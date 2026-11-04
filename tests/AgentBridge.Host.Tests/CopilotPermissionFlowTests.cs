@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Protocol;
@@ -389,6 +390,10 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
         return Question;
     }
 
+    // The rule Copilot's dialog is drawn under: with others waiting, what is read is the dialog
+    // alone, from its top edge down.
+    const string Rule = "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500";
+
     static readonly string[] ReadPrompt =
     [
         " Allow read",
@@ -403,6 +408,8 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
     public async Task With_two_permissions_waiting_the_earliest_is_listed_and_approved_when_the_screen_shows_it_and_not_the_other()
     {
         var question = await TwoWaiting();
+        // Under the conversation, which still shows the other request's tool call.
+        injector.Screen = ["\u25CF View C:\\Users\\someone\\settings.json", "", Rule, .. Prompt];
         Completes("approved");
 
         var result = await Answerer().AnswerAsync(Request("approve") with { Question = question });
@@ -410,7 +417,10 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
         Assert.StartsWith("r1#", question);
         Assert.Equal(2, source.Get(Id)!.Question!.Waiting);
         Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), result);
-        Assert.Equal("1", Assert.Single(Assert.Single(injector.Plans).Plan.Sends).Text);
+        var send = Assert.Single(Assert.Single(injector.Plans).Plan.Sends);
+        Assert.Equal("1", send.Text);
+        // Held from the dialog's top edge down, so a different dialog in its place stops the key.
+        Assert.Equal(new ScreenRow(2, Rule), send.Expect![0]);
     }
 
     [Fact]
@@ -418,7 +428,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
     {
         var question = await TwoWaiting();
         // The other request's dialog, under scrollback that still shows this one's command.
-        injector.Screen = [Prompt[0], "", .. ReadPrompt];
+        injector.Screen = [Prompt[0], "", Rule, .. ReadPrompt];
 
         var result = await Answerer().AnswerAsync(Request("approve") with { Question = question });
 
@@ -441,7 +451,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
             Copilot.Event("abort", new { reason = "user_initiated" }, 6, agentId: "helper"),
         ]);
         await source.RefreshAsync();
-        injector.Screen = ReadPrompt;
+        injector.Screen = [Rule, .. ReadPrompt];
         Assert.StartsWith("r2#", Question);
 
         var result = await Answerer().AnswerAsync(Request("approve"));
@@ -473,14 +483,78 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
     public async Task A_permission_asked_while_the_screen_was_read_and_drawn_in_its_place_is_refused_and_nothing_is_typed()
     {
         // The read was taken with only r1 waiting; r2 arrived and is what the screen shows by
-        // the time it is checked again. Its subject is drawn nearer the options than r1's.
-        injector.Screen = [Prompt[0], "", .. ReadPrompt];
+        // the time it is checked again, under scrollback still showing r1's command.
+        injector.Screen = [Prompt[0], "", Rule, .. ReadPrompt];
         injector.OnScreen = () => Fixture.Append(events, Copilot.Permission("r2", "c2", Copilot.Prompts["read"], 6));
 
         var result = await Answerer().AnswerAsync(Request("approve"));
 
         Assert.Equal(AnswerOutcome.Refused, result.Outcome);
         Assert.Contains("different permission (read, request r2)", result.Reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    // r1 is first, and Copilot draws r2. A probe is agent-written text: r2's command can end in
+    // r1's, wrapped or on a line of its own, nearer the options than r2's own start, and a diff
+    // can hold it with r2's own subject more than 30 rows up (Trust review of #769).
+    static JsonObject Command(string text)
+    {
+        var o = Copilot.Prompts["commands"].DeepClone().AsObject();
+        o["fullCommandText"] = text;
+        o["intention"] = "Run it";
+        return o;
+    }
+
+    async Task<string> Asking(JsonObject first, JsonObject second)
+    {
+        File.WriteAllLines(events,
+        [
+            Copilot.User("ship it", 1),
+            Copilot.ToolStart("c1", "powershell", new { command = "x" }, 2),
+            Copilot.Permission("r1", "c1", first, 3),
+            Copilot.ToolStart("c2", "powershell", new { command = "y" }, 4),
+            Copilot.Permission("r2", "c2", second, 5),
+        ]);
+        await source.RefreshAsync();
+        return Question;
+    }
+
+    static string[] Options => ["", " Do you want to run this command?", "", " \u276F 1. Yes", "   2. No, and tell Copilot what to do differently (Esc to stop)"];
+
+    [Theory]
+    [InlineData("echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ; npm test", new[] { " echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", " aaaaaaaaaaaaaaaaaaaaaaa ; npm test" })]
+    [InlineData("cd sub\nnpm test", new[] { " cd sub", " npm test" })]
+    [InlineData("Remove-Item -Recurse C:\\data\nnpm test", new[] { " Remove-Item -Recurse C:\\data", " npm test" })]
+    public async Task A_shown_command_that_ends_in_the_first_ones_is_never_taken_for_it(string command, string[] drawn)
+    {
+        var question = await Asking(Command("npm test"), Command(command));
+        injector.Screen = [Rule, " Run command", "", .. drawn, .. Options];
+
+        var result = await Answerer().AnswerAsync(Request("approve") with { Question = question });
+
+        Assert.StartsWith("r1#", question);
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "another waiting permission (shell, request r2) also shows what this one is for, so the screen cannot say which is shown; answer at the machine"), result);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_shown_dialog_whose_top_is_more_than_30_rows_up_is_never_taken_for_the_first_one()
+    {
+        // r2's script: its start, and the dialog's top, scrolled out of reach; r1's command is
+        // in the conversation above it... or anywhere else but r2's own text.
+        var script = string.Join("\n", Enumerable.Range(1, 40).Select(i => $"Write-Output step{i}"));
+        var question = await Asking(Command("npm test"), Command(script));
+        injector.Screen = [" npm test", Rule, " Run command", .. Enumerable.Range(1, 40).Select(i => $" Write-Output step{i}"), .. Options];
+
+        var result = await Answerer().AnswerAsync(Request("approve") with { Question = question });
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "the session's screen does not show where the prompt begins, so it cannot say which waiting permission it is; answer at the machine"), result);
+        Assert.Empty(injector.Plans);
+
+        // And one whose body holds r1's command is the same as one ending in it.
+        var holding = await Asking(Command("npm test"), Command(script + "\nnpm test"));
+        var held = await Answerer().AnswerAsync(Request("approve") with { Question = holding });
+        Assert.Contains("also shows what this one is for", held.Reason);
         Assert.Empty(injector.Plans);
     }
 

@@ -36,9 +36,17 @@ namespace AgentBridge.Host.Core.Parsing;
 // host finds them on the session's screen to know the prompt there is this one, and holds
 // those rows with the options when it types, so a prompt for something else drawn in the
 // same place, with the same options, stops the key.
+//
+// While other requests wait too, Copilot draws one of them, and a probe is too little to say
+// which (#690): a probe is a piece of agent-written text, and another request's text can hold
+// it. Subject is then what this prompt's dialog must show whole (the full command, the file or
+// first path as written, the URL, the tool's name), and Drawn every piece of text Copilot was
+// given for it, as written, which no other waiting request's dialog may show.
 public sealed record CopilotPermissionPrompt(string RequestId, string? ToolCallId, string Kind, string Message, string Digest, string? AtMachine)
 {
     public IReadOnlyList<string> Probes { get; init; } = [];
+    public IReadOnlyList<string> Subject { get; init; } = [];
+    public IReadOnlyList<string> Drawn { get; init; } = [];
 
     // Where Message holds the host's own escapes (ShownText.RevealMarked), for EscapedText.Marks.
     public IReadOnlyList<(int Start, int Length)> Marks { get; init; } = [];
@@ -95,7 +103,53 @@ public static partial class CopilotPermission
         // escape is six characters or more, so escaping all of it first could make it six times that
         // before the question cut it (QuestionMapper.Approval, which says when it was cut).
         var (shown, marks) = ShownText.RevealWithinMarked(message, Limits.QuestionMessage, rightToLeft: true);
-        return new CopilotPermissionPrompt(request, toolCallId, kind, shown, Digest(kind, message, p, atMachine is not null), atMachine) { Probes = Probes(kind, p), Marks = marks };
+        return new CopilotPermissionPrompt(request, toolCallId, kind, shown, Digest(kind, message, p, atMachine is not null), atMachine)
+        {
+            Probes = Probes(kind, p),
+            Marks = marks,
+            Subject = Subject(kind, p),
+            Drawn = [.. Strings(prompt), .. Strings(permission)],
+        };
+    }
+
+    static List<string> Subject(string kind, JsonElement p)
+    {
+        IEnumerable<string?> found = kind switch
+        {
+            "commands" => [Json.Str(p, "fullCommandText")],
+            "write" => [Json.Str(p, "fileName")],
+            "read" => [Json.Str(p, "path")],
+            "path" => Json.Arr(p, "paths") is { } paths ? paths.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Take(1).Select(e => e.GetString()) : [],
+            "url" => [Json.Str(p, "url")],
+            "mcp" or "custom-tool" => [Json.Str(p, "toolName")],
+            _ => [],
+        };
+        return [.. found.OfType<string>().Where(s => s.Trim().Length > 0)];
+    }
+
+    // Every string in a request, at any depth, but the ones naming its kind or tool call, which
+    // no dialog draws as written: the most a dialog could draw of it.
+    static List<string> Strings(JsonElement? request)
+    {
+        var found = new List<string>();
+        if (request is { } r) { Walk(r, null); }
+        return found;
+
+        void Walk(JsonElement e, string? name)
+        {
+            switch (e.ValueKind)
+            {
+                case JsonValueKind.String when name is not ("kind" or "toolCallId" or "accessKind"):
+                    if (e.GetString() is { Length: > 0 } s) { found.Add(s); }
+                    break;
+                case JsonValueKind.Object:
+                    foreach (var p in e.EnumerateObject()) { Walk(p.Value, p.Name); }
+                    break;
+                case JsonValueKind.Array:
+                    foreach (var item in e.EnumerateArray()) { Walk(item, name); }
+                    break;
+            }
+        }
     }
 
     static List<string> Probes(string kind, JsonElement p)

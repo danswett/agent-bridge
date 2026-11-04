@@ -187,14 +187,21 @@ that `permission.requested` with no `permission.completed` (and no session abort
 shutdown) after it, reading exactly as shown (`stale` otherwise), and no `ask_user`
 waiting (`refused`). Copilot can have several permission requests waiting at once, one for
 each of a batch of parallel tool calls, and draws one at a time; the session lists the
-earliest, saying how many wait (#690). The screen, not the order asked, says which is
-drawn: the answer is `refused`, naming the other ("the machine is showing a different
-permission (read, request ed05e9d7)"), if any other waiting request's subject is drawn as
-near the options as this one's or nearer, if another cannot be read or has nothing to look
-for on the screen, or if this request is not the earliest still waiting. It is never typed
-for the request on screen instead. The transcript is checked so before the screen is read
-and again after, so what the screen showed was this request while it was still waiting,
-and no request that arrived meanwhile is drawn in its place. A
+earliest, saying how many wait (#690). While others wait, the screen, not the order
+asked, says which is drawn, and a probe is not enough: it is agent-written text, which
+another request's command can end in or its diff hold. The key goes only if:
+* no other waiting request was given text holding one of this one's probes;
+* the dialog's top edge (a box's top corner, or a rule) is on screen within 30 rows of the
+  options, so the dialog is read alone, never the conversation above it;
+* nothing given for another waiting request is drawn from that edge down;
+* this request's whole subject (full command, file, first path, URL or tool name) is;
+* and this request is the earliest still waiting.
+
+Otherwise it is `refused` ("the machine is showing a different permission (read, request
+ed05e9d7)", or why the screen cannot say), and never typed for the request on screen
+instead. The key is held from the dialog's top edge. The transcript is checked so before
+the screen is read and again after, so what the screen showed was this request while it was
+still waiting, and no request that arrived meanwhile is drawn in its place. A
 request to run outside the sandbox, a kind not listed
 above, or one whose details cannot be read is `answerAtMachine`.
 

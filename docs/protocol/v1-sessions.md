@@ -732,12 +732,15 @@ waiting, with `waiting` saying how many there are, and the next as a new questio
 answered. Immediately before typing, the host checks the transcript (that request still
 waiting and reading as shown, and no `ask_user` waiting beside it), then reads the session's
 screen and finds the option by its label, never by its position, under rows showing what the
-prompt is for, and checks the transcript again. The screen, not the order asked, says which
-request is shown: an answer is `refused`, naming the other ("the machine is showing a
-different permission (read, request ed05e9d7)"), when another waiting request's subject is
-drawn as near the options as this one's or nearer, when another cannot be read or looked for
-on the screen, and when this request is not the earliest still waiting. It is never retargeted
-to the request on screen. The key goes
+prompt is for, and checks the transcript again. While others wait, the screen, not the order
+asked, says which request is shown, and a piece of what the agent wrote is never enough to
+say so. The key goes only if no other waiting request was given text holding what this one
+is about; the dialog's top edge is on screen within 30 rows of its options; nothing given
+for another waiting request is drawn from that edge down; this request's whole subject (its
+full command, file, first path, URL or tool) is; and it is the earliest still waiting.
+Otherwise the answer is `refused`, naming the other where it can ("the machine is showing a
+different permission (read, request ed05e9d7)"), and the key is held from the dialog's top
+edge. It is never retargeted to the request on screen. The key goes
 only if those rows and the options, and which is highlighted, still read the same at the
 moment it is typed.
 `permissions.remoteApproval` in the host's own settings turns this off on a machine

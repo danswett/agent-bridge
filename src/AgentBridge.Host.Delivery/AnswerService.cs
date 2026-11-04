@@ -383,7 +383,7 @@ public sealed class AnswerService : ISessionAnswerer
             try { screen = await injector.ReadScreenAsync(pid); }
             catch (Exception e) { return Failed(AnswerOutcome.Refused, $"could not read the screen of {Short(session.Id)} for permission {Short(requestId)}", e); }
             if (screen.Rows is not { } rows) { return Refused(DeliveryReasons.Of(screen.Problem ?? "the host could not read the session's screen; answer at the machine")); }
-            var (choice, problem) = CopilotPermissionScreen.Locate(rows, approve, pending.Probes, Waiting(state));
+            var (choice, problem) = CopilotPermissionScreen.Locate(rows, approve, pending.Probes, Crowd(pending, state));
             if (choice is null) { return Refused($"{problem}; answer at the machine"); }
             // Again after the screen was read: what is on it is this request only if this
             // request was still the one waiting once it had been read, and no request that
@@ -395,7 +395,7 @@ public sealed class AnswerService : ISessionAnswerer
             {
                 return Refused("Copilot has more than one prompt waiting, and the screen shows only one of them; answer at the machine");
             }
-            (choice, problem) = CopilotPermissionScreen.Locate(rows, approve, pending.Probes, Waiting(after));
+            (choice, problem) = CopilotPermissionScreen.Locate(rows, approve, pending.Probes, Crowd(pending, after));
             if (choice is null) { return Refused($"{problem}; answer at the machine"); }
             // The screen showing this request is what lets a key go; the order asked is only
             // how the card chose it. One asked after another still waiting is never typed into,
@@ -417,9 +417,10 @@ public sealed class AnswerService : ISessionAnswerer
 
     // The other requests waiting, each named by its kind and request id, never by what the
     // agent wrote, since a refusal is shown as plain words; one that cannot be read has no
-    // probes, so it can never be ruled out.
-    static List<(string Name, IReadOnlyList<string> Probes)> Waiting(CopilotPermissionState state) =>
-        [.. state.Others.Select(o => ($"{KindName(o.Prompt?.Kind)}, request {Short(o.RequestId)}", o.Prompt?.Probes ?? []))];
+    // text to look for, so it can never be ruled out. Null when none is.
+    static CopilotPermissionScreen.Crowd? Crowd(CopilotPermissionPrompt pending, CopilotPermissionState state) =>
+        state.Others.Count == 0 ? null
+        : new(pending.Subject, [.. state.Others.Select(o => new CopilotPermissionScreen.Other($"{KindName(o.Prompt?.Kind)}, request {Short(o.RequestId)}", o.Prompt?.Drawn ?? []))]);
 
     static string KindName(string? kind) => kind switch
     {

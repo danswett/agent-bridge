@@ -201,22 +201,34 @@ public sealed class CopilotPermissionTests : IDisposable
     }
 
     // Copilot asks a permission for each of a batch of parallel tool calls and draws one of them
-    // (#690). The screen, not the order asked, says which: the request whose subject is drawn
-    // nearest the options is the one shown, and one the screen cannot tell apart is never typed for.
+    // (#690). With others waiting, the dialog is read alone, from its top edge down: it is taken
+    // for this prompt only if it shows this prompt's whole subject and nothing given for another.
     [Fact]
-    public void With_other_requests_waiting_a_prompt_is_chosen_only_when_the_screen_shows_it_and_none_of_them()
+    public void With_other_requests_waiting_a_prompt_is_chosen_only_when_its_dialog_shows_it_whole_and_none_of_them()
     {
-        (string, IReadOnlyList<string>)[] read = [("read, request r2", ["settings.json"])];
-        // The command's dialog, under scrollback that still shows the other request's tool call.
-        string[] scrolled = ["\u25CF View C:\\Users\\someone\\settings.json", "", .. Shell];
+        const string rule = "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500";
+        CopilotPermissionScreen.Crowd Crowd(params string[] drawn) =>
+            new([.. ShellProbes], [new CopilotPermissionScreen.Other("read, request r2", drawn)]);
+        var read = Crowd("Read the settings", "C:\\Users\\someone\\settings.json");
+        // The command's dialog, under the conversation that still shows the other request's tool call.
+        string[] shown = ["\u25CF View C:\\Users\\someone\\settings.json", rule, .. Shell];
 
-        Assert.Equal("1", CopilotPermissionScreen.Locate(scrolled, approve: true, ShellProbes, read).Choice?.Key);
+        var (choice, _) = CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, read);
+        Assert.Equal("1", choice?.Key);
+        Assert.Equal(new ScreenRow(1, rule), choice!.Hold[0]);
+
         Assert.Equal("the machine is showing a different permission (read, request r2)",
-            CopilotPermissionScreen.Locate([.. Shell[..3], " C:\\Users\\someone\\settings.json", .. Shell[3..]], approve: true, ShellProbes, read).Problem);
-        Assert.Contains("reads the same on the session's screen",
-            CopilotPermissionScreen.Locate(Shell, approve: true, ShellProbes, [("shell, request r2", ShellProbes)]).Problem);
-        Assert.Contains("cannot be checked against the session's screen",
-            CopilotPermissionScreen.Locate(Shell, approve: true, ShellProbes, [("permission, request r2", [])]).Problem);
+            CopilotPermissionScreen.Locate([rule, .. Shell[..3], " C:\\Users\\someone\\settings.json", .. Shell[3..]], approve: true, ShellProbes, read).Problem);
+        Assert.Contains("does not show where the prompt begins", CopilotPermissionScreen.Locate(Shell, approve: true, ShellProbes, read).Problem);
+        Assert.Contains("also shows what this one is for", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, Crowd("git push origin main --force-with-lease && rm -rf .")).Problem);
+        Assert.Contains("cannot be checked against the session's screen", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, Crowd()).Problem);
+        Assert.Contains("whole subject", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes,
+            read with { Subject = ["git push origin main --force-with-lease --tags"] }).Problem);
+
+        // A later shell request ending in this read's file, drawn in its place (Copilot review of #769).
+        var shell = new CopilotPermissionScreen.Crowd(["C:\\elsewhere\\notes.txt"], [new CopilotPermissionScreen.Other("shell, request r2", ["Write-Output first\nGet-Content C:\\notes\\notes.txt"])]);
+        string[] drawn = [rule, " Run command", " Write-Output first", " Get-Content C:\\notes\\notes.txt", "", " \u276F 1. Yes", "   2. No (Esc)"];
+        Assert.Contains("also shows what this one is for", CopilotPermissionScreen.Locate(drawn, approve: true, PathProbes, shell).Problem);
     }
 
     [Fact]

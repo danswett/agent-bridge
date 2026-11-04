@@ -146,9 +146,16 @@ public static class CopilotPermissionScreen
     // the list (the No row's message box opened at the machine, say) stops it.
     public sealed record Choice(string Key, int Row, IReadOnlyList<ScreenRow> Hold);
 
-    // probes: CopilotPermissionPrompt.Probes, what this prompt is about. others: every other
-    // permission request waiting, by a name for a person and its probes.
-    public static (Choice? Choice, string? Problem) Locate(IReadOnlyList<string> rows, bool approve, IReadOnlyList<string> probes, IReadOnlyList<(string Name, IReadOnlyList<string> Probes)>? others = null)
+    // Another permission request waiting beside this one: a name for a person, and everything
+    // Copilot was given for it as written (CopilotPermissionPrompt.Drawn); empty if unreadable.
+    public sealed record Other(string Name, IReadOnlyList<string> Drawn);
+
+    // While others wait: this prompt's whole subject (CopilotPermissionPrompt.Subject), and them.
+    public sealed record Crowd(IReadOnlyList<string> Subject, IReadOnlyList<Other> Others);
+
+    // probes: CopilotPermissionPrompt.Probes, what this prompt is about. crowd: set when other
+    // permission requests are waiting too.
+    public static (Choice? Choice, string? Problem) Locate(IReadOnlyList<string> rows, bool approve, IReadOnlyList<string> probes, Crowd? crowd = null)
     {
         var numbered = new List<(int Row, int Number, string Label, bool Selected)>();
         for (var i = 0; i < rows.Count; i++)
@@ -175,16 +182,10 @@ public static class CopilotPermissionScreen
         // there down, so another prompt with the same options in its place (the next path
         // request, say) stops the key.
         var top = Top(rows, block[0].Row, probes);
-        // Copilot can have several requests waiting and draws one of them (#690). Being the
-        // earliest asked is not proof of which: the screen is. Another waiting request whose
-        // subject is drawn as near the options as this one's, or nearer, may be the one shown,
-        // or cannot be told from it; one that cannot be looked for at all cannot be ruled out.
-        foreach (var (name, other) in others ?? [])
+        if (crowd is { Others.Count: > 0 } && Crowded(rows, block[0].Row, end, probes, crowd) is { } crowded)
         {
-            if (other.Count == 0) { return (null, $"another waiting permission request ({name}) cannot be checked against the session's screen"); }
-            var theirs = Top(rows, block[0].Row, other);
-            if (theirs >= 0 && theirs > top) { return (null, $"the machine is showing a different permission ({name})"); }
-            if (theirs >= 0 && theirs == top) { return (null, $"another waiting permission ({name}) reads the same on the session's screen, so it cannot say which is shown"); }
+            if (crowded.Problem is { } why) { return (null, why); }
+            top = crowded.Start;
         }
         if (top < 0) { return (null, "the session's screen does not show what this permission prompt is for"); }
         var hold = Enumerable.Range(top, end - top + 1).Select(r => new ScreenRow(r, rows[r])).ToList();
@@ -205,6 +206,65 @@ public static class CopilotPermissionScreen
         if (yes.Count != 1) { return (null, "the prompt on the session's screen has no single plain Yes to approve once"); }
         var chosen = yes[0];
         return (new Choice(chosen.Number.ToString(System.Globalization.CultureInfo.InvariantCulture), chosen.Row, hold), null);
+    }
+
+    // Copilot can have several requests waiting and draws one of them (#690). Being the earliest
+    // asked is not proof of which, nor is a probe: it is a piece of agent-written text, which
+    // another request's command can end in, or its diff hold, and a probe not found says nothing
+    // of where the other request is drawn. So, while others wait, the prompt on screen is taken
+    // for this one only when all of these hold, and otherwise nothing is typed:
+    //   * no other waiting request was given text holding one of this one's probes, so nothing of
+    //     it drawn can read as this one;
+    //   * the dialog's own top (a box's top edge or a rule) is on screen within 30 rows above the
+    //     options, so what is read is the dialog alone, never the conversation above it;
+    //   * none of the other requests' text is drawn there, top edge included (one drawn there is
+    //     the one shown, however its subject is drawn);
+    //   * and this request's whole subject is.
+    // Start: the dialog's top edge, where the key's hold begins, so a different dialog drawn in
+    // its place, however it ends, stops the key.
+    static (int Start, string? Problem)? Crowded(IReadOnlyList<string> rows, int options, int end, IReadOnlyList<string> probes, Crowd crowd)
+    {
+        var mine = probes.Select(Squeeze).Where(s => s.Length > 0).ToList();
+        foreach (var other in crowd.Others)
+        {
+            if (other.Drawn.Count == 0) { return (-1, $"another waiting permission request ({other.Name}) cannot be checked against the session's screen"); }
+            if (other.Drawn.Any(d => mine.Any(m => Squeeze(d).Contains(m, StringComparison.Ordinal))))
+            {
+                return (-1, $"another waiting permission ({other.Name}) also shows what this one is for, so the screen cannot say which is shown");
+            }
+        }
+        var start = -1;
+        for (var i = options - 1; i >= Math.Max(0, options - 30) && start < 0; i--)
+        {
+            if (Edge(rows[i])) { start = i; }
+        }
+        if (start < 0) { return (-1, "the session's screen does not show where the prompt begins, so it cannot say which waiting permission it is"); }
+        var dialog = string.Concat(Enumerable.Range(start, end - start + 1).Select(r => Squeeze(Clean(rows[r]).Text)));
+        var edge = Squeeze(rows[start]);
+        foreach (var other in crowd.Others)
+        {
+            var pieces = other.Drawn.SelectMany(d => d.Split('\n')).Select(Squeeze).Where(s => s.Length >= 3).Select(s => s[..Math.Min(16, s.Length)]);
+            if (pieces.Any(s => dialog.Contains(s, StringComparison.Ordinal) || edge.Contains(s, StringComparison.Ordinal)))
+            {
+                return (-1, $"the machine is showing a different permission ({other.Name})");
+            }
+        }
+        var subject = crowd.Subject.Select(Squeeze).Where(s => s.Length > 0).ToList();
+        if (subject.Count == 0 || !subject.All(s => dialog.Contains(s, StringComparison.Ordinal)))
+        {
+            return (-1, "the session's screen does not show this permission's whole subject, so it cannot say which waiting permission it is");
+        }
+        return (start, null);
+    }
+
+    // A dialog's top edge: a box's top corner, or a rule of three or more line characters with
+    // nothing else on the row.
+    static bool Edge(string row)
+    {
+        var s = row.Trim();
+        if (s.Length == 0) { return false; }
+        if (s[0] is '\u256D' or '\u250C' or '\u250F' or '\u2554') { return true; }
+        return s.Count(c => c is '\u2500' or '\u2501' or '\u2550' or '\u254C' or '\u254D') >= 3 && s.All(c => Box(c) || c == ' ');
     }
 
     // The nearest row above the options from which the rows down to them show one of the
