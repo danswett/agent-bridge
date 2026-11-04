@@ -391,7 +391,9 @@ export class ReplyBox {
       drawReceipt(e.status, 'answer-status reply-status', null);
     }
     this.#reading = reading;
-    e.form.setAttribute('aria-busy', reading || this.#pending(entry) ? 'true' : 'false');
+    // Send is busy (ui.md §9), not the form: the receipt's live region is in it, and a reader may
+    // hold back what a busy region says until it is done.
+    e.send.setAttribute('aria-busy', reading || this.#pending(entry) ? 'true' : 'false');
     e.resend.hidden = entry?.state !== 'failed' || entry.request === this.#edited || entry.reason === CANCELLED;
     const { service, hostId, sessionId } = this.replying;
     e.cancel.hidden = !(entry?.state === 'sending' && service.cancellable?.(hostId, sessionId));

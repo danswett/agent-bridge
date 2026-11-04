@@ -287,13 +287,15 @@ export class QuestionPanel {
     e.send = h('button', { type: 'submit', class: 'button send' }, q.kind === 'approval' ? 'Send' : 'Send answer');
     e.resend = h('button', { type: 'button', class: 'button secondary resend', hidden: true, onclick: () => this.#resend() }, 'Try again');
     e.actions = h('div', { class: 'answer-actions' }, e.send, e.resend);
-    // The receipt's words, and apart from them the line a screen reader hears it on (receipt.js).
+    // The receipt's words, and apart from them the line a screen reader hears it on (receipt.js):
+    // outside the form, which is aria-busy while the answer goes, and a reader may hold back
+    // what a busy region says until it is done.
     e.status = h('p', { class: 'answer-status' });
     e.live = receiptLive();
-    e.form.append(e.held, e.error, e.actions, e.status, e.live);
+    e.form.append(e.held, e.error, e.actions, e.status);
     // A tap question has no Send until Other is opened.
     e.send.hidden = this.tap && !this.otherOpen;
-    this.element.append(e.form);
+    this.element.append(e.form, e.live);
   }
 
   #buildTap(field) {
