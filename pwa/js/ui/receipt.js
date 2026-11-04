@@ -125,7 +125,7 @@ const histories = new Map();
 function historyFor(request, now) {
   let h = histories.get(request);
   if (!h) {
-    h = { start: now, stage: null, stageAt: now, sendingSince: null, shown: null, said: null };
+    h = { start: now, stage: null, stageAt: now, sendingSince: null, delivering: false, shown: null, said: new Set() };
     histories.set(request, h);
     if (histories.size > KEEP) { histories.delete(histories.keys().next().value); }
   }
@@ -184,10 +184,15 @@ export class ReceiptClock {
       return;
     }
     const stage = entry.stage ?? null;
-    if (stage !== h.stage) { h.stage = stage; h.stageAt = t; }
-    if (entry.state === 'sending' && !stage && !uploading(entry)) { h.sendingSince ??= t; } else if (uploading(entry)) { h.sendingSince = null; }
-    const due = stallDue(entry, h, T);
-    const d = this.describe(entry, { stalled: due !== null && t >= due });
+    if (stage !== h.stage) { h.stage = stage; h.stageAt = t; h.delivering = false; }
+    // A resend that met the first copy in flight goes again every few seconds, and is busy again
+    // until the first copy settles: between, it still is being delivered, not newly sent, so the
+    // line doesn't flicker between the two and say both each time.
+    if (entry.state === 'waiting') { h.delivering = entry.reason === 'still being delivered'; }
+    const now = h.delivering && entry.state === 'sending' ? { ...entry, state: 'waiting', reason: 'still being delivered' } : entry;
+    if (now.state === 'sending' && !stage && !uploading(now)) { h.sendingSince ??= t; } else if (uploading(now)) { h.sendingSince = null; }
+    const due = stallDue(now, h, T);
+    const d = this.describe(now, { stalled: due !== null && t >= due });
     let wake = due !== null && t < due ? due : null;
     if (t < h.start + T.quietMs) {
       this.#put(QUIET, null);
@@ -213,8 +218,9 @@ export class ReceiptClock {
       this.#drawn = signature;
       this.draw(d);
     }
-    if (h && d?.speech && d.speech !== h.said) {
-      h.said = d.speech;
+    // Each change is said once for the request, however often a card is drawn again.
+    if (h && d?.speech && !h.said.has(d.speech)) {
+      h.said.add(d.speech);
       this.#announce(d.speech);
     }
   }
