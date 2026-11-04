@@ -1,0 +1,249 @@
+name: Flake hunt
+
+# Finds flaky tests before they turn a pull request or main red (#509, quality/README.md §5).
+# Each night, in quiet hours, every .NET test project runs N times (10 by default) on each OS
+# CI tests on, all at once as CI runs them, with nothing changed between runs. A test that both passes and fails is
+# flaky; one that fails every run on an OS is a real failure, reported as one. Nothing is retried
+# into green or skipped: this only reports, through issues labelled `flaky`, which are the flake
+# record, and through the run's summary.
+#
+# The jobs, by what they may do:
+#   hunt            reads the code and runs the tests; no token is kept by the checkout.
+#   classify        reads the open issues (issues: read) and the run's own job times
+#                   (actions: read), and plans what to file with agent-bridge-quality flakes.
+#                   Off main, or with dry-run, it only says what it would file.
+#   report          the only job that may write issues, and only on main: it checks out main and
+#                   runs quality/publish-flakes.ps1 on classify's plan, read as data.
+#
+# By hand: gh workflow run flake-hunt.yml [--ref <branch>] -f runs=50 -f projects=AgentBridge.Host.Tests
+#   -f filter="FullyQualifiedName~AnswerFlowTests", to confirm a fix on every OS without a
+#   throwaway workflow. A run from a branch never files anything.
+
+on:
+  schedule:
+    # 10:30 UTC: 02:30 Pacific in winter, 03:30 in summer; quiet hours either way, so its
+    # runners don't compete with the day's pull requests.
+    - cron: '30 10 * * *'
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: How many times each test project runs on each OS
+        type: number
+        default: 10
+      projects:
+        description: Test project folders under tests/, comma-separated; empty for all
+        type: string
+        default: ''
+      filter:
+        description: A dotnet test --filter to narrow each run; empty for none
+        type: string
+        default: ''
+      dry-run:
+        description: Say what would be filed and file nothing (always so off main)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Two runs from main that both find no issue open would both open one, so they never overlap; a
+# newer one waits. A run from a branch has a group of its own.
+concurrency:
+  group: flake-hunt-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  hunt:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+      # ci.yml's product job saves NuGet's packages from main (#459); this only reads them.
+      - name: NuGet packages from main's cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-product-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
+          restore-keys: nuget-product-${{ runner.os }}-${{ runner.arch }}-
+      - name: What to test
+        shell: pwsh
+        env:
+          ONLY: ${{ inputs.projects }}
+        # The whole solution, as ci.yml's product job tests it on main; or a solution filter of the
+        # projects asked for, as product does on a pull request.
+        run: |
+          $only = @("$env:ONLY" -split ',' | ForEach-Object Trim | Where-Object { $_ })
+          if ($only.Count -eq 0) { $target = 'AgentBridge.slnx' }
+          else {
+            $projects = foreach ($name in $only) {
+              $csproj = "tests/$name/$name.csproj"
+              if (-not (Test-Path -LiteralPath $csproj)) { throw "$name is not a test project under tests/" }
+              $csproj
+            }
+            $target = Join-Path $env:RUNNER_TEMP hunt.slnf
+            @{ solution = @{ path = (Resolve-Path AgentBridge.slnx).Path; projects = @($projects) } } | ConvertTo-Json -Depth 3 | Set-Content $target
+          }
+          Write-Host "Hunting in $target"
+          "HUNT_TARGET=$target" | Add-Content $env:GITHUB_ENV
+      - name: Build
+        shell: pwsh
+        run: dotnet build $env:HUNT_TARGET -c Release --nologo
+        timeout-minutes: 20
+      - name: Run them again and again
+        shell: pwsh
+        env:
+          OS: ${{ matrix.os }}
+          RUNS: ${{ inputs.runs || 10 }}
+          FILTER: ${{ inputs.filter }}
+        # All the projects at once in each run, as CI runs them: a first try that ran one project
+        # at a time on a runner of its own saw nothing flaky in 330 runs, on a day CI hit five
+        # flakes, since what makes them flake is CI's own load. Every run, pass or fail, leaves a
+        # TRX per project and dotnet test's exit code, and the step always succeeds: classify
+        # judges the runs. --blame-hang ends a hung test host rather than the job, as in ci.yml.
+        # The HA integration tests need a disposable Home Assistant, which only ha-integration has.
+        run: |
+          $filter = 'Category!=HomeAssistantIntegration'
+          if ($env:FILTER) { $filter = "($env:FILTER)&$filter" }
+          for ($i = 1; $i -le [int]$env:RUNS; $i++) {
+            $dir = "flake-results/$env:OS/run-$i"
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            $started = Get-Date
+            dotnet test $env:HUNT_TARGET -c Release --no-build --nologo --filter $filter --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type none --results-directory $dir --logger trx --logger "console;verbosity=minimal"
+            $code = $LASTEXITCODE
+            Set-Content -LiteralPath "$dir/exit" -Value $code
+            Write-Host "Run $i of $env:RUNS on $env:OS`: exit $code in $([int]((Get-Date) - $started).TotalSeconds) s"
+          }
+          exit 0
+        timeout-minutes: 150
+      - name: Keep the runs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: flake-hunt-${{ matrix.os }}
+          path: |
+            flake-results/**/*.trx
+            flake-results/**/exit
+          if-no-files-found: error
+          retention-days: 14
+
+  classify:
+    needs: hunt
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+      actions: read
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+      dry-run: ${{ steps.classify.outputs.dry-run }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: flake-hunt-*
+          path: ${{ runner.temp }}/flake-results
+      - name: Build the reporter
+        run: dotnet build tools/AgentBridge.Quality -c Release --nologo -v q
+      - name: Flaky, failing or passing
+        id: classify
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+          SHA: ${{ github.sha }}
+          DRY_RUN: ${{ github.ref != 'refs/heads/main' || github.repository != 'danswett/agent-bridge' || inputs.dry-run == true }}
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP flake-plan
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $issues = Join-Path $env:RUNNER_TEMP open-issues.json
+          gh issue list --repo $env:REPO --state open --limit 1000 --json number,title,body,labels,author > $issues
+          if ($LASTEXITCODE) { throw 'gh issue list failed' }
+          $flags = @('--results', "$env:RUNNER_TEMP/flake-results", '--issues', $issues, '--owner', $env:OWNER, '--run-url', $env:RUN_URL, '--commit', $env:SHA,
+            '--plan', "$out/plan.json", '--summary', "$out/summary.md")
+          if ($env:DRY_RUN -eq 'true') { $flags += '--dry-run' }
+          dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll flakes @flags
+          $code = $LASTEXITCODE
+          Get-Content "$out/summary.md" >> $env:GITHUB_STEP_SUMMARY
+
+          # The runner time it cost, from the run's own jobs: a job is billed by the minute,
+          # rounded up, so both are given.
+          $jobs = @(gh api --paginate "repos/$env:REPO/actions/runs/$env:RUN_ID/attempts/$env:ATTEMPT/jobs" --jq '.jobs[] | select(.completed_at != null and .started_at != null) | [.name, .started_at, .completed_at] | @tsv')
+          $minutes = @($jobs | Where-Object { $_ } | ForEach-Object {
+            $name, $started, $completed = $_ -split "`t"
+            $os = if ($name -match 'windows-11-arm') { 'windows-11-arm' } elseif ($name -match 'windows-latest') { 'windows-latest' } else { 'ubuntu-latest' }
+            [pscustomobject]@{ Os = $os; Minutes = ([datetimeoffset]$completed - [datetimeoffset]$started).TotalMinutes }
+          })
+          $lines = @('', '### Runner time (the jobs finished so far)', '', '| OS | Jobs | Minutes | Billed minutes |', '|---|---|---|---|')
+          foreach ($group in $minutes | Group-Object Os | Sort-Object Name) {
+            $lines += "| $($group.Name) | $($group.Count) | $([math]::Round(($group.Group | Measure-Object Minutes -Sum).Sum)) | $(($group.Group | ForEach-Object { [math]::Ceiling($_.Minutes) } | Measure-Object -Sum).Sum) |"
+          }
+          $lines += "| all | $($minutes.Count) | $([math]::Round(($minutes | Measure-Object Minutes -Sum).Sum)) | $(($minutes | ForEach-Object { [math]::Ceiling($_.Minutes) } | Measure-Object -Sum).Sum) |"
+          $lines -join "`n" | Add-Content "$out/summary.md"
+          $lines -join "`n" >> $env:GITHUB_STEP_SUMMARY
+
+          "code=$code" >> $env:GITHUB_OUTPUT
+          "dry-run=$env:DRY_RUN" >> $env:GITHUB_OUTPUT
+      - name: What would be filed
+        if: steps.classify.outputs.dry-run == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: ./quality/publish-flakes.ps1 -Plan "$env:RUNNER_TEMP/flake-plan/plan.json" -Repository $env:REPO -DryRun
+      - name: Keep the plan
+        if: steps.classify.outputs.code != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: flake-plan
+          path: ${{ runner.temp }}/flake-plan
+          retention-days: 30
+      - name: Fail on a real failure
+        if: steps.classify.outputs.code != '0'
+        shell: pwsh
+        run: |
+          Write-Host '::error::A test failed every run on some OS, or a run broke outside any test: see the summary.'
+          exit 1
+
+  report:
+    needs: classify
+    # Main only, and never a dry run: the one job that may write issues runs main's own scripts.
+    if: ${{ always() && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && needs.classify.outputs.dry-run == 'false' && needs.classify.outputs.code != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: flake-plan
+          path: ${{ runner.temp }}/flake-plan
+      - name: Open or comment on the issues
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: ./quality/publish-flakes.ps1 -Plan "$env:RUNNER_TEMP/flake-plan/plan.json" -Repository $env:REPO

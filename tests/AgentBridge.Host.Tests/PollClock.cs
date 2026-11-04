@@ -9,7 +9,7 @@
 // not armed yet (which re-armed it from the later time, a wait of 25 ms becoming 50 ms).
 sealed class PollClock : TimeProvider, IAsyncDisposable
 {
-    static readonly DateTimeOffset Epoch = new(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    readonly DateTimeOffset epoch;
 
     readonly object gate = new();
     readonly List<Wait> waits = [];
@@ -20,9 +20,15 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
     long order;
     Action? onNextWait;
 
-    public PollClock() => driving = Task.Run(DriveAsync);
+    // start: where its time begins. A fixed date unless the code reads it against something on the
+    // wall clock, as a migration does against the files and spool names it writes.
+    public PollClock(DateTimeOffset? start = null)
+    {
+        epoch = start ?? new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        driving = Task.Run(DriveAsync);
+    }
 
-    public override DateTimeOffset GetUtcNow() => Epoch.AddTicks(Interlocked.Read(ref now));
+    public override DateTimeOffset GetUtcNow() => epoch.AddTicks(Interlocked.Read(ref now));
     public override long GetTimestamp() => Interlocked.Read(ref now);
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
     public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;

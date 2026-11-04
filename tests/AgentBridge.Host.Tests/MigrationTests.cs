@@ -415,7 +415,7 @@ public sealed class MigrationTests : MigrationFixture
         var before = _f.Listing();
         _f.Host.IgnoreIntake = true;
 
-        var report = await _f.OnWaitedClock(m => m.MigrateAsync(dryRun: false), verify: TimeSpan.FromSeconds(1));
+        var report = await _f.OnPollClock(m => m.MigrateAsync(dryRun: false), verify: TimeSpan.FromSeconds(1));
 
         Assert.False(report.Ok);
         Assert.Contains("did not start taking the hook spool", report.ToString());
@@ -502,7 +502,7 @@ public sealed class MigrationTests : MigrationFixture
         var before = _f.Listing();
         _f.Runtime_.Stubborn = true;
 
-        var report = await _f.OnWaitedClock(m => m.MigrateAsync(dryRun: false));
+        var report = await _f.OnPollClock(m => m.MigrateAsync(dryRun: false));
 
         Assert.False(report.Ok);
         Assert.Contains("still running", report.ToString());
@@ -1107,7 +1107,7 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         _f.Runtime_.StartsNothing = true;
         _f.Runtime_.OtherDaemon = "fedcba9876543210fedcba9876543210";
 
-        var report = await _f.OnWaitedClock(m => m.RollbackAsync(dryRun: false));
+        var report = await _f.OnPollClock(m => m.RollbackAsync(dryRun: false));
 
         Assert.False(report.Ok);
         Assert.Contains("was not seen running", report.ToString());
@@ -1121,7 +1121,7 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         _f.Runtime_.StartsNothing = true;
         _f.Runtime_.Unknown = true;
 
-        var report = await _f.OnWaitedClock(m => m.RollbackAsync(dryRun: false));
+        var report = await _f.OnPollClock(m => m.RollbackAsync(dryRun: false));
 
         Assert.False(report.Ok);
         Assert.Contains("was not seen running", report.ToString());
@@ -1233,7 +1233,7 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         bool? recorded = true;
         _f.Runtime_.OnStop = () => recorded = MigrationRecord.Load(_f.Profile).Record!.DaemonRunning;
 
-        await _f.OnWaitedClock(m => m.MigrateAsync(dryRun: false));
+        await _f.OnPollClock(m => m.MigrateAsync(dryRun: false));
 
         Assert.Null(recorded);
     }
@@ -1369,7 +1369,7 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         _f.Runtime_.Calls.Clear();
         try
         {
-            var report = await _f.OnWaitedClock(m => m.RollbackAsync(dryRun: false));
+            var report = await _f.OnPollClock(m => m.RollbackAsync(dryRun: false));
 
             Assert.False(report.Ok);
             Assert.Contains($"* {daemon} was left disabled", report.ToString());
@@ -1682,7 +1682,7 @@ public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
         // The host acknowledged the restart but its last pass has not let go yet.
         _f.Host.Linger = true;
 
-        var report = await _f.OnWaitedClock(m => m.RollbackAsync(dryRun: false));
+        var report = await _f.OnPollClock(m => m.RollbackAsync(dryRun: false));
 
         Assert.False(report.Ok);
         Assert.Contains("still holds the hook spool", report.ToString());

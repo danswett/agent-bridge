@@ -49,13 +49,14 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    AnswerService Answerer(bool platform = true, bool remoteApproval = true) => new(source, f.Processes, probe, new NoGuard(), injector, new AnswerOptions
+    AnswerService Answerer(bool platform = true, bool remoteApproval = true, TimeProvider? time = null) => new(source, f.Processes, probe, new NoGuard(), injector, new AnswerOptions
     {
         CopilotHome = f.CopilotHome,
         PlatformSupported = platform,
         CopilotRemoteApproval = remoteApproval,
         ConfirmTimeout = TimeSpan.FromSeconds(2),
         PollInterval = TimeSpan.FromMilliseconds(25),
+        Time = time ?? TimeProvider.System,
     });
 
     void Serve(ISessionAnswerer answers) =>
@@ -163,10 +164,16 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [Fact]
     public async Task A_matching_answer_followed_at_once_by_the_call_failing_is_unconfirmed()
     {
+        // The failure follows once the answerer has seen the answer alone and waits for the
+        // call's completion, on its own clock, well inside the second it allows for one. It used
+        // to follow 300 ms of real time later, which a loaded runner could stretch past that
+        // second, and the answer read delivered (#508).
+        await using var clock = new PollClock();
+        Serve(Answerer(time: clock));
         injector.OnInject = () =>
         {
             Fixture.Append(events, Recorded("q1", new { pick = "b" }));
-            _ = Task.Delay(300).ContinueWith(_ => Fixture.Append(events, Copilot.ToolDone("q1", second++, success: false)), TaskScheduler.Default);
+            clock.OnNextWait(() => Fixture.Append(events, Copilot.ToolDone("q1", second++, success: false)));
         };
         var ch = await OpenAsync();
 

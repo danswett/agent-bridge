@@ -6,7 +6,6 @@ using AgentBridge.Hooks;
 using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Migration;
-using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // An agent-ha-bridge installation laid out under a temporary HOME the way its install.ps1,
@@ -179,32 +178,17 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
     }, Runtime_, Host, Hook, time);
 
     // A migrate or rollback whose waits these fakes settle at once or never (a daemon stopped or
-    // started, the spool's claim let go or held, a host that never takes the spool), on a clock
-    // moved on by one poll each time it waits. A wait meant to run out (a daemon that never stops,
+    // started, the spool's claim let go or held, a host that never takes the spool), on a PollClock,
+    // which moves on only while the migration waits. A wait meant to run out (a daemon that never stops,
     // one never seen back) still takes its whole timeout, of this clock's time: on the real one each
     // took 2 s, and those waits were most of what made MigrationTests hold up Host.Tests (#479).
     // Not for a migration that has to see the host start (VerifyAsync): the intake runs on real time.
-    public async Task<MigrationReport> OnWaitedClock(Func<Migrator, Task<MigrationReport>> run, TimeSpan? verify = null)
+    // It starts at the wall clock's now, since the migration reads its time against the files and
+    // spool names it writes.
+    public async Task<MigrationReport> OnPollClock(Func<Migrator, Task<MigrationReport>> run, TimeSpan? verify = null)
     {
-        var clock = new WaitedClock();
-        var work = run(Migrator(verify, time: clock));
-        while (await Task.WhenAny(work, clock.Waited()) != work) { clock.Advance(PollEvery); }
-        return await work;
-    }
-
-    // Says each time something starts waiting on it (a Task.Delay is a timer).
-    sealed class WaitedClock() : FakeTimeProvider(DateTimeOffset.UtcNow)
-    {
-        readonly SemaphoreSlim waits = new(0);
-
-        public Task Waited() => waits.WaitAsync();
-
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        {
-            var timer = base.CreateTimer(callback, state, dueTime, period);
-            waits.Release();
-            return timer;
-        }
+        await using var clock = new PollClock(DateTimeOffset.UtcNow);
+        return await run(Migrator(verify, time: clock));
     }
 
     // Every file under HOME and its hash, but for what the daemon and the hook change by
