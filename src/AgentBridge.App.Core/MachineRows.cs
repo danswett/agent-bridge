@@ -14,6 +14,7 @@ public sealed class MachineRowViewModel : Observable
     string facts = "";
     string status = "";
     string? viewOnlyWhy;
+    string? heldWhy;
     bool canShowSessions;
     bool canCheckHere;
     MachineUpdateViewModel? update;
@@ -43,8 +44,25 @@ public sealed class MachineRowViewModel : Observable
     public string? ViewOnlyWhy
     {
         get => viewOnlyWhy;
-        internal set { if (Set(ref viewOnlyWhy, value)) { Raise(nameof(ViewOnly)); } }
+        internal set { if (Set(ref viewOnlyWhy, value)) { Raise(nameof(ViewOnly)); Raise(nameof(FactsWhy)); } }
     }
+    // What holds the machine's discovery, while anything does: the host's words (#788). Shown as
+    // "Discovery held" whether or not its banner was dismissed, which changes only the banner.
+    public string? HeldWhy
+    {
+        get => heldWhy;
+        internal set { if (Set(ref heldWhy, value)) { Raise(nameof(Held)); Raise(nameof(FactsWhy)); } }
+    }
+    public bool Held => heldWhy is not null;
+    // The reasons behind line 2's flag, never on the row (ui.md §6.6): its tooltip and its
+    // accessible description. Discovery held takes View only's place on the row, as in the PWA,
+    // so with both, both reasons are said, each named.
+    public string? FactsWhy => (heldWhy, viewOnlyWhy) switch
+    {
+        ({ } held, { } viewOnly) => $"View only: {viewOnly} · Discovery held: {held}",
+        ({ } held, null) => $"Discovery held: {held}",
+        _ => viewOnlyWhy,
+    };
     public bool CanShowSessions { get => canShowSessions; internal set => Set(ref canShowSessions, value); }
     // This machine's own Check: Settings' check, shown there with its outcome and install.
     public bool CanCheckHere { get => canCheckHere; internal set => Set(ref canCheckHere, value); }
@@ -79,8 +97,10 @@ public sealed partial class MainViewModel
             var count = byId.Values.Count(c => owner[c] == m);
             row.Name = m.Name;
             row.ViewOnlyWhy = ViewOnlyWhy(m);
+            // Read from the host, not the banner: a dismissed banner leaves the hold standing.
+            row.HeldWhy = connected ? m.Host.Sessions.Held?.Reason : null;
             row.Facts = m.OfflineSince is { } since ? $"Last seen {Words.Ago(since, Time.GetUtcNow())}"
-                : string.Join(" · ", new[] { connected ? Words.Plural(count, "session", "sessions") : null, row.ViewOnly ? "View only" : null }.Where(s => s is not null));
+                : string.Join(" · ", new[] { connected ? Words.Plural(count, "session", "sessions") : null, row.Held ? "Discovery held" : row.ViewOnly ? "View only" : null }.Where(s => s is not null));
             row.Status = m.Offline ? "Offline" : !connected ? "Connecting" : m.IsLocal ? "This machine" : "Online";
             row.CanShowSessions = connected && !m.Offline && machines.Count > 1;
             row.CanCheckHere = m.IsLocal && CheckLocal is not null;
