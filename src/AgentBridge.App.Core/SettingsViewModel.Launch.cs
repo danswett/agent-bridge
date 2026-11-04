@@ -176,7 +176,8 @@ public sealed partial class SettingsViewModel
         return RunAsync(async () =>
         {
             LaunchSettingsStatus = "The save has not been confirmed. If the connection is lost, reload before retrying.";
-            var result = await host.CallAsync<SettingsResult>(HostOps.Settings, new SettingsRequest(Launch: asked, LaunchWas: was, LaunchConfirmed: true));
+            asked.CheckMessageBudget();
+            var result = await host.CallAsync<SettingsResult>(HostOps.Settings, new SettingsRequest(Launch: asked, LaunchBaseline: was.Baseline, LaunchConfirmed: true));
             if (result.Conflict)
             {
                 launchConflict = true;

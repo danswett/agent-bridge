@@ -53,7 +53,7 @@ public sealed class LaunchSettingsTests : IDisposable
         Assert.Equal("Repo", was.DefaultWorkspace);
         Assert.False(control.Status().RestartRequired);
 
-        var saved = await Save(control, new SettingsRequest(Launch: was with { DefaultAgent = "claude" }, LaunchWas: was, LaunchConfirmed: true));
+        var saved = await Save(control, new SettingsRequest(Launch: was with { DefaultAgent = "claude" }, LaunchBaseline: was.Baseline, LaunchConfirmed: true));
 
         Assert.False(saved.Conflict);
         Assert.True(saved.RestartRequired);
@@ -70,17 +70,69 @@ public sealed class LaunchSettingsTests : IDisposable
     [Fact]
     public async Task A_stale_workspace_list_never_restores_a_revoked_folder_or_applies_other_fields()
     {
+        File.WriteAllText(PathOfConfig, new JsonObject
+        {
+            ["launch"] = new JsonObject
+            {
+                ["workspaces"] = JsonSerializer.SerializeToNode(new[] { new ApprovedWorkspace("Repo", folder) }, ProtocolJson.Options),
+            },
+        }.ToJsonString());
         var control = Control();
         var was = control.Status().Settings.Launch!;
-        const string changed = """{"name":"Changed elsewhere","launch":{"defaultAgent":"codex"}}""";
+        const string changed = """{"name":"Changed elsewhere","launch":{"workspaces":[]}}""";
         File.WriteAllText(PathOfConfig, changed);
 
         var result = await Save(control, new SettingsRequest(Name: "Must not apply",
-            Launch: was with { Permissions = LaunchProtocol.AllowAll }, LaunchWas: was, LaunchConfirmed: true));
+            Launch: was with { Permissions = LaunchProtocol.AllowAll }, LaunchBaseline: was.Baseline, LaunchConfirmed: true));
 
         Assert.True(result.Conflict);
-        Assert.Equal("codex", result.Settings.Launch!.DefaultAgent);
+        Assert.Empty(result.Settings.Launch!.Workspaces);
         Assert.Equal(changed, File.ReadAllText(PathOfConfig));
+    }
+
+    [Fact]
+    public async Task Default_edits_and_folder_removal_remain_possible_for_a_large_approved_list()
+    {
+        var workspaces = Enumerable.Range(0, LaunchProtocol.MaxWorkspaces).Select(i => new ApprovedWorkspace($"Repo{i}",
+            Path.Combine(folder, $"repo{i}", new string('x', 100), new string('x', 100),
+                new string('x', 100), new string('x', 100), new string('x', 50)))).ToList();
+        File.WriteAllText(PathOfConfig, new JsonObject
+        {
+            ["launch"] = new JsonObject { ["workspaces"] = JsonSerializer.SerializeToNode(workspaces, ProtocolJson.Options) },
+        }.ToJsonString());
+        var control = Control();
+        var was = control.Status().Settings.Launch!;
+
+        var saved = await Save(control, new SettingsRequest(Launch: was with { DefaultAgent = "claude" },
+            LaunchBaseline: was.Baseline, LaunchConfirmed: true));
+        var next = saved.Settings.Launch!;
+        var removed = await Save(control, new SettingsRequest(Launch: next with { Workspaces = [.. next.Workspaces.Skip(1)] },
+            LaunchBaseline: next.Baseline, LaunchConfirmed: true));
+
+        Assert.False(saved.Conflict);
+        Assert.False(removed.Conflict);
+        Assert.Equal("claude", removed.Settings.Launch!.DefaultAgent);
+        Assert.Equal(workspaces.Skip(1), removed.Settings.Launch.Workspaces);
+    }
+
+    [Fact]
+    public async Task Oversized_escaped_workspace_proposals_fail_before_any_config_field_is_written()
+    {
+        const string before = """{"name":"Original"}""";
+        File.WriteAllText(PathOfConfig, before);
+        var control = Control();
+        var was = control.Status().Settings.Launch!;
+        var asked = was with
+        {
+            Workspaces = [.. Enumerable.Range(0, LaunchProtocol.MaxWorkspaces).Select(i =>
+                new ApprovedWorkspace($"Repo{i}", Path.Combine(folder, $"repo{i}", string.Concat(Enumerable.Repeat("\U0001f600", 60)))))],
+        };
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => Save(control,
+            new SettingsRequest(Name: "Must not apply", Launch: asked, LaunchBaseline: was.Baseline, LaunchConfirmed: true)));
+
+        Assert.Contains("too large", error.Message);
+        Assert.Equal(before, File.ReadAllText(PathOfConfig));
     }
 
     [Fact]
@@ -88,7 +140,7 @@ public sealed class LaunchSettingsTests : IDisposable
     {
         var control = Control();
         var was = control.Status().Settings.Launch!;
-        var request = new SettingsRequest(Launch: was with { Enabled = false }, LaunchWas: was);
+        var request = new SettingsRequest(Launch: was with { Enabled = false }, LaunchBaseline: was.Baseline);
         Assert.Contains("confirm", (await Assert.ThrowsAsync<ArgumentException>(() => Save(control, request))).Message);
         Assert.False(File.Exists(PathOfConfig));
 

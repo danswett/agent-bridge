@@ -200,14 +200,21 @@ defaultWorkspace?, permissions, enabled }`. Paths are absolute, workspace order 
 preserved, and an absent default workspace means no configured default. Standard
 `permissions: "ask"` is the default; `"allowAll"` is an explicitly selected bypass.
 
-`host.settings` additionally accepts `launch`, `launchWas` (the complete baseline launch
-snapshot) and `launchConfirmed: true`. All three are required for launch edits. The host
+`host.settings` additionally accepts `launch`, `launchBaseline` and
+`launchConfirmed: true`. All three are required for launch edits. The baseline is the
+64-character uppercase hex SHA-256 of the baseline launch snapshot's UTF-8 protocol JSON,
+without a baseline field; the complete snapshot is not sent twice. The host
 rechecks read-only/legacy coexistence, validates new physical folder approvals and isolation,
-and compares the current launch snapshot with `launchWas`. A difference returns the normal
+and compares the current launch snapshot's hash with `launchBaseline`. A difference returns the normal
 `SettingsResult` with `conflict: true` and changes nothing in the request. The app preserves
 its draft for review and requires a deliberate reload, never blindly retries.
 Malformed/newer/invalid configuration and invalid proposals are refused without writing.
 Unknown unrelated fields and metadata on retained workspaces remain intact.
+Workspace lists are bounded to the existing 40 KiB launch JSON budget before and after path
+normalization, leaving room for defaults, the request envelope, baseline token and host
+settings/status fields within the pipe's frame limit. Defaults do not consume the workspace
+budget. Oversized proposals fail explicitly without writing;
+paths and labels are never silently truncated, and accepted lists remain editable.
 
 The existing local-App authorization boundary applies to the whole request; this grants
 no relay or agent-session management access. App settings and config/workspace CLI edits

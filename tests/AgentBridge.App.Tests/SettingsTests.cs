@@ -308,7 +308,7 @@ public sealed class SettingsTests : IAsyncLifetime
         {
             var request = d.Deserialize<SettingsRequest>(ProtocolJson.Options)!;
             Assert.True(request.LaunchConfirmed);
-            Assert.Equal(HostLaunchSettings.Default, request.LaunchWas);
+            Assert.Equal(HostLaunchSettings.Default.Baseline, request.LaunchBaseline);
             Assert.Equal(LaunchProtocol.Ask, request.Launch!.Permissions);
             return host.Status.Settings with { Launch = request.Launch };
         });
@@ -320,6 +320,34 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Empty(settings.Workspaces);
         Assert.Equal("", settings.DefaultWorkspace);
         Assert.True(settings.CanSaveLaunchSettings);
+    }
+
+    [Fact]
+    public async Task A_large_workspace_list_can_change_defaults_and_remove_folders_over_the_real_pipe()
+    {
+        var workspaces = Enumerable.Range(0, LaunchProtocol.MaxWorkspaces).Select(i => new ApprovedWorkspace($"Repo{i}",
+            Path.Combine(app, $"repo{i}", new string('x', 100), new string('x', 100),
+                new string('x', 100), new string('x', 100), new string('x', 50)))).ToList();
+        var saved = HostLaunchSettings.Default with { Workspaces = workspaces };
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, Launch: saved) });
+        Saves(d =>
+        {
+            var request = d.Deserialize<SettingsRequest>(ProtocolJson.Options)!;
+            Assert.Equal(host.Status.Settings.Launch!.Baseline, request.LaunchBaseline);
+            return host.Status.Settings with { Launch = request.Launch };
+        });
+
+        settings.DefaultAgent = "claude";
+        await settings.SaveLaunchSettingsAsync(confirmed: true);
+        Assert.False(settings.HasError, settings.Error);
+        settings.RemoveWorkspace(workspaces[0].Path);
+        await settings.SaveLaunchSettingsAsync(confirmed: true);
+
+        Assert.False(settings.HasError, settings.Error);
+        Assert.Equal(2, host.Sent(HostOps.Settings).Count);
+        Assert.Equal("claude", settings.DefaultAgent);
+        Assert.Equal(workspaces.Skip(1), settings.Workspaces);
+        Assert.False(settings.CanSaveLaunchSettings);
     }
 
     [Fact]

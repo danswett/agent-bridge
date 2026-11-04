@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Local;
@@ -93,6 +96,17 @@ public sealed record HostLaunchSettings(IReadOnlyList<ApprovedWorkspace> Workspa
 {
     public static readonly HostLaunchSettings Default = new([]);
 
+    [JsonIgnore]
+    public string Baseline => Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(this, ProtocolJson.Options)));
+
+    public void CheckMessageBudget()
+    {
+        if (JsonSerializer.SerializeToUtf8Bytes(new { workspaces = Workspaces }, ProtocolJson.Options).Length > LaunchProtocol.MaxOptionsBytes)
+        {
+            throw new ArgumentException("The workspace list is too large for launch settings. Choose fewer folders or shorter labels and paths; nothing was saved.");
+        }
+    }
+
     public bool Equals(HostLaunchSettings? other) => other is not null && DefaultAgent == other.DefaultAgent
         && DefaultWorkspace == other.DefaultWorkspace && Permissions == other.Permissions && Enabled == other.Enabled
         && (Workspaces ?? []).SequenceEqual(other.Workspaces ?? []);
@@ -158,7 +172,7 @@ public sealed record SignInRequest(string? Relay = null);
 // applied at once.
 public sealed record SettingsRequest(bool? RemoteApproval = null, string? Name = null, bool? RemoteFolderTrust = null, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
     IReadOnlyList<string>? RemoteFolderTrustDevicesWas = null, bool? DevBoxKeepAwake = null,
-    HostLaunchSettings? Launch = null, HostLaunchSettings? LaunchWas = null, bool LaunchConfirmed = false);
+    HostLaunchSettings? Launch = null, string? LaunchBaseline = null, bool LaunchConfirmed = false);
 
 public sealed record SettingsResult(HostSettingsView Settings, bool RestartRequired, bool Conflict = false);
 

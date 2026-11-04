@@ -243,7 +243,7 @@ public sealed class HostControl
         HostLaunchSettings? launch = null;
         if (request.Launch is { } asked)
         {
-            if (!request.LaunchConfirmed || request.LaunchWas is null) { throw new ArgumentException("Review and confirm the launch settings before saving."); }
+            if (!request.LaunchConfirmed || request.LaunchBaseline is null) { throw new ArgumentException("Review and confirm the launch settings before saving."); }
             var why = (options.ReadOnlyNow ?? options.ReadOnly)() ?? options.AgentHaBridge();
             if (why is not null)
             {
@@ -255,7 +255,7 @@ public sealed class HostControl
                 throw new InvalidOperationException($"Launch settings were not changed: {problem ?? string.Join("; ", configured.SectionProblems)}; fix config.json first.");
             }
             var launchBefore = Settings(configured, HostConfigFile.ReadName(options.Folder));
-            if (request.LaunchWas != launchBefore.Launch)
+            if (request.LaunchBaseline != launchBefore.Launch!.Baseline)
             {
                 log("settings not changed by the app: launch settings changed meanwhile");
                 return new SettingsResult(launchBefore, launchBefore != Volatile.Read(ref running), Conflict: true);

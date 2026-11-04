@@ -16,6 +16,7 @@ public static class LaunchSettingsEditor
         {
             throw new ArgumentException($"Choose at most {LaunchProtocol.MaxWorkspaces} workspaces.");
         }
+        asked.CheckMessageBudget();
         if (asked.DefaultAgent != "auto" && !LaunchProtocol.Agents.Contains(asked.DefaultAgent))
         {
             throw new ArgumentException("Choose a supported default agent or auto.");
@@ -66,6 +67,8 @@ public static class LaunchSettingsEditor
         {
             throw new ArgumentException("The default workspace must be one of the approved folders, or none.");
         }
-        return asked with { Workspaces = workspaces, DefaultWorkspace = defaultWorkspace };
+        var checkedSettings = asked with { Workspaces = workspaces, DefaultWorkspace = defaultWorkspace };
+        checkedSettings.CheckMessageBudget();
+        return checkedSettings;
     }
 }
