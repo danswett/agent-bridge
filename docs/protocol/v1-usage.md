@@ -356,7 +356,9 @@ E4). So the host never kills a probe:
   running from the package, which Velopack ends too: each is held again every round, so no hold
   lapses while another is waited for, and again just before the hand-over, the package looked at
   again once they are done so that a host started meanwhile is held too; one of the package's
-  hosts that no pipe reaches stops the update. Quitting the app gives up those waits (never a
+  hosts that no pipe reaches stops the update, as does this profile's own host when it answered as
+  the update began but not when asked to stop and is still running (the same process, by its start
+  time): nothing is ended, and it is started again or left running. Quitting the app gives up those waits (never a
   probe) and starts a host already stopped for the update again. Home Assistant's Install, run by the host itself,
   holds and waits for this host's probes and refuses while another profile's host runs from the
   package, whose probes it cannot hold, asked both before and after the wait. Giving up that wait

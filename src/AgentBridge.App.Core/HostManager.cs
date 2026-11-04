@@ -44,6 +44,9 @@ public interface IProcesses
     int Start(string path, IReadOnlyList<string> arguments);
     bool IsRunning(int pid);
     void Kill(int pid);
+    // When a process started, so a pid given to another since is not taken for it; null when that
+    // cannot be read.
+    DateTimeOffset? StartedAt(int pid) => null;
 }
 
 public sealed class SystemProcesses : IProcesses
@@ -84,6 +87,12 @@ public sealed class SystemProcesses : IProcesses
         }
         try { using var p = Process.GetProcessById(pid); p.Kill(entireProcessTree: false); }
         catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
+    }
+
+    public DateTimeOffset? StartedAt(int pid)
+    {
+        try { using var p = Process.GetProcessById(pid); return new DateTimeOffset(p.StartTime.ToUniversalTime(), TimeSpan.Zero); }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { return null; }
     }
 }
 
@@ -354,8 +363,9 @@ public sealed class HostManager
             stop = updateStop = Task.Run(async () =>
             {
                 var own = await OwnPidAsync();
+                var ownStarted = own is { } o ? processes.StartedAt(o) : null;
                 await OthersDoneAsync(own, giveUp);
-                await StopAsync(ProbeWait, CancellationToken.None, giveUp);
+                await StopAsync(ProbeWait, CancellationToken.None, giveUp, own is { } h ? (h, ownStarted) : null);
                 // Again just before the hand-over: every other host's hold is fresh, and one that
                 // let a probe start while this host was waited for is waited for too.
                 await OthersDoneAsync(own, giveUp);
@@ -439,8 +449,10 @@ public sealed class HostManager
     // Whether the stop under way wrote the marker: only that one is its to clear.
     bool marked;
 
-    // hold: gives up the wait for the probes only, before anything is stopped.
-    async Task StopAsync(TimeSpan probeWait, CancellationToken ct, CancellationToken hold = default)
+    // hold: gives up the wait for the probes only, before anything is stopped. host: the host this
+    // profile ran when an update began (its pid, and when it started), which must not outlive a stop
+    // that never reached it.
+    async Task StopAsync(TimeSpan probeWait, CancellationToken ct, CancellationToken hold = default, (int Pid, DateTimeOffset? Started)? host = null)
     {
         using (var waiting = CancellationTokenSource.CreateLinkedTokenSource(ct, hold))
         {
@@ -449,7 +461,15 @@ public sealed class HostManager
         try
         {
             marked = false;
-            await StopHostAsync(probeWait, ct, hold);
+            // A host that answered when the update began but not now (its pipe hung, say) was never
+            // held, nor asked to stop: still running, the update would end it, and a standalone Codex
+            // probe with it, part-way through refreshing its sign-in (#197 E4). Refused, as a host
+            // of the package that cannot be reached is, before the launcher is touched (#238 review).
+            if (!await StopHostAsync(probeWait, ct, hold) && host is { } h && processes.IsRunning(h.Pid)
+                && (h.Started is not { } began || processes.StartedAt(h.Pid) is not { } now || now == began))
+            {
+                throw new HostBusyException($"this profile's host (pid {h.Pid}) could not be reached to stop it and is still running, so its usage probes cannot be held and nothing was stopped; try again later");
+            }
             await EndLauncherAsync(probeWait, ct, hold);
         }
         // Not stopped: refused, still finishing a usage probe (#238), or the wait for its probes
@@ -463,10 +483,12 @@ public sealed class HostManager
         finally { stopping.Release(); }
     }
 
-    // Through the host's pipe, as above, once its usage probes are done (#238).
-    async Task StopHostAsync(TimeSpan probeWait, CancellationToken ct, CancellationToken hold = default)
+    // Through the host's pipe, as above, once its usage probes are done (#238). Whether it reached a
+    // host and told it to stop: false when nothing answered, which is taken as no host running.
+    async Task<bool> StopHostAsync(TimeSpan probeWait, CancellationToken ct, CancellationToken hold = default)
     {
         int? pid = null;
+        var reached = false;
         try
         {
             await using var ch = await connect(ct);
@@ -492,6 +514,7 @@ public sealed class HostManager
             MarkStopped();
             try { await ch.CallAsync(HostOps.Stop, ct: ct); }
             catch (HostErrorException e) { throw new HostRefusedException(e.Message); }
+            reached = true;
         }
         // Refused at the connection (one of the host and this app elevated, the other not): the
         // host is there and said no, as a refused stop does (#106 review).
@@ -508,6 +531,7 @@ public sealed class HostManager
         // Its pipe is gone; wait for the process too, so its files can be replaced (an update).
         var deadline = Time.GetUtcNow() + StopTimeout;
         while (pid is { } p && processes.IsRunning(p) && Time.GetUtcNow() < deadline) { await Task.Delay(Poll, ct); }
+        return reached;
     }
 
     // The launcher (agent-bridge-hostw) outlives a host it is about to start again: between crash
@@ -547,6 +571,8 @@ public sealed class HostManager
     // stopped (every update the app starts) is left alone, so no stop is begun only to be abandoned.
     // One still running is stopped only once its usage probes are done within probeWait; otherwise
     // it is not asked to stop at all, and the reason is returned: Velopack ends it with the package.
+    // A host its pipe cannot reach is taken as stopped here: Velopack ends what runs from the package
+    // whatever this says, so the hooks are best effort (docs/app-windows.md).
     public async Task<string?> StopWithinAsync(TimeSpan probeWait, CancellationToken ct = default)
     {
         if (!await IsRunningAsync(ct)) { return null; }

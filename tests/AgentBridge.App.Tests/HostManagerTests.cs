@@ -543,6 +543,59 @@ public sealed class HostManagerTests : IAsyncLifetime
         Assert.Single(host.Sent(HostOps.Stop));
     }
 
+    [Theory]
+    [Trait("Category", "Network")]
+    // The same process still there, or its pid since given to another.
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_update_whose_host_stops_answering_mid_stop_but_still_runs_is_refused_and_nothing_is_ended(bool pidReused)
+    {
+        // The host answers when the update begins, then its pipe hangs while its process runs on.
+        var answering = true;
+        var m = new HostManager(manager.Layout, tasks, processes,
+            ct =>
+            {
+                if (Volatile.Read(ref answering)) { return LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct); }
+                if (pidReused) { lock (processes) { processes.StartTimes[4242] = Make.T0.AddHours(1); } }
+                throw new TimeoutException("the pipe did not answer");
+            },
+            userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(1),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(50),
+            ProbeWait = TimeSpan.FromSeconds(5),
+            ProbePoll = TimeSpan.FromMilliseconds(50),
+            PackageHosts = () => [4242],
+        };
+        processes.Alive.Add(4242);
+        processes.StartTimes[4242] = Make.T0;
+        host.On(HostOps.Status, _ =>
+        {
+            Volatile.Write(ref answering, false);
+            return FakeHost.StatusOf();
+        });
+        host.Start();
+        var applied = false;
+
+        var update = m.StopAndApplyAsync(() => { }, () => applied = true);
+
+        if (pidReused)
+        {
+            await update;
+            Assert.True(applied);
+        }
+        else
+        {
+            var e = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => update);
+            Assert.Contains("could not be reached to stop it and is still running", e.Message, StringComparison.Ordinal);
+            Assert.False(applied);
+            Assert.False(File.Exists(StopMarker));
+        }
+        Assert.Empty(processes.Killed);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Two_stops_waiting_on_the_same_usage_probe_both_end_with_the_host_stopped_and_the_marker_kept()
