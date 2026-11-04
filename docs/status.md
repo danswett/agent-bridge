@@ -204,6 +204,16 @@ Source outages mean unknown visibility, not idle work or missed consent.
 The following handoff/resumption notes are **historical, 2026-11-02**; use canonical
 issues and PRs for current heads, owners and gates:
 
+**Current-run verification (#384, partial #231):** the local-App backend now provides
+explicitly consented new-session tests, shared by the forthcoming Settings controls and
+guided flow. It requires the exact launch request/session binding, a new process, the main
+provider's unique reply and a fresh hook naming that same session/process. Trust and
+sign-in remain the person's actions in the session window. Timeouts/cancellation do not
+close sessions or count as success, and results are current-host-run-only and invalidated
+for configuration/process changes or expiration. The guided shell, controls, installer
+integration and disposable end-to-end acceptance remain incomplete; this is not dogfood
+readiness. HA onboarding is excluded. See [the pipe contract](protocol/local-pipe.md#current-run-verification).
+
 **First-run foundation (#384, partial #231):** a shared local-host agent readiness
 report and compact read-only Agents section in Windows Settings are implemented in this
 change. It distinguishes executable/version detection, ownership/intake evidence and actual

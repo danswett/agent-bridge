@@ -28,6 +28,8 @@ public sealed class LocalApiTests : IAsyncLifetime
     HostControl control = null!;
     AgentReadinessService readiness = null!;
     AgentSetupService setup = null!;
+    AgentVerificationService verification = null!;
+    readonly AgentVerificationTests.Launcher verificationLauncher = new();
     UpdateService updates = null!;
     LocalServer server = null!;
     readonly P256KeyPair hostKey = P256KeyPair.Generate();
@@ -73,10 +75,12 @@ public sealed class LocalApiTests : IAsyncLifetime
         setup = new AgentSetupService(new StandaloneHooks(profile,
             new IntakeState.AgentHomes(roots.CopilotHome, roots.ClaudeHome, roots.CodexHome), hookSource,
             Path.Combine(profile, "no-legacy"), () => null, new SetupAgents(), new EmptyMarketplaces()), () => null);
+        verification = new AgentVerificationService(source, verificationLauncher, new AgentVerificationTests.Notices(), () => null);
         control = new HostControl(new HostControlOptions
         {
             Agents = readiness,
             AgentSetup = setup,
+            AgentVerification = verification,
             Updates = updates,
             Profile = "test",
             Folder = profile,
@@ -107,6 +111,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         authorization.Dispose();
         hostKey.Dispose();
         if (readiness is not null) { await readiness.DisposeAsync(); }
+        if (verification is not null) { await verification.DisposeAsync(); }
         await source.DisposeAsync();
         f.Dispose();
         try { Directory.Delete(profile, recursive: true); } catch (IOException) { }
@@ -263,6 +268,43 @@ public sealed class LocalApiTests : IAsyncLifetime
 
         Assert.Null(IntakeState.Load(profile).State);
         Assert.False(setup.RestartRequired);
+    }
+
+    [Fact]
+    public async Task The_local_app_explicitly_starts_and_cancels_verification_and_status_carries_the_same_run()
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentVerificationCapability, (await ch.HelloAsync()).Capabilities);
+        var request = new AgentVerificationRequest(Guid.NewGuid().ToString("D"), "copilot", "Test");
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsVerify, request));
+        Assert.Equal(0, verificationLauncher.Calls);
+
+        var report = await ch.CallAsync<AgentVerificationReport>(HostOps.AgentsVerify, request with { Confirmed = true });
+        await verificationLauncher.Called.Task.WaitAsync(Patience);
+        Assert.Equal(report.Request, Assert.Single((await ch.CallAsync<HostStatus>(HostOps.Status)).AgentVerifications!).Request);
+        var cancelled = await ch.CallAsync<AgentVerificationReport>(HostOps.AgentsVerifyCancel, new AgentVerificationCancel(request.Request));
+
+        Assert.Equal(VerificationState.Cancelled, cancelled.State);
+        Assert.Equal(1, verificationLauncher.Calls);
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    [InlineData(CallerKind.HostCli)]
+    public async Task Verification_and_its_cancellation_require_a_fresh_local_app_identity(CallerKind kind)
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentVerificationCapability, (await ch.HelloAsync()).Capabilities);
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+
+        var request = new AgentVerificationRequest(Guid.NewGuid().ToString("D"), "copilot", "Test", Confirmed: true);
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsVerify, request));
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsVerifyCancel, new AgentVerificationCancel(request.Request)));
+
+        Assert.Equal(0, verificationLauncher.Calls);
+        Assert.Empty(verification.Snapshot);
+        Assert.DoesNotContain(HostOps.AgentVerificationCapability, (await ch.HelloAsync()).Capabilities);
     }
 
     sealed class SetupAgents : IAgentLocator

@@ -54,6 +54,7 @@ public sealed class HostControlOptions
     public Func<string?>? ReadOnlyNow { get; init; }
     public AgentReadinessService? Agents { get; init; }
     public AgentSetupService? AgentSetup { get; init; }
+    public AgentVerificationService? AgentVerification { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -82,6 +83,7 @@ public sealed class HostControl
         if (options.Updates is { } updates) { updates.AsksChanged += Changed; }
         if (options.Agents is { } agents) { agents.Changed += Changed; }
         if (options.AgentSetup is { } setup) { setup.Changed += Changed; }
+        if (options.AgentVerification is { } verification) { verification.Changed += Changed; }
         relay = options.LocalOnly ? new RelayStatus(RelayState.Off, Detail: "this host serves this machine's apps only (--local-only)")
             : options.Account() is null ? new RelayStatus(RelayState.SignedOut, options.Relay()?.ToString())
             : new RelayStatus(RelayState.Connecting, options.Relay()?.ToString());
@@ -114,6 +116,7 @@ public sealed class HostControl
 
     public bool HasAgentReadiness => options.Agents is not null;
     public bool HasAgentSetup => options.AgentSetup is not null;
+    public bool HasAgentVerification => options.AgentVerification is not null;
 
     HostStatus StatusLocked(bool fresh = false)
     {
@@ -141,6 +144,7 @@ public sealed class HostControl
             ReadOnly = fresh && options.ReadOnlyNow is { } afresh ? afresh() : options.ReadOnly(),
             DevBox = options.DevBox(),
             Agents = options.Agents?.Snapshot,
+            AgentVerifications = options.AgentVerification?.Snapshot,
         };
     }
 
@@ -177,6 +181,12 @@ public sealed class HostControl
             case HostOps.AgentsSetup when options.AgentSetup is not null:
                 return await options.AgentSetup.ApplyAsync(Read<AgentSetupRequest>(data)
                     ?? throw new ArgumentException("Agent setup needs an agent and an action."));
+            case HostOps.AgentsVerify when options.AgentVerification is not null:
+                return options.AgentVerification.Start(Read<AgentVerificationRequest>(data)
+                    ?? throw new ArgumentException("Verification needs a request UUID, agent, workspace and explicit confirmation."));
+            case HostOps.AgentsVerifyCancel when options.AgentVerification is not null:
+                return options.AgentVerification.Cancel((Read<AgentVerificationCancel>(data)
+                    ?? throw new ArgumentException("Choose the verification to stop observing.")).Request);
             case HostOps.SignIn:
                 return await SignInAsync(Read<SignInRequest>(data) ?? new SignInRequest());
             case HostOps.SignInCancel:
