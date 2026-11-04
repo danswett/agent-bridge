@@ -69,9 +69,14 @@ test('a prompt is the person\'s when the host doesn\'t say who sent it, and a se
   assert.equal(readSession({ id: 'x', activity: { userMessage: 'hi' } }).activity.userMessageFrom, 'person');
   assert.deepEqual([from('person'), from('schedule'), from('agent'), from('other')], ['person', 'schedule', 'agent', 'other']);
   assert.deepEqual([from(undefined), from(null)], ['person', 'person']);
-  // Present but malformed is still a value the host sent: not the person's, as in the app.
-  assert.deepEqual([from(''), from(4), from(true), from({})], ['other', 'other', 'other', 'other']);
-  assert.equal(from('cron'), 'other');
+  // Text this client doesn't know, empty text too, is still a sender that isn't the person.
+  assert.deepEqual([from(''), from('cron')], ['other', 'other']);
+  // A sender that isn't text is refused with the whole activity, as the host's reader does
+  // (v1-sessions.md, strict): the session keeps an empty one, so no prompt shows, never as theirs.
+  for (const v of [4, true, {}, ['schedule']]) {
+    const a = readSession({ id: 'x', activity: { userMessage: 'hi', userMessageFrom: v, response: 'Done.', turnCount: 3 } }).activity;
+    assert.deepEqual([a.userMessage, a.response, a.turnCount, a.userMessageFrom], [null, null, null, 'person'], JSON.stringify(v));
+  }
   assert.equal(readSession({ id: 'x', activity: { userMessageLabel: 4 } }).activity.userMessageLabel, null);
   assert.equal(readSession({ id: 'x', activity: { userMessageLabel: '4' } }).activity.userMessageLabel, '4');
 });

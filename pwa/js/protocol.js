@@ -47,8 +47,9 @@ export const readFieldType = tolerant(['choice', 'multi', 'boolean', 'text', 'nu
 // edge is worse than none.
 export const readDriver = tolerant(['person', 'agent'], 'person');
 // Who sent activity.userMessage (#489). Absent (or null) is the person, as from a host before the
-// field; any other value this client doesn't know, malformed ones too, is still one the host says
-// the person didn't type, so it is never drawn as theirs.
+// field; any other text this client doesn't know is still a sender the host says isn't the
+// person, so it is never drawn as theirs. A value that isn't text at all is refused with the whole
+// activity (readActivity): strict under v1-sessions.md, as the host's reader has it.
 export const readUserMessageFrom = (v) => (v === undefined || v === null ? 'person' : tolerant(['person', 'schedule', 'agent', 'other'], 'other')(v));
 // An outcome from a newer host is unconfirmed: never delivered, and never a reason to
 // answer again.
@@ -181,11 +182,38 @@ export function readBackground(raw) {
   return agents || shells ? { agents, shells } : null;
 }
 
+// A Session's activity as the views use it, or null when the host's reader would refuse it: a
+// userMessageFrom that isn't text (v1-sessions.md, strict fields). Read as absent, a prompt a
+// schedule or an agent sent would be drawn as the person's own words; the session keeps an empty
+// activity instead (rule 4), so no prompt is shown at all.
+export function readActivity(raw) {
+  const a = obj(raw) ?? {};
+  if (a.userMessageFrom !== undefined && a.userMessageFrom !== null && typeof a.userMessageFrom !== 'string') { return null; }
+  return {
+    response: str(a.response),
+    responseTruncated: a.responseTruncated === true,
+    reasoning: str(a.reasoning),
+    currentTool: readTool(a.currentTool),
+    history: Array.isArray(a.history) ? a.history.map(readTool).filter(Boolean) : null,
+    userMessage: str(a.userMessage),
+    // Who sent it (person, schedule, agent or other), and a short label of the host's, such as
+    // a schedule's number: an agent's text, shown only through prompt-origin.js (#489).
+    userMessageFrom: readUserMessageFrom(a.userMessageFrom),
+    userMessageLabel: str(a.userMessageLabel),
+    turnCount: num(a.turnCount),
+    compactions: num(a.compactions),
+    background: readBackground(a.background),
+    // Whose the top-level response and reasoning are, and the main agent's own beside them
+    // (attribution.js says which to show). A host before sub-agents sends neither.
+    source: readSource(a.source),
+    own: readOwn(a.own),
+  };
+}
+
 // A Session as the views use it, or null if it has no id to file it under.
 export function readSession(raw) {
   const s = obj(raw);
   if (!s || !str(s.id)) { return null; }
-  const a = obj(s.activity) ?? {};
   return {
     id: s.id,
     agent: readAgent(s.agent),
@@ -202,25 +230,7 @@ export function readSession(raw) {
     driver: readDriver(s.driver),
     // Which agent, when the host knows; only ever with an agent driving.
     driverPrincipal: readDriver(s.driver) === 'agent' ? str(s.driverPrincipal) : null,
-    activity: {
-      response: str(a.response),
-      responseTruncated: a.responseTruncated === true,
-      reasoning: str(a.reasoning),
-      currentTool: readTool(a.currentTool),
-      history: Array.isArray(a.history) ? a.history.map(readTool).filter(Boolean) : null,
-      userMessage: str(a.userMessage),
-      // Who sent it (person, schedule, agent or other), and a short label of the host's, such as
-      // a schedule's number: an agent's text, shown only through prompt-origin.js (#489).
-      userMessageFrom: readUserMessageFrom(a.userMessageFrom),
-      userMessageLabel: str(a.userMessageLabel),
-      turnCount: num(a.turnCount),
-      compactions: num(a.compactions),
-      background: readBackground(a.background),
-      // Whose the top-level response and reasoning are, and the main agent's own beside them
-      // (attribution.js says which to show). A host before sub-agents sends neither.
-      source: readSource(a.source),
-      own: readOwn(a.own),
-    },
+    activity: readActivity(s.activity) ?? readActivity({}),
     question: readQuestion(s.question),
     // Absent (null) from a host that lists none, or can't: Claude and Codex so far.
     subagents: Array.isArray(s.subagents) ? s.subagents.map(readSubagent).filter(Boolean) : null,

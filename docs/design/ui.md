@@ -623,10 +623,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   platform radius), at most 85% of the column's width, so a short message beside a short reply
   is still at the right (#255).
 - **A prompt you didn't type** (#489): a schedule's (`activity.userMessageFrom` `schedule`), another
-  agent's (`agent`), or one the host knows only as not yours (`other`, and any other value a
-  client doesn't know, malformed ones too). It is **never a bubble**, and never at the right,
-  which is yours only. A prompt from you, and every prompt from a host that doesn't send the
-  field (or sends it null), keeps the bubble.
+  agent's (`agent`), or one the host knows only as not yours (`other`, and any other text a
+  client doesn't know). It is **never a bubble**, and never at the right, which is yours only.
+  A prompt from you, and every prompt from a host that doesn't send the field (or sends it
+  null), keeps the bubble. A sender that isn't text is refused with the whole `activity`
+  ([v1-sessions.md](../protocol/v1-sessions.md), strict fields), so no prompt shows at all.
   - **At the column's start, across it,** like an event line; on a phone, a full-width row.
   - **A label line in agent colour, with an icon:** a clock (`icons/clock.svg`) and "Scheduled
     prompt · #4" for a schedule (its `userMessageLabel`: "#" before a number, anything else in
