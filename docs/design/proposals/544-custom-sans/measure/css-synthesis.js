@@ -1,4 +1,5 @@
-// Proposal #544 (not approved): proves CSS renders real faces, not synthesized ones, in headless Chromium.
+// Proposal #544 (not approved): proves CSS renders real faces, not synthesized ones, in headless Chromium,
+// and measures the width of a reading paragraph in each face against Segoe UI Variable.
 //   NODE_PATH=<repo>/tools/design-mockups/node_modules node css-synthesis.js <repo root> > results/css-synthesis.md
 // For each family it declares the complete @font-face set under one name with font-synthesis: none, then
 // renders every weight and style the ramps use through ordinary CSS (font-weight, font-style, <strong>, <em>)
@@ -76,6 +77,25 @@ function cssMatch(faces, w, s) {
     }
     out.push('');
   }
+  // Width: the same reading paragraph on one line at 14 px (the Windows reading role is 15, rows 14),
+  // relative to Segoe UI Variable, and the characters that fit the 680 px reading measure.
+  const segoe = process.env.SEGOE_UI_VARIABLE || 'C:/Windows/Fonts/SegUIVar.ttf';
+  const para = 'The banner listens for TrustStateChanged, but LaunchView only checks it once, at load. I will subscribe in OnNavigatedTo and clear it as soon as the folder is trusted, then rerun the tests on the devbox.';
+  const faces = [['Slipgates Sans A', P + 'SlipgatesSansA-Regular.woff2'], ['Slipgates Sans B', P + 'SlipgatesSansB-Regular.woff2'], ['Agent Bridge Mono', M + 'AgentBridgeMono-Regular.woff2']];
+  const rows = [];
+  if (fs.existsSync(segoe)) rows.push(['Segoe UI Variable (Text, wght 400)', `url(data:font/ttf;base64,${fs.readFileSync(segoe).toString('base64')}) format('truetype')`, "font-variation-settings:'opsz' 10.5"]);
+  for (const [n, f] of faces) rows.push([n, woff2(f), '']);
+  const widths = [];
+  for (const [n, src, extra] of rows) {
+    await page.setContent(`<style>@font-face{font-family:W;src:${src};font-weight:100 900}body{margin:0}span{font:400 14px W;white-space:nowrap;font-kerning:normal;${extra}}</style><span>${para}</span>`);
+    await page.evaluate(() => document.fonts.ready);
+    widths.push([n, await page.evaluate(() => document.querySelector('span').getBoundingClientRect().width)]);
+  }
+  const base = widths[0][0].startsWith('Segoe') ? widths[0][1] : null;
+  out.push('## Reading width at 14 px', '', `One paragraph of ${para.length} characters, set on one line at 14 px, Regular.`, '',
+    '| Face | Width (px) | Relative to Segoe UI Variable | Characters in 680 px |', '|---|---|---|---|');
+  for (const [n, w] of widths) out.push(`| ${n} | ${w.toFixed(1)} | ${base ? (w / base).toFixed(3) : '–'} | ${Math.round(680 / (w / para.length))} |`);
+  out.push('');
   await browser.close();
   process.stdout.write(out.join('\n') + '\n');
 })();

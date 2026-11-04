@@ -75,3 +75,14 @@ Each row renders the text through ordinary CSS on the full family and compares i
 | 600 italic | font-weight/font-style | auto | no 600 italic face: SYNTHESIZED (differs from SlipgatesSansA-Regular.woff2, the face CSS matching picks) | 496.81 | – |
 | 700 italic | &lt;strong>&lt;em> | auto | no 700 italic face: SYNTHESIZED (differs from SlipgatesSansA-Regular.woff2, the face CSS matching picks) | 496.81 | – |
 
+## Reading width at 14 px
+
+One paragraph of 203 characters, set on one line at 14 px, Regular.
+
+| Face | Width (px) | Relative to Segoe UI Variable | Characters in 680 px |
+|---|---|---|---|
+| Segoe UI Variable (Text, wght 400) | 1229.1 | 1.000 | 112 |
+| Slipgates Sans A | 1340.6 | 1.091 | 103 |
+| Slipgates Sans B | 1329.6 | 1.082 | 104 |
+| Agent Bridge Mono | 1705.2 | 1.387 | 81 |
+

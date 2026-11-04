@@ -13,8 +13,10 @@ fonts declares a Reserved Font Name.
 | **Slipgates Sans A** | A custom Iosevka 34.9.1 build, quasi-proportional (the way Iosevka Aile is built), using the monospace's IoskeleyMono variants: tailed `l`, flag `1`, open 4/6/9, flat-top 3. Width 540. | 8 statics: Regular, Medium, SemiBold, Bold, each with its true italic. Hinted with ttfautohint. |
 | **Slipgates Sans B** | Inter 4.1 with five alternates frozen into the defaults (`cv05` tailed l, `cv02` open 4, `cv03`/`cv04` open 6 and 9, `cv09` flat-top 3, `ss07` square punctuation), subset and renamed. No outline is redrawn. | 8 statics (hinted), plus the variable pair `SlipgatesSansB[opsz,wght]` and `SlipgatesSansB-Italic[opsz,wght]` (unhinted, as Inter ships them). |
 
-Both cover the monospace's character set plus Vietnamese (Latin Extended Additional) and
-Spacing Modifier Letters.
+A covers the monospace's whole character set plus Vietnamese (Latin Extended Additional) and
+Spacing Modifier Letters. B covers the same Latin, Greek and Cyrillic text plus Vietnamese,
+but Inter has few of the mono's symbols (arrows, maths, box drawing), so those fall back to
+the mono ([fonts.md](../measure/results/fonts.md)).
 
 ## Rebuilding
 

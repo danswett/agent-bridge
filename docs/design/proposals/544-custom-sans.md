@@ -177,7 +177,7 @@ All measured from the font files with fontTools, DirectWrite and headless Chromi
 | Cap height / em | 0.690 | 0.728 | 0.690 | 0.700 | 0.711 |
 | Inline mono scale for an x-height match (`type.inlineMono`) | **1.000** | **1.050** | — | 0.962 | 1.016 |
 | Average advance / em | 0.494 | 0.510 | 0.600 | 0.469 | 0.475 |
-| Width of a reading paragraph at 14 px, relative to Segoe | 1.10 | 1.08 | — | 1.00 | — |
+| Width of a reading paragraph at 14 px, relative to Segoe | 1.091 | 1.082 | 1.387 | 1.000 | — |
 | Codepoints | 3054 | 1561 | 2718 | 2417 | 927 |
 | Vietnamese (U+1E00–1EFF) | 256 | 255 | **3** | 250 | 101 |
 | Real faces | 8 statics | 8 statics + 2 variable | 6 statics (no 500) | variable font, upright only (no italic, 500 → Semibold) | — |
@@ -193,10 +193,11 @@ What the numbers say:
 
 - **Inline mono:** A matches exactly, and B needs ×1.05. Both are closer to 1 than Segoe's
   ×0.962, because the mono was drawn tall for Segoe.
-- **Width:** both sets run about 8 to 10% wider than Segoe UI Variable. So a row truncates a
-  few characters earlier at the same size, and a reply's measure in characters is about 7%
-  shorter. ui.md's 68-character measure would want `max-width` raised from about 680–712 px to
-  about 730–760 px. Nothing else in the layouts changes.
+- **Width:** set as a paragraph, both run about 8 to 9% wider than Segoe UI Variable
+  (css-synthesis.md, "Reading width"). So a row truncates a few characters earlier at the same
+  size, and a reply's measure holds about 8% fewer characters: 104 rather than 112 in 680 px
+  at 14 px. Keeping ui.md's measure would want `max-width` raised by the same 8 to 9%, from
+  about 680–712 px to about 735–775 px. Nothing else in the layouts changes.
 - **Coverage:** both cover every Latin, Greek and Cyrillic letter a UI string needs, plus
   Vietnamese. B lacks most IPA, arrows, maths and box drawing, which fall back to the mono (by
   stacking it second), then the system face. That is the right order, because the mono covers
@@ -366,7 +367,8 @@ Each has the recommended answer first.
    Board: [synthesis](544-custom-sans/proposal-544-synthesis.png) (last row),
    [app](544-custom-sans/proposal-544-app.png).
 7. **Reading measure:**
-   - **(a) Widen `max-width` by about 7% to keep about 68 characters (recommended).**
+   - **(a) Widen `max-width` by about 8% to keep the same number of characters per line
+     (recommended).**
    - (b) Keep the pixel width, giving a shorter measure.
 
    Board: [windows](544-custom-sans/proposal-544-windows.png),

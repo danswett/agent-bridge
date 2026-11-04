@@ -9,13 +9,22 @@ const fs = require('fs'), path = require('path');
 const { chromium } = require('playwright');
 const [projectDir, outDir, only] = process.argv.slice(2);
 const index = JSON.parse(fs.readFileSync(path.join(projectDir, 'canvas.json'), 'utf8'));
-const files = {};
+const sources = {};
+for (const f of fs.readdirSync(projectDir)) if (f.endsWith('.dc.html')) sources[f] = fs.readFileSync(path.join(projectDir, f), 'utf8');
 // A board's helmet may load a font file by a path relative to the canvas folder
-// (src: url(../../docs/....woff2)); the page is built from strings, so such URLs are inlined.
+// (src: url(../../docs/....woff2)); the page is built from strings, so such URLs are inlined,
+// only for the board being rendered and the boards it imports.
 const fontUrl = /url\((['"]?)((?:\.\.?\/)[^'")]+\.(woff2|ttf|otf))\1\)/g;
 const mime = { woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf' };
-for (const f of fs.readdirSync(projectDir)) if (f.endsWith('.dc.html')) files[f] = fs.readFileSync(path.join(projectDir, f), 'utf8')
-  .replace(fontUrl, (_, q, rel, ext) => `url(data:${mime[ext]};base64,${fs.readFileSync(path.join(projectDir, rel)).toString('base64')})`);
+const inlined = {};
+const inline = f => inlined[f] ??= sources[f].replace(fontUrl, (_, q, rel, ext) =>
+  `url(data:${mime[ext]};base64,${fs.readFileSync(path.join(projectDir, rel)).toString('base64')})`);
+function filesFor(file, out = {}) {
+  if (out[file] || !sources[file]) return out;
+  out[file] = inline(file);
+  for (const [, name] of sources[file].matchAll(/<dc-import\b[^>]*\bname="([^"]+)"/g)) filesFor(name.endsWith('.dc.html') ? name : name + '.dc.html', out);
+  return out;
+}
 
 const nm = p => path.join(__dirname, 'node_modules', p);
 // @font-face can't redefine generic families, so system-ui, sans-serif and -apple-system
@@ -127,7 +136,7 @@ async function renderBoard(page, file, w, h) {
     const wrap = document.createElement('div'); wrap.id = 'board'; wrap.style.display = 'inline-block';
     wrap.appendChild(root); document.body.appendChild(wrap);
     return true;
-  }, { files, file, fontCss, standInSrc: standIn.toString() });
+  }, { files: filesFor(file), file, fontCss, standInSrc: standIn.toString() });
 }
 
 (async () => {
