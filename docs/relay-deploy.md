@@ -132,8 +132,12 @@ replicas no stable addresses to forward to, so that step is the `standard` size 
    it, and the smoke test runs at its version. The run still fails, and the **incident** job
    (`issues: write`, no Azure sign-in) opens an `area:ops` issue from
    [ops/templates/incident.md](../ops/templates/incident.md): mitigated if the rollback passed its
-   smoke test, otherwise saying production may still run the failed build. A failure before the
-   roll (sign-in, baseline) changes nothing and rolls nothing back.
+   smoke test, otherwise saying production may still run the failed build, naming the digest
+   production ran before the roll as the recovery target (or saying there is none) and the
+   failed build's digest as not to be used. The rollback's own roll writes its summary section
+   as "Production, automatic rollback", with no `rollback_to` hint, since the image it replaces
+   is the failed build. A failure before the roll (sign-in, baseline) changes nothing and rolls
+   nothing back.
 7. **rollback**: run the workflow by hand with `rollback_to=<image digest>` (`sha256:…`); see
    [Rollback](#rollback). Same approval, same script, same smoke test and bake. Not scanned
    again: it returns to an image that ran. Its baseline records an unknown device or restart
@@ -372,7 +376,10 @@ Staging has its own keys in `kv-abrelay-stg-wus2`; rotating them affects only th
   roll, or ran this same image; the incident then says so, and the next item is the way back.
 - **A bad build:** run `relay.yml` (Actions, *Relay deploy*, *Run workflow* on `main`) with
   `rollback_to=<digest>`, the `sha256:…` the production job's summary gives under "roll back"
-  for the image it replaced, and approve the `production` environment as for any deploy.
+  for the image it replaced (in its first "Production" section: after an automatic rollback
+  that didn't finish, take the incident's recovery target instead, and never the
+  "Production, automatic rollback" section's, whose replaced image is the failed build),
+  and approve the `production` environment as for any deploy.
   `infra/rollback-target.sh` accepts only a digest that a revision of the production app has
   run, and takes the commit that revision ran as the version the smoke test expects; anything
   else is refused before production is touched. To see what production has run:

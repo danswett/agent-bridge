@@ -73,6 +73,9 @@ hint() {
 }
 AZ_IMAGE="reg.azurecr.io/relay@$good" AZ_VERSION="$v1" hint "production's summary names the digest it replaced as the rollback target" "rollback_to=$good"
 AZ_IMAGE="reg.azurecr.io/relay:$v1" AZ_VERSION="$v1" hint "an image deployed by tag is not offered as a rollback target" "was not deployed by digest"
+# relay.yml's automatic rollback (#577) replaces the build that failed: never offered as the way back.
+AZ_IMAGE="reg.azurecr.io/relay@$good" AZ_VERSION="$v1" REPLACING_FAILED=true hint "an automatic rollback's summary sends a person to the incident, not to the failed build" "the build that failed in this run"
+if grep -qF -- "rollback_to=" "$work/summary"; then echo "FAIL: an automatic rollback's summary offers the build it replaced"; failures=$((failures + 1)); else echo "ok: an automatic rollback's summary never offers the build it replaced"; fi
 
 if [ "$failures" -ne 0 ]; then echo "$failures failure(s)"; exit 1; fi
 echo "all passed"

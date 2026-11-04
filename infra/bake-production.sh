@@ -295,8 +295,20 @@ incident() {
     rows="$rows\\n| $(pacific) | Rolled back automatically to \`$previous\` ($revert_version); smoke test passed | relay.yml production job |"
   else
     status=investigating
-    impact="Production was rolled to \`$image\` ($version), and $what. The automatic rollback did not complete (target: $target, roll: $roll, smoke test: $smoke), so **production may still run the failed build**. Follow ops/runbooks/relay-bad-deploy.md now."
+    # The way back a person takes from here. Not this run's summary's last "roll back" line: once
+    # the automatic rollback has begun rolling, the image production runs, and so the one that
+    # line names, can be the failed build (#577).
+    local bad_digest='(unreadable)' recover
+    [ "$image" = "(unreadable)" ] || bad_digest="${image##*@}"
+    if [ "$previous" = "(unreadable)" ] || [ "$previous" = "$bad_digest" ]; then
+      recover="No verified recovery target: production ran no image by digest from this registry before this deploy, or the run could not tell. Find a digest production ran before this deploy and check it (ops/runbooks/relay-bad-deploy.md) before rolling back"
+    else
+      recover="Recovery target: \`$previous\`, the digest production ran before this deploy (\`rollback_to=$previous\`)"
+    fi
+    # \n\n as in rows below: awk -v makes it a paragraph break.
+    impact="Production was rolled to \`$image\` ($version), and $what. The automatic rollback did not complete (target: $target, roll: $roll, smoke test: $smoke), so **production may still run the failed build**. Follow ops/runbooks/relay-bad-deploy.md now.\\n\\n$recover. **Do not roll back to \`$bad_digest\`**: it is the build that failed."
     rows="$rows\\n| $(pacific) | Automatic rollback did not complete (target: $target, roll: $roll, smoke test: $smoke) | relay.yml production job |"
+    rows="$rows\\n| $(pacific) | $recover; not \`$bad_digest\`, the failed build | relay.yml production job |"
   fi
 
   url=$(awk -v title="$title" -v status="$status" -v started="$failed_at" -v detected="$(pacific), by relay.yml (A-BAKE): $run_url" \

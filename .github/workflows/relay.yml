@@ -336,6 +336,7 @@ jobs:
         env:
           IMAGE_REF: ${{ steps.revert_target.outputs.image }}
           VERSION: ${{ steps.revert_target.outputs.version }}
+          REPLACING_FAILED: 'true'
         run: ./infra/roll-production.sh "$IMAGE_REF" "$VERSION"
       - name: Smoke test after the rollback
         id: revert_smoke

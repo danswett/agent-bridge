@@ -13,8 +13,12 @@ back by hand.
 
 ## Roll back (Owner approves)
 
-1. Find the digest the deploy replaced. The production job's summary shows it under
-   "roll back". Or list what production has run:
+1. Find the digest the deploy replaced. After a failed automatic rollback, the incident names it
+   as the **recovery target** (what production ran before the roll), and names the failed
+   build's digest not to use; with no recovery target there, find one in the list below. Otherwise, the
+   production job's summary shows it under "roll back" in its **first** "Production" section.
+   Never take it from a "Production, automatic rollback" section: the image that one replaced
+   is the failed build. Or list what production has run:
    ```powershell
    az containerapp revision list --subscription $sub -g $rg -n $app --all --query "[].{created: properties.createdTime, image: properties.template.containers[0].image, version: properties.template.containers[0].env[?name=='Relay__Version'].value | [0]}" -o table
    ```

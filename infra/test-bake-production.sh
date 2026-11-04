@@ -276,7 +276,21 @@ check "a smoke test that failed after the roll and rolled back opens a mitigated
 
 incident; export RECOVERY_SMOKE=failure; bake incident; exits 0
 body_has "**Status:** investigating"; body_has "production may still run the failed build"; body_has "smoke test: failure"
-check "a rollback whose smoke test failed says production may still run the failed build"
+body_has "Recovery target: \`$old\`"; body_has "rollback_to=$old"; body_has "**Do not roll back to \`$new\`**"
+body_lacks "rollback_to=$new"; body_has "; not \`$new\`, the failed build |"
+check "a rollback whose smoke test failed names the digest from before the deploy as the way back, never the failed one"
+
+incident; export RECOVERY_ROLL=failure RECOVERY_SMOKE=skipped; bake incident; exits 0
+body_has "**Status:** investigating"; body_has "roll: failure"; body_has "Recovery target: \`$old\`"
+body_has "**Do not roll back to \`$new\`**"; body_lacks "rollback_to=$new"
+check "a rollback whose roll failed names the digest from before the deploy as the way back, never the failed one"
+
+for value in '' 'sha256:1' "reg.azurecr.io/relay@$old" "$new"; do
+  incident; export RECOVERY_ROLL=failure RECOVERY_SMOKE=skipped PREVIOUS_DIGEST="$value"; bake incident; exits 0
+  body_has "No verified recovery target"; body_lacks "Recovery target:"; body_lacks "rollback_to="
+  body_has "**Do not roll back to \`$new\`**"
+  check "a digest from before the deploy that is missing, malformed or the failed one is never offered: '$value'"
+done
 
 incident; export RECOVERY=failure RECOVERY_ROLL=skipped RECOVERY_SMOKE=skipped; bake incident; exits 0
 body_has "**Status:** investigating"; body_has "target: failure"
