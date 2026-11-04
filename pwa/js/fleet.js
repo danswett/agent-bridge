@@ -50,6 +50,8 @@ export class FleetStatus {
   // A press accepted on a machine: looked at every fastMs until then, even before its state says
   // anything is under way (the answer is the state from before the app took the press).
   #watchUntil = new Map();
+  // Ops from call() on their way (busy).
+  #calls = 0;
 
   // hosts: a HostSession (host-session.js): links() for the machines shown, link(id), shows(id)
   // and refresh(id).
@@ -128,13 +130,23 @@ export class FleetStatus {
   }
 
   // An op on a machine: on the channel of a machine shown, else on a short one of its own.
+  // Counted from the channel's opening to the response, so the connection doesn't rest under a
+  // press (Check, Install) still on its way to a machine not shown (busy).
   async call(id, op, data) {
-    const link = this.#followed(id) ? this.hosts.link(id) : null;
-    if (link?.phase === 'open' && link.client) { return link.client.request(op, data); }
-    const channel = await this.connection.openChannel(id, { timeoutMs: 10000 });
-    const client = this.makeClient(channel);
-    try { return await client.request(op, data); } finally { client.close(); }
+    this.#calls += 1;
+    try {
+      const link = this.#followed(id) ? this.hosts.link(id) : null;
+      if (link?.phase === 'open' && link.client) { return await link.client.request(op, data); }
+      const channel = await this.connection.openChannel(id, { timeoutMs: 10000 });
+      const client = this.makeClient(channel);
+      try { return await client.request(op, data); } finally { client.close(); }
+    } finally {
+      this.#calls -= 1;
+    }
   }
+
+  // An op from call() still on its way.
+  get busy() { return this.#calls > 0; }
 
   onChange(fn) { this.#listeners.add(fn); return () => this.#listeners.delete(fn); }
 

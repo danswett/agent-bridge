@@ -592,7 +592,7 @@ function begin(account) {
   const { answers, replies, stops, launches } = page;
   // The relay connection rests while the app is out of sight (connection.js), but not with
   // anything on its way: that finishes first.
-  connection.busy = () => [answers, replies, stops, launches].some((s) => s.busy) || hosts.busy || connection.relay?.busy === true;
+  connection.busy = () => [answers, replies, stops, launches].some((s) => s.busy) || hosts.busy || fleet.busy || connection.relay?.busy === true;
 
   // ---- notifications ----
   const worker = () => new Promise((resolve, reject) => {

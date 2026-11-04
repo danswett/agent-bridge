@@ -539,3 +539,17 @@ test('a machine shown that says when its hello changes is asked for it only ever
   assert.deepEqual(refreshed.slice(4).sort(), ['quiet', 'tells']);
   fleet.clear();
 });
+
+test('a press on a machine not shown keeps the app busy from opening its channel until the response, so the connection never rests under it', async () => {
+  let answer;
+  const { fleet } = fleetWith({ b: { machine: {}, capabilities: ['update'], answer: () => new Promise((r) => { answer = r; }) } });
+  assert.equal(fleet.busy, false);
+  const call = fleet.call('b', 'update.check', { request: 'r1' });
+  assert.equal(fleet.busy, true, 'while its channel opens');
+  for (let i = 0; i < 5 && !answer; i++) { await flush(); }
+  assert.ok(answer, 'the request reached the machine');
+  assert.equal(fleet.busy, true, 'while its response is on its way');
+  answer({ outcome: 'accepted' });
+  assert.deepEqual(await call, { outcome: 'accepted' });
+  assert.equal(fleet.busy, false);
+});

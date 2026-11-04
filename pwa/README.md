@@ -679,7 +679,7 @@ the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `
   1.6 Mbps (DevTools' throttling), written to the job's summary; and a warm start asking the
   network for none of the release's files.
 * `test/unit/release-watch.test.mjs`, and in `test/ui.spec.mjs` with the worker installed: releases that keep failing to install, said once there have been three in a row, cleared by one that installs, and never counted for one that installed and was later replaced.
-* `test/unit/connection.test.mjs` and `test/unit/ticker.test.mjs`: out of sight for 15 s the relay connection rests and comes back at once in sight, a quick look away keeps it, and something on its way keeps it until done; the clocks stop out of sight (#610). `test/glyphs.spec.mjs`, Chromium: turning glyphs cost no style recalculation or layout from frame to frame (DevTools' counts, written to the job's summary).
+* `test/unit/connection.test.mjs` and `test/unit/ticker.test.mjs`: out of sight for 15 s the relay connection rests and comes back at once in sight, a quick look away keeps it, something on its way keeps it until done (a press on a machine not shown included: `test/unit/fleet.test.mjs`), and an attempt the relay hasn't admitted yet is let go, so coming back connects afresh; the clocks stop out of sight (#610). `test/glyphs.spec.mjs`, Chromium: turning glyphs cost no style recalculation or layout from frame to frame (DevTools' counts, written to the job's summary).
 * `test/unit/sw.test.mjs` and `test/unit/push.test.mjs`: the worker's caching (a release's
   files from its cache with no request, the rest stale-while-revalidate, the release before
   kept for a page still open on it and older ones dropped) and its handlers in every

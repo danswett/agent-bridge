@@ -98,3 +98,38 @@ test('with an answer or reply on its way, the connection stays until it is done,
   assert.notEqual(relays[0].closed, null);
   conn.stop();
 });
+
+test('put away while the relay is still admitting it, the attempt is let go, and coming back connects afresh', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { win, show } = page();
+  const relays = [];
+  const makeRelay = () => {
+    const first = relays.length === 0;
+    const r = {
+      open: false,
+      closed: null,
+      onClose: null,
+      // The first is never admitted; the next is at once.
+      connect() { return first ? new Promise(() => {}) : Promise.resolve().then(() => { this.open = true; return this; }); },
+      close(code, reason) { this.open = false; this.closed = { code, reason }; this.onClose?.({ code, reason }); },
+    };
+    relays.push(r);
+    return r;
+  };
+  const conn = new BridgeConnection({ base: 'http://relay.invalid', key: {}, deviceId: 'me', name: 'phone', account: { token: 't' }, win, busy: () => false, makeRelay });
+  conn.start();
+  await flush();
+  assert.equal(conn.state, 'connecting');
+
+  show(false);
+  t.mock.timers.tick(QUIET_AFTER_MS);
+  await flush();
+  assert.equal(conn.state, 'resting');
+  assert.deepEqual(relays[0].closed, { code: 1000, reason: 'resting' });
+
+  show(true);
+  await flush();
+  assert.equal(relays.length, 2, 'a new attempt, not the one left waiting');
+  assert.equal(conn.state, 'connected');
+  conn.stop();
+});

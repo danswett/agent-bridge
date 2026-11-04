@@ -26,6 +26,8 @@ export const QUIET_AFTER_MS = 15000;
 export class BridgeConnection {
   #listeners = new Map();
   #attempt = null;
+  // The relay of the attempt under way, until it is admitted: closed if the app rests meanwhile.
+  #connecting = null;
   #retryTimer = null;
   #backoff = new ReconnectBackoff();
   #wake = null;
@@ -106,6 +108,10 @@ export class BridgeConnection {
     }
     clearTimeout(this.#restTimer);
     this.#restTimer = null;
+    const c = this.#connecting;
+    this.#connecting = null;
+    this.#attempt = null;
+    c?.close();
     const r = this.relay;
     this.relay = null;
     this.known = null;
@@ -136,6 +142,12 @@ export class BridgeConnection {
   // they do for a drop, so every channel goes and is opened again on return.
   #sleep() {
     clearTimeout(this.#retryTimer);
+    // Put away while the relay was still admitting it: that attempt goes too, so the return
+    // connects afresh rather than waiting on an admission that may never come.
+    const c = this.#connecting;
+    this.#connecting = null;
+    this.#attempt = null;
+    c?.close(1000, 'resting');
     const r = this.relay;
     this.relay = null;
     this.#setState('resting', 'The app is in the background.');
@@ -170,16 +182,23 @@ export class BridgeConnection {
       this.#emit('presence', list);
     };
     r.onClose = (e) => this.#dropped(r, e);
-    this.#attempt = r.connect(this.account.token).then(() => {
-      // Put away while it was connecting: it rests as soon as it is up.
-      if (this.state === 'resting') { r.close(1000, 'resting'); return; }
+    this.#connecting = r;
+    const attempt = r.connect(this.account.token).then(() => {
+      // Put away while it was connecting (#sleep let it go), or stopped: it never takes over.
+      if (this.#connecting !== r || this.state === 'resting') { r.close(1000, 'resting'); return; }
+      this.#connecting = null;
       this.relay = r;
       this.#backoff.reset();
       this.channels.attach(r);
       this.#setState('connected', r.login ?? '');
       this.#emit('ready', r);
-    }, (e) => this.#dropped(null, e)).finally(() => { this.#attempt = null; });
-    return this.#attempt;
+    }, (e) => {
+      if (this.#connecting !== r) { return; }
+      this.#connecting = null;
+      this.#dropped(null, e);
+    }).finally(() => { if (this.#attempt === attempt) { this.#attempt = null; } });
+    this.#attempt = attempt;
+    return attempt;
   }
 
   #dropped(r, e) {
