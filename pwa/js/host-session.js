@@ -450,8 +450,12 @@ export class HostSession {
     const stale = () => this.#links.get(link.id) !== link || link.attempt !== attempt;
     let client;
     try {
-      // hello goes first: a host that takes it early answers it in the handshake (#603).
-      const channel = await this.connection.openChannel(link.id, { signal: attempt.abort?.signal, early: { op: Ops.hello, data: {} } });
+      // hello goes first: a host that takes it early answers it in the handshake (#603). Asked with
+      // the very data the first hello below sends: the channel uses the handshake's answer only
+      // for the same request, and any other costs every reopen a second round trip (#610 reopens
+      // each shown machine's channel whenever the app comes back).
+      const helloData = { changes: true };
+      const channel = await this.connection.openChannel(link.id, { signal: attempt.abort?.signal, early: { op: Ops.hello, data: helloData } });
       if (stale()) { channel.close(); return; }
       client = this.makeClient(channel, link.store);
       link.channel = channel;
@@ -491,7 +495,7 @@ export class HostSession {
         if (m?.ev !== Events.helloChanged || link.client !== client) { return; }
         if (link.phase === 'open') { this.refresh(link.id).catch(() => {}); } else { link.helloChanged = true; }
       });
-      const hello = await client.hello({ changes: true }).catch((e) => {
+      const hello = await client.hello(helloData).catch((e) => {
         // Hosts from before this protocol (the S4 demo host) answer "unknown op". Only such
         // an answer means unsupported; a timeout or a dropped channel is retried below.
         throw Object.assign(e, { unsupported: e.fromHost === true });

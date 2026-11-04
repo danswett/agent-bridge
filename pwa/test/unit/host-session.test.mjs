@@ -24,13 +24,13 @@ function fakeConnection(presence) {
     opens,
     emit(type, detail) { for (const fn of listeners.get(type) ?? []) { fn(detail); } },
     on(type, fn) { (listeners.get(type) ?? listeners.set(type, []).get(type)).push(fn); },
-    openChannel(peerId, { signal = null } = {}) {
+    openChannel(peerId, { signal = null, early = null } = {}) {
       let resolve, reject;
       const p = new Promise((res, rej) => { resolve = res; reject = rej; });
       const channel = { peerId, peerName: peerId, closed: false, close() { this.closed = true; } };
       // As ChannelSet does: a handshake no longer wanted is closed, and its open fails.
       signal?.addEventListener('abort', () => { channel.close(); reject(new Error('no longer wanted')); });
-      opens.push({ peerId, channel, signal, resolve: () => resolve(channel), reject });
+      opens.push({ peerId, channel, signal, early, resolve: () => resolve(channel), reject });
       return p;
     },
   };
@@ -52,6 +52,25 @@ function session(presence) {
   const hosts = new HostSession({ connection, store: new SessionsStore(), storage: null, makeClient: (ch) => fakeClient(ch) });
   return { connection, hosts };
 }
+
+test("a shown machine's channel asks hello early with the data its first hello sends, so the handshake's answer is the one used (#603)", async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }]);
+  const asked = [];
+  const hosts = new HostSession({
+    connection, store: new SessionsStore(), storage: null,
+    makeClient: (ch) => {
+      const c = fakeClient(ch);
+      c.hello = async (data) => { asked.push(data); return { protocol: 1, machine: { name: 'a' }, capabilities: ['sessions.read'] }; };
+      return c;
+    },
+  });
+  hosts.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  assert.equal(connection.opens[0].early.op, 'hello');
+  assert.deepEqual(asked[0], connection.opens[0].early.data);
+});
 
 test('a hello that times out is retried, not taken for an old host', async () => {
   const connection = fakeConnection([{ id: 'a', kind: 'host' }]);
