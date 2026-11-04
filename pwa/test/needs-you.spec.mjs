@@ -567,6 +567,23 @@ test.describe('a moment before the lane takes a click', () => {
     expect((await log(page)).length).toBe(before);
   });
 
+  test('a click on the lane whose read of where the answers are fails is dropped; a key still answers', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, LAND, permission());
+    await expect(lane(page).locator('.needs-you-list[data-arriving]')).toHaveCount(0);
+    const before = (await log(page)).length;
+    const press = (detail) => page.evaluate(({ land, detail }) => {
+      const b = document.querySelector(`#needs-you .needs-entry[data-id="${land}"] .needs-approve`);
+      b.getClientRects = () => { throw new Error('no layout'); };
+      b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail }));
+    }, { land: LAND, detail });
+    await press(1);
+    await page.waitForTimeout(100);
+    expect((await log(page)).length).toBe(before);
+    await press(0);
+    await expect.poll(async () => (await log(page)).length).toBe(before + 1);
+  });
+
   test('an entry that grows as its answer goes moves those after it, and the lane takes no click for a moment', async ({ page }) => {
     await openDemo(page);
     await ask(page, LAND, permission());

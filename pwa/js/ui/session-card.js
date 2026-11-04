@@ -1202,9 +1202,11 @@ export class SessionCard {
       if (e.detail === 0) { return; }
       if (!this.#guarded?.contains(e.target) || !e.target.closest?.(QUESTION_CONTROLS)) { return; }
       // Moved since the last frame was read (an update in the task just before this click, before
-      // any frame): found now, and the wait starts before the click is let through.
-      this.#moves?.check();
-      if ((globalThis.performance?.now() ?? Date.now()) >= this.#guardUntil) { return; }
+      // any frame): found now, and the wait starts before the click is let through. A read that
+      // fails can't say the answers stayed put, so that click is dropped too (#642).
+      let read = true;
+      try { this.#moves?.check(); } catch { read = false; }
+      if (read && (globalThis.performance?.now() ?? Date.now()) >= this.#guardUntil) { return; }
       e.preventDefault();
       e.stopImmediatePropagation();
     }, true);
