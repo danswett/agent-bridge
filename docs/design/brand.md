@@ -258,7 +258,7 @@ thing (decided G1, §11).
 | Failed | `mark-failed.svg` | The S in Danger | `failed` |
 | Ended | `mark-ended.svg` | The S as a 1.5 px keyline at row sizes, in Neutral | `ended` |
 | Finished, then ended | `mark-ended-finished.svg` | The ended keyline, still cut around the outlined badge | `ended` (#500) |
-| Working, driven | `mark-driven.svg` | Working in Agent violet, with the driven diamond (`mark-driven-badge.svg`) in the seat | `working` + `driven-badge` |
+| Working, driven | `mark-driven.svg` | Working in Agent violet, but with the lower gate lit and the upper one as the track, and the driven diamond (`mark-driven-badge.svg`, already included) in the seat. Clients draw this glyph as it is, not `mark-working` plus a badge | `working` + `driven-badge` |
 | Finished, driven | `mark-finished.svg` with the badge in Agent violet | A violet check in place of the diamond | `done` + `driven-badge` (#500) |
 | Connecting | `mark-connecting.svg` | The two gates drawn apart, in Neutral, while a machine's link comes up. It shares offline's shape; it differs by strength (full opacity), and by motion once #232 specifies it | (a machine connecting, ui.md §6.1, §6.6) |
 | Offline | `mark-offline.svg` | The two gates standing apart, in Neutral, at **85% opacity** | `failed` (a host unreachable; a machine away, §6.1) |

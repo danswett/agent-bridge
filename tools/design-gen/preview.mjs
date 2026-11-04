@@ -23,7 +23,7 @@ const GLYPHS = [
 const MARKS = [
   ['mark-needs', 'needs', 'needs'], ['mark-working', 'active', 'working'], ['mark-delegating', 'active', 'delegating'],
   ['mark-idle', 'neutral', 'idle'], ['mark-finished', 'neutral', 'finished'], ['mark-failed', 'danger', 'failed'],
-  ['mark-ended', 'neutral', 'ended'], ['mark-working', 'agent', 'working + driven', 'mark-driven-badge'],
+  ['mark-ended', 'neutral', 'ended'], ['mark-driven', 'agent', 'working + driven'],
   ['mark-finished', 'neutral', 'finished + driven', 'mark-finished-badge', 'agent'], ['mark-background', 'active', 'background'],
   ['mark-offline', 'neutral', 'offline'], ['mark-connecting', 'neutral', 'connecting'],
 ];
