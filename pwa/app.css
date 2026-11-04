@@ -1,4 +1,4 @@
-/* Agent Bridge PWA. Mobile first (an iPhone on the Home Screen), fine on a desktop.
+/* The Slipgates web app (PWA). Mobile first (an iPhone on the Home Screen), fine on a desktop.
    Colours are the design language's roles and surfaces, from design/tokens.css (generated from
    design/tokens.json; docs/design/ui.md §3): never a colour of this file's own. Controls,
    links, focus and selection are bridge. Status is a glyph from the generated sprite and the

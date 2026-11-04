@@ -1195,7 +1195,9 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
 - **PWA:** the Windows tile as the favicon and the manifest's `any` icons (192 and 512), the
   iOS icon at 180 as `apple-touch-icon`, and maskable icons (192 and 512) that are full bleed
   with the mark 35 across on a 72 grid. That keeps the mark inside the safe zone at Android's
-  proportion.
+  proportion. The same mark without its plate, in white, is the `monochrome` icon Android's
+  themed icons draw; and the native 24 px cut in white, at 96 px, is a notification's badge,
+  as the Android client's notification icon.
 
 ## 8. Copy
 
