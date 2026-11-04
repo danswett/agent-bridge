@@ -589,13 +589,13 @@ export class DemoHost {
     this.replyLog.push(clone(data ?? null));
     const request = typeof data?.request === 'string' ? data.request : '';
     const known = this.replies.get(request);
-    if (known) { known.join(progress); known.result.then(reply); return; }
+    if (known) { known.repeat(progress, reply); return; }
     const step = this.#replyScript.shift() ?? 'delivered';
     const scripted = typeof step === 'string' ? { outcome: step } : step;
     const delivery = this.#delivery(progress);
     const result = this.#delivered(delivery, (typed) => this.#decideReply(data, scripted, typed));
-    this.replies.set(request, { result, join: delivery.join });
-    result.then((r) => { if (!scripted.drop) { reply(r); } });
+    this.replies.set(request, delivery);
+    result.then((r) => { if (!scripted.drop) { reply(delivery.told(r, delivery.start, !!progress)); } });
   }
 
   // Where the request asked for progress and this host offers it (sessions.progress), a
@@ -606,23 +606,37 @@ export class DemoHost {
 
   // One answer's or reply's progress, as a host keeps it: each stage goes to every copy of the
   // request that asked for progress, and a repeat still on its way gets the stages reached so far.
+  // When each stage was reached is kept once; each copy's outcome counts its timings from that
+  // copy's own arrival, a stage reached before it came as 0 (v1-sessions.md, as the host's
+  // DeliveryTimeline does). A repeat used to be told the first copy's figures.
   #delivery(progress) {
     const stages = [];
     const told = new Set(progress ? [progress] : []);
-    const start = Date.now();
+    const at = {};
     return {
-      // ms since receipt of each stage reached, for the outcome's timings.
-      timings: progress ? {} : null,
+      start: Date.now(),
+      // The first copy's outcome, once #delivered has begun it.
+      result: null,
       tell(p) {
-        if (this.timings && p.stage === 'typed') { this.timings.typed = Date.now() - start; }
+        if (p.stage === 'typed') { at.typed = Date.now(); }
         stages.push(p);
         for (const fn of told) { fn(p); }
       },
       join: (fn) => { if (!fn) { return; } for (const p of stages) { fn(p); } told.add(fn); },
-      done(r) {
-        if (!this.timings || !('typed' in this.timings)) { return r; }
-        const ms = Date.now() - start;
-        return { ...r, timings: { ...this.timings, ...(r.outcome === 'delivered' ? { recorded: ms, confirmed: ms } : {}) } };
+      done(r) { at.done = Date.now(); return r; },
+      // The outcome as one copy of the request is told it: with timings where that copy asked
+      // for progress and the keys went.
+      told(r, arrived, asked) {
+        if (!asked || at.typed === undefined) { return r; }
+        const since = (t) => Math.max(0, t - arrived);
+        return { ...r, timings: { typed: since(at.typed), ...(r.outcome === 'delivered' ? { recorded: since(at.done), confirmed: since(at.done) } : {}) } };
+      },
+      // A repeat of the request, even one still being delivered: the stages so far and the first
+      // copy's outcome, its timings its own.
+      repeat(fn, reply) {
+        const arrived = Date.now();
+        this.join(fn);
+        this.result.then((r) => reply(this.told(r, arrived, !!fn)));
       },
     };
   }
@@ -634,13 +648,14 @@ export class DemoHost {
   // see each stage (#600).
   #delivered(delivery, decide) {
     Promise.resolve(this.#responsesHeld).then(() => delivery.tell({ stage: 'received' }));
-    return this.#after(() => this.#heldBefore.get('typing')?.promise)
+    delivery.result = this.#after(() => this.#heldBefore.get('typing')?.promise)
       .then(() => decide((working) => delivery.tell({ stage: 'typed', working })))
       .then(async (r) => {
         await this.#heldBefore.get('result')?.promise;
         if (this.confirmDelayMs) { await new Promise((resolve) => setTimeout(resolve, this.confirmDelayMs)); }
         return delivery.done(r);
       });
+    return delivery.result;
   }
 
   // Holds every delivery before it types ('typing') or before its outcome goes ('result'), until
@@ -693,7 +708,7 @@ export class DemoHost {
     const request = typeof data?.request === 'string' ? data.request : '';
     // A repeat, even of one still being delivered, gets the first one's outcome.
     const known = this.answers.get(request);
-    if (known) { known.join(progress); known.result.then(reply); return; }
+    if (known) { known.repeat(progress, reply); return; }
     const step = this.#script.shift() ?? 'delivered';
     const scripted = typeof step === 'string' ? { outcome: step } : step;
     const delivery = this.#delivery(progress);
@@ -705,9 +720,9 @@ export class DemoHost {
       return;
     }
     const result = this.#delivered(delivery, (typed) => this.#decide(data, scripted, typed));
-    this.answers.set(request, { result, join: delivery.join });
+    this.answers.set(request, delivery);
     // drop: the host did the work, but its response never reached the phone.
-    result.then((r) => { if (!scripted.drop) { reply(r); } });
+    result.then((r) => { if (!scripted.drop) { reply(delivery.told(r, delivery.start, !!progress)); } });
   }
 
   #decide(data, scripted, typed = () => {}) {

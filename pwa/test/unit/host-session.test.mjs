@@ -885,3 +885,21 @@ test('a machine still in presence whose channel drops takes nothing new until a 
   await until(() => answers.get('two', 'same-id', 'q1')?.state === 'done', 'its outcome');
   assert.deepEqual([answers.get('two', 'same-id', 'q1').outcome, two.typed.length], ['delivered', 1]);
 });
+
+// The demo host's timings are a host's (v1-sessions.md): each copy of a request counts them from
+// its own arrival, a stage reached before it came as 0.
+test('the demo machine times a repeated reply from the repeat\'s own arrival', async () => {
+  const t0 = new Date().toISOString();
+  const host = new DemoHost({ sessions: [{ id: 's1', agent: 'copilot', title: 'T', status: 'idle', statusSince: t0, startedAt: t0, updatedAt: t0, processId: 1, activity: {} }] }, { answerDelayMs: 40 });
+  const got = [];
+  const channel = { deliver: (m) => got.push(m) };
+  const results = () => got.filter((m) => m.ok === true).map((m) => m.result);
+  const send = (id) => host.receive(channel, { id, op: 'session.reply', data: { id: 's1', request: 'r1', text: 'hi', progress: true } });
+  send('1');
+  await until(() => results().length === 1, 'the first outcome');
+  assert.equal(results()[0].outcome, 'delivered');
+  assert.ok(results()[0].timings.typed >= 30, `the first copy waited for its typing (${results()[0].timings.typed} ms)`);
+  send('2');
+  await until(() => results().length === 2, 'the repeat\'s outcome');
+  assert.deepEqual(results()[1], { outcome: 'delivered', timings: { typed: 0, recorded: 0, confirmed: 0 } });
+});
