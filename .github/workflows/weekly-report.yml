@@ -14,7 +14,9 @@ name: Weekly quality report
 #            nothing and runs no code from the repository.
 #
 # By hand: gh workflow run weekly-report.yml [--ref <branch>] [-f dry_run=false]. A dry run (the
-#   default, and always so off main) only writes the job summary.
+#   default, and always so off main) only writes the job summary. A pull request that changes the
+#   reporter or this workflow runs it too, as a dry run, so its report is there to read before it
+#   merges (a branch can't dispatch it until the workflow is on main).
 
 on:
   schedule:
@@ -22,6 +24,11 @@ on:
     # Monday, and the report job keeps the one that's 08:00 Pacific that day.
     - cron: '0 15 * * 1'
     - cron: '0 16 * * 1'
+  pull_request:
+    paths:
+      - .github/workflows/weekly-report.yml
+      - tools/AgentBridge.Quality/Report.cs
+      - tools/AgentBridge.Quality/ReportCommand.cs
   workflow_dispatch:
     inputs:
       dry_run:
@@ -62,7 +69,7 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           REF: ${{ github.ref }}
           REPO: ${{ github.repository }}
-        # A run from a branch, or from a fork, never posts; nor does a dispatch unless dry_run is
+        # A run from a branch or a pull request never posts; nor does a dispatch unless dry_run is
         # off. Of the two schedules, the one that isn't 08:00 Pacific today does nothing at all.
         run: |
           $run = $true
