@@ -14,10 +14,12 @@ public class PatchReplayTests(ITestOutputHelper output)
     const string File = "session-patches.json";
     const string Generator = "tests/AgentBridge.Host.Core.Tests/PatchReplayTests.cs";
 
-    // The list form a subscriber is sent at each step where it changed.
-    static async Task<List<Session>> Steps(Func<double, Task> through, Func<Session> listForm, double from, double to)
+    // The list form a subscriber is sent at each step where it changed, with the seconds into the
+    // replay it was sent at. Its own updatedAt says when the agent wrote it, which is not that: the
+    // Copilot recording's first state is stamped half an hour before its first change.
+    static async Task<List<(double At, Session Session)>> Steps(Func<double, Task> through, Func<Session> listForm, double from, double to)
     {
-        var steps = new List<Session>();
+        var steps = new List<(double At, Session Session)>();
         string? last = null;
         for (var at = from; at <= to; at += Step)
         {
@@ -25,15 +27,15 @@ public class PatchReplayTests(ITestOutputHelper output)
             var s = listForm();
             var json = JsonSerializer.Serialize(s, ProtocolJson.Options);
             if (json == last) { continue; }
-            steps.Add(s);
+            steps.Add((at - from, s));
             last = json;
         }
         return steps;
     }
 
-    static async Task<IReadOnlyList<(string Name, string Recording, List<Session> Steps)>> ReplayAsync()
+    static async Task<IReadOnlyList<(string Name, string Recording, List<(double At, Session Session)> Steps)>> ReplayAsync()
     {
-        var all = new List<(string, string, List<Session>)>();
+        var all = new List<(string, string, List<(double At, Session Session)>)>();
         await using (var copilot = new SubagentTests.Recorded())
         {
             all.Add(("copilot-delegates", "tests/fixtures/copilot/subagents.jsonl",
@@ -53,7 +55,7 @@ public class PatchReplayTests(ITestOutputHelper output)
     }
 
     // Replayed once for the class: each replay reads its recording a quarter-second at a time.
-    static readonly Lazy<Task<IReadOnlyList<(string Name, string Recording, List<Session> Steps)>>> Recorded = new(ReplayAsync);
+    static readonly Lazy<Task<IReadOnlyList<(string Name, string Recording, List<(double At, Session Session)> Steps)>>> Recorded = new(ReplayAsync);
 
     // What an event costs on the channel before encryption: its envelope and its data, as sent.
     static int EventBytes(string name, object data) => ProtocolJson.ByteCount(new { ev = name, seq = 1000, data });
@@ -69,7 +71,7 @@ public class PatchReplayTests(ITestOutputHelper output)
             var events = new JsonArray();
             JsonObject? held = null;
             long seq = 0;
-            foreach (var session in steps)
+            foreach (var (_, session) in steps)
             {
                 var json = SessionPatches.Json(session);
                 seq++;
@@ -109,7 +111,7 @@ public class PatchReplayTests(ITestOutputHelper output)
             long seq = 0;
             long upserts = 0, patches = 0;
             var based = 0;
-            foreach (var session in steps)
+            foreach (var (_, session) in steps)
             {
                 var json = SessionPatches.Json(session);
                 var patch = SessionPatches.Next(held, seq, json, revision: seq + 1)!;
@@ -141,8 +143,8 @@ public class PatchReplayTests(ITestOutputHelper output)
             {
                 for (var i = 0; i + stride < steps.Count; i += stride)
                 {
-                    var start = SessionPatches.Json(steps[i]);
-                    var end = SessionPatches.Json(steps[i + stride]);
+                    var start = SessionPatches.Json(steps[i].Session);
+                    var end = SessionPatches.Json(steps[i + stride].Session);
                     var patch = SessionPatches.Diff(start, 9, end);
                     var applied = patch is null ? start : SessionPatches.Apply(start, 9, patch);
                     Assert.True(JsonNode.DeepEquals(end, applied), $"{name} {i}+{stride}: {applied.ToJsonString()}");
@@ -206,7 +208,7 @@ public class PatchReplayTests(ITestOutputHelper output)
     {
         // Four sessions as on 2026-11-03: the idle one upserted three times, and the first 40 s of
         // each recording, at work. Each session's snapshot upsert counts too, as it did then.
-        var recorded = (await Recorded.Value).Select(r => (IReadOnlyList<Session>)[.. r.Steps.Where(s => s.UpdatedAt < r.Steps[0].UpdatedAt.AddSeconds(40))]).ToList();
+        var recorded = (await Recorded.Value).Select(r => (IReadOnlyList<Session>)[.. r.Steps.Where(s => s.At < 40).Select(s => s.Session)]).ToList();
         IReadOnlyList<Session> idle = [Idle(-1, 0), Idle(3, 1), Idle(11, 2), Idle(7, 3)];
         output.WriteLine($"the idle session: {ProtocolJson.ByteCount(idle[0]):N0} bytes, {ProtocolJson.ByteCount(idle[0].Subagents):N0} of them sub-agents");
 
