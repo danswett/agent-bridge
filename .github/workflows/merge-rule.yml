@@ -20,7 +20,7 @@ name: Merge rule
 #    hand, is required by nothing else); finished, so a late red flips it. A test keeps the list
 #    complete. That includes the review relay in merge-rule-review.yml: pull_request_review runs
 #    the pull request's copy of a workflow, which mustn't post statuses.
-#  - check_suite: a check from an app other than GitHub Actions was requested or finished (code
+#  - check_suite: a check from an app other than GitHub Actions finished (code
 #    scanning's CodeQL). Actions' own suites start no check_suite workflow, hence workflow_run.
 #  - schedule and workflow_dispatch: a backstop for anything the events missed. That includes
 #    Dependabot's: runs it triggers may get a read-only token, so their posts can fail (allowed
@@ -39,7 +39,7 @@ on:
     workflows: [CI, CodeQL, Dependencies, HA contract drift, IaC scan, Merge rule review relay, Pages, Perf, Relay deploy, Workflow lint]
     types: [requested, in_progress, completed]
   check_suite:
-    types: [requested, rerequested, completed]
+    types: [completed] # the only type Actions accepts here
   schedule:
     # Every 10 minutes. GitHub may run it later under load; the events above do the prompt work.
     - cron: '*/10 * * * *'

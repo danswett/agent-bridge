@@ -78,6 +78,17 @@ sensitive_paths:
   - src/AgentBridge.Host/Program.cs # builds the remote-authorization policy
   - src/AgentBridge.Host/HostSettings.cs # authorization settings
   - src/AgentBridge.App.Core/Transfers.cs # signs commands
+  # The Windows app's remote actions: connections, signed transfers and trust, launch
+  # permissions, delivery, answers, replies and ending a session.
+  - src/AgentBridge.App.Core/Machines.cs
+  - src/AgentBridge.App.Core/HostConnection.cs
+  - src/AgentBridge.App.Core/HostManager.cs
+  - src/AgentBridge.App.Core/LaunchViewModel*.cs
+  - src/AgentBridge.App.Core/Deliveries.cs
+  - src/AgentBridge.App.Core/QuestionViewModel.cs
+  - src/AgentBridge.App.Core/ReplyViewModel.cs
+  - src/AgentBridge.App.Core/EndSessionViewModel.cs
+  - src/AgentBridge.App.Core/ToastResponder.cs
   - pwa/js/transfer.js # signs commands
   # Trust consent, launch permissions, approval eligibility and delivery to the right session.
   - pwa/js/launch.js
