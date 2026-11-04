@@ -415,7 +415,7 @@ strict minimal DER, low-S, `p256-sha256-der`, as #391 specifies for roster entri
 | `heads` | The issuer's current roster heads, as #391 person commands carry them (#391 §7.2) |
 | `principal` | §3.1, plus `add`: the hash of the issuing host's add entry. Principals are keyed by **account + generation + add hash**, because device ids aren't namespaced across accounts and a copy shares its original's id (§8.10, V3, V7). `machine` must be the channel peer that delivered it: a host never relays another host's envelope as its own (§4.6) |
 | `chain` | §5.4. `via` is at most `maxDepth` entries, most recent last. Under (a), each entry may also carry the previous hop's envelope hash, and the target may fetch and check it |
-| `action` | `sessions.list`, `session.get`, `session.read` (§4.7), `session.reply`, `launch.options`, `session.launch`, `launch.result`. **Nothing else verifies.** In particular `session.answer`, `launch.trust.answer`, `session.stop`, `session.transfer`, `attachment.*`, `update.*`, `push.*` and `host.*` are not in the action set, so the envelope cannot express them |
+| `action` | `sessions.list`, `session.get`, `session.read` (§4.7), `session.reply`, `launch.options`, `session.launch`, `launch.result`. **Nothing else verifies.** In particular `session.answer`, `launch.trust.answer`, `session.stop`, `session.transfer`, `attachment.*`, `update.*`, `push.*` and `host.*` are not in the action set, so the envelope cannot express them. A `principal.kind: "person"` across a link (§7.12) may use only `sessions.list`, `session.get`, `session.read` and `sessions.subscribe` |
 | `target` | `account` and `machine` must be the target host's own. `session` is required for `session.get`, `session.read` and `session.reply`. `instance` is required for `session.reply` and optional for reads (§4.5). Absent for `sessions.list`, `launch.options` and `session.launch`. `link` and `repo` are absent within one account. Across accounts `link` is required, and `repo` is required for a repo-scoped link: both must equal the link the channel was admitted under (§7.3, "Link context binding"), so a relay can't make a command run under another link's scope |
 | `dataSha256` | Binds the op's `data` (the reply text, the launch settings and prompt) to the signature: the SHA-256 of the exact bytes of the inner op's `data` JSON, which travel base64url-encoded beside the envelope (§4.6), so neither host re-serializes anything. Beside, not inside, so the envelope stays under 2 KiB and the 16 KiB reply and 20 KiB launch limits (v1-sessions.md:430; v1-launch.md:105-115) are unchanged |
 | `issuedAt`, `expiresAt` | Unix seconds. Lifetime at most **120 s**. Long enough for a relay round trip and a reply's delivery check, and short enough that a captured envelope is useless soon after |
@@ -601,7 +601,7 @@ meant as off is never read as on (host-config.md:139-141).
 | `outbound.allowAgentLaunchedToLaunch` | bool | Whether a session an agent launched may itself launch (fan-out, §5.4) |
 | `inbound.*.read` | `any` \| `agent-launched` \| `none` | Which sessions on this machine an agent may read. `any` is any live session. `agent-launched` is only sessions an agent launched through the bridge. `none` is none. **Default: `any`** |
 | `inbound.*.reply` | `forced-ask` \| `agent-launched` \| `none` | Which sessions an agent may reply to. `forced-ask` is every session the host launched in forced-ask mode with no grant or mode change since (§5.3), which is the widest possible value. `agent-launched` is the subset an agent launched. `none` is none. **Default: `forced-ask`** (Q37). Adopted and manually started sessions are never reply targets, because their mode is unknown (§5.3) |
-| `inbound.*.gate` | bool | Whether a reply into an **allow-all or unknown-mode** session is **held** for the owner's per-message, presence-signed approval instead of refused (§5.7 G). **Default: `false`**. Never offered to connectors |
+| `inbound.*.gate` | bool | Whether a reply into a session that **isn't provably forced-ask** (allow-all or unknown-mode, §5.3) is **held** for the owner's per-message, presence-signed approval instead of refused (§5.7 G). **Default: `false`**. Never offered to connectors |
 | `inbound.*.allowAllTargets` | `false`, or `{ workspaces: "same" \| "any" }` | Whether **this account's own** agents may reply into allow-all and unknown-mode sessions on this machine **without** a gate (§5.7 O). Set in `inbound.local`, it covers agents on this machine; in `inbound.remote`, agents on the account's other machines. Never for another account, a connector, a federated or `homeassistant:` principal, or a chain with a cross-account hop. **Default: `false`** in both. When enabled, the app proposes `inbound.local` with `workspaces: "same"`, and shows the escalation warning |
 | `inbound.*.launch` | `false`, or `{ workspaces: "approved" \| [labels], permissions: "ask", agents: [ids], profiles: [names] }` | Where an agent may launch. **`permissions` can only be `ask`**, and the launch request must say so explicitly (§5.2). `allowAll` is not expressible for an agent: it stays a person's decision, and design.md §5.6 already requires a confirmation for it even from a phone. `agents` and `profiles` are **allowlists**, empty by default except the machine's default agent and profile, each checked not to grant allow-all (§5.2) |
 | `inbound.remote.fromMachines` | `any` \| `[add hash]` | Which of the account's machines may send. `any` means any active, non-probationary rostered host. A list names **add entries**, which the app picks by machine name, never bare device ids. A machine that is re-enrolled or displaced has a new add hash, so it drops out until the owner re-selects it (§8.10, V3, V4) |
@@ -698,10 +698,10 @@ connector `act` profile, Q26):
 * `permissions` must be present and exactly `ask`. **A launch or resume without it is refused**,
   never filled from the machine's `defaults.permissions`, which may be `allowAll`
   (v1-launch.md:101).
-* **Every agent launch is a forced-ask launch** (§5.3): the host *sets* the mode, rather than
-  checking for flags it doesn't want, and **refuses the launch** if the effective configuration
-  that would still load auto-allows a side-effecting tool or adds a command-running hook. An agent
-  launch carries the agent's own prompt, which are typed words too.
+* **Every agent launch is a provably forced-ask launch** (§5.3 (A)): a host-owned configuration
+  home, project sources off or absent, no managed policy, allowlisted flags and a scrubbed
+  environment. Anything else **refuses the launch**. An agent launch carries the agent's own
+  prompt, which runs at once, so this check is its only guard.
 * **Agency is never used** for an agent launch, and `agent: "auto"` resolving to Agency
   (host-launch.md:65) is refused: Agency adds flags and profile config the host can't show keep
   forced-ask (host-launch.md:29-30).
@@ -724,99 +724,150 @@ without a fresh, per-action prompt.** Side-effecting means running a command, wr
 a file, fetching from the network, or calling an MCP tool that isn't read-only. Reading files the
 agent may already read by default is not counted; that exposure is stated in §7.8. The host
 **cannot infer** "not allow-all" from what it sees: modes and grants come from too many places.
+Three review rounds in a row found sources a list had missed. So the design no longer rests on
+listing them (Q47):
+
+* **(A) Isolation, not enumeration.** A session is **provably forced-ask** only if the host
+  launched it with a **host-owned configuration home** holding nothing but what the host wrote,
+  with project sources switched off or absent, and with no managed policy that could apply. The
+  allowlist is then "what the host wrote", not "everything we remembered to check".
+* **(B) The gate as the general fallback.** Every other target (allow-all, unknown, adopted,
+  manually started, a session whose configuration changed, an agent whose grants the host can't
+  see) receives an agent's message **only** if the target's owner approves that exact message
+  with presence (§5.7 G), or enabled own-account allow-all targets (§5.7 O). Otherwise it is
+  refused. Forced-ask becomes an optimisation (no prompt needed), not the only safety boundary.
+
+**What isolation has to neutralise.** The table is the inventory that (A) is checked against, not
+a list the host reads one by one:
 
 | Source | Examples |
 |---|---|
 | Launch flags | Copilot `--allow-all`, `--allow-all-tools`, `--allow-all-paths`, `--allow-all-urls`, `--allow-tool`, `--yolo`; Claude `--dangerously-skip-permissions`, `--permission-mode bypassPermissions` or `acceptEdits`, `--allowedTools`; Codex `--ask-for-approval never`, `--dangerously-bypass-approvals-and-sandbox` |
 | Machine config and wrappers | `launch.agents.<id>.extraArgs` (host-config.md:95). **Agency**, which `auto` prefers (host-launch.md:65), adds its own flags and profile config to Copilot's command line (host-launch.md:29-30) |
-| Agent settings, every scope that loads | **Claude:** `permissions.defaultMode` and `permissions.allow` rules such as `Bash(*)` in managed, **user** (`~/.claude/settings.json`), project (`.claude/settings.json`, committed to the repository, so a collaborator can add it) and local settings. `allow` lists **merge** across scopes, so a later empty list cancels nothing. **Codex:** `approval_policy` in `config.toml` or a profile, and **exec-policy rule files**: `~/.codex/rules/*.rules` (the Codex terminal UI writes one when the person adds a command to its allow list), managed rules, and rules in a trusted project. An `allow` rule skips the approval **and the sandbox**, even under `-a untrusted -s workspace-write` (Codex's own `exec_policy_tests.rs`, L1010-1053, expects exactly that). **Copilot:** saved approvals per repository or folder in `~/.copilot/permissions-config.json`, `allowedUrls` in `~/.copilot/settings.json`, and its saved default mode |
-| Hooks and extensions | **Claude:** user, project and plugin hooks; a `PreToolUse` hook can return `allow`, and any hook runs a command. Plugins and MCP servers add tools. **Codex:** MCP servers and app tools, whose non-destructive tools may not prompt. **Copilot:** repository, user and plugin hooks; `sessionStart` and `userPromptSubmitted` hooks run commands on every typed message, and permission hooks can approve tools. MCP servers add tools |
-| Environment | The agent inherits the host's environment (host-launch.md:68, :95). `CODEX_HOME` or `CLAUDE_CONFIG_DIR` move the config; scrubbing `CODEX_HOME` only falls back to `~/.codex`, it doesn't empty anything |
+| The personal configuration home | **Claude** (`~/.claude`): `settings.json` (`defaultMode`, `permissions.allow`, which **merge** across scopes), agents, skills, commands, plugins, hooks, MCP servers. **Codex** (`~/.codex`): `config.toml` (`approval_policy`, inline `[hooks]`, MCP servers), `rules/*.rules`, `hooks.json`, plugins. **Copilot** (`~/.copilot`): `settings.json` (`allowedUrls`, saved mode), `permissions-config.json` and its legacy extensionless predecessor, hooks, skills, legacy commands, agents, plugins, MCP servers |
+| Repository configuration | **Copilot:** `.github/copilot/settings.json` and `settings.local.json` (inline `hooks`, `allowedUrls`, `enabledPlugins`), `.github/skills`, `.github/agents`, `.github/hooks`, legacy commands. Saved permissions for a linked worktree are scoped to its **main checkout**. **Claude:** `.claude/` (settings and local settings, agents, skills, commands), `.mcp.json`. **Codex:** `.codex/config.toml`, `.codex/hooks.json` and rules, in a trusted project |
+| Skills and commands with `allowed-tools` | **Invoking one pre-approves its tools.** Copilot CLI 1.0.105 handles `skill.invoked` by `addApprovedRules(allowedTools)` and re-adds them on resume, with no `permission.requested` recorded; Claude's skills and commands do the same. An agent's reply only has to ask for the skill |
+| Subagents | Claude agent files (`.claude/agents/`, `~/.claude/agents/`) with `permissionMode: acceptEdits`, `auto` or `dontAsk`, and their own hooks. Copilot custom agents |
+| Hooks | Claude: a `PreToolUse` hook can return `allow`, and any hook runs a command. **Codex: on by default**; `hooks.json`, inline `[hooks]`, the repository's and plugins' hooks merge, and a `PermissionRequest` hook can approve. Copilot: `sessionStart` and `userPromptSubmitted` hooks run commands on every message, and permission hooks can approve |
+| MCP and app tools | Tools that skip approval by annotation. A server's own read-only declaration isn't proof |
+| Managed and server policy | **Claude:** a managed-settings file, MDM (a macOS profile, Windows policy registry keys), the policy helper, and **server-managed settings** from the claude.ai console, which the host can't read from disk. **Copilot:** managed settings and managed `permissions.allow`, and an organization's `defaultPermissionMode: "assisted"`; Copilot has **no flag that forces manual mode**, so interactive mode isn't manual mode. **Codex:** managed configuration and requirements files |
+| Environment | The agent inherits the host's environment (host-launch.md:68, :95). `COPILOT_HOME`, `CLAUDE_CONFIG_DIR` and `CODEX_HOME` move the configuration home |
 | Modes | Copilot's assisted or autopilot modes. Claude's Shift+Tab cycle |
-| In-session grants | Copilot's "Yes, and don't ask again" and "remember these paths" (host-answers.md:85-88). Claude's "don't ask again", for the session or persisted to a settings file. Codex's "always allow", which writes a rule file. A resumed session may restore session-scoped approvals made before the resume |
-| Runtime switches | `/allow-all`, `/yolo`, `/permissions`, Codex's `/approvals` |
+| In-session grants | Copilot's "Yes, and don't ask again" and "remember these paths" (host-answers.md:85-88). Claude's "don't ask again", for the session or persisted. Codex's "always allow", which writes a rule file. A resume may restore session-scoped approvals and skill rules |
+| Runtime switches and reloads | `/allow-all`, `/yolo`, `/permissions`, Codex's `/approvals`. **Claude reloads** permissions and hooks when a settings file changes, and loads one **created** mid-session, a new `.claude/` included. **Copilot reloads** hooks, MCP servers and agents on a plugin change, and `/skills reload` loads new skills |
 
-So the rule is positive, and it is about the **effective** configuration, not the launch mode:
+**(A) in detail: a provably forced-ask launch.** All of these, or the launch isn't forced-ask:
 
-* **A session is an unattended reply target only if both hold** (otherwise only through §5.7):
-  1. **At launch, the host forced ask mode, and the effective permission and extension
-     configuration auto-allows nothing side-effecting and runs no command of its own.** Before
-     every forced-ask launch the host reads **every scope that will still load**, per agent. It
-     excludes a scope where the CLI can, and otherwise **refuses the launch** if any loaded scope
-     auto-allows a side-effecting tool or adds a hook that runs a command:
-     * **Copilot:** an **allowlist** of the flags the host passes (session id, model, effort,
-       context, the prompt, and the CLI's explicit interactive mode where it has one). Nothing
-       else is passed, `extraArgs` aren't applied, and **Agency is never used** for a forced-ask
-       launch (Q36). The host reads `~/.copilot/permissions-config.json` (any saved approval for
-       the workspace or a parent folder), `allowedUrls` and the saved mode in
-       `~/.copilot/settings.json`, and the repository, user and plugin hook definitions. Any
-       saved approval, allowed URL, non-default mode or hook refuses the launch, unless AP1 shows
-       a flag that disables that scope.
-     * **Claude:** `--permission-mode default`, with `--setting-sources` limited so that project
-       and local settings, **and user settings where the CLI allows excluding them**, don't load.
-       `--settings` gives a host-written file holding
-       `permissions: { defaultMode: "default", disableBypassPermissionsMode: "disable" }`. Because
-       `allow` lists merge, that file can't cancel anything, so the host reads what still loads:
-       managed settings, user settings if they load, enabled plugins, hooks and MCP servers. Any
-       `allow` rule for a side-effecting tool, any non-default mode, any hook, or any plugin that
-       adds hooks or side-effecting tools refuses the launch.
-     * **Codex:** an explicit `-a untrusted` and `-s workspace-write`, no `--profile`, and `-c`
-       overrides for every permission-relevant key. `-c` can't remove rules, so the host reads
-       every rule file that loads (`$CODEX_HOME/rules` or `~/.codex/rules`, managed rules, and the
-       project's if it is trusted) and the configured MCP servers and apps. Any `allow` rule, or
-       any tool that the host can't show prompts, refuses the launch.
-     * **All:** a **scrubbed environment**: the host's environment minus each agent's
-       config-relocating and permission variables, plus `AGENT_BRIDGE_*`. Scrubbing only moves
-       the agent back to its default config directory, so that directory is what gets read.
-     * **Unsupported combinations stay unavailable.** An agent, version or configuration for
-       which AP1 hasn't shown every scope can be excluded or read is never launched in forced-ask
-       mode, and an agent launch there is refused.
-     * **Resume.** If the CLI restores session-scoped approvals on resume, grants made before the
-       resume count. A forced-ask resume is allowed only when the host's own record shows the
-       session was forced-ask from its first launch with no grant seen since; otherwise it is
-       `unknown`.
-  2. **The host has seen no in-session grant or mode change since.** Before every delivery, the
-     host checks:
-     * **Prompts it didn't answer once-only:** any permission prompt in the session that the
-       host didn't answer itself with a plain, once-only choice (remote approval never picks a
-       persistent one, v1-sessions.md "Copilot permission prompts") counts as a possible grant.
-     * **Settings, rule and hook files:** none of the files read at launch has changed.
-     * **The on-screen mode indicator**, read in the same screen read as the composer guard
-       (§5.2 step 2), still shows the forced mode.
-* **What each agent records, and so what the host can see** (v1-sessions.md:1021-1027):
-  * **Copilot** writes `permission.requested` and `permission.completed` to `events.jsonl`. That
-    is a real signal: the host sees every prompt and how it was answered, including at the
-    machine. With the screen's mode indicator, Copilot is the one agent v1 can expect to keep
-    reachable.
+1. **A host-owned configuration home** per agent kind: `COPILOT_HOME`, `CLAUDE_CONFIG_DIR` and
+   `CODEX_HOME` point at `<host data>/agent-homes/<agent>/`. It holds only:
+   * **host-written configuration**, deny by default: Claude `defaultMode: "default"`, no `allow`,
+     `disableBypassPermissionsMode`, no hooks, plugins, agents, skills or MCP servers; Codex
+     `approval_policy = "untrusted"`, `sandbox_mode = "workspace-write"`, `features.hooks = false`,
+     no rules, MCP servers or trusted projects; Copilot no `allowedUrls`, plugins, hooks, skills,
+     agents or saved approvals;
+   * **a copy of the sign-in credential only** (Claude's `.credentials.json`, Codex's
+     `auth.json`, Copilot's token through its documented variable), never the rest of the
+     personal home;
+   * the CLI's own **state** (session history, logs), in the subdirectories it uses for them.
+
+   **Before every launch** the host checks the home against its manifest: every host-written
+   file by hash, every state directory by name, and nothing else. Anything else, such as a file
+   a session or another process wrote, makes the host **reset** the home to the manifest
+   (moving the stray entries to an audited quarantine). The built-in skills and agents a CLI
+   ships with are inventoried by AP1 per version; one with `allowed-tools` refuses the launch.
+2. **Project sources off.** Claude `--setting-sources` with none of project or local; Codex's
+   project configuration doesn't load because the host-owned home trusts no project, and
+   `-c features.hooks=false` is passed too. Where a CLI has no switch, the host **refuses the
+   launch if the workspace, or the main checkout of a linked worktree, contains a repository
+   extension path** for that agent: Copilot `.github/copilot/`, `.github/skills/`,
+   `.github/agents/`, `.github/hooks/` and legacy commands; Claude `.claude/` and `.mcp.json`
+   unless AP1 shows `--setting-sources` excludes each; Codex `.codex/` unless AP1 shows an
+   untrusted project's are ignored. Instruction files (`AGENTS.md`, `CLAUDE.md`,
+   `copilot-instructions.md`) carry no authority and are allowed.
+3. **No managed or server policy may apply.** The host refuses if a managed-settings file, an MDM
+   profile or a policy registry key for that agent exists, or if the signed-in account is one
+   whose organization can set permissions server-side (Claude Team or Enterprise, Copilot
+   Business or Enterprise), unless AP1 finds a positive in-CLI signal of the effective policy.
+   A policy that can change at runtime is treated as unreadable.
+4. **Flags.** Copilot: an **allowlist** (session id, model, effort, context, the prompt), no
+   `extraArgs`, never Agency (Q36). It has no manual-mode flag, so the effective mode is proved
+   by step 3 and by the on-screen mode indicator at first idle, before any delivery. Claude:
+   `--permission-mode default`. Codex: `-a untrusted -s workspace-write -c features.hooks=false`,
+   no `--profile`.
+5. **A scrubbed environment:** the host's environment minus each agent's configuration and
+   permission variables, plus `AGENT_BRIDGE_*`, with the three home variables set to the host's.
+6. **Fail closed.** A scope that is unreadable, unparseable or ambiguous refuses the launch:
+   **unreadable is not absence**, as for the policy (§5.1) and the credential store (§3.4).
+
+**Agent launches are exposed for all three agents.** A launch's prompt runs at once, so the launch
+check is its only guard. An agent launch is allowed only as a provably forced-ask launch; anything
+else is refused. A gated launch, approved like a gated message, is a later option (Q47).
+
+**Staying forced-ask.** Before every delivery the host checks that nothing has changed since
+launch:
+* **Watches on directories, not files.** It watches the host-owned home, the workspace's and main
+  checkout's extension paths (including their **creation**), and every managed path, plus the
+  CLI's plugin, skill and agent sets where it records them. **Any new or changed entry** makes
+  the session `unknown`. A list of the files read at launch would miss a file created later.
+* **Grants.** Any permission prompt the host didn't answer itself once-only counts as a possible
+  grant (remote approval never picks a persistent one, v1-sessions.md "Copilot permission
+  prompts"). The on-screen mode indicator, read in the composer guard's screen read (§5.2
+  step 2), still shows the forced mode.
+* **What each agent records** (v1-sessions.md:1021-1027):
+  * **Copilot** writes `permission.requested` and `permission.completed` to `events.jsonl`, a real
+    signal, including grants made at the machine. A skill's pre-approval isn't recorded there,
+    which is why skills are excluded by step 1 rather than detected.
   * **Claude** gives agent-bridge **no signal**: its prompts aren't in the transcript, and only
-    agent-ha-bridge's hook ever saw them. A "don't ask again" given at the machine for the
-    session is invisible. Only a grant persisted to a settings file is seen, by the file check.
-    So, under the rule below, a Claude session is `unknown` unless AP1 proves otherwise.
-  * **Codex** records `exec_approval_request`, and its per-turn approval policy only **after**
-    a turn is submitted. A `/approvals` change is therefore visible only once the next turn,
-    possibly the agent's own reply, has started. That is too late, so a Codex session is
-    `unknown` unless AP1 finds an earlier signal.
-* **Anything else is "unknown" and refused:**
-  * any session the host didn't launch, including adopted and manually started ones;
-  * any session where one of those checks fails or can't be made;
-  * every session of an agent, or agent version, for which **AP1's vectors** don't show the
-    host can see that agent's grants and mode changes before delivery.
-* **The consequence in v1** (Q45): **Claude and probably Codex sessions are unreachable as reply
-  targets.** Agent-to-agent replies work only **into Copilot** sessions until a Claude or Codex
-  signal is found. Reads and launches work for all three. With the per-message gate on (§5.7 G),
-  Claude and Codex sessions can still receive a reply the owner approves.
-* **The person's own grants make a session unreachable by agents.** "Don't ask again" at the
-  machine, or `/allow-all`, takes the session out of reach until it is relaunched (Q44). That is
-  deliberate.
+    agent-ha-bridge's hook ever saw them. A session-only "don't ask again" is invisible; a
+    persisted one is caught by the watches. So a Claude session stays `unknown` unless AP1 finds
+    a signal, and reaches agents through (B).
+  * **Codex** records `exec_approval_request`, and its per-turn approval policy only **after** a
+    turn is submitted, too late. A Codex session stays `unknown` unless AP1 finds an earlier
+    signal, and reaches agents through (B).
+
+**Residuals.**
+* **The launch-time race.** Between the host's check and the CLI loading its configuration, a
+  same-user process can change a file. That is same-user code (§1.3).
+* **Mid-turn changes.** A configuration change during a turn an agent's message already started
+  can't be withdrawn from the CLI, so new authority may apply to that turn. The host marks the
+  session `unknown` at once, audits it, and puts a notice in the person's Needs-you lane ("the
+  configuration changed during an agent-driven turn") with **Stop**. Only same-user code can make
+  such a change: another process, or the target's own agent where its mode lets it write without
+  a prompt (Codex in `workspace-write` can write the workspace, which is why an untrusted
+  project's `.codex/` must be shown ignored, and why AP1 has a vector for it).
+* **What isolation costs the person** (Q47). Forced-ask sessions don't have the person's own
+  skills, MCP servers, plugins, custom agents, hooks or saved approvals, and a workspace carrying
+  repository extension paths can't have one at all. Their history lives in the host-owned home,
+  so they appear in the bridge but not in the CLI's own resume list. The person's ordinary
+  sessions are untouched. Forced-ask sessions are a kind the person or an agent chooses for
+  agent-to-agent work; everything else is reached through the gate.
+
+**The rule.**
+* **A session is an unattended reply target only if** it was a provably forced-ask launch under
+  (A), and nothing above has made it `unknown` since.
+* **Anything else is `unknown`**, including any session the host didn't launch, adopted and
+  manually started ones, and every session of an agent or version whose AP1 vectors don't show
+  the host can see its grants and mode changes before delivery. An unknown session gets an
+  agent's message only through (B).
+* **The consequence in v1** (Q45): Claude and probably Codex sessions are never unattended reply
+  targets, and on an organization-managed account Copilot sessions may not be either. With the
+  gate on, every one of them can still receive a message its owner approves.
+* **The person's own grants make a session unreachable unattended.** "Don't ask again" at the
+  machine, or `/allow-all`, makes it `unknown` until it is relaunched (Q44). That is deliberate,
+  and the gate still applies.
 * Allow-all and unknown sessions are **excluded from every `expose` set** (§7.4) and every
   connector scope (§9.3), unless a link's `allowAllRead` opt-in exposes them for reading only
   (§5.7 R). They may be **read** within the same-account read policy. A **reply** into one is
-  refused, unless the target's owner opted in: the per-message gate (§5.7 G), or the own-account
-  setting (§5.7 O). Q34 records the owner's decision.
-* AP1 ships **effective-configuration checks and mode forcing at launch**, and **vectors for every
-  row of the table above**. Each must refuse the launch, make the session unknown, or be prevented
-  by forcing (§11.2). **Pre-seeded user rules, hooks and rule files** are mandatory refusal
-  vectors for all three agents.
+  refused unless the target's owner opted in: the gate (§5.7 G) or the own-account setting
+  (§5.7 O). Q34 records the owner's decision.
+* AP1 ships **isolation (A)**: the host-owned homes and their manifests, the project-source
+  switches and refusals, the managed-policy refusal, the flags, the scrubbed environment, and
+  the directory watches. It ships **mandatory refusal vectors** for every row of the table, for
+  all three agents, including: a pre-seeded user allow rule, hook, rule file and skill with
+  `allowed-tools`; each repository extension path; a managed file and a policy registry key;
+  Copilot's `defaultPermissionMode: "assisted"`; and, mid-session, an added hook, skill, settings
+  file or `.claude/` directory, a plugin change, and `/skills reload`, each making the session
+  `unknown` (§11.2).
 The other hard-coded exclusions:
 * A session that is **working** or asking anything: replies are `refused` with
   `code: "notIdle"` (§5.2).
@@ -916,7 +967,9 @@ escaping), which there protects the **timing**, not the mode. A fourth option, *
 allow-all** (allow-all only inside an OS sandbox the host sets up, so unattended execution is
 confined), was **not chosen** and is recorded as deferred (Q34).
 
-**(G) A per-message gate for allow-all and unknown targets.** Same account and cross-account.
+**(G) A per-message gate for every target that isn't provably forced-ask** (§5.3 (B)):
+allow-all, unknown, adopted, manually started, a session whose configuration changed, and
+Claude and Codex sessions. Same account and cross-account.
 `inbound.*.gate` (§5.1), and per link `expose.gate` (§7.4). Off by default.
 
 1. **Held.** A reply that passes every check except §5.3's target rule, addressed to an
@@ -1005,7 +1058,7 @@ cross-account hop (§5.4 `via`, the §7.5 taint rule).
 |---|---|---|
 | `driver` | `Session` | `agent`, unchanged (v1-sessions.md:832) |
 | `driverPrincipal` | `Session` | `agent:<machine>/<session>` (§3.1), replacing `homeassistant:<id>` for native agents. HA-connector presses keep theirs |
-| `driverFrom` (new) | `Session` | `{ account?, login?, repo?, machine, machineName, session, title?, agent, federated?, depth }`: who drives, for display. `machineName` is the **target host's** view of the sender's roster name (signed by a person's device, #391 §3.2), never a name the envelope carries. `title` is the sender's session title as the envelope's issuer gave it (cut to 120 bytes, hidden characters made visible as `NeedsYou.Reveal` does). `account`, `login` and `repo` (the link's repository, §7.11) only when it is another account's (§7) |
+| `driverFrom` (new) | `Session` | `{ account?, login?, repo?, machine, machineName, session, title?, agent, federated?, depth }`: who drives, for display. `machineName` is the **target host's** view of the sender's roster name (signed by a person's device, #391 §3.2), never a name the envelope carries. `title` is the sender's session title as the envelope's issuer gave it (cut to 120 bytes, hidden characters made visible as `NeedsYou.Reveal` does). `account`, `login` and `repo` (the link's repository, §7.11) only when it is another account's (§7). `login` is the receiving side's own resolution of the T2-verified user id (`GET /user/{id}` by its app, recorded in its link statement and refreshed daily), never a name the peer supplied |
 | `activity.userMessageFrom` | `Activity` | `agent` (PR #501), set **only** from a verified agent command or a local agent connection, never from anything the sender's text contains (the #501 security review's requirement) |
 | `activity.userMessageLabel` | `Activity` | Built **only from verified fields** (§6.3): `"<agent> on <machineName>"`, for example `"copilot on DESK"`; across accounts `"<agent> on <link name> · @<T2 login>"`. Cut to 64 bytes. Clients show it as "Sent by copilot on *DESK*". The sender's `title` is never in the label: older clients that show only the label must not show an unverified title as the sender |
 
@@ -1042,7 +1095,8 @@ unchanged. Only the principal and its source change.
   * for another account, the **GitHub login verified by T2** (§7.11.3), or the **name the
     receiving person set locally** at link time.
 
-  A peer's self-asserted `login` and host `name` (§7.3) are never shown as identity. The sender's
+  A peer's host `name` (§7.3) is never shown as identity, and descriptors carry no login at all
+  (§7.11.3). The sender's
   session `title` is the issuer's unverified claim. It is shown only as secondary text, in
   quotation marks and labelled as the sender's title, with hidden characters made visible
   (`NeedsYou.Reveal`).
@@ -1128,18 +1182,21 @@ command–style signed object:
 {
   "v": 1,
   "link": "<16 random bytes, base64url>",
-  "account": "<A's account id>", "login": "danswett",
+  "account": "<A's account id>",
   "relay": "https://relay.example",
   "genesis": "<A's roster genesis entry hash>", "generation": "<A's generation>",
   "linkKey": "<P-256 ECDSA public key, SEC1, base64url>",
   "revokers": ["<P-256 public keys that may only revoke this link>"],
   "repo": "<GitHub repository id, for a repo-scoped link>",
+  "singleMachine": false,
   "expiresAt": 1795900000
 }
 ```
 
-* `account` and `login` are the sender's claims. The receiving side shows the login only once T2
-  verified it (§7.11.3), or else the name its own person typed at link time (§6.3).
+* `account` is the sender's claim. The descriptor carries **no name**: no login, display name or
+  email. The receiving side shows a GitHub login only as GitHub resolves the T2-verified numeric
+  user id **at display time** (`GET /user/{id}`, §7.11.3), or else the name its own person typed
+  at link time (§6.3).
 * `linkKey` is a **dedicated per-link signing key** created on the A person's device that makes
   the link. It signs A's later statements *about this link* (below). It isn't a roster key, so
   B never needs to understand A's roster rules. A's own hosts accept it because A's person's
@@ -1158,6 +1215,9 @@ command–style signed object:
     keeping it off the custodian's machine is A's app's rule, and in A's interest.
 * `repo` is the immutable numeric repository id (not the name), for a repo-scoped link (§7.11).
   It is part of the link's identity, bound into every channel and command (below).
+* `singleMachine` (Q46) says A's side has no attester off the custodian's machine (below). It is
+  in the descriptor, so the link code and T2 cover it, and it is **immutable for the link id**:
+  changing it means a new link.
 * **Exchange.** Descriptors travel over any channel (a chat, an email, a QR code in a video
   call). They aren't secret.
 * **Link code.** Both apps show `code = first 64 bits of SHA-256(F("agent-bridge link v1",
@@ -1184,8 +1244,9 @@ machine holds both keys. A's app sets `custodianMachine` honestly, and changing 
 host is a host change that needs B's person (below).
 
 **Single-machine owners** (Q46). If A has no attester (one machine, and only an offline recovery
-key), A's app marks the link `singleMachine`, the co-signature from that machine's host is
-accepted, and B's app says so before acceptance: "@alex's side of this link lives on one machine.
+key), A's app sets `singleMachine: true` **in the descriptor**. B accepts a co-signature from a
+host on the custodian's machine **only if `singleMachine` was pinned true at acceptance**; a
+statement can't switch it on later. B's app says so before acceptance: "@alex's side of this link lives on one machine.
 If it is stolen, only their recovery key can end the link before it expires." The residual below
 then applies until that recovery key's tombstone arrives or the link expires.
 
@@ -1396,7 +1457,15 @@ admission. F3: host enforcement, projection and taint, including `allowAllRead` 
 (§5.7, after AP8). F4: app and PWA link pages and the external marker, with the allow-all opt-ins
 and their warnings (§7.11.5). F5: spaces as named sets of links (optional). F6: repo discovery (§7.11):
 SSH-signed descriptors, the members-only directory, membership freshness and the suggestion UI.
-F6 depends on F1-F4, because it produces F1 links.
+F6 depends on F1-F4, because it produces F1 links, and on the **directory store** (§7.11.10): the
+`directory` container in design.md §5.8's Cosmos DB account, the `directory-store.bicep` stamp
+module with managed-identity RBAC and no keys, and the Key Vault secret and data key. F7: the
+**person view** (§7.12): the proxied `kind: "person"` read across a link, `collaborator.removed`,
+`Session.external`, and the app's person dimension and "Involving external agents" filter. It
+depends on F3 and F4. Its exit vectors: a revoked, suspended or expired link hides that person's
+sessions at once; no reply, answer, approve, launch, stop or transfer control is shown, and each
+is refused by both hosts; a collaborator's session never enters Needs-you, notifications, badges
+or counts; a removed person device can't read through its host.
 
 ### 7.11 Repo-based contributor discovery
 
@@ -1431,10 +1500,11 @@ renamed and recycled.
 | **(D1)** A committed file per contributor, e.g. `.agent-bridge/contributors/<user id>.json` holding the descriptor (relay endpoint, link key) | Endpoint and key | Anyone with push. A drive-by contributor needs a merged PR | **Worst.** Permanent in history, copied to every fork and clone, and scrapeable in public repos (§7.11.7) | Yes | **Not recommended.** Allowed only as an explicit opt-in in a private repo |
 | **(D2)** GitHub's collaborator API, called by each app with its owner's own GitHub token | **Candidates**: logins and user ids with push access. No endpoint or key | GitHub | Nothing published. `GET /repos/{o}/{r}/collaborators` requires the caller to have write access, which is the membership being sought anyway | n/a | **Recommended**, for candidates |
 | **(D3)** A signed statement in the repo, or in the user's own GitHub space (a gist, or `<login>/<login>`) | Endpoint and key, with a proof | The user | Per-user rather than per-repo, but still public | Yes | Rejected as a discovery source. Its *signature* is §7.11.3's proof |
-| **(D4)** A **members-only directory on a relay**, keyed by the repo's immutable id: opted-in members' signed descriptors, visible only to callers who prove push access to that repo **and recent activity in it** (§7.11.4) | Endpoint and key, for fellow active members only | Members. **No GitHub token is ever sent to a directory** other than the owner's own sign-in relay (below) | Only the directory relay's operator and fellow members learn who uses the bridge on R, and where | Yes, with a **rendezvous relay** (below) | **Recommended**, for endpoints |
+| **(D4)** A **members-only directory on a relay**, keyed by the repo's immutable id: opted-in members' signed descriptors, visible only to callers who prove push access to that repo, stored blinded and encrypted (§7.11.10) | Key, and an endpoint sealed per accepted peer, for fellow members only | Members. **No GitHub token is ever sent to a directory** other than the owner's own sign-in relay (below) | Only the directory relay's operator and fellow members learn who uses the bridge on R, and where | Yes, with a **rendezvous relay** (below) | **Recommended**, for endpoints |
 
-**Recommended discovery: D2 for candidates, plus D4 for endpoints**, with both narrowed to
-people active in the repository (§7.11.4, Q22).
+**Recommended discovery: D2 for candidates, plus D4 for keys and sealed endpoints.** The apps
+narrow suggestions to people active in the repository (§7.11.4, Q22); the directory gates on
+write access only.
 
 **A GitHub token never leaves the owner's devices**, except to the owner's own sign-in relay,
 during sign-in as today (design.md §5.4). It is never sent to a directory, a rendezvous relay, a
@@ -1455,15 +1525,17 @@ peer or a host. That way a rewritten pointer can't harvest bearer tokens (§7.11
    install is the repository's consent to the directory. A repository that hasn't installed it
    gets **no directory**, and its members use invitations (§7.3). There is no fallback in which
    any GitHub user can list entries.
-   * **The same filter as the apps** (§7.11.4, "Who is suggested"). With the same installation,
-     the directory also checks **recent activity**, so a dormant member with write access can't
-     list active members' descriptors, and a dormant member's own entry isn't revealed. It
-     answers a query only if the caller qualifies, and returns only entries whose users qualify.
-     What it can verify with an installation token is listed in §7.11.4. Where it can't verify
-     activity (a GitHub outage, a check it can't make), it gates on **write access only**, says so
-     in its answer, and the apps filter further.
+   * **The installation is Metadata-only**, and the directory gates on **write access only**.
+     Checking activity would need Contents and Pull requests read (commits, `history`, reviews,
+     private pull-request search), and that would let the relay operator read every
+     participating private repository's source, contradicting design.md §5.1. So the activity
+     filter (§7.11.4) runs **in the apps only**, with each person's own token.
+   * **The privacy cost:** a dormant writer can still list the repo's opted-in entries. That is a
+     privacy cost only, never authority: a listing is not a suggestion and not a link, and every
+     link still needs both people's consent (§7.11.6, §7.11.7).
 4. **Registration and query.** With identity and membership proven, the app publishes its owner's
-   signed descriptor, keyed by `(repo id, user id)` and kept for at most 30 days, and reads the
+   signed descriptor, stored under blinded keys derived from `(repo id, user id)` and encrypted
+   (§7.11.10), kept for at most 30 days, and reads the
    repo's entries. It then intersects them with its own step 1 candidates. An entry whose user
    isn't a current collaborator in the app's **own** GitHub check, or isn't **active** in the
    app's own activity check (§7.11.4), is ignored. Every descriptor's T2 proof is verified by the
@@ -1489,11 +1561,18 @@ The **repo descriptor** is §7.3's link descriptor plus:
 
 ```json
 {
-  "github": { "userId": 1234567, "login": "alex" },
-  "repo":   { "id": 987654321, "fullName": "danswett/agent-bridge" },
+  "github": { "userId": 1234567 },
+  "repo":   { "id": 987654321 },
+  "sealKey": "<P-256 ECDH public key, for endpoints sealed to this person>",
   "proof":  { "kind": "ssh", "sig": "-----BEGIN SSH SIGNATURE-----…" }
 }
 ```
+
+**No names** (owner decision, §7.11.10): no login, display name, email or repository name. Apps
+resolve the login from the numeric user id with `GET /user/{id}` **at display time**, and a
+suggestion shows what GitHub returns now; the repository's name comes from the app's own
+workspace or the API. The descriptor in the directory also carries no `relay` by default: the
+endpoint travels sealed to `sealKey` after both people accept (§7.11.7).
 
 with `account` equal to `github.userId`, and **a fresh `linkKey` per repository**, so the same
 person is unlinkable across repos by key (§7.11.7).
@@ -1554,12 +1633,13 @@ SSH-host-key rule.
     collaborators and opted-in directory entries are checked, so an organization with hundreds
     of writers costs a handful of queries per repository per day. "Can't tell" counts as
     **not active** for suggestions, never the reverse.
-  * **What the directory can verify** with its installation token: default-branch commits by
-    author id (GraphQL `history(author: {id}, since)`), pull requests opened and reviews
-    submitted (search, and the reviews API), and co-authorship by noreply address. Co-authorship
-    under another email is visible only to the apps' GraphQL check, so the apps filter further.
+  * **The directory doesn't check activity** (§7.11.2): its installation is Metadata-only, so the
+    filter is the apps'. That needs **Contents** and **Pull requests** read on the person's
+    selected repositories in the app's own token (Q38). Exhausting the search limit makes the
+    answer "can't tell", which counts as not active: suggestions fail closed.
   * **Activity lapsing on an existing link** keeps the link: membership is unchanged, so nothing
-    is suspended. It only stops new suggestions, and hides that user's entry in the directory.
+    is suspended. It only stops new suggestions, and that user's app withdraws their directory
+    entry.
     The directory still carries tombstones and re-checks for existing links whatever the activity
     (§7.3). The link shows "@alex: no activity in danswett/agent-bridge for 90 days" so the
     person can revoke it if they want.
@@ -1601,6 +1681,8 @@ SSH-host-key rule.
 * **Repo scope** (the choices in the dialog):
   * **Nothing is pre-ticked** (Q40), as in §7.4 and #391's "pre-ticks nothing". The person ticks
     read and/or reply. Launch is a separate opt-in.
+  * **Read** covers @alex's agents **and @alex in their own app** (§7.12): "@alex and their
+    agents can read these sessions."
   * **Allow-all sessions** (§5.7), two further opt-ins, unticked, each with its warning:
     * "**Let @alex's agents read my allow-all sessions** in these workspaces" (`allowAllRead`):
       "Their agents could read what those sessions say, including command output. Transcripts
@@ -1648,6 +1730,11 @@ SSH-host-key rule.
 | **@alex's GitHub account compromised** | A new key means a new identity, so a re-verify prompt, never silent. New links with @alex are possible for the attacker | The T2 residual. T4 per link mitigates it |
 | **A login renamed or recycled** | No effect | Bound to the numeric user id |
 | **The directory relay lies** | It can hide entries | It can't forge them (T2 is verified by the apps) |
+| **Storage-level access** (Cosmos DB, a backup, or someone with data-plane access but not Key Vault) | Blinded keys, ciphertext, sizes and timestamps. No repo, user, key, endpoint or name | Keyed HMAC indexes and AEAD at rest (§7.11.10) |
+| **The directory secret leaks** | With storage access, keys become **linkable**: an attacker can test candidate repo ids and user ids, which are small integers, and learn who registered on which repo. Entries stay encrypted unless the data key leaks too, and stay **signed and unforgeable** either way | Rotate the secret (dual-read, re-key) and the data key (§7.11.10) |
+| **The data key leaks too** | Descriptors are readable: user ids, per-repo keys, repo ids. No names, and sealed endpoints stay sealed to their peers | Rotate; the 30-day TTL bounds what an old copy holds |
+| **A stale region replays an old descriptor** | Loses: newest signed `issuedAt`, then hash, wins, and a withdrawal is a signed tombstone that outlives it | §7.11.10 item 4 |
+| **A person wants their data gone** | Withdrawal hides it at once; on-demand removal hard-deletes it in every region; backups age out within 7 days | §7.11.10 item 6 |
 | **The repo goes from private to public** | No published personal data (D4 entries are members-only), so nothing new leaks | Unless D1 was used. That is why D1 is private-only |
 
 #### 7.11.7 Privacy
@@ -1664,25 +1751,30 @@ public one:
 
 **Recommended form: indirect and members-only.** Nothing personal is ever committed. The only
 optional repo file is the non-personal `rendezvous` pointer. Descriptors live in the D4
-directory, visible only to callers who prove push access to that repo and recent activity in
-it, and expire after 30
-days. Link keys are per-repo, so they don't link across repos. Hashing the repo id in the
-directory doesn't help, since repo ids are small sequential integers anyone can enumerate, so it
-isn't offered as a privacy measure. What the **directory operator** learns is that GitHub user X
-uses the bridge on repo R, through relay E. For the production relay, that is the project's
-operator. A team that won't accept that uses the invitation path (§7.3).
+directory, visible only to callers who prove push access to that repo, and expire after 30
+days. They carry **no names** (§7.11.3), and link keys are per-repo, so they don't link across
+repos. A plain hash of the repo id wouldn't help, since repo ids are small sequential integers
+anyone can enumerate; the directory instead indexes by a **keyed** HMAC under a secret it holds
+(§7.11.10), which hides ids from anyone who reads its storage without that secret, but not from
+the operator. What the **directory operator** can learn is that GitHub user id X uses the
+bridge on repo R. For the production relay, that is the project's operator. A team that won't
+accept that uses the invitation path (§7.3).
 
-**Large organizations.** Only members with write access **and** activity in the window can list
-the directory (§7.11.2), so a large organization's hundreds of dormant writers can't. The active
-ones can still see every opted-in active member's descriptor, including relay endpoints, which
-for a self-hosted relay may be a home address. The opt-in dialog says so, and shows the number of
-people who **can actually see the entry**, as the directory reports it ("visible to the 12 people
-with write access to contoso/platform who were active there in the last 90 days"). If the
-directory can't verify activity, the dialog shows the larger write-access count and says why. A member can opt in with **"discoverable, but share my endpoint only after
-we've both accepted"**. The directory entry then carries the descriptor without `relay`. The
-endpoint is left in the directory only after both have accepted, sealed for that one peer (to an
-ECDH key in the peer's descriptor), so the operator and other members never see it.
+**Endpoints are sealed by default** (owner decision, §7.11.10). An entry carries the descriptor
+**without `relay`**. When both people have accepted, each app leaves its endpoint in the
+directory **sealed to that one peer** (ECDH to the peer's `sealKey`, AEAD, bound to the link id),
+so neither the operator, storage nor other members ever see it. When both use the same relay,
+nothing needs sealing at all. Publishing an **unsealed** endpoint, readable by every member who
+can list the directory, is an explicit opt-in ("show my relay to everyone with write access to
+this repo"), with the warning that a self-hosted relay's address may be a home network.
 
+**Large organizations.** The directory gates on write access only (§7.11.2), so in a large
+organization's repository **every** writer, including hundreds of dormant ones, can list every
+opted-in member's entry: the numeric user id, keys and expiry, and an unsealed endpoint only for
+those who opted into one. The activity filter only decides whom the apps **suggest**, not who can
+see an entry. The opt-in dialog says so, and shows the number of people who **can actually see
+the entry**, the write-access count ("visible to the 214 people with write access to
+contoso/platform; Agent Bridge suggests only those active there in the last 90 days").
 #### 7.11.8 Repo as the only path?
 
 | | Repo-based only | Explicit pairwise invitation only (F1) |
@@ -1727,6 +1819,163 @@ A's roster is never exported to B. B never trusts A's devices beyond the hosts A
 lists. Each side's #55 roster governs only its own side. A's agent principals are §3's, vouched
 for by A's hosts. B sees them as `driverFrom { account, login, federated: true, repo }` (§6.1, with
 `repo` added).
+
+
+#### 7.11.10 Directory storage (owner decision)
+
+**Owner decision** (coordinator, 2026-11-03, 20:10 PT, Q48). Where and how D4 entries are kept.
+
+1. **No names.**
+   * A stored entry carries **no login, display name, email or repository name** (§7.11.3).
+     Apps resolve a login from the numeric user id at display time.
+   * The **numeric GitHub user id** stays, only **inside the signed descriptor**. It can't be
+     dropped: it is what a peer resolves GitHub's signing keys from to check T2 (§7.11.3), and it
+     equals the relay account id (`RelayApp.cs:199`), which the envelope's `account` binds.
+   * It is **pseudonymous personal data**: anyone can turn it into a login through GitHub's
+     public API. So it is handled as personal data: the entry is **encrypted at rest** with an
+     application key (AEAD under a Key Vault key, `directory-data`, with the entry key as
+     associated data) on top of Cosmos DB's own encryption, and the plaintext id is **never an
+     index, a log field or a metric dimension**.
+2. **Blinded indexing.**
+   * The partition key is `HMAC(directorySecret, repoId)` and the item id is
+     `HMAC(directorySecret, repoId ‖ userId)`, both over fixed-width encodings.
+   * `directorySecret` is a **versioned Key Vault secret**, shared by every stamp. Each entry
+     records its key version (`kid`).
+   * **Rotation** has three steps:
+     1. publish version *k+1*;
+     2. **dual-read**: writes use *k+1*, and reads query both *k* and *k+1* and merge by the
+        newest-wins rule below, while a background job re-keys each entry (decrypt, recompute
+        both keys, write under *k+1*, delete the *k* item);
+     3. retire *k* once no item uses it. The 30-day TTL bounds how long that can take.
+   * Raw repo ids and user ids **never appear in keys, logs or metrics**. A log line carries the
+     blinded key or nothing.
+3. **Endpoints sealed by default** (§7.11.7). An entry has no `relay`. After both people accept,
+   each app leaves its endpoint sealed to the peer's `sealKey`. An unsealed endpoint is the
+   opt-in.
+4. **One directory for every region stamp.**
+   * **Azure Cosmos DB (NoSQL)**, as design.md §5.8 already specifies for the account directory
+     (design.md:605, multi-region writes): one container, `directory`, in that account, shared by
+     every stamp now and as regions are added, partitioned on `/pk` (item 2). A new region joins
+     by adding its location to the account, with no data move.
+   * **Expiry and withdrawal.** Per-item `ttl` is the descriptor's `expiresAt` minus now (30 days
+     at most). Withdrawal writes a **signed tombstone** (signed by the descriptor's `linkKey`, with
+     a newer `issuedAt`), whose own TTL is 31 days, longer than any descriptor it replaces.
+   * **Conflicts.** Cosmos's last-writer-wins policy on a **custom path**, `/order` =
+     `issuedAt × 2^20 + the first 20 bits of the descriptor hash` (well inside 2^53), so the
+     **newest signed descriptor wins, then the higher hash**. It is never last writer by region
+     clock. Every write is also conditional (on the etag) and refused unless its `issuedAt` is
+     newer than the stored item's and at most 120 s in the directory's future. So a stale region
+     can't resurrect a withdrawn entry: its older descriptor loses to the tombstone everywhere.
+   * **Consistency.** **Session** consistency (strong isn't available with multi-region writes).
+     After registration, the registering request's session token gives **read-your-writes** in
+     that region, so the app's immediate re-read sees its own entry. A member reading through
+     another region sees it once replicated, typically within seconds. That is acceptable,
+     because suggestions are not time-critical, entries are self-authenticating, and apps
+     re-check daily (§7.11.4).
+   * **Not the roster's pattern.** Today the relay keeps rosters per region in Blob storage
+     (`AzureRosterStore`, `Roster.cs:121`), and a second region is a separate relay URL
+     (relay-deploy.md:358-363). A per-stamp directory would hide members on one stamp from
+     members on another, so the directory must not follow that pattern.
+   * **Infrastructure.**
+     * A Bicep module, `directory-store.bicep`, that each stamp includes beside `roster-store.bicep`
+       and `blob-store.bicep`. It adds the stamp's region to the Cosmos account and creates the
+       database and container on first deployment.
+     * The stamp's managed identity gets the Cosmos DB Built-in Data Contributor role, scoped to
+       that container, with `disableLocalAuth: true`: **no keys**.
+     * Key Vault access is `get` on `directory-secret` and `unwrapKey` on `directory-data`.
+   * **Self-hosted relays** may use a single-node store (an embedded database or a file) with the
+     same blinded keys, AEAD, TTL sweep and newest-wins rule, and no replication.
+5. **Who sees what.**
+   * The **relay operator** sees a caller's repo id and user id while it checks the GitHub App
+     and T2, and can decrypt entries, because it serves them to members. It doesn't log either id.
+   * **Cosmos DB, or anyone reading storage or a backup without Key Vault access**, sees blinded
+     keys, ciphertext, sizes, timestamps and TTLs. From those it can count entries per blinded
+     repository, but learns no repo, user, key or endpoint.
+   * Sealed endpoints are readable only by the peer they were sealed to.
+6. **Retention and deletion.**
+   * **Withdrawal** (turning off discovery for a repo, "Never for this repo", lost membership or
+     dormancy) writes the signed tombstone at once, which hides the entry everywhere; the TTL then
+     removes both.
+   * **On demand**, "Remove me from collaborator discovery" in the app signs a withdrawal for
+     every repository the person ever registered. A person who has lost their keys signs in to
+     the relay with GitHub, and the directory deletes the entries keyed by their user id across
+     those repositories. Either way, the directory **hard-deletes** the entries and their
+     tombstones once the tombstones have replicated to every region.
+   * **Backups.** Cosmos DB's backup keeps deleted entries for its retention window, set to
+     **7 days** of continuous backup for this container, and no other copy exists. A restore is
+     for disaster recovery only, and is followed by re-applying every tombstone and deletion
+     recorded since the restore point.
+   * Nothing about an entry reaches logs or metrics beyond blinded keys and counts (item 2).
+
+
+### 7.12 Collaborators in the person's own app (owner decision)
+
+**Owner decision** (coordinator, 2026-11-03, Q49). The **person**, not only their agents, sees a
+linked collaborator's exposed sessions in their own app, read-only, with a person filter beside
+machines, and can filter their own sessions to those involving external agents.
+
+**What the person sees.**
+* Under a link where the other side granted **read** (§7.4), the person's app (the PWA, the
+  Windows app, Home Assistant later) lists that collaborator's **exposed** sessions: those in the
+  pinned workspaces, never allow-all or unknown ones unless the other side ticked `allowAllRead`
+  (§5.7 R). The person can open the transcript view.
+* Content is **exactly** what an agent's read under that link gets: §7.4's projection, §7.5's
+  rates, and the same exclusions. The exposing side audits it like an agent read.
+* **No reply, answer, approve, launch, stop or transfer controls** on a collaborator's session,
+  ever, in v1. The host refuses those actions too: they aren't in the person-across-link action
+  set. A person replying into a collaborator's session would be a separate, future grant
+  (deferred, Q49).
+* The exposing side's link dialog says so: "**@alex and their agents** can read these sessions"
+  (§7.11.5).
+
+**Which principal reads: proxied through the reader's own listed host.** Two choices:
+* **(a) The person's device as a direct guest.** The link statement would list the reading
+  side's person devices, and B's hosts would admit and verify foreign person devices. That means
+  a new key list in every statement, more disclosure (B learns A's devices), and a second
+  revocation path for devices B can't check against A's roster.
+* **(b) Proxied by one of the reader's own listed hosts** (recommended, chosen). A's person device
+  asks one of **A's hosts listed for this link**, over A's own account channel, which A's roster
+  authenticates. That host makes the read across the link with the principal
+  `{ kind: "person", account: A, device: <add hash of the person device> }` in a §4.3 envelope it
+  signs with its `hostSign`. Presence isn't needed for reads.
+
+Why (b):
+* **Verification is the same as for agent reads.** B verifies A's listed host exactly as for an
+  agent's command (§7.5): channel, link binding, signature, fresh co-signed statement.
+* **Revocation is the same.** A tombstone, a suspension or an expired statement stops person
+  reads with the agent reads.
+* **On A's side,** the host proxies only for a device that is **active in A's roster**, so
+  removing that device stops it at once.
+* **Nothing new to disclose.** B never learns A's devices beyond an opaque add hash in its audit,
+  and never needs a foreign device key.
+
+**The action set across the link** for `kind: "person"` is `sessions.list`, `session.get`,
+`session.read` and `sessions.subscribe`, with the subscription relayed by A's host to the device.
+B's hosts refuse any other action from a person principal, and A's host refuses to proxy one.
+B caps live subscriptions per link (4 by default) and charges reads to the link's rates.
+
+**Filters and UI.**
+* **A person dimension.** The session list gains **Mine**, then each linked collaborator by
+  **verified login**: resolved from the T2-verified user id at display time (§7.11.3), or the name
+  set locally at link time. Machines nest under each person.
+* **Never mixed in.** Collaborators' sessions sit in their own section with the outlined
+  diamond and the word "**External**" (§6.2), never colour alone (ui.md's accessibility rule).
+  They are **excluded** from Needs-you, notifications, badges and counts, so another person's
+  questions never page you.
+* **"Involving external agents."** A filter on your **own** sessions: any external principal
+  **sent, read or was refused** there within a window (1 h, 24 h or 7 days). The host derives it
+  from its audit log (§5.6) and reports it to the account's own clients only, as an additive
+  `Session.external: { lastAt, kinds: ["sent", "read", "refused"] }`.
+* **Revocation hides at once.** On a tombstone, suspension, expiry or a lost read grant, A's host
+  ends the proxied subscriptions and tells the device `collaborator.removed { link }`. The app
+  drops that person's sessions from view immediately, cached transcripts included.
+
+**Follow-ups for the UI owner** (the Agent Bridge UI session). This note doesn't change other
+documents:
+* **ui.md:** the person dimension and grouping; the external section's outline treatment and
+  marker; the exclusion from Needs-you, badges and counts; and the "Involving external agents"
+  filter.
+* **design.md:** the client views list (a read-only collaborator view), and `Session.external`.
 
 ---
 
@@ -2270,6 +2519,7 @@ In addition to design.md §5.1 (:348-361) and #391 §2.
 | **A stolen person's device** (unlocked, with its presence check passable) | Holds `sign`, maybe a `linkKey` | Beyond #391 §2's bounds: add or re-key hosts on a federation link, or rotate its key, without the peer person's confirmation (§7.3). Renew a link after its removal, holding only that device: the attesters stop co-signing (§7.3) | Until removed: what #391 allows a person's device, including drive sessions (#391 §7.3), and re-sign statements for links it holds the key for. Removal revokes those links, and each host sends a tombstone under its own `hostSign` (§7.3, §7.7). If the device is also a listed host or attester (the single-laptop setup), it renews its links until a tombstone from the required separate revoker arrives, or they expire |
 | **A stolen host** (the machine, or its keys) | Holds `dh`, `hostSign` and the account token | Act as another machine. Pass person-only checks. Reach targets whose policy excludes it | Until removed and the removal is fresh at targets (1 h, V5): send agent commands as its own sessions, within targets' policy. Partition residual as for a removed host |
 | **A manually started or adopted session** | A manual one has no credential | A manual one: act as an agent anywhere (decision 3). Either: be a reply target, since its mode is unknown (§5.3) | Read locally, as today (local-pipe.md:95) |
+| **A configuration change in a target** (a hook, skill, settings file, `.claude/` directory or plugin added mid-session, or `/skills reload`) | Same-user code, or the target's own agent where its mode lets it write | Keep the session an unattended reply target: the directory watches make it `unknown` before the next delivery (§5.3) | Add authority to a turn an agent's message already started: the host marks it `unknown`, audits it and offers the person **Stop** (§5.3 residuals). Win the race between the host's launch check and the CLI's load (same-user) |
 | **Same-user malware** | Reads keys, environments and stores | | Everything the user can, as today (§1.3). The audit log and signatures make its agent-attributed acts visible, not impossible |
 | **A compromised host** | Holds its `dh` and `hostSign` keys | Act as another machine's agents (it can't sign as their hosts). Pass person-only checks (#391 §7.2). Reach a machine whose policy excludes it (`fromMachines`) | Sign as any principal *on itself*, invent sessions, and lie about chains under 4.2(b). Bounded by targets' per-origin rates and policy, and visible in their audit. Removed via #391 |
 | **A removed host** | Keys still held | Be accepted by any host that has applied the removal, or by a target without a head attestation from another device in the last hour (§8.10, V5) | Inside a relay-maintained partition, unbounded (#391 §6.3). Shown as machines that never confirm the removal |
@@ -2336,16 +2586,16 @@ Each slice is one PR, security-reviewed independently before merge.
 
 | # | Slice | Depends on | Crosses machines? |
 |---|---|---|---|
-| **AP1** | **Smallest first slice: local agent principals, Windows only** (§3.4). It covers:<br>• credentials issued at launch (`AGENT_BRIDGE_TOKEN`, hashed store with process binding, a Job object per launch);<br>• `agent.hello` with **ancestry or Job membership read in full, failing closed**, never the environment variable. It is a **safety rail, not a boundary**: parent-PID spoofing and Job joining are stated residuals (§3.4);<br>• **effective-configuration checks and mode forcing at launch** for every agent kind (§5.3): the Copilot flag allowlist with no Agency or `extraArgs`, and reads of `permissions-config.json`, `allowedUrls` and hooks; Claude's `--permission-mode default` with restricted settings sources, and reads of managed and user settings, hooks, plugins and MCP servers; Codex's explicit `-a`/`-s`, and reads of every rule file and MCP server; a scrubbed environment; **vectors for every row of §5.3's sources table**;<br>• in-session grant and mode-change **detection**: Copilot from `permission.requested`/`permission.completed`, the others `unknown` unless a vector proves a signal before delivery;<br>• a **Copilot input-box reader** (host-replies.md:19-23 has none today), so the composer can be read before typing and before Enter (§5.2);<br>• the `agents` policy (`enabled`, `issue`, `inbound.local`, `exclude`, `limits`);<br>• local `session.reply`, `session.launch` and reads as an agent connection;<br>• chains, budgets and rates for local targets, and the audit log;<br>• `driverPrincipal = agent:<machine>/<session>`, `driverFrom`, the escaped prefix, and `userMessageFrom = agent` from the verified source;<br>• `agent-bridge-host agent list\|read\|reply\|launch` for tests, and the federation stub fields (§7.9).<br>**Exit criteria, each with a test that fails without it:**<br>• **an allow-all or unknown-mode session is never a reply target** (§5.3), including a session switched to allow-all after launch. The §5.7 opt-ins come later (AP8, AP9), so AP1 has none;<br>• **an agent launch or resume without an explicit `permissions: "ask"` is refused**, as are a non-allowlisted `agent` or `profile`, a resume of an allow-all session, and a `transfer`;<br>• **agent replies are delivered only to idle sessions** (`notIdle` otherwise, re-checked before Enter), **with `KeySend.Expect` on both the words and the Enter for every agent kind**, Copilot included. A prompt opened between the check and each key types nothing;<br>• a **non-empty or shell-mode composer is refused**, and Enter is sent only when the **complete** composer equals the authorized message exactly (§5.2);<br>• a session launched in forced-ask mode becomes `unknown` after an in-session "don't ask again" grant or a runtime mode switch (§5.3, Q44);<br>• **pre-seeded user allow rules, hooks and Codex rule files each refuse the launch or leave the session `unknown`**, for all three agents, and an `auto` launch that would pick Agency is refused;<br>• leading option keys and `@path` are escaped;<br>• a token from another session or a plain detached helper is refused, as are `AGENT_BRIDGE_SESSION` alone and a partial ancestry read;<br>• a manual or adopted session isn't a reply target, and a manual one gets no credential;<br>• an agent can't answer an approval or folder trust;<br>• a forged header in a title or body (including confusables) is neutralized;<br>• depth and budget refuse, and the person's reply resets them;<br>• a resumed session's old token is dead | #501 merged | **No** (decision 4 holds) |
+| **AP1** | **Smallest first slice: local agent principals, Windows only** (§3.4). It covers:<br>• credentials issued at launch (`AGENT_BRIDGE_TOKEN`, hashed store with process binding, a Job object per launch);<br>• `agent.hello` with **ancestry or Job membership read in full, failing closed**, never the environment variable. It is a **safety rail, not a boundary**: parent-PID spoofing and Job joining are stated residuals (§3.4);<br>• **isolation for forced-ask launches** (§5.3 (A)): a host-owned configuration home per agent (`COPILOT_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) with a manifest checked and reset before every launch; project sources switched off, or the launch refused when the workspace or main checkout has a repository extension path; refusal when managed, MDM or server policy may apply; the Copilot flag allowlist with no Agency or `extraArgs`, Claude's `--permission-mode default`, Codex's `-a untrusted -s workspace-write -c features.hooks=false`; a scrubbed environment; failing closed on any unreadable or ambiguous scope;<br>• **directory watches** on every scope, including the creation of new extension paths, and the CLI's plugin, skill and agent sets;<br>• in-session grant and mode-change **detection**: Copilot from `permission.requested`/`permission.completed`, the others `unknown` unless a vector proves a signal before delivery;<br>• a **Copilot input-box reader** (host-replies.md:19-23 has none today), so the composer can be read before typing and before Enter (§5.2);<br>• the `agents` policy (`enabled`, `issue`, `inbound.local`, `exclude`, `limits`);<br>• local `session.reply`, `session.launch` and reads as an agent connection;<br>• chains, budgets and rates for local targets, and the audit log;<br>• `driverPrincipal = agent:<machine>/<session>`, `driverFrom`, the escaped prefix, and `userMessageFrom = agent` from the verified source;<br>• `agent-bridge-host agent list\|read\|reply\|launch` for tests, and the federation stub fields (§7.9).<br>**Exit criteria, each with a test that fails without it:**<br>• **an allow-all or unknown-mode session is never a reply target** (§5.3), including a session switched to allow-all after launch. The §5.7 opt-ins come later (AP8, AP9), so AP1 has none;<br>• **an agent launch or resume without an explicit `permissions: "ask"` is refused**, as are a non-allowlisted `agent` or `profile`, a resume of an allow-all session, and a `transfer`;<br>• **agent replies are delivered only to idle sessions** (`notIdle` otherwise, re-checked before Enter), **with `KeySend.Expect` on both the words and the Enter for every agent kind**, Copilot included. A prompt opened between the check and each key types nothing;<br>• a **non-empty or shell-mode composer is refused**, and Enter is sent only when the **complete** composer equals the authorized message exactly (§5.2);<br>• a session launched in forced-ask mode becomes `unknown` after an in-session "don't ask again" grant or a runtime mode switch (§5.3, Q44);<br>• **the mandatory refusal vectors of §5.3, for all three agents**: pre-seeded user allow rules, hooks, rule files and skills or commands with `allowed-tools`; subagents with a `permissionMode`; every repository extension path (in the workspace and in a linked worktree's main checkout); a managed file and a policy registry key; Copilot's `defaultPermissionMode: "assisted"`; Codex hooks with `features.hooks=false` unproven; an `auto` launch that would pick Agency. Each refuses the launch;<br>• **mid-session vectors**: adding a hook, a skill, a settings file or a `.claude/` directory, a plugin change, and `/skills reload` each make the session `unknown`; a Codex agent writing `.codex/` into an untrusted workspace gains nothing;<br>• leading option keys and `@path` are escaped;<br>• a token from another session or a plain detached helper is refused, as are `AGENT_BRIDGE_SESSION` alone and a partial ancestry read;<br>• a manual or adopted session isn't a reply target, and a manual one gets no credential;<br>• an agent can't answer an approval or folder trust;<br>• a forged header in a title or body (including confusables) is neutralized;<br>• depth and budget refuse, and the person's reply resets them;<br>• a resumed session's old token is dead | #501 merged | **No** (decision 4 holds) |
 | AP2 | #45's MCP server on AP1 (stdio), with the old tool names and outcomes | AP1 | No |
 | AP3 | Adoption on Windows: app action, CLI, `agent.credential` | AP1 | No |
 | AP4 | Envelope library: encoding, signing (a) or MAC (b), strict parser, shared positive and negative vectors | #391 R1 (+ roster v2 V1-V2 if (a), §8.10) | Library only |
 | AP5 | Cross-machine: `agent.command` host-to-host, verification §4.7, `inbound.remote`, `outbound`, durable replay via R6, `instance` on `Session`, `agent.outcome`, `session.read` wait | AP4, #391 R3 + R6, hosts in `enforce` | **Yes** |
 | AP6 | Clients: "from *X* on *Y*" in the app and PWA (extending #503/#504), Settings for the policy, the Agent activity view | AP1 (local), AP5 (remote) | n/a |
 | AP7 | Re-enable `inbound.remote` defaults per machine during the owner's cutover (#391 R8) | AP5, R8 | Yes, live |
-| AP8 | **The per-message gate** for allow-all and unknown targets (§5.7 G): `inbound.*.gate`, holds, the `held` outcome and `gateDenied`/`gateExpired` codes, the Needs-you `agentMessage` item with full text and revealed characters, the presence-signed `gate v1` approval, windows and their rate limit, audit. **Exit tests:** an approval for different text, sender, target or instance is refused; a replayed approval is refused; an approval without presence, or from an agent connection, a connector or the `homeassistant:` path, is refused; a hold expires after 5 minutes; a window ends on revocation, either session's end or resume, and a target mode change; a sender can't open or extend a window; a connector reply into allow-all is refused with no hold; delivery still runs §5.2's guard | AP1, AP6, #391 person commands with presence (§7.2) and R6. Remote targets also AP5 | Same machine first; remote with AP5 |
+| AP8 | **The per-message gate** for every target that isn't provably forced-ask (§5.7 G, §5.3 (B)): `inbound.*.gate`, holds, the `held` outcome and `gateDenied`/`gateExpired` codes, the Needs-you `agentMessage` item with full text and revealed characters, the presence-signed `gate v1` approval, windows and their rate limit, audit. **Exit tests:** an approval for different text, sender, target or instance is refused; a replayed approval is refused; an approval without presence, or from an agent connection, a connector or the `homeassistant:` path, is refused; a hold expires after 5 minutes; a window ends on revocation, either session's end or resume, and a target mode change; a sender can't open or extend a window; a connector reply into allow-all is refused with no hold; delivery still runs §5.2's guard | AP1, AP6, #391 person commands with presence (§7.2) and R6. Remote targets also AP5 | Same machine first; remote with AP5 |
 | AP9 | **Own agents into own allow-all sessions** (§5.7 O): `inbound.*.allowAllTargets`, its warning in Settings, workspace scope. **Exit tests:** off by default; refused for another account's, a connector's, a federated or `homeassistant:` principal and for a chain with a cross-account hop; refused outside the workspace scope; `allowAllPerTargetPerMinute`, depth and budget apply; the guard still applies | AP1 (`inbound.local`). `inbound.remote`: AP5 | Local first; remote with AP5 |
-| F1-F6 | Federation (§7.10), with repo discovery (§7.11) as F6 | AP5, owner approval, separate review | Cross-account |
+| F1-F7 | Federation (§7.10), with repo discovery (§7.11) as F6 and the person view (§7.12) as F7 | AP5, owner approval, separate review. F6 also needs the Cosmos DB directory store (§7.11.10) | Cross-account |
 | C1-C6 | Connector API (§9.7). C1 is the read-only first slice | C1: #534, #407. Production (C5): §8.7 | C5 only |
 
 **Why AP1 first.** It delivers the owner's main ask (native, attributed agent messaging) for
@@ -2443,24 +2693,28 @@ Repo-based contributor discovery (§7.11):
     (T2). A relay's OAuth attestation is never sufficient alone. Offer the link code on every
     suggestion, and require it when T2 isn't available. A changed key is a new identity.
 21. **Q21. Where descriptors are published.** **Recommended:** nowhere public. A members-only
-    directory on a rendezvous relay (D4), gated by GitHub push access and recent activity
-    (Q22), and expiring after 30 days. No directory, and so invitations, where the repository
-    hasn't installed the directory's GitHub App. The only optional repo file is a non-personal `.agent-bridge/rendezvous` relay pointer.
+    directory on a rendezvous relay (D4), gated by GitHub push access through a **Metadata-only**
+    GitHub App installation, and expiring after 30 days. The activity filter (Q22) runs in the
+    apps only. No directory, and so invitations, where the repository hasn't installed the
+    directory's GitHub App. The only optional repo file is a non-personal `.agent-bridge/rendezvous` relay pointer.
     Per-contributor files in the repo (D1) are offered only in private repos, as an explicit
     opt-in.
 22. **Q22. What counts as a contributor.** **Decided by the owner (2026-11-03, 19:47 PT).** A
     collaborator is **suggested** only with **write access now AND recent activity in that
     repository by both people**: authored or co-authored default-branch commits, pull requests
     opened, or reviews submitted, within a per-repo window (default 90 days). Each app checks
-    both people with its own token; the directory applies the same filter where it can. Activity
+    both people with its own token. The directory, Metadata-only, gates on write access alone,
+    so a dormant writer can list entries, a privacy cost only (§7.11.2). Activity
     is a suggestion filter only: **write access stays the membership test for the link**, and
     lapsed activity keeps an existing link but stops new suggestions. No client-side directory
     fallback: a repository without the directory's GitHub App uses invitations (§7.11.2,
     §7.11.4).
 23. **Q23. Who operates the directory for the production relay, and is the operator learning
     "user X uses the bridge on repo R, through relay E" acceptable?** **Recommended:** yes, the
-    production relay hosts it, and that disclosure is stated in the opt-in dialog. A team that
-    objects uses the invitation path, or its own rendezvous relay.
+    production relay hosts it, and that disclosure is stated in the opt-in dialog. Its GitHub App
+    asks for **Metadata only**, so the operator can never read a repository's contents or pull
+    requests through it. A team that objects uses the invitation path, or its own rendezvous
+    relay.
 24. **Q24. Suggestions' reach.** **Recommended:** the app only, as a quiet badge on the
     Collaboration page: never a push, a toast or a phone notification. Opt-in per repository, with
     "Never for this repo", and nothing connects until both owners accept.
@@ -2544,8 +2798,10 @@ Decisions the reviews of `f3559996` asked to make explicit:
     (`reply: forced-ask`, §5.3), so manually started and adopted sessions, whose mode is unknown,
     can't be. `inbound.exclude` makes a private session unreadable too.
 38. **Q38. GitHub token type, scopes and storage, for repo discovery.** **Recommended:**
-    * a **GitHub App user-to-server token** from the Agent Bridge GitHub App, read-only:
-      repository metadata, and the collaborators check on repositories the person selects;
+    * a **GitHub App user-to-server token** from the Agent Bridge GitHub App, read-only, on the
+      repositories the person selects: **Metadata** (the collaborators check), **Contents** read
+      and **Pull requests** read (the activity filter, §7.11.4). It never holds write
+      permissions, and the directory's own installation stays Metadata-only;
     * expiring and refreshed;
     * stored only on the **person's** devices (DPAPI, Keychain, IndexedDB with a non-extractable
       wrapping key), never on hosts or relays;
@@ -2590,24 +2846,19 @@ Decisions the reviews of `f3559996` asked to make explicit:
     **Recommended: (a), unreachable**, with no opt-in in v1. The person can see why on the
     session card ("Agents can't reply here: you allowed tools without asking") and can start a
     fresh forced-ask session. An opt-in would be an allow-all reply target by another name.
-45. **Q45. In v1, cross-session replies work only into Copilot sessions.** §5.3 makes a session a
-    reply target only when the host can see every grant and mode change before delivery. Copilot
-    records `permission.requested`/`permission.completed` in `events.jsonl`. Claude gives
-    agent-bridge no signal, and Codex records its approval policy only after a turn is submitted.
-    So **Claude and probably Codex sessions are unreachable as reply targets** in v1. They can still
-    be read and launched, and can send. In addition, on any machine with a user-level allow rule,
-    a Codex rule file or a command-running hook (agent-ha-bridge's included), forced-ask launches of
-    that agent are refused until the person removes it. (a) Accept: Copilot-only replies in v1,
-    with Claude and Codex added when AP1 vectors find a pre-delivery signal (a Claude hook that
-    agent-bridge installs and reads, say). (b) Allow Claude and Codex as reply targets on the
-    launch check alone, accepting that a grant made at the machine is invisible. **Recommended:
-    (a).** (b) reopens the unattended-execution path the reviews closed. The owner's §5.7
-    decisions (Q34) narrow the gap without reopening it: with the gate on, a Claude or Codex
-    session receives any message its owner approves; with `allowAllTargets` on, the owner's own
-    agents reach their own Claude and Codex sessions in scope with no prompt, as a risk the owner
-    accepted. A later option is an
-    allowlist of hooks by exact content hash, for hooks the host can show never approve a tool and
-    never run a command derived from session input.
+45. **Q45. Unattended replies into Claude and Codex in v1.** §5.3 makes a session an unattended
+    reply target only when it is provably forced-ask **and** the host can see every grant and
+    mode change before delivery. Copilot records `permission.requested`/`permission.completed`;
+    Claude gives agent-bridge no signal; Codex records its approval policy only after a turn is
+    submitted. So **Claude and probably Codex sessions are never unattended reply targets** in
+    v1, and on an organization-managed account Copilot sessions may not be either (§5.3 (A)
+    step 3). (a) Accept that, and reach them through the gate (§5.7 G, Q47 (B)): every Claude or
+    Codex session can receive a message its owner approves, and the owner's own agents reach
+    their own sessions in scope with no prompt if `allowAllTargets` is on (§5.7 O). (b) Allow them
+    on the launch check alone, accepting that a grant made at the machine is invisible.
+    **Recommended: (a).** (b) reopens the unattended-execution path the reviews closed. Claude and
+    Codex join the unattended path when AP1 vectors find a pre-delivery signal (a hook
+    agent-bridge installs in the host-owned home and reads, say).
 46. **Q46. Links held on a single machine.** If A's only machine is both the link custodian and
     its only host, a thief who passes that machine's sign-in holds `linkKey` and `hostSign`
     together and renews the link until a tombstone arrives or it expires (§7.3, "The residual").
@@ -2616,3 +2867,39 @@ Decisions the reviews of `f3559996` asked to make explicit:
     recovery key, shown as such to the other person before acceptance. **Recommended: (b), with
     (a) the default the app steers to.** A revoker off the machine is always required (§7.3), so
     revocation always has a path, and the other person decides with the risk in front of them.
+47. **Q47. How forced-ask is established: isolation, the gate, or both.** Three rounds of
+    review each found configuration sources a list had missed (§5.3). (A) **Isolation**: a
+    host-owned configuration home per agent holding only host-written configuration and the
+    sign-in credential, project sources switched off or the launch refused, and refusal when
+    managed or server policy may apply. (B) **The gate as the general fallback**: any target that
+    isn't provably forced-ask gets a message only with the owner's presence-signed approval of
+    that exact message (§5.7 G). (C) Keep enumerating sources. **Recommended: (A) and (B)
+    together.** Isolation makes the unattended path rest on "what the host wrote"; the gate makes
+    forced-ask an optimisation rather than the only boundary, and gives Claude, Codex and
+    organization-managed accounts a v1 path (Q45). The costs, accepted with it: forced-ask
+    sessions lack the person's own skills, MCP servers, plugins, custom agents, hooks and saved
+    approvals; a workspace with repository extension paths can't have one; and their history
+    lives in the host-owned home, visible through the bridge rather than the CLI's own resume
+    list. Agent **launches** must be provably forced-ask or are refused in v1; a gated launch, the
+    owner approving the exact prompt and settings, is a later option.
+48. **Q48. Directory storage.** **Decided by the owner (2026-11-03, 20:10 PT), §7.11.10.**
+    * No names are stored: no login, display name, email or repository name.
+    * The numeric user id stays only inside the signed descriptor, encrypted at rest, and is
+      treated as pseudonymous personal data.
+    * Keys are blinded with a keyed HMAC under a rotatable Key Vault secret shared by every
+      stamp, read from both versions during rotation.
+    * Endpoints are sealed per peer by default.
+    * One Cosmos DB (NoSQL) container is shared by every region stamp, with multi-region writes.
+      The newest signed descriptor wins; withdrawals are signed tombstones; expiry uses TTL;
+      reads use session consistency.
+    * Deletion is withdrawal plus TTL, or on demand.
+    * Self-hosted relays may use a single-node store.
+49. **Q49. Collaborators in the person's own app.** **Decided by the owner (2026-11-03), §7.12.**
+    * The person sees a linked collaborator's exposed sessions read-only, with a person filter
+      ("Mine", then each collaborator) and machines nested under it.
+    * Those sessions are kept out of Needs-you, notifications, badges and counts.
+    * Your own sessions get an "Involving external agents" filter.
+    * Reads are proxied through one of the reader's own listed hosts, as a `kind: "person"`
+      principal.
+    * **Deferred:** the person replying into a collaborator's session, which would be its own
+      future grant, presence-signed and separately reviewed.
