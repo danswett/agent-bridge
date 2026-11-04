@@ -5,6 +5,7 @@ using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Local;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
 
@@ -62,7 +63,7 @@ public sealed class AgentCliSignInService(
             if (starter.CommandLine(spec, out var why) is null) { throw new InvalidOperationException($"The CLI sign-in command cannot start: {why}"); }
             limit.Token.ThrowIfCancellationRequested();
             windows[request.Agent] = starter.Start(spec);
-            return new(true, "The CLI's sign-in window was opened. Complete or cancel there, including any browser approval. Agent Bridge does not collect credentials. Opening or closing that window does not verify account access, entitlement, hooks or trust.");
+            return new(true, $"The CLI's sign-in window was opened. Complete or cancel there, including any browser approval. {Product.Name} does not collect credentials. Opening or closing that window does not verify account access, entitlement, hooks or trust.");
         }
         catch (OperationCanceledException) when (!stopping.IsCancellationRequested && limit.IsCancellationRequested)
         {
