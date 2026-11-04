@@ -180,8 +180,10 @@ export class AnswerService {
     const stage = ({ stage: s, working }) => {
       if (token !== entry.token || entry.state !== 'sending' || !ProgressStages.includes(s)) { return; }
       const next = s === 'typed' && working ? 'queued' : s;
-      if (this.marks) { marked(entry.request, next); }
       if ((STAGE_ORDER[next] ?? 0) < (STAGE_ORDER[entry.stage] ?? 0) || next === entry.stage) { return; }
+      // Marked only when the stage moves on: a repeat replaying the stages so far, or a host
+      // saying the same again, adds nothing to the timing record.
+      if (this.marks) { marked(entry.request, next); }
       this.#set(entry, { stage: next });
     };
     let result;
