@@ -329,6 +329,7 @@ static partial class SelfTest
             await Task.Delay(500);
             Check(Fits(window, "SettingsPane"), "fits the Settings page's column in a wide window");
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".settings.png"));
+            await CheckAgentRows(window, main, Check, outFile, result);
 
             // Approve once from Needs you, as a person would: the card's own answer goes, and the
             // entry leaves with its question.
@@ -986,6 +987,7 @@ static partial class SelfTest
             var hcBroken = await DrawPages(window, "HighContrast", outFile, check);
             check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
             await PictureYoursInHighContrast(window, check, outFile);
+            await PictureAgentRows(window, main, outFile, "highcontrast");
             var system = new[] { "SystemColorHighlightColor", "SystemColorHighlightTextColor", "SystemColorWindowTextColor", "SystemColorWindowColor", "SystemColorGrayTextColor", "SystemColorButtonFaceColor", "SystemColorButtonTextColor", "SystemColorHotlightColor" }
                 .Select(k => Application.Current.Resources.TryGetValue(k, out var c) && c is Windows.UI.Color colour ? colour.ToString() : null).OfType<string>().ToHashSet();
             var own = Design.DesignKeys.Brushes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var b) && b is SolidColorBrush s && system.Contains(s.Color.ToString()))).ToList();

@@ -1,7 +1,10 @@
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
 
 namespace AgentBridge.App;
@@ -60,19 +63,68 @@ public sealed partial class SettingsView : UserControl
 
     async Task ConfirmAgentAsync(object sender, bool remove)
     {
-        if (viewModel is not { CanManageAgents: true } v || sender is not Button { Tag: string id }) { return; }
+        if (viewModel is not { CanManageAgents: true } v || sender is not Button { Tag: string id }
+            || v.Agents.FirstOrDefault(a => a.Id == id) is not { } row) { return; }
         var dialog = new ContentDialog
         {
             XamlRoot = XamlRoot,
-            Title = remove ? "Remove this agent's connection?" : "Connect this agent?",
+            Title = remove ? row.RemoveQuestion : row.SetUpQuestion,
             Content = remove
                 ? "Remove only this installation's hook registrations and owned guidance blocks. Other settings, instructions, CLI sign-in and hook trust stay unchanged. Existing sessions keep their hooks until they end."
                 : "Register hooks and guidance owned by this installation, preserving other settings and instructions. Copilot and Agency share their hooks. You will need to restart the host and start a new agent session. Codex also asks you to trust its hooks at this machine. Nothing restarts or accepts trust automatically.",
-            PrimaryButtonText = remove ? "Remove connection" : "Set up hooks",
+            PrimaryButtonText = remove ? "Remove connection" : row.SetUpVerb ?? "Set up",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close,
         };
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary) { await v.SetUpAgentAsync(id, remove); }
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) { return; }
+        var pending = v.SetUpAgentAsync(id, remove);
+        Announce(id);
+        await pending;
+        Announce(id);
+    }
+
+    // The row's status is a polite live region, but its rows are drawn afresh from each status, so
+    // the TextBlock that says it is new and Narrator would not hear a change: the change is raised
+    // on it once it is drawn, for "Setting up…" and again for the result.
+    void Announce(string id) => DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+    {
+        AgentList.UpdateLayout();
+        if (AgentStatusOf(id) is { Text.Length: > 0 } status
+            && (FrameworkElementAutomationPeer.FromElement(status) ?? FrameworkElementAutomationPeer.CreatePeerForElement(status)) is { } peer)
+        {
+            peer.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+        }
+    });
+
+    internal ItemsControl AgentRows => AgentList;
+
+    // A row's status in its tone, a failure in Danger, from the brushes of the theme the row is drawn
+    // in: Ui.ToneBrush gives the app's, and a window can be drawn in the other.
+    void OnAgentStatusLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not TextBlock status) { return; }
+        PaintStatus(status, null);
+        status.ActualThemeChanged -= PaintStatus;
+        status.ActualThemeChanged += PaintStatus;
+    }
+
+    static void PaintStatus(FrameworkElement sender, object? _)
+    {
+        if (sender is TextBlock { DataContext: AgentReadinessRow row } status) { status.Foreground = Ui.ThemedBrush(Ui.ToneKey(row.StatusTone), status.ActualTheme); }
+    }
+
+    // A row's status line as drawn (the self-test reads it too).
+    internal TextBlock? AgentStatusOf(string id) => Descendants(AgentList).OfType<TextBlock>()
+        .FirstOrDefault(t => AutomationProperties.GetAutomationId(t) == $"AgentStatus_{id}");
+
+    static IEnumerable<DependencyObject> Descendants(DependencyObject node)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+        {
+            var child = VisualTreeHelper.GetChild(node, i);
+            yield return child;
+            foreach (var inner in Descendants(child)) { yield return inner; }
+        }
     }
     async void OnInstallUpdate(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.InstallUpdateAsync(); } }
     void OnRefreshLog(object sender, RoutedEventArgs e) => viewModel?.RefreshLog();

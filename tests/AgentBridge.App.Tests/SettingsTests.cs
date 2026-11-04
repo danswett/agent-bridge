@@ -392,7 +392,7 @@ public sealed class SettingsTests : IAsyncLifetime
         await Wait.UntilAsync(() => settings.Agents.SingleOrDefault()?.Installation.Contains("2.3.4") == true && settings.RestartRequired, "the readiness and restart the setup left",
             why: () => $"installation {settings.Agents.SingleOrDefault()?.Installation ?? "none"}, restart required {settings.RestartRequired}");
         Assert.Empty(host.Sent(HostOps.Restart));
-        Assert.Contains("Start new agent sessions", settings.AgentSetupStatus);
+        Assert.Contains("Start new agent sessions", settings.Agents.Single().Status);
         Assert.Contains("Trust and a new session have not been verified", settings.Agents.Single().Checks);
         Assert.False(settings.HasError);
     }
@@ -400,13 +400,13 @@ public sealed class SettingsTests : IAsyncLifetime
     [Fact]
     public async Task A_failed_post_setup_scan_preserves_the_mutation_outcome_and_shows_the_scan_error()
     {
-        await Connected();
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = Readiness("1.2.3") });
         host.On(HostOps.AgentsSetup, _ => new AgentSetupResult(true, "Registered. Restart explicitly.", true));
         host.On(HostOps.AgentsRefresh, _ => throw new InvalidOperationException("fixture post-setup scan failed"));
 
         await settings.SetUpAgentAsync("claude");
 
-        Assert.Equal("Registered. Restart explicitly.", settings.AgentSetupStatus);
+        Assert.Equal("Registered. Restart explicitly.", settings.Agents.Single().Status);
         Assert.Equal("fixture post-setup scan failed", settings.Error);
         Assert.Empty(host.Sent(HostOps.Restart));
     }
@@ -414,15 +414,128 @@ public sealed class SettingsTests : IAsyncLifetime
     [Fact]
     public async Task Settings_setup_failures_keep_partial_work_visible_and_do_not_restart()
     {
-        await Connected();
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = Readiness("1.2.3") });
         host.On(HostOps.AgentsSetup, _ => new AgentSetupResult(false, "Hook setup incomplete: fixture partial work", true));
 
-        await settings.SetUpAgentAsync("codex");
+        await settings.SetUpAgentAsync("claude");
 
         Assert.Equal("Hook setup incomplete: fixture partial work", settings.Error);
-        Assert.Equal(settings.Error, settings.AgentSetupStatus);
+        Assert.Equal(settings.Error, settings.Agents.Single().Status);
+        Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
         Assert.Empty(host.Sent(HostOps.Restart));
         Assert.False(settings.Busy);
+    }
+
+    static AgentReadiness Agent(string id, string label, ReadinessState hooks, ReadinessState installation = ReadinessState.Working) =>
+        new(id, label, "fixture-home", $"{id}.exe", "1.2.3",
+            new(installation, "Executable found."), new(ReadinessState.Working, "Version 1.2.3"), new(hooks, "Fixture hooks."),
+            new(ReadinessState.Unknown, "Sign-in has not been verified."), new(ReadinessState.Unknown, "Trust has not been verified."));
+
+    [Fact]
+    public void Each_agent_rows_buttons_are_named_for_its_agent_and_have_ids_of_their_own()
+    {
+        var copilot = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.NeedsAction), canManage: true);
+        var claude = new AgentReadinessRow(Agent("claude", "Claude Code", ReadinessState.Failed), canManage: true);
+
+        Assert.Equal("Set up Copilot CLI", copilot.SetUpName);
+        Assert.Equal("Repair Claude Code", claude.SetUpName);
+        Assert.Equal("Remove Copilot CLI's connection", copilot.RemoveName);
+        Assert.Equal("Remove Claude Code's connection?", claude.RemoveQuestion);
+        Assert.Equal("Set up Copilot CLI?", copilot.SetUpQuestion);
+        string[] ids = [copilot.SetUpId, copilot.RemoveId, copilot.StatusId, claude.SetUpId, claude.RemoveId, claude.StatusId];
+        Assert.Equal(["SetUpAgent_copilot", "RemoveAgent_copilot", "AgentStatus_copilot", "SetUpAgent_claude", "RemoveAgent_claude", "AgentStatus_claude"], ids);
+    }
+
+    [Theory]
+    [InlineData(ReadinessState.Missing, "Set up")]
+    [InlineData(ReadinessState.NeedsAction, "Set up")]
+    [InlineData(ReadinessState.Failed, "Repair")]
+    [InlineData(ReadinessState.Unknown, "Repair")]
+    [InlineData(ReadinessState.Working, null)]
+    [InlineData(ReadinessState.Blocked, null)]
+    public void An_agent_row_offers_one_verb_for_its_hooks_state_and_none_once_they_work(ReadinessState hooks, string? verb)
+    {
+        var row = new AgentReadinessRow(Agent("copilot", "Copilot CLI", hooks), canManage: true);
+
+        Assert.Equal(verb, row.SetUpVerb);
+        Assert.Equal(verb is not null, row.ShowSetUp);
+        Assert.Equal(verb is not null, row.CanSetUp);
+    }
+
+    [Fact]
+    public void An_agent_that_is_not_installed_has_nothing_to_set_up()
+    {
+        var row = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.NeedsAction, installation: ReadinessState.Missing), canManage: true);
+
+        Assert.Null(row.SetUpVerb);
+        Assert.False(row.ShowSetUp);
+    }
+
+    [Fact]
+    public async Task A_setup_says_its_progress_and_result_on_its_own_row_and_not_on_the_others()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = new(DateTimeOffset.UtcNow,
+            [Agent("copilot", "Copilot CLI", ReadinessState.NeedsAction), Agent("claude", "Claude Code", ReadinessState.Failed)]) });
+        await Wait.UntilAsync(() => settings.Agents.Count == 2, "agent readiness");
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(HostOps.AgentsSetup, async _ =>
+        {
+            await release.Task.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+            return new AgentSetupResult(true, "Registered. Start new agent sessions to verify hooks.", true);
+        });
+        host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
+        AgentReadinessRow Row(string id) => settings.Agents.Single(a => a.Id == id);
+
+        var pending = settings.SetUpAgentAsync("claude");
+        try
+        {
+            Assert.Equal("Repairing…", Row("claude").Status);
+            Assert.Equal(Tone.Progress, Row("claude").StatusTone);
+            Assert.Equal("", Row("copilot").Status);
+        }
+        finally { release.TrySetResult(); await pending; }
+
+        Assert.Equal("Registered. Start new agent sessions to verify hooks.", Row("claude").Status);
+        Assert.Equal(Tone.Ok, Row("claude").StatusTone);
+        Assert.Equal("", Row("copilot").Status);
+        Assert.Equal(Tone.None, Row("copilot").StatusTone);
+    }
+
+    [Fact]
+    public async Task A_rows_setup_result_goes_with_a_fresh_check_or_the_host_that_ran_it()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = new(DateTimeOffset.UtcNow, [Agent("copilot", "Copilot CLI", ReadinessState.NeedsAction)]) });
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
+        host.On(HostOps.AgentsSetup, _ => new AgentSetupResult(false, "Hook setup incomplete: fixture partial work", true));
+        host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
+
+        await settings.SetUpAgentAsync("copilot");
+        Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
+        await settings.CheckAgentsAsync();
+        Assert.Equal("", settings.Agents.Single().Status);
+
+        await settings.SetUpAgentAsync("copilot");
+        Assert.NotEqual("", settings.Agents.Single().Status);
+        await host.StopAsync();
+        await Wait.UntilAsync(() => !settings.HostRunning, "the host gone");
+        host.Start();
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "the restarted host's agents");
+        Assert.Equal("", settings.Agents.Single().Status);
+        Assert.Equal(Tone.None, settings.Agents.Single().StatusTone);
+    }
+
+    [Fact]
+    public async Task A_setup_that_never_answers_says_so_on_its_row()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = new(DateTimeOffset.UtcNow, [Agent("copilot", "Copilot CLI", ReadinessState.NeedsAction)]) });
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
+        host.On(HostOps.AgentsSetup, _ => throw new InvalidOperationException("fixture setup refused"));
+
+        await settings.SetUpAgentAsync("copilot");
+
+        Assert.Equal("fixture setup refused", settings.Agents.Single().Status);
+        Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
+        Assert.Equal("fixture setup refused", settings.Error);
     }
 
     [Fact]

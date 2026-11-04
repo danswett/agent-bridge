@@ -189,7 +189,7 @@ public sealed partial class DemoHost : IAsyncDisposable
                 {
                     var hello = new HelloResult(1, new MachineInfo(MachineId, MachineName, "windows", version, Dev: true, Sessions: Count), remote
                         ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, AuthState.Capability]
-                        : [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, HostOps.Capability]);
+                        : [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, HostOps.Capability, HostOps.AgentReadinessCapability, HostOps.AgentSetupCapability]);
                     // Held for a test: the reply a recovery reads before it subscribes again.
                     if (HoldHello is { } hold) { HoldHello = null; return After(hold.Task, hello); }
                     return Done(hello);
@@ -246,6 +246,10 @@ public sealed partial class DemoHost : IAsyncDisposable
                     _ = Change(s with { Status = SessionStatus.Working, StatusSince = now, UpdatedAt = now, Activity = s.Activity with { UserMessage = r.Text } });
                     return Done(new ReplyResult(AnswerOutcome.Delivered));
                 }
+            case HostOps.AgentsRefresh when !remote:
+                return Done(Agents());
+            case HostOps.AgentsSetup when !remote:
+                return Done(SetUp(data.Deserialize<AgentSetupRequest>(ProtocolJson.Options)!));
             case LaunchProtocol.Options:
                 lock (gate) { return Done(LaunchChoices()); }
             case LaunchProtocol.Launch:
@@ -707,6 +711,33 @@ public sealed partial class DemoHost : IAsyncDisposable
         Relay = new RelayStatus(RelayState.SignedOut),
         SignIn = new SignInStatus(SignInState.Idle),
         Settings = new HostSettingsView(true, "Demo machine"),
+        Agents = Agents(),
+    };
+
+    // Settings › Agents on this machine (#678): one agent per hook state, so the page shows each
+    // verb: Copilot CLI to set up, Claude Code to repair, and Codex working, with none. The demo
+    // writes nothing: a setup only answers, Claude Code's repair failing so its row shows a failure.
+    static AgentReadinessReport Agents()
+    {
+        static AgentReadiness Agent(string id, string label, string version, ReadinessCheck hooks) => new(id, label, $"C:\\Users\\demo\\.{id}", $"C:\\Program Files\\{label}\\{id}.exe", version,
+            new(ReadinessState.Working, "Executable found using the launch configuration."),
+            new(ReadinessState.Working, $"Version {version}"),
+            hooks,
+            new(ReadinessState.Unknown, "CLI sign-in and entitlement have not been verified."),
+            new(ReadinessState.Unknown, "Folder trust, hook activation and a new session have not been verified."));
+        return new(DateTimeOffset.UtcNow,
+        [
+            Agent("copilot", "Copilot CLI", "1.0.105", new(ReadinessState.NeedsAction, "Hook intake is off for this profile. Explicit setup or migration is required.")),
+            Agent("claude", "Claude Code", "2.1.4", new(ReadinessState.Failed, "The hook ownership record is not recognized. Inspect it before repairing setup.")),
+            Agent("codex", "Codex", "0.48.0", new(ReadinessState.Working, "Registered and owned by this profile.")),
+        ]);
+    }
+
+    static AgentSetupResult SetUp(AgentSetupRequest r) => r switch
+    {
+        { Action: "remove" } => new(true, "Removed this installation's hooks. Existing sessions keep theirs until they end.", true),
+        { Agent: "claude" } => new(false, "Repair incomplete: the demo cannot write Claude Code's settings.", false),
+        _ => new(true, "Hooks registered. Restart the host, then start a new session to check them.", true),
     };
 
     // Another machine's sessions: a Claude question and a Codex turn under way, so the demo
