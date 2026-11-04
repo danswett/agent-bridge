@@ -14,7 +14,7 @@ namespace AgentBridge.App.Core;
 //   By: secondary text after the facts (the agent driving, when the host knows).
 //   Spoken: what the label reads as aloud, before the disclosure's words.
 //   Preview: the prompt on one line, for the two-line preview; Text: all of it, for Show prompt.
-// Every word an agent chose has gone through Fact or NeedsYouEntry.Reveal: no hidden or bidi
+// Every word an agent chose has gone through Fact or HiddenText.Reveal: no hidden or bidi
 // character is drawn as nothing, and no label can read as the person's or the main agent's.
 public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Facts, string? By, string Spoken, bool Repeat, string Text, string Preview)
 {
@@ -35,7 +35,7 @@ public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Fa
         var a = s.Activity;
         var from = a.UserMessageFrom ?? UserMessageFrom.Person;
         if (from == UserMessageFrom.Person || string.IsNullOrEmpty(a.UserMessage)) { return null; }
-        var text = NeedsYouEntry.Reveal(a.UserMessage);
+        var text = HiddenText.Reveal(a.UserMessage);
         var preview = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         switch (from)
         {
