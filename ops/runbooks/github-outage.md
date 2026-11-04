@@ -38,7 +38,7 @@ There's nothing to fix on our side. The job is to avoid adding load, and to reco
    `gh pr edit <n> --repo danswett/agent-bridge --add-label hold`. Auto-merge could otherwise
    fire on a status posted before the outage.
 3. **Relay emergencies don't wait for Actions.** If production needs a change, the owner runs
-   `infra/deploy.ps1 -Production` from a workstation ([relay-bad-deploy](relay-bad-deploy.md),
+   `infra/deploy.ps1 -Production -ProductionImage <approved image@sha256 digest> -ProductionVersion <its sha>` from a workstation ([relay-bad-deploy](relay-bad-deploy.md),
    docs/relay-deploy.md). **Owner.**
 4. **Windows and PWA:** installed apps keep the version they have, and the PWA keeps serving
    from Pages' cache and the service worker. If Pages itself is down, phones that have the PWA
@@ -68,7 +68,7 @@ The watch hasn't recorded a result in 30 minutes, so A-GHA can't fire. Look at
 `logic-agent-bridge-github-watch` in the portal: is it enabled, and what do the latest runs show
 failed? `az resource show --subscription $sub -g $rg -n logic-agent-bridge-github-watch
 --resource-type Microsoft.Logic/workflows --query properties.state` reads its state. If it was
-disabled or deleted, re-running `infra/deploy.ps1 -Production` restores it (**Owner**). Until it
+disabled or deleted, re-running `infra/deploy.ps1 -Production -ProductionImage <running digest> -ProductionVersion <running sha>` restores it without changing the relay release (**Owner**). Until it
 reports again, check https://www.githubstatus.com yourself.
 
 ## If A-GHA is noisy

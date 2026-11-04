@@ -318,9 +318,11 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
           runAfter: { queued: ['Succeeded'] }
           inputs: {
             method: 'GET'
-            uri: 'https://api.github.com/repos/@{parameters(\'repository\')}/actions/runs?status=queued&per_page=100'
+            uri: 'https://api.github.com/repos/@{parameters(\'repository\')}/actions/runs?status=queued&per_page=100&created=%3C@{formatDateTime(addMinutes(utcNow(), mul(-1, parameters(\'stallMinutes\'))), \'yyyy-MM-ddTHH:mm:ssZ\')}'
             headers: { 'User-Agent': 'agent-bridge-ops', Accept: 'application/vnd.github+json' }
-            // One quick retry keeps each check inside its 5 minutes, so a 15-minute window holds 3.
+            // Only runs created before the stall threshold, so a page of fresh runs can't hide an old
+            // one (the API lists newest first). One quick retry keeps each check inside its 5 minutes,
+            // so a 15-minute window holds 3.
             retryPolicy: { type: 'fixed', count: 1, interval: 'PT20S' }
           }
         }
@@ -355,7 +357,16 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
           runAfter: { statusAnswered: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] }
           inputs: {
             from: '@variables(\'components\')'
-            where: '@and(contains(createArray(\'Actions\', \'Pages\'), item()?[\'name\']), not(equals(item()?[\'status\'], \'operational\')))'
+            // Only a status GitHub documents as an outage counts; a missing or unknown one is unreadable.
+            where: '@and(contains(createArray(\'Actions\', \'Pages\'), item()?[\'name\']), contains(createArray(\'degraded_performance\', \'partial_outage\', \'major_outage\'), item()?[\'status\']))'
+          }
+        }
+        known: {
+          type: 'Query'
+          runAfter: { statusAnswered: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] }
+          inputs: {
+            from: '@variables(\'components\')'
+            where: '@and(contains(createArray(\'Actions\', \'Pages\'), item()?[\'name\']), contains(createArray(\'operational\', \'degraded_performance\', \'partial_outage\', \'major_outage\'), item()?[\'status\']))'
           }
         }
         degradedNames: {
@@ -380,7 +391,7 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
           // Runs whatever happened above, so a malformed answer still reports, as no evidence and with
           // the message saying "unreadable", rather than going silent. A-GHA-SILENT catches the watch
           // not reporting at all.
-          runAfter: { degradedNames: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'], stalled: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] }
+          runAfter: { degradedNames: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'], known: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'], stalled: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] }
           // The instrumentation key stays out of run history.
           runtimeConfiguration: { secureData: { properties: ['inputs'] } }
           inputs: {
@@ -401,7 +412,7 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
                     duration: '00:00:01'
                     runLocation: 'azure-logic-app'
                     success: '@and(equals(length(coalesce(body(\'degraded\'), json(\'[]\'))), 0), equals(length(coalesce(body(\'stalled\'), json(\'[]\'))), 0))'
-                    message: '@{concat(\'status page: \', if(not(equals(outputs(\'status\')?[\'statusCode\'], 200)), \'unreachable\', if(and(equals(actions(\'statusAnswered\')?[\'status\'], \'Succeeded\'), equals(actions(\'degraded\')?[\'status\'], \'Succeeded\')), if(equals(length(coalesce(body(\'degradedNames\'), json(\'[]\'))), 0), \'Actions and Pages operational\', join(coalesce(body(\'degradedNames\'), json(\'[]\')), \', \')), \'unreadable\')), \'; runs queued over \', string(parameters(\'stallMinutes\')), \' min: \', if(not(equals(outputs(\'runs\')?[\'statusCode\'], 200)), concat(\'unknown (API \', string(outputs(\'runs\')?[\'statusCode\']), \')\'), if(and(equals(actions(\'runsAnswered\')?[\'status\'], \'Succeeded\'), equals(actions(\'stalled\')?[\'status\'], \'Succeeded\')), string(length(coalesce(body(\'stalled\'), json(\'[]\')))), \'unreadable\')))}'
+                    message: '@{concat(\'status page: \', if(not(equals(outputs(\'status\')?[\'statusCode\'], 200)), \'unreachable\', if(and(equals(actions(\'statusAnswered\')?[\'status\'], \'Succeeded\'), equals(actions(\'degraded\')?[\'status\'], \'Succeeded\'), equals(length(coalesce(body(\'known\'), json(\'[]\'))), 2)), if(equals(length(coalesce(body(\'degradedNames\'), json(\'[]\'))), 0), \'Actions and Pages operational\', join(coalesce(body(\'degradedNames\'), json(\'[]\')), \', \')), \'unreadable\')), \'; runs queued over \', string(parameters(\'stallMinutes\')), \' min: \', if(not(equals(outputs(\'runs\')?[\'statusCode\'], 200)), concat(\'unknown (API \', string(outputs(\'runs\')?[\'statusCode\']), \')\'), if(and(equals(actions(\'runsAnswered\')?[\'status\'], \'Succeeded\'), equals(actions(\'stalled\')?[\'status\'], \'Succeeded\')), string(length(coalesce(body(\'stalled\'), json(\'[]\')))), \'unreadable\')))}'
                   }
                 }
               }
