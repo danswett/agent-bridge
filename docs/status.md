@@ -152,6 +152,49 @@ old authority instructions during a handoff. Do not remove the old tracker until
 active rows have a verified destination; a Project-permission failure is not an empty
 queue or a completed migration.
 
+#### Running Shiproom
+
+The [public Shiproom hub](https://github.com/danswett/agent-bridge/issues/689)
+links coordinator check-ins and blocker acknowledgments to the existing
+[private Project](https://github.com/users/danswett/projects/1).
+Shiproom owns coordination, Project health, deadlines and escalation only.
+TPM retains issue triage, deduplication and the single collector; implementation,
+design and Quality retain their existing authorities. Authors may still arm
+their own exact-head auto-merge under AGENTS.md. Shiproom is not a merge grant,
+a second implementation coordinator or completion of the #170 index cutover.
+
+Active agent coordinators explicitly acknowledge the protocol and post a first
+check-in before adoption is recorded. A coordinator acknowledges a delivered blocker
+or ACK request within 5 minutes. Each check-in names lane and current session,
+its permalink, the reused recurring mechanism, canonical current work, actual
+blockers (or none), named needed responder, next deliverable and next due time in
+Pacific. Keep one standing roll-up per lane, linking canonical issues and PRs rather
+than copying the backlog. Missing owners remain pending until acceptance is proved.
+Keep contributor branches and delegates with their existing owners. A human
+contributor has no imposed cadence outside an explicitly accepted work window;
+public receipts work without private Project access.
+
+| Interval | Shiproom action |
+|---|---|
+| 5 minutes after a delivered blocker/ACK request | Obtain an explicit acknowledgment; escalate a missed deadline once |
+| 15 minutes after the last explicit check-in | Coordinator check-in due |
+| 20 minutes after the last explicit check-in | Mark the heartbeat stale |
+| 30 minutes after the last explicit check-in | Escalate to the named responsible coordinator/TPM |
+| Immediately | Escalate P0 or unsafe routing to the actual responsible authority |
+
+Preserve the actual blocked reason and needed responder. A sent message, generic
+issue `updatedAt`, mirror write or unchanged activity response is not a check-in or
+acceptance. Project `Heartbeat receipt`, `Next due PT`, `Needs from` and `Ack state`
+fields index this evidence; `Accepted owner` and `Owner receipt` require actual acceptance.
+An inactive optional HA or Apple lane does not block unrelated native delivery.
+
+The dedicated Shiproom session runs a narrow one-minute SLA tick with its own
+persisted control state, consuming only new retained collector events from its
+activation cursor. Reuse an appropriate coordinator timer instead of duplicating
+one. Inspect control/source health before lengthy research. Session-local timers
+do not survive a stopped CLI or reboot: report gaps and restore coverage explicitly.
+Source outages mean unknown visibility, not idle work or missed consent.
+
 The following handoff/resumption notes are **historical, 2026-11-02**; use canonical
 issues and PRs for current heads, owners and gates:
 
