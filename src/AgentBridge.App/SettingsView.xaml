@@ -60,6 +60,26 @@
                     Header="Start the host when I sign in to Windows"
                     AutomationProperties.AutomationId="HostAtSignIn"
                     IsOn="{x:Bind ViewModel.StartAtSignIn, Mode=TwoWay}" />
+
+                <TextBlock Style="{StaticResource AbSectionTitle}" Text="Agents on this machine" AutomationProperties.HeadingLevel="Level2" />
+                <TextBlock Style="{StaticResource AbSecondaryText}" AutomationProperties.AutomationId="AgentsState" Text="{x:Bind ViewModel.AgentsState, Mode=OneWay}" />
+                <Button Content="Check agents again" AutomationProperties.AutomationId="CheckAgents" Click="OnCheckAgents" IsEnabled="{x:Bind ViewModel.CanCheckAgents, Mode=OneWay}" />
+                <ItemsControl ItemsSource="{x:Bind ViewModel.Agents, Mode=OneWay}" AutomationProperties.AutomationId="AgentReadiness">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="core:AgentReadinessRow">
+                            <Border Background="{ThemeResource AbSubtle}" CornerRadius="{StaticResource AbRadiusCard}" Padding="16" Margin="0,0,0,8">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="{x:Bind Label}" FontWeight="SemiBold" AutomationProperties.HeadingLevel="Level3" />
+                                    <TextBlock Text="{x:Bind Installation}" TextWrapping="Wrap" />
+                                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Executable}" IsTextSelectionEnabled="True" />
+                                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Home}" IsTextSelectionEnabled="True" />
+                                    <TextBlock Text="{x:Bind Checks}" TextWrapping="Wrap" />
+                                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind HookActivity}" />
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
     
                 <!-- The relay: how this machine reaches the person's other devices. -->
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="Your devices" />

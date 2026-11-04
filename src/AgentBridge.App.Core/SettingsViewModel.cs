@@ -86,6 +86,15 @@ public sealed class SettingsViewModel : Observable
     public bool RestartRequired => Status?.RestartRequired == true;
     public bool ElevatedWarning => Status?.Elevated == true;
 
+    public IReadOnlyList<AgentReadinessRow> Agents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && Status?.Agents is { } report
+        ? [.. report.Agents.Select(a => new AgentReadinessRow(a))] : [];
+    public bool CanCheckAgents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && !Busy;
+    public string AgentsState => !HostRunning ? "Connect to this machine's host to check its agents."
+        : !host.Can(HostOps.AgentReadinessCapability) ? "This host does not report agent readiness. Update the app and restart the host."
+        : Status?.Agents is not { } report ? "Checking installed agents..."
+        : $"Checked at {report.CheckedAt.ToLocalTime():g}. Detection alone does not verify sign-in, hook trust or a new session."
+            + (Status.ReadOnly is { } why ? $" This host is read-only: {why}." : "");
+
     public string AccountText => Status?.Account is { } a ? $"Signed in as {a.Login}" : "Not signed in: this machine's sessions are only in this app";
     public string RelayText => Status?.Relay is not { } r ? "" : r.State switch
     {
@@ -367,7 +376,11 @@ public sealed class SettingsViewModel : Observable
 
     public string? Error { get => error; private set { if (Set(ref error, value)) { Raise(nameof(HasError)); } } }
     public bool HasError => error is not null;
-    public bool Busy { get => busy; private set => Set(ref busy, value); }
+    public bool Busy
+    {
+        get => busy;
+        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); } }
+    }
     public string UpdateStatus { get => updateStatus; private set => Set(ref updateStatus, value); }
     public bool UpdateAvailable => updateVersion is not null;
     public string Log { get => log; private set => Set(ref log, value); }
@@ -419,6 +432,13 @@ public sealed class SettingsViewModel : Observable
     });
 
     public void RefreshLog() => Log = manager.LogTail();
+
+    public Task CheckAgentsAsync() => RunAsync(async () =>
+    {
+        if (!HostRunning || !host.Can(HostOps.AgentReadinessCapability)) { throw new InvalidOperationException(AgentsState); }
+        await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromSeconds(20));
+        await host.RefreshStatusAsync();
+    });
 
     public Task CheckForUpdatesAsync() => RunAsync(async () =>
     {

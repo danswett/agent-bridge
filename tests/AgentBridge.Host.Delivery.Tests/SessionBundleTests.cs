@@ -89,7 +89,7 @@ public sealed class SessionBundleTests : IDisposable
         var link = Path.Combine(dir, "files", "repo");
         if (OperatingSystem.IsWindows())
         {
-            using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", ["/c", "mklink", "/J", link, secrets]) { CreateNoWindow = true, UseShellExecute = false })!;
+            using var p = AgentBridge.Host.Core.Processes.ProcessLaunch.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", ["/c", "mklink", "/J", link, secrets]) { CreateNoWindow = true, UseShellExecute = false })!;
             p.WaitForExit();
         }
         else { Directory.CreateSymbolicLink(link, secrets); }
@@ -133,7 +133,7 @@ public sealed class SessionBundleTests : IDisposable
     {
         if (OperatingSystem.IsWindows())
         {
-            using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", ["/c", "mklink", "/J", link, target]) { CreateNoWindow = true, UseShellExecute = false })!;
+            using var p = AgentBridge.Host.Core.Processes.ProcessLaunch.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", ["/c", "mklink", "/J", link, target]) { CreateNoWindow = true, UseShellExecute = false })!;
             p.WaitForExit();
         }
         else { Directory.CreateSymbolicLink(link, target); }

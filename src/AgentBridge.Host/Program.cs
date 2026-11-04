@@ -113,6 +113,7 @@ var options = new SessionSourceOptions
     StateFile = command == "serve" && serveFolder is not null ? Path.Combine(serveFolder, "sessions-listed.json") : null,
 };
 var pretty = new JsonSerializerOptions(ProtocolJson.Options) { WriteIndented = !Flag("--compact") };
+var agentLocator = new AgentLocator();
 
 switch (command)
 {
@@ -462,6 +463,9 @@ async Task<int> ServeAsync(HostHandover handover)
     PublishCredential();
     // agent-ha-bridge's state for the app's status, looked for at most every few seconds.
     var agentHaCached = haProbe is null ? () => null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64);
+    await using var agentReadiness = new AgentReadinessService(identity.Folder,
+        new IntakeState.AgentHomes(options.CopilotHome, options.ClaudeHome, options.CodexHome),
+        settings.Launch, agentLocator, new VersionCommandRunner(), ServeReadOnly, intake);
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -489,6 +493,7 @@ async Task<int> ServeAsync(HostHandover handover)
         HomeAssistant = () => haAuth.Problem,
         ReadOnly = () => ReadOnlyReason() ?? agentHaCached(),
         ReadOnlyNow = ServeReadOnly,
+        Agents = agentReadiness,
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
@@ -514,6 +519,7 @@ async Task<int> ServeAsync(HostHandover handover)
             stop.Cancel();
         },
     }, Log);
+    agentReadiness.Start();
     // A pass, or keep-awake turned on or off, changes what the app's Settings shows.
     if (keepAwake is not null) { keepAwake.Changed += control.Refresh; }
     haAuth.Changed += control.Refresh;
@@ -663,7 +669,7 @@ LaunchService Launcher(ISessionSource source, AttachmentStore? attachments, Sess
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
     IAgentHaBridgeProbe probe = new ReadOnlyGate(OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : new NoAgentHaBridge(), ReadOnlyReason());
     IConsoleInjector injector = OperatingSystem.IsWindows() ? new WorkerInjector() : new NoScreens();
-    var launcher = new LaunchService(source, probe, injector, starter, new AgentLocator(), new AgencyCatalog(new BatchFileRunner(new CommandRunner())), new LaunchServiceOptions
+    var launcher = new LaunchService(source, probe, injector, starter, agentLocator, new AgencyCatalog(new BatchFileRunner(new CommandRunner())), new LaunchServiceOptions
     {
         CopilotHome = options.CopilotHome,
         ClaudeHome = options.ClaudeHome,
@@ -719,7 +725,7 @@ void RestartSelf()
 {
     var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
     foreach (var a in args) { start.ArgumentList.Add(a); }
-    using var _ = Process.Start(start);
+    using var _ = ProcessLaunch.Start(start);
 }
 
 // Hook intake (docs/host-hooks.md): only for a profile that has migrated from agent-ha-bridge,

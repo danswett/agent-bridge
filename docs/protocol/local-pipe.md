@@ -149,6 +149,7 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 |---|---|---|
 | `host.status` | none | `HostStatus` |
 | `host.subscribe` | none | `HostStatus`, then a `host.status` event with the whole status whenever it changes |
+| `host.agents.refresh` | none | `AgentReadinessReport` (below). Advertised as `host.agents` in the app's local hello only. Requests a fresh, read-only scan; overlapping requests share a scan. App-only despite not saving settings: version checks can start CLI processes |
 | `host.signIn` | `{ "relay"?: "https://…" }` | `SignInStatus`: GitHub's device flow started through that relay (or the profile's), with `userCode` and `verificationUri` once GitHub gives them. The host finishes on its own and starts using the relay; progress arrives as `host.status` events |
 | `host.signIn.cancel` | none | `SignInStatus` as it is; the flow then ends, reported by a `host.status` event |
 | `host.settings` | `{ "remoteApproval"?: bool, "remoteFolderTrust"?: bool, "remoteFolderTrustDevices"?: [device id], "remoteFolderTrustDevicesWas"?: [device id], "devBoxKeepAwake"?: bool, "name"?: string }` (`remoteFolderTrust`, `remoteFolderTrustDevices`, which replaces the whole list, and `devBoxKeepAwake` (`devBox.keepAwake`, on a Dev Box) apply at once; the rest at the next start). A `devBoxKeepAwake` change is refused, leaving the file as it was, when the saved `config.json` would not read back with it (another setting the host rejects reads as keep-awake off). `remoteFolderTrustDevicesWas` is the list the new one was made from. If the saved list differs (as a set), because another app or a person's terminal changed it in the meantime, nothing in the request is changed and `conflict` is true. A device revoked elsewhere is therefore never approved again from a list read before. On a conflict, read the list again and make the change from that | `{ "settings": HostSettingsView, "restartRequired": bool, "conflict"?: bool }`. Written to the profile's `config.json`; read when the host starts. `name: ""` removes the name |
@@ -176,9 +177,51 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `readOnly` | Why the host acts on nothing from other devices now (`delivery.readOnly`, or agent-ha-bridge running, G5); absent when it does. The app carries out no install a device asked for while it is set, and checks it again just before stopping the host |
 | `updateAsks` | Presses of Check and Install from the account's other devices waiting for the app (#51): `[{ request, kind: check \| install, by, at }]`, `by` naming the device (`"pwa 1a2b3c4d"`). Absent when none. At most 8, each dropped once the app reports it taken or after ten minutes. The pipe itself asks for no update: `update.*` is refused here, for the app included, which updates its own machine from Settings |
 | `devBox` | The Dev Box keep-awake ([host-config.md](../host-config.md#dev-box-keep-awake)), present only when this machine is a Microsoft Dev Box (the Dev Box agent is installed, its settings usable or not): `{ keepAwake, intervalMinutes, last?: { at, outcome, detail, alarming }, nextAt?, problem? }`. `keepAwake` is whether passes run now; `outcome` is `skipped`, `delayed`, `safe`, `no-action`, `blocked`, `failed`, `stood-back`, `busy` or `not-a-devbox`; `alarming` (`failed`, `blocked`, or `stood-back` with the scheduler unreadable) says the Dev Box may hibernate. `nextAt` while on. `problem`: why the agent's settings could not be used, so it cannot be kept awake |
+| `agents` | Optional `AgentReadinessReport`: separate evidence for each launcher's installation, version, hooks, CLI sign-in and activation. Absent on older hosts and until the first scan finishes |
 
 Unknown fields are ignored, and unknown enum values read as the first value listed, as in
 the rest of the protocol.
+
+### Agent readiness evidence
+
+The shared first-run/Settings contract is `{ checkedAt, agents: [...], readOnlyReason? }`.
+Each agent has `id`, `label`, `home`, optional `executable` and `version`, checks named
+`installation`, `versionCheck`, `hooks`, `authentication` and `activation`, and optional
+`lastHookHandledAt`. Each check is `{ state, detail }`; states are `unknown`, `missing`,
+`needsAction`, `working`, `blocked` and `failed`. Unknown future states read as `unknown`.
+There is deliberately no aggregate "ready" bit.
+
+The running host scans at startup, every ten minutes and when the app asks. It uses
+Launch's executable locator and running launch configuration, not an app-side PATH probe.
+On Windows, installed executables get `--version` with a three-second timeout each in a
+non-breakaway process job assigned atomically at creation. Success, timeout and cancellation
+all terminate remaining descendants and allow one second for process and pipe cleanup.
+All Windows host subprocess starts share the native launch's inheritable-handle gate so unrelated
+usage, git or injector children cannot retain a probe's pipe writers outside that job.
+The scan waits for cleanup before releasing its gate. Other platforms still detect
+executables and hook ownership, but explicitly report version probing unavailable until
+equivalent process isolation is implemented. A failed version probe does not make an
+installed CLI missing. A read-only host (including one beside the
+legacy bridge) runs no version commands and reports hook setup blocked.
+The guard is checked again before each process: if the legacy bridge starts during a
+scan, subsequent commands are blocked. Earlier observations remain evidence from before
+that transition; `readOnlyReason` reports the reason observed at scan completion.
+
+This first slice reports all four launchers (Agency, Copilot, Claude and Codex).
+Ownership records and enabled intake are evidence, not proof that registrations are
+correct or a new session will activate hooks. Missing, foreign or broken records are
+distinguished; no record or registration is written. Authentication, entitlement, folder
+trust and new-session activation remain `unknown` until verified probes are added.
+`lastHookHandledAt` comes from the existing intake's accepted events since this detector
+started in the current host run, not from consuming its spool or scanning old logs.
+Agency shares Copilot's hook evidence; it does not prove that an Agency test session ran.
+Neither old events nor a matching ownership marker imply end-to-end readiness.
+
+Scan completions and newly handled hook events publish whole `host.status` events.
+After a manual scan, Settings also reads status explicitly so a delayed or absent event
+does not leave the old report displayed; a newer status event or connection wins the race.
+Settings drops displayed agent rows on disconnect and explains an older host's missing
+capability instead of presenting its agents as not installed.
 
 ## The host without the relay
 

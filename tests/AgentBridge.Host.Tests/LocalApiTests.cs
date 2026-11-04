@@ -2,6 +2,9 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Intake;
+using AgentBridge.Host.Core.Usage;
+using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -23,6 +26,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     SessionSource source = null!;
     SessionService service = null!;
     HostControl control = null!;
+    AgentReadinessService readiness = null!;
     UpdateService updates = null!;
     LocalServer server = null!;
     readonly P256KeyPair hostKey = P256KeyPair.Generate();
@@ -60,8 +64,12 @@ public sealed class LocalApiTests : IAsyncLifetime
         var machine = new MachineInfo("host-id", "Test host", "windows", "0.1.0");
         updates = new UpdateService("0.1.0");
         service = new SessionService(source, machine, push: new PushNotifier(source, machine, PushStore.Load(null, "acct"))) { Updates = updates };
+        var roots = f.Options();
+        readiness = new AgentReadinessService(profile, new IntakeState.AgentHomes(roots.CopilotHome, roots.ClaudeHome, roots.CodexHome),
+            LaunchConfig.Default, new MissingAgents(), new NoCommands(), () => null);
         control = new HostControl(new HostControlOptions
         {
+            Agents = readiness,
             Updates = updates,
             Profile = "test",
             Folder = profile,
@@ -91,6 +99,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         foreach (var o in owned) { await o.DisposeAsync(); }
         authorization.Dispose();
         hostKey.Dispose();
+        if (readiness is not null) { await readiness.DisposeAsync(); }
         await source.DisposeAsync();
         f.Dispose();
         try { Directory.Delete(profile, recursive: true); } catch (IOException) { }
@@ -186,6 +195,47 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(SignInState.Idle, status.SignIn.State);
         Assert.Equal(new HostSettingsView(true), status.Settings);
         Assert.False(status.RestartRequired);
+    }
+
+    [Fact]
+    public async Task An_app_refreshes_readiness_and_the_same_report_is_published_in_host_status()
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentReadinessCapability, (await ch.HelloAsync()).Capabilities);
+        Assert.Null((await ch.CallAsync<HostStatus>(HostOps.Subscribe)).Agents);
+
+        var report = await ch.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh);
+        var pushed = (await NextAsync(ch)).Data.Deserialize<HostStatus>(ProtocolJson.Options)!.Agents!;
+
+        Assert.Equal(report.CheckedAt, pushed.CheckedAt);
+        Assert.Equal(4, pushed.Agents.Count);
+        Assert.All(pushed.Agents, a => Assert.Equal(ReadinessState.Missing, a.Installation.State));
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    [InlineData(CallerKind.HostCli)]
+    public async Task Non_app_callers_cannot_trigger_CLI_readiness_probes(CallerKind kind)
+    {
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        var ch = await ConnectAsync();
+        Assert.DoesNotContain(HostOps.AgentReadinessCapability, (await ch.HelloAsync()).Capabilities);
+
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsRefresh));
+
+        Assert.Null(readiness.Snapshot);
+    }
+
+    sealed class MissingAgents : IAgentLocator
+    {
+        public string? Find(Launcher launcher, AgentConfig config) => null;
+    }
+
+    sealed class NoCommands : ICommandRunner
+    {
+        public Task<CommandResult> RunAsync(string program, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("no CLI may run in this fixture");
     }
 
     [Fact]

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using AgentBridge.Host.Core.Processes;
 
 namespace AgentBridge.Host.Delivery.Launch;
 
@@ -36,7 +37,7 @@ public static class Git
         start.Environment["GCM_INTERACTIVE"] = "never";
         foreach (var (name, value) in environment ?? new Dictionary<string, string>()) { start.Environment[name] = value; }
         Process process;
-        try { process = Process.Start(start) ?? throw new InvalidOperationException("git did not start"); }
+        try { process = ProcessLaunch.Start(start) ?? throw new InvalidOperationException("git did not start"); }
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException) { return new GitResult(false, -1, "", $"git could not be run: {e.Message}"); }
         using (process)
         {

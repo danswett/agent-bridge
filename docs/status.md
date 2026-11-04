@@ -147,6 +147,13 @@ queue or a completed migration.
 The following handoff/resumption notes are **historical, 2026-11-02**; use canonical
 issues and PRs for current heads, owners and gates:
 
+**First-run foundation (#384, partial #231):** a shared local-host agent readiness
+report and compact read-only Agents section in Windows Settings are implemented in this
+change. It distinguishes executable/version detection, ownership/intake evidence and actual
+current-run hook activity; CLI sign-in, trust and new-session activation remain unverified.
+This does not complete onboarding or #231's setup/repair controls and makes no live hook,
+legacy daemon or HA changes. Scope is coordinated on #170.
+
 **Handoff, 2026-11-02 13:30 PT** (the overall coordinator's session ends for DEV-VM1's migration; background delegates are lost, their work is on branches):
 - **#238 (#200, live Claude and Codex usage)**, head ac2b8498: CI green, Copilot reviewed, 0 threads. Before merge it needs:
   1. an **independent security re-review** at the final head; earlier rounds were clean of vulnerabilities, and the update-gate paths were the last findings;

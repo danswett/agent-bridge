@@ -297,7 +297,7 @@ public sealed class ProcessHookRunner : IHookRunner
     {
         var start = new ProcessStartInfo(executable) { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
         foreach (var a in arguments) { start.ArgumentList.Add(a); }
-        using var process = Process.Start(start) ?? throw new IOException($"{executable} did not start");
+        using var process = ProcessLaunch.Start(start) ?? throw new IOException($"{executable} did not start");
         process.StandardInput.Write(stdin);
         process.StandardInput.Close();
         var output = process.StandardOutput.ReadToEndAsync();

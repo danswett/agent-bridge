@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Core.Usage;
 
 namespace AgentBridge.Host.Delivery.Launch;
@@ -25,7 +26,7 @@ public sealed class BatchFileRunner(ICommandRunner inner) : ICommandRunner
             CreateNoWindow = true,
         };
         Process process;
-        try { process = Process.Start(start) ?? throw new InvalidOperationException(); }
+        try { process = ProcessLaunch.Start(start) ?? throw new InvalidOperationException(); }
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or FileNotFoundException) { return new CommandResult(false, false, -1, ""); }
         using (process)
         {

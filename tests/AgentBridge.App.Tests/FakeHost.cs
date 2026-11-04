@@ -18,7 +18,7 @@ sealed class FakeHost : IAsyncDisposable
 
     public ConcurrentQueue<(string Op, JsonElement Data)> Received { get; } = new();
     public ConcurrentBag<IProtocolChannel> Channels { get; } = [];
-    public List<string> Capabilities { get; } = [AgentBridge.Protocol.Capabilities.SessionsRead, AgentBridge.Protocol.Capabilities.SessionsAnswer, AgentBridge.Protocol.Capabilities.SessionsReply, AgentBridge.Protocol.Capabilities.SessionsAttach, AgentBridge.Protocol.Capabilities.SessionsStop, UsageProtocol.Capability, HostOps.Capability];
+    public List<string> Capabilities { get; } = [AgentBridge.Protocol.Capabilities.SessionsRead, AgentBridge.Protocol.Capabilities.SessionsAnswer, AgentBridge.Protocol.Capabilities.SessionsReply, AgentBridge.Protocol.Capabilities.SessionsAttach, AgentBridge.Protocol.Capabilities.SessionsStop, UsageProtocol.Capability, HostOps.Capability, HostOps.AgentReadinessCapability];
     public List<Session> Sessions { get; } = [];
     // Sent with sessions.synced.
     public DiscoveryHeld? Held { get; set; }
@@ -312,6 +312,8 @@ sealed class HoldingDispatcher : IUiDispatcher
     readonly TestUi ui = TestUi.ForTest;
     readonly Queue<Action> held = new();
     bool holding;
+
+    public int QueuedCount => ui.Invoke(() => held.Count);
 
     public void Hold() => ui.Invoke(() => holding = true);
 

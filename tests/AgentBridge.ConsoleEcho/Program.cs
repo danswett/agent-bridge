@@ -18,6 +18,20 @@ internal static unsafe partial class Program
 {
     static int Main(string[] args)
     {
+        if (args is ["--probe-child", var pidFile, var closeOutput])
+        {
+            if (closeOutput == "close")
+            {
+                var output = GetStdHandle(-11);
+                var error = GetStdHandle(-12);
+                CloseHandle(output);
+                if (error != output) { CloseHandle(error); }
+            }
+            File.WriteAllText(pidFile + ".tmp", Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+            File.Move(pidFile + ".tmp", pidFile);
+            Thread.Sleep(TimeSpan.FromSeconds(30));
+            return 0;
+        }
         if (args.Length >= 2 && args[0] == "--args")
         {
             File.WriteAllText(args[1], System.Text.Json.JsonSerializer.Serialize(args[2..]), new UTF8Encoding(false));
@@ -92,6 +106,10 @@ internal static unsafe partial class Program
 
     [LibraryImport("kernel32.dll")]
     private static partial nint GetConsoleWindow();
+
+    [LibraryImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CloseHandle(nint handle);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

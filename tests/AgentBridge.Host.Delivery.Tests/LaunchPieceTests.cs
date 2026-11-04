@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -110,6 +111,117 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.Equal((true, 0), (ran.Ran, ran.ExitCode));
         Assert.Equal(["config", "profiles"], Read("agency.json"));
         Assert.Equal(["home", "work"], await new AgencyCatalog(new BatchFileRunner(new AgentBridge.Host.Core.Usage.CommandRunner())).ProfilesAsync(shim));
+    }
+
+    [WindowsFact]
+    [Trait("Category", "Process")]
+    public Task A_version_probe_timeout_terminates_an_orphaned_grandchild_holding_its_output() => ProbeDescendant(false, false);
+
+    [WindowsFact]
+    [Trait("Category", "Process")]
+    public Task Cancelling_a_version_probe_terminates_its_orphaned_grandchild_before_returning() => ProbeDescendant(false, true);
+
+    [WindowsFact]
+    [Trait("Category", "Process")]
+    public Task A_successful_version_probe_also_terminates_descendants_that_closed_their_output() => ProbeDescendant(true, false);
+
+    [WindowsFact]
+    [Trait("Category", "Process")]
+    public Task A_usage_command_cannot_inherit_a_probe_writer_from_another_launch() => SharedInheritanceWindow(false);
+
+    [WindowsFact]
+    [Trait("Category", "Process")]
+    public Task A_batch_command_cannot_inherit_a_probe_writer_from_another_launch() => SharedInheritanceWindow(true);
+
+    async Task SharedInheritanceWindow(bool batch)
+    {
+        var pidFile = Out("concurrent.pid");
+        var shim = Out("concurrent.cmd");
+        File.WriteAllText(shim, $"@\"{Echo}\" --probe-child \"{pidFile}\" close\r\n");
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var entered = new ManualResetEventSlim();
+        using var window = AgentBridge.Host.Core.Processes.ProcessLaunch.HoldInheritableHandles();
+        using var pipe = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
+        using var reader = new StreamReader(pipe);
+        AgentBridge.Host.Core.Usage.ICommandRunner runner = batch
+            ? new BatchFileRunner(new AgentBridge.Host.Core.Usage.CommandRunner())
+            : new AgentBridge.Host.Core.Usage.CommandRunner();
+        var pending = Task.Run(() =>
+        {
+            entered.Set();
+            return runner.RunAsync(batch ? shim : Echo, batch ? [] : ["--probe-child", pidFile, "close"], TimeSpan.FromSeconds(15), stop.Token);
+        });
+        Process? child = null;
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            // Give the competing launch a chance to inherit the writer if it ignores the gate.
+            var beforeRelease = DateTime.UtcNow.AddMilliseconds(500);
+            while (!File.Exists(pidFile) && DateTime.UtcNow < beforeRelease) { Thread.Sleep(10); }
+            pipe.DisposeLocalCopyOfClientHandle();
+            window.Dispose();
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (!File.Exists(pidFile) && DateTime.UtcNow < deadline) { await Task.Delay(10); }
+            Assert.True(File.Exists(pidFile));
+            child = Process.GetProcessById(int.Parse(File.ReadAllText(pidFile)));
+            Assert.False(child.HasExited);
+            Assert.Equal("", await reader.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(2)));
+        }
+        finally
+        {
+            window.Dispose();
+            stop.Cancel();
+            try { await pending.WaitAsync(TimeSpan.FromSeconds(2)); }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+            child?.Dispose();
+        }
+    }
+
+    async Task ProbeDescendant(bool closeOutput, bool cancel)
+    {
+        var shim = Out("version.cmd");
+        var intermediate = Out("intermediate.cmd");
+        var pidFile = Out("probe.pid");
+        var release = Out("release.txt");
+        File.WriteAllText(intermediate, $"@start \"\" /b \"{Echo}\" --probe-child \"{pidFile}\" {(closeOutput ? "close" : "keep")}\r\n");
+        File.WriteAllText(shim, $"@echo off\r\nstart \"\" /b cmd.exe /d /c \"\"{intermediate}\"\"\r\n:wait\r\nif not exist \"{release}\" goto wait\r\necho fixture 1.2.3\r\n");
+        // The safety deadline must leave room for process startup and the ten-second probe
+        // timeout; loaded ARM runners can spend more than two seconds creating the fixture.
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var runner = new VersionCommandRunner();
+        var pending = runner.RunAsync(shim, ["--version"], TimeSpan.FromSeconds(10), stop.Token);
+        Process? child = null;
+        try
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(8);
+            while (!File.Exists(pidFile) && DateTime.UtcNow < deadline) { await Task.Delay(10); }
+            Assert.True(File.Exists(pidFile), "The fixture descendant did not start.");
+            child = Process.GetProcessById(int.Parse(File.ReadAllText(pidFile)));
+            File.WriteAllText(release, "continue");
+            if (cancel) { stop.CancelAfter(TimeSpan.FromMilliseconds(100)); }
+            AgentBridge.Host.Core.Usage.CommandResult? result = null;
+            var failure = await Record.ExceptionAsync(async () => result = await pending.WaitAsync(TimeSpan.FromSeconds(15)));
+            Assert.True(child.HasExited, "The version probe left its fixture descendant running.");
+            if (cancel) { Assert.IsAssignableFrom<OperationCanceledException>(failure); }
+            else
+            {
+                Assert.Null(failure);
+                Assert.NotNull(result);
+                Assert.Equal(!closeOutput, result.TimedOut);
+                if (closeOutput) { Assert.Equal(0, result.ExitCode); Assert.Contains("1.2.3", result.Output); }
+            }
+        }
+        finally
+        {
+            stop.Cancel();
+            if (child is not null)
+            {
+                if (!child.HasExited) { child.Kill(); await child.WaitForExitAsync(); }
+                child.Dispose();
+            }
+            try { await pending.WaitAsync(TimeSpan.FromSeconds(2)); }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        }
     }
 
     [Fact]
@@ -225,7 +337,7 @@ public sealed class LaunchPieceTests : IDisposable
         // The line as CreateProcess gets it, run windowless: what follows the program is passed on as is.
         var program = $"\"{line.Application}\"";
         var rest = line.CommandLine.StartsWith(program, StringComparison.Ordinal) ? line.CommandLine[program.Length..].TrimStart() : line.CommandLine[(line.CommandLine.IndexOf(' ') + 1)..];
-        using var p = Process.Start(new ProcessStartInfo(line.Application, rest) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })!;
+        using var p = AgentBridge.Host.Core.Processes.ProcessLaunch.Start(new ProcessStartInfo(line.Application, rest) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })!;
         p.WaitForExit(20000);
         return Read(name);
     }
