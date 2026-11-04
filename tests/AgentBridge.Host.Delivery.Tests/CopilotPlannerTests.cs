@@ -196,6 +196,44 @@ public class CopilotPlannerTests
         $$"""{ "message": "m", "requestedSchema": { "properties": { "n": { "type": "integer", "default": {{@default}} } } } }""";
 
     [Theory]
+    // The CLI holds each as another double, so what it records is not the default or the answer:
+    // precision lost, underflow to 0, and past the largest double (#700).
+    [InlineData("\"9007199254740993\"", "9007199254740993")]
+    [InlineData("9007199254740993", "9007199254740993")]
+    [InlineData("\"1e-400\"", "1e-400")]
+    [InlineData("1e-400", "1e-400")]
+    [InlineData("\"1e400\"", "1e400")]
+    public void A_default_the_CLI_would_hold_as_another_number_is_refused_even_when_the_answer_reads_the_same(string @default, string answer)
+    {
+        var schema = $$"""{ "message": "m", "requestedSchema": { "properties": { "n": { "type": "number", "default": {{@default}} } } } }""";
+
+        Assert.Contains("pre-filled default", Refusal(schema, Answer(Raw($$"""{ "n": {{answer}} }"""))));
+    }
+
+    [Theory]
+    [InlineData("9007199254740993")]
+    [InlineData("1e-400")]
+    [InlineData("1e300")]
+    public void A_number_the_CLI_would_record_differently_or_that_is_too_long_to_type_is_refused_before_any_key(string answer)
+    {
+        const string Free = """{ "message": "m", "requestedSchema": { "properties": { "n": { "type": "number" } } } }""";
+
+        Assert.Contains("answer at the machine", Refusal(Free, Answer(Raw($$"""{ "n": {{answer}} }"""))));
+    }
+
+    [Fact]
+    public void A_number_is_typed_as_plain_decimal_since_the_box_drops_a_key_that_leaves_it_not_a_number()
+    {
+        // "1e" is not a number, so the "e" of 1e5 typed key by key would be dropped: 15.
+        const string Free = """{ "message": "m", "requestedSchema": { "properties": { "n": { "type": "number" } } } }""";
+
+        var plan = Plan(Free, Answer(Raw("""{ "n": 1e5 }""")));
+
+        Assert.Equal([("100000", true)], Keys(plan));
+        Assert.Equal("1e5", Assert.IsType<Expected.Number>(Assert.Single(plan.Fields).Value).Raw.GetRawText());
+    }
+
+    [Theory]
     [InlineData("2.50", "25e-1", true)]
     [InlineData("100", "1E+2", true)]
     [InlineData("-0", "0.000", true)]
@@ -426,6 +464,23 @@ public class CopilotPlannerTests
         Assert.Null(form);
         Assert.Contains("opens on its Other box", problem);
         Assert.Contains("answer it at the machine", problem);
+    }
+
+    [Theory]
+    [InlineData("""{ "type": "array" }""")]
+    [InlineData("""{ "type": "array", "items": true }""")]
+    [InlineData("""{ "type": "array", "items": "x" }""")]
+    [InlineData("""{ "type": "array", "items": [] }""")]
+    [InlineData("""{ "type": "array", "items": {} }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": [] } }""")]
+    public void A_checkbox_list_whose_items_yield_no_options_is_refused_before_any_key(string field)
+    {
+        using var doc = JsonDocument.Parse($$"""{ "message": "m", "requestedSchema": { "properties": { "many": {{field}} } } }""");
+
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+
+        Assert.Null(form);
+        Assert.Contains("no options to choose from", problem);
     }
 
     [Fact]

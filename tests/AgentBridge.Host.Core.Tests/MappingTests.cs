@@ -44,6 +44,22 @@ public class QuestionMappingTests
     }
 
     [Theory]
+    // A checkbox list whose `items` yield no options: nothing to offer, and nothing the keys
+    // could walk (Copilot review of 318c7334).
+    [InlineData("""{ "type": "array" }""")]
+    [InlineData("""{ "type": "array", "items": true }""")]
+    [InlineData("""{ "type": "array", "items": "x" }""")]
+    [InlineData("""{ "type": "array", "items": [] }""")]
+    [InlineData("""{ "type": "array", "items": {} }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": [] } }""")]
+    public void A_checkbox_list_whose_items_yield_no_options_is_shown_to_be_answered_at_the_machine(string field)
+    {
+        var q = Ask($$"""{ "message": "m", "requestedSchema": { "properties": { "many": {{field}} } } }""");
+
+        Assert.True(q.AnswerAtMachine);
+    }
+
+    [Theory]
     [InlineData("""{ "type": "string", "enum": ["a", "b"] }""")]
     [InlineData("""{ "type": "string", "enum": ["a", "b"], "default": "b" }""")]
     [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"] }, "default": null }""")]

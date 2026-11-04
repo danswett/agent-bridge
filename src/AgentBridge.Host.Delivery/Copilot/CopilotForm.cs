@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 
@@ -27,7 +26,7 @@ public sealed record CopilotField(
 // reads it (Get-DecisionSchemaFields), rather than from the Question a client saw: the
 // keys depend on things a Question does not carry (which rows open ticked, whether an
 // empty list is an answer, the older `choices` format).
-public sealed partial record CopilotForm(IReadOnlyList<CopilotField> Fields)
+public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
 {
     // Null with a reason when the prompt cannot be driven by keys from here.
     public static (CopilotForm? Form, string? Problem) Read(JsonElement arguments)
@@ -170,23 +169,21 @@ public sealed partial record CopilotForm(IReadOnlyList<CopilotField> Fields)
     // certain. Copilot 1.0.105's form (`Uxn`, its accept step) turns a number field's string into
     // Number(text) when that is finite and keeps it a string otherwise, so a default of "3" is
     // recorded as 3. Only a string that is plainly a JSON number is read so (Number() also takes
-    // hex, padding and "Infinity"), and only a finite one whose exact value can be held.
+    // hex, padding and "Infinity"), and only one the CLI holds exactly as written
+    // (CopilotFieldSchema.HeldExactly): "9007199254740993" would be recorded as
+    // 9007199254740992, and "1e-400" as 0, so neither is the answer it reads as.
     public static JsonElement? Recorded(JsonElement value)
     {
         var text = value.ValueKind switch
         {
             JsonValueKind.Number => value.GetRawText(),
-            JsonValueKind.String when PlainNumber().IsMatch(value.GetString()!) => value.GetString()!,
+            JsonValueKind.String => value.GetString()!,
             _ => null,
         };
-        if (text is null || CopilotFieldSchema.ExactNumber(text) is null) { return null; }
-        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) || !double.IsFinite(d)) { return null; }
+        if (text is null || CopilotFieldSchema.HeldExactly(text) is null) { return null; }
         using var doc = JsonDocument.Parse(text);
         return doc.RootElement.Clone();
     }
-
-    [GeneratedRegex(@"\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\z", RegexOptions.CultureInvariant)]
-    private static partial Regex PlainNumber();
 
     // Compared as CopilotFieldSchema compares them, so the list and its default read alike.
     public static bool SameScalar(JsonElement a, JsonElement b) => CopilotFieldSchema.SameScalar(a, b);

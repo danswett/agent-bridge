@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery.Copilot;
@@ -104,6 +105,12 @@ public static class CopilotPlanner
     // What the session records for a field left as it opened: the default it opened with, not
     // the answer's own spelling of it (3.0 given for a 3 is recorded as the 3), and a number
     // field's string default as the number the CLI turns it into ("3" is recorded as 3).
+    // The longest number typed into a number box, as plain decimal.
+    const int MaxNumberLength = 40;
+
+    static string? Recorded(JsonElement value) =>
+        value.ValueKind == JsonValueKind.Number ? CopilotFieldSchema.HeldExactly(value.GetRawText()) : null;
+
     static Expected Kept(CopilotField field, JsonElement prefill)
     {
         if (field.Kind == CopilotFieldKind.Number) { return new Expected.Number(CopilotForm.Recorded(prefill)!.Value); }
@@ -123,7 +130,16 @@ public static class CopilotPlanner
                     return ([words], string.IsNullOrWhiteSpace(words) ? new Expected.Omitted() : new Expected.Words(words), null);
                 }
             case CopilotFieldKind.Number:
-                return ([value.GetRawText()], new Expected.Number(value.Clone()), null);
+                {
+                    // Typed as plain decimal, and only a number the CLI will hold exactly as
+                    // given: it keeps numbers as doubles, so 9007199254740993 typed would be
+                    // recorded as 9007199254740992, an answer nobody gave (#700).
+                    if (Recorded(value) is not { } exact || CopilotFieldSchema.PlainDecimal(exact, MaxNumberLength) is not { } typed)
+                    {
+                        return (null, null, "Copilot would record a different number than this one, or one too long to type; answer at the machine");
+                    }
+                    return ([typed], new Expected.Number(value.Clone()), null);
+                }
             case CopilotFieldKind.Boolean:
                 {
                     var at = value.ValueKind == JsonValueKind.True ? 0 : 1;

@@ -53,7 +53,7 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     answer. An empty answer only where `minItems` allows it. That Up stops at the first
     row of a checkbox list, as it does in a single-choice list, is assumed rather than
     seen live: check it on the test VM.
-  * text and number: the words (a number as its JSON text). An optional text field left
+  * text and number: the words (a number as plain decimal, below). An optional text field left
     out is skipped with Enter; an option list cannot be left out, since Enter commits
     whatever its caret is on.
   * text and number with a schema `default` (#662): Copilot opens the field with the default
@@ -64,7 +64,12 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     `answer at the machine (this field has a pre-filled default)`. A text field's `null` or
     empty default fills nothing in, and is typed as before; a number field's `null` default
     opens reading `null`, so it is refused like any other. Numbers are compared exactly, and
-    one that cannot be (an exponent too large to hold, or no finite value) is refused. A number
+    one that cannot be (an exponent too large to hold, or no finite value) is refused. Copilot
+    is JavaScript and holds every number as the nearest double, so a default, an answer or a
+    number option it would hold as another number (`9007199254740993` becomes
+    `9007199254740992`, `1e-400` becomes `0`) is refused before a key goes. A number is typed
+    as plain decimal (`1e5` as `100000`): the number box drops a key that leaves its text not
+    a number, and `1e` is not one; one longer than 40 characters is refused. A number
     field's string default is recorded by the CLI as `Number(text)`, so `"3"` is kept as `3`;
     only a string that is plainly a JSON number is read so. Seen in a real session for a number field; a text field is
     assumed to open the same way. Claude's and Codex's prompts take no typed field values, so
@@ -72,7 +77,8 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
   * An option list whose `default` is present but is not one of its options, `null` included,
     opens on its Other box (`Dxn` in 1.0.105), where the walk from the top row ends a row off;
     it is refused, and shown to be answered at the machine. So are a checkbox list with no
-    options and one whose default does not name its options.
+    options (no `items` object, or one naming none) and one whose default does not name its
+    options.
   * Every field is read as Copilot CLI draws it, which is by its `type` alone (`cli-main.js`
     `tle` in 1.0.105): a `number` or `integer` is a number box even with an `enum` (whose Up
     and Down add or take one, so walking it as a list recorded a different number), and a
