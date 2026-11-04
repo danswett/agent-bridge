@@ -135,7 +135,7 @@ public sealed class StopFlowTests : IAsyncLifetime
     public async Task Hello_offers_ending_sessions_only_while_agent_ha_bridge_is_not_running_and_only_where_a_stopper_can_act()
     {
         var ch = await OpenAsync();
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsStop], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, Capabilities.SessionsStop], await CapabilitiesAsync(ch));
 
         probe.Reason = "agent-ha-bridge is running for this user";
         Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus], await CapabilitiesAsync(ch));

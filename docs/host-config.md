@@ -153,7 +153,7 @@ pinned full Noise static public key. Every request is checked again:
 
 | Local role | Allowed remote operations |
 |---|---|
-| `service` | `hello`, `sessions.list`, `session.get`, `sessions.subscribe`, `sessions.focus` |
+| `service` | `hello`, `sessions.list`, `session.get`, `sessions.subscribe` |
 | `host` | `hello`, `usage.get` (including shared readings), `session.transfer` |
 | `person` | Existing explicitly registered person operations, except `session.transfer` |
 | Unpinned | None |

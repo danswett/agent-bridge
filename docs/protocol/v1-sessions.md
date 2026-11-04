@@ -424,6 +424,7 @@ to 4 s, and with the app open the radio barely rested (#610: the largest battery
 | `open` | The session it shows, if any. Absent or `null` on the list, or another machine's session |
 
 Result: `{}`. A request without `visible`, or with a field of the wrong type, fails as a request.
+It is for a person's devices: a pinned `service` or `host` peer is neither offered nor allowed it.
 What it says holds for the channel, across `sessions.subscribe` on it, until it is said again or
 the channel closes; a new channel starts with nothing said, and a client says it again after
 subscribing (it may send both at once). Until a channel has said anything, nothing below applies

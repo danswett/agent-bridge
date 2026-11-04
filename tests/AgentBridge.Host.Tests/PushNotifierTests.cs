@@ -257,6 +257,25 @@ public sealed class PushNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task A_finished_turn_waiting_for_the_relay_is_not_sent_to_a_device_that_has_come_on_screen_since()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, notifier.Pending);
+
+        notifier.Watching = device => device == Phone;
+        var next = new FakeSender(Account);
+        notifier.Attach(next);
+        await notifier.PumpAsync();
+        Assert.Empty(next.Sent);
+        Assert.Equal(0, notifier.Pending);
+    }
+
+    [Fact]
     public async Task Finished_turns_of_one_session_reach_a_device_at_most_once_in_ten_minutes_until_it_replies()
     {
         Start();

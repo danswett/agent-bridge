@@ -351,7 +351,7 @@ public sealed class PushNotifier : IAsyncDisposable
                 if (!sessions.TryGetValue(change.Id, out var t)) { return; }
                 t.Removed = true;
                 t.Due = t.Shown is { } shown ? new Due(NoticeKind.Resolved, now, shown) : null;
-                if (t.Due is null) { sessions.Remove(change.Id); }
+                if (t.Due is null) { Drop(change.Id); }
             }
             else if (change.Session is { } s) { Observe(s, now); }
         }
@@ -466,9 +466,11 @@ public sealed class PushNotifier : IAsyncDisposable
                 if (recent.Count >= options.MaxPerMinute) { return NextWake(now); }
                 outbox.Remove(ready);
                 if (store.Get(ready.Device) is not { } found) { continue; }
-                // A collapsed finished notice that waited: only still true, and still not seen.
-                if (ready.Collapsed && (sessions.GetValueOrDefault(ready.Session) is not { Removed: false, Last: { Status: SessionStatus.Idle, Question: null } }
-                    || Sees(ready.Device, ready.Session))) { continue; }
+                // A finished notice that waited (the relay down, the rate limit, a retry, or
+                // collapsed) is not sent to a device now on screen; a collapsed one only while
+                // still true.
+                if (ready.Kind == NoticeKind.Finished && (Sees(ready.Device, ready.Session)
+                    || ready.Collapsed && sessions.GetValueOrDefault(ready.Session) is not { Removed: false, Last: { Status: SessionStatus.Idle, Question: null } })) { continue; }
                 if (!MayNotify(found) || ready.Grant != found.Grant) { continue; }
                 (next, sub, via) = (ready, found, s);
             }
@@ -588,7 +590,15 @@ public sealed class PushNotifier : IAsyncDisposable
                 case NoticeKind.Finished when !t.Removed && s is { Status: SessionStatus.Idle, Question: null }:
                     t.FinishedKey = FinishedKey(s);
                     t.Shown = null;
-                    Enqueue(s, NoticeKind.Finished, null, [.. store.All.Where(d => !Sees(d.Device, id))]);
+                    var unseen = new List<PushSubscriber>();
+                    foreach (var d in store.All)
+                    {
+                        if (!Sees(d.Device, id)) { unseen.Add(d); continue; }
+                        // Not sent, but what was waiting for that device (a question not yet
+                        // delivered, a collapsed finished) is stale all the same.
+                        outbox.RemoveAll(o => o.Device == d.Device && o.Session == id);
+                    }
+                    Enqueue(s, NoticeKind.Finished, null, unseen);
                     break;
                 // Checked again as it goes: a question asked once more is not resolved.
                 case NoticeKind.Resolved when s is not null && (t.Removed || s.Question?.Id != due.Question):
@@ -604,12 +614,16 @@ public sealed class PushNotifier : IAsyncDisposable
                         break;
                     }
             }
-            if (t.Removed && t.Due is null)
-            {
-                sessions.Remove(id);
-                foreach (var k in finishedSent.Keys.Where(k => k.Session == id).ToList()) { finishedSent.Remove(k); }
-            }
+            if (t.Removed && t.Due is null) { Drop(id); }
         }
+    }
+
+    // A session gone from the host, with what is kept of it: finishedSent would otherwise keep every
+    // ended session of every device for the life of the host.
+    void Drop(string id)
+    {
+        sessions.Remove(id);
+        foreach (var k in finishedSent.Keys.Where(k => k.Session == id).ToList()) { finishedSent.Remove(k); }
     }
 
     // On screen now, so it sees the turn finish; unless a question notice of the session is still on
