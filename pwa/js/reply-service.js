@@ -13,6 +13,7 @@
 // itself is sent the person can cancel, which stops an upload where it is.
 import { AnswerService } from './answer-service.js';
 import { uploadAttachment } from './attachments.js';
+import { marked } from './timing.js';
 
 // Where an answer's entry keeps its question, a reply's keeps this.
 const REPLY = '';
@@ -46,6 +47,8 @@ export class ReplyService extends AnswerService {
           abort.signal.throwIfAborted();
           this.#sending.delete(entry.key);
           if (files.length) { progress({ sent: total, total, phase: 'reply' }); }
+          // Its files' time is the tap's to sent, not the machine's.
+          marked(entry.request, 'sent');
           return await client.reply(data, { onProgress: stage });
         } catch (e) {
           if (abort.signal.aborted) { throw Object.assign(new Error(CANCELLED), { fromHost: true, reason: CANCELLED }); }
