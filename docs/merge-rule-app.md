@@ -1,12 +1,18 @@
-# The merge-rule GitHub App (prepared, not applied)
+# The merge-rule GitHub App
 
-Main's ruleset requires the `merge-rule` status (quality/README.md §4.9). Today the
-`merge-rule` workflow posts it with its own `GITHUB_TOKEN`, as GitHub Actions. A same-repo
+**Created 2026-11-04:** App ID 5607979, slug `agent-bridge-merge-rule`, installed on
+`agent-bridge` only, with environment `merge-rule` limited to `main`. The workflow posts with it
+from the change that wired it in; the steps below are kept for rotating the key or recreating the
+App.
+
+Main's ruleset requires the `merge-rule` status (quality/README.md §4.9). Before the App, the
+`merge-rule` workflow posted it with its own `GITHUB_TOKEN`, as GitHub Actions. A same-repo
 pull request can add a workflow of its own with `statuses: write` and post `merge-rule:
 success` on its own head, also as GitHub Actions, and the ruleset can't tell the two apart.
-So, until this App exists, **auto-merge stays off** and the merge coordinator merges by hand
-after running `merge-rule --pr <n>` locally from a freshly fetched `origin/main` checkout,
-never the pull request's worktree (AGENTS.md, "Pull requests", rule 4).
+So, until the ruleset accepts `merge-rule` only from this App, **auto-merge stays off** and the
+merge coordinator merges by hand after running `merge-rule --pr <n>` locally from a freshly
+fetched `origin/main` checkout, never the pull request's worktree (AGENTS.md, "Pull requests",
+rule 4).
 
 The App closes the gap: only it posts `merge-rule`, the ruleset accepts `merge-rule` only from
 it, and its private key sits in an environment that only `main` can deploy from, so no pull
