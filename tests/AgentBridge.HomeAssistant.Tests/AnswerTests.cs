@@ -989,10 +989,16 @@ public sealed class AnswerTests : IDisposable
         {
             MachineName = Machine, Version = "0.1.0", Tick = TimeSpan.FromMilliseconds(20),
             FieldPinDelay = TimeSpan.Zero, SelectDelay = TimeSpan.Zero,
-        }, ha, sessions, () => null, answer: (r, _) => { lock (answered) { answered.Add(r); } return Task.FromResult(new AnswerResult(AnswerOutcome.Delivered)); });
+        }, ha, sessions, () => null, log: m => { lock (log) { log.Add(m); } },
+            answer: (r, _) => { lock (answered) { answered.Add(r); } return Task.FromResult(new AnswerResult(AnswerOutcome.Delivered)); });
         c.Start();
         await Until(() => ha.Watches.Count > 0 && ha.Watches[^1].Contains(SessionEntities.Submit(Node)));
         Assert.Equal(HaContract.MaxFields + 4, ha.Watches[^1].Count);
+        // The watch covers a session from its first publication, before its question is armed:
+        // until then the field does not offer the option (#643, chosen 62 ms in on a loaded
+        // runner), and a hit before arming is one the card ignores, as made looking at something
+        // else. So the card is acted on once the connector says it is armed.
+        await Until(() => { lock (log) { return log.Contains($"Home Assistant connector armed {Node} for its question"); } });
         ha.Trigger(ha.Choose(SessionEntities.Field(Node, 1), "Cut the release now"));
         ha.Trigger(ha.Press(SessionEntities.Submit(Node)));
         await Until(() => { lock (answered) { return answered.Count == 1; } });
