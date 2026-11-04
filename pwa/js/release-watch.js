@@ -10,8 +10,13 @@ export const STUCK_AFTER = 3;
 // one release is no count under another.
 const FAILURES = 'agent-bridge.app.installFailures';
 
+// localStorage, or null where the browser blocks it: even reading the property can throw.
+function localStorageOrNull() {
+  try { return globalThis.localStorage ?? null; } catch { return null; }
+}
+
 export class ReleaseWatch {
-  constructor({ storage = globalThis.localStorage, onChange = () => {} } = {}) {
+  constructor({ storage = localStorageOrNull(), onChange = () => {} } = {}) {
     this.storage = storage;
     this.onChange = onChange;
     this.watched = new WeakSet();
@@ -29,7 +34,7 @@ export class ReleaseWatch {
   under(release) {
     this.release = release;
     let kept = null;
-    try { kept = JSON.parse(this.storage.getItem(FAILURES)); } catch { /* none kept, or unreadable */ }
+    try { kept = JSON.parse(this.storage?.getItem(FAILURES) ?? 'null'); } catch { /* unreadable */ }
     const n = Math.floor(Number(kept?.failures));
     this.#count((kept?.release === release && n > 0 ? n : 0) + this.failures);
   }
@@ -51,24 +56,29 @@ export class ReleaseWatch {
     });
   }
 
-  // A release installed.
+  // A release installed: what was kept goes too, even before the release in control is known.
   installed() {
-    if (this.failures) { this.#count(0); }
+    this.#forget();
+    this.#count(0);
   }
 
   // A release took over: nothing failed, and which release is in control is learnt again
   // (under), from its record.
   tookOver() {
-    try { this.storage.removeItem(FAILURES); } catch { /* storage blocked: nothing was kept */ }
+    this.#forget();
     this.release = undefined;
     this.#count(0);
+  }
+
+  #forget() {
+    try { this.storage?.removeItem(FAILURES); } catch { /* storage blocked: nothing was kept */ }
   }
 
   #count(n) {
     this.failures = n;
     if (this.release !== undefined) {
       try {
-        if (n) { this.storage.setItem(FAILURES, JSON.stringify({ release: this.release, failures: n })); } else { this.storage.removeItem(FAILURES); }
+        if (n) { this.storage?.setItem(FAILURES, JSON.stringify({ release: this.release, failures: n })); } else { this.storage?.removeItem(FAILURES); }
       } catch { /* storage blocked or full: the count lasts as long as this page */ }
     }
     this.onChange(this.stuck);

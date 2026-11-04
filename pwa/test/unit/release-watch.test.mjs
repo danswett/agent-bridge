@@ -58,6 +58,35 @@ test('an install that fails before the release in control is known still counts,
   assert.equal(watch.stuck, true);
 });
 
+test('a release that installs before the release in control is known clears what was kept', () => {
+  const storage = memory();
+  for (let i = 0; i < STUCK_AFTER; i++) { failedStart(storage, A); }
+  const watch = new ReleaseWatch({ storage });
+  const worker = new Worker();
+  watch.watch(worker);
+  // Installed, then replaced by a later release before it could take over.
+  worker.to('installed', 'redundant');
+  watch.under(A);
+  assert.equal(watch.stuck, false);
+  assert.equal(watch.failures, 0);
+});
+
+test('where the browser refuses even to hand over storage, the app still starts and counts', (t) => {
+  const was = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new DOMException('The operation is insecure.', 'SecurityError'); } });
+  t.after(() => {
+    if (was) { Object.defineProperty(globalThis, 'localStorage', was); } else { delete globalThis.localStorage; }
+  });
+  const watch = new ReleaseWatch();
+  watch.under(A);
+  for (let i = 0; i < STUCK_AFTER; i++) {
+    const worker = new Worker();
+    watch.watch(worker);
+    worker.to('redundant');
+  }
+  assert.equal(watch.stuck, true);
+});
+
 test('failures counted under one release are no count under the next, nor under the first again after a rollback', () => {
   const storage = memory();
   for (let i = 0; i < STUCK_AFTER; i++) { failedStart(storage, A); }
