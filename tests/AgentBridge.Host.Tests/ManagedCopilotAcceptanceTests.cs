@@ -60,6 +60,7 @@ public sealed class ManagedCopilotAcceptanceTests(ITestOutputHelper output)
             PollInterval = TimeSpan.FromMilliseconds(250), CoalesceInterval = TimeSpan.Zero,
         }, processes);
         var gate = new DeliveryGate();
+        var inherited = SessionSourceOptions.ForCurrentUser();
         var config = LaunchConfig.Default with
         {
             Workspaces = [new("Acceptance", workspace, false)], DefaultAgent = "copilot",
@@ -76,7 +77,10 @@ public sealed class ManagedCopilotAcceptanceTests(ITestOutputHelper output)
         var launcher = new LaunchService(source, probe, backend, new IsolatedCopilotStarter(backend, home),
             new OnlyCopilotLocator(), new AgencyCatalog(new CommandRunner()), new LaunchServiceOptions
             {
-                CopilotHome = home, ClaudeHome = claude, CodexHome = codex,
+                // Only Copilot is launched. Discovery stays on the unused roots above;
+                // keep unrelated launch homes inherited so main's home propagation does
+                // not request a forbidden CODEX_HOME override for this Copilot fixture.
+                CopilotHome = home, ClaudeHome = inherited.ClaudeHome, CodexHome = inherited.CodexHome,
                 Config = config, PlatformSupported = true, MacCompatibility = new MacLaunchCompatibility(),
                 // This is a fresh test-owned workspace, explicitly approved above.
                 IsSystemDirectory = p => !string.Equals(p, workspace, StringComparison.Ordinal),
