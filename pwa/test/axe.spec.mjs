@@ -158,13 +158,20 @@ for (const layout of LAYOUTS) {
         await expect(land.locator('.answer-receipt, .answer-status').filter({ hasText: /\S/ }).first()).toBeVisible();
         await check(page, 'an approval answered');
 
+        // A delegate opens in the inspector from the strip, or on a phone in the Delegates tab's
+        // list's place (ui.md §6.3).
         const delegating = await open(page, DELEGATES);
-        if (layout.phone) { await delegating.getByRole('tab', { name: 'Delegates' }).click(); }
-        const suite = delegating.locator('.delegate[data-id="demo-agent-suite"]');
-        await suite.locator('.delegate-summary').click();
-        await expect(suite.locator('.delegate-task')).toBeVisible();
-        await delegating.locator('.delegates-finished > summary').click();
-        await check(page, 'a session\'s delegates, one open and the finished unfolded');
+        if (layout.phone) {
+          await delegating.getByRole('tab', { name: 'Delegates' }).click();
+          await delegating.locator('.delegates-finished > summary').click();
+          await check(page, 'a session\'s delegates, the finished unfolded');
+          await delegating.locator('.delegate[data-id="demo-agent-suite"] .delegate-summary').click();
+        } else {
+          await delegating.locator('.strip-fold').click();
+          await delegating.locator('.strip-item[data-id="demo-agent-suite"]').click();
+        }
+        await expect(delegating.locator('.delegate-pane .delegate-task')).toBeVisible();
+        await check(page, layout.phone ? 'a delegate open' : 'a session\'s delegates, one open and the finished unfolded');
 
         if (layout.phone) {
           await delegating.getByRole('tab', { name: 'Tools' }).click();
@@ -176,6 +183,9 @@ for (const layout of LAYOUTS) {
           await expect(delegating.locator('.details')).toBeVisible();
           await check(page, 'a session\'s details');
         } else {
+          // The delegate let go, by its strip item pressed again, gives the inspector back to them.
+          await delegating.locator('.strip-item[data-id="demo-agent-suite"]').click();
+          await expect(delegating.locator('.delegate-pane')).toBeHidden();
           await expect(delegating.locator('.details')).toBeVisible();
           await expect(delegating.locator('.tools-panel')).toBeVisible();
         }

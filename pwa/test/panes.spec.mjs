@@ -131,8 +131,15 @@ for (const width of [900, 1440]) {
     const v = await open(page, 'demo-delegates');
     const stream = v.locator('.stream-scroll');
     const inspector = v.locator('.inspector');
-    if (width < 1280) { await v.getByRole('tab', { name: 'Delegates' }).click(); }
-    await expect(v.locator('.delegates')).toBeVisible();
+    // A delegate in the inspector: at three panes one opened from the strip (ui.md §6.3), below
+    // that the Delegates tab's list.
+    if (width < 1280) {
+      await v.getByRole('tab', { name: 'Delegates' }).click();
+      await expect(v.locator('.delegates')).toBeVisible();
+    } else {
+      await v.locator('.strip-item').first().click();
+      await expect(inspector.locator('.delegate-pane')).toBeVisible();
+    }
     // A delegate's line read aloud far down the inspector once stretched the page under it.
     await scrollsOnItsOwn(page, inspector);
     await inspector.evaluate((el) => { el.scrollTop = 0; });

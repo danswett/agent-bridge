@@ -144,6 +144,7 @@ export class SessionListView {
             viewing: () => this.viewing(),
           });
           card.onInspector = () => this.onInspector?.();
+          card.onDelegate = () => this.onDelegate?.(card);
           card.element.dataset.key = key;
           card.view.dataset.key = key;
           card.element.prepend(h('span', { class: 'drag-handle', 'aria-hidden': 'true', title: 'Drag to move' }));
@@ -446,6 +447,9 @@ export class SessionListView {
   }
 
   get selected() { return this.#selected ? this.#cards.get(this.#selected) ?? null : null; }
+
+  // Every session's card, shown or not.
+  get cards() { return [...this.#cards.values()]; }
 
   // The rows shown, in order: what a desktop selects when nothing is chosen yet.
   shownCards() {

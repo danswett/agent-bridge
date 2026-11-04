@@ -121,6 +121,20 @@ export class ReplyBox {
 
   get text() { return this.els.input.value; }
 
+  // Words put in for the person to read and send, after anything already typed ("Ask main agent
+  // to stop it", ui.md §6.3): nothing is sent until Send. What is there is kept as it is, its
+  // trailing space or line break too: a reply on its way comes out of the box only while the box
+  // still begins with it, so trimmed, a delivered reply would stay to be sent again.
+  prefill(text) {
+    const input = this.els.input;
+    const v = input.value;
+    input.value = !v.trim() ? text : /\s$/.test(v) ? `${v}${text}` : `${v} ${text}`;
+    this.#clearError();
+    this.#sync();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+
   // The files waiting to go: { id, name, size, type, resized, large }.
   get files() { return this.#files.map(({ id, name, size, type, resized, large }) => ({ id, name, size, type, resized, large: !!large })); }
 

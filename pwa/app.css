@@ -252,11 +252,11 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
    From 760, the list and the session side by side, each scrolling on its own, Conversation and
    Tools as tabs. From 1280, a third pane: the inspector, which can be hidden. */
 .session-pane { display: none; }
-.session-view:not([hidden]) { display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; min-height: 0; }
+.session-view:not([hidden]) { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); height: 100%; min-height: 0; }
 .view-body { min-height: 0; }
-/* The body keeps the third row even while the tabs are hidden (three panes), or it takes the
-   tabs' auto row and the reply box floats halfway up an empty pane. */
-.session-view > .view-body { grid-row: 3; }
+/* The body keeps the last row even while the strip or the tabs are hidden, or it takes their auto
+   row and the reply box floats halfway up an empty pane. */
+.session-view > .view-body { grid-row: 4; }
 .no-session { margin: auto; color: var(--ab-text2); }
 @media (max-width: 759px) {
   body[data-page="sessions"][data-session-open="true"] .list-pane { display: none; }
@@ -305,7 +305,13 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   body[data-inspector="shown"] .view-body { grid-template-columns: minmax(0, 1fr) 336px; }
   body[data-inspector="shown"] .session-view .conversation { display: flex; }
   body[data-inspector="shown"] .session-view .inspector { display: grid; border-left: 1px solid var(--ab-stroke2); }
-  body[data-inspector="shown"] .session-view .details, body[data-inspector="shown"] .session-view .delegates-panel, body[data-inspector="shown"] .session-view .tools-panel { display: block; }
+  body[data-inspector="shown"] .session-view .details, body[data-inspector="shown"] .session-view .tools-panel { display: block; }
+  /* At three panes the strip lists the delegates, and the one chosen there takes the inspector
+     in place of the session's own Details and Tools (§6.3). */
+  body[data-inspector="shown"] .session-view .delegates-panel { display: none; }
+  body[data-inspector="shown"] .session-view[data-delegate="open"] :is(.details, .tools-panel) { display: none; }
+  body[data-inspector="shown"] .session-view[data-delegate="open"] .delegate-pane:not([hidden]) { display: block; }
+  body[data-inspector="shown"] .delegate-back { display: none; }
 }
 /* Whatever scrolls holds what is positioned inside it (#288). Text kept for a screen reader
    (.sr-only, a delegate's "under …") is absolutely positioned; with no positioned ancestor its
@@ -718,6 +724,71 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .session-view[data-tab="tools"] .details, .session-view[data-tab="delegates"] .details { display: none; }
 .session-view[data-tab="details"] .tools-panel, .session-view[data-tab="delegates"] .tools-panel { display: none; }
 .session-view:not([data-tab="delegates"]) .delegates-panel { display: none; }
+/* Below three panes a delegate opened is pushed in the Delegates tab, in its list's place. */
+.session-view:not([data-tab="delegates"]) .delegate-pane { display: none; }
+.session-view[data-tab="delegates"][data-delegate="open"] .delegates-panel { display: none; }
+
+/* ---- the delegate strip (ui.md §6.3, #176) ----
+   One item per delegate the main agent started, under the header: at three panes, and on a phone
+   as one chip row that scrolls sideways. Between them the Delegates tab does its job. */
+.delegate-strip:not([hidden]) {
+  display: flex; gap: var(--ab-space-2); padding: var(--ab-space-2) var(--ab-space-6); overflow-x: auto;
+  border-bottom: 1px solid var(--ab-stroke2); scrollbar-width: thin;
+}
+@media (min-width: 760px) and (max-width: 1279px) { .delegate-strip:not([hidden]) { display: none; } }
+@media (max-width: 759px) { .delegate-strip:not([hidden]) { padding: var(--ab-space-2) var(--ab-space-4); } }
+.strip-item {
+  flex: none; display: inline-flex; align-items: center; gap: var(--ab-space-2); max-width: 240px; min-height: 32px;
+  padding: var(--ab-space-1) var(--ab-space-3); font: inherit; font-size: var(--type-meta); line-height: var(--type-meta-line);
+  color: var(--ab-text); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-pill); cursor: pointer;
+}
+.strip-item:hover { background: var(--ab-selected); }
+/* The one open is marked by its outline, as a tab by its bar; its words stay the text colour,
+   which the brand colour on the selected fill is too light for (4.45:1). */
+.strip-item[aria-pressed="true"] { color: var(--ab-text); background: var(--ab-selected); border-color: var(--ab-bridge); box-shadow: inset 0 0 0 1px var(--ab-bridge); }
+.strip-item[aria-expanded="true"] { background: var(--ab-selected); }
+.strip-words { display: inline-flex; gap: var(--ab-space-2); min-width: 0; white-space: nowrap; }
+.strip-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.strip-facts { color: var(--ab-text2); font-variant-numeric: tabular-nums; }
+.strip-facts:empty { display: none; }
+.strip-more { color: var(--ab-text2); align-self: center; white-space: nowrap; font-size: .8rem; }
+@media (pointer: coarse), (max-width: 759px) { .strip-item { min-height: var(--tap); } }
+@media (forced-colors: active) { .strip-item[aria-pressed="true"] { border: 2px solid Highlight; } }
+
+/* ---- a delegate opened (§6.3): in the inspector, or pushed in the Delegates tab ---- */
+.delegate-pane { min-width: 0; }
+.delegate-back { margin: 0 0 var(--ab-space-3); }
+.delegate-label { margin: 0 0 var(--ab-space-1); }
+.delegate-title {
+  display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: var(--ab-space-2); align-items: start;
+  margin: 0 0 var(--ab-space-3); font-size: var(--type-row); line-height: var(--type-row-line); font-weight: 600; overflow-wrap: anywhere;
+}
+.delegate-title > .glyph { margin-top: calc((var(--type-row-line) - 16px) / 2); }
+.delegate-title:focus { outline: none; }
+.delegate-pane > .facts { margin-bottom: var(--ab-space-4); }
+.delegate-pane > div:not([hidden]), .delegate-pane > .reasoning:not([hidden]) { margin: 0 0 var(--ab-space-4); }
+.delegate-pane .md { font-size: var(--type-row); line-height: var(--type-row-line); overflow-wrap: anywhere; }
+.delegate-pane .md > :first-child { margin-top: 0; }
+.delegate-pane .delegate-task .plain { margin: 0; font-size: var(--type-row); line-height: var(--type-row-line); }
+.delegate-pane .tool .tool-time { font-variant-numeric: tabular-nums; }
+.delegate-summary[aria-current="true"] .delegate-name { color: var(--ab-bridge); }
+
+/* ---- delegates starting and reporting back, in the conversation (§6.4) ---- */
+.delegate-events { list-style: none; margin: var(--ab-space-2) 0 0; padding: 0; display: grid; gap: var(--ab-space-1); }
+.delegate-event {
+  display: grid; grid-template-columns: 12px minmax(0, 1fr); column-gap: var(--ab-space-2); align-items: start;
+  font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); font-variant-numeric: tabular-nums;
+}
+.delegate-event > .glyph { margin-top: calc((var(--type-meta-line) - 12px) / 2); }
+/* A start is history, not something happening now: its glyph stands still. */
+.delegate-event .glyph-orbit { animation: none; }
+.delegate-event-text { min-width: 0; overflow-wrap: anywhere; }
+.delegate-link {
+  display: inline; padding: 0; margin: 0; font: inherit; font-style: italic; color: var(--ab-bridge);
+  background: none; border: 0; cursor: pointer; text-align: start; text-decoration: underline; text-underline-offset: 2px;
+}
+.delegate-link:hover { text-decoration-thickness: 2px; }
+@media (forced-colors: active) { .delegate-link { color: LinkText; } }
 
 /* ---- the conversation (ui.md §6.4) ---- */
 .conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -796,8 +867,14 @@ summary {
 .delegate[data-depth="1"] { padding-left: 16px; }
 .delegate[data-depth="2"] { padding-left: 32px; }
 .delegate[data-depth="3"] { padding-left: 48px; }
-.delegate .delegate-detail { margin: 0; }
-.delegate-summary { display: block; padding: 6px 0; min-width: 0; font-weight: 400; color: var(--ab-text); }
+/* A button, not the disclosure's summary it was: none of a button's own face, so the row reads
+   as the list's text (#376's axe walk found the browser's grey under it). */
+.delegate-summary {
+  display: block; width: 100%; margin: 0; padding: 6px 4px; min-width: 0; font: inherit; font-weight: 400; text-align: start;
+  color: var(--ab-text); background: none; border: 0; border-radius: var(--ab-radius-control); cursor: pointer;
+}
+.delegate-summary:hover { background: var(--ab-selected); }
+@media (pointer: coarse), (max-width: 759px) { .delegate-summary { min-height: var(--tap); } }
 /* The name, "under" its parent and the time flow as text beside the glyph, so in the inspector's
    336 px they wrap at spaces and a separator stays with the fact after it, never starting a
    line (#214); the glyph and the chevron keep to the first line. */
@@ -811,23 +888,10 @@ summary {
 .delegate-under { margin-left: 6px; color: var(--ab-text2); font-size: .8rem; overflow-wrap: anywhere; }
 .delegate-under::before { content: "·"; margin-right: 6px; }
 .delegate-line { display: block; margin: 2px 0 0 20px; color: var(--ab-text2); font-size: .82rem; overflow-wrap: anywhere; }
-.delegate-body { margin: 0 0 8px 20px; padding-left: 10px; border-left: 2px solid var(--ab-stroke2); font-size: .88rem; }
-.delegate-body h5 { margin: 8px 0 2px; color: var(--ab-text2); font-size: .78rem; font-weight: 600; }
-.delegate-facts { margin: 4px 0; color: var(--ab-text2); font-size: .8rem; overflow-wrap: anywhere; }
-.delegate-body .reasoning { margin: 4px 0; }
 .delegates-finished { margin: 2px 0; }
 .delegates-finished > summary { font-size: .82rem; }
-/* A row opens in place; its chevron says so, pointing down into it once open. */
-/* Disclosure (ui.md §5.3): the chevron turns as the row opens, and back, quicker, as it closes.
-   The tokens are 0 under reduced motion. */
-.delegate-chevron {
-  width: 16px; height: 16px; margin-top: 2px; color: var(--ab-text2);
-  transition: transform var(--ab-motion-disclosure-exit-duration) var(--ab-motion-disclosure-exit-ease);
-}
-.delegate-detail[open] .delegate-chevron {
-  transform: rotate(90deg);
-  transition-duration: var(--ab-motion-disclosure-duration); transition-timing-function: var(--ab-motion-disclosure-ease);
-}
+/* A row opens its delegate in the inspector or in the list's place; its chevron points there. */
+.delegate-chevron { width: 16px; height: 16px; margin-top: 2px; color: var(--ab-text2); }
 .delegates-more { font-size: .8rem; }
 
 /* ---- inline mono (ui.md §4.2, #215) ----

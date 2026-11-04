@@ -18,12 +18,12 @@ const DELEGATES = 'demo-delegates';
 
 // The elements the catalogue animates in the PWA today, each of which the walk shows on screen:
 // the moving part of a working and a delegating glyph, the in-flight progress ring, a usage bar, a
-// delegate's chevron (Disclosure), a session row (Arriving and leaving, Press), the pushed session
+// session row (Arriving and leaving, Press), the pushed session
 // (Push and pop), a tab (on a phone; a desktop has none), the row menu (Menu and flyout), the
 // inspector (Pane and inspector; on a phone it holds the Tools tab), a Needs you entry (Arriving
 // and leaving), and Show reasoning (Disclosure).
 const ANIMATED = [
-  '.glyph .glyph-spin', '.glyph .glyph-orbit', '.answer-status.progress', '.usage-fill', '.delegate-chevron',
+  '.glyph .glyph-spin', '.glyph .glyph-orbit', '.answer-status.progress', '.usage-fill',
   '.session .row-main', '.session-view', '.view-tab', '.row-menu', '.inspector', '.needs-you-list > li', 'details.reasoning > summary',
 ];
 
@@ -130,14 +130,20 @@ async function walk(page, { phone }) {
   await look('a row menu open');
   await page.keyboard.press('Escape');
 
-  // Tab switch and Disclosure: the delegates, a delegate opened, the finished fold opened.
+  // Tab switch: the delegates, the finished fold opened, and a delegate opened, which takes the
+  // inspector, or on a phone the list's place, at once (ui.md §6.3): it has no motion of its own.
   const delegating = await open(page, DELEGATES);
-  if (phone) { await delegating.getByRole('tab', { name: 'Delegates' }).click(); }
-  const suite = delegating.locator('.delegate[data-id="demo-agent-suite"]');
-  await suite.locator('.delegate-summary').click();
-  await expect(suite.locator('.delegate-task')).toBeVisible();
-  await delegating.locator('.delegates-finished > summary').click();
-  await look('delegates opened');
+  if (phone) {
+    await delegating.getByRole('tab', { name: 'Delegates' }).click();
+    await delegating.locator('.delegates-finished > summary').click();
+    await look('the finished delegates unfolded');
+    await delegating.locator('.delegate[data-id="demo-agent-suite"] .delegate-summary').click();
+  } else {
+    await delegating.locator('.strip-fold').click();
+    await delegating.locator('.strip-item[data-id="demo-agent-suite"]').click();
+  }
+  await expect(delegating.locator('.delegate-pane .delegate-task')).toBeVisible();
+  await look('a delegate opened');
   if (phone) { await delegating.getByRole('tab', { name: 'Tools' }).click(); await look('the tools tab'); }
 
   // Pop: back to the list on a phone.
@@ -175,10 +181,6 @@ for (const layout of [
       expect(all).toMatch(/glyph-spin: animation glyph-turn 1200ms/);
       expect(all).toMatch(/glyph-orbit: animation glyph-turn 8000ms/);
       expect(all).toMatch(/progress::before: animation spin 1000ms/);
-      // A delegate's chevron turns in Disclosure's time, opening or closing (ui.md §5.3).
-      const ms = tokens.motion.platform.windows.duration;
-      const disclosure = tokens.motion.catalogue.disclosure;
-      expect(all).toMatch(new RegExp(`delegate-chevron: transition transform (${ms[disclosure.duration]}|${ms[disclosure.exit.duration]})ms`));
       // A reading isn't something the person did: phase 2 took the bars' 0.4 s ease out (ui.md §5.3).
       expect(all).not.toMatch(/usage-fill: transition/);
     });

@@ -774,7 +774,21 @@ function delegateDetail(s, agent, said) {
   const entry = (s.subagents ?? []).find((a) => a.id === agent);
   if (!entry) { return { missing: true }; }
   const words = said[agent] ?? {};
-  return { ...clone(entry), response: words.response ?? entry.line ?? '', ...(words.reasoning ? { reasoning: words.reasoning } : {}), history: [] };
+  return { ...clone(entry), response: words.response ?? entry.line ?? '', ...(words.reasoning ? { reasoning: words.reasoning } : {}), history: delegateTools(entry) };
+}
+
+// Its tool calls, oldest first as a host sends them: two it finished a minute apart from its
+// start, and the one it is running now.
+function delegateTools(entry) {
+  const start = Date.parse(entry.startedAt);
+  if (!Number.isFinite(start)) { return entry.currentTool ? [clone(entry.currentTool)] : []; }
+  const at = (ms) => new Date(start + ms).toISOString();
+  const calls = [
+    { id: `${entry.id}-t0`, name: 'view', summary: 'src/Host/RestartWitness.cs', status: 'done', startedAt: at(5000), endedAt: at(9000) },
+    { id: `${entry.id}-t1`, name: 'grep', summary: 'ResetTimer', status: entry.outcome === 'failed' ? 'failed' : 'done', startedAt: at(20000), endedAt: at(83000) },
+  ];
+  if (entry.currentTool) { calls.push(clone(entry.currentTool)); }
+  return calls;
 }
 
 // What the demo's delegates said in full, beyond the latest line a list carries.

@@ -147,10 +147,9 @@ const OVER_LIST = Object.freeze({ overList: true });
 // the system's Back (Android's button or gesture, iOS's edge swipe, platform.js) closes it before
 // it leaves the session, and the session before it leaves the list (#168).
 const overDelegate = (id) => Object.freeze({ overList: true, delegate: id });
-const DELEGATE = 'details.delegate-detail';
-const FOLD = 'details.delegates-finished';
-// Open where it can be seen: not behind another tab or in the finished fold shut.
-const shown = (d) => (d.checkVisibility ? d.checkVisibility() : d.getClientRects().length > 0);
+// The delegate a session shows on a phone: the one open, pushed in the Delegates tab's list's
+// place (ui.md §6.3), and not behind another tab.
+const shownDelegate = (card) => (card?.openDelegateId && card.view.dataset.tab === 'delegates' ? card.openDelegateId : null);
 
 export class SessionsPage {
   #shownCaps = new Map();
@@ -176,6 +175,9 @@ export class SessionsPage {
   #shown = null;
   #laneGuard = null;
   #stepping = false;
+  // While a popstate brings the delegates in line with the entry gone to: their own open and close
+  // would otherwise step the history from inside the browser's own step.
+  #syncing = false;
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
   // blobs(): the relay's blob store, or null; relayMax(): the largest blob it takes.
@@ -215,7 +217,7 @@ export class SessionsPage {
     this.#inspectorHidden = this.#read(INSPECTOR) === 'hidden';
     this.view = new SessionListView($('session-list'), hosts.sessions, {
       views: $('session-views'),
-      layout: () => ({ inspector: this.wide.matches && !this.#inspectorHidden }),
+      layout: () => ({ inspector: this.wide.matches && !this.#inspectorHidden, wide: this.wide.matches }),
       // Only while Sessions shows, in a page that does: news that comes while another page, or
       // the tab or app in the background, waits for it, with no scroll and no question's wait
       // spent unseen.
@@ -332,53 +334,40 @@ export class SessionsPage {
   }
 
   // The delegate level of a phone's back stack: opening a delegate in a pushed session adds an
-  // entry (one, however many are opened), closing the last one by hand takes the entry back, and
-  // going back from it closes the delegate. The entry is the session's own address, so a reload or
-  // a link never lands on a delegate: a reload on one goes back to its session.
+  // entry (one: opening another replaces the one open, and its entry with it), closing it by hand
+  // takes the entry back, and going back from it closes the delegate. The entry is the session's
+  // own address, so a reload or a link never lands on a delegate: a reload on one goes back to its
+  // session.
   #delegateBack(views) {
     const win = globalThis.window;
     if (!views || !win) { return; }
     this.#listening = new AbortController();
     const { signal } = this.#listening;
     if (this.#delegateLevel()) { this.#stepBack(); }
-    // toggle doesn't bubble: it is heard on its way down.
-    views.addEventListener('toggle', (e) => {
-      const d = e.target;
-      // The finished fold shut hides the delegates in it; opened, it may show one again.
-      if (d?.matches?.(FOLD)) { this.#delegateStep(); return; }
-      if (!d?.matches?.(DELEGATE)) { return; }
-      const id = d.closest('.delegate')?.dataset.id ?? '';
-      const state = win.history.state;
-      if (d.open) {
-        if (state?.delegate === id || !this.#pushed()) { return; }
-        const url = win.location.href;
-        if (this.#delegateLevel()) { win.history.replaceState(overDelegate(id), '', url); } else { win.history.pushState(overDelegate(id), '', url); }
-        this.#delegateShown = id;
-      } else {
-        this.#delegateStep();
-      }
-    }, { capture: true, signal });
+    // Opened or closed from the strip, the Delegates tab, a nested list, the conversation's events
+    // or its own "All delegates".
+    this.view.onDelegate = () => this.#delegateStep();
     win.addEventListener('popstate', () => {
       this.#stepping = false;
       const want = this.#delegateLevel() ? win.history.state.delegate : null;
       const had = this.#delegateShown;
       this.#delegateShown = want;
       if ((had === null && want === null) || !this.phone.matches) { return; }
-      // Every view's, not only the selected one's: going back from a delegate to the list (the
+      const selected = this.view.selected;
+      // Every session's, not only the selected one's: going back from a delegate to the list (the
       // header's Back) has deselected its session by now, and a delegate left open there would be
       // open without its step when the session is opened again or gone forward to.
-      for (const d of views.querySelectorAll(`${DELEGATE}[open]`)) {
-        if (d.closest('.delegate')?.dataset.id !== want || !this.view.selected?.view?.contains(d)) { d.open = false; }
-      }
-      // Forward again: the delegate it was on, where it still is.
-      const v = this.view.selected?.view;
-      const row = want && v ? [...v.querySelectorAll('.delegate')].find((el) => el.dataset.id === want)?.querySelector(DELEGATE) : null;
-      if (row && !row.open) {
-        this.view.selected.setTab('delegates');
-        // One that finished since Back moved, closed, into the finished fold, which stays shut.
-        const fold = row.closest(FOLD);
-        if (fold) { fold.open = true; }
-        row.open = true;
+      this.#syncing = true;
+      try {
+        for (const card of this.view.cards) {
+          // Focus in the pane going goes back to its row, as the pane's own All delegates does;
+          // left there, it would fall to the page. Another card's or tab's focus is left be.
+          if (card.openDelegateId && (card !== selected || card.openDelegateId !== want)) { card.closeDelegate({ focus: card === selected && card.detail.element.contains(document.activeElement) }); }
+        }
+        // Forward again: the delegate it was on, finished since or not, where it is still listed.
+        if (want && selected && shownDelegate(selected) !== want) { selected.openDelegate(want); }
+      } finally {
+        this.#syncing = false;
       }
       // Forward to a delegate its machine has stopped listing shows nothing: no step.
       this.#delegateStep();
@@ -386,30 +375,29 @@ export class SessionsPage {
     // Another tab hides an open delegate as surely as closing it does.
     const tabs = new MutationObserver(() => this.#delegateStep());
     tabs.observe(views, { subtree: true, attributes: true, attributeFilter: ['data-tab'] });
-    signal.addEventListener('abort', () => tabs.disconnect());
+    signal.addEventListener('abort', () => { tabs.disconnect(); this.view.onDelegate = null; });
   }
 
   // The delegate step matches what the selected session shows: one entry while a delegate is open
-  // and in view in it, pushed over the list, and none otherwise. A row can close, hide or go
-  // without anyone pressing Back: closed by hand with another still open, behind another tab or
-  // the finished fold shut, removed by its machine's update (no toggle), or left open across a
-  // phone → wider → phone resize, and each would leave Back an invisible step or skip a visible one.
+  // and in view in it, pushed over the list, and none otherwise. A delegate can close, hide or go
+  // without anyone pressing Back: closed by hand, behind another tab, removed by its machine's
+  // update, or left open across a phone → wider → phone resize, and each would leave Back an
+  // invisible step or skip a visible one.
   #delegateStep() {
     const win = globalThis.window;
-    if (!this.#listening || this.#stepping || !win) { return; }
+    if (!this.#listening || this.#stepping || this.#syncing || !win) { return; }
     const level = this.#delegateLevel();
     if (!this.phone.matches) {
       if (level) { this.#stepBack(); }
       return;
     }
     if (!this.#pushed()) { return; }
-    const open = [...(this.view.selected?.view?.querySelectorAll(`${DELEGATE}[open]`) ?? [])].filter(shown).map((d) => d.closest('.delegate')?.dataset.id ?? '');
-    if (open.length === 0) {
+    const id = shownDelegate(this.view.selected);
+    if (!id) {
       if (level) { this.#stepBack(); }
       return;
     }
     const was = win.history.state?.delegate;
-    const id = open.includes(was) ? was : open[0];
     if (level && was === id) { return; }
     if (level) { win.history.replaceState(overDelegate(id), '', win.location.href); } else { win.history.pushState(overDelegate(id), '', win.location.href); }
     this.#delegateShown = id;

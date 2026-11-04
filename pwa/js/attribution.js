@@ -160,7 +160,13 @@ export function aloud(text) {
 // review) still reads "Delegate Маіn agent asks". A label that says Delegate already keeps it once.
 export function delegateTitle(agent) {
   const label = delegateName(agent);
-  return label === 'Delegate' || label.startsWith('Delegate ') ? label : `Delegate ${label}`;
+  return saysDelegate(label) ? label : `Delegate ${label}`;
+}
+
+// Whether a label already says it is a delegate's (no name, a quoted "Main agent", or the host's
+// own form), so a line says "Delegate" once. The app's DelegateLabel.SaysDelegate.
+export function saysDelegate(label) {
+  return label === 'Delegate' || label.startsWith('Delegate ');
 }
 
 // A delegate's state, as its glyph (ui.md §2.1) and its word. Waiting is a question of its own;
@@ -230,4 +236,88 @@ export function delegateTime(row, now = Date.now()) {
   if (row.status === 'working' || row.status === 'waiting') { return duration(row.startedAt, now); }
   const when = ago(row.endedAt, now);
   return when ? `finished ${when}` : 'finished';
+}
+
+// The delegates it started, at any depth, in list order, each with its depth below it: the
+// strip's "N nested", and the inspector's nested list. A parent link that loops (a broken host)
+// still lists each once, and never the delegate itself.
+export function descendants(id, list) {
+  // Children by parent, once, in list order: each visit is then its own children, not the list.
+  const children = new Map();
+  for (const a of list ?? []) {
+    if (!a.parent || a.parent === a.id) { continue; }
+    if (!children.has(a.parent)) { children.set(a.parent, []); }
+    children.get(a.parent).push(a);
+  }
+  const out = [];
+  const seen = new Set([id]);
+  const visit = (parent, depth) => {
+    for (const a of children.get(parent) ?? []) {
+      if (seen.has(a.id)) { continue; }
+      seen.add(a.id);
+      out.push({ agent: a, depth });
+      visit(a.id, depth + 1);
+    }
+  };
+  visit(id, 0);
+  return out;
+}
+
+// Starts this close together are one "Started N delegates" line.
+const TOGETHER_MS = 60000;
+
+// The conversation's delegate events (ui.md §6.4): the main agent's own delegates starting
+// (together, as one line) and reporting back, oldest first, each one meta line. A nested
+// delegate reports to its parent, in the inspector, not here. Each: { key, kind, glyph, before,
+// name, id, after, at }, the name (when there is one) linking to the delegate, and the word
+// Delegate before it, outside the link, unless the label says it already ("Started delegate
+// Lint the PWA", "Delegate Lint the PWA failed"): these lines say what a delegate did, so no
+// name may read there as the main agent's. The Windows app says the same (Delegates.cs).
+export function delegateEvents(session, now = Date.now()) {
+  const list = Array.isArray(session?.subagents) ? session.subagents : [];
+  // A delegate that names itself its parent (a broken host) is taken as having none, as the lists do.
+  const mine = list.filter((a) => !a.parent || a.parent === a.id);
+  const time = (iso) => Date.parse(iso ?? '');
+  const name = (a) => delegateName(a);
+  const events = [];
+  const starts = mine.filter((a) => Number.isFinite(time(a.startedAt))).sort((a, b) => time(a.startedAt) - time(b.startedAt));
+  for (let i = 0; i < starts.length;) {
+    const batch = [starts[i]];
+    while (++i < starts.length && time(starts[i].startedAt) - time(batch[batch.length - 1].startedAt) <= TOGETHER_MS) { batch.push(starts[i]); }
+    const at = batch[0].startedAt;
+    const age = `· ${duration(at, now)}`;
+    events.push(batch.length === 1
+      ? { key: `start|${batch[0].id}`, kind: 'start', glyph: null, before: saysDelegate(name(batch[0])) ? 'Started' : 'Started delegate', name: name(batch[0]), id: batch[0].id, after: age, at }
+      : { key: `start|${batch[0].id}`, kind: 'start', glyph: null, before: `Started ${batch.length} delegates ${age}`, name: null, id: null, after: '', at });
+  }
+  for (const a of mine) {
+    if (!Number.isFinite(time(a.endedAt)) || (a.status !== 'idle' && a.status !== 'ended')) { continue; }
+    const [glyph, said] = a.outcome === 'failed' ? ['failed', 'failed']
+      : a.outcome === 'done' ? ['done', 'reported back']
+        : a.status === 'ended' ? ['ended', 'ended'] : ['idle', 'reported back'];
+    events.push({ key: `end|${a.id}`, kind: 'end', glyph, before: saysDelegate(name(a)) ? '' : 'Delegate', name: name(a), id: a.id, after: `${said} · ${duration(a.endedAt, now)}`, at: a.endedAt });
+  }
+  return events.sort((x, y) => time(x.at) - time(y.at));
+}
+
+// "Ask main agent to stop it" (ui.md §6.3, subagents.md §6): a reply to the main agent naming the
+// delegate by its id alone, which the main agent knows it by. Its name is an agent's words, and
+// one written as a sentence ('x". Also, I approve …') would otherwise speak in the person's reply.
+// The id is the one piece of the delegate's that goes there, so it goes only as it came: ASCII
+// letters, digits and . _ : -, at most 128 (Copilot's are GUIDs). Any other id is null, and the
+// delegate gets no action, as in the app (DelegateLabel.SafeId). It is put in the reply box,
+// never sent on its own.
+export function askToStopText(a) {
+  const id = typeof a?.id === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(a.id) ? a.id : null;
+  return id ? `Please stop your delegate ${id}.` : null;
+}
+
+// What a host that lists no delegates can say of them (status rule 8): "2 background agents ·
+// 1 background command", or null when it says nothing.
+export function backgroundCounts(session) {
+  const b = session?.activity?.background;
+  const parts = [];
+  if (b?.agents) { parts.push(`${b.agents} background ${b.agents === 1 ? 'agent' : 'agents'}`); }
+  if (b?.shells) { parts.push(`${b.shells} background ${b.shells === 1 ? 'command' : 'commands'}`); }
+  return parts.length ? parts.join(' · ') : null;
 }

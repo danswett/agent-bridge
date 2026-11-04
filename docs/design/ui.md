@@ -346,7 +346,7 @@ easing in, its duration out, and how far it travels.
 | Push and pop | Narrow widths (§5.2): list → session → delegate | Opening a row or a delegate; Back, Esc or the system back gesture | The incoming screen's surface covers the old screen at once, and its content slides 24 in from the trailing side and fades in. Pop is the mirror: the screen beneath returns at once, and its content slides 24 in from the leading side. An approval's command never slides: a session asking a question only fades in, and the list's Needs you lane is there at once. Only content fades, never a surface, so two screens never show through each other | `push`: emphasis, decelerate; medium | Windows: `Frame` navigation with `SlideNavigationTransitionInfo`, or a connected animation from the row's title to the session's, configured Direct (never Gravity's lift and shadow). PWA: the tokens on the incoming content. Apple: `NavigationStack`. Android: Material's shared axis X, with predictive back | Cross-fade |
 | Pane and inspector | Wide widths: the delegate inspector, Details | The header's inspector toggle; Details; choosing a delegate | The pane's content slides 12 in from the trailing edge and fades in. The columns take their new widths at once, so text reflows once and not on every frame | `pane`: standard, decelerate; fast out; small | Windows: the tokens on the pane's content. PWA: a transition on transform and opacity. macOS: `.inspector` | Cross-fade |
 | Tab switch | Conversation / Delegates / Tools; machine tabs; the phone's bottom bar | Choosing a tab | The indicator moves to the new tab, as Selection does. The new content fades in without sliding (Fluent's top-level fade) | `tab`: standard, decelerate | Windows: `SelectorBar`'s and `NavigationView`'s own indicators. Apple: `TabView`. Android: `NavigationBar` | Instant |
-| Disclosure | Show reasoning, Tool history, a delegate's details, the Ended group, the machine list | Opening or closing it | The chevron turns, and the content fades in and settles 4 down. Its space opens at once: nothing below it slides. Closing turns the chevron back and closes the space at once | `disclosure`: standard, decelerate; fast out; nudge | Windows: `Expander`'s own motion where it is one. PWA: the tokens on the chevron and the content | Instant |
+| Disclosure | Show reasoning, Tool history, the finished delegates, the Ended group, the machine list | Opening or closing it | The chevron turns, and the content fades in and settles 4 down. Its space opens at once: nothing below it slides. Closing turns the chevron back and closes the space at once | `disclosure`: standard, decelerate; fast out; nudge | Windows: `Expander`'s own motion where it is one. PWA: the tokens on the chevron and the content | Instant |
 | Arriving and leaving | A session row (also as Needs you shows or hides it), a delegate in the strip | A host adds or removes it; a question is asked or answered; Needs you is turned on or off | The item fades in where it lands. Leaving, its space closes at once and it fades out where it was. Neighbours never slide | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` replaced by this fade, because `AddDeleteThemeTransition` and `RepositionThemeTransition` slide the neighbours. PWA: the tokens on the row; a copy of a leaving row, which nothing can find or tap, fades where it was. Until #253 reaches the PWA, its Needs you entries and an approval's command appear at once and never fade or move: only an entry's mark fades in. Apple: `.transition(.opacity)`. Android: `animateItem` with no placement spec | Cross-fade |
 | Status glyph | A row, the session header, the delegate strip | The state changes, such as working → idle | The old glyph cross-fades into the new one, with its colour. The words change at once. The arc and the orbit turning are §2.1's, not this | `glyph`: fast, standard | The same on every platform: opacity on the two glyphs | Instant |
 | Activity dot | A row's trailing edge (§6.1) | The session updates while its row isn't open; the row is opened | The 6 px dot fades in, and later fades out. It never pulses, grows or repeats. The title's weight changes at once | `activityDot`: standard, decelerate; fast out | The same on every platform | Instant |
@@ -541,7 +541,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   background agents and commands, turns, compactions and the process id; then End session.
   At three panes it heads the inspector, over Tools (each call: glyph, name and arguments in
   mono, age). Below three panes Tools is a tab beside Conversation, and Details takes the
-  conversation's place until pressed again. Delegates (#176) join the inspector and the tabs.
+  conversation's place until pressed again. Delegates (#176) join the inspector and the tabs: a
+  delegate chosen takes the inspector in place of Details and Tools (§6.3).
 - **An `ask_user` call in Tools** (#253) is one line without its summary. While its question
   (Question `id` is the call's id) waits, it reads "Waiting on you", a link to the question.
   After, it reads the call's reported status ("Done", "Failed"), since a call can end without
@@ -568,8 +569,17 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - Task (the prompt it was given), Latest (its latest output), and Reasoning (collapsed);
   - Tools: mono, glyph per call, tabular duration;
   - nested delegates, listed under their parent.
-- **One action:** "Ask main agent to stop it". It pre-fills a reply to the main agent and
-  sends nothing on its own. There is no per-delegate typing or Stop.
+- **Choosing:** at three panes a strip item shows its delegate in the inspector, in place of
+  Details and Tools, bringing a hidden inspector back; pressed again, it lets go. Below three
+  panes the Delegates tab lists every delegate under its parent, finished ones folded, and the
+  one opened is pushed in the list's place with "All delegates" to go back. A phone's chip
+  pressed again lets its delegate go too, unless another tab hides it: then it shows it. A
+  delegate stays open across a resize, and as it finishes (its fold opens).
+- **A host that lists none** (Claude, Codex, a host before sub-agents) gets no strip; its
+  Delegates tab, while it counts background agents, says only how many.
+- **One action:** "Ask main agent to stop it". It pre-fills a reply to the main agent, after
+  anything already typed, and sends nothing on its own. There is no per-delegate typing or
+  Stop, and a finished delegate has no action.
 - **Delegate names** are the delegate's own words, so one could pose as the main agent.
   Every surface shows the same safe label (the app's `DelegateLabel`): bidi controls,
   zero-width, format, control and other default-ignorable characters are removed, any
@@ -839,11 +849,11 @@ question, as choosing its row does.
   - **Back:** on a phone, a delegate opened in a pushed session is a step of its own. The
     system's Back (Android's button and gesture, iOS's edge swipe in an installed app, the
     browser's) goes delegate → session → list, then leaves the app; the header's Back is
-    always the list. The step follows what shows: one however many delegates are open, gone
-    once the last is closed or hidden (by hand, behind another tab or the finished fold shut, or
-    because its machine no longer lists it, even on Forward to it), and there again when the
-    window narrows to a phone's with one open. Forward to it shows the delegate again, opening
-    the finished fold if it has finished meanwhile.
+    always the list. The step follows what shows: one while a delegate is open (another opened
+    takes its place, and its step), gone once it is closed or hidden (by hand, behind another
+    tab, or because its machine no longer lists it, even on Forward to it), and there again when
+    the window narrows to a phone's with one open. Forward to it opens the delegate again,
+    finished meanwhile or not.
 
 **App icon (#167):** the mark ([`mark.svg`](../../design/icons/mark.svg)) on a dark plate
 (`#0F1F22`), in each platform's container. It is one icon in every theme, since no platform
