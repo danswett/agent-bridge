@@ -55,6 +55,11 @@ public sealed partial class MacLaunchCompatibility
             {
                 var match = CopilotEfforts().Match(help.Output);
                 var efforts = match.Success ? QuotedEffort().Matches(match.Groups[1].Value).Select(m => m.Groups[1].Value).Distinct(StringComparer.Ordinal).ToArray() : [];
+                if (efforts.Length == 0 && CopilotPossibleValues().Match(help.Output) is { Success: true } possible)
+                {
+                    var values = possible.Groups[1].Value.Split(',', StringSplitOptions.TrimEntries);
+                    if (values.All(v => EffortName().IsMatch(v))) { efforts = values.Distinct(StringComparer.Ordinal).ToArray(); }
+                }
                 result = efforts.Length is > 0 and <= 16
                     ? new(Efforts: efforts)
                     : new(Refusal: "this Copilot installation did not report its reasoning-effort choices; check copilot --help at the machine before launching from another device");
@@ -89,6 +94,10 @@ public sealed partial class MacLaunchCompatibility
     private static partial Regex NoDaemonOption();
     [GeneratedRegex(@"--reasoning-effort\s+<[^>\r\n]+>[^()]{0,256}\(choices:\s*([^)]{1,512})\)", RegexOptions.CultureInvariant)]
     private static partial Regex CopilotEfforts();
+    [GeneratedRegex(@"--reasoning-effort\s+<[^>\r\n]+>(?:(?!\r?\n[ \t]*--)[^\[\]]){0,256}\[possible values:\s*([^\]]{1,512})\]", RegexOptions.CultureInvariant)]
+    private static partial Regex CopilotPossibleValues();
+    [GeneratedRegex(@"\A[a-z][a-z0-9_-]{0,31}\z", RegexOptions.CultureInvariant)]
+    private static partial Regex EffortName();
     [GeneratedRegex("\"([a-z][a-z0-9_-]{0,31})\"", RegexOptions.CultureInvariant)]
     private static partial Regex QuotedEffort();
 }

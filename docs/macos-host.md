@@ -60,6 +60,10 @@ during launch preparation refuses the launch. Output is never logged. This check
 does not authenticate an agent or make a model call. Other platforms keep their
 existing launch arguments and tuning tables.
 
+Copilot effort choices are read from either the quoted `(choices: ...)` help format
+or the native CLI's `[possible values: ...]` format. Malformed lists and values
+belonging to another option are refused; the host does not invent a fallback list.
+
 Codex normally retains `--no-daemon`. Exact `codex-cli 0.140.0`, which does not
 recognize that flag, instead retains the mandatory
 `-c model_reasoning_summary=detailed` override. In that exact release, a nonempty

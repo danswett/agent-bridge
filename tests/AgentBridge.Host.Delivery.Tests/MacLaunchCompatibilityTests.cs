@@ -106,6 +106,26 @@ public sealed class MacLaunchCompatibilityTests : IDisposable
     }
 
     [Fact]
+    public async Task Copilot_native_help_reports_unquoted_possible_values()
+    {
+        var help = "      --reasoning-effort <level>\n" +
+            "          Set the reasoning effort level [possible values: none, minimal, low, medium, high, xhigh, max]\n";
+        var value = await new MacLaunchCompatibility(new Runner(help)).InspectAsync(Copilot, Executable("copilot"), [], default);
+        Assert.Null(value.Refusal);
+        Assert.Equal(new[] { "none", "minimal", "low", "medium", "high", "xhigh", "max" }, value.Efforts);
+    }
+
+    [Theory]
+    [InlineData("  --reasoning-effort <level>\n  --context <tier> [possible values: low, high]")]
+    [InlineData("  --reasoning-effort <level> [possible values: low, high --remote]")]
+    [InlineData("  --reasoning-effort <level> [possible values: low, , high]")]
+    public async Task Possible_values_from_another_flag_or_malformed_values_do_not_authorize_a_launch(string help)
+    {
+        var value = await new MacLaunchCompatibility(new Runner(help)).InspectAsync(Copilot, Executable("copilot"), [], default);
+        Assert.NotNull(value.Refusal);
+    }
+
+    [Fact]
     public async Task Missing_choices_and_failed_or_oversized_probes_refuse_without_exposing_output()
     {
         var file = Executable();
