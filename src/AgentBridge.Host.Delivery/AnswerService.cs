@@ -220,7 +220,7 @@ public sealed class AnswerService : ISessionAnswerer
         finally { gate.DoneTyping(); }
 
         log($"typed into {Short(session.Id)} (pid {pid}): {plan.Keys.Describe()} -> {typed.Status} {typed.Detail}");
-        if (Settle(typed, attempt, timeline) is { } settled) { return settled; }
+        if (Settle(typed, attempt) is { } settled) { return settled; }
         try { return await ConfirmAsync(transcript, question.Id, from, plan, timeline); }
         catch (Exception e) { return Unconfirmed($"the answer was typed but could not be checked ({e.Message}); check at the machine"); }
     }
@@ -326,7 +326,7 @@ public sealed class AnswerService : ISessionAnswerer
         finally { gate.DoneTyping(); }
 
         log($"typed {decision} into {Short(session.Id)} (pid {pid}) for permission {Short(requestId)}: {keys.Describe()} -> {typed.Status} {typed.Detail}");
-        if (Settle(typed, attempt, timeline) is { } settled) { return settled; }
+        if (Settle(typed, attempt) is { } settled) { return settled; }
         try { return await ConfirmPermissionAsync(transcript, requestId, from, approve, timeline); }
         catch (Exception e) { return Unconfirmed($"the {decision} was typed but could not be checked ({e.Message}); check at the machine"); }
     }
@@ -403,7 +403,7 @@ public sealed class AnswerService : ISessionAnswerer
         finally { gate.DoneTyping(); }
 
         log($"typed into {Short(session.Id)} (pid {pid}): {plan.Keys.Describe()} -> {typed.Status} {typed.Detail}");
-        if (Settle(typed, attempt, timeline) is { } settled) { return settled; }
+        if (Settle(typed, attempt) is { } settled) { return settled; }
         try { return await ConfirmClaudeAsync(session.Id, pid, transcript, question.Id, from, plan, timeline); }
         catch (Exception e) { return Unconfirmed($"the answer was typed but could not be checked ({e.Message}); check at the machine"); }
     }
@@ -433,13 +433,13 @@ public sealed class AnswerService : ISessionAnswerer
             if (!reviewed && elapsed >= options.ClaudeReviewAfter)
             {
                 reviewed = true;
-                await SubmitReviewAsync(sessionId, pid, transcript, toolUseId, from);
+                await SubmitReviewAsync(sessionId, pid, transcript, toolUseId, from, timeline);
             }
             await Task.Delay(options.PollInterval, options.Time);
         }
     }
 
-    async Task SubmitReviewAsync(string sessionId, int pid, string transcript, string toolUseId, long from)
+    async Task SubmitReviewAsync(string sessionId, int pid, string transcript, string toolUseId, long from, DeliveryTimeline timeline)
     {
         await gate.WaitToTypeAsync();
         try
@@ -452,7 +452,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (!state.Readable || state.Answer is not null || state.Interrupted) { return; }
             if (!processes.GetAgentProcesses(AgentKind.Claude).Any(p => p.Id == pid) || guard.Refuse(pid) is not null) { return; }
             var enter = new KeyPlan([new KeySend("", true, 0, 0)]);
-            var result = await TypeAsync(pid, enter);
+            var result = await TypeAsync(pid, enter, timeline);
             log($"pressed Enter on Claude's review screen in {Short(sessionId)} (pid {pid}) -> {result.Status} {result.Detail}");
         }
         finally { gate.DoneTyping(); }
@@ -495,7 +495,7 @@ public sealed class AnswerService : ISessionAnswerer
         finally { gate.DoneTyping(); }
 
         log($"typed {decision} into {Short(session.Id)} (pid {pid}): {keys.Describe()} -> {typed.Status} {typed.Detail}");
-        if (Settle(typed, attempt, timeline) is { } settled) { return settled; }
+        if (Settle(typed, attempt) is { } settled) { return settled; }
         return Unconfirmed($"typed {decision}, but Codex records nothing that says how an approval was answered, so it cannot be confirmed; check at the machine");
     }
 
@@ -507,20 +507,27 @@ public sealed class AnswerService : ISessionAnswerer
         return guard.Refuse(pid) is { } refused ? Refused(refused) : null;
     }
 
+    // timeline: the delivery's, marking the worker's start and end, and typed once every key has
+    // gone, before anything else is done (the log line writes a file). A later Enter (Claude's
+    // review screen) moves only the end: typed is the first time.
     async Task<InjectionResult> TypeAsync(int pid, KeyPlan keys, DeliveryTimeline? timeline = null)
     {
         timeline?.InjectStart();
-        try { return await injector.InjectAsync(pid, keys); }
+        InjectionResult result;
+        try { result = await injector.InjectAsync(pid, keys); }
         catch (Exception e)
         {
-            return new InjectionResult(InjectionStatus.Interrupted, $"the injector failed while typing ({e.Message})");
+            result = new InjectionResult(InjectionStatus.Interrupted, $"the injector failed while typing ({e.Message})");
         }
-        finally { timeline?.InjectEnd(); }
+        timeline?.InjectEnd();
+        // A question holds the session, so it was not working.
+        if (result.Status == InjectionStatus.Typed) { timeline?.Typed(false); }
+        return result;
     }
 
     // What typing came to, when that is already the outcome: nothing typed (refused, and the
     // prompt may be answered again) or keys that may have landed (unconfirmed).
-    AnswerResult? Settle(InjectionResult typed, string attempt, DeliveryTimeline timeline)
+    AnswerResult? Settle(InjectionResult typed, string attempt)
     {
         switch (typed.Status)
         {
@@ -530,8 +537,6 @@ public sealed class AnswerService : ISessionAnswerer
             case InjectionStatus.Interrupted:
                 return Unconfirmed($"{typed.Detail}; part of the answer may have reached the session, so check at the machine");
             default:
-                // A question holds the session, so it was not working.
-                timeline.Typed(false);
                 return null;
         }
     }

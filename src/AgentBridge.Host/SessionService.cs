@@ -274,7 +274,7 @@ public sealed class SessionService
         if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }
         if (answers?.ApprovesPermissions == true) { offered.Add(Capabilities.SessionsApprove); }
         if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }
-        if (answers?.Available == true || replies?.Available == true) { offered.Add(Capabilities.SessionsProgress); }
+        if (offered.Contains(Capabilities.SessionsAnswer) || offered.Contains(Capabilities.SessionsReply)) { offered.Add(Capabilities.SessionsProgress); }
         if (attachments is not null && replies?.TakesAttachments == true) { offered.Add(Capabilities.SessionsAttach); }
         // Large files come through the blob store of the relay this channel came through; an app on
         // this machine has no use for it, and sends them in chunks over its own pipe instead.

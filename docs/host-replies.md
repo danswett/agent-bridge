@@ -235,7 +235,7 @@ reply 0b7e3c1d timings (ms after 22:56:28.441): checked 2, turn 3, inject 4-25, 
 |---|---|
 | `checked` | The checks before the typing turn passed (steps 1 to 4) |
 | `turn` | The single typing turn was taken (step 5) |
-| `inject a-b` | The worker started and finished (the first and last, for Claude and Codex) |
+| `inject a-b` | The first worker started and the last finished, an Enter pressed again (Claude and Codex replies, Claude's review screen) included |
 | `typed` | Every key went; `working` follows it when the session was working |
 | `recorded` | The agent's timestamp on the prompt that is the reply |
 | `confirmed` | The host matched it (`delivered` only) |
@@ -243,4 +243,5 @@ reply 0b7e3c1d timings (ms after 22:56:28.441): checked 2, turn 3, inject 4-25, 
 | `sent` | Its response left on the channel or pipe of the request that started it (`not sent` if it could not); absent for Home Assistant's, which has none |
 
 A stage not reached is left out: a reply refused at step 1 logs only `settled` and `sent`. The
-receipt time is local, to the millisecond.
+receipt time is the machine's local time, to the millisecond, as the log's own timestamps are,
+so the line reads against the lines around it.

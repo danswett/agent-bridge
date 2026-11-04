@@ -386,7 +386,7 @@ public sealed class ReplyService : ISessionReplier
                 return new Attempt(Unconfirmed($"{result.Detail}; part of the reply may have reached the session, so check at the machine"), null, KeysWent: true);
         }
 
-        await SubmitAsync(session.Id, agent, pid, transcript, from, plan);
+        await SubmitAsync(session.Id, agent, pid, transcript, from, plan, timeline);
         return new Attempt(null, new Typed(() => ConfirmAgentAsync(agent, transcript, from, plan, timeline)), KeysWent: true);
 
         static Attempt Done(ReplyResult r) => new(r, null);
@@ -412,7 +412,7 @@ public sealed class ReplyService : ISessionReplier
     // still empty, or showing only the start of the reply, may not have taken all of it in yet
     // (Codex takes keys in slowly while it streams, seen live), so it is looked at again rather
     // than given up on.
-    async Task SubmitAsync(string sessionId, AgentKind agent, int pid, string transcript, long from, AgentReply plan)
+    async Task SubmitAsync(string sessionId, AgentKind agent, int pid, string transcript, long from, AgentReply plan, DeliveryTimeline timeline)
     {
         var pressed = 0;
         var began = options.Time.GetTimestamp();
@@ -453,7 +453,9 @@ public sealed class ReplyService : ISessionReplier
                     return;
                 }
                 var box = Find(agent, screen.Rows!)!;
-                var enter = await injector.InjectAsync(pid, new KeyPlan([new KeySend("", true, 0, 0, box.Rows)]));
+                InjectionResult enter;
+                try { enter = await injector.InjectAsync(pid, new KeyPlan([new KeySend("", true, 0, 0, box.Rows)])); }
+                finally { timeline.InjectEnd(); }
                 pressed++;
                 log($"pressed Enter again in {Short(sessionId)} (pid {pid}): the reply was still in its input box -> {enter.Status} {enter.Detail}");
                 if (enter.Status != InjectionStatus.Typed) { return; }
