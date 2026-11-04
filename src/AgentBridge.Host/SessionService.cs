@@ -113,7 +113,12 @@ public sealed class SessionService
     // Each feed as it is made, so tests can check a replaced one is let go.
     internal event Action<object>? FeedCreated;
 
-    public async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data)
+    public Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data) => HandleAsync(channel, op, data, null);
+
+    // shape: what the caller's role (RemoteAuthorization) or kind (LocalApi) lets this channel's
+    // hello say. hello.changed compares what was shaped, so a channel hears only of a change it
+    // can see; compared unshaped, a Service peer heard of update coming and going (#651).
+    public async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data, Func<HelloResult, HelloResult>? shape)
     {
         switch (op)
         {
@@ -123,9 +128,10 @@ public sealed class SessionService
                     // starting for this user takes sessions.answer and sessions.reply away until
                     // it stops.
                     var hello = HelloFor(channel);
+                    if (shape is not null) { hello = shape(hello); }
                     if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("changes", out var changes) && changes.ValueKind == JsonValueKind.True)
                     {
-                        WatchHello(channel, hello);
+                        WatchHello(channel, hello, shape);
                     }
                     return hello;
                 }
@@ -305,7 +311,7 @@ public sealed class SessionService
     // change is heard as soon as it was, and a look costs no more than one of their hellos did.
     public TimeSpan HelloCheck { get; init; } = TimeSpan.FromSeconds(10);
 
-    // What each channel that asked was last told: its readOnly and capabilities.
+    // What each channel that asked was last told: its readOnly and capabilities, as shaped for it.
     readonly ConcurrentDictionary<IProtocolChannel, HelloWatch> helloWatches = new();
     readonly Lock helloGate = new();
     ITimer? helloTimer;
@@ -314,19 +320,24 @@ public sealed class SessionService
     sealed class HelloWatch
     {
         public string Said = "";
+        public Func<HelloResult, HelloResult>? Shape;
     }
 
     // Only what a client acts on; machine.sessions changes all the time and is not a change here.
     static string Said(string? readOnly, IEnumerable<string> offered) => (readOnly ?? "") + "\n" + string.Join("\n", offered);
 
-    void WatchHello(IProtocolChannel channel, HelloResult hello)
+    void WatchHello(IProtocolChannel channel, HelloResult hello, Func<HelloResult, HelloResult>? shape)
     {
         var watch = helloWatches.GetOrAdd(channel, c =>
         {
             _ = c.Closed.ContinueWith(closed => helloWatches.TryRemove(c, out _), TaskScheduler.Default);
             return new HelloWatch();
         });
-        lock (watch) { watch.Said = Said(hello.Machine.ReadOnly, hello.Capabilities); }
+        lock (watch)
+        {
+            watch.Said = Said(hello.Machine.ReadOnly, hello.Capabilities);
+            watch.Shape = shape;
+        }
         lock (helloGate) { helloTimer ??= Time.CreateTimer(_ => CheckHellos(), null, HelloCheck, HelloCheck); }
     }
 
@@ -350,7 +361,18 @@ public sealed class SessionService
                 // now that could not be sent.
                 if (!channel.IsOpen) { continue; }
                 // Not HelloFor: a look needs no copy of the session list, only what Said compares.
-                var said = Said(ReadOnly?.Invoke(), Offered(channel));
+                // Shaped afresh at each look, so a peer whose role changed is compared as it is now.
+                Func<HelloResult, HelloResult>? shape;
+                lock (watch) { shape = watch.Shape; }
+                var readOnly = ReadOnly?.Invoke();
+                var offered = Offered(channel);
+                string said;
+                if (shape is null) { said = Said(readOnly, offered); }
+                else
+                {
+                    var shaped = shape(new HelloResult(1, machine with { ReadOnly = readOnly }, offered));
+                    said = Said(shaped.Machine.ReadOnly, shaped.Capabilities);
+                }
                 lock (watch)
                 {
                     if (said == watch.Said) { continue; }
@@ -372,9 +394,8 @@ public sealed class SessionService
         finally { Volatile.Write(ref checkingHellos, 0); }
     }
 
-    // Only that it changed: the client asks hello again. What a channel's hello says is shaped
-    // after this service, by the caller's role (RemoteAuthorization) and kind (LocalApi), so the
-    // result built here is not what that channel may be told.
+    // Only that it changed: the client asks hello again. The shaped result is not sent either:
+    // hello itself is checked afresh by the caller's role or kind, and says it.
     async Task TellAsync(IProtocolChannel channel)
     {
         try { await channel.SendEventAsync(Events.HelloChanged, new { }); }

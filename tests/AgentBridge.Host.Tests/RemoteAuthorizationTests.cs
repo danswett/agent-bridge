@@ -126,6 +126,36 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         Assert.Equal((null, (string?)null), drivers.Shown(SessionId));
     }
 
+    [Fact]
+    public async Task A_service_peer_that_asked_for_changes_is_not_told_when_only_update_changes_but_a_person_is()
+    {
+        string? updateWithheld = null;
+        var watched = new SessionService(source, new MachineInfo(host.Id, "Host", "windows", "0.1.0"))
+        {
+            Drivers = drivers,
+            Time = time,
+            Updates = new UpdateService("0.1.0", time: time) { ReadOnly = () => updateWithheld },
+        };
+        host.Hub.Handler = authorization.Handler(watched);
+        var reader = await PeerAsync();
+        Pin(reader);
+        var person = await PeerAsync();
+        Pin(person, TrustedPeerStore.Person);
+        var readerChannel = await reader.Hub.OpenAsync(host.Id, Patience);
+        var personChannel = await person.Hub.OpenAsync(host.Id, Patience);
+        HelloResult Hello(JsonElement response) => Result(response).Deserialize<HelloResult>(ProtocolJson.Options)!;
+
+        Assert.Equal([Capabilities.SessionsRead], Hello(await readerChannel.RequestAsync(Ops.Hello, new { changes = true }, Patience)).Capabilities);
+        Assert.Contains(UpdateProtocol.Capability, Hello(await personChannel.RequestAsync(Ops.Hello, new { changes = true }, Patience)).Capabilities);
+
+        updateWithheld = "agent-ha-bridge is running for this user";
+        time.Advance(watched.HelloCheck);
+        Assert.Equal(Events.HelloChanged, (await personChannel.Events.ReadAsync().AsTask().WaitAsync(Patience)).Name);
+        // Told in the same look as the person, had it been told at all.
+        await Task.Delay(200);
+        Assert.False(readerChannel.Events.TryRead(out _));
+    }
+
     [Theory]
     [InlineData(TrustedPeerStore.Host)]
     [InlineData(TrustedPeerStore.Person)]
