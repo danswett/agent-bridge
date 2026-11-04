@@ -332,11 +332,11 @@ public sealed class DelegatesTests : IAsyncLifetime
     public async Task A_model_that_arrives_with_the_fetch_adds_its_row_and_keeps_the_rows_already_there()
     {
         using var fetching = new ManualResetEventSlim();
-        using var release = new ManualResetEventSlim();
-        host.On(Ops.SessionGet, _ =>
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(Ops.SessionGet, async _ =>
         {
             fetching.Set();
-            release.Wait(FakeHost.Patience);
+            await FakeHost.Until(release.Task);
             return Delegating().Subagents![1] with { Model = "gpt-6-sol" };
         });
         var unknown = Delegating() with
@@ -356,7 +356,7 @@ public sealed class DelegatesTests : IAsyncLifetime
         var before = TestUi.Read(() => detail.Properties.ToList());
         Assert.Equal(["Status", "Kind", "ID"], before.Select(p => p.Label));
 
-        release.Set();
+        release.TrySetResult();
         await Wait.UntilAsync(() => detail.Properties.Any(p => p.Label == "Model"), "the model");
         var after = TestUi.Read(() => detail.Properties.ToList());
         Assert.Equal(["Status", "Model", "Kind", "ID"], after.Select(p => p.Label));
@@ -502,11 +502,11 @@ public sealed class DelegatesTests : IAsyncLifetime
     public async Task A_task_the_list_brings_while_a_fetch_is_out_is_not_overwritten_by_the_fetchs_older_one()
     {
         using var fetched = new ManualResetEventSlim();
-        using var release = new ManualResetEventSlim();
-        host.On(Ops.SessionGet, _ =>
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(Ops.SessionGet, async _ =>
         {
             fetched.Set();
-            release.Wait(FakeHost.Patience);
+            await FakeHost.Until(release.Task);
             return Delegating().Subagents![1] with { Task = "The old task.", Response = "Run full test suite: everything it said." };
         });
         Resize(1440);
@@ -523,7 +523,7 @@ public sealed class DelegatesTests : IAsyncLifetime
         await host.SendAsync(Events.SessionUpsert, next);
         await Wait.UntilAsync(() => card.Delegates.Detail.Task == "The new task.", "the listed task");
 
-        release.Set();
+        release.TrySetResult();
         await Wait.UntilAsync(() => card.Delegates.Detail.Latest == "Run full test suite: everything it said.", "the fetched words");
         Assert.Equal("The new task.", TestUi.Read(() => card.Delegates.Detail.Task));
     }
@@ -562,10 +562,10 @@ public sealed class DelegatesTests : IAsyncLifetime
     [Fact]
     public async Task Ask_main_agent_to_stop_it_while_a_reply_is_being_delivered_leaves_that_reply_to_come_out_of_the_box()
     {
-        using var delivering = new ManualResetEventSlim();
-        host.On(Ops.SessionReply, _ =>
+        var delivering = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(Ops.SessionReply, async _ =>
         {
-            delivering.Wait(FakeHost.Patience);
+            await FakeHost.Until(delivering.Task);
             return new ReplyResult(AnswerOutcome.Delivered);
         });
         Resize(1440);
@@ -579,7 +579,7 @@ public sealed class DelegatesTests : IAsyncLifetime
         ui.Post(card.Delegates.AskMainAgentToStop);
         Assert.Equal("Thanks.\nPlease stop your delegate witness.", TestUi.Read(() => card.Reply!.Text));
 
-        delivering.Set();
+        delivering.TrySetResult();
         await Wait.UntilAsync(() => card.Reply!.Text == "Please stop your delegate witness.", "the delivered reply to leave the box");
     }
 

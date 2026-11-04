@@ -762,11 +762,11 @@ public sealed class FleetTests : IAsyncLifetime
     [Fact]
     public async Task A_machine_that_leaves_takes_its_answer_outcome_toasts_and_an_answer_on_its_way_there_says_nothing_more()
     {
-        var release = new ManualResetEventSlim();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
-        remoteHost.On(Ops.SessionAnswer, _ =>
+        remoteHost.OnAsync(Ops.SessionAnswer, async _ =>
         {
-            if (Interlocked.Increment(ref calls) > 1) { release.Wait(TimeSpan.FromSeconds(10)); }
+            if (Interlocked.Increment(ref calls) > 1) { await FakeHost.Until(release.Task); }
             return new AnswerResult(AnswerOutcome.Delivered);
         });
         await BothMachinesAsync();
@@ -789,7 +789,7 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Contains(outcome, sink.Withdrawn);
         var before = sink.Shown.Count;
         await held;
-        release.Set();
+        release.TrySetResult();
         Assert.Equal(before, sink.Shown.Count);
     }
 

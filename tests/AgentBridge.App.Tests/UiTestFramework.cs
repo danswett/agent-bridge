@@ -12,6 +12,21 @@ using Xunit.Sdk;
 // The xunit runners are stock but for the one step that runs a test case.
 public sealed class UiTestFramework(IMessageSink sink) : XunitTestFramework(sink)
 {
+    // The pool these tests run on has threads that wait by design. xunit's adapter and
+    // vstest's message loop each hold one for the whole run. A dispatcher's Post from a pipe's
+    // thread waits for its test's UI turn, as LockedDispatcher always has. The pool starts with
+    // one thread per core and adds about one every half second once all of them are taken. On
+    // a 4-core runner, a few tests side by side took all four: a timer's continuation then
+    // waited 8.4 s with 11 threads and 33 items queued, and a connection to no host stayed
+    // Connecting past its test's wait (#465, #511). Sampled every 50 ms on 4 pinned cores with
+    // 4 busy loops, an item queued to the pool waited over a second 423 times in 6 runs before
+    // #511, and once in 10 runs after.
+    static UiTestFramework()
+    {
+        ThreadPool.GetMinThreads(out var workers, out var io);
+        ThreadPool.SetMinThreads(Math.Max(workers, 32), io);
+    }
+
     protected override ITestFrameworkExecutor CreateExecutor(AssemblyName assemblyName) =>
         new Executor(assemblyName, SourceInformationProvider, DiagnosticMessageSink);
 

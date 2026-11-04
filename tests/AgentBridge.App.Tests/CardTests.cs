@@ -166,7 +166,7 @@ public sealed class CardTests : IAsyncLifetime
         long received = 0;
         host.On(Ops.AttachmentChunk, d => { received += Convert.FromBase64String(d.GetProperty("data").GetString()!).Length; return new AttachmentState(received, received == 30_000); });
         var reply = new TaskCompletionSource<ReplyResult>();
-        host.On(Ops.SessionReply, _ => reply.Task.Result);
+        host.OnAsync(Ops.SessionReply, async _ => await reply.Task.ConfigureAwait(ConfigureAwaitOptions.ForceYielding));
         var r = new ReplyViewModel(Make.Session(), attach: true, deliveries, connection, machineName: "Test PC");
 
         await r.AddAsync("notes.txt", "text/plain", new byte[30_000]);
