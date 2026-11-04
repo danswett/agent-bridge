@@ -14,24 +14,17 @@ public static class LongWords
     // A quarter of the measured limit, and half the protocol's 16 KiB response.
     public const int Max = 8192;
 
-    // The text in pieces that join to exactly the text, for a break opportunity between each two:
-    // never more than max characters without one. Not the line-breaking rules, which a space does
-    // not always satisfy (none after `[`, even past spaces), but a count, cut where it costs least:
-    // just after the last space, where a line could already end, else between grapheme clusters, so
-    // an accent stays on its letter. Only a cluster longer than max is cut inside it, never inside
-    // a surrogate pair: one mark drawn on its own beats the app ending.
-    // since: the characters drawn since the last break opportunity, from the runs before this one
-    // in its paragraph (a bold word straight after a plain one is one word on screen), 0 after a
-    // line break; left at the count the text ends on. A first piece of "" puts a break before it.
-    public static IReadOnlyList<string> Pieces(string text, ref int since, int max = Max)
+    // Where a paragraph's text takes a break opportunity, so that it never has more than max
+    // characters without one. Not the line-breaking rules, which a space does not always satisfy
+    // (none after `[`, even past spaces), but a count, cut where it costs least: just after the last
+    // space, where a line could already end, else between grapheme clusters, so an accent stays on
+    // its letter. Only a cluster longer than max is cut inside it, never inside a surrogate pair:
+    // one mark drawn on its own beats the app ending. A line break starts the count again.
+    public static IReadOnlyList<int> Cuts(string text, int max = Max)
     {
-        if (since + text.Length <= max && text.AsSpan().IndexOfAny('\r', '\n') < 0)
-        {
-            since += text.Length;
-            return [text];
-        }
-        var pieces = new List<string>();
-        int start = 0, afterSpace = -1;
+        var cuts = new List<int>();
+        if (text.Length <= max) { return cuts; }
+        int since = 0, last = 0, afterSpace = -1;
         for (var i = 0; i < text.Length;)
         {
             var n = StringInfo.GetNextTextElementLength(text.AsSpan(i));
@@ -44,25 +37,58 @@ public static class LongWords
             }
             if (since > 0 && since + n > max)
             {
-                var cut = afterSpace > start && i - afterSpace + n <= max ? afterSpace : i;
-                if (cut > start || pieces.Count == 0) { pieces.Add(text[start..cut]); }
+                var cut = afterSpace > last && i - afterSpace + n <= max ? afterSpace : i;
+                cuts.Add(cut);
                 since = i - cut;
-                start = cut;
+                last = cut;
                 afterSpace = -1;
             }
             for (var end = i + n; end - i > max;)
             {
                 var cut = i + max;
                 if (char.IsLowSurrogate(text[cut]) && char.IsHighSurrogate(text[cut - 1])) { cut--; }
-                pieces.Add(text[start..cut]);
-                start = i = cut;
+                cuts.Add(cut);
+                last = i = cut;
                 n = end - i;
             }
             since += n;
             i += n;
             if (n == 1 && text[i - 1] is ' ' or '\t') { afterSpace = i; }
         }
-        pieces.Add(text[start..]);
+        return cuts;
+    }
+
+    // A paragraph's runs (a bold word straight after a plain one is one word on screen), each in
+    // the pieces that join to exactly it, with a break opportunity between each two. Cut as their
+    // joined text is (Cuts), so a cluster split across two runs is still never cut inside. A first
+    // piece of "" puts a break before the run.
+    public static IReadOnlyList<IReadOnlyList<string>> Pieces(IReadOnlyList<string> runs, int max = Max)
+    {
+        var text = string.Concat(runs);
+        var cuts = Cuts(text, max);
+        var pieces = new List<IReadOnlyList<string>>(runs.Count);
+        int at = 0, next = 0;
+        foreach (var run in runs)
+        {
+            var end = at + run.Length;
+            if (next >= cuts.Count || cuts[next] >= end)
+            {
+                pieces.Add([run]);
+                at = end;
+                continue;
+            }
+            var own = new List<string>();
+            var start = at;
+            if (cuts[next] == at) { own.Add(""); next++; }
+            for (; next < cuts.Count && cuts[next] < end; next++)
+            {
+                own.Add(text[start..cuts[next]]);
+                start = cuts[next];
+            }
+            own.Add(text[start..end]);
+            pieces.Add(own);
+            at = end;
+        }
         return pieces;
     }
 }

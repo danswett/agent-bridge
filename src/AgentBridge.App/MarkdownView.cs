@@ -124,48 +124,42 @@ public sealed class MarkdownView : StackPanel
         if (size is { } s) { rich.FontSize = s; }
         if (bold) { rich.FontWeight = FontWeights.SemiBold; }
         var para = new Paragraph();
-        var since = 0;
-        foreach (var i in inlines) { Inlines(i, para.Inlines, ref since); }
+        var pieces = LongWords.Pieces([.. inlines.Select(i => i switch { MdText t => t.Text, MdLink l => l.Text, MdBreak => "\n", _ => "" })]);
+        for (var k = 0; k < inlines.Count; k++) { Inlines(inlines[k], pieces[k], para.Inlines); }
         rich.Blocks.Add(para);
         FitInlineMono(rich);
         return rich;
     }
 
-    // Each inline, in pieces of at most LongWords.Max characters between break opportunities, so
-    // a long word never fails WinUI's text layout (#493). Selecting and copying gives the text as
-    // written: the break is an empty element, never a character.
-    static void Inlines(MdInline inline, InlineCollection into, ref int since)
+    // Each inline in its pieces (LongWords), cut where the paragraph needs a break, so a long word
+    // never fails WinUI's text layout (#493). Selecting and copying gives the text as written: the
+    // break is an empty element, never a character.
+    static void Inlines(MdInline inline, IReadOnlyList<string> pieces, InlineCollection into)
     {
         switch (inline)
         {
             case MdBreak:
                 into.Add(new LineBreak());
-                since = 0;
                 break;
             case MdLink link:
+                for (var k = 0; k < pieces.Count; k++)
                 {
-                    var pieces = LongWords.Pieces(link.Text, ref since);
-                    for (var k = 0; k < pieces.Count; k++)
-                    {
-                        if (k > 0) { into.Add(Break()); }
-                        // A hyperlink holds only text, so a long one is drawn as several to the same place.
-                        var h = new Hyperlink { NavigateUri = Uri.TryCreate(link.Url, UriKind.Absolute, out var u) ? u : null };
-                        ToolTipService.SetToolTip(h, link.Url);
-                        h.Inlines.Add(Styled(new Run { Text = pieces[k] }, link.Style));
-                        into.Add(h);
-                    }
-                    break;
+                    if (k > 0) { into.Add(Break()); }
+                    if (pieces[k].Length == 0) { continue; }
+                    // A hyperlink holds only text, so a long one is drawn as several to the same place.
+                    var h = new Hyperlink { NavigateUri = Uri.TryCreate(link.Url, UriKind.Absolute, out var u) ? u : null };
+                    ToolTipService.SetToolTip(h, link.Url);
+                    h.Inlines.Add(Styled(new Run { Text = pieces[k] }, link.Style));
+                    into.Add(h);
                 }
+                break;
             case MdText t:
+                for (var k = 0; k < pieces.Count; k++)
                 {
-                    var pieces = LongWords.Pieces(t.Text, ref since);
-                    for (var k = 0; k < pieces.Count; k++)
-                    {
-                        if (k > 0) { into.Add(Break()); }
-                        into.Add(Styled(new Run { Text = pieces[k] }, t.Style));
-                    }
-                    break;
+                    if (k > 0) { into.Add(Break()); }
+                    into.Add(Styled(new Run { Text = pieces[k] }, t.Style));
                 }
+                break;
             default:
                 into.Add(new Run());
                 break;

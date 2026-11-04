@@ -64,12 +64,38 @@ static partial class SelfTest
     // A word WinUI's text layout fails on (#493): "Done: " and 32,000 `[` in the conversation's
     // reading column threw E_FAIL from RichTextBlock's Measure, and the app ended with 0xC000027B.
     // Drawn now in pieces with breaks of no width between them: every character as written, and
-    // selecting all of it copies exactly the text.
+    // selecting all of it copies exactly the text. Its time is judged by its growth (Growth).
     static async Task CheckLongWords(MainWindow window, Action<bool, string> check)
     {
+        static string Repeat(string s, int n) => string.Concat(Enumerable.Repeat(s, n));
         var root = (Panel)window.RootElement;
+
+        // What a view in the conversation's reading column draws for the text, and what selecting
+        // all of it copies.
+        (string Drawn, string Copied) Draw(string markdown)
+        {
+            var view = new MarkdownView { Reading = true };
+            var column = new ReadingColumn { MaxWidth = (double)Application.Current.Resources["AbLayoutReadingMax"], Padding = new Thickness(24, 8, 24, 24) };
+            column.Children.Add(view);
+            var scroll = new ScrollViewer { Width = 700, Height = 600, Content = column, IsHitTestVisible = false, Opacity = 0 };
+            try
+            {
+                view.Markdown = markdown;
+                root.Children.Add(scroll);
+                scroll.UpdateLayout();
+                var blocks = view.Children.OfType<RichTextBlock>().ToList();
+                var drawn = string.Concat(blocks.SelectMany(r => r.Blocks.OfType<Paragraph>()).SelectMany(p => p.Inlines.OfType<Run>()).Select(r => r.Text));
+                var copied = string.Concat(blocks.Select(r =>
+                {
+                    r.SelectAll();
+                    return r.SelectedText;
+                }));
+                return (drawn, copied);
+            }
+            finally { root.Children.Remove(scroll); }
+        }
+
         var wrong = new List<string>();
-        var times = new List<string>();
         var a = new string('a', 20000);
         var b = new string('b', 20000);
         foreach (var (name, markdown, text) in new[]
@@ -79,37 +105,26 @@ static partial class SelfTest
             // One word on screen across two runs, neither alone near the limit.
             ("a bold word run on", $"Done: **{a}**{b}", $"Done: {a}{b}"),
             // No line may end after `[`, even past a space: as unbreakable as the word above.
-            ("\"Done: \" and 20,000 \"[ \"", "Done: " + string.Concat(Enumerable.Repeat("[ ", 20000)), "Done: " + string.Concat(Enumerable.Repeat("[ ", 20000))),
+            ("\"Done: \" and 20,000 \"[ \"", "Done: " + Repeat("[ ", 20000), "Done: " + Repeat("[ ", 20000)),
         })
         {
-            var view = new MarkdownView { Reading = true };
-            var column = new ReadingColumn { MaxWidth = (double)Application.Current.Resources["AbLayoutReadingMax"], Padding = new Thickness(24, 8, 24, 24) };
-            column.Children.Add(view);
-            var scroll = new ScrollViewer { Width = 700, Height = 600, Content = column, IsHitTestVisible = false, Opacity = 0 };
-            var clock = Stopwatch.StartNew();
             try
             {
-                view.Markdown = markdown;
-                root.Children.Add(scroll);
-                scroll.UpdateLayout();
-                clock.Stop();
-                times.Add($"{name} {clock.ElapsedMilliseconds} ms");
-                var blocks = view.Children.OfType<RichTextBlock>().ToList();
-                var drawn = string.Concat(blocks.SelectMany(r => r.Blocks.OfType<Paragraph>()).SelectMany(p => p.Inlines.OfType<Run>()).Select(r => r.Text));
+                var (drawn, copied) = Draw(markdown);
                 if (drawn != text) { wrong.Add($"{name}: {drawn.Length} of {text.Length} characters drawn as written"); }
-                if (view.ActualHeight <= 0) { wrong.Add($"{name}: not drawn"); }
-                var copied = string.Concat(blocks.Select(r =>
-                {
-                    r.SelectAll();
-                    return r.SelectedText;
-                }));
                 if (copied != text) { wrong.Add($"{name}: copies {copied.Length} characters, not the {text.Length} written"); }
-                if (clock.ElapsedMilliseconds > 3000) { wrong.Add($"{name}: {clock.ElapsedMilliseconds} ms"); }
             }
             catch (Exception e) { wrong.Add($"{name}: {e.GetType().Name} {e.Message}"); }
-            finally { root.Children.Remove(scroll); }
             await Task.Delay(50);
         }
-        check(wrong.Count == 0, $"draws a word too long for WinUI's text layout as written, and copies it exactly ({string.Join(", ", times)}){(wrong.Count > 0 ? $": not {string.Join("; ", wrong)}" : "")}");
+        var growth = "";
+        try
+        {
+            var result = Growth.Measure(n => Draw("Done: " + new string('[', n)), 12500);
+            growth = $"; \"[\" ×12,500 to ×{12500 * Growth.Step:N0}: {result}";
+            if (!result.Linear) { wrong.Add($"time grows {result.Ratio:0.0}× for {Growth.Step}× the text"); }
+        }
+        catch (Exception e) { wrong.Add($"growth: {e.GetType().Name}"); }
+        check(wrong.Count == 0, $"draws a word too long for WinUI's text layout as written, and copies it exactly{growth}{(wrong.Count > 0 ? $": not {string.Join("; ", wrong)}" : "")}");
     }
 }

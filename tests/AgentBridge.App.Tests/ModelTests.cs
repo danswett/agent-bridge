@@ -573,29 +573,22 @@ public sealed class MarkdownTests
 
     // #493: WinUI's text layout failed on about 32,000 characters with nowhere to break, after
     // other text, and the app ended. Drawn in pieces of at most LongWords.Max between breaks.
-    static List<string> Pieces(int since, params string[] runs)
+    // The runs as drawn: each run's pieces joined by a break ("|"), the runs joined by nothing.
+    static string Drawn(params string[] runs)
     {
-        var all = new List<string>();
-        foreach (var run in runs)
-        {
-            var pieces = LongWords.Pieces(run, ref since);
-            Assert.Equal(run, string.Concat(pieces));
-            all.AddRange(pieces);
-            all.Add("|");
-        }
-        return all;
+        var pieces = LongWords.Pieces(runs);
+        Assert.Equal(runs, pieces.Select(p => string.Concat(p)));
+        return string.Concat(pieces.Select(p => string.Join("|", p)));
     }
 
-    static int Longest(IEnumerable<string> pieces) =>
-        string.Concat(pieces.Select(p => p == "|" ? "" : p + "\0")).Split('\0', '\n').Max(s => s.Length);
+    static int Longest(string drawn) => drawn.Split('|', '\n').Max(s => s.Length);
 
     [Fact]
     public void A_long_word_after_other_text_is_drawn_in_pieces_that_join_to_it_exactly()
     {
         var text = "Done: " + new string('[', 32000);
-        var since = 0;
 
-        var pieces = LongWords.Pieces(text, ref since);
+        var pieces = Assert.Single(LongWords.Pieces([text]));
 
         Assert.Equal(text, string.Concat(pieces));
         // The first cut falls just after "Done: ", where a line could already end.
@@ -607,20 +600,19 @@ public sealed class MarkdownTests
     [Fact]
     public void Text_of_no_more_than_the_limit_is_drawn_whole()
     {
-        var since = 0;
         var prose = Repeat("All 47 tests pass. ", 400);
 
-        Assert.Equal([prose], LongWords.Pieces(prose, ref since));
-        Assert.Equal(prose.Length, since);
+        Assert.Equal(prose, Drawn(prose));
+        Assert.Equal(prose + "\n" + prose, Drawn(prose, "\n", prose));
     }
 
     [Fact]
     public void A_word_continued_in_the_next_run_is_counted_as_one()
     {
-        // "aaaa**bbbb**": one word on screen, in two runs, neither alone over the limit.
-        var pieces = Pieces(0, new string('a', 6000), new string('b', 6000), new string('c', 6000));
+        // "aaaa**bbbb**cccc": one word on screen, in three runs, none alone over the limit.
+        var drawn = Drawn(new string('a', 6000), new string('b', 6000), new string('c', 6000));
 
-        Assert.True(Longest(pieces) <= LongWords.Max, $"{Longest(pieces)}");
+        Assert.InRange(Longest(drawn), 1, LongWords.Max);
     }
 
     [Fact]
@@ -628,9 +620,8 @@ public sealed class MarkdownTests
     {
         // No line may break after `[`, even past spaces (UAX #14 LB14), so "[ [ [" is one word.
         var text = Repeat("[ ", 20000);
-        var since = 0;
 
-        var pieces = LongWords.Pieces(text, ref since);
+        var pieces = Assert.Single(LongWords.Pieces([text]));
 
         Assert.Equal(text, string.Concat(pieces));
         Assert.All(pieces, p => Assert.True(p.Length <= LongWords.Max));
@@ -640,17 +631,14 @@ public sealed class MarkdownTests
     [Fact]
     public void A_cut_keeps_an_accent_on_its_letter_and_a_surrogate_pair_whole()
     {
-        var accents = Repeat("e\u0301", 10000);
-        var emoji = Repeat("\U0001F600", 10000);
-        var since = 0;
-
-        Assert.All(LongWords.Pieces(accents, ref since).Skip(1), p => Assert.StartsWith("e", p, StringComparison.Ordinal));
-        since = 0;
-        Assert.All(LongWords.Pieces(emoji, ref since), p => Assert.True(char.IsHighSurrogate(p[0]) && !char.IsHighSurrogate(p[^1])));
+        Assert.All(Assert.Single(LongWords.Pieces([Repeat("e\u0301", 10000)])).Skip(1), p => Assert.StartsWith("e", p, StringComparison.Ordinal));
+        Assert.All(Assert.Single(LongWords.Pieces([Repeat("\U0001F600", 10000)])), p => Assert.True(char.IsHighSurrogate(p[0]) && !char.IsHighSurrogate(p[^1])));
+        // An accent in a run of its own, its letter at the end of the run before: still one cluster.
+        var split = Drawn(new string('a', LongWords.Max - 1) + "e", "\u0301", new string('a', 100));
+        Assert.Contains("e\u0301", split, StringComparison.Ordinal);
         // One cluster longer than the limit: cut inside it rather than not at all.
-        since = 0;
         var cluster = "e" + new string('\u0301', 20000);
-        var pieces = LongWords.Pieces(cluster, ref since);
+        var pieces = Assert.Single(LongWords.Pieces([cluster]));
         Assert.Equal(cluster, string.Concat(pieces));
         Assert.All(pieces, p => Assert.True(p.Length <= LongWords.Max));
     }
@@ -658,15 +646,14 @@ public sealed class MarkdownTests
     [Fact]
     public void A_line_break_starts_the_count_again()
     {
-        var since = LongWords.Max - 10;
-        var text = "abc\n" + new string('x', LongWords.Max);
+        var before = new string('x', LongWords.Max - 10);
+        var after = new string('y', LongWords.Max);
 
-        Assert.Equal([text], LongWords.Pieces(text, ref since));
-        Assert.Equal(LongWords.Max, since);
-        Assert.Equal(["", "y"], LongWords.Pieces("y", ref since));
+        Assert.Equal(before + "\n" + after, Drawn(before, "\n", after));
+        // Without it, the two are one word, and one break goes in.
+        Assert.Equal(1, Drawn(before, after).Count(c => c == '|'));
     }
 }
-
 // #493: what a host sends is held to the protocol's limits on receipt, so a broken, remote or
 // demo host can't send the app text its layout fails on.
 public sealed class ReceivedLimitsTests
