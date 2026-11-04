@@ -18,6 +18,9 @@ public interface ISessionLauncher
 
     Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default);
 
+    // Also raised when registration succeeds after the initial answer was unconfirmed.
+    event Action<Guid, string>? RequestRegistered { add { } remove { } }
+
     // The agents launches started that still run, registered or not: whatever runs inside one
     // is an agent's, and may not manage the host (§6.3 invariant 13).
     IReadOnlyList<Started> LaunchedProcesses() => [];
@@ -126,6 +129,8 @@ public sealed class LaunchServiceOptions
 //     (OutcomeMemory). One start at a time, so worktrees and Codex's binding cannot race.
 public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 {
+    public event Action<Guid, string>? RequestRegistered;
+
     readonly ISessionSource source;
     readonly IAgentHaBridgeProbe probe;
     readonly IConsoleInjector injector;
@@ -1275,7 +1280,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     void Decide(Pending p, LaunchResult result)
     {
         // Before the outcome is told, so the record has it by the time anyone hears of the session.
-        if (result is { Outcome: LaunchOutcome.Started, Session: { } id }) { Noted(p, id); }
+        if (result is { Outcome: LaunchOutcome.Started, Session: { } id }) { Noted(p, id); RequestRegistered?.Invoke(p.Key, id); }
         if (!p.Decided.TrySetResult(result) && result.Outcome == LaunchOutcome.Started)
         {
             p.RegisteredLate = true;

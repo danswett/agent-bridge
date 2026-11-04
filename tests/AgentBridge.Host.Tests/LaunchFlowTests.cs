@@ -689,12 +689,18 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
     public async Task A_folder_trust_question_is_left_for_the_machine_and_other_launches_are_busy_meanwhile()
     {
         starter.Registers = false;
+        var launcher = Launcher(Config());
+        var registered = new TaskCompletionSource<(Guid Request, string Session)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        launcher.RequestRegistered += (key, id) => registered.TrySetResult((key, id));
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: launcher).HandleAsync;
         screens.Rows = ["Confirm folder trust", app, "Do you trust the files in this folder?", "❯ 1. Yes", "  2. Yes, and remember this folder for future sessions", "  3. No (Esc)"];
         var ch = await OpenAsync();
-        var first = await LaunchAsync(ch, new { workspace = "App", prompt = "go" });
+        var request = Guid.NewGuid().ToString("D");
+        var first = await LaunchAsync(ch, new { workspace = "App", prompt = "go" }, request);
         Assert.Equal("unconfirmed", first.Outcome_);
         Assert.Contains("is asking whether to trust App. Only a person at the machine can answer that", first.Reason);
         Assert.NotNull(first.Session);
+        Assert.False(registered.Task.IsCompleted);
 
         var second = await LaunchAsync(ch, new { workspace = "API" });
         Assert.Equal(("busy", "Busy: Copilot in App is waiting for a person to answer whether to trust that folder, so nothing was launched. Try again in a couple of minutes."), Pair(second));
@@ -711,6 +717,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         screens.Rows = CopilotReady;
         starter.Register(starter.Specs[0]);
         await WaitAsync(async () => (await RequestAsync(ch, LaunchProtocol.Options, new { })).TryGetProperty("busy", out _) == false);
+        Assert.Equal((Guid.Parse(request), first.Session), await registered.Task.WaitAsync(Patience));
         starter.Registers = true;
         Assert.Equal("started", (await LaunchAsync(ch, new { workspace = "API" })).Outcome_);
     }
