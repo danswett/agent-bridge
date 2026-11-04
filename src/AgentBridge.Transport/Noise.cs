@@ -252,7 +252,7 @@ public sealed class XXHandshake : INoiseHandshake
 
     public byte[]? RemoteStatic { get; private set; }
     public byte[] HandshakeHash => ss.H;
-    public bool IsComplete => step == 3;
+    public bool IsComplete => Volatile.Read(ref step) == 3;
     public CipherState? Send { get; private set; }
     public CipherState? Receive { get; private set; }
 
@@ -325,14 +325,16 @@ public sealed class XXHandshake : INoiseHandshake
         return payload;
     }
 
+    // The cipher states before the step that says they exist: the receive path reads IsComplete
+    // and then Receive while another thread may be writing the last message (IKHandshake).
     void Advance()
     {
-        step++;
-        if (step == 3)
+        if (step == 2)
         {
             var (c1, c2) = ss.Split();
             (Send, Receive) = initiator ? (c1, c2) : (c2, c1);
         }
+        Volatile.Write(ref step, step + 1);
     }
 }
 
@@ -359,7 +361,7 @@ public sealed class IKHandshake : INoiseHandshake
 
     public byte[]? RemoteStatic { get; private set; }
     public byte[] HandshakeHash => ss.H;
-    public bool IsComplete => step == 2;
+    public bool IsComplete => Volatile.Read(ref step) == 2;
     public CipherState? Send { get; private set; }
     public CipherState? Receive { get; private set; }
 
@@ -436,13 +438,16 @@ public sealed class IKHandshake : INoiseHandshake
         return payload;
     }
 
+    // The cipher states before the step that says they exist. A responder writes its reply off the
+    // receive path (ChannelHub.AnswerIkAsync), so a frame arriving meanwhile (forged, since only the
+    // reply lets the opener encrypt) saw IsComplete and then a null Receive (#653's review).
     void Advance()
     {
-        step++;
-        if (step == 2)
+        if (step == 1)
         {
             var (c1, c2) = ss.Split();
             (Send, Receive) = initiator ? (c1, c2) : (c2, c1);
         }
+        Volatile.Write(ref step, step + 1);
     }
 }
