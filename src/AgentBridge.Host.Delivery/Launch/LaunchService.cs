@@ -448,9 +448,16 @@ public sealed partial class LaunchService : ISessionLauncher
     public TransferConfig TransferConfig => Config.Transfer;
 
     // Whether this machine hands its sessions to the account's other machines now.
-    public string? ServeUnavailable => !Config.Transfer.Serve ? "this machine does not hand its sessions to other machines (launch.transfer.serve in its config)"
+    public string? ServeUnavailable => ServeUnavailableWith(probe.Active);
+
+    // The same for what hello offers only (session.transfer.serve), from G5's shared answer, which
+    // may be a moment old (SharedAgentHaBridgeProbe); a transfer itself asks ServeUnavailable.
+    public string? OfferedServeUnavailable => ServeUnavailableWith(probe.Recent);
+
+    string? ServeUnavailableWith(Func<string?> agentHaBridge) =>
+        !Config.Transfer.Serve ? "this machine does not hand its sessions to other machines (launch.transfer.serve in its config)"
         : !Config.Enabled ? "launching is turned off on this machine (launch.enabled in its config)"
-        : probe.Active();
+        : agentHaBridge();
 
     // A session another machine asks for, if this machine offers it now, with its title; else
     // why not. Only what the resume list offers can be taken: an ended session in an approved

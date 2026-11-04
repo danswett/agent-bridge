@@ -92,7 +92,7 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
     public bool Receives => HasBlobStore && Launcher is { Available: true, TransferConfig.Receive: true };
 
     // hello's sessions.transfer.serve: this machine answers session.transfer.
-    public bool Serves => HasBlobStore && Launcher is { ServeUnavailable: null };
+    public bool Serves => HasBlobStore && Launcher is { OfferedServeUnavailable: null };
 
     public string? Unavailable => Volatile.Read(ref link) is not { } l ? "this machine is not connected to the relay now"
         : l.Relay.BlobMaxBytes <= 0 ? "the relay this machine uses has no blob store, which a transfer goes through"
