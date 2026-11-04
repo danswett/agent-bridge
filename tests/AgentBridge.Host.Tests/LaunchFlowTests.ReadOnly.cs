@@ -4,6 +4,7 @@ using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Protocol;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // A host made read-only in its config (delivery.readOnly), as the shadow host beside
@@ -24,10 +25,11 @@ public sealed partial class LaunchFlowTests
         public HeldOpen Open(int processId, DateTimeOffset startedAt) => throw new InvalidOperationException("a read-only host must never get as far as ending a process");
     }
 
-    // Every action a phone could take, behind one gate, as serve wires them.
-    SessionTransfers ServeEverything(string? readOnly)
+    // Every action a phone could take, behind one gate, as serve wires them; with g5, behind the
+    // host's one shared G5 check, as serve wires that too.
+    SessionTransfers ServeEverything(string? readOnly, SharedAgentHaBridgeProbe? g5 = null)
     {
-        var gate = new ReadOnlyGate(probe, readOnly);
+        var gate = new ReadOnlyGate((IAgentHaBridgeProbe?)g5 ?? probe, readOnly);
         var transfers = new SessionTransfers(host.Key, Path.Combine(f.Root, "profile", "transfers"));
         var launcher = Launcher(Config(), transfers: transfers, gate: gate);
         transfers.Launcher = launcher;
@@ -37,7 +39,8 @@ public sealed partial class LaunchFlowTests
         var stops = new StopService(source, f.Processes, gate, screens, new NoProcessControl(), new StopOptions { CopilotHome = f.CopilotHome, PlatformSupported = true });
         host.Hub.Handler = new SessionService(source, new MachineInfo(host.Id, "Test host", "windows", "0.1.0"), answers: answers, replies: replies, stops: stops, launcher: launcher, transfers: transfers)
         {
-            ReadOnly = () => readOnly ?? probe.Active(),
+            ReadOnly = () => readOnly ?? (g5 is null ? probe.Active() : g5.Recent()),
+            G5 = g5,
         }.HandleAsync;
         return transfers;
     }
@@ -80,5 +83,35 @@ public sealed partial class LaunchFlowTests
         Assert.Equal(refused, Pair(await LaunchAsync(ch, new { prompt = "go" })));
         Assert.Empty(screens.Typed);
         Assert.Empty(starter.Specs);
+    }
+
+    // #607: a hello asked agent-ha-bridge's check once for each capability it takes away, every
+    // transfer serve included, uncached. Now every one of them comes from one shared look.
+    [Fact]
+    public async Task A_burst_of_hellos_offering_every_action_looks_for_agent_ha_bridge_once()
+    {
+        probe.Reason = null;
+        var looks = new CountedProbe(probe);
+        ServeEverything(null, new SharedAgentHaBridgeProbe(looks, new FakeTimeProvider()));
+        var ch = await OpenAsync();
+
+        for (var i = 0; i < 5; i++)
+        {
+            Assert.Superset(new HashSet<string> { Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsStop, LaunchProtocol.Capability, TransferProtocol.ServeCapability },
+                (await CapabilitiesAsync(ch)).ToHashSet());
+        }
+
+        Assert.Equal(1, looks.Count);
+    }
+
+    sealed class CountedProbe(IAgentHaBridgeProbe inner) : IAgentHaBridgeProbe
+    {
+        public int Count;
+
+        public string? Active()
+        {
+            Interlocked.Increment(ref Count);
+            return inner.Active();
+        }
     }
 }

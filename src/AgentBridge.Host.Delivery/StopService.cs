@@ -119,7 +119,7 @@ public sealed class StopService : ISessionStopper
         requests = new OutcomeMemory<StopResult>(options.Time, options.RememberFor);
     }
 
-    public bool Available => options.PlatformSupported && probe.Active() is null;
+    public bool Available => options.PlatformSupported && probe.Recent() is null;
 
     public Task<StopResult> StopAsync(StopRequest request, CancellationToken cancellationToken = default)
     {

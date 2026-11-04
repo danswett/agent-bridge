@@ -348,7 +348,12 @@ async Task<int> ServeAsync(HostHandover handover)
     // approval on a migrated machine is not answered.
     HookIntake? runningIntake = null;
     var codexUnsettled = HookIntake.AnswerGate(intakeState?.RuntimeRoot, intakeProblem, () => runningIntake);
-    var (answers, replies, attachments, stops) = Typists(source, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled);
+    // One G5 check for everything this host offers and does (design G5), so a hello asks it once
+    // rather than once for each capability, and a burst of hellos once between them (#607). What
+    // types, stops or launches still looks afresh, immediately before it acts.
+    var haProbe = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : null;
+    var g5 = new SharedAgentHaBridgeProbe((IAgentHaBridgeProbe?)haProbe ?? new NoAgentHaBridge());
+    var (answers, replies, attachments, stops) = Typists(source, g5, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled);
     using var attachmentsLifetime = attachments;
     // Notifications: the account's phones hear of questions and finished turns even with the
     // app closed. Subscriptions live in the profile's own folder, for this account only. None at
@@ -368,7 +373,6 @@ async Task<int> ServeAsync(HostHandover handover)
     // accounts at the idle pace. None at all when usage.publish is off: no vendor is asked, and
     // hello leaves usage out.
     using var usageHttp = new UsageHttp(TimeSpan.FromSeconds(15));
-    var haProbe = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : null;
     foreach (var problem in settings.UsageProblems) { Log($"config.json: {problem}"); }
     await using var usageMonitor = settings.Usage.Publish
         ? NewUsageMonitor(source, usageHttp, Log, () => OperatingSystem.IsWindows() ? haProbe!.Active() : null)
@@ -403,7 +407,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // through the relay's blob store (docs/host-transfer.md). Bundles wait in the profile's own
     // private folder, never a shared temporary one.
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log) { Trust = trustedPeers };
-    var launcher = Launcher(source, attachments, transfers);
+    var launcher = Launcher(source, g5, attachments, transfers);
     transfers.Launcher = launcher;
     // Folder-trust questions answered by a person from their devices, where config.json allows it.
     var trustAnswers = new FolderTrustAnswers(identity.Key, launcher, Log) { Trust = trustedPeers };
@@ -420,18 +424,22 @@ async Task<int> ServeAsync(HostHandover handover)
     await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers,
         HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth);
     // What takes answering, replying, ending and launching away while it runs (design G5).
-    // Asked afresh, as the delivery services ask it for what hello offers: a cached answer
-    // could say read-only beside actions offered, or offer none without saying why.
-    string? ServeReadOnly() => ReadOnlyReason() ?? (OperatingSystem.IsWindows() ? haProbe?.Active() : null);
+    // Asked afresh by what acts on it (updates, the readiness checks, the app's status).
+    string? ServeReadOnly() => ReadOnlyReason() ?? g5.Active();
+    // The same for what hello says, from the answer the delivery services offer from: a hello
+    // holds one (SessionService.G5), so it never says read-only beside actions offered, or offers
+    // none without saying why.
+    string? OfferedReadOnly() => ReadOnlyReason() ?? g5.Recent();
     // Updates asked for from the account's other devices, which the app beside this host installs
     // (#51, docs/protocol/v1-update.md). A read-only machine serves none, as #112 withdrew Home
     // Assistant's Install there.
-    var updates = new UpdateService(HostVersion(), Log) { ReadOnly = ServeReadOnly };
+    var updates = new UpdateService(HostVersion(), Log) { ReadOnly = ServeReadOnly, OfferedReadOnly = OfferedReadOnly };
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
         Drivers = drivers,
         // Said in hello so a phone shows the machine read-only and why.
-        ReadOnly = ServeReadOnly,
+        ReadOnly = OfferedReadOnly,
+        G5 = g5,
         TrustAnswers = trustAnswers,
         Updates = updates,
     };
@@ -678,11 +686,11 @@ async Task<int> ServeAsync(HostHandover handover)
 // Launching and resuming sessions from other devices (docs/host-launch.md): only in the folders
 // the profile's config.json approves, and on Windows only for now. The agent starts in a console
 // of its own on this desktop, so the host must run here, as the user, unelevated.
-LaunchService Launcher(ISessionSource source, AttachmentStore? attachments, SessionTransfers transfers)
+LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers)
 {
     foreach (var problem in settings.LaunchProblems) { Log($"config.json: {problem}"); }
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
-    IAgentHaBridgeProbe probe = new ReadOnlyGate(OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : new NoAgentHaBridge(), ReadOnlyReason());
+    IAgentHaBridgeProbe probe = new ReadOnlyGate(g5, ReadOnlyReason());
     IConsoleInjector injector = OperatingSystem.IsWindows() ? new WorkerInjector() : new NoScreens();
     var launcher = new LaunchService(source, probe, injector, starter, agentLocator, new AgencyCatalog(new BatchFileRunner(new CommandRunner())), new LaunchServiceOptions
     {
@@ -779,14 +787,14 @@ static string OsName() =>
 // session at once. Files sent with replies are staged in the profile's own folder, private
 // to this user (docs/host-replies.md), and the prompts already
 // answered are recorded there too, so none is typed into twice.
-(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, string staging, string attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled)
+(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, IAgentHaBridgeProbe g5, string staging, string attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled)
 {
     if (!OperatingSystem.IsWindows())
     {
         Log("answering, replying and ending sessions from other devices are not supported on this platform yet");
         return (new UnsupportedPlatformAnswerer(), new UnsupportedPlatformReplier(), null, new UnsupportedPlatformStopper());
     }
-    var probe = new ReadOnlyGate(new AgentHaBridgeProbe(), ReadOnlyReason());
+    var probe = new ReadOnlyGate(g5, ReadOnlyReason());
     var injector = new WorkerInjector();
     var guard = new TargetGuard();
     var processes = new SystemProcessInspector();

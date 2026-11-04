@@ -9,4 +9,6 @@ namespace AgentBridge.Host.Delivery;
 public sealed class ReadOnlyGate(IAgentHaBridgeProbe agentHaBridge, string? readOnly) : IAgentHaBridgeProbe
 {
     public string? Active() => readOnly ?? agentHaBridge.Active();
+
+    public string? Recent() => readOnly ?? agentHaBridge.Recent();
 }

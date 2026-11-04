@@ -108,7 +108,7 @@ public sealed class AnswerService : ISessionAnswerer
         ledger = new AttemptLedger(options.AttemptLedgerPath, options.Time);
     }
 
-    public bool Available => options.PlatformSupported && probe.Active() is null;
+    public bool Available => options.PlatformSupported && probe.Recent() is null;
 
     public bool ApprovesPermissions => Available && options.CopilotRemoteApproval;
 

@@ -40,6 +40,10 @@ public sealed class SessionService
     // design G5), or null: said in hello, beside the capabilities it takes away.
     public Func<string?>? ReadOnly { get; init; }
 
+    // The host's shared G5 check, held for each hello so its readOnly and every capability G5 takes
+    // away come from one look (SharedAgentHaBridgeProbe.Hold); null where nothing shares it.
+    public SharedAgentHaBridgeProbe? G5 { get; init; }
+
     // Who drives each session (Session.Driver). Every device that reaches this service is a
     // person's (agents on the pipe are refused before it, design §5.5), so an answer or reply that
     // may have arrived takes the session back from an agent at once, as one typed at the machine.
@@ -116,8 +120,12 @@ public sealed class SessionService
             case Ops.Hello:
                 // Computed for each hello, so it says what is true now: agent-ha-bridge
                 // starting for this user takes sessions.answer and sessions.reply away until
-                // it stops.
-                return new HelloResult(1, machine with { Sessions = source.Snapshot().Count, ReadOnly = ReadOnly?.Invoke() }, Offered(channel));
+                // it stops. Now is at most SharedAgentHaBridgeProbe.Keep old: what acts on it
+                // looks again first.
+                using (G5?.Hold())
+                {
+                    return new HelloResult(1, machine with { Sessions = source.Snapshot().Count, ReadOnly = ReadOnly?.Invoke() }, Offered(channel));
+                }
             case Ops.SessionAnswer:
                 return await AnswerAsync(channel, data);
             case Ops.SessionReply:

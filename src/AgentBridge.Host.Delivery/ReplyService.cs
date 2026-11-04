@@ -104,7 +104,7 @@ public sealed class ReplyService : ISessionReplier
         requests = new OutcomeMemory<ReplyResult>(options.Time, options.RememberFor);
     }
 
-    public bool Available => options.PlatformSupported && probe.Active() is null;
+    public bool Available => options.PlatformSupported && probe.Recent() is null;
 
     // Whether hello offers sessions.attach: replies are on and there is somewhere to stage files.
     public bool TakesAttachments => attachments is not null && Available;
