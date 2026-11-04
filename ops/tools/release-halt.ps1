@@ -1,8 +1,8 @@
 #Requires -Version 7.2
 <#
 .SYNOPSIS
-  Owner only: halts (withdraws) Windows releases, so no installed copy installs them, by adding
-  them to the release halt list, rollout.json on the repository's pinned `rollout` release.
+  Owner only: halts (withdraws) a Windows release, so no installed copy installs it, by adding
+  it to the release halt list, rollout.json on the repository's pinned `rollout` release.
 
 .DESCRIPTION
   The release kill switch (#580, ops/plan.md §6.4, ops/runbooks/windows-release.md). The app and
@@ -15,8 +15,8 @@
   or the fix) is published, which they take by the ordinary idle rules. Halting is the stop;
   publishing that newer release is the recovery.
 
-  -Version adds versions to the list and uploads it, then marks each one's release notes as
-  withdrawn. -Initialize creates the `rollout` release with an empty list, once, before the first
+  -Version adds the version to the list and uploads it, then marks its release notes as
+  withdrawn; one version per run. -Initialize creates the `rollout` release with an empty list, once, before the first
   release that reads it ships (until then such copies install nothing). -DryRun reads everything
   and changes nothing.
 
@@ -25,8 +25,9 @@
   the owner's to run (ops/README.md); agent sessions prepare it, or run it with -DryRun.
 
 .PARAMETER Version
-  The version(s) to halt, as Velopack and the release tags name them: 0.1.1200 or v0.1.1200.
-  Each must be a published release of the repository.
+  The version to halt, as Velopack and the release tags name them: 0.1.1200 or v0.1.1200. It
+  must be a published release of the repository. One version per run: to halt another, run this
+  again (`pwsh <file> -Version a,b` passes "a,b" as one string, which is refused).
 
 .PARAMETER Reason
   Why, in a sentence, for the withdrawn notice on each release's notes. Required with -Version.

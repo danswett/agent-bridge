@@ -56,8 +56,10 @@ until someone looks.
 2. **Stop the next merge shipping the same bug.** Revert the PR on `main` (through a PR, with
    Quality as merge coordinator, AGENTS.md), or land the fix. Every green `main` run publishes
    a new, higher release, which machines take by the ordinary idle rules. A release published
-   while the first was being halted can be halted the same way, several at once
-   (`-Version 0.1.<a>,0.1.<b>`).
+   while the first was being halted is halted the same way: run step 1 again for it, one version
+   per run (`-Version 0.1.<a>`, then `-Version 0.1.<b>`, each with its `-Reason`). Don't list
+   several in one `-Version`: from a shell, `pwsh <file> -Version 0.1.<a>,0.1.<b>` arrives as
+   one string, which is refused and halts nothing.
 3. **Machines that installed it.** They stay on it until step 2's release: no downgrade. **Owner,
    at the machine** (guard #67: host management isn't done from agent sessions):
    - if the host still runs and reaches the relay, wait for step 2's release: it's a higher
