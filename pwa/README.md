@@ -537,6 +537,15 @@ running another checkout's tests at the same time. CI splits the run over severa
 (quality/README.md §4.7): Chromium, three WebKit shards (`--shard`), and `test/e2e` alone in
 the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `test/e2e` out.
 
+**Renders for design review** (`test/renders/*.render.mjs`, `playwright.renders.config.mjs`):
+captures, not checks, of the demo in the states a change wants Design to sign off, each in dark,
+light and forced colours at 390 and 1440 px, saved as `renders/<state>-<theme>-<width>.png`
+(`test/renders/shoot.mjs`). CI's Chromium leg of pwa-ui draws them after its tests and keeps
+`renders/` as the `pwa-renders` artifact for 14 days, whatever the tests did; a render that
+fails never fails the job. They are drawn in CI rather than on anyone's machine, and Chromium
+alone emulates forced colours. `test/renders/demo.render.mjs` draws the sessions list, so the
+route is seen to work before a feature adds its own states.
+
 * `test/answer.spec.mjs`, in demo mode at a phone's size: answering every field type and
   kind, defaults, required fields, the byte limit, every outcome, Sent then Passed to the agent
   then "You answered · value" from a machine with `sessions.progress`, a resend after a lost
