@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #592: Reorder on a phone (PWA): rest, press, lift, drag, settle</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/592-reorder.md). Each frame is a Proposal-592-Frame. -->
+<div style="width: 1692px; height: 880px; box-sizing: border-box; padding: 32px; background: {{t.bg}}; color: {{t.text}}; font-family: 'Segoe UI Variable Text', system-ui, -apple-system, Roboto, sans-serif; overflow: hidden">
+  <div style="display: flex; align-items: center; gap: 12px">
+    <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.bridge}}; background: {{t.tag}}">Proposal #592 · awaits owner decision</span>
+    <span style="font-size: 12px; color: {{t.text2}}">{{t.name}}</span>
+  </div>
+  <h1 style="margin: 10px 0 2px; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 22px; line-height: 28px; font-weight: 600">Reorder on a phone (PWA): rest, press, lift, drag, settle</h1>
+  <p style="margin: 0 0 28px; font-size: 13px; line-height: 18px; color: {{t.text2}}">Dashboard card polish moves three places down. The card lifts; the cards it passes ease up to make room; it settles into the gap.</p>
+  <div style="display: flex; gap: 28px; align-items: flex-start">
+    <sc-for list="{{frames}}" as="fr">
+      <dc-import name="Proposal-592-Frame" theme="{{theme}}" f="{{fr}}" hint-size="300px,760px"></dc-import>
+    </sc-for>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":1692,"height":880}}'>
+const THEMES = {
+  dark: { bg: '#1B1E21', text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', text3: 'rgba(255,255,255,.54)', bridge: '#2DD4BF', tag: 'rgba(45,212,191,.14)', stroke: 'rgba(255,255,255,.12)', name: 'Dark' },
+  light: { bg: '#E6E9EC', text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', text3: 'rgba(0,0,0,.58)', bridge: '#0B7A6E', tag: 'rgba(11,122,110,.12)', stroke: 'rgba(0,0,0,.12)', name: 'Light' },
+};
+// Slots: { h } a group header, { r } a session row, { gap } the landing gap, { ph } an empty-group placeholder.
+// trace: n draws a dashed outline where a neighbour was n slots further on, before it eased.
+const P = { h: 'Pinned' }, S = { h: 'Sessions' };
+const rows = (ids, extra) => ids.split('').map(r => Object.assign({ r }, (extra || {})[r] || {}));
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const lifted = [P, ...rows('ab'), S, { gap: true }, ...rows('defghij')];
+    const moved = [P, ...rows('ab'), S, ...rows('def', { d: { trace: 1 }, e: { trace: 1 }, f: { trace: 1 } }), { gap: true }, ...rows('ghij')];
+    const settled = [P, ...rows('ab'), S, ...rows('def'), { gap: true }, ...rows('ghij')];
+    const frames = [
+      { label: '1 · Rest', slots: [P, ...rows('ab'), S, ...rows('cdefghij', { c: { st: 'sel' } })],
+        notes: ['Your order. On touch the grip shows on every card, in Text 3.'] },
+      { label: '2 · Press and hold', slots: [P, ...rows('ab'), S, ...rows('cdefghij', { c: { st: 'sink' } })], ptr: { at: 4, dx: 232, ring: 0.62 },
+        notes: ['The card darkens and sinks to 98.5% over the hold: 500 ms on iOS, 400 ms on Android.', 'Moving 10 px first is a scroll, and nothing lifts.'] },
+      { label: '3 · Lifted', slots: lifted, lift: { r: 'c', at: 4, sel: true }, ptr: { at: 4, dx: 232, ring: 1 },
+        notes: ['Scale 1.02, the drag shadow and a 5% Bridge tint, over 83 ms (lift). One haptic tick.', 'Announced: “Picked up Dashboard card polish, position 1 of 10 in Sessions.”'] },
+      { label: '4 · Dragging, neighbours part', slots: moved, lift: { r: 'c', at: 7, dy: -22, sel: true }, ptr: { at: 7, dx: 232, dy: 6, ring: 1 },
+        notes: ['The card follows the finger 1:1, with no easing. Each card it passes eases up one row (reorder, 167 ms).', 'The gap is where it will land. There is no insertion line.'] },
+      { label: '5 · Release, settle', slots: settled, lift: { r: 'c', at: 7, dy: -5, scale: 1.006, shadow: 0.3, sel: true },
+        notes: ['The card settles from the finger into the gap (reorder, 167 ms) and lowers.', 'Announced: “Moved to position 4 of 10 in Sessions.”'] },
+    ];
+    return { t: THEMES[theme], theme, frames: frames.map(f => Object.assign({ grip: 'all' }, f)) };
+  }
+}
+</script>
+</body>
+</html>
