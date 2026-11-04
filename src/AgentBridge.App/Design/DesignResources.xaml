@@ -29,6 +29,9 @@
                 <SolidColorBrush x:Key="AbDanger" Color="#C9302C" />
                 <SolidColorBrush x:Key="AbDangerText" Color="#C9302C" />
                 <SolidColorBrush x:Key="AbNeutral" Color="#6E7781" />
+                <SolidColorBrush x:Key="AbExternal" Color="#A3177F" />
+                <SolidColorBrush x:Key="AbExternalText" Color="#A3177F" />
+                <SolidColorBrush x:Key="AbExternalTrack" Color="#E3C1DB" />
                 <SolidColorBrush x:Key="AbShell" Color="#EEF0F2" />
                 <SolidColorBrush x:Key="AbLayer" Color="#F9F9F9" />
                 <SolidColorBrush x:Key="AbCard" Color="#FFFFFF" />
@@ -65,6 +68,9 @@
                 <SolidColorBrush x:Key="AbDanger" Color="#FF6B6B" />
                 <SolidColorBrush x:Key="AbDangerText" Color="#FF9494" />
                 <SolidColorBrush x:Key="AbNeutral" Color="#8B949E" />
+                <SolidColorBrush x:Key="AbExternal" Color="#F769CF" />
+                <SolidColorBrush x:Key="AbExternalText" Color="#FBA8E4" />
+                <SolidColorBrush x:Key="AbExternalTrack" Color="#5B3A56" />
                 <SolidColorBrush x:Key="AbShell" Color="#202326" />
                 <SolidColorBrush x:Key="AbLayer" Color="#272A2E" />
                 <SolidColorBrush x:Key="AbCard" Color="#2F3338" />
@@ -101,6 +107,9 @@
                 <SolidColorBrush x:Key="AbDanger" Color="{ThemeResource SystemColorWindowTextColor}" />
                 <SolidColorBrush x:Key="AbDangerText" Color="{ThemeResource SystemColorWindowTextColor}" />
                 <SolidColorBrush x:Key="AbNeutral" Color="{ThemeResource SystemColorGrayTextColor}" />
+                <SolidColorBrush x:Key="AbExternal" Color="{ThemeResource SystemColorWindowTextColor}" />
+                <SolidColorBrush x:Key="AbExternalText" Color="{ThemeResource SystemColorWindowTextColor}" />
+                <SolidColorBrush x:Key="AbExternalTrack" Color="{ThemeResource SystemColorGrayTextColor}" />
                 <SolidColorBrush x:Key="AbShell" Color="{ThemeResource SystemColorWindowColor}" />
                 <SolidColorBrush x:Key="AbLayer" Color="{ThemeResource SystemColorWindowColor}" />
                 <SolidColorBrush x:Key="AbCard" Color="{ThemeResource SystemColorWindowColor}" />

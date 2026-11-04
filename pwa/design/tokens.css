@@ -94,6 +94,9 @@
   --ab-danger: #C9302C;
   --ab-danger-text: #C9302C;
   --ab-neutral: #6E7781;
+  --ab-external: #A3177F;
+  --ab-external-text: #A3177F;
+  --ab-external-track: #E3C1DB;
   --ab-shell: #EEF0F2;
   --ab-layer: #F9F9F9;
   --ab-card: #FFFFFF;
@@ -225,6 +228,9 @@
     --ab-danger: #FF6B6B;
     --ab-danger-text: #FF9494;
     --ab-neutral: #8B949E;
+    --ab-external: #F769CF;
+    --ab-external-text: #FBA8E4;
+    --ab-external-track: #5B3A56;
     --ab-shell: #202326;
     --ab-layer: #272A2E;
     --ab-card: #2F3338;
@@ -263,6 +269,9 @@
     --ab-danger: CanvasText;
     --ab-danger-text: CanvasText;
     --ab-neutral: GrayText;
+    --ab-external: CanvasText;
+    --ab-external-text: CanvasText;
+    --ab-external-track: GrayText;
     --ab-shell: Canvas;
     --ab-layer: Canvas;
     --ab-card: Canvas;
