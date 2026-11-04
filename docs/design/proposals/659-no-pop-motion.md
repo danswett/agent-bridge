@@ -132,6 +132,14 @@ Leaving is the mirror: the item fades out over `listItem`'s exit (fast, accelera
 was, as a copy nothing can find or tap, and its neighbours ease up into the space over
 `shift`. Both start together, so the whole change ends inside 167 ms.
 
+**A session ending, or leaving the list, while nothing is dragged.** Today's §5.3 closes the
+leaving row's space at once, so the rows below jump into place, and #605 (head 14d15102)
+implements that jump because a review cited §5.3. Under this rule the card fades out where it
+was (or collapses as its slot eases closed) and the cards below ease up over `shift`, the same
+motion as the cards a held card passes in Reorder. Under reduced motion the gap closes with a
+short cross-fade (`value`, 83 ms) and nothing travels. Once this proposal is approved, #605's
+departure jump is replaced by this; #605 itself is not edited here.
+
 The item never slides in from the side, which is why WinUI's `AddDeleteThemeTransition` stays
 out: its entrance is a slide from the leading edge with its own timing (D6).
 
@@ -429,6 +437,9 @@ Once the owner decides, the proposal banner comes off §5.3 and these issues get
 - **#605** (the reorder spec, #592) changes principle 4's neighbour wording, adds `lift` after
   `reorder` and edits §6.1. This PR rewrites principle 4 too; whichever lands second keeps
   both ideas (a reorder's passed row now eases with `shift` rather than "at once").
+  #605 (head 14d15102) also makes the remaining rows jump when a session ends or leaves the
+  list with nothing held, as today's §5.3 says; §2.1 replaces that jump with a fade and an
+  ease up over `shift` (a cross-fade under reduced motion), to follow once this is approved.
 - **#629** (the compact header, #620) adds `collapse` after `reorder`. No conflict: `shift`
   and `value` sit earlier in the catalogue.
 - `design/canvas/canvas.json` is one line in every PR; the #659 boards sit below #620's
