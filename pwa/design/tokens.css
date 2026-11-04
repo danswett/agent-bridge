@@ -211,6 +211,8 @@
   --ab-motion-scroll-ease: cubic-bezier(0.33, 0, 0.67, 1);
   --ab-motion-reorder-duration: 167ms;
   --ab-motion-reorder-ease: cubic-bezier(0.33, 0, 0.67, 1);
+  --ab-motion-collapse-duration: 167ms;
+  --ab-motion-collapse-ease: cubic-bezier(0.33, 0, 0.67, 1);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -335,5 +337,6 @@
     --ab-motion-menu-exit-duration: 0ms;
     --ab-motion-scroll-duration: 0ms;
     --ab-motion-reorder-duration: 0ms;
+    --ab-motion-collapse-duration: 83ms;
   }
 }
