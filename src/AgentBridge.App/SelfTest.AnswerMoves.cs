@@ -121,11 +121,27 @@ static partial class SelfTest
                 var held = view.QuestionShown is { IsHitTestVisible: false };
                 check(opened && !held, $"holds nothing as the person's own act lays out their question: Other's box opening as Other is activated (opened: {opened}; held: {held})");
 
+                var box = ById<TextBox>(view, "OtherText");
+                var settled = await Until(() => view.QuestionShown is { IsHitTestVisible: true }, TimeSpan.FromSeconds(5));
+
+                // A text box's own clear button isn't an answer: its coming, with nothing moved and
+                // the question no taller, holds nothing. The question draws its boxes wrapping, which
+                // never shows the button (TextBox shows it only for NoWrap), so this box is drawn
+                // without wrapping for the check: the text first, then focus, which shows it.
+                Button? Clear() => box is null ? null : Find<Button>(box).FirstOrDefault(b => b.Name == "DeleteButton");
+                if (box is not null) { box.TextWrapping = TextWrapping.NoWrap; box.Text = "x"; }
+                await Task.Delay(400);
+                var focused = box?.Focus(FocusState.Programmatic) == true;
+                var clearShown = await Until(() => Clear() is { Visibility: Visibility.Visible, ActualWidth: > 0 }, TimeSpan.FromSeconds(3));
+                await Task.Delay(100);
+                held = view.QuestionShown is { IsHitTestVisible: false };
+                if (box is not null) { box.TextWrapping = TextWrapping.Wrap; }
+                check(settled && focused && clearShown && !held, $"holds nothing as the clear button in a text box of the question appears (focused: {focused}; shown: {clearShown}; held: {held})");
+
                 // A press while the person's own act still holds, with their question grown since
                 // the last layout pass: the pass that press brings is read with nothing exempt, so
                 // Send, moved, drops it. Their typing opens the moment; the box then grows unlaid out.
-                var box = ById<TextBox>(view, "OtherText");
-                var settled = await Until(() => view.QuestionShown is { IsHitTestVisible: true }, TimeSpan.FromSeconds(5));
+                settled = await Until(() => view.QuestionShown is { IsHitTestVisible: true }, TimeSpan.FromSeconds(5));
                 if (box is not null && ById<Button>(view, "SendAnswer") is { ActualWidth: > 0 } sendButton)
                 {
                     var at = Centre(sendButton);

@@ -144,7 +144,13 @@ sealed class AnswerWatch
         {
             var node = stack.Pop();
             if (node is UIElement { Visibility: Visibility.Collapsed }) { continue; }
-            if (node != holder && node is ButtonBase or TextBox && node is FrameworkElement { ActualWidth: > 0, ActualHeight: > 0 } shown) { yield return shown; }
+            if (node != holder && node is ButtonBase or TextBox)
+            {
+                if (node is FrameworkElement { ActualWidth: > 0, ActualHeight: > 0 } shown) { yield return shown; }
+                // Its template's own parts (a text box's clear button, shown as it has text and
+                // focus) come and go with the person's typing; they aren't answers of their own.
+                continue;
+            }
             for (var i = VisualTreeHelper.GetChildrenCount(node) - 1; i >= 0; i--) { stack.Push(VisualTreeHelper.GetChild(node, i)); }
         }
     }
