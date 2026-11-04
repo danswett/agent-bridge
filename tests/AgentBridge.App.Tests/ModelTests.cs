@@ -397,12 +397,10 @@ public sealed class MarkdownTests
     public void Runs_of_markup_the_parser_is_quadratic_on_are_read_in_well_under_a_second(string unit)
     {
         var text = Repeat(unit, 20000);
-        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        Speed.IsLinear(n => Repeat(unit, n), 20000, t => { MarkdownModel.Parse(t); MarkdownModel.Outline(t); });
 
         var blocks = MarkdownModel.Parse(text);
-        MarkdownModel.Outline(text);
-
-        Assert.True(clock.ElapsedMilliseconds < 1000, $"{clock.ElapsedMilliseconds} ms");
         Assert.Contains(unit.TrimEnd('\n'), string.Concat(blocks.OfType<MdParagraph>().SelectMany(b => b.Inlines).OfType<MdText>().Select(t => t.Text)));
     }
 
@@ -412,12 +410,10 @@ public sealed class MarkdownTests
         // Each `- |` line joins the paragraph above it, as a table's delimiter row would, so this is
         // one paragraph of 15,000 lines to Markdig, not thousands of list items.
         var text = "a\n" + Repeat("- |\n[](\n", 7800);
-        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        Speed.IsLinear(n => "a\n" + Repeat("- |\n[](\n", n), 7800, t => { MarkdownModel.Parse(t); MarkdownModel.Outline(t); });
 
         var p = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse(text)));
-        MarkdownModel.Outline(text);
-
-        Assert.True(clock.ElapsedMilliseconds < 1000, $"{clock.ElapsedMilliseconds} ms");
         Assert.Equal(new MdText("- |"), p.Inlines[2]);
     }
 
@@ -435,13 +431,11 @@ public sealed class MarkdownTests
     public void Text_of_one_inline_per_token_is_read_in_bounded_time_and_memory(string prefix, string unit, int count)
     {
         var text = prefix + Repeat(unit, count);
-        MarkdownModel.Parse("warm");
+        Speed.IsLinear(n => prefix + Repeat(unit, n), count, t => MarkdownModel.Parse(t));
         var before = GC.GetAllocatedBytesForCurrentThread();
-        var clock = System.Diagnostics.Stopwatch.StartNew();
 
         var blocks = MarkdownModel.Parse(text);
 
-        Assert.True(clock.ElapsedMilliseconds < 1000, $"{clock.ElapsedMilliseconds} ms");
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         Assert.True(allocated < 16 * 1024 * 1024, $"{allocated / (1024 * 1024)} MiB");
         Assert.NotEmpty(Assert.IsType<MdParagraph>(Assert.Single(blocks)).Inlines);
