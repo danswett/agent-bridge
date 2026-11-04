@@ -879,3 +879,61 @@ test.describe('at three panes', () => {
     await expect(c.locator('.strip-item[data-id="demo-agent-suite"]')).toHaveAttribute('aria-pressed', 'true');
   });
 });
+
+// A pending approval while the session's delegates come and go (#491, from #334's security
+// review): the strip appearing and the conversation's "Started" and "reported back" lines move
+// the approval's answers. A tap already on its way to where Deny was lands on what moved there,
+// and must send nothing.
+test.describe('a pending approval as delegates come and go above it', () => {
+  const APPROVAL = {
+    id: 'r1#delegates', kind: 'approval', message: 'Allow **shell**?\n\n```\ngit push origin main\n```',
+    fields: [{ name: 'decision', type: 'choice', required: true, options: [{ value: 'approve', label: 'Approve once' }, { value: 'deny', label: 'Deny' }] }],
+  };
+  const running = (id, name, startedAt) => ({ id, kind: 'background', name, status: 'working', ...(startedAt ? { startedAt } : {}), shells: 0 });
+  const THREE = [['d-one', 'Read the logs'], ['d-two', 'Run the suite'], ['d-three', 'Check the docs']];
+  const CASES = [
+    { title: 'the first delegate starting brings the strip and a "Started" line',
+      before: () => [], after: (now) => [running('d-new', 'Write the fix', now)] },
+    { title: 'a delegate listed with no start time brings the strip alone',
+      before: () => [], after: () => [running('d-new', 'Write the fix', null)] },
+    { title: 'three delegates reporting back add three lines',
+      before: (now, ago) => THREE.map(([id, name]) => running(id, name, ago)),
+      after: (now, ago) => THREE.map(([id, name]) => ({ ...running(id, name, ago), status: 'ended', outcome: 'done', endedAt: now })) },
+  ];
+  // The session asking, its delegates as given; at times the page's paused clock makes later.
+  const asking = (page, subagents, at) => page.evaluate(({ id, question, subagents, at }) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    d.upsert({ ...s, status: 'waiting', statusSince: at, updatedAt: at, question: { ...question, askedAt: at }, subagents });
+  }, { id: SESSION, question: APPROVAL, subagents, at });
+
+  for (const size of [{ name: 'on a phone', width: 390, height: 844 }, { name: 'at three panes', width: 1440, height: 900 }]) {
+    for (const k of CASES) {
+      test(`${size.name}, ${k.title}: a tap at Deny's old place sends nothing`, async ({ page }) => {
+        await page.setViewportSize({ width: size.width, height: size.height });
+        await openDemo(page);
+        const c = card(page);
+        const t0 = Date.now();
+        const iso = (ms) => new Date(t0 + ms).toISOString();
+        await asking(page, k.before(iso(60_000), iso(-20 * 60_000)), iso(60_000));
+        const deny = c.locator('.question-slot').getByRole('button', { name: 'Deny' });
+        await expect(deny).toBeVisible();
+        await deny.scrollIntoViewIfNeeded();
+        await expect(deny).toBeInViewport();
+        // The question has been on screen longer than its arrival's wait.
+        await expect(c.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
+        await page.clock.install();
+        await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+        const was = await deny.boundingBox();
+        const before = await page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+        await asking(page, k.after(iso(70_000), iso(-20 * 60_000)), iso(70_000));
+        await page.clock.runFor(20);
+        const now = await deny.boundingBox();
+        expect(Math.abs(now.y - was.y) + Math.abs(now.x - was.x), 'the update moved Deny').toBeGreaterThan(1);
+        await page.mouse.click(was.x + was.width / 2, was.y + was.height / 2);
+        await page.clock.runFor(50);
+        expect(await page.evaluate(() => window.agentBridgeDemo.host.answerLog.length)).toBe(before);
+      });
+    }
+  }
+});

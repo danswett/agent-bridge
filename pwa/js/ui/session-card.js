@@ -57,6 +57,312 @@ export const QUESTION_ARRIVAL_GUARD_MS = 500;
 const SCROLL_SETTLED_MS = 100;
 export const TABS = Object.freeze(['conversation', 'delegates', 'tools']);
 
+// A question's or Needs you's answers that take a click (what their guards drop a pointer's on).
+export const QUESTION_CONTROLS = 'button, input, select, label, summary, a';
+
+// Whether the browser keeps what's on screen in place as content above it changes (scroll
+// anchoring; WebKit doesn't): found once, by growing what is above a small scroller's top.
+let anchorsAtAll = null;
+function browserAnchors(doc) {
+  if (anchorsAtAll !== null) { return anchorsAtAll; }
+  try {
+    const box = doc.createElement('div');
+    box.style.cssText = 'position:fixed;left:-10000px;top:0;width:10px;height:10px;overflow:auto;visibility:hidden;pointer-events:none';
+    const above = doc.createElement('div');
+    above.style.height = '10px';
+    const below = doc.createElement('div');
+    below.style.height = '100px';
+    box.append(above, below);
+    doc.body.append(box);
+    box.scrollTop = 20;
+    void box.scrollTop;
+    above.style.height = '30px';
+    anchorsAtAll = box.scrollTop > 30;
+    box.remove();
+  } catch {
+    anchorsAtAll = false;
+  }
+  return anchorsAtAll;
+}
+
+// Answers moved under a still pointer (#491): where each of controls() sits on screen is read
+// whenever something that can move it changes size (holder, everything holding it, everything
+// beside each of those, and also), and a move of more than a pixel calls moved(). That includes
+// the browser pulling a scroll back as what it scrolls gets shorter at its end: the clamp is part
+// of the same layout the size change is seen in, before its scroll event comes. A scroll only
+// updates where they are: the person's own, and the browser's bringing a focused control into
+// view, aren't moves under a pointer, and the app's own scrolls to a question or a row wait in
+// their own right. Only answers shown are read: a hidden one has no place to keep. The guards'
+// own attribute changes no size, so a guard can't feed itself; a read is one per frame at most.
+// paused: nothing read or watched until track() (pause() again stops it).
+export function watchMoves({ holder, controls, also = [], skip = () => false, moved, paused = false }) {
+  const win = holder.ownerDocument?.defaultView ?? globalThis;
+  let live = !paused;
+  let was = null;
+  // The answers' own question laying itself out after the person's click, key or typing in it
+  // (an error under a field, Other's box opening): where they are now, not a move under a
+  // pointer. Only for the frame that interaction is drawn in, and only what resized in or around
+  // the question itself: anything else resizing then (a title, the response, a banner) is
+  // nothing the person did, and still counts.
+  let own = false;
+  let acts = 0;
+  // Something the app drew in or around the question (a redraw, a receipt's words): the next
+  // frame is not the person's alone, whichever came first.
+  let forced = false;
+  let draws = 0;
+  // Theirs only if the question itself resized, nothing but it and what holds it did, and nothing
+  // outside the page's content changed with it (the window, or what a scroller shows, resized): a
+  // window resized as the person types still moves the answers. A scroll pulled back because
+  // their own question got shorter (an error going) stays theirs.
+  const theirs = (entries, outside) => own && !forced && !outside && !!entries
+    && entries.some((e) => holder.contains(e.target))
+    && entries.every((e) => holder.contains(e.target) || e.target.contains?.(holder));
+  let view = null;
+  // Whether the last read saw the window or what a scroller shows change size: a clamp after it
+  // isn't the person's, whatever they are doing in the question.
+  let wasOutside = false;
+  // How far everything holding the answers is scrolled and how big each is inside and out; for
+  // each the holder's place doesn't pin (nothing fixed between them), how far the browser's
+  // anchoring moved its scrolling to keep what's at its top in place as content above changed.
+  // A change in scrolling that is all anchoring (read off what is at the top of the scroller,
+  // which the browser keeps in place) is left for the read to find in place; any other is a
+  // scroll someone made, and is taken off where the answers were rather than read afresh, which
+  // would also take in a move laid out in the same frame (a title wrapping as the list
+  // scrolls). A browser that doesn't anchor (WebKit) has its whole scroll taken off. A scroller
+  // pulled back to a lower end (what it holds got shorter, or it got taller) slides the answers
+  // under a still pointer: nothing of it is taken off, and the read finds the move, whichever
+  // comes first, the scroll event or the read.
+  const doc = holder.ownerDocument;
+  const style = (el) => win.getComputedStyle?.(el);
+  const pinnedIn = (el, from) => {
+    for (let up = from; up && up !== el; up = up.parentElement) {
+      const p = style(up)?.position;
+      if (p === 'fixed' || p === 'sticky') { return true; }
+    }
+    return false;
+  };
+  // What el scrolls that is just inside its top edge, above the holder's middle: where the
+  // browser's anchor is, or a box holding it.
+  const topOf = (el, box) => {
+    const at = holder.getBoundingClientRect();
+    const y = (el === doc.documentElement ? 0 : Math.max(box + (el.clientTop || 0), 0)) + 1;
+    for (const hit of doc.elementsFromPoint?.(at.left + at.width / 2, y) ?? []) {
+      if (hit !== el && el.contains(hit) && !pinnedIn(el, hit)) { return hit; }
+    }
+    return null;
+  };
+  const scrolledBy = (before = []) => {
+    const anchors = browserAnchors(doc);
+    const by = [];
+    let pinned = false;
+    for (let below = holder; below.parentElement; below = below.parentElement) {
+      const p = style(below)?.position;
+      pinned ||= p === 'fixed';
+      const el = below.parentElement;
+      const top = el.scrollTop || 0;
+      const height = el.scrollHeight || 0;
+      const inner = el.clientHeight || 0;
+      const carried = !pinned && height > inner;
+      let probe = null;
+      let probeAt = 0;
+      let anchored = 0;
+      if (carried && anchors && style(el)?.overflowAnchor !== 'none') {
+        // A place in what el scrolls: the document's box moves with its own scrolling, an
+        // element's doesn't.
+        const box = el.getBoundingClientRect().top;
+        const place = (x) => x.getBoundingClientRect().top - (el === doc.documentElement ? box : box - top);
+        const [, , , , wasProbe, wasAt] = before[by.length] ?? [];
+        if (wasProbe?.isConnected && el.contains(wasProbe)) { anchored = place(wasProbe) - wasAt; }
+        probe = topOf(el, box);
+        probeAt = probe ? place(probe) : 0;
+      }
+      by.push([top, height, inner, carried, probe, probeAt, anchored]);
+    }
+    return by;
+  };  let wasBy = [];
+  // A size change that resized nothing watched (the window taller where the page itself scrolls,
+  // a margin, something positioned) brings no read of its own: the next frame reads instead,
+  // after this frame's own read if there is one.
+  let pending = false;
+  const frame = (fn) => (win.requestAnimationFrame ? win.requestAnimationFrame(fn) : setTimeout(fn, 16));
+  // It runs in a frame's callbacks, before that frame's resize read: while the person's own act
+  // in the question holds, it waits, so what they did is read with what resized (and theirs).
+  const later = () => {
+    if (pending) { return; }
+    pending = true;
+    frame(() => frame(() => {
+      if (!pending) { return; }
+      if (own) {
+        pending = false;
+        later();
+        return;
+      }
+      read(true);
+    }));
+  };
+  // How far a scroll since the last look moved the answers on screen (see scrolledBy), and
+  // whether anything scrolling changed size; null if they are held elsewhere now.
+  const scrolledSince = (by) => {
+    if (by.length !== wasBy.length) { return null; }
+    let shift = 0;
+    let resized = false;
+    let clamped = false;
+    by.forEach(([top, height, inner, carried, , , anchored], i) => {
+      const [wasTop, wasHeight, wasInner, wasCarried] = wasBy[i];
+      const sized = height !== wasHeight || inner !== wasInner;
+      resized ||= sized;
+      // One that scrolled the answers before, or was last seen past its end with a new size, still
+      // can: pulled back to 0 as it stops overflowing (a read for that size may come first).
+      if (top === wasTop || !(carried || wasCarried || wasBy[i][7] === true)) { return; }
+      // Pulled back: the end came up past where it was scrolled to, seen with the change of size,
+      // or already seen with it (see overEnd).
+      const over = wasBy[i][7] === true;
+      const pulled = top < wasTop && top >= height - inner - 1 && (over || (sized && height - inner < wasHeight - wasInner));
+      // Nothing taken off; read in a moment, in case the read for the new size came first.
+      if (pulled) {
+        resized = true;
+        clamped = true;
+        return;
+      }
+      // All of it anchoring (nothing scrolled by anyone): left for the read to find in place,
+      // less what rounding leaves over. Anything else (a 1 px step of a slow scroll included) is
+      // all taken off as a scroll: when a scroll and anchoring come in one frame, where the
+      // browser anchors after the scroll isn't known, so a move above the question then
+      // (content growing as the person scrolls) takes its click away for a moment rather than
+      // hiding a move between the anchor and the question.
+      const all = Math.abs(anchored) > 0.5 && Math.abs(top - wasTop - anchored) <= 1;
+      shift += all ? top - wasTop - anchored : top - wasTop;
+    });
+    return { shift, resized, clamped };
+  };
+  // Marks a scroller this look finds past its own end with a new size (or still past it since
+  // one): a browser that laid out the size before it moved the scroll, so the pull back to the
+  // end that follows is a clamp. An elastic bounce past the end (iOS) changes no size.
+  const overEnd = (by) => {
+    by.forEach((now, i) => {
+      const [top, height, inner] = now;
+      const was = by.length === wasBy.length ? wasBy[i] : null;
+      now[7] = !!was && top > height - inner + 1 && (height !== was[1] || inner !== was[2] || was[7] === true);
+    });
+    return by;
+  };
+  const read = (count, entries = null) => {
+    pending = false;
+    if (!live) { return; }
+    // A scroll can be laid out before its scroll event comes (made in a frame's own callbacks,
+    // or by the compositor): what it moved is taken off here, so the event finds nothing left.
+    const by = scrolledBy(wasBy);
+    const since = was && scrolledSince(by);
+    if (since?.shift) { was = was.map(([y, x]) => [y - since.shift, x]); }
+    // Where each is across as well as down: a window narrowed or widened within one layout moves
+    // a centred conversation sideways with nothing changing height.
+    const at = controls().filter((b) => b.getClientRects().length > 0).map((b) => {
+      const r = b.getBoundingClientRect();
+      return [r.top, r.left];
+    });
+    const changed = was && (at.length !== was.length || at.some(([y, x], i) => Math.abs(y - was[i][0]) > 1 || Math.abs(x - was[i][1]) > 1));
+    const size = [win.innerWidth, win.innerHeight];
+    const outside = !view || size[0] !== view[0] || size[1] !== view[1]
+      || by.some(([, , inner, carried], i) => carried && wasBy.length === by.length && inner !== wasBy[i][2]);
+    const fired = !!(count && changed && !theirs(entries, outside));
+    if (fired) { moved(); }
+    view = size;
+    wasOutside = outside;
+    was = at;
+    wasBy = overEnd(by);
+    return fired;
+  };
+  const sized = typeof ResizeObserver === 'function' ? new ResizeObserver((entries) => read(true, entries)) : null;
+  const watched = new Set();
+  const observe = (el) => {
+    if (!live || !el || watched.has(el) || skip(el)) { return; }
+    watched.add(el);
+    sized?.observe(el);
+  };
+  // What holds it can be put on the page after this starts watching (a session's view is built
+  // before it is shown): track() takes in whatever holds it now, and lets go of whatever has
+  // left the page since, which nothing else would.
+  const track = () => {
+    live = true;
+    for (const el of watched) {
+      if (!el.isConnected) {
+        watched.delete(el);
+        sized?.unobserve(el);
+      }
+    }
+    for (let up = holder; up; up = up.parentElement) {
+      observe(up);
+      for (const el of up.parentElement?.children ?? []) { observe(el); }
+    }
+    for (const el of also) { observe(el); }
+  };
+  if (live) { track(); }
+  const scrolled = (e) => {
+    if (!e.target?.contains?.(holder) || !was) { return; }
+    const by = scrolledBy(wasBy);
+    const since = scrolledSince(by);
+    // Held elsewhere now (moved to another page): left for the next read.
+    if (!since) {
+      later();
+      return;
+    }
+    if (since.shift) { was = was.map(([y, x]) => [y - since.shift, x]); }
+    wasBy = overEnd(by);
+    // A clamp is read now, not frames on: the answers it slid are under the pointer already. While
+    // the person's own act in the question holds, it is left to the read with what resized, unless
+    // that read saw the window or a scroller change size (then the clamp isn't theirs).
+    if (since.clamped && (!own || wasOutside)) {
+      read(true);
+      return;
+    }
+    if (since.resized) { later(); }
+  };
+  win.addEventListener?.('scroll', scrolled, { capture: true, passive: true });
+  return {
+    track,
+    observe,
+    unobserve(el) {
+      if (!el || !watched.delete(el)) { return; }
+      sized?.unobserve(el);
+    },
+    // The person acted in the answers' own question: what it draws next is theirs. Each act holds
+    // it for the frame it's drawn in, counted from the latest: an earlier act's frames ending
+    // mustn't cut a later one's short.
+    own() {
+      own = true;
+      const mine = ++acts;
+      frame(() => frame(() => { if (mine === acts) { own = false; } }));
+    },
+    // The app drew something in or around the question itself: whatever moves in the frames it's
+    // drawn in counts.
+    notOwn() {
+      forced = true;
+      const mine = ++draws;
+      frame(() => frame(() => { if (mine === draws) { forced = false; } }));
+    },
+    // Where they are now, as the place to measure moves from (a new set of answers drawn).
+    settle() { was = null; read(false); },
+    // Read now, as a click comes (#491): something laid out since the last frame's read (an update
+    // in the task just before the click) is found before the click is let through, not a frame
+    // later. Nothing the person did is exempt here. Says whether it found a move.
+    check() { return read(true) === true; },
+    // Nothing of it read or watched until track() (a session's view hidden while another shows).
+    pause() {
+      live = false;
+      pending = false;
+      was = null;
+      wasBy = [];
+      sized?.disconnect();
+      watched.clear();
+    },
+    stop() {
+      sized?.disconnect();
+      watched.clear();
+      win.removeEventListener?.('scroll', scrolled, { capture: true });
+    },
+  };
+}
+
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 // Why nothing can be given for a session now, for under its controls, or null (#269): its
@@ -121,6 +427,8 @@ export class SessionCard {
   #scrollEnd = null;
   // A question that arrived in the drawing under way, to bring into sight once it is all drawn.
   #arrived = null;
+  // What moves the guarded question's answers on screen while it stays (#491).
+  #moves = null;
   #menu = new RowMenu();
   // The delegate open, in the inspector or pushed in the Delegates tab.
   #delegate = null;
@@ -272,6 +580,24 @@ export class SessionCard {
     this.view = h('section', { class: 'session-view', 'aria-labelledby': this.ids.title, hidden: true, dataset: { tab: 'conversation' } },
       e.header, this.strip.element, e.tabs, h('div', { class: 'view-body' }, e.conversation, e.inspector));
     this.#applyTab();
+    // A question that stays where it is can still move (#491): a title wrapping, a tool line
+    // coming or going, the response or reasoning or your message changing above it, a note,
+    // banner or app bar above the view, a list shrinking at its end. Each move is the same wait as
+    // a question arriving.
+    this.#moves = watchMoves({
+      holder: e.question,
+      controls: () => (this.#selected && this.#guarded?.isConnected ? [...this.#guarded.querySelectorAll(QUESTION_CONTROLS)] : []),
+      // Other sessions' views: hidden whenever this one shows, so they never move its question,
+      // and holding on to them would keep a removed session's view alive.
+      skip: (el) => el !== this.view && el.classList?.contains('session-view'),
+      moved: () => this.#movedUnder(),
+      // Read only while its view is the one shown.
+      paused: !this.#selected,
+    });
+  }
+
+  #movedUnder() {
+    if (this.#guarded?.isConnected && this.#selected && this.viewing() && this.els.scroll.getClientRects().length) { this.#guard(); }
   }
 
   #changed(key, value) {
@@ -575,6 +901,14 @@ export class SessionCard {
     this.element.classList.toggle('selected', selected);
     if (selected) { this.els.open.setAttribute('aria-current', 'true'); } else { this.els.open.removeAttribute('aria-current'); }
     this.view.hidden = !selected;
+    // Shown now, in the page it was put into: what holds it there can move its question too.
+    // Hidden, nothing of it is read or watched.
+    if (selected) {
+      this.#moves?.track();
+      this.#moves?.observe(this.#guarded);
+    } else {
+      this.#moves?.pause();
+    }
     // Its question shows now, where a tap or a click may already be headed (a phone's push puts
     // the view under the finger that opened it): the same wait as a question arriving.
     if (selected && this.#guarded?.isConnected) { this.#guard(); }
@@ -699,6 +1033,7 @@ export class SessionCard {
     this.#dropReceipt();
     this.delegates.dispose();
     this.detail.dispose();
+    this.#moves?.stop();
     clearTimeout(this.#history.timer);
   }
 
@@ -761,6 +1096,8 @@ export class SessionCard {
     // was entered, but takes nothing until the machine says the question is still asked.
     const held = staleNote(ctx?.stale, this.machineName, 'answered');
     if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null, asker, held])) { return; }
+    // Drawn by the app, not by the person typing in it: whatever this moves counts.
+    this.#moves?.notOwn();
     const old = this.#panel;
     const sameQuestion = !!(old && q && old.questionId === q.id && answerable && old.answering.hostId === ctx.hostId);
     if (old && !sameQuestion) {
@@ -790,8 +1127,13 @@ export class SessionCard {
     } else if (q) {
       view = renderQuestion(q, { machineName: this.machineName, why: able.why, readOnly: ctx?.readOnly ?? null, asker });
     }
-    // A new question replaces a receipt that has said its last word.
-    if (q && this.#receipt?.final) { this.#dropReceipt(); }
+    // A new question replaces a receipt that has said its last word. A question that stays moves
+    // up into its place.
+    let dropped = false;
+    if (q && this.#receipt?.final) {
+      this.#dropReceipt();
+      dropped = true;
+    }
     // Scroll to a question (ui.md §5.3): one that arrives is brought into sight once the whole
     // update is drawn (#bringQuestion), as long as the conversation was read to its end.
     const arrived = this.#asked !== undefined && !!q && q.id !== this.#asked;
@@ -809,10 +1151,14 @@ export class SessionCard {
     // note that said why goes, and Send or Approve once moves up under the pointer as it does.
     const unheld = !!this.#guardedHeld && !held;
     const opened = !this.#guardedAnswerable && answerable;
+    if (this.#guarded !== (view || null)) {
+      this.#moves?.unobserve(this.#guarded);
+      if (view) { this.#moves?.observe(view); }
+    }
     this.#guarded = view || null;
     const same = view && q.id === this.#guardedId;
     let armed = false;
-    if (view && (!same || unheld || opened)) {
+    if (view && (!same || unheld || opened || dropped)) {
       this.#guardedId = q.id;
       if (this.#selected && this.viewing() && this.els.scroll.getClientRects().length) {
         this.#guard();
@@ -848,11 +1194,20 @@ export class SessionCard {
   // else in the slot (a kept draft's Dismiss, say), which the question didn't bring.
   #guardQuestion(slot) {
     slot.addEventListener('click', (e) => {
-      if (e.detail === 0 || (globalThis.performance?.now() ?? Date.now()) >= this.#guardUntil) { return; }
-      if (!this.#guarded?.contains(e.target) || !e.target.closest?.('button, input, select, label, summary, a')) { return; }
+      if (e.detail === 0) { return; }
+      if (!this.#guarded?.contains(e.target) || !e.target.closest?.(QUESTION_CONTROLS)) { return; }
+      // Moved since the last frame was read (an update in the task just before this click, before
+      // any frame): found now, and the wait starts before the click is let through.
+      this.#moves?.check();
+      if ((globalThis.performance?.now() ?? Date.now()) >= this.#guardUntil) { return; }
       e.preventDefault();
       e.stopImmediatePropagation();
     }, true);
+    // What the person does in the question that went through: the question's answer to it isn't
+    // a move under their pointer (watchMoves). A dropped click stops above and changes nothing.
+    for (const type of ['click', 'keydown', 'input', 'change']) {
+      slot.addEventListener(type, (e) => { if (this.#guarded?.contains(e.target)) { this.#moves?.own(); } }, true);
+    }
   }
 
   #atEnd() {
@@ -964,6 +1319,8 @@ export class SessionCard {
     const receipt = { element, final: false, unwatch: null, fresh: true };
     const show = (entry) => {
       if (!entry) { return; }
+      // Its words change as the answer goes, above a question that may stay: whatever they move counts.
+      this.#moves?.notOwn();
       const { text, tone } = describeAnswer(entry, this.machineName);
       element.className = `answer-receipt ${tone}`;
       element.dataset.answer = entry.state === 'done' ? entry.outcome : entry.state;
@@ -992,7 +1349,7 @@ export class SessionCard {
           ? 'The question changed before you sent your answer. It was answered at the machine, or the agent moved on. What you typed is kept here.'
           : 'This question can no longer be answered from here. What you typed is kept here.'),
         ta,
-        h('button', { type: 'button', class: 'button secondary', onclick: () => { this.#orphan = null; o.element.remove(); } }, 'Dismiss'));
+        h('button', { type: 'button', class: 'button secondary', onclick: () => { this.#orphan = null; o.element.remove(); this.#movedUnder(); } }, 'Dismiss'));
     }
     return o.element;
   }
