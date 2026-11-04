@@ -6,7 +6,7 @@ namespace AgentBridge.Quality.Tests;
 public sealed class FlakesTests : IDisposable
 {
     static readonly XNamespace Ns = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
-    static readonly FlakeContext Context = new("https://example.test/run/1", "abc1234", new DateTimeOffset(2026, 11, 4, 10, 30, 0, TimeSpan.Zero));
+    static readonly FlakeContext Context = new("https://example.test/run/1", "abc1234", new DateTimeOffset(2026, 11, 4, 10, 30, 0, TimeSpan.Zero), "danswett");
 
     readonly string root = Directory.CreateTempSubdirectory("flakes-").FullName;
 
@@ -70,10 +70,10 @@ public sealed class FlakesTests : IDisposable
         var known = verdicts.Single(v => v.Test == "Ns.TrustTests.Known(x: 1)");
         var open = new List<OpenIssue>
         {
-            new(465, "Flaky: App ConnectionTests.With_no_host_running_the_app_says_so times out", "", []),
+            new(465, "Flaky: App ConnectionTests.With_no_host_running_the_app_says_so times out", "", [], "danswett"),
             // Names the test but isn't about a flake: never commented on as one.
-            new(300, "Connection rework", "ConnectionTests.With_no_host_running_the_app_says_so", []),
-            new(600, "Flaky on windows-11-arm: App TrustTests.Known", FlakeReport.Marker(known, Verdict.Flaky), ["flaky", "area:testing"]),
+            new(300, "Connection rework", "ConnectionTests.With_no_host_running_the_app_says_so", [], "danswett"),
+            new(600, "Flaky on windows-11-arm: App TrustTests.Known", FlakeReport.Marker(known, Verdict.Flaky), ["flaky", "area:testing"], "app/github-actions"),
         };
 
         var plan = FlakeReport.Plan(verdicts, open, Context);
@@ -93,6 +93,28 @@ public sealed class FlakesTests : IDisposable
         Assert.StartsWith(FlakeReport.Marker(verdicts.Single(v => v.Test == "FleetTests.New"), Verdict.Flaky), created.Body);
         // The error's own backticks can't close the fence around it.
         Assert.Contains("````\nrun 1 failed ```here```", created.Body);
+    }
+
+    [Fact]
+    public void An_issue_by_anyone_but_the_owner_or_the_hunt_never_takes_a_tests_flake_record_even_with_its_name_or_marker()
+    {
+        Run("ubuntu-latest", "AgentBridge.Host.Tests", 1, 1, ("AnswerFlowTests.Racy", "Failed"));
+        Run("ubuntu-latest", "AgentBridge.Host.Tests", 2, 0, ("AnswerFlowTests.Racy", "Passed"));
+        var verdicts = FlakeHunt.Load(root).Classify();
+        var marker = FlakeReport.Marker(verdicts.Single(), Verdict.Flaky);
+        var open = new List<OpenIssue>
+        {
+            new(700, "Flaky: AnswerFlowTests.Racy", "", ["flaky"], "someone-else"),
+            new(701, "Flaky on ubuntu-latest: Host.Tests AnswerFlowTests.Racy", marker, ["flaky"], "someone-else"),
+        };
+
+        var plan = FlakeReport.Plan(verdicts, open, Context);
+
+        Assert.Equal("create", Assert.Single(plan).Action);
+        // The owner's own, filed by hand, is taken; the hunt's, by gh's name for the Actions bot.
+        Assert.Equal(702, Assert.Single(FlakeReport.Plan(verdicts, [.. open, new(702, "Flaky: AnswerFlowTests.Racy", "", [], "DanSwett")], Context)).Issue);
+        Assert.Equal(703, Assert.Single(FlakeReport.Plan(verdicts, [.. open, new(703, "x", marker, [], "app/github-actions")], Context)).Issue);
+        Assert.Equal("someone-else", OpenIssue.Parse("""[{"number":1,"title":"t","body":"b","labels":[],"author":{"is_bot":false,"login":"someone-else"}}]""").Single().Author);
     }
 
     [Fact]

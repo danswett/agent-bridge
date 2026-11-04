@@ -166,6 +166,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RUN_ID: ${{ github.run_id }}
           ATTEMPT: ${{ github.run_attempt }}
@@ -175,9 +176,9 @@ jobs:
           $out = Join-Path $env:RUNNER_TEMP flake-plan
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           $issues = Join-Path $env:RUNNER_TEMP open-issues.json
-          gh issue list --repo $env:REPO --state open --limit 1000 --json number,title,body,labels > $issues
+          gh issue list --repo $env:REPO --state open --limit 1000 --json number,title,body,labels,author > $issues
           if ($LASTEXITCODE) { throw 'gh issue list failed' }
-          $flags = @('--results', "$env:RUNNER_TEMP/flake-results", '--issues', $issues, '--run-url', $env:RUN_URL, '--commit', $env:SHA,
+          $flags = @('--results', "$env:RUNNER_TEMP/flake-results", '--issues', $issues, '--owner', $env:OWNER, '--run-url', $env:RUN_URL, '--commit', $env:SHA,
             '--plan', "$out/plan.json", '--summary', "$out/summary.md")
           if ($env:DRY_RUN -eq 'true') { $flags += '--dry-run' }
           dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll flakes @flags

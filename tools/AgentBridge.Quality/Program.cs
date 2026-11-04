@@ -16,13 +16,14 @@ static class Program
           check [--repo DIR]
               Fails when a test project, workflow job or pwa test folder is missing from the
               catalog, a catalog project doesn't exist, or a tracked file is claimed by no rule.
-          flakes --results DIR [--issues FILE] [--run-url URL] [--commit SHA] [--plan FILE]
-                 [--summary FILE] [--dry-run]
+          flakes --results DIR [--issues FILE] [--owner LOGIN] [--run-url URL] [--commit SHA]
+                 [--plan FILE] [--summary FILE] [--dry-run]
               The flake hunt's reporter: classifies each test in DIR/<os>/run-<i>/*.trx (a TRX
               per test project, and the run's exit code in exit) as flaky, failing every run or
-              passing, and plans the issues to open or comment
-              on, given the open issues (gh issue list --json number,title,body,labels). Exits 1
-              when a test failed every run on some OS, or a run broke outside any test.
+              passing, and plans the issues to open or comment on, given the open issues (gh
+              issue list --json number,title,body,labels,author); only the hunt's own and
+              --owner's count. Exits 1 when a test failed every run on some OS, or a run broke
+              outside any test.
         """;
 
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -105,7 +106,7 @@ static class Program
     }
 
     static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "explain", "dry-run" };
-    static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "ring", "base", "head", "files", "suite", "platform", "repo", "results", "issues", "run-url", "commit", "plan", "summary" };
+    static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "ring", "base", "head", "files", "suite", "platform", "repo", "results", "issues", "run-url", "commit", "plan", "summary", "owner" };
 
     /// <summary>
     /// The flake hunt's reporter (quality/README.md §5): classifies every test in the hunt's TRX
@@ -122,7 +123,7 @@ static class Program
             throw new InvalidOperationException($"{results} holds no runs.");
         var verdicts = hunt.Classify();
         var open = options.TryGetValue("issues", out var issues) ? OpenIssue.Parse(File.ReadAllText(issues)) : [];
-        var context = new FlakeContext(options.GetValueOrDefault("run-url") ?? "(no run)", options.GetValueOrDefault("commit") ?? "(unknown commit)", DateTimeOffset.UtcNow);
+        var context = new FlakeContext(options.GetValueOrDefault("run-url") ?? "(no run)", options.GetValueOrDefault("commit") ?? "(unknown commit)", DateTimeOffset.UtcNow, options.GetValueOrDefault("owner"));
         var plan = FlakeReport.Plan(verdicts, open, context);
         var summary = FlakeReport.Summary(hunt, verdicts, plan, options.ContainsKey("dry-run"));
         if (options.TryGetValue("plan", out var planFile))

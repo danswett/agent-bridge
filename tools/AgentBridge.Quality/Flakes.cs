@@ -196,8 +196,8 @@ static class Trx
 // Project is null for a TRX with no test in it, such as a test host that crashed before its first.
 sealed record TrxFile(string? Project, IReadOnlyList<(string Test, bool Passed, string? Message, string? Stack)> Results, string? Aborted);
 
-/// <summary>An open issue, as <c>gh issue list --json number,title,body,labels</c> gives it.</summary>
-sealed record OpenIssue(int Number, string Title, string Body, IReadOnlyList<string> Labels)
+/// <summary>An open issue, as <c>gh issue list --json number,title,body,labels,author</c> gives it.</summary>
+sealed record OpenIssue(int Number, string Title, string Body, IReadOnlyList<string> Labels, string Author = "")
 {
     public static IReadOnlyList<OpenIssue> Parse(string json)
     {
@@ -206,20 +206,35 @@ sealed record OpenIssue(int Number, string Title, string Body, IReadOnlyList<str
             i.GetProperty("number").GetInt32(),
             i.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "",
             i.TryGetProperty("body", out var b) ? b.GetString() ?? "" : "",
-            i.TryGetProperty("labels", out var l) ? l.EnumerateArray().Select(x => x.GetProperty("name").GetString() ?? "").ToList() : [])).ToList();
+            i.TryGetProperty("labels", out var l) ? l.EnumerateArray().Select(x => x.GetProperty("name").GetString() ?? "").ToList() : [],
+            i.TryGetProperty("author", out var a) && a.ValueKind == JsonValueKind.Object && a.TryGetProperty("login", out var login) ? login.GetString() ?? "" : "")).ToList();
     }
 }
 
 /// <summary>What the reporter will do on GitHub: open an issue, or comment on one (and label it).</summary>
 sealed record IssueAction(string Action, string Key, int? Issue, string? Title, string Body, IReadOnlyList<string> Labels);
 
-sealed record FlakeContext(string RunUrl, string Commit, DateTimeOffset Now);
+/// <summary>owner: the repository's owner, whose hand-filed issues the hunt may take for a test's record.</summary>
+sealed record FlakeContext(string RunUrl, string Commit, DateTimeOffset Now, string? Owner = null)
+{
+    // The hunt's own issues are opened by GITHUB_TOKEN: gh names that author app/github-actions,
+    // the REST API github-actions[bot].
+    static readonly string[] Bots = ["app/github-actions", "github-actions[bot]"];
+
+    /// <summary>
+    /// Whether an issue's author may hold a test's flake record. The repository is public: anyone
+    /// could open an issue titled flaky with a test's name, or paste the hunt's marker into one, and
+    /// have the hunt's counts and labels go there instead (#542).
+    /// </summary>
+    public bool Trusts(string author) => Bots.Contains(author, StringComparer.Ordinal)
+        || (!string.IsNullOrEmpty(Owner) && string.Equals(author, Owner, StringComparison.OrdinalIgnoreCase));
+}
 
 /// <summary>
 /// Turns the hunt into issues and a summary. A flaky test gets one issue labelled flaky, found
 /// again next time by a marker in its body, or, for an issue filed by hand before the hunt
 /// existed, by its Class.Method in an open issue whose title says flaky; it is then commented
-/// on with the new counts. A test failing every run gets an issue of its own as a bug.
+/// on with the new counts. Only issues by the repository's owner or the hunt itself count. A test failing every run gets an issue of its own as a bug.
 /// </summary>
 static class FlakeReport
 {
@@ -234,6 +249,7 @@ static class FlakeReport
     {
         var actions = new List<IssueAction>();
         var created = 0;
+        open = [.. open.Where(i => context.Trusts(i.Author))];
         foreach (var (v, kind) in verdicts.SelectMany(v => v.Kinds.Select(k => (v, k))))
         {
             var marker = Marker(v, kind);

@@ -380,8 +380,10 @@ changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
     `agent-bridge-quality flakes` then classifies every test, per OS:
     - **flaky:** failed some runs and passed others. It gets an issue labelled `flaky` with the
       project, the test, the failures per OS, the first error and the run link. When one is
-      already open (marked by the hunt, or filed by hand with `Flaky` in its title and the
-      test's `Class.Method` in it), the hunt comments the new counts on it and labels it `flaky`;
+      already open (opened by the hunt and marked for the test, or filed by hand by the
+      repository's owner with `Flaky` in its title and the test's `Class.Method` in it), the hunt
+      comments the new counts on it and labels it `flaky`. Anyone else's issue is never taken for
+      a test's record, whatever it says (#542);
     - **failing:** failed every run on some OS. That's a real failure, not a flake: it gets an
       issue labelled `bug`, and the run fails;
     - **passing:** never failed.
