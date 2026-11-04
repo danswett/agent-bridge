@@ -458,7 +458,7 @@ to 4 s, and with the app open the radio barely rested (#610: the largest battery
 | `visible` | Required. Whether the app is on screen now (the page is visible, the window not minimised) |
 | `open` | The session it shows, if any. Absent or `null` on the list, or another machine's session |
 
-Result: `{}`. A request without `visible`, or with a field of the wrong type, fails as a request.
+Result: `{}`. A request without `visible`, or with a field of the wrong type, fails as a request, as does one past 20 on a channel in 10 s: a client says it when its page or session changes, not more.
 It is for a person's devices: a pinned `service` or `host` peer is neither offered nor allowed it.
 What it says holds for the channel, across `sessions.subscribe` on it, until it is said again or
 the channel closes; a new channel starts with nothing said, and a client says it again after
@@ -469,7 +469,7 @@ and every live change goes at once, as without the capability.
 `open` session, while `visible`, goes at once. Of every other session (all of them while not
 `visible`), the first live change after a quiet spell goes at once too; the ones that follow within
 12 s of it wait for the end of those 12 s and go together, only each session's latest state, and
-the next 12 s start then. A session that becomes `open` has its waiting change sent at once.
+the next 12 s start then. A session that becomes `open` has its waiting change sent at once. A change a person must see is never held, open or not, visible or not: compared with what the channel was last sent of that session, a `question` that appeared, went or changed (its `id`, what it asks, its `decision` choices, `answerAtMachine`), a `status` entering `waiting` or `ending`, or a new `waitingOn`; and the first change of a session not yet sent on this subscription (a resumed snapshot leaves out what the client already holds, a pending question included). It goes at once and replaces anything held of the session (#697).
 `session.remove`, `discovery.changed` and the snapshot are never held; a removal drops the change
 held for that session. So a client is told of every session at most every 12 s, and of the one it
 shows as before.
