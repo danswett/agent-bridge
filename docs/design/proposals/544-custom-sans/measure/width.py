@@ -21,6 +21,9 @@ from fontTools.varLib.instancer import instantiateVariableFont
 CMP = Path(sys.argv[1])
 REPO = Path(sys.argv[2])
 SANS = REPO / "design/fonts/slipgates-sans/ttf/SlipgatesSans.ttf"
+# The shipping TTF is pinned at the text cut (opsz 14), so the optical-size rows read the
+# proposal's unpinned variable font, the same tuned B with its opsz axis kept.
+SANS_OPSZ = REPO / "docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB[opsz,wght].woff2"
 WIN = Path(r"C:\Windows\Fonts")
 
 # (face, regular file, its location, SemiBold file or None for the same file at wght 600)
@@ -29,8 +32,8 @@ FACES = [
     ("Segoe UI Variable Text (the Windows app today)", WIN / "SegUIVar.ttf", {"opsz": 10.5}, None),
     ("Roboto (the PWA today on Android)", CMP / "Roboto.ttf", {"wdth": 100}, None),
     ("Slipgates Sans B, text cut (opsz 14): what ships on Windows and the web", SANS, {"opsz": 14}, None),
-    ("B at opsz 20 (Apple/Android variable TTF, a 20 pt title)", SANS, {"opsz": 20}, None),
-    ("B at opsz 32 (the display cut, a 34 pt Large Title)", SANS, {"opsz": 32}, None),
+    ("B at opsz 20 (Apple/Android variable TTF, a 20 pt title)", SANS_OPSZ, {"opsz": 20}, None),
+    ("B at opsz 32 (the display cut, a 34 pt Large Title)", SANS_OPSZ, {"opsz": 32}, None),
     ("Inter Tight (the interim wordmark and brand-board headings, #558)", CMP / "InterTight.ttf", {}, None),
     ("IBM Plex Sans", CMP / "IBMPlexSans.ttf", {"wdth": 100}, None),
     ("Noto Sans", CMP / "NotoSans.ttf", {"wdth": 100}, None),

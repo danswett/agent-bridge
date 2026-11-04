@@ -1048,7 +1048,7 @@ static partial class SelfTest
         // checks name whatever the design calls the font rather than a copy of its name.
         var bundled = (mono as FontFamily)?.Source.Split(',')[0].Trim() ?? "";
         var family = bundled[(bundled.IndexOf('#') + 1)..];
-        var sansBundled = (sans as FontFamily)?.Source.Split(',')[0].Trim() ?? "";
+        var sansBundled = (Application.Current.Resources.TryGetValue("SansFontFamily", out var sansStack) ? (sansStack as FontFamily)?.Source.Split(',')[0].Trim() : null) ?? "";
         var sansFamily = sansBundled[(sansBundled.IndexOf('#') + 1)..];
         List<string> missingFonts = [.. Design.DesignKeys.FontFiles.Where(f => !File.Exists(Path.Combine(AppContext.BaseDirectory, f)))];
         check(missingFonts.Count == 0, $"bundles {sansFamily}, {family} and their licences{(missingFonts.Count > 0 ? $": missing {string.Join(", ", missingFonts)}" : "")}");

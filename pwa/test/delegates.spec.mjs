@@ -541,7 +541,7 @@ test.describe('at three panes', () => {
     await expect(tools.nth(0)).toHaveAttribute('data-status', 'running');
     await expect(tools.nth(1).locator('.tool-time')).toHaveText('1:03');
     await expect(tools.nth(2).locator('.tool-time')).toHaveText('0:04');
-    expect(await tools.nth(1).locator('.tool-name').evaluate((el) => getComputedStyle(el).fontFamily)).toMatch(/Agent Bridge Mono/);
+    expect(await tools.nth(1).locator('.tool-name').evaluate((el) => getComputedStyle(el).fontFamily)).toMatch(/Slipgates Mono/);
     expect(await tools.nth(1).locator('.tool-time').evaluate((el) => getComputedStyle(el).fontVariantNumeric)).toBe('tabular-nums');
     // The delegates it started, each under its own parent, open in its place.
     const nested = p.locator('.delegate-nested .delegate');

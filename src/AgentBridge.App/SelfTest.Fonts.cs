@@ -50,6 +50,9 @@ static partial class SelfTest
                 FontStyle = a.Italic ? FontStyle.Italic : FontStyle.Normal,
                 HorizontalAlignment = HorizontalAlignment.Left,
                 TextWrapping = TextWrapping.NoWrap,
+                // Want is computed at the unscaled size, so Windows' text-size setting mustn't
+                // enlarge the probe and fail a face that loaded correctly.
+                IsTextScaleFactorEnabled = false,
             };
             Typography.SetKerning(block, false);
             return (a.Weight, a.Italic, Want: a.Advance * size / Design.DesignKeys.SansUnitsPerEm, Block: block);
