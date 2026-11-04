@@ -66,9 +66,16 @@ static partial class SelfTest
             var approval = await Choose(window, main, "demo-approval", "Option:approve");
             Check(approval is not null && ById<Button>(approval, "Option:approve") is { IsEnabled: true } && ById<Button>(approval, "Option:deny") is not null,
                 "shows Approve once and Deny on a Copilot permission prompt");
+            // Where Approve once is pressed, the command reads in the order it runs (#220).
+            var approvalCode = approval is null ? null : Find<TextBlock>(approval).FirstOrDefault(b => AutomationProperties.GetAutomationId(b) == "CodeText" && b.Text.Contains("dotnet test", StringComparison.Ordinal));
+            Check(approvalCode is { FlowDirection: FlowDirection.LeftToRight, TextReadingOrder: TextReadingOrder.UseFlowDirection } && approvalCode.Text.StartsWith("Allow **shell**?", StringComparison.Ordinal) && approvalCode.Text.Contains("\n```\ndotnet test", StringComparison.Ordinal), $"draws an approval's message on its card exactly as written, fence markers included, left to right ({approvalCode?.Text})");
+            // All of an approval's message is drawn escaped and in order (#220); any other question's as written.
+            static MarkdownView? Message(SessionView? v) => v is not null && ById<FrameworkElement>(v, "Question") is { } q ? Find<MarkdownView>(q).FirstOrDefault() : null;
+            Check(Message(approval) is { Approval: true }, "draws all of an approval's message on its card in its escaped, left-to-right mode");
             var form = await Choose(window, main, "02d9e5d5-6b35-49bd-b083-39572fbff648", "SendAnswer");
             Check(form is not null && ById<Button>(form, "SendAnswer") is not null && ById<TextBox>(form, "Field:notes") is not null,
                 "draws a form question with its fields and Send");
+            Check(Message(form) is { Approval: false }, "draws a question that is not an approval as written");
             var withResponse = main.AllCards.FirstOrDefault(c => c.HasResponse);
             var responding = withResponse is null ? null : await Choose(window, main, withResponse.Id, "Response");
             Check(responding is not null && await Until(() => ById<FrameworkElement>(responding, "Response") is MarkdownView { Children.Count: > 0 }, TimeSpan.FromSeconds(5)), "renders a response's Markdown");
@@ -83,6 +90,7 @@ static partial class SelfTest
                 $"draws the navigation's design icons in a visible colour ({navIcons.Count} found)");
             CheckDesign(window, Check);
             await CheckInlineMono(window, Check);
+            await CheckCodeBlocks(window, Check, outFile);
             await CheckShell(window, main, Check);
             await CheckStatusLines(window, main, Check);
             await CheckCurrentTools(window, main, Check);
@@ -105,6 +113,9 @@ static partial class SelfTest
             result["needsYouButtons"] = lane is null ? null : Find<Button>(lane).Select(b => $"{AutomationProperties.GetAutomationId(b)}: {(b.IsEnabled ? "enabled" : "disabled")}, {b.Visibility}").ToList();
             Check(offered && main.NeedsYou.SingleOrDefault(e => e.Card.Id == "demo-approval") is { Approvable: true }, "offers Approve once and Deny in Needs you for the permission prompt");
             if (lane is not null) { await Picture(lane, Path.ChangeExtension(outFile, ".needs-you.png")); }
+            // The lane draws a whole approval as its card does: exactly as written (ui.md §6.1, §6.4).
+            var prompts = lane is null ? [] : Find<MarkdownView>(lane).Where(m => AutomationProperties.GetAutomationId(m) == "NeedsYouPrompt").ToList();
+            Check(prompts.Count > 0 && prompts.All(m => m.Approval) && prompts.Any(m => Find<TextBlock>(m).Any(b => AutomationProperties.GetAutomationId(b) == "CodeText" && b.Text.StartsWith("Allow **shell**?", StringComparison.Ordinal))), "draws an approval's prompt in Needs you exactly as written, as its card does");
             // ui.md §6.1: the list's first section, above Pinned and Sessions, inside the list pane;
             // an entry opens its session in the session pane.
             double Top(FrameworkElement e) => e.TransformToVisual(window.RootElement).TransformPoint(default).Y;

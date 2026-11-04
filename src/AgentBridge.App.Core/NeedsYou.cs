@@ -1,6 +1,3 @@
-using System.Buffers;
-using System.Globalization;
-using System.Text;
 using System.Text.RegularExpressions;
 using AgentBridge.Protocol;
 
@@ -178,64 +175,10 @@ public sealed partial class NeedsYouEntry : Observable
         // screen as it will run: a bidi control can make `curl ... | sh` read as a comment.
         // Nor is one with right-to-left letters, which reorder what is drawn around them without any
         // control: three Hebrew letters before `; rm -rf / #` show its comment marker first.
-        if (HasHidden(q.Message) || HasRightToLeft(q.Message)) { return false; }
+        if (HiddenText.HasHidden(q.Message) || HiddenText.HasRightToLeft(q.Message)) { return false; }
         // Every line ending the renderer breaks on is counted: a bare CR is a line too.
         var m = q.Message.Trim().Replace("\r\n", "\n").Replace('\r', '\n');
         return m.Length > 0 && m.Length <= PromptMaxChars && m.Split('\n').Length <= PromptMaxLines && LiteralShape(m) && !HasTable(MarkdownModel.Parse(m));
-    }
-
-    // Characters a reader cannot see as they run: format characters (bidi controls, zero-width
-    // spaces and joiners), controls other than a newline or a tab (a CR too: a shell runs it as part
-    // of the command), private-use and unassigned code points, unpaired surrogates, and the line and
-    // paragraph separators (pwa/js/needs-you.js HIDDEN).
-    public static bool HasHidden(string text)
-    {
-        for (var i = 0; i < text.Length;)
-        {
-            if (Rune.DecodeFromUtf16(text.AsSpan(i), out var r, out var n) != OperationStatus.Done || Hidden(r)) { return true; }
-            i += n;
-        }
-        return false;
-    }
-
-    // The right-to-left blocks: Hebrew to Arabic Extended, their presentation forms, and the
-    // supplementary planes' right-to-left ranges (pwa/js/needs-you.js RTL).
-    public static bool HasRightToLeft(string text) => text.EnumerateRunes().Any(r => r.Value is
-        (>= 0x0590 and <= 0x08FF) or (>= 0xFB1D and <= 0xFDFF) or (>= 0xFE70 and <= 0xFEFF)
-        or (>= 0x10800 and <= 0x10FFF) or (>= 0x1E800 and <= 0x1EFFF));
-
-    static bool Hidden(Rune r) => r.Value is 0x2028 or 0x2029 || Ignorable(r.Value) || Rune.GetUnicodeCategory(r) switch
-    {
-        UnicodeCategory.Format or UnicodeCategory.PrivateUse or UnicodeCategory.OtherNotAssigned or UnicodeCategory.Surrogate => true,
-        UnicodeCategory.Control => r.Value is not ('\n' or '\t'),
-        _ => false,
-    };
-
-    // Every default-ignorable code point, drawn as nothing though it is there: variation selectors
-    // (which can make one name look like another), the combining grapheme joiner, Hangul fillers,
-    // tags (Unicode's DerivedCoreProperties, Default_Ignorable_Code_Point; pwa/js/needs-you.js).
-    static bool Ignorable(int c) => c is 0x00AD or 0x034F or 0x061C or 0x115F or 0x1160 or 0x17B4 or 0x17B5 or 0x3164 or 0xFEFF or 0xFFA0
-        or (>= 0x180B and <= 0x180F) or (>= 0x200B and <= 0x200F) or (>= 0x202A and <= 0x202E) or (>= 0x2060 and <= 0x206F)
-        or (>= 0xFE00 and <= 0xFE0F) or (>= 0xFFF0 and <= 0xFFF8) or (>= 0x1BCA0 and <= 0x1BCA3) or (>= 0x1D173 and <= 0x1D17A)
-        or (>= 0xE0000 and <= 0xE0FFF);
-
-    // Any such character drawn as a visible escape (\u202E), so the lane's line reads in the order it
-    // runs.
-    public static string Reveal(string text)
-    {
-        var b = new StringBuilder(text.Length);
-        for (var i = 0; i < text.Length;)
-        {
-            if (Rune.DecodeFromUtf16(text.AsSpan(i), out var r, out var n) != OperationStatus.Done)
-            {
-                b.Append($"\\u{(int)text[i]:X4}");
-                i += Math.Max(n, 1);
-                continue;
-            }
-            if (Hidden(r)) { b.Append(r.Value > 0xFFFF ? $"\\u{{{r.Value:X}}}" : $"\\u{r.Value:X4}"); } else { b.Append(r.ToString()); }
-            i += n;
-        }
-        return b.ToString();
     }
 
     // Whether a prompt has the shape a host writes for a permission, so that what is drawn is what is
@@ -327,8 +270,8 @@ public sealed partial class NeedsYouEntry : Observable
         var message = q.Message.Replace("\r\n", "\n").Replace('\r', '\n');
         var (prose, code) = MarkdownModel.Outline(message);
         var lines = message.Split('\n');
-        if (prose is int at && at < lines.Length && PlainLine(Container().Replace(Reveal(lines[at]), "")) is { Length: > 0 } line) { return line; }
-        return code is null ? "" : Cut(Spaces().Replace(Reveal(code), " ").Trim());
+        if (prose is int at && at < lines.Length && PlainLine(Container().Replace(HiddenText.Reveal(lines[at]), "")) is { Length: > 0 } line) { return line; }
+        return code is null ? "" : Cut(Spaces().Replace(HiddenText.Reveal(code), " ").Trim());
     }
 
     [GeneratedRegex(@"^(?: {0,3}(?:>\s?|[-*+]\s+|\d+[.)]\s+))+")]
@@ -361,7 +304,9 @@ public sealed partial class NeedsYouEntry : Observable
     private static partial Regex Marks();
     [GeneratedRegex(@"(^|[\s(])[*_]([^*_\s][^*_]*?)[*_](?=[\s).,!?:;]|$)")]
     private static partial Regex Emphasis();
-    [GeneratedRegex(@"\[([^\]]*)\]\([^)]*\)")]
+    // Not backtracking: from every `[` the pattern scans the rest of the line, quadratic over a long
+    // run of brackets in the agent's text.
+    [GeneratedRegex(@"\[([^\]]*)\]\([^)]*\)", RegexOptions.NonBacktracking)]
     private static partial Regex Link();
     [GeneratedRegex(@"\s+")]
     private static partial Regex Spaces();

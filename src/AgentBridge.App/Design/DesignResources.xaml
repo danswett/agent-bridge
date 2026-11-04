@@ -486,6 +486,23 @@
             </Setter.Value>
         </Setter>
     </Style>
+    <Style x:Key="AbIconCopy" TargetType="ContentControl">
+        <Setter Property="Width" Value="20" />
+        <Setter Property="Height" Value="20" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContentControl">
+                    <Viewbox Stretch="Uniform">
+                        <Canvas Width="20" Height="20">
+                            <Path Data="F1 M9,7 L15,7 A2,2 0 0 1 17,9 L17,15 A2,2 0 0 1 15,17 L9,17 A2,2 0 0 1 7,15 L7,9 A2,2 0 0 1 9,7 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+                            <Path Data="F1 M13,7 L13,5 A2,2 0 0 0 11,3 L5,3 A2,2 0 0 0 3,5 L3,11 A2,2 0 0 0 5,13 L7,13" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+                        </Canvas>
+                    </Viewbox>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
     <Style x:Key="AbIconDelegate" TargetType="ContentControl">
         <Setter Property="Width" Value="20" />
         <Setter Property="Height" Value="20" />

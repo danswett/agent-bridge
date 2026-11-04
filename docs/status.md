@@ -65,7 +65,7 @@ The work has been built phone-first. All merged PRs are listed in §7.
 | Spikes S1–S6 | Done. S7 (macOS), S8 (corporate policy, parked) and S9 (relay at scale) not started |
 | Protocol v1 | sessions, answer, reply, attachments, stop, usage, launch, transfer, blobs, roster, update, folder trust. Specs in `docs/protocol/` |
 | Host (`agent-bridge-host`) | Read-only core, delivery (answers, replies, attachments, stop, launch, resume), worktree reclaim, hook intake, discovery holds, management refused from agent sessions, migrate and rollback, shadow comparison |
-| Windows app | Local and remote machines, Launch page, transfers, toasts, folder trust, Settings, self-update (installs when the host is idle), remote update |
+| Windows app | Local and remote machines, Launch page, transfers, toasts, folder trust, Settings, self-update (installs when the host is idle), remote update, Copy button on code blocks |
 | PWA | Cards, answers, replies, attachments, launch, stop, usage, push, All machines view, Machines fold, folder trust, remote update, Copy button on code blocks |
 | Relay | Production at https://relay.bad-duck.com, image `7c17d4a` (2026-11-01), with a roster store. Staging, then production on approval, via `.github/workflows/relay.yml` |
 | HA connector | Stages 1–7, so a migrated machine stays on the existing HA dashboard: status, answers, replies, stop, launch, phone notifications, update buttons, upkeep and forget. Contract pinned to agent-ha-bridge v1.33.33 |

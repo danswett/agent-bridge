@@ -1,9 +1,12 @@
 using AgentBridge.App.Core;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
+using Windows.ApplicationModel.DataTransfer;
 
 namespace AgentBridge.App;
 
@@ -16,7 +19,7 @@ public sealed class MarkdownView : StackPanel
     // The design's monospace stack (design/tokens.json type.mono), from the app's resources.
     static FontFamily Mono => (FontFamily)Application.Current.Resources["MonoFontFamily"];
     string? markdown;
-    bool wrapCode;
+    bool approval;
 
     public MarkdownView() => Spacing = 8;
 
@@ -62,24 +65,40 @@ public sealed class MarkdownView : StackPanel
         }
     }
 
-    // Code wraps rather than scrolls: where every character must be seen without scrolling, as an
-    // approval's prompt in Needs you, whose Approve once allows all of it (#165).
-    public bool WrapCode
+    // An approval's message on its card (#220): drawn exactly as written, fence markers included,
+    // as one block in the code face, with nothing in it read as Markdown (MarkdownModel.Approval):
+    // what is not on screen as it runs (right-to-left letters too) shown as escapes, read left to
+    // right. A Codex approval's command is prose, and Approve once allows what was read.
+    public bool Approval
     {
-        get => wrapCode;
+        get => approval;
         set
         {
-            if (value == wrapCode) { return; }
-            wrapCode = value;
+            if (value == approval) { return; }
+            approval = value;
+            if (value) { FlowDirection = FlowDirection.LeftToRight; } else { ClearValue(FlowDirectionProperty); }
             Render();
         }
     }
+
+    // Where Copy puts a block's text. The self-test swaps in its own, so a run never takes the
+    // clipboard from the person at the machine.
+    internal static Func<string, bool> PutText = text =>
+    {
+        var data = new DataPackage();
+        data.SetText(text);
+        Clipboard.SetContent(data);
+        // Kept after the app exits: a command copied, then the app closed, still pastes. A flush
+        // refused leaves it on the clipboard while the app runs, so the copy still counts.
+        try { Clipboard.Flush(); } catch (System.Runtime.InteropServices.COMException) { }
+        return true;
+    };
 
     void Render()
     {
         Children.Clear();
         if (markdown is null) { return; }
-        foreach (var b in MarkdownModel.Parse(markdown))
+        foreach (var b in Approval ? MarkdownModel.Approval(markdown) : MarkdownModel.Parse(markdown))
         {
             var element = Block(b);
             if (Reading) { Read(element); }
@@ -161,25 +180,110 @@ public sealed class MarkdownView : StackPanel
 
     static UIElement Heading(MdHeading h) => Text(h.Inlines, h.Level switch { 1 => 20, 2 => 18, 3 => 16, _ => 14 }, bold: true);
 
-    UIElement Code(MdCode c) => new Border
+    // Code wraps rather than scrolls (#296): every character of a long command is seen without
+    // scrolling sideways, as in the PWA. The wrap is the text block's own and adds no line breaks,
+    // so selecting the text, or Copy, gives the command as drawn.
+    // Every block reads strictly left to right, in the order it runs, never a reading order detected
+    // from its letters, with what is not on screen as it runs drawn as escapes (CodeCopy, #220):
+    // the conversation's, the delegate inspector's, and an approval's on its card, where Approve once
+    // allows all of it.
+    UIElement Code(MdCode c)
     {
-        Background = Ui.Brush("AbSubtle"),
-        CornerRadius = new CornerRadius(6),
-        Padding = new Thickness(10, 8, 10, 8),
-        Child = WrapCode
-            // The lane's code reads in the order it runs: left to right, never a reading order
-            // detected from its letters (NeedsYouEntry refuses right-to-left text and anything drawn
-            // elsewhere, and escapes it in the line).
-            ? new TextBlock { Text = c.Text.TrimEnd('\n'), FontFamily = Mono, FontSize = 13, IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap, FlowDirection = FlowDirection.LeftToRight, TextReadingOrder = TextReadingOrder.UseFlowDirection }
-            : new ScrollViewer
+        var copy = new CodeCopy(c, text => PutText(text), new QueueDispatcher(DispatcherQueue));
+        var text = new TextBlock
         {
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            HorizontalScrollMode = ScrollMode.Auto,
-            VerticalScrollMode = ScrollMode.Disabled,
-            Content = new TextBlock { Text = c.Text.TrimEnd('\n'), FontFamily = Mono, FontSize = 13, IsTextSelectionEnabled = true },
-        },
-    };
+            Style = (Style)Application.Current.Resources["AbTypeCode"],
+            Text = copy.Text,
+            IsTextSelectionEnabled = true,
+            TextWrapping = TextWrapping.Wrap,
+            FlowDirection = FlowDirection.LeftToRight,
+            TextReadingOrder = TextReadingOrder.UseFlowDirection,
+            Margin = new Thickness(0, 0, 6, 0),
+        };
+        AutomationProperties.SetAutomationId(text, "CodeText");
+        var head = new Grid();
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        // What the block held that its escapes stand for, said in words beside Copy: both if both.
+        var notes = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
+        if (copy.Hidden) { notes.Children.Add(Note(CodeCopy.HiddenNote, "CodeHidden")); }
+        if (copy.RightToLeft) { notes.Children.Add(Note(CodeCopy.RightToLeftNote, "CodeRightToLeft")); }
+        head.Children.Add(notes);
+        // An approval's card has no Copy: its block is the whole message, prose and fence lines too,
+        // and pasted into bash a line of backticks runs as a command substitution.
+        if (!Approval)
+        {
+            var button = CopyButton(copy);
+            Grid.SetColumn(button, 1);
+            head.Children.Add(button);
+        }
+        Grid.SetRow(text, 1);
+        var grid = new Grid { RowSpacing = 2 };
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.Children.Add(head);
+        grid.Children.Add(text);
+        return new Border
+        {
+            Background = Ui.Brush("AbSubtle"),
+            CornerRadius = new CornerRadius(6),
+            // Copy sits in the top-right corner above the code, so it never covers a line of it.
+            Padding = new Thickness(10, 4, 4, 8),
+            Child = grid,
+        };
+    }
+
+    static TextBlock Note(string text, string id)
+    {
+        var note = new TextBlock
+        {
+            Style = (Style)Application.Current.Resources["AbTypeMeta"],
+            Foreground = Ui.Brush("AbText2"),
+            Text = text,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        AutomationProperties.SetAutomationId(note, id);
+        return note;
+    }
+
+    // A block's Copy button, as the PWA's: its icon and "Copy", then "Copied" (or "Copy failed")
+    // for a moment. Its name stays "Copy code" whatever it shows, and what happened is said to a
+    // screen reader, as the PWA's live region says it. 32 high, the desktop's smallest target (§9).
+    static Button CopyButton(CodeCopy copy)
+    {
+        var resources = Application.Current.Resources;
+        var label = new TextBlock { Style = (Style)resources["AbTypeMeta"], Text = copy.Label, VerticalAlignment = VerticalAlignment.Center };
+        var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        content.Children.Add(new ContentControl { Style = (Style)resources["AbIconCopy"], Width = 16, Height = 16, VerticalAlignment = VerticalAlignment.Center });
+        content.Children.Add(label);
+        var button = new Button
+        {
+            Style = (Style)resources["AbIconButton"],
+            Width = double.NaN,
+            MinWidth = 32,
+            Padding = new Thickness(6, 0, 8, 0),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Foreground = Ui.Brush("AbText2"),
+            Content = content,
+        };
+        AutomationProperties.SetName(button, CodeCopy.Name);
+        AutomationProperties.SetAutomationId(button, "CopyCode");
+        ToolTipService.SetToolTip(button, CodeCopy.Name);
+        copy.PropertyChanged += (_, _) =>
+        {
+            label.Text = copy.Label;
+            button.Foreground = Ui.Brush(copy.Label switch { CodeCopy.Done => "AbBridge", CodeCopy.Failed => "AbDangerText", _ => "AbText2" });
+        };
+        button.Click += (_, _) =>
+        {
+            var copied = copy.Copy();
+            // Created if need be: FromElement finds only a peer something already asked for.
+            FrameworkElementAutomationPeer.CreatePeerForElement(button)?.RaiseNotificationEvent(
+                copied ? AutomationNotificationKind.ActionCompleted : AutomationNotificationKind.ActionAborted,
+                AutomationNotificationProcessing.MostRecent, copy.Label, "AgentBridgeCodeCopied");
+        };
+        return button;
+    }
 
     UIElement Quote(MdQuote q)
     {

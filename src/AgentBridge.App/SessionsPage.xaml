@@ -218,10 +218,10 @@
                                                         TextReadingOrder="DetectFromContent"
                                                         Text="{x:Bind Line}"
                                                         Visibility="{x:Bind local:Ui.Show(ShowLine)}" />
-                                                    <!-- An approval answered here shows its prompt whole: everything Approve once allows. -->
+                                                    <!-- An approval answered here shows its prompt whole, as its card does: exactly as written (ui.md §6.4). -->
                                                     <local:MarkdownView
                                                         AutomationProperties.AutomationId="NeedsYouPrompt"
-                                                        WrapCode="True"
+                                                        Approval="True"
                                                         Markdown="{x:Bind Prompt}"
                                                         Visibility="{x:Bind local:Ui.Show(HasPrompt)}" />
                                                     <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Meta, Mode=OneWay}" />

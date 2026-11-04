@@ -45,7 +45,7 @@ public sealed class QuestionView : StackPanel
 
         head = new TextBlock { Text = heading ?? vm.Heading, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsHead") };
         Children.Add(head);
-        Children.Add(new MarkdownView { Markdown = vm.Message });
+        Children.Add(new MarkdownView { Approval = vm.Approval, Markdown = vm.Message });
 
         if (!vm.Answerable)
         {
