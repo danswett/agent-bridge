@@ -103,8 +103,12 @@ An external row is the normal 20 px row, with:
 - a collaborator's waiting session drawn as an **outlined** S tile in External, never the
   filled amber tile, with *Waiting for @welshofer*;
 
-Opening one shows exactly what the link's read projection carries (agent-principals §7.4,
-§7.12): the title, status, the **latest response** (`activity.response`) and whether it's
+What a row shows follows the other side's grant (agent-principals §7.4, §7.12). Under a
+**status-only** link, line 1 names the agent in secondary text (*copilot session*) where the
+title would be, line 2 reads *Working · status only*, and the opened view says *@octo-dev
+shares status only: no titles or text.* (board 2). A title appears only if they also give
+the separate person-view **Show titles** grant, and the latest response only under **Read
+content**. Under a content grant, opening one shows exactly what the projection carries: the title, status, the **latest response** (`activity.response`) and whether it's
 waiting. Never their prompts, questions, reasoning, tool history or delegates' content. The
 header reads `@welshofer · WS-LAPTOP (their name) · Working` with an **◇ External** tag;
 above the response, *Latest response · 2 min ago*; below it, *The link shares the latest
@@ -134,6 +138,11 @@ On your own sessions' messages:
 | An external agent | **outlined ◇** in External, a dashed External outline, no filled edge | **external** · Sent by an agent on *WS-LAPTOP* · **@welshofer** |
 | Any agent carrying external content (§5.8 retained origins) | its own mark, plus a small outlined ◇ line | Carries **external** content from **@welshofer** (*another account* only for an external origin without a verified login) |
 | Any agent carrying automation, forwarded or unknown content (§5.8) | its own mark, plus a neutral line, no External colour | Carries automation content from *Home Assistant* · Carries forwarded content · Carries content of unknown origin |
+| Origins another account's host lists (§4.3: its claim, never fact) | a neutral line, no External diamond | @welshofer reports external content from @octo-dev |
+
+Only origins your own hosts recorded, including the `external:<account>` your host adds for
+any cross-account message, are stated as fact. A peer's listed origins are its report; ones
+naming your own account are dropped.
 
 Under the external label, secondary and quoted: *Their session: "Port the pairing tests"*.
 The filled-versus-outlined contrast and the word "external" keep the two apart in forced
@@ -184,8 +193,9 @@ A new page in Settings, after Devices.
 
 **The link dialog** (board 7), from "Review and connect" or "Link by invitation…":
 
-- *What @mira-k can do*: **Read status**, **Read content**, **Reply**, **Launch** (the separate
-  grants of agent-principals §7.4), each with one plain line. Nothing is pre-ticked. Read
+- *What @mira-k can do*: **Read status** (with, nested under it, **Show titles in @mira-k's
+  app**, the separate person-view display grant of §7.12), **Read content**, **Reply**,
+  **Launch** (the separate grants of agent-principals §7.4), each with one plain line. Nothing is pre-ticked. Read
   content carries the §7.4 warning that @mira-k and their AI provider may retain what their
   agents read, and that revocation doesn't retract copies.
 - *Allow-all sessions*: two separate opt-ins (read my allow-all sessions; ask me before each
@@ -420,14 +430,16 @@ and changes them there, not here:
   @welshofer's prompts, questions and tool history stay on their side.*; *@welshofer's
   agent is waiting for @welshofer.*; *Only @welshofer can see what it asked and answer it.*
 - Provenance: *Sent by copilot on DESK*; *external · Sent by an agent on WS-LAPTOP ·
-  @welshofer*; *Their session: "…"*.
+  @welshofer*; *Their session: "…"*; *@welshofer reports external content from @octo-dev*.
+- Status-only rows: *copilot session*; *Working · status only*; *@octo-dev shares status
+  only: no titles or text.*; *@octo-dev shares titles and status, not text.*
 - Filter: *Involving external agents*; *External agents: sent, read, refused · 2 min*; *No
   external agents in the last hour*; *None sent to, read or were refused by your sessions.*;
   *Show 24 hours*; *Clear filter*.
 - Collaboration: *Find collaborators who use Slipgates on {repo}*; the §7.11.5 suggestion
   copy; *Review and connect*; *Not now*; *Never for this repo*; *Link by invitation…*;
   *Active*, *Suspended*, *Revoked*; *Re-confirm workspaces*; *Revoke…*; *Message audit*.
-- Link dialog: *What @{login} can do*; *Read status*, *Read content*, *Reply*, *Launch* and their lines; the Read content retention
+- Link dialog: *What @{login} can do*; *Read status*, *Show titles in @{login}'s app*, *Read content*, *Reply*, *Launch* and their lines; the Read content retention
   warning; the two
   allow-all opt-ins and warnings; *Workspaces (pinned now)*; *Who can end this link*; *Add a
   device or a recovery key that can end this link*; *Identity*; *Link code (optional, stronger)*; *Link code (required)*; *Accept with Windows

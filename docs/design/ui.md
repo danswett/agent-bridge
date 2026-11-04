@@ -855,8 +855,20 @@ from": Everyone (the default), Mine, and one entry per collaborator. It never sh
 - **Search** finds their sessions too, in a separate **Collaborators** group after your own
   results.
 
+**What each grant shows** (`agent-principals.md` §7.4, §7.12). The other side's grant decides
+what you see of their sessions, and the row never shows more:
+- **Status only:** typed status, no free text. Line 1 names the agent in secondary text,
+  "copilot session", where a title would be; line 2 reads "Working · status only". Opening it
+  shows the header and, in place of the response, "@*login* shares status only: no titles or
+  text." A waiting session keeps the outlined card.
+- **Status with titles:** when @*login* also grants the separate person-view display grant
+  (titles in your app only, never to your agents), line 1 is the title; the rest is as status
+  only, and the opened view says "@*login* shares titles and status, not text."
+- **Content:** the title and the **latest response**, as below. The latest response is shown
+  only under a content grant.
+
 **Read-only.** A collaborator's row follows §2.2 rule 9. Opening it shows only what the link's
-read projection carries: the title, the status, the **latest response** ("Latest response · 2
+read projection carries: under a content grant, the title, the status, the **latest response** ("Latest response · 2
 min ago") and whether it waits. Never their prompts, questions, reasoning, tool history or
 delegates: the projection carries no `subagents` (`agent-principals.md` §7.4), so their rows
 have no delegate nest or count. The header reads "@*login* · *machine* (their name) · *status*" with the
@@ -874,6 +886,7 @@ asked and answer it.", with no question and no buttons.
 | Your own agent | filled Agent diamond, Agent left edge | "Sent by copilot on *DESK*" |
 | An external agent | **outlined** External diamond, dashed External outline, no filled edge | "**external** · Sent by an agent on *WS-LAPTOP* · **@welshofer**", then "Their session: “…”" |
 | Any agent that carries external content | its own mark, plus a second line with a small outlined External diamond | "Carries **external** content from **@welshofer**" |
+| An external agent whose host lists further origins | its mark, plus a neutral line, as that host's claim | "@welshofer reports external content from @octo-dev" |
 | Any agent that carries other retained content | its own mark, plus a second neutral line, no External colour or diamond | "Carries automation content from *Home Assistant*", "Carries forwarded content", "Carries content of unknown origin" |
 
 **Retained origins** (`agent-principals.md` §5.8): a message whose `driverFrom.origins` is not
@@ -889,7 +902,14 @@ line per category:
 - `unknown:<machine>`, or `origins` reported as `"unknown"`: "Carries content of unknown
   origin", neutral, never guessed into another category.
 
-The held-message card shows the same lines under its sender.
+**Established or reported.** Only origins your own hosts recorded are stated as fact; that
+includes the `external:<account>` your host adds itself for a message from another account.
+Origins another account's host lists are its claim, never verified by a resolved @login
+(`agent-principals.md` §4.3, the `provenance` row), so they read as that sender's report, in
+neutral text without the External diamond: "@welshofer reports external content from
+@octo-dev", "@welshofer reports automation content", "@welshofer reports content of unknown
+origin". Listed origins that name your own account are dropped. The held-message card shows
+the same lines under its sender.
 
 **Involving external agents.** A filter chip in the list header (in "More filters" on a phone),
 with the outlined diamond, and a window of **1 h · 24 h · 7 days**, 24 h by default. It shows
@@ -908,8 +928,8 @@ collaborator item that is yours: a pending question on its target session, count
 - the title "Message from an external agent", the outlined diamond, and "Held · 52 min left",
   counted down to the host's expiry, never a client's own timer;
 - a From / To block: *From* "external · an agent on *machine* (their name) · **@login**", their
-  session title quoted below, then its retained origins ("Carries external content from
-  **@login**"); *To* your session, its agent, machine and mode;
+  session title quoted below, then its retained origins as the sender's report ("@*login* reports external content from
+  @*other*", never stated as fact); *To* your session, its agent, machine and mode;
 - the **whole** message in the code face, escaped and never read as Markdown, exactly as an
   approval's (§6.4), in a scrolling box with a visible scrollbar, under "Shown exactly as sent, N
   characters. Not formatted.";
@@ -949,7 +969,9 @@ device." and [Back to sessions]. It is never a notification and never in Needs y
   a link shows its history (accepted, verified, renewed, suspended, revoked, each with its cause
   and device), [Message audit] and [Revoke…].
 - **The link dialog:** "What @*login* can do", nothing ticked: **Read status** (working, waiting
-  or idle; no titles, no text), **Read content** (titles and the latest response), Reply and
+  or idle; no titles, no text) with, under it, **Show titles in @*login*'s app** (the separate
+  person-view display grant of §7.12: only @*login* sees them, in their own app; their agents
+  still get status only), **Read content** (titles and the latest response), Reply and
   Launch, the separate grants of `agent-principals.md` §7.4. Read content carries its warning:
   "@*login* and their AI provider may process and retain what their agents read, under their own
   policies. Read-only access and later revocation don't retract copies." The two allow-all
@@ -1134,7 +1156,9 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   because a control that is absent can't carry a tooltip.
 - **Collaborator words (#519):** "Mine", "Everyone", "Show sessions from", "Manage
   collaborators…", "External", "*machine* · their name", "· read-only", "Waiting for @*login*",
-  "Driven by an external agent · @*login*", "External agent · @*login*" (narrow), "Involving
+  "copilot session" and "· status only", "@*login* shares status only: no titles or text.",
+  "@*login* shares titles and status, not text.", "Show titles in @*login*'s app", "@*login*
+  reports external content from @*other*", "Driven by an external agent · @*login*", "External agent · @*login*" (narrow), "Involving
   external agents", "Message from an external agent", "Approve once", "Allow @*login* here
   for…", "Expired · not delivered", "Stop allowing @*login*", and the reason lines (§6.7). The
   product name in them is Slipgates. Never "gate" in a status or error line.
