@@ -18,6 +18,8 @@ static partial class CiPlan
     // The output the plan job sets, outside the selector, when the whole ring must run: it gates
     // nothing by its own name.
     const string WholeRing = "whole-ring";
+    // Jobs that deliver rather than check, so quality-gate doesn't wait on them.
+    static readonly HashSet<string> Delivery = new(StringComparer.Ordinal) { PublishGate, "publish", "attest", "relay-image-sarif" };
 
     [GeneratedRegex(@"needs\.plan\.outputs\.([A-Za-z0-9_-]+)\s*==\s*'true'")]
     private static partial Regex GatedOn();
@@ -115,10 +117,12 @@ static partial class CiPlan
             var gateNeeds = Needs(gate);
             if (!gateNeeds.Contains(Plan))
                 Add($"ci.yml {Gate} doesn't need plan, so a failed plan would skip every job and pass the gate");
-            // A job downstream of the gate (publish-gate, checked below) can't be in its needs.
-            foreach (var (id, job) in jobs.Where(j => j.Key is not (Gate or PublishGate) && !Needs(j.Value).Contains(Gate) && (gated.Contains(j.Key) || Needs(j.Value).Contains(Plan))))
+            // Every check job, whether it reads the plan or not; a job downstream of the gate
+            // (publish-gate, checked below) can't be in its needs, and the delivery jobs run only on
+            // main, where a superseded publish is cancelled by design.
+            foreach (var (id, job) in jobs.Where(j => j.Key is not (Gate or Plan) && !Delivery.Contains(j.Key) && !Needs(j.Value).Contains(Gate)))
                 if (!gateNeeds.Contains(id))
-                    Add($"ci.yml job {id} needs the plan but isn't in {Gate}'s needs, so its result wouldn't count");
+                    Add($"ci.yml job {id} isn't in {Gate}'s needs, so its result wouldn't count (only {string.Join(", ", Delivery.Order(StringComparer.Ordinal))} may stay out)");
         }
 
         // publish-gate stands on quality-gate rather than a second copy of its needs (#512).

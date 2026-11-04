@@ -79,6 +79,13 @@ jobs:
       # and a ready pull request that touches any of them runs ring 2: every gated job and step,
       # on every runner, whatever the selector says. A draft keeps its fast ring; its gate is not
       # the required check. Its own step, so nothing the change runs can write this output.
+      # The paths come NUL-separated (-z): without it git quotes a path holding ", \, a tab or
+      # another control character, and the quoted form, starting with ", slipped past the anchors
+      # below (tools/AgentBridge.Quality/a"b.cs left the whole ring off). Fail closed as well: a
+      # path that still starts with " or holds a control or undecodable character counts as one.
+      # A pull request runs its own ci.yml, so it can edit this step too: a .github/ change stays
+      # under the standing rule of an independent review and a check that ring 2 ran
+      # (quality/README.md §4.7).
       - name: Whole ring, when the change touches what decides selection
         id: whole-ring
         shell: pwsh
@@ -87,13 +94,16 @@ jobs:
           DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           $roots = '^(\.github|quality|tools/AgentBridge\.Quality|tests/AgentBridge\.Quality\.Tests|build)/|(^|/)(Directory\.[^/]+\.(props|targets)|[^/]+\.slnx?|global\.json|nuget\.config)$'
-          $changed = @(git -c core.quotePath=false diff --name-only --no-renames HEAD^1 HEAD)
+          $odd = '^"|[\x00-\x1f\x7f\uFFFD]'
+          $out = git diff -z --name-only --no-renames HEAD^1 HEAD
           if ($LASTEXITCODE) { throw "git diff HEAD^1 HEAD failed ($LASTEXITCODE)" }
-          $touched = @($changed | Where-Object { $_ -match $roots })
+          # PowerShell splits native output into lines; a path with a newline in it is put back.
+          $changed = @((@($out) -join "`n") -split "`0" | Where-Object { $_ })
+          $touched = @($changed | Where-Object { $_ -match $roots -or $_ -match $odd })
           $whole = if ($env:EVENT -ne 'pull_request') { $true } elseif ($env:DRAFT -eq 'true') { $false } else { $touched.Count -gt 0 }
           "whole-ring=$($whole.ToString().ToLowerInvariant())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
           if ($env:EVENT -eq 'pull_request' -and $touched.Count -gt 0) {
-            $shown = ($touched | Select-Object -First 10 | ForEach-Object { '`' + $_ + '`' }) -join ', '
+            $shown = ($touched | Select-Object -First 10 | ForEach-Object { '`' + ($_ -replace '[\x00-\x1f\x7f`]', '?') + '`' }) -join ', '
             if ($touched.Count -gt 10) { $shown += " (+$($touched.Count - 10) more)" }
             $what = if ($whole) { 'so the whole ring runs (ring 2: every gated job and step)' } else { 'so marking it ready runs the whole ring' }
             "**This change touches what decides selection**, ${what}: $shown." | Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8
@@ -1036,7 +1046,7 @@ jobs:
     # plan skipped isn't selected, so a pull request never waits on it, but any job that failed
     # or was cancelled fails this, and so does a selected job that was skipped (#487). The plan
     # itself is in needs, since when it fails every other job is skipped. The catalog check
-    # fails when a job that needs the plan is missing here. publish-gate, publish, attest and
+    # fails when any check job is missing here. publish-gate, publish, attest and
     # relay-image-sarif are not: they deliver rather than check, and run only on main, where a
     # superseded publish is cancelled by design.
     # A draft's gate has another name, so the required check, quality-gate, only ever comes from

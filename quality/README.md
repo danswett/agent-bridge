@@ -276,8 +276,17 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    select ring 2 (with ring 1's choice beside it). Otherwise a selector or catalog under change
    would choose its own tests: a bug in `ChangedFiles`, or one line moving `quality/**` into
    `no_test_paths`, could pass a gate that ran nothing. A draft keeps its fast ring, whose gate
-   isn't the required check. `.github/CODEOWNERS` asks the owner to review changes to
-   `.github/`, `quality/` and the selector and its tests.
+   isn't the required check. The paths come from `git diff -z`, NUL-separated, and any path that
+   still looks quoted or holds a control character counts as touched: one-per-line output quotes
+   such a path, and `tools/AgentBridge.Quality/a"b.cs` once left the whole ring off.
+   `.github/CODEOWNERS` asks the owner to review changes to every path on that list.
+
+   **What this doesn't close.** On `pull_request` GitHub runs the pull request's own ci.yml, so a
+   change to `.github/**` can edit this list, the whole-ring step or quality-gate's checks along
+   with anything else. Such a change stays under the standing rule: an independent
+   workflow review, and a check that its plan ran ring 2, before it merges. The structural guard
+   is #524's `merge-rule` workflow, which runs on `pull_request_target` from the base branch's
+   code, so a pull request can't rewrite it.
 
    The check wants every job in every workflow file named
    in a suite's `where:`, so a temporary workflow (a CI loop, say) fails it, and with it the plan:
@@ -285,12 +294,14 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    throwaway branch with no pull request, triggered by `push` to that branch (`workflow_dispatch`,
    for reruns with `gh workflow run --ref`, fires only once the file has run or is on `main`), or
    listed in the catalog with `status: planned`. It also checks ci.yml's wiring to the plan, which
-   only names hold together: every job whose `if:` reads the plan reads its own output and runs
-   on `main` whatever the plan says; the plan step's `JOBS`, the jobs gated on the plan and the
-   plan's outputs agree; every job that needs the plan is in `quality-gate`'s needs;
+   only names hold together: every job whose `if:` reads the plan has exactly the one gate shape
+   (its own output, and it runs on `main` and in the whole ring whatever the plan says); the plan
+   step's `JOBS`, the jobs gated on the plan and the plan's outputs, bound to the steps that
+   compute them, agree; every check job in ci.yml is in `quality-gate`'s needs (all but the
+   delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`);
    `publish-gate` needs `quality-gate` and requires its success; and each step that runs when a
-   suite is selected names a suite the catalog has, whose `where:` names that job, and runs on
-   `main` whatever the plan selected.
+   suite is selected names a suite the catalog has, whose `where:` names that job explicitly,
+   and runs on `main` and in the whole ring whatever the plan selected.
    The plan writes the "what runs and why" table to the run's summary, and outputs:
    - a true or false per job, from the selected suites' `where:`. So the catalog, not ci.yml,
      says which suites a job runs, and moving a suite moves its trigger. On a pull request a
