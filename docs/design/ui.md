@@ -609,9 +609,9 @@ launch lineage may come later, on top of this, once hosts report it.
   way. At the top of the first group, or the foot of Sessions, nothing moves.
 - **Renaming or deleting** never ends, hides or reorders a session. Delete group asks nothing:
   its rows go to the top of Sessions in their order, a pinned member stays pinned and leaves
-  the group, focus goes to the first of the moved rows (or, with none, the next header or row),
-  and it is announced politely ("*name* deleted. 3 sessions moved to Sessions"). An empty
-  group stays until it is deleted.
+  the group, focus goes to the first of the moved rows (or, with none, the next header or row,
+  else the one before it, else New), and it is announced politely ("*name* deleted. 3 sessions
+  moved to Sessions"). An empty group stays until it is deleted.
 - **Kept and roaming:** groups are kept with your order (above). Their names, their order and
   which sessions are in them roam with your order, pins and sort once #759 lands: keyed by
   machine id + session id, last writer wins per change, in the same record as the order and
@@ -621,16 +621,17 @@ launch lineage may come later, on top of this, once hosts report it.
   lands, all of it is per device.
 - **A resumed session keeps its group by its resume lineage.** A session's membership outlives
   its ending: it is kept for 30 days after the session was last listed, so a resume finds it.
-  - Resumed on its own machine (`session.launch` with `resume`, which keeps the session's id;
-    v1-launch.md), its key is unchanged: it goes back to its group, at the top.
+  - Resumed on its own machine, by anyone (a client's `session.launch` with `resume`, or at the
+    machine), it keeps its id (v1-launch.md), so its key is unchanged: it goes back to its
+    group, at the top, whether or not this client saw the launch.
   - Brought from another machine (`transfer`), it is resumed under a new id. The client that
     asked knows the lineage from the launch's result (`launched.transfer`'s `from` and
     `session`, with `launched.resume` its new id here), and puts the new key in the old one's
     group, which then roams like any other change.
-  - With no lineage the client can tell (resumed at the machine, from another client that
-    didn't record it, or after the old membership was dropped), it is a new session: the top of
-    Sessions, in no group. A host never reports lineage today; if it does later, it is used
-    the same way.
+  - Only a session whose own key has no kept membership and whose lineage no client recorded
+    (a new id from a transfer no client saw, an agent that started afresh, or membership
+    already dropped) is a new session: the top of Sessions, in no group. A host never reports
+    lineage today; if it does later, it is used the same way.
 
 **A machine away (#269).** A host's relay link drops now and then (a restart, an update, a
 network blip), often for under a minute. While its machine has left the relay's presence, and the
