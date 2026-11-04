@@ -58,4 +58,30 @@ public sealed class UiThreadTests
         Assert.True(mine.OnIt);
         Assert.False(other.OnIt);
     }
+
+    // What StallWatch writes down when a test's waits stop looking (#660): every thread's stack,
+    // a blocked one's included, read while the process goes on.
+    [Fact]
+    public void The_stall_watch_reads_the_stack_of_a_thread_blocked_elsewhere()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        using var parked = new ManualResetEventSlim();
+        using var go = new ManualResetEventSlim();
+        var thread = new Thread(() => ParkedUntil(parked, go)) { IsBackground = true };
+        thread.Start();
+        Assert.True(parked.Wait(FakeHost.Patience));
+        try
+        {
+            var stacks = StallWatch.Stacks();
+            Assert.Contains($"{nameof(UiThreadTests)}.{nameof(ParkedUntil)}", stacks);
+        }
+        finally { go.Set(); thread.Join(); }
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    static void ParkedUntil(ManualResetEventSlim parked, ManualResetEventSlim go)
+    {
+        parked.Set();
+        go.Wait();
+    }
 }
