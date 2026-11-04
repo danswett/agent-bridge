@@ -66,6 +66,7 @@ public sealed partial class SettingsViewModel : Observable
     int foundAt;
     string log = "";
     string agentInstallStatus = "";
+    string agentSignInStatus = "";
     bool agentInstallInProgress;
     bool installRequestPending;
     string? installing;
@@ -134,7 +135,7 @@ public sealed partial class SettingsViewModel : Observable
         {
             if (!HostRunning || !host.Can(HostOps.AgentReadinessCapability) || Status?.Agents is not { } report) { return []; }
             AgentReadinessRow[] rows = [.. report.Agents.Select(a => new AgentReadinessRow(a, CanManageAgents, CanInstallAgents, agentNotes.GetValueOrDefault(a.Id),
-                shared: hookResults.GetValueOrDefault(AgentReadinessRow.HooksOf(a.Id)), install: InstallOf(a.Id), installOffered: InstallOffered))];
+                shared: hookResults.GetValueOrDefault(AgentReadinessRow.HooksOf(a.Id)), install: InstallOf(a.Id), installOffered: InstallOffered, canSignIn: CanSignInAgents))];
             // Never on a host that is read-only or beside agent-ha-bridge: the row's own words say why
             // there (Review migration, Read-only), and the card would offer what can't be done.
             var mayOffer = Status?.ReadOnly is null && Status?.AgentHaBridge is null;
@@ -200,6 +201,9 @@ public sealed partial class SettingsViewModel : Observable
     }
     public string AgentInstallStatus { get => agentInstallStatus; private set => Set(ref agentInstallStatus, value); }
     public bool AgentInstallInProgress => agentInstallInProgress || Status?.AgentInstallation?.InProgress == true;
+    public bool CanSignInAgents => HostRunning && host.Can(HostOps.AgentSignInCapability) && !Busy && !AgentInstallInProgress
+        && Status?.ReadOnly is null && Status?.AgentHaBridge is null;
+    public string AgentSignInStatus { get => agentSignInStatus; private set => Set(ref agentSignInStatus, value); }
     public bool CanCheckAgents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && !Busy;
     public string AgentsState => !HostRunning ? "Connect to this machine's bridge to check its agents."
         : !host.Can(HostOps.AgentReadinessCapability) ? "This host does not report agent readiness. Update the app and restart the host."
@@ -562,7 +566,7 @@ public sealed partial class SettingsViewModel : Observable
     public bool Busy
     {
         get => busy;
-        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); RaiseVerification(); } }
+        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(CanSignInAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); RaiseVerification(); } }
     }
     // The card's Set up follows what the row's would (CanManageAgents), so it is drawn again wherever the rows are.
     void RaiseOffers() { Raise(nameof(AgentOffers)); Raise(nameof(HasAgentOffers)); Raise(nameof(AgentsNavName)); }
@@ -901,6 +905,32 @@ public sealed partial class SettingsViewModel : Observable
     {
         if (!AgentInstallInProgress) { return; }
         await host.CallAsync(HostOps.AgentsInstallCancel);
+    });
+
+    public Task SignInAgentAsync(string agent) => RunAsync(async () =>
+    {
+        if (!HostRunning || !host.Can(HostOps.AgentSignInCapability))
+        {
+            throw new InvalidOperationException("This host does not support CLI sign-in. Update the app and restart the host.");
+        }
+        if (Status?.ReadOnly is not null || Status?.AgentHaBridge is not null)
+        {
+            throw new InvalidOperationException($"CLI sign-in is unavailable: {Status.ReadOnly ?? Status.AgentHaBridge}");
+        }
+        AgentSignInStatus = "Opening the CLI's own sign-in flow...";
+        var reported = false;
+        try
+        {
+            var result = await host.CallAsync<AgentSignInResult>(HostOps.AgentsSignIn,
+                new AgentSignInRequest(agent, Confirmed: true), TimeSpan.FromSeconds(30));
+            AgentSignInStatus = result.Detail;
+            reported = true;
+            if (!result.Opened) { throw new InvalidOperationException(result.Detail); }
+        }
+        finally
+        {
+            if (!reported) { AgentSignInStatus = "The sign-in window's result is unavailable. Check your desktop before retrying; account access remains unverified."; }
+        }
     });
 
     // How long a setup may take at the host before its row says it took too long (tests shorten it).

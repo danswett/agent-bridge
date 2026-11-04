@@ -66,7 +66,8 @@ public static class LocalApi
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
                 .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],
                 .. control.HasAgentInstall ? new[] { HostOps.AgentInstallCapability } : [],
-                .. control.HasAgentVerification ? new[] { HostOps.AgentVerificationCapability } : []] },
+                .. control.HasAgentVerification ? new[] { HostOps.AgentVerificationCapability } : [],
+                .. control.HasAgentSignIn ? new[] { HostOps.AgentSignInCapability } : []] },
             CallerKind.Agent => hello with { Capabilities = [.. hello.Capabilities.Where(AgentCapabilities.Contains)] },
             _ => hello,
         });

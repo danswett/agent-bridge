@@ -629,6 +629,12 @@ async Task<int> ServeAsync(HostHandover handover)
         ServeReadOnly, agentLocator, new BatchFileRunner(new CommandRunner(codexEnvironment), codexEnvironment)) : null;
     var agentSetup = standaloneHooks is null ? null : new AgentSetupService(standaloneHooks, ServeReadOnly, stop.Token);
     if (agentSetup is not null) { manage.Hooks = new AgentSetupHookRepair(agentSetup, agentHomes, identity.Folder); }
+    void CheckAgentMutation(string agent)
+    {
+        if (ServeReadOnly() is { } why) { throw new InvalidOperationException($"CLI setup is unavailable while this host is read-only: {why}"); }
+        if (standaloneHooks is null) { throw new InvalidOperationException("CLI setup is not available on this platform."); }
+        standaloneHooks.CheckInstall(agent);
+    }
     await using var agentInstall = standaloneHooks is null ? null : new AgentInstallService(identity.Folder,
         agentLocator, agentLocator.Refresh, new VersionCommandRunner(),
         () =>
@@ -636,11 +642,10 @@ async Task<int> ServeAsync(HostHandover handover)
             var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "winget.exe");
             return File.Exists(path) ? path : null;
         },
-        agent =>
-        {
-            if (ServeReadOnly() is { } why) { throw new InvalidOperationException($"CLI installation is unavailable while this host is read-only: {why}"); }
-            standaloneHooks.CheckInstall(agent);
-        }, stop.Token);
+        CheckAgentMutation, stop.Token);
+    var agentSignIn = OperatingSystem.IsWindows() && standaloneHooks is not null
+        ? new AgentCliSignInService(identity.Folder, agentHomes, agentLocator, agentLocator.Refresh,
+            new WindowsAgentStarter(), new VersionCommandRunner(), CheckAgentMutation, stop.Token) : null;
     await using var agentReadiness = new AgentReadinessService(identity.Folder, agentHomes,
         settings.Launch, agentLocator, new VersionCommandRunner(), ServeReadOnly, intake);
     var launchConfiguration = JsonSerializer.Serialize(settings.Launch, ProtocolJson.Options);
@@ -693,6 +698,7 @@ async Task<int> ServeAsync(HostHandover handover)
         // Only while this host runs sign-in from devices: a switch changed since applies at the next start.
         SignInDevices = signIn is null ? null : self => PersonDevices.View(personRoster, rosterAccount(), self),
         AgentVerification = agentVerification,
+        AgentSignIn = agentSignIn,
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
