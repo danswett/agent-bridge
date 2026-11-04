@@ -9,10 +9,10 @@
 # Only pull requests into this branch are judged; main's ruleset protects only it.
 base: main
 
-# Who posts merge-rule, as GraphQL names it (without REST's "[bot]"): the workflow's GITHUB_TOKEN
-# today. Once the merge-rule GitHub App exists (docs/merge-rule-app.md), its slug, so the
-# evaluator recognises its own earlier post and doesn't post the same verdict again.
-status_poster: github-actions
+# Who posts merge-rule, as GraphQL names it (without REST's "[bot]"): the merge-rule GitHub App
+# (docs/merge-rule-app.md, App ID 5607979), so the evaluator recognises its own earlier post and
+# doesn't post the same verdict again. Main's ruleset accepts merge-rule only from this App.
+status_poster: agent-bridge-merge-rule
 
 # A review whose author is this bot, on the head commit, is the Copilot review. GraphQL names the
 # bot without REST's "[bot]" suffix, and the evaluator also requires the author to be a Bot, so a

@@ -13,8 +13,9 @@ name: Merge rule
 # through the API: its code is never checked out, built or run.
 #  - pull_request_target: opened, pushed to, reopened, ready or back to draft, retargeted (edited),
 #    labelled or unlabelled.
-#  - status: a receipt or any other status posted on a head (statuses this workflow posts with its
-#    own token start no workflow, so it can't loop).
+#  - status: a receipt or any other status posted on a head. The App's own merge-rule posts do
+#    start a run (only GITHUB_TOKEN's events don't), so the job skips status events for the
+#    merge-rule context: they'd only re-judge what was just judged.
 #  - workflow_run: any other workflow started or finished on a pull request. Started, so a new run
 #    or a rerun on an already-green head turns the verdict pending at once (Perf, dispatched by
 #    hand, is required by nothing else); finished, so a late red flips it. A test keeps the list
@@ -57,16 +58,22 @@ jobs:
     if: >-
       (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch != 'main' || github.event.workflow_run.head_repository.full_name != github.repository)
       && (github.event_name != 'check_suite' || github.event.check_suite.head_branch != 'main')
+      && (github.event_name != 'status' || github.event.context != 'merge-rule')
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The merge-rule App's key lives in this environment, which only main may deploy from
+    # (docs/merge-rule-app.md): a pull request's own workflow can't reach it, so it can't post a
+    # merge-rule the ruleset accepts. With GITHUB_TOKEN it could, since every workflow posts as
+    # GitHub Actions and the ruleset couldn't tell them apart.
+    environment: merge-rule
     permissions:
       contents: read # check out main
       pull-requests: read # the pull requests, their files, labels and reviews
       checks: read # every check run on the head
       actions: read # which workflow each of the head's check suites belongs to
-      statuses: write # read the receipts, post merge-rule
-    # A Dependabot-triggered run's token may be read-only (see above); its post failing mustn't
-    # turn the run red when the schedule will post in its place.
+      statuses: read # the receipts; merge-rule itself is posted with the App's token
+    # A Dependabot-triggered run gets neither the environment's secret nor a writable token, so it
+    # can't mint the App's token; that mustn't turn the run red when the schedule posts in its place.
     continue-on-error: ${{ github.actor == 'dependabot[bot]' }}
     # One evaluation at a time, all triggers together, so no two read and post on the same head at
     # once, and an older read can't land after a newer one. A newer one waits rather than
@@ -95,9 +102,18 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Build main's evaluator
         run: dotnet build tools/AgentBridge.Quality -c Release --nologo -v q
+      # Minted after the build, so nothing the build runs holds it, and limited to posting statuses.
+      - name: Mint the merge-rule App's token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MERGE_RULE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MERGE_RULE_APP_KEY }}
+          permission-statuses: write
       - name: Judge and post merge-rule
         env:
           GH_TOKEN: ${{ github.token }}
+          MERGE_RULE_POST_TOKEN: ${{ steps.app.outputs.token }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll merge-rule --all \

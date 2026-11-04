@@ -413,15 +413,16 @@ agent-ha-bridge releases from this work:
   them from agent sessions); production relay deploys (a required reviewer); Azure
   changes (the owner's personal Visual Studio Enterprise subscription, never a work
   account or the trial subscription).
-- **Merge rule enforcement (#452, #524): pending apply.** The `merge-rule` workflow and main's
-  ruleset (`quality/ruleset-main.json`) are in the repository, but the ruleset, auto-merge and
-  branch deletion on merge aren't switched on yet. Until the coordinator applies them (the commands
-  and the rollback are in #524), merge by hand under AGENTS.md's rule, and treat `merge-rule`'s
-  status as advice. Once they're applied, change this line to say so, with the date. Auto-merge
-  stays off even then, until the merge-rule GitHub App posts the status (docs/merge-rule-app.md):
-  a same-repo PR's own workflow could forge it. Until then the coordinator merges by hand, after its
-  own local `merge-rule --pr <n>`, which counts only `danswett`'s receipts, run from a freshly
-  fetched `origin/main` checkout, never the PR's worktree (the tool refuses anything else).
+- **Merge rule enforcement (#452, #524): applied 2026-11-03.** Main's ruleset 26510567
+  (`quality/ruleset-main.json`) is active since 21:55 PT, the classic branch protection was removed
+  at 22:59 PT, and merged branches delete themselves. The merge-rule GitHub App (ID 5607979,
+  `agent-bridge-merge-rule`; docs/merge-rule-app.md) was created on 2026-11-04, and the workflow
+  posts `merge-rule` with its token once this change merges. Auto-merge stays off until the
+  coordinator has seen the App's posts and pinned the ruleset's `merge-rule` to the App; until then
+  the coordinator merges by hand, after its own local `merge-rule --pr <n>`, which counts only
+  `danswett`'s receipts, run from a freshly fetched `origin/main` checkout, never the PR's worktree
+  (the tool refuses anything else). Then change this line, and AGENTS.md's rule 4, to say
+  auto-merge is on, with the date.
 
 ## 9. Decision log (after design.md §10)
 

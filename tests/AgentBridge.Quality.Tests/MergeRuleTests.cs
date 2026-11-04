@@ -598,6 +598,36 @@ public class MergeRuleTests
         Assert.Equal(("failure", $"Needs an independent review of abcdef0: it touches {path}"), (verdict.State, verdict.Description));
     }
 
+    // The workflow posts merge-rule only with the App's token, from the environment only main can
+    // deploy from, and skips the status events its own posts start.
+    [Fact]
+    public void The_merge_rule_workflow_posts_with_the_apps_token_from_mains_environment_and_ignores_its_own_posts()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "merge-rule.yml"))));
+        var job = (YamlMappingNode)((YamlMappingNode)((YamlMappingNode)stream.Documents[0].RootNode)
+            .Children[new YamlScalarNode("jobs")]).Children[new YamlScalarNode("evaluate")];
+        string Scalar(YamlMappingNode node, string key) => ((YamlScalarNode)node.Children[new YamlScalarNode(key)]).Value!;
+        var permissions = (YamlMappingNode)job.Children[new YamlScalarNode("permissions")];
+        var steps = ((YamlSequenceNode)job.Children[new YamlScalarNode("steps")]).Cast<YamlMappingNode>().ToList();
+        var mint = steps.Single(s => s.Children.ContainsKey(new YamlScalarNode("uses"))
+            && Scalar(s, "uses").StartsWith("actions/create-github-app-token@", StringComparison.Ordinal));
+        var judge = steps.Single(s => s.Children.ContainsKey(new YamlScalarNode("name")) && Scalar(s, "name") == "Judge and post merge-rule");
+        var env = (YamlMappingNode)judge.Children[new YamlScalarNode("env")];
+
+        Assert.Equal("merge-rule", Scalar(job, "environment"));
+        Assert.Equal("read", Scalar(permissions, "statuses"));
+        Assert.Matches("^actions/create-github-app-token@[0-9a-f]{40} ?", Scalar(mint, "uses"));
+        Assert.Equal("${{ steps." + Scalar(mint, "id") + ".outputs.token }}", Scalar(env, "MERGE_RULE_POST_TOKEN"));
+        Assert.True(steps.IndexOf(mint) < steps.IndexOf(judge));
+        Assert.Contains("github.event.context != 'merge-rule'", Scalar(job, "if"));
+        Assert.Equal("agent-bridge-merge-rule", MergeRuleConfig.Load(Path.Combine(root, "quality", "merge-rule.yml")).StatusPoster);
+    }
+
+    // The merge-rule GitHub App (docs/merge-rule-app.md).
+    const long MergeRuleAppId = 5607979;
+
     // Reads the live repository, like CatalogTests: the ruleset must require only what something
     // posts, or every pull request waits forever; and nothing else may post merge-rule's name.
     [Fact]
@@ -614,6 +644,14 @@ public class MergeRuleTests
             .GetProperty("parameters").GetProperty("required_status_checks"));
 
         Assert.Equal(["merge-rule", "quality-gate"], required);
+        // merge-rule must come from the merge-rule App, whose key only main's environment holds:
+        // from GitHub Actions (15368), any pull request's own workflow could post it (#524's review).
+        var apps = ruleset.RootElement.GetProperty("rules").EnumerateArray()
+            .Single(r => r.GetProperty("type").GetString() == "required_status_checks")
+            .GetProperty("parameters").GetProperty("required_status_checks").EnumerateArray()
+            .ToDictionary(c => c.GetProperty("context").GetString()!, c => c.GetProperty("integration_id").GetInt64());
+        Assert.Equal(15368, apps["quality-gate"]);
+        Assert.Equal(MergeRuleAppId, apps["merge-rule"]);
         // Migrating from the classic protection drops none of its checks.
         Assert.Empty(Contexts(classic.RootElement.GetProperty("required_status_checks").GetProperty("checks")).Except(required));
         var jobs = Directory.EnumerateFiles(Path.Combine(root, ".github", "workflows"), "*.yml")

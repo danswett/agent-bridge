@@ -30,7 +30,7 @@
         "do_not_enforce_on_create": false,
         "required_status_checks": [
           { "context": "quality-gate", "integration_id": 15368 },
-          { "context": "merge-rule", "integration_id": 15368 }
+          { "context": "merge-rule", "integration_id": 5607979 }
         ]
       }
     },
