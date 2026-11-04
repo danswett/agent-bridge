@@ -425,7 +425,7 @@ strict minimal DER, low-S, `p256-sha256-der`, as #391 specifies for roster entri
     "rootAt": 1793300000,
     "prev": "<base64url SHA-256 of the envelope that drove this sender's turn; absent at the root>",
     "depth": 3,
-    "messages": 3,
+    "messages": 2,
     "via": [
       { "account": "…", "machine": "…", "session": "<the conversation's first sender>" },
       { "account": "…", "machine": "…", "session": "<this sender>" }
@@ -459,7 +459,7 @@ strict minimal DER, low-S, `p256-sha256-der`, as #391 specifies for roster entri
 | `generation` | The issuer's roster generation (#391 §3.2). A command from another generation (a reset roster) is refused |
 | `heads` | The issuer's current roster heads, as #391 person commands carry them (#391 §7.2) |
 | `principal` | §3.1, plus `add`: the hash of the issuing host's add entry. Principals are keyed by **account + generation + add hash**, because device ids aren't namespaced across accounts and a copy shares its original's id (§8.10, V3, V7). `machine` must be the channel peer that delivered it: a host never relays another host's envelope as its own (§4.6) |
-| `chain` | §5.4. `via` is the conversation's **distinct** sending sessions in first-seen order, this message's sender included, so it holds at most `maxDepth` entries however many messages the conversation has. `depth` is the number of distinct sessions **including the target**. `messages` counts every agent message, repeats included, under the per-conversation budget. `prev` is the hash of the envelope that drove this sender's turn. Each host **rebuilds** `via` from the envelope it received and signs it inside its own envelope; the target never trusts it as claimed but recomputes `depth` and a floor for `messages` from the signed `prev` chain (§5.4, §4.7 step 10) |
+| `chain` | §5.4. `via` is the conversation's **distinct** sending sessions in first-seen order, this message's sender included, so it holds at most `maxDepth` entries however many messages the conversation has. `depth` is the number of distinct sessions **including the target**. `messages` counts every agent message, repeats included, under the per-conversation budget. `prev` is the hash of the envelope that drove this sender's turn. Each host **rebuilds** `via` from the envelope it received and signs it inside its own envelope; the target never trusts it as claimed but recomputes `depth` and a floor for `messages` from the signed `prev` chain (§5.4, §4.7 step 10). **Across accounts** the envelope carries no `prev`, and `via` holds the sender alone, so internal session ids and other hops' envelopes never reach the peer; the receiver treats the peer's `chain` as opaque and re-roots it at the link (§7.5). `anchor` (`{ link, envelope, account, session }`: the link, the hash of the link envelope, and the peer account and session) replaces `prev` in an envelope whose chain began at a link; it is signed by the host that verified that link envelope |
 | `provenance` | **Mandatory, host-authored** (§5.8). `origins` is the sending session's full retained origin set, or the single value `"unknown"`. `oEligible` is `true`, `false` or `"unknown"`: the issuing host's attestation that the sender passes every O exclusion it can see (§5.7 O). `window` names the G window the message claims. **Only a host that implements AP8's taint tracking** may advertise `agent.provenance` (versioned, v1) or send an explicit origin set; an AP5-era host sends `"unknown"`. The target allows O only when `oEligible` is `true` **and `origins` is exactly `[]`**, and **pauses the window** when `origins` include one outside the window's fixed origin set. Anything missing, legacy or `"unknown"` becomes the sticky origin `unknown:<machine>` on whatever receives it (§5.8), fails closed for O and windows, and still allows per-message G with the prompt saying "origins unknown". **Trust:** within one account, a host's provenance is trusted, so a compromised own host can claim a clean, O-eligible sender (§10.1). Across accounts it is **never** used to authorize anything: the receiver always adds `external:<peer account>` itself, shows the peer's listed origins only as the peer's claim, and drops any that name the receiver's own account |
 | `action` | `sessions.status` and `session.status` (typed, non-tainting, §5.8), `sessions.list`, `session.get`, `session.read` (§4.7), `sessions.subscribe` (only for `principal.kind: "person"`, §7.12; agents follow a session with `session.read`'s wait), `session.reply`, `launch.options`, `session.launch`, `launch.result`. **Nothing else verifies.** In particular `session.answer`, `launch.trust.answer`, `session.stop`, `session.transfer`, `attachment.*`, `update.*`, `push.*` and `host.*` are not in the action set, so the envelope cannot express them. A `principal.kind: "person"` across a link (§7.12) may use only `sessions.status`, `session.status`, `sessions.list`, `session.get`, `session.read` and `sessions.subscribe` |
 | `target` | `account` and `machine` must be the target host's own. `session` is required for `session.get`, `session.read` and `session.reply`. `instance` is required for `session.reply` and optional for reads (§4.5). Absent for `sessions.list`, `launch.options` and `session.launch`. `link` and `repo` are absent within one account. Across accounts `link` is required, and `repo` is required for a repo-scoped link: both must equal the link the channel was admitted under (§7.3, "Link context binding"), so a relay can't make a command run under another link's scope |
@@ -522,7 +522,7 @@ may not reach.
   as `UsagePeers` and transfers do. In `enforce`, #391 §7.1 gates the channel to **active
   rostered hosts** on both ends, and both must be **fresh** (#391 §6.3). The relay sees frame
   sizes and timing between two of the account's hosts, as it does every 5 minutes for usage today.
-* **Op.** One new host-to-host op, `agent.command`:
+* **Op.** Two new host-to-host ops: `agent.command` and `agent.chainLink` (below). The first:
 
   ```json
   { "id": 9, "op": "agent.command", "data": { "command": { "body": "…", "sig": "…" }, "data": "eyJpZCI6Ii4uLiIsInRleHQiOiIuLi4ifQ" } }
@@ -536,6 +536,27 @@ may not reach.
 * **Capability.** `agent.command` in `hello` (host-to-host channels only), and only while the host
   is in roster `enforce` mode. A host without it is never sent one. A client channel (`app`,
   `pwa`, `phone`) never gets it.
+* **`agent.chainLink`**, so a target can recompute a chain (§5.4):
+
+  ```json
+  { "id": 10, "op": "agent.chainLink", "data": { "hash": "<prev hash>", "citing": { "body": "…", "sig": "…" } } }
+  ```
+
+  * **Who serves it, and where.** Only on an **own-account, `enforce`-mode, host-to-host channel
+    between active, fresh, rostered hosts**: the same gate as `agent.command`. Never on a guest
+    or link channel, never to a client, connector or agent connection. It is **internal-only** in
+    the op classification (§9.4).
+  * **What the requester must present.** `citing` is the envelope whose `prev` is `hash`: the one
+    the requester received, or one it obtained by an earlier `agent.chainLink` in the same walk.
+    The server answers only if `citing` verifies, was issued by the server itself
+    (`principal.machine`), is in its own account, and has `prev` == `hash`. It then returns the
+    cited envelope (body and signature, never the op's data bytes). For a cited `session.launch`
+    it also returns its own signed `launch.result` record `{ request, session, instance }`, so the
+    walker can bind the launch to the session it created.
+  * **Bounds.** A walk stops after `conversationMessages` links, and each fetch has a 5 s
+    timeout. Either limit, a refusal or a link that doesn't verify gives `chain-unverifiable`.
+    Hosts keep the envelopes they sent and received for a conversation for
+    `conversationMinutes`, and cache the envelopes they have verified per `root`.
 * **Provenance on results, and its capability.** Taint has to cross machines in both directions
   (§5.8):
   * **Commands** carry `provenance` in the signed body (§4.3).
@@ -592,9 +613,11 @@ non-disclosing first). Each refusal is audited with its reason:
 9. **Action and target.** The action is in the allowed set. `target.machine` is T. The op's `data`
    names the same session as `target.session`. `instance` matches for a reply.
 10. **Policy.** §5: inbound rules for this origin machine and action, the target session's
-    eligibility, chain and budget, and rates. **The chain** is recomputed, not taken as claimed
-    (§5.4): T walks the signed `prev` links back to the root or to an envelope it has already
-    verified for that `root`, checks that `via` is exactly the deduplicated list of their senders
+    eligibility, chain and budget, and rates. **The chain**, under 4.2(a), is recomputed, not
+    taken as claimed (§5.4): T walks the signed `prev` links with `agent.chainLink` (§4.6), at
+    most `conversationMessages` links with a 5 s timeout per fetch, back to the root, to an
+    envelope carrying an `anchor` (accepted on its issuing host's signature, never walked past),
+    or to an envelope it has already verified for that `root`, and checks that `via` is exactly the deduplicated list of their senders
     plus this one, and computes `depth` (distinct sessions, `target.session` included) and a
     floor for `messages` from that chain. A missing or unverifiable link, or a `via` that differs,
     is `chain-unverifiable`; `depth > maxDepth` is `chain-too-deep`; the larger of the claimed,
@@ -1019,14 +1042,18 @@ the `request` of the first agent message sent from a turn that a **person** drov
 tracks, per session, the chain of the turn that is running (it already tracks the turn's driver
 and principal, `SessionDrivers`):
 
-* A turn the **person** drove (typed, replied or answered from a device, or launched by a person):
+* A turn the **person** drove (typed, replied or answered a question from a device, or launched by
+  a person; approving a tool or permission prompt doesn't count, §5.4 "A person resets it"):
   the session's next outbound message starts a **new conversation**: `root` = its own `request`,
   no `prev`, `messages` 1, `via` = [the sender], and `depth` 2 (the sender and its target).
 * A turn an **agent message** drove: outbound messages **continue that message's conversation**:
   `root` and `rootAt` unchanged, `prev` = the hash of that incoming envelope, `messages` = its
   `messages` + 1, and `via` = its `via` with the sender appended **only if not already there**.
 * A session **launched by an agent** starts in the launcher's conversation. The launch envelope
-  is a hop like any other, and the launched session's first message names it as `prev`.
+  is a hop like any other, and the launched session's first message names it as `prev`. Since a
+  `session.launch` has no `target.session`, that link is bound by the target host's signed
+  `launch.result` record (`{ request, session, instance }`, §4.6), which must name the session
+  that sent the next message.
 
 **Depth counts distinct sessions, the destination included.** `depth` = the number of distinct
 sessions in `via` ∪ {the target}. A message to a session already in `via` doesn't increase it;
@@ -1048,14 +1075,16 @@ still counts against the separate `messages` budget.
 | Rule | Default | Effect |
 |---|---|---|
 | `depth ≤ maxDepth` | 3 | Distinct sessions, the destination included (above). A → B → C is allowed. C reaching a fourth session D is refused (`chain-too-deep`). Replying back to a session already in `via` doesn't add depth, so A ⇄ B conversations are unaffected |
-| `messages ≤ conversationMessages` | 20 | A conversation can't exceed 20 agent messages in total, across all its sessions, repeats included. The issuer checks its own count before signing. The target enforces the largest of the claimed `messages`, the length of the verified `prev` chain, and its own count of messages it has received for that `root`. Past that: `conversation-budget`, and the message tells the agent that a person must reply to continue |
+| `messages ≤ conversationMessages` | 20 | At most 20 agent messages, repeats included, along any one `prev` path and in each receiving host's own count for that `root`. The issuer checks its own count before signing. The target enforces the largest of the claimed `messages`, the length of the verified `prev` chain, and its own count of messages it has received for that `root`. **Residual:** a conversation that fans out across several hosts can reach about 20 messages per host in total, bounded by the per-pair and per-origin rates (§5.5). Past that: `conversation-budget`, and the message tells the agent that a person must reply to continue |
 | `now − rootAt ≤ conversationMinutes` | 60 | An agent conversation older than an hour ends the same way |
 | A launch's `depth ≤ maxDepth` | 3 | A launch is a hop to a new session, counted like any other destination. A person-driven session (A launching L: 2 sessions), or one an agent messaged directly (A → B, B launching L: 3), may launch; deeper ones may not, so launches can't fan out into a tree. A launched session reporting back to its launcher adds nothing, since the launcher is already in `via` |
 | `allowAgentLaunchedToLaunch` | false | A session an agent launched can't launch further sessions at all, by default |
 
-**A person resets it.** Any person input to a session (a reply or answer from any of the person's
-devices, or typing at the machine) takes the session back (v1-sessions.md:863-867) and ends its
-part in any conversation. It resets the **chain budget only, never taint** (§5.8). Its next outbound message is a fresh root. This is the same "until the
+**A person resets it.** Any person input to a session (a reply, or an answer to a question the
+agent asked, from any of the person's devices, or typing at the machine) takes the session back (v1-sessions.md:863-867) and ends its
+part in any conversation. It resets the **chain budget only, never taint** (§5.8). **Approving a
+tool or permission prompt is not such input**: it doesn't reset the chain, just as it doesn't
+reset the workflow budget (below). Its next outbound message is a fresh root. This is the same "until the
 person takes it back" rule as the purple edge, so the budget is easy to explain: "agents can go
 back and forth 20 times on their own; then one of them needs you".
 
@@ -1065,17 +1094,19 @@ it is new, and signs the result inside its own envelope, whose `principal` binds
 sender. Deduplication shortens the list, not the evidence: every hop's sender is still bound by
 the signature on that hop's envelope, and chain identity (`root`, `rootAt`), provenance and taint
 travel and are checked as before (§4.3, §5.8). **The target recomputes rather than trusting the
-list.** Under 4.2(a) it walks `prev` back to the root, or to an envelope it has already verified
-for that `root`, fetching each from the host that sent it (hosts keep the envelopes they sent and
-received for a conversation for `conversationMinutes`). Each link must verify, have the same
-`root`, and be addressed to the session that is the next link's sender. From that chain it
+list.** Under 4.2(a) it walks `prev` back to the root, to an anchored envelope (§7.5), or to an
+envelope it has already verified for that `root`, fetching each with `agent.chainLink` from the
+host that issued the citing envelope (§4.6), within that op's bounds. Each link must verify, have
+the same `root`, and be addressed to the session that is the next link's sender: by
+`target.session`, or for a `session.launch` by its signed `launch.result`. From that chain it
 computes the distinct sessions and a floor for `messages`, and refuses (`chain-unverifiable`)
 if a link is missing or doesn't verify, or if the claimed `via` differs from the recomputed one.
 So a host can't drop an earlier entry to reset depth: the dropped session is still in the signed
 chain. Under (b), the pairwise MAC can't be checked by a third host, so a compromised host can
 lie about the chain. Either way, a compromised host, which could also start a fresh `root`, is
-bounded by the target's per-origin rates (§5.5). Across accounts the receiver doesn't use the
-peer's chain to authorize anything: it starts its own count at the link (§7.5).
+bounded by the target's per-origin rates (§5.5). **Across accounts** nothing is walked:
+outbound envelopes carry no `prev` and a `via` of the sender alone, and the receiver re-roots at
+the link with a signed `anchor` (§7.5).
 
 **Workflow budget.** A coordinator running a long piece of work needs more than 20 messages. The
 person grants it a **workflow budget** with presence (for example 150 agent messages over 8
@@ -2127,11 +2158,17 @@ the other side says. B can expose read to A without A letting any of A's session
    covers a thief with an attester's keys too. Otherwise the link is stale: nothing flows (Q9).
 5. **Policy:** this side's expose statement (sessions, actions, projection) and the per-link
    rates, **half** the single-account defaults. **Taint** (§5.8): the receiving session becomes
-   tainted by the external origin, whatever drives it later. Across accounts the receiver starts
-   its own count at the link, and `maxDepth` there is **3 sessions**: the peer's sender, the
-   receiving session, and **one** further session within this account, reached only through G or
-   into a provably forced-ask target, which inherits the taint. Never through O, and never a
-   fourth session. The peer's `via` isn't used to authorize anything.
+   tainted by the external origin, whatever drives it later. **Re-rooting at the link.** T treats
+   the peer's `chain` as opaque and never walks it. Having verified the link envelope (steps 1-4),
+   T starts a local chain for the receiving session R: a new `root` (the link envelope's hash),
+   `rootAt` = when T received it, `messages` 1, and `via` = [the peer's sender, R]. R's next
+   message carries a signed `anchor` naming the link, the link envelope's hash and the peer
+   account and session in place of `prev`. Same-account hosts accept the anchor on T's signature
+   and never walk past it. So `maxDepth` across accounts is **3 sessions**: the peer's sender, R,
+   and **one** further session S within this account, reached only through G or into a provably
+   forced-ask target, which inherits the taint. S reaching a fourth session X is
+   `chain-too-deep`. Never through O: `via` keeps the external entry, which is how O sees "a chain
+   with a cross-account hop" (§5.7 O).
 6. **Prefix** mandatory (§6.4).
 
 ### 7.6 What each relay operator sees
@@ -2928,7 +2965,7 @@ each verifier refuses the others' bytes.
 * **Denied:** every other op, including unknown future ones. That covers `session.reply`,
   `session.answer` (approvals included), `launch.*`, `launch.trust.answer`, `session.stop`,
   transfers, `attachment.*` and blobs, `push.*`, `usage.*`, `update.*`, `host.*`, roster,
-  account and credential administration, `agent.command`, and every agent op of §4.
+  account and credential administration, `agent.command`, `agent.chainLink`, and every agent op of §4.
 * **Not inherited from agents.** That agents may reply and launch gives connectors nothing. A
   later connector write grant (action parity) is a separate reviewed design with its own
   attribution (#388's "automation" kind), not a reuse of the agent policy.
@@ -3093,7 +3130,7 @@ grant names.
 | `read` v1 | `hello`, `sessions.list`, `session.get`, `sessions.subscribe`. Events `session.upsert`, `session.remove`, `sessions.synced`, `discovery.changed` (#534's index) | First slice (§9.7) |
 | `usage` v1 (later) | `usage.get`, `usage.subscribe` | Separate grant |
 | `act` v1 (later, Q26) | Candidates, each its **own** grant: `session.reply`, `session.stop`, `launch.options` and `session.launch` (`ask` only) | Needs its own design and review (Q18), with `automation` attribution. Any reply act has §5.2's idle-only, screen-guarded delivery, and §5.3's allow-all exclusion |
-| **Never in any profile** | `session.answer` on any approval; `launch.trust.answer`; `host.*`; roster, account and credential administration; `pairing.*`; `update.*`; `push.*`; `session.transfer`; `agent.command` | Enforced by the host's classification test (§9.4) |
+| **Never in any profile** | `session.answer` on any approval; `launch.trust.answer`; `host.*`; roster, account and credential administration; `pairing.*`; `update.*`; `push.*`; `session.transfer`; `agent.command`; `agent.chainLink` | Enforced by the host's classification test (§9.4) |
 
 Whether connectors may ever answer `ask_user` *forms* (not approvals) is part of Q26. Note the
 consequence for parity: agent-ha-bridge let Home Assistant's phone notifications answer
@@ -3254,7 +3291,8 @@ project. Real-host validation still applies for anything production (#534's cave
 * **Payload drift:** `ConnectorReadVectorTests` (#534) regenerates the conversations from the
   real host and fails on any difference.
 * **Op classification:** every op the host serves must be classified as in exactly one profile,
-  internal-only, or never-for-connectors. A new op that isn't classified fails the build, in the
+  internal-only, or never-for-connectors. `agent.command` and `agent.chainLink` are
+  internal-only. A new op that isn't classified fails the build, in the
   spirit of `quality/catalog.yml`, which lists every suite the repository runs. That is how
   `session.answer` approvals, `launch.trust.answer` and `host.*` can never quietly become
   reachable.
@@ -3426,7 +3464,7 @@ Each slice is one PR, security-reviewed independently before merge.
 | AP2 | #45's MCP server on AP1 (stdio), with the old tool names and outcomes | AP1 | No |
 | AP3 | Adoption on Windows: app action, CLI, `agent.credential` | AP1 | No |
 | AP4 | Envelope library: encoding, signing (a) or MAC (b), strict parser, shared positive and negative vectors | #391 R1 (+ roster v2 V1-V2 if (a), §8.10) | Library only |
-| AP5 | Cross-machine: `agent.command` host-to-host, verification §4.7, `inbound.remote`, `outbound`, durable replay via R6, `instance` on `Session`, `agent.outcome`, `session.read` wait, and the **v1 wire format of signed provenance** on commands and content results (§4.3, §4.6). AP5 doesn't advertise `agent.provenance`; AP8 does, once it implements taint. **Exit tests** (transport only; the taint and O tests are in AP8 and AP9): provenance is signed and verified on commands and on content results; a result without signed origins is never handed over; an AP5-era host sends `"unknown"`, never an explicit origin set, and doesn't advertise `agent.provenance`; **the chain across machines**: the target recomputes `via` and `depth` from the signed `prev` links, so an envelope whose `via` drops an earlier session, cites a `prev` addressed to another session or another `root`, or cites one that is missing or doesn't verify is refused (`chain-unverifiable`), and A → B → C → D across three machines is refused at D with `chain-too-deep`; an A ⇄ B conversation across two machines runs to the `messages` budget with `via` at two entries, and the target enforces the larger of the claimed, recomputed and locally counted `messages` | AP4, #391 R3 + R6, hosts in `enforce` | **Yes** |
+| AP5 | Cross-machine: `agent.command` host-to-host, verification §4.7, `inbound.remote`, `outbound`, durable replay via R6, `instance` on `Session`, `agent.outcome`, `session.read` wait, and the **v1 wire format of signed provenance** on commands and content results (§4.3, §4.6). AP5 doesn't advertise `agent.provenance`; AP8 does, once it implements taint. **Exit tests** (transport only; the taint and O tests are in AP8 and AP9): provenance is signed and verified on commands and on content results; a result without signed origins is never handed over; an AP5-era host sends `"unknown"`, never an explicit origin set, and doesn't advertise `agent.provenance`; **the chain across machines**: the target recomputes `via` and `depth` from the signed `prev` links, so an envelope whose `via` drops an earlier session, cites a `prev` addressed to another session or another `root`, or cites one that is missing or doesn't verify is refused (`chain-unverifiable`), and A → B → C → D across three machines is refused at D with `chain-too-deep`; an A ⇄ B conversation across two machines runs to the `messages` budget with `via` at two entries, and the target enforces the larger of the claimed, recomputed and locally counted `messages`; **`agent.chainLink`**: it is served only on own-account, `enforce`-mode host-to-host channels, a request on a guest or link channel, or from a client, connector or agent connection, is refused, a request without a verifying `citing` envelope issued by the server is refused, and a walk longer than `conversationMessages` links or a fetch that times out gives `chain-unverifiable`; a launch link binds through the target host's signed `launch.result`, and one naming another session is refused; a tool-approval answer doesn't reset the chain; **across accounts**: an outbound envelope carries no `prev` and a `via` of the sender alone, external → R → S is allowed and S → X is refused (`chain-too-deep`), S's host accepts R's `anchor` without walking past it, and `via` keeps the external entry, so O from R or S is refused | AP4, #391 R3 + R6, hosts in `enforce` | **Yes** |
 | AP6 | Clients: "from *X* on *Y*" in the app and PWA (extending #503/#504), Settings for the policy, the Agent activity view | AP1 (local), AP5 (remote) | n/a |
 | AP7 | Re-enable `inbound.remote` defaults per machine during the owner's cutover (#391 R8) | AP5, R8 | Yes, live |
 | AP8 | **The gate, as the main path** (§5.7 G, §5.3 (B)), and **provenance** (§5.8). It covers:<br>• `inbound.*.gate` (`off`/`quiet`/`push`, default `quiet`), holds with absolute expiry, the bounded queue, `held` and the `gateDenied`/`gateExpired`/`gateCancelled` codes;<br>• the Needs-you `agentMessage` item with its deterministic partial summary and full text;<br>• the presence-signed `gate v1` approval, batches, windows over fixed instance sets with the expansion fold, and G delegation grants;<br>• **gated launches**, with the manifest, the **base commit** bound at hold time, the source report over that tree, and a fresh worktree at exactly that commit;<br>• mute, pause and block without biometrics, and the refusal nudge;<br>• taint tracking, **transitive through every content-bearing read and every launch**, with in-host Home Assistant presses (Q43) recorded as `automation:homeassistant`, **workspace-unit taint** merged into every resident, presence-signed clearing, `driverFrom.origins`, `taint`, `replyPath`, the badge, and "Start a fresh coordinator";<br>• the typed, non-tainting `sessions.status` and `session.status` for own sessions, as the MCP default; **unattributed callers (HTTP MCP, the pipe without `agent.hello`, the CLI apart from its three exceptions, anything else) limited to typed status, with no acting ops**, superseding local-pipe.md:93-98, and host-launch.md's "Isolation" (:118-136) and "Reclaiming finished worktrees" (:142-214) for agent-requested launches; `launch.options` without titles for agents; workspace units by `unitsOf` with containment; generation-bound clearing; gated launches bound to the base commit and the hashed local git state, with Git under a closed, host-generated configuration and a rebuilt environment for every host-made worktree and every gated session;<br>• workflow budgets;<br>• audit of origin, authorizer, grant and outcome.<br>**Exit tests:**<br>• an approval for different text, sender, origins, target or instance is refused, and so is a replayed one;<br>• an approval without presence, or from an agent connection, a connector or the `homeassistant:` path, is refused;<br>• a hold expires at its absolute deadline even when approved late, and the person's input cancels it;<br>• **no hold is ever pushed individually**;<br>• a batch can't change after signing;<br>• a window never grows except by a presence-signed expansion, and pauses on a new origin;<br>• taint survives resume, compaction, transfer and a person's reply;<br>• **external → A → a same-account `session.read` by B → B is tainted with A's origins**, and the same through `session.get`, a list and a wait result;<br>• **a content read over HTTP MCP, or over the pipe without `agent.hello`, is refused, and typed status is served instead**;<br>• typed status taints nothing;<br>• a tainted session's forced-ask or gated launch produces a tainted session;<br>• **a tainted session in worktree W1 taints the unit**: a clean resident already running in the main checkout W0 inherits its origins, and C reading that resident inherits them too;<br>• clearing a unit needs presence, and is refused while a tainted session runs there;<br>• **a push to the default branch after a gated launch's approval doesn't change what launches**, and a missing base commit refuses it;<br>• a batch containing a gated launch is refused;<br>• a batch with two senders, or mixed tainted and untainted items, is refused;<br>• an external sender's resend returns `held` until the common deadline;<br>• mute, pause or block from an agent, a connector or Home Assistant is refused, and none of them hides the mid-turn configuration-change notice;<br>• a gated launch can't change after approval, and a cross-account gated launch requesting `allowAll` is refused;<br>• a connector reply into allow-all is refused with no hold;<br>• delivery still runs §5.2's guard;<br>• **an unattributed caller (HTTP MCP, the pipe without `agent.hello`, a script) can't reply, launch, answer, stop or attach**, and HTTP-mode MCP exposes no acting tools; the CLI gets only `launch`, `agents adopt` and `agents revoke`, and **`agent-bridge-host launch` run from inside an agent session is refused** by the full-ancestry check;<br>• `launch.options` reaches an agent or unattributed caller with no titles;<br>• **unit containment**: a tainted session whose working directory is a non-git parent taints every nested repository's unit; a submodule is in its superproject's unit; an `--add-dir` root taints the unit it falls in; a tainted allow-all session taints every unit on the machine for O;<br>• **across machines**: external → A on M2, then a content read of A by B on M1, taints B on M1 before the content is handed over; a coordinator tainted mid-window is paused at a remote destination; a peer without `agent.provenance` gets typed reads only, and its commands give the target `unknown:<machine>`;<br>• **`unknown` sticks**: a forced-ask target that received `unknown` provenance carries `unknown:<machine>` and stays ineligible after later clean messages;<br>• **durability**: after a host restart or update a tainted coordinator is still tainted; a deleted taint store makes everything `unknown:<machine>`; an old clear doesn't match after a restart;<br>• **rollback**: restoring **both** the taint store and its high-water mark from a backup taken while a coordinator was clean, then restarting only the host while the coordinator's process lives on, leaves the coordinator `unknown:<machine>` and O refused;<br>• **clear after store loss**: after the store is lost and a person clears the machine, a resumed pre-loss conversation still has `unknown:<machine>`; the first AP8 start treats every existing conversation the same way; the machine clear is refused while an unconfined tainted session runs;<br>• **canonicalisation**: one repository reached through a junction, a symlink, `subst`, a `\\?\` path or an 8.3 name is one unit; a unit first seen after a tainted allow-all session ran is tainted;<br>• **a pending wait is cancelled** when the read grant narrows mid-wait, own-account and cross-account;<br>• **a subscription** merges taint per event, including when the subscribed session becomes tainted mid-stream;<br>• **a delayed clearance is refused**: a tainted session that starts, writes and exits after the person reviewed but before the clear executes bumps the generation;<br>• **a gated launch is refused** when the common directory's hooks, its allowed configuration keys, `info/attributes`, `.lfsconfig`, or the main checkout's untracked `settings.local.json` changed after approval; `worktree add` runs no hook, and the launched session's `git status` runs no hook or monitor added later;<br>• **closed configuration**: a repository whose `config` or `config.worktree` holds any key outside the allowlist (an `include`, `core.fsmonitor`, a non-LFS `filter`, `core.gitProxy`, `remote.*.vcs`, `remote.*.uploadpack`, `url.*.insteadOf`, `protocol.*.allow`, `lfs.customtransfer.*`, `lfs.standalonetransferagent`, `lfs.extension.*`, `mergetool.*.path`, `sendemail.smtpServer`) refuses the launch, as does a `.lfsconfig` with other keys or a remote URL not in `https://`, `ssh://` or scp form; in the launched session, a `~/.gitconfig` `url."ext::sh -c …".insteadOf` rewrite with `protocol.ext.allow=always`, a global `credential.helper` script, a `~/.ssh/config` `ProxyCommand` or `Match exec`, and a `gpg.conf` program option all run **nothing**, before or after being edited post-approval;<br>• **environment**: a launch inheriting `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_EDITOR`, `GIT_PAGER`, `GIT_EXTERNAL_DIFF`, `GIT_PROXY_COMMAND`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_GLOBAL`, `GIT_EXEC_PATH` or `GNUPGHOME` pointing at a user-writable helper, which is then edited between approval and launch, runs none of them, in `worktree add` or in the session; with no configured helper, Git's default editor and pager don't run; `PATH` with `.`, an empty or relative element, or a unit directory refuses the launch;<br>• **version and self-check**: a Git older than 2.32, or below the shipped maintained-release floor, refuses the launch; a global or include-defined `filter.<x>.smudge` naming a writable script runs nothing during the host's `worktree add` or in the session; the self-check (`git config --list --show-scope --show-origin` under the exact executable and environment) refuses any entry from another origin;<br>• **scope**: an agent's forced-ask launch into a repository whose `config` holds a planted `filter.<x>.smudge` is refused; a person's own launch still runs no global filter, hook or monitor during `worktree add`; a gated launch requesting `ask` gets the same closed session configuration as one requesting `allowAll`;<br>• **host artifacts**: a `post-checkout` hook dropped into the host's empty hooks directory, or a `ProxyCommand` added to the generated ssh config, after approval refuses the launch; translating a `~/.ssh/config` with `Match exec`, or a compound `Match host *.corp exec "…"`, never runs it and drops the whole block;<br>• **every host Git command**: with `core.fsmonitor`, `remote.origin.uploadpack` or `core.sshCommand` planted in `.git/config` (or a `config.worktree`), an agent's launch request is refused by the parser before any Git command, so nothing runs during repository resolution, reclaiming, the fetch or the hold, even when the person would have denied it; with a clean repository, reclaiming and the fetch run under the closed configuration, a fetch needing the user's jump host falls back to the local base, and a gated launch's base SHA is the one resolved at hold time; a person's own launch fetches with the user's own Git; the pre-add self-check runs in the main checkout and accepts repository keys only for a person's own launch; a forced-ask session isn't self-checked;<br>• **reclaiming**: a finished worktree whose `.git` is redirected to `<wt>\.cache\gd` (with a `commondir` back to the repository, `extensions.worktreeConfig=true`, a `config.worktree` holding `filter.x.clean`, `* filter=x` in `.gitattributes` and a touched tracked file) is kept with nothing run, and so is one whose own `.git/worktrees/<id>/config.worktree` holds `filter.x.clean` directly, both for an agent's launch and for a person's own; every host Git command carries the parser-resolved `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE`; a finished worktree whose index holds a gitlink to a submodule with a redirected `.git` and a `filter.x.clean` is kept after `ls-files --stage`, with no `status`, `rm` or `checkout-index` run;<br>• **submodules in the fetch**: in a launch workspace with a populated submodule, `.gitmodules` `fetchRecurseSubmodules=true`, and the submodule's own configuration holding `remote.origin.url=ext::<cmd>` and `protocol.ext.allow=always`, an agent's launch request that the person then denies runs no child fetch and no command; the host's fetch carries `--no-recurse-submodules`, every host Git command carries the `submodule.recurse`, `fetch.recurseSubmodules` and per-protocol `never` pins, and no host Git command runs inside a submodule;<br>• **parser fidelity**: a key on a header's line (`[filter "x"] clean = …`), a comment ending in `\`, the legacy `[remote.origin]` form, a CR, BOM or NUL byte, and a quoted `#` or `;` each refuse an agent's launch, Git's own `<TAB>name = value` layout is accepted, a subsection containing `=` cross-checks correctly, and a file where `git config --file <f> --list --null` disagrees with the host's parse refuses it;<br>• **base source**: the approval screen shows whether the base was fetched or is the local ref after a failed fetch, with the reason; a `branch.<name>.remote` holding a URL refuses the launch;<br>• **LFS**: `worktree add` on an SSH remote with LFS runs no SSH and no smudge; a later `git lfs pull` in the session loads no custom transfer agent;<br>• **instance**: a session adopted, discovered or resumed from a terminal (`--resume`, `--continue`, a forked id) after a host start is `unknown:<machine>`; a fresh coordinator started after a restart but before the machine clear stays `unknown:<machine>` after the clear; an allow-all session started after the restart blocks the clear; an open window pauses after a restart | AP1, AP6, #391 person commands with presence (§7.2) and R6. Remote targets also AP5 | Same machine first; remote with AP5 |
