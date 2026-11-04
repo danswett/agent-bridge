@@ -46,7 +46,8 @@
   /* The conversation scrolls under the header, which floats over its top: collapsing never moves it. */
   .scroller { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: var(--full) 16px 16px; scroll-padding-top: calc(var(--covered, var(--full)) + 8px); }
   .head { position: absolute; left: 0; right: 0; top: 0; z-index: 2; pointer-events: none; }
-  .full { pointer-events: auto; background: var(--shell); border-bottom: 1px solid var(--stroke); transform: translateY(var(--ty)); will-change: transform; }
+  /* touch-action: a vertical swipe on the header scrolls the conversation (script below); the chips still pan sideways. */
+  .full { pointer-events: auto; touch-action: pan-x; background: var(--shell); border-bottom: 1px solid var(--stroke); transform: translateY(var(--ty)); will-change: transform; }
   .animating .full { transition: transform var(--dur) var(--ease); }
   .bar { position: absolute; left: 0; right: 0; top: 0; z-index: 3; height: var(--bar); display: flex; align-items: center; gap: 6px; padding: 0 4px; pointer-events: none; }
   .bar::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--shell); border-bottom: 1px solid var(--stroke); opacity: 0; transition: opacity var(--xfade) linear; }
@@ -275,6 +276,32 @@
   // Focus is never hidden: reaching anything in the header brings the header back first, and holds it.
   full.addEventListener('focusin', () => { focusInside = true; if (last > 0) setReturned(true, true); });
   full.addEventListener('focusout', (e) => { if (!full.contains(e.relatedTarget)) focusInside = false; });
+// The header floats over the conversation, so a vertical swipe or wheel that starts on it scrolls the
+// conversation, as the app's would. On a landscape phone the header can cover the whole conversation.
+full.addEventListener('wheel', (e) => {
+  if (e.ctrlKey || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+  e.preventDefault();
+  scroller.scrollTop += e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? scroller.clientHeight : 1);
+}, { passive: false });
+let touch = null;
+full.addEventListener('touchstart', (e) => {
+  touch = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY, axis: null } : null;
+}, { passive: true });
+full.addEventListener('touchmove', (e) => {
+  if (!touch || e.touches.length !== 1) return;
+  const p = e.touches[0], dx = touch.x - p.clientX, dy = touch.y - p.clientY;
+  if (!touch.axis) {
+    if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+    touch.axis = Math.abs(dy) > Math.abs(dx) ? 'y' : 'x';
+  }
+  if (touch.axis !== 'y') return;
+  e.preventDefault();
+  scroller.scrollTop += dy;
+  touch.x = p.clientX; touch.y = p.clientY;
+}, { passive: false });
+const endTouch = () => { touch = null; };
+full.addEventListener('touchend', endTouch);
+full.addEventListener('touchcancel', endTouch);
   if ('ResizeObserver' in window) new ResizeObserver(measure).observe(full); else addEventListener('resize', measure);
 
   // A scroll the app makes (to an arriving question, a restored position) never folds or brings back the header.
