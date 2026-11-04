@@ -293,8 +293,35 @@ does.
 
 - **Spacing:** a 4 px grid (4, 8, 12, 16, 20, 24, 32, 40, 48).
   - 24 between blocks in the conversation, and 8 between a speaker label and its text.
-  - Panes pad 20–24 on desktop and 16–20 on phones.
+  - Panes pad 24 on desktop (the keylines below) and 16–20 on phones.
   - A row's glyph aligns with the row's first line of text, not with its centre.
+- **Keylines (desktop, #771).** A base unit of 4 and a rhythm of 8. Every pane (the list,
+  the session, the inspector, and full-page surfaces such as Settings) shares one set:
+  - **K0, the pane inset: 24** from the pane's left and right edges. Headings, body text,
+    tabs and the edges of cards sit on it.
+  - **K1, text after a glyph: K0 + 24.** The glyph sits on K0 and the text 24 after it,
+    whatever the glyph's size: a 16 px glyph leaves an 8 px gap, and the 20 px session mark
+    (brand.md) leaves 4. It applies to session rows, Tools rows, delegate events, the delegate
+    strip's items, nested delegates and Needs you items. A glyph inside a card sits on the
+    card's own inner inset, and its text 24 after that.
+  - **Cards** (Needs you, the delegate strip's items, the banner, Show reasoning, the reply
+    box) put their edge on K0 and their text 12–16 inside it. A card's edge never hangs
+    outside K0 to line its text up with K0.
+  - **Gutters between panes** are K0 | hairline | K0: nothing else separates two panes.
+  - **One header band** across the panes, 20 from the pane's top: a 32 px title row in which
+    Sessions, the session's title and the inspector's heading sit on one shared baseline.
+    Details keeps its section-header style but sits on that baseline. A two-line heading (a
+    chosen delegate's "Delegate" overline over its name, §6.3) puts the name on the baseline
+    and the overline in the band's top 20. Nothing else sits above the band.
+  - **Meta lists** (property rows such as Details, Tools rows and delegate events) have a row
+    pitch of 24. A wrapped row grows by whole lines; its next row still starts on the pitch.
+  - **Scrolling under a header:** a header that stays put (a pane's header band, the delegate
+    strip) shows a hairline at its foot only while content is scrolled beneath it, and none
+    at rest.
+  - **Overflow in a strip:** a row of items too wide for its pane (the delegate strip, like the
+    machine tabs) ends in an "N more" item that opens the rest. It never clips an item
+    mid-word.
+  - Every margin, padding and spacing value is a step of the scale above; no other values.
 - **Radii follow the platform:**
   - Windows: 4 on controls, 8 on cards.
   - macOS: 6 and 10.
@@ -318,6 +345,11 @@ Selection survives a resize across breakpoints. #166 has the acceptance criteria
 - **Which session:** the one chosen, or with none chosen yet on a desktop, the first row.
   A phone shows the list until one is chosen.
 - **The inspector's toggle** is remembered on the device.
+- **Keylines at each width** (§5.1): each pane keeps K0 at 24 inside its own edges, whether
+  there are three panes, two or one. When the session pane is wider than the conversation's
+  centred reading column, the session's header, its tabs and the delegate strip follow that
+  column's edges, as the conversation's cards and the reply box (§6.5) already do, so the whole
+  pane shares one left edge. K0 is then the column's edge rather than the pane's.
 - **Scrolling:** from 760 the window itself never scrolls. The app bar, the rail and the
   reply box stay put; a page scrolls on its own, and on Sessions the list, the conversation
   and the inspector each do (#288). A phone's list scrolls the page; a pushed session's
