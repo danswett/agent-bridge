@@ -4,7 +4,7 @@
 // tracks it. A rule is never turned off: a new element breaking a known rule still fails.
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { go, motionsDone, open, row, view } from './nav.mjs';
+import { countMotions, go, motionsDone, motionsStarted, open, row, view } from './nav.mjs';
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const LAND = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
@@ -71,10 +71,21 @@ async function openDemo(page, query) {
 // The serious and critical violations on the page as it is, less the known ones, as
 // "rule: selector: what to fix" lines.
 async function scan(page) {
-  // At rest: a fade still under way draws its text paler than it will be, which isn't the
-  // contrast anyone reads (ui.md §5.3's fades last a few frames).
-  await motionsDone(page);
-  const { violations } = await new AxeBuilder({ page }).withTags(TAGS).analyze();
+  let violations;
+  for (let attempt = 1; ; attempt += 1) {
+    // At rest: a fade still under way draws its text paler than it will be, which isn't the
+    // contrast anyone reads (ui.md §5.3's fades last a few frames), and an element still at
+    // opacity 0 isn't checked at all.
+    const before = await motionsDone(page);
+    if (before === null) { throw new Error('scan needs countMotions(page) before the page loads'); }
+    ({ violations } = await new AxeBuilder({ page }).withTags(TAGS).analyze());
+    // A motion that started while axe read the page (#551) makes what it read neither the page
+    // before nor the page after, and may have hidden an element mid-fade from it: that reading is
+    // thrown away and the page read again once at rest. A page that never comes to rest fails.
+    const moved = (await motionsStarted(page)) - before;
+    if (!moved) { break; }
+    if (attempt === 3) { return [`the page never came to rest: motions started during each of ${attempt} scans (${moved} in the last)`]; }
+  }
   const nodes = violations.filter((v) => FAILING.has(v.impact)).flatMap((v) => v.nodes.map((node) => ({ v, node })));
   // Whether each is a known one, in one call. A node has one selector, unless it is inside a frame
   // or a shadow root (one selector per level), which the app has none of: such a node is never
@@ -97,6 +108,7 @@ for (const layout of LAYOUTS) {
       test.beforeEach(async ({ page, browserName }) => {
         test.skip(theme.chromiumOnly && browserName !== 'chromium', 'forced colours are emulated in Chromium only');
         await page.emulateMedia(theme.media);
+        await countMotions(page);
       });
 
       test.afterEach(async ({ page }) => {

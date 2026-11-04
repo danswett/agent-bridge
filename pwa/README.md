@@ -552,6 +552,8 @@ the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `
   Details, Tools, the row and overflow menus, search, End session armed, Launch and a folder-trust
   question, Machines (updating, offline, Forget armed), usage, settings and sign-in. A serious or
   critical violation fails, unless `KNOWN` lists it by rule and selector with the issue tracking it.
+  Each view is read at rest: once nothing has moved for two frames running, and read again if a
+  motion started while axe read it, so a fade under way is never taken for the colour (#551).
 * `test/keyboard.spec.mjs`, in demo mode (#356): Tab walks the app bar, rail, list and open session
   in the order they are laid out with focus shown on every stop, and Shift+Tab walks it back;
   opening a session with Enter, answering with Tab, Space and Enter, replying, End session's two
