@@ -948,3 +948,33 @@ test('a relay connection put to rest says so on each machine shown, rather than 
   assert.equal(hosts.link('a').stale, true);
   assert.equal(hosts.link('a').error, 'Paused while the app is in the background.');
 });
+
+test('a hello that changes while the channel is still subscribing is asked for again once it is open', async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }]);
+  const asked = [];
+  let events = [];
+  let subscribed;
+  const hosts = new HostSession({
+    connection, store: new SessionsStore(), storage: null,
+    makeClient: (ch) => {
+      const c = fakeClient(ch);
+      c.on = (type, fn) => { if (type === 'event') { events.push(fn); } };
+      c.hello = async (options) => { asked.push(options); return { protocol: 1, machine: { name: 'a' }, capabilities: ['sessions.read', 'hello.changed'] }; };
+      c.subscribe = () => new Promise((resolve) => { subscribed = resolve; });
+      return c;
+    },
+  });
+  hosts.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  assert.equal(asked.length, 1);
+  for (const fn of events) { fn({ ev: 'hello.changed', seq: 1, data: {} }); }
+  await flush();
+  assert.equal(asked.length, 1, 'not while it is still being set up');
+  subscribed({ revision: 1, count: 0 });
+  await flush();
+  assert.equal(hosts.phase, 'open');
+  assert.equal(asked.length, 2, 'asked once it is open: the host says so only once');
+  events = [];
+});

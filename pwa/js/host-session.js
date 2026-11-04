@@ -66,6 +66,9 @@ export class HostLink {
   // Its list may be out of date: no channel open now has delivered a whole snapshot (none has
   // opened yet, its channel went, or the machine left presence). Nothing is sent to it meanwhile.
   stale = true;
+  // Its hello changed (hello.changed) while its channel was still being set up: asked for again
+  // once open, as the host says so only once.
+  helloChanged = false;
 
   constructor(id, store) {
     this.id = id;
@@ -483,8 +486,10 @@ export class HostSession {
       });
       // What it says changes without a new channel; a machine that can says when (hello.changed),
       // and is then asked again, rather than every minute on the chance (#610).
+      link.helloChanged = false;
       client.on('event', (m) => {
-        if (m?.ev === Events.helloChanged && link.client === client) { this.refresh(link.id).catch(() => {}); }
+        if (m?.ev !== Events.helloChanged || link.client !== client) { return; }
+        if (link.phase === 'open') { this.refresh(link.id).catch(() => {}); } else { link.helloChanged = true; }
       });
       const hello = await client.hello({ changes: true }).catch((e) => {
         // Hosts from before this protocol (the S4 demo host) answer "unknown op". Only such
@@ -505,6 +510,10 @@ export class HostSession {
       if (link.client !== client) { throw new Error('the channel closed'); }
       link.failures = 0;
       this.#set(link, 'open');
+      if (link.helloChanged) {
+        link.helloChanged = false;
+        this.refresh(link.id).catch(() => {});
+      }
       if (client.synced === true) { this.#confirm(link, client); }
     } catch (e) {
       if (stale()) { client?.close(); return; }
