@@ -631,6 +631,8 @@ async Task<int> ServeAsync(HostHandover handover)
         // that got this far took the host down for good, minutes after a relay deploy (#40).
         catch (Exception e)
         {
+            // A relay restarting before ready (1012) still spreads this retry, as after one.
+            if (e is RelayRefusedException refused) { (endedWith, endedWhy) = (refused.Code, refused.Reason); }
             Log($"connection failed: {e.GetType().Name}: {e.Message}");
             control.SetRelay(RelayState.Connecting, $"connection failed: {e.Message}");
         }

@@ -1,3 +1,8 @@
+using System.Net.WebSockets;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace AgentBridge.Transport.Tests;
@@ -125,5 +130,30 @@ public class ReconnectBackoffTests
         Schedule(b, 5);
 
         Assert.Equal(TimeSpan.FromSeconds(15), b.Next(CloseCodes.Restarting, "restarting;spread=1"));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_relay_restarting_before_ready_hands_its_close_and_hint_to_the_backoff()
+    {
+        var b = WebApplication.CreateSlimBuilder();
+        b.WebHost.UseUrls("http://127.0.0.1:0");
+        b.Logging.ClearProviders();
+        await using var app = b.Build();
+        app.UseWebSockets();
+        app.Map("/v1/ws", async (HttpContext http) =>
+        {
+            using var ws = await http.WebSockets.AcceptWebSocketAsync();
+            await ws.ReceiveAsync(new byte[4096], http.RequestAborted);
+            await ws.CloseAsync((WebSocketCloseStatus)CloseCodes.Restarting, "restarting;spread=20", http.RequestAborted);
+        });
+        await app.StartAsync();
+        using var key = P256KeyPair.Generate();
+
+        var e = await Assert.ThrowsAsync<RelayRefusedException>(() => RelayClient.ConnectAsync(new Uri(app.Urls.First()), "t", key, "x", "test"));
+
+        Assert.Equal(CloseCodes.Restarting, e.Code);
+        Assert.Equal("restarting;spread=20", e.Reason);
+        Assert.Equal(TimeSpan.FromSeconds(10), Pinned(0.5).Next(e.Code, e.Reason));
     }
 }

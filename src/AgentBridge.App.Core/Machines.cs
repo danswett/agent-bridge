@@ -597,6 +597,8 @@ public sealed class RelayFleetLink : IFleetLink
             }
             catch (Exception e) when (e is not OutOfMemoryException)
             {
+                // A relay restarting before ready (1012) still spreads this retry, as after one.
+                if (e is RelayRefusedException refused) { (endedWith, endedWhy) = (refused.Code, refused.Reason); }
                 log($"the relay connection failed: {e.Message}");
                 Set(FleetState.Connecting, e.Message);
             }

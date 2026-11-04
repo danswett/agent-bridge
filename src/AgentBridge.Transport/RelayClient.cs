@@ -18,6 +18,8 @@ public sealed class RelayRefusedException(WebSocketCloseStatus? status, string? 
     : Exception($"relay closed the connection: {(int?)status} {reason}")
 {
     public int? Code => (int?)status;
+    // As the relay sent it: a 1012 before ready may carry a spread hint (ReconnectBackoff).
+    public string? Reason => reason;
 }
 
 // One device's connection to the relay: sign in to it, prove the device key, then send
