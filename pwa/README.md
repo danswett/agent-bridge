@@ -230,7 +230,8 @@ near the limit) and 16 KiB per request. A problem is named and focus goes to its
 While an answer is on its way the controls are disabled, and one line, the receipt
 (`js/ui/receipt.js`, ui.md §6.4 and §6.5 as the owner decided them on #617), says where it has
 got. A machine whose `hello` lists `sessions.progress` is asked for it (`"progress": true`,
-[v1-sessions.md](../docs/protocol/v1-sessions.md)), and says how far it has got before the
+[v1-sessions.md](../docs/protocol/v1-sessions.md); left off a request that fits its limit only
+without it, which then shows Sending… until its outcome), and says how far it has got before the
 outcome comes: "Sent" once it has the answer, "Passed to the agent" once the keys have gone
 (for a reply into a working session, "Up next · after the agent's current step"), then "You
 answered · *value*" with the check badge once confirmed: a tap's option, free text's first

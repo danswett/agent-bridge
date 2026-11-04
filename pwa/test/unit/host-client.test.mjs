@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HostClient } from '../../js/host-client.js';
+import { Limits, hostJsonBytes } from '../../js/answers.js';
 import { SessionsStore } from '../../js/sessions-store.js';
 
 // A transport that records what the client sends and lets the test play the host.
@@ -342,6 +343,21 @@ test('a reply asks for progress only from a host that offers sessions.progress',
   assert.equal(newer.t.lastRequest('session.answer').data.progress, true);
   older.client.close();
   newer.client.close();
+});
+
+test('an answer that fits the 16 KiB only without the progress flag goes without it, rather than be refused for asking', async () => {
+  const { t, client } = await greeted(['sessions.read', 'sessions.answer', 'sessions.progress']);
+  const answer = (text) => ({ id: 's1', question: 'q1', request: '00000000-0000-4000-8000-000000000000', text });
+  // 8 bytes under the limit as it is: "progress":true would put it 8 over, and the host refuse it.
+  const text = 'x'.repeat(Limits.request - 8 - hostJsonBytes(answer('')));
+  assert.equal(hostJsonBytes(answer(text)), Limits.request - 8);
+  client.answer(answer(text), { onProgress: () => {} }).catch(() => {});
+  await flush();
+  assert.equal('progress' in t.lastRequest('session.answer').data, false);
+  client.answer(answer('short'), { onProgress: () => {} }).catch(() => {});
+  await flush();
+  assert.equal(t.lastRequest('session.answer').data.progress, true);
+  client.close();
 });
 
 test('progress frames tell a reply how far it has got, in order, and never settle it', async () => {

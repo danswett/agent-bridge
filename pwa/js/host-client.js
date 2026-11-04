@@ -10,6 +10,8 @@ import { PatchError, applyPatch, readPatch } from './session-patch.js';
 import { USAGE, readUsage } from './usage.js';
 import { UPDATE, readUpdateState } from './update.js';
 import { LAUNCH, TRUST, readLaunchOptions, readLaunchResult, readTrustResult } from './launch.js';
+import { Limits, hostJsonBytes } from './answers.js';
+import { checkReply } from './replies.js';
 
 export class HostError extends Error {
   // fromHost: the host answered with ok:false. Otherwise the request never got an answer
@@ -128,9 +130,16 @@ export class HostClient {
     return hello;
   }
 
-  // A session.answer's or session.reply's data, asking for progress where the host offers it.
-  #withProgress(data, onProgress) {
-    return onProgress && this.capabilities.includes(Capabilities.sessionsProgress) ? { ...data, progress: true } : data;
+  // A session.answer's or session.reply's data, asking for progress where the host offers it and
+  // the request still fits its limit with the flag (fits): the host counts "progress": true
+  // against it, and one that fits only without the flag goes without it, saying Sending until its
+  // outcome, rather than be refused for asking how it went. A host without progress gets nothing
+  // new, and a request is never checked against bytes it won't carry (#616 review), as the app's
+  // Deliveries.AskProgress does.
+  #withProgress(data, onProgress, fits) {
+    if (!onProgress || !this.capabilities.includes(Capabilities.sessionsProgress)) { return data; }
+    const flagged = { ...data, progress: true };
+    return fits(flagged) ? flagged : data;
   }
 
   // Every page of sessions.list. Not used by the live view, which subscribes instead (pages
@@ -174,14 +183,14 @@ export class HostClient {
   // onProgress({ stage, working }) hears how far the host has got, where it says
   // (sessions.progress); a host that doesn't sends only the outcome.
   async answer(data, { timeoutMs = this.#answerTimeoutMs, onProgress = null } = {}) {
-    return readAnswerResult(await this.request(Ops.sessionAnswer, this.#withProgress(data, onProgress), { timeoutMs, onProgress }));
+    return readAnswerResult(await this.request(Ops.sessionAnswer, this.#withProgress(data, onProgress, (d) => hostJsonBytes(d) <= Limits.request), { timeoutMs, onProgress }));
   }
 
   // Sends a session a prompt: data is session.reply's { id, request, text, attachments? }.
   // Resolves to { outcome, reason, timings? }; rejects only when no outcome arrived (HostError).
   // onProgress as for answer().
   async reply(data, { timeoutMs = this.#replyTimeoutMs, onProgress = null } = {}) {
-    return readAnswerResult(await this.request(Ops.sessionReply, this.#withProgress(data, onProgress), { timeoutMs, onProgress }));
+    return readAnswerResult(await this.request(Ops.sessionReply, this.#withProgress(data, onProgress, (d) => checkReply(d) === null), { timeoutMs, onProgress }));
   }
 
   // Sends a file ahead of a reply (attachments.js does the chunking). Each resolves to
