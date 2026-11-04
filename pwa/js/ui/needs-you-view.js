@@ -7,6 +7,7 @@ import { glyph } from './glyph.js';
 import { needsYou, AppBadge } from '../needs-you.js';
 import { tapState, prepareAnswer } from '../answers.js';
 import { BUSY_PAUSE_MS, answerControls, answerState, describeAnswer } from './question-view.js';
+import { receiptText } from './receipt.js';
 import { duration, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
 
@@ -170,10 +171,12 @@ export class NeedsYouLane {
   #show(view, entry) {
     const { els } = view;
     clearTimeout(view.pause);
-    const shown = entry ? describeAnswer(entry, this.machine(view.entry.hostId).name) : { text: '', tone: '' };
+    const shown = entry ? describeAnswer(entry, this.machine(view.entry.hostId).name, { question: view.entry.question }) : { text: '', tone: '' };
     const { again, pause } = answerControls(entry);
     view.el.dataset.answer = answerState(entry);
-    els.status.textContent = shown.text;
+    // The receipt's words, as the card says them (receipt.js); the card's line, beside it, is the
+    // one that keeps the quiet window and the stalls, and the one a screen reader hears.
+    els.status.textContent = receiptText(shown);
     els.status.className = `needs-status${shown.tone ? ` ${shown.tone}` : ''}`;
     els.status.hidden = !shown.text;
     els.approve.disabled = els.deny.disabled = !again || pause;

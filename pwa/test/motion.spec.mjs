@@ -890,7 +890,10 @@ test('the same question drawn again, longer, as the person types in it still tak
 });
 
 test('a receipt above a question whose words grow as the person types below it still holds the question\'s click', async ({ page }) => {
-  await openDemo(page, { width: 390, height: 844 });
+  // A machine from before progress: the receipt's next words are its outcome (stale, as the
+  // question has changed since), which take more lines than "Sending…". With progress the next
+  // would be the shorter "Sent".
+  await openDemo(page, { width: 390, height: 844, hash: '&progress=0' });
   await askCodex(page, choices('q-answered'));
   const v = await open(page, CODEX);
   await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());

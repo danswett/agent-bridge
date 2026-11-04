@@ -109,7 +109,7 @@ test('an answer, a reply with files, and End session from a session go to the ma
   await openDemo(page);
   const asked = await open(page, 'laptop-ask-1', LAPTOP);
   await asked.locator('.choice[data-value="now"]').click();
-  await expect(asked.locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.');
+  await expect(asked.locator('.answer-receipt')).toHaveText('You answered · Yes, now');
   expect((await machine(page, LAPTOP, 'typed')).map((t) => t.said)).toEqual(['answer: "now"']);
   expect(await machine(page, 'demo', 'answerLog')).toEqual([]);
 
@@ -123,7 +123,7 @@ test('an answer, a reply with files, and End session from a session go to the ma
   ]);
   await reply.getByRole('textbox', { name: 'Reply' }).fill('see these');
   await reply.getByRole('button', { name: 'Send' }).click();
-  await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.');
+  await expect(reply.locator('.reply-status')).toHaveText('Delivered');
   expect((await machine(page, LAPTOP, 'typedReplies')).map((r) => r.files.map((f) => f.name))).toEqual([['notes.md', 'photo.jpg']]);
   expect(await page.evaluate(() => window.agentBridgeDemo.blobs.log.filter((l) => l.op === 'put').map((l) => l.to))).toEqual([LAPTOP]);
   expect(await machine(page, 'demo', 'replyLog')).toEqual([]);

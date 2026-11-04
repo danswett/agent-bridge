@@ -15,9 +15,10 @@
 // One never sent at all (given while disconnected) can't have been typed, so it waits for
 // a connection however long that takes.
 //
-// Entry states: 'sending' (a request is out), 'waiting' (no channel; resent when there is
-// one), 'failed' (the host answered the op with an error, not an outcome; resendable as
-// is), 'done' (outcome and reason set).
+// Entry states: 'sending' (a request is out), 'waiting' (no channel, reason 'not connected', and
+// resent when there is one; or no outcome on a channel still open, resent after retryMs; or
+// 'still being delivered'), 'failed' (the host answered the op with an error, not an outcome;
+// resendable as is), 'done' (outcome and reason set).
 //
 // While it is on its way, a host that offers sessions.progress says how far it has got, which
 // the entry keeps as its `stage`: 'received' (the host has it), 'typed' (the keys have gone),
@@ -207,7 +208,9 @@ export class AnswerService {
       // already up (the reconnect beat this rejection), resend on it now; otherwise later.
       const now = this.current(entry.hostId);
       if (now?.client && !now.client.closed && now.client !== client && now.hostId === entry.hostId) { this.#attempt(entry); return; }
-      this.#wait(entry, e?.message ?? 'no response');
+      // A channel that went is no connection, as when there was none to send on: the receipt says
+      // it waits for the machine (ui.md §6.5). Still connected, it is a lost response, retried.
+      this.#wait(entry, client.closed ? 'not connected' : e?.message ?? 'no response');
       if (!client.closed) { entry.timer = setTimeout(() => this.#attempt(entry), this.retryMs); }
       return;
     }

@@ -46,7 +46,8 @@ Larger files come next.
 | `js/prompt-origin.js` | A prompt the person didn't type (#489, [ui.md](../docs/design/ui.md) §6.4): who sent it (`activity.userMessageFrom`: a schedule, an agent, or other; absent is the person), its label line's words and spoken name, its label cleaned and cut to 64 bytes, its hidden characters as escapes, and `PromptMemory`, which folds a schedule's repeat ("same as last time") and dates a prompt by its turn. Pure, and tested in `test/unit/prompt-origin.test.mjs` |
 | `js/needs-you.js` | The Needs you lane (#165): one entry per pending question across the machines shown, oldest first; what each says (title, machine, agent, age, first line or an approval's whole prompt, a delegate by name) and offers (Approve once and Deny, open the session, or answer at the machine); and the app badge with its count |
 | `js/answers.js` | An answer as the form holds it, as the request sends it, and checked first: `checkAnswer` mirrors the C# `Answers.Check` case for case, with its wording |
-| `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect; how far each has got where the machine says (`sessions.progress`: Sent, Typed, Queued) |
+| `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect; how far each has got where the machine says (`sessions.progress`: received, typed, queued) |
+| `js/ui/receipt.js` | The receipt of a reply or an answer (#600, #617): its words at each stage, the quiet window, the dwell, the stalls and what a screen reader hears. The timing is tested on a mocked clock in `test/unit/receipt.test.mjs` |
 | `js/timing.js` | Timing marks for each answer and reply (#600), kept on this device only: tap, each send, each progress stage and the outcome as `performance` marks and measures, with the machine's own `timings` beside them |
 | `js/replies.js` | A reply checked before it goes: `checkReply` mirrors the C# `Replies.Check`, with its wording |
 | `js/reply-service.js` | Sending replies: `answer-service.js` with `session.reply`, one reply on its way per session, its files sent first |
@@ -226,14 +227,25 @@ Before anything is sent the form is checked as the host will check it: `required
 values, Other not empty, 4 KiB of UTF-8 per free text (counted in bytes; a counter appears
 near the limit) and 16 KiB per request. A problem is named and focus goes to its field.
 
-While an answer is on its way the controls are disabled and it says so: "Sending…" until the
-machine says more. A machine whose `hello` lists `sessions.progress` is asked for it
-(`"progress": true`, [v1-sessions.md](../docs/protocol/v1-sessions.md)), and says how far it
-has got before the outcome comes: "Sent. The machine is typing it…" once it has the answer,
-"Typed. Waiting for the session to take it…" once the keys have gone, or "Queued. The session
-is working, and takes it at its next step." when they went into a working session. A stage
-only moves forward, across resends. A machine from before it says nothing until the outcome,
-as before. If the response is
+While an answer is on its way the controls are disabled, and one line, the receipt
+(`js/ui/receipt.js`, ui.md §6.4 and §6.5 as the owner decided them on #617), says where it has
+got. A machine whose `hello` lists `sessions.progress` is asked for it (`"progress": true`,
+[v1-sessions.md](../docs/protocol/v1-sessions.md)), and says how far it has got before the
+outcome comes: "Sent" once it has the answer, "Passed to the agent" once the keys have gone
+(for a reply into a working session, "Up next · after the agent's current step"), then "You
+answered · *value*" with the check badge once confirmed: a tap's option, free text's first
+line cut to about 40 characters, or nothing for a form of several fields. A stage only moves
+forward, across resends. A machine from before it goes from "Sending…" to the outcome.
+
+The receipt shows nothing for its first 400 ms (Send's ring covers them), then the furthest
+stage reached, each in-between stage for at least 400 ms; an outcome shows at once. When the
+stages stop: "Still sending…" after 3 s with nothing heard (and for a resend), "Sent · still
+waiting on *machine*" after 5 s, "Passed to the agent · not picked up yet" after 10 s; Up next
+never stalls. A resend that meets the first copy in flight keeps its stage and adds "· still
+being delivered"; one held for a machine that isn't connected says "Waiting for *machine* · it
+goes when *machine* is back", with its ring still. The thresholds are `ReceiptTiming`. A screen
+reader hears each change once, prefixed "Reply" or "Answer", at most one a second (the later of
+two), never "Sending…", always the outcome. If the response is
 lost (a timeout, the channel or relay dropping) it is resent with the same `request` on
 the next channel to that machine, so the host returns the first outcome and never types it
 twice; after 9 minutes without an outcome (hosts remember requests for 10) it is reported
@@ -268,13 +280,14 @@ While the session is asking a question the box is disabled and says to answer fi
 words would answer it. Anything typed stays.
 
 One reply per session is on its way at a time, resent with the same `request` like an
-answer, and shows how far it has got like one (Sent, Typed, Queued) where the machine says.
+answer, and shows how far it has got like one (Sent, Passed to the agent, Up next) where the
+machine says.
 The words stay in the box until the session has them: a delivered reply takes out
 what was sent (anything typed meanwhile stays), and every other outcome keeps them.
 
 | Outcome | Shown | Then |
 |---|---|---|
-| `delivered` | Delivered. The session has your reply. | The session's upsert shows it as your last message |
+| `delivered` | Delivered, with the check badge | The session's upsert shows it as your last message |
 | `unconfirmed`, or unknown | Sent, but not confirmed. Check at the machine before sending it again. | The words stay; sending them again is a new reply |
 | `stale` | Not sent: the session has ended. | |
 | `busy` | Not sent: an answer or another reply is being delivered. | Send comes back after 2 s |
@@ -296,7 +309,7 @@ names it), with the machine's own `timings` from the result (ms since it receive
 None of it is ever sent anywhere.
 
 Demo mode plays a machine with progress: `?progress=0` one from before it,
-`?confirmDelay=<ms>` the wait between typing and the outcome (to see Typed), and
+`?confirmDelay=<ms>` the wait between typing and the outcome (to see Passed to the agent), and
 `host.holdBefore('typing' | 'result')` with `releaseBefore` hold a delivery at a stage for a test.
 
 ### Attachments
@@ -485,14 +498,15 @@ running another checkout's tests at the same time. CI splits the run over severa
 the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `test/e2e` out.
 
 * `test/answer.spec.mjs`, in demo mode at a phone's size: answering every field type and
-  kind, defaults, required fields, the byte limit, every outcome, Sent then Typed then
-  Delivered from a machine with `sessions.progress`, a resend after a lost
+  kind, defaults, required fields, the byte limit, every outcome, Sent then Passed to the agent
+  then "You answered · value" from a machine with `sessions.progress`, a resend after a lost
   response (typed once), a question changing or going while being answered, a card moving
   while in use, 44 px targets, and the keyboard.
 * `test/reply.spec.mjs`, in demo mode: a reply delivered as one line and taken out of the
   box (keeping what was typed meanwhile), every outcome keeping the words, a resend after a
-  lost response (typed once), Sent, Typed and Queued from a machine with `sessions.progress`
-  with the timing marks kept, Sending alone from one without it, the box held while a question is pending, the checks before
+  lost response (typed once), Sent, Passed to the agent and Up next from a machine with
+  `sessions.progress` with the timing marks kept, the check badge and what a screen reader
+  hears, forced colours, Sending alone from one without it, the box held while a question is pending, the checks before
   sending, 44 px targets, Ctrl/Cmd+Enter, and no box for a machine without `sessions.reply`.
 * `test/attach.spec.mjs`, in demo mode: a picked file and a pasted screenshot shown as
   chips and typed as `@` mentions ahead of the words, files alone, removing one, the size

@@ -30,6 +30,7 @@ import { ago, duration, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
 import { sessionStatus, statusLabel } from '../status.js';
 import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.js';
+import { drawReceipt } from './receipt.js';
 import { answerability } from '../answers.js';
 import { ReplyBox } from './reply-view.js';
 import { EndSession } from './stop-view.js';
@@ -1187,7 +1188,7 @@ export class SessionCard {
       if (draft) {
         this.#orphan = { text: draft, why: !q || q.id !== old.questionId ? 'changed' : 'unanswerable' };
       } else if (entry) {
-        this.#watchReceipt(old.answering, old.questionId);
+        this.#watchReceipt(old.answering, old.q);
       }
     }
     old?.destroy();
@@ -1393,18 +1394,20 @@ export class SessionCard {
     });
   }
 
-  #watchReceipt({ service, hostId, sessionId }, questionId) {
+  // question: the one answered, which says what a confirmed answer's value was (answeredValue).
+  #watchReceipt({ service, hostId, sessionId }, question) {
     this.#dropReceipt();
+    const questionId = question.id;
     const element = h('p', { class: 'answer-receipt', role: 'status', 'aria-live': 'polite' });
     const receipt = { element, final: false, unwatch: null, fresh: true };
     const show = (entry) => {
       if (!entry) { return; }
       // Its words change as the answer goes, above a question that may stay: whatever they move counts.
       this.#moves?.notOwn();
-      const { text, tone } = describeAnswer(entry, this.machineName);
-      element.className = `answer-receipt ${tone}`;
+      const d = describeAnswer(entry, this.machineName, { question });
       element.dataset.answer = entry.state === 'done' ? entry.outcome : entry.state;
-      element.textContent = `Your answer: ${text}`;
+      // "You answered · value" says whose answer it is; anything else says it is about the answer.
+      drawReceipt(element, 'answer-receipt', d.key === 'delivered' ? d : { ...d, text: `Your answer: ${d.text}` }, { enters: false });
       receipt.final = entry.state === 'done';
     };
     receipt.unwatch = service.watch(hostId, sessionId, questionId, show);
