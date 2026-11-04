@@ -201,16 +201,21 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) { return; }
   const hadController = !!navigator.serviceWorker.controller;
   // Only an app running a release it has can be stuck on it: without one, each load is the network's.
-  const stuck = (yes) => {
-    if (yes && hadController) { reveal($('stuck-banner')); } else { $('stuck-banner').hidden = true; }
+  const releases = new ReleaseWatch({
+    onChange: (stuck) => {
+      if (stuck && hadController) { reveal($('stuck-banner')); } else { $('stuck-banner').hidden = true; }
+    },
+  });
+  // Which release is in control, read again after each takeover; only the latest read counts.
+  let reading = 0;
+  const learn = () => {
+    const mine = ++reading;
+    releaseInControl().then((release) => { if (mine === reading) { releases.under(release); } });
   };
-  let releases = null;
-  // A release that takes over while the watch is still being made (its record may not say so yet).
-  let tookOver = false;
-  navigator.serviceWorker.register('sw.js').then(async (reg) => {
-    releases = new ReleaseWatch({ release: hadController ? await releaseInControl(reg) : null, onChange: stuck });
-    if (tookOver) { releases.installed(); }
-    stuck(releases.stuck);
+  learn();
+  navigator.serviceWorker.register('sw.js').then((reg) => {
+    // Watched from the start, while the release in control is still being read: an install
+    // that fails meanwhile is counted, and kept once the release is known.
     reg.addEventListener('updatefound', () => releases.watch(reg.installing));
     // One the browser found on its own as this page loaded, before it could listen.
     releases.watch(reg.installing);
@@ -219,8 +224,8 @@ function registerServiceWorker() {
     });
   }).catch((e) => console.warn('service worker:', e.message));
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    tookOver = true;
-    releases?.installed();
+    releases.tookOver();
+    learn();
     if (hadController) { reveal($('update-banner')); }
   });
   $('reload').onclick = () => location.reload();
@@ -229,16 +234,21 @@ function registerServiceWorker() {
 }
 
 // The release in control: the worker's record of it (sw.js, releases.json), which each release
-// writes as it takes over. null from a worker that keeps none, or a cache that can't be read.
-async function releaseInControl(reg) {
+// writes as it activates; so a worker still activating (one taking over) is waited for. null
+// with no worker, from one that keeps no record, or from a cache that can't be read.
+async function releaseInControl() {
+  const worker = navigator.serviceWorker.controller;
+  if (!worker) { return null; }
   try {
-    const record = await caches.match(new URL('releases.json', reg.scope).href);
+    if (worker.state === 'activating') {
+      await new Promise((resolve) => worker.addEventListener('statechange', resolve, { once: true }));
+    }
+    const record = await caches.match(new URL('releases.json', new URL('./', worker.scriptURL)).href);
     return (await record?.json())?.active ?? null;
   } catch {
     return null;
   }
 }
-
 // ---- demo ----
 // The demo's own remembered choices, apart from the live app's on the same site.
 const demoStorage = {

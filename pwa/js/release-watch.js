@@ -7,23 +7,32 @@ export const STUCK_AFTER = 3;
 // Remembered across starts, each start trying once, with the release in control as they were
 // counted: a release can install with no page open to see it (the browser checks for one when a
 // push arrives, and finishes an install begun before the app was closed), and a count kept under
-// the release before is no count under the one after.
+// one release is no count under another.
 const FAILURES = 'agent-bridge.app.installFailures';
 
 export class ReleaseWatch {
-  // release: the release in control (sw.js's cache for it, from the worker's record), or null.
-  constructor({ storage = globalThis.localStorage, release = null, onChange = () => {} } = {}) {
+  constructor({ storage = globalThis.localStorage, onChange = () => {} } = {}) {
     this.storage = storage;
-    this.release = release;
     this.onChange = onChange;
     this.watched = new WeakSet();
-    let kept = null;
-    try { kept = JSON.parse(storage.getItem(FAILURES)); } catch { /* none kept, or unreadable */ }
-    const n = Math.floor(Number(kept?.failures));
-    this.failures = kept?.release === release && n > 0 ? n : 0;
+    // The release in control (sw.js's cache for it, from the worker's record), once known:
+    // undefined until then, null for a worker that keeps no record. Failures seen before it is
+    // known are counted here, and kept once it is.
+    this.release = undefined;
+    this.failures = 0;
   }
 
   get stuck() { return this.failures >= STUCK_AFTER; }
+
+  // The release in control is known: the count kept under it, if that is the one kept, and any
+  // failures seen meanwhile.
+  under(release) {
+    this.release = release;
+    let kept = null;
+    try { kept = JSON.parse(this.storage.getItem(FAILURES)); } catch { /* none kept, or unreadable */ }
+    const n = Math.floor(Number(kept?.failures));
+    this.#count((kept?.release === release && n > 0 ? n : 0) + this.failures);
+  }
 
   // A worker installing a release (the registration's installing worker). One that goes from
   // installing straight to redundant failed; one that got as far as installed did not, even
@@ -42,16 +51,26 @@ export class ReleaseWatch {
     });
   }
 
-  // A release installed, or took over.
+  // A release installed.
   installed() {
     if (this.failures) { this.#count(0); }
   }
 
+  // A release took over: nothing failed, and which release is in control is learnt again
+  // (under), from its record.
+  tookOver() {
+    try { this.storage.removeItem(FAILURES); } catch { /* storage blocked: nothing was kept */ }
+    this.release = undefined;
+    this.#count(0);
+  }
+
   #count(n) {
     this.failures = n;
-    try {
-      if (n) { this.storage.setItem(FAILURES, JSON.stringify({ release: this.release, failures: n })); } else { this.storage.removeItem(FAILURES); }
-    } catch { /* storage blocked or full: the count lasts as long as this page */ }
+    if (this.release !== undefined) {
+      try {
+        if (n) { this.storage.setItem(FAILURES, JSON.stringify({ release: this.release, failures: n })); } else { this.storage.removeItem(FAILURES); }
+      } catch { /* storage blocked or full: the count lasts as long as this page */ }
+    }
     this.onChange(this.stuck);
   }
 }
