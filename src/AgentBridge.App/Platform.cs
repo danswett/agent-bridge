@@ -38,7 +38,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         IUpdateSource from = feed.Length == 0
             ? new GithubSource(Repository, null, prereleases(), null)
             : webFeed is not null
-                ? new SimpleWebSource(webFeed.AbsoluteUri, new OverrideFeedDownloader())
+                ? new SimpleWebSource(webFeed.AbsoluteUri, new OverrideFeedDownloader(developmentFeeds))
                 : new SimpleFileSource(new DirectoryInfo(UpdateFeedPolicy.LocalDirectory(feed)));
         source = key;
         pending = null;

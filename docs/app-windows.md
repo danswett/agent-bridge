@@ -234,7 +234,8 @@ into one folder with one version. An app update is a host update, so they never 
   (`localhost`, `127.0.0.1`, or `[::1]`). HTTP to other machines is refused even in that mode;
   local directory overrides need no opt-in. UNC and file-URI authorities (including WebDAV shares)
   are refused. Custom web feeds and their packages do not follow redirects; configure the final
-  HTTPS destination directly.
+  HTTPS destination directly. The same policy is checked on each actual download, including
+  absolute package URLs named by an otherwise valid HTTPS feed.
 * **One channel per architecture** (#222, `build/app-channels.ps1`). x64 is in Velopack's default
   channel, `win`, as every copy installed before Arm64 builds was packed; Arm64 is in
   `win-arm64`. The channel is recorded in the installed package (`current\sq.version`), and

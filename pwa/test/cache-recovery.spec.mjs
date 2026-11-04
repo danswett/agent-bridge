@@ -18,7 +18,7 @@ test('an updated asset survives worker termination and an offline reopen', async
     const read = () => page.evaluate(async (asset) => (await fetch(asset)).text(), name);
     expect(await read()).toBe('before');
     await writeFile(file, 'after');
-    expect(await read()).toBe('after');
+    expect(await read()).toBe('before');
     await expect.poll(() => page.evaluate(async (asset) => (await caches.match(asset))?.text(), name)).toBe('after');
     const cdp = await context.newCDPSession(page);
     await cdp.send('ServiceWorker.enable');

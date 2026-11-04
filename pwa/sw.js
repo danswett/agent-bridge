@@ -109,11 +109,10 @@ self.addEventListener('fetch', (e) => {
     }
     // Anything else (the demo's chunk, a file of the app's source layout) is
     // stale-while-revalidate: what is kept now, and the network's copy kept for next time.
-    const fresh = network(e.request).then(async (r) => {
-      if (r.ok) { await own.put(e.request, r.clone()).catch(() => {}); }
-      return r;
-    });
-    pending.push(fresh.catch(() => {}));
+    const fresh = network(e.request);
+    pending.push(fresh.then(async (r) => {
+      if (r.ok) { await own.put(e.request, r.clone()); }
+    }).catch(() => {}));
     if (hit) {
       return hit;
     }

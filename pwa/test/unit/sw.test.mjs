@@ -26,7 +26,7 @@ function worker({ clients = [], cacheStorage = {}, network = fetch } = {}) {
   vm.runInNewContext(readFileSync(path.join(pwa, 'sw.js'), 'utf8'), { self, location: new URL(scope), URL, caches: cacheStorage, fetch: network });
   const fire = async (type, event) => {
     let done;
-    handlers[type]({ ...event, waitUntil: (p) => { done = p; } });
+    handlers[type]({ ...event, waitUntil: (p) => { event.waitUntil?.(p); done = p; } });
     await done;
   };
   return { fire, shown, opened };
@@ -247,26 +247,36 @@ test('a tap brings an open app forward and tells it where to go, keeping its con
 });
 
 
-test('a successful fetch responds while its cache write remains in the event lifetime', { timeout: 2000 }, async () => {
+test('a cached response returns while its refreshed asset write remains in the event lifetime', { timeout: 2000 }, async () => {
   let finishWrite;
   const started = Promise.withResolvers();
   let written = false;
   let response;
   const sw = worker({
     network: async () => new Response('new asset'),
-    cacheStorage: { open: async () => ({ put: async (_, copy) => {
+    cacheStorage: { open: async () => ({ match: async () => new Response('cached asset'), put: async (_, copy) => {
       assert.equal(await copy.text(), 'new asset');
       await new Promise((resolve) => { finishWrite = resolve; started.resolve(); });
       written = true;
     } }) },
   });
   let done = false;
-  const lifetime = sw.fire('fetch', { request: new Request(`${scope}app.css`), respondWith: (p) => { response = p; } }).then(() => { done = true; });
-  assert.equal(await (await response).text(), 'new asset');
+  let registered = false;
+  let yielded = false;
+  queueMicrotask(() => { yielded = true; });
+  let lifetime;
+  const fired = sw.fire('fetch', { request: new Request(`${scope}cache-fixture.txt`), respondWith: (p) => { response = p; }, waitUntil: (p) => {
+    assert.equal(yielded, false, 'lifetime is registered synchronously');
+    registered = true;
+    lifetime = p.then(() => { done = true; });
+  } });
+  assert.equal(registered, true);
+  assert.equal(await (await response).text(), 'cached asset');
   await started.promise;
   assert.equal(done, false);
   finishWrite();
   await lifetime;
+  await fired;
   assert.equal(written, true);
 });
 
@@ -276,7 +286,8 @@ test('cache quota failures preserve successful responses and network failures re
     const sw = worker({
       network: async () => { if (offline) { throw new Error('offline'); } return new Response('network asset'); },
       cacheStorage: {
-        open: async () => ({ put: async () => { throw new Error('QuotaExceededError'); } }),
+        open: async () => ({ match: async () => undefined, put: async () => { throw new Error('QuotaExceededError'); } }),
+        keys: async () => [],
         match: async () => new Response('cached asset'),
       },
     });
