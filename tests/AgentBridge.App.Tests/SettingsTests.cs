@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -60,6 +61,8 @@ public sealed class SettingsTests : IAsyncLifetime
             return new { stopping = true };
         });
         host.Capabilities.Add(HostOps.AgentSetupCapability);
+        host.Capabilities.Add(HostOps.AgentVerificationCapability);
+        host.Capabilities.Add(LaunchProtocol.Capability);
         host.Start();
         connection = host.Connect(ui);
         manager = new HostManager(new InstallLayout(app, host.Folder, "test"), tasks, processes,
@@ -82,6 +85,188 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     Task Connected() => Wait.UntilAsync(() => settings.HostRunning && connection.Status is not null, "the connection");
+
+    static LaunchOptions VerificationOptions() => new()
+    {
+        Agents = [new LaunchAgent { Id = "agency", Label = "Agency", Kind = AgentKind.Copilot, Profiles = ["work"] }],
+        Workspaces = [new LaunchWorkspace { Label = "approved", Path = @"C:\src\approved", Isolate = true }],
+        Defaults = new LaunchDefaults { Agent = "agency", Workspace = "approved", Permissions = LaunchProtocol.AllowAll },
+    };
+
+    static AgentVerificationReport VerificationReport(string request, VerificationState state)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var check = new ReadinessCheck(ReadinessState.Unknown, "Still observing this exact test session.");
+        return new(request, "agency", "approved", "work", state, "Current host run only.", now, now,
+            check, check, check, check, Session: "test-session");
+    }
+
+    async Task<VerificationSelection> PickVerificationAsync()
+    {
+        await Connected();
+        await settings.LoadVerificationChoicesAsync();
+        settings.VerificationAgent = Assert.Single(settings.VerificationAgents);
+        settings.VerificationWorkspace = Assert.Single(settings.VerificationWorkspaces);
+        settings.VerificationProfile = settings.VerificationProfiles.Single(p => p.Value == "work");
+        return settings.CaptureVerificationSelection();
+    }
+
+    [Fact]
+    public async Task A_new_test_requires_explicit_picks_and_a_confirmation_of_the_exact_folder_and_profile()
+    {
+        host.On(LaunchProtocol.Options, _ => VerificationOptions());
+        host.On(HostOps.AgentsVerify, data =>
+        {
+            var request = data.Deserialize<AgentVerificationRequest>(ProtocolJson.Options)!;
+            var report = VerificationReport(request.Request, VerificationState.Running);
+            host.Status = host.Status with { AgentVerifications = [report] };
+            return report;
+        });
+        await Connected();
+        await settings.LoadVerificationChoicesAsync();
+        Assert.False(settings.CanRunVerification);
+        Assert.DoesNotContain(host.Received, r => r.Op == HostOps.AgentsVerify);
+        settings.VerificationAgent = Assert.Single(settings.VerificationAgents);
+        Assert.False(settings.CanRunVerification);
+        settings.VerificationWorkspace = Assert.Single(settings.VerificationWorkspaces);
+        settings.VerificationProfile = settings.VerificationProfiles.Single(p => p.Value == "work");
+        var consent = settings.CaptureVerificationSelection();
+        Assert.Contains(@"C:\src\approved", consent.Consent, StringComparison.Ordinal);
+        Assert.Contains("paid usage", consent.Consent, StringComparison.Ordinal);
+        Assert.Contains("Standard permission prompts", consent.Consent, StringComparison.Ordinal);
+        Assert.Contains("work", consent.Consent, StringComparison.Ordinal);
+        Assert.DoesNotContain(host.Received, r => r.Op == HostOps.AgentsVerify);
+
+        await settings.RunVerificationAsync(consent);
+        Assert.Null(settings.Error);
+        var sent = Assert.Single(host.Received, r => r.Op == HostOps.AgentsVerify).Data
+            .Deserialize<AgentVerificationRequest>(ProtocolJson.Options)!;
+        Assert.True(sent.Confirmed);
+        Assert.True(Guid.TryParseExact(sent.Request, "D", out _));
+        Assert.Equal(("agency", "approved", "work"), (sent.Agent, sent.Workspace, sent.Profile));
+        await Wait.UntilAsync(() => settings.Verifications.Count == 1, "current verification report");
+        Assert.True(Assert.Single(settings.Verifications).CanStopObserving);
+        Assert.False(settings.CanRunVerification);
+        Assert.DoesNotContain(host.Received, r => r.Op == LaunchProtocol.Launch);
+    }
+
+    [Theory]
+    [InlineData("path")]
+    [InlineData("isolate")]
+    [InlineData("profile")]
+    [InlineData("host")]
+    public async Task Choices_changed_after_consent_never_open_a_test_in_a_different_context(string changed)
+    {
+        var options = VerificationOptions();
+        host.On(LaunchProtocol.Options, _ => options);
+        var consent = await PickVerificationAsync();
+        options = changed switch
+        {
+            "path" => options with { Workspaces = [options.Workspaces[0] with { Path = @"C:\different" }] },
+            "isolate" => options with { Workspaces = [options.Workspaces[0] with { Isolate = false }] },
+            "profile" => options with { Agents = [options.Agents[0] with { Profiles = ["other"] }] },
+            _ => options,
+        };
+        if (changed == "host") { consent = consent with { Host = "a-replaced-host" }; }
+        await settings.RunVerificationAsync(consent);
+        Assert.NotNull(settings.Error);
+        Assert.DoesNotContain(host.Received, r => r.Op == HostOps.AgentsVerify);
+    }
+
+    [Theory]
+    [InlineData("read-only")]
+    [InlineData("restart")]
+    public async Task Becoming_unavailable_while_the_consent_dialog_is_open_blocks_the_test(string reason)
+    {
+        host.On(LaunchProtocol.Options, _ => VerificationOptions());
+        var consent = await PickVerificationAsync();
+        host.Status = reason == "read-only" ? host.Status with { ReadOnly = "legacy owner is active" }
+            : host.Status with { RestartRequired = true };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => !settings.CanRunVerification, "verification blocked");
+        await settings.RunVerificationAsync(consent);
+        Assert.NotNull(settings.Error);
+        Assert.DoesNotContain(host.Received, r => r.Op == HostOps.AgentsVerify);
+    }
+
+    [Fact]
+    public async Task Reconnect_recovers_host_reports_but_a_new_host_never_inherits_a_success_or_approval()
+    {
+        host.On(LaunchProtocol.Options, _ => VerificationOptions());
+        var consent = await PickVerificationAsync();
+        var report = VerificationReport(Guid.NewGuid().ToString("D"), VerificationState.Verified);
+        host.Status = host.Status with { AgentVerifications = [report] };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.Verifications.Count == 1, "host verification");
+        Assert.Contains("Verified", Assert.Single(settings.Verifications).State, StringComparison.Ordinal);
+        await host.StopAsync();
+        await Wait.UntilAsync(() => !settings.HostRunning, "disconnected");
+        Assert.Empty(settings.Verifications);
+        host.Start();
+        connection.RetryNow();
+        await Connected();
+        await Wait.UntilAsync(() => settings.Verifications.Count == 1, "recovered verification");
+        await host.StopAsync();
+        await Wait.UntilAsync(() => !settings.HostRunning, "disconnected again");
+        host.Status = host.Status with { StartedAt = host.Status.StartedAt.AddSeconds(1), AgentVerifications = null };
+        host.Start();
+        connection.RetryNow();
+        await Connected();
+        Assert.Empty(settings.Verifications);
+        Assert.False(settings.CanRunVerification);
+        await settings.RunVerificationAsync(consent);
+        Assert.NotNull(settings.Error);
+        Assert.DoesNotContain(host.Received, r => r.Op == HostOps.AgentsVerify);
+    }
+
+    [Fact]
+    public async Task Stopping_a_recovered_test_only_stops_observing_the_same_host_request()
+    {
+        await Connected();
+        var request = Guid.NewGuid().ToString("D");
+        host.Status = host.Status with { AgentVerifications = [VerificationReport(request, VerificationState.Running)] };
+        host.On(HostOps.AgentsVerifyCancel, data =>
+        {
+            Assert.Equal(request, data.Deserialize<AgentVerificationCancel>(ProtocolJson.Options)!.Request);
+            var report = VerificationReport(request, VerificationState.Cancelled);
+            host.Status = host.Status with { AgentVerifications = [report] };
+            return report;
+        });
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.Verifications.Count == 1, "recovered running test");
+        await settings.CancelVerificationAsync(Assert.Single(settings.Verifications).Request);
+        Assert.Null(settings.Error);
+        await Wait.UntilAsync(() => !Assert.Single(settings.Verifications).CanStopObserving, "observation stopped");
+        Assert.Contains("was not closed", settings.VerificationActionStatus, StringComparison.Ordinal);
+        Assert.DoesNotContain(host.Received, r => r.Op == HostOps.AgentsVerify || r.Op == LaunchProtocol.Launch || r.Op == Ops.SessionStop);
+    }
+
+    [Theory]
+    [InlineData(VerificationState.Verified)]
+    [InlineData(VerificationState.Unknown)]
+    [InlineData(VerificationState.Running)]
+    public async Task A_racing_or_unrecognized_cancel_result_never_claims_observation_was_cancelled(VerificationState state)
+    {
+        await Connected();
+        var request = Guid.NewGuid().ToString("D");
+        host.Status = host.Status with { AgentVerifications = [VerificationReport(request, VerificationState.Running)] };
+        host.On(HostOps.AgentsVerifyCancel, _ =>
+        {
+            var report = VerificationReport(request, state);
+            host.Status = host.Status with { AgentVerifications = [report] };
+            return report;
+        });
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.Verifications.Count == 1, "running verification");
+        await settings.CancelVerificationAsync(request);
+        Assert.DoesNotContain("Observation stopped.", settings.VerificationActionStatus, StringComparison.Ordinal);
+        if (state == VerificationState.Verified)
+        {
+            Assert.Null(settings.Error);
+            Assert.Contains("already ended", settings.VerificationActionStatus, StringComparison.Ordinal);
+        }
+        else { Assert.Contains("did not confirm", settings.Error, StringComparison.Ordinal); }
+    }
 
     // The host's status as the test sets it, seen by the app. The app may have read the status before
     // the test set it (on Linux its socket connects at once), so it is sent as the host would.

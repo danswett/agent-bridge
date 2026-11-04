@@ -40,6 +40,24 @@ public sealed partial class SettingsView : UserControl
     async void OnCheckAgents(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.CheckAgentsAsync(); } }
     async void OnSetUpAgent(object sender, RoutedEventArgs e) => await ConfirmAgentAsync(sender, remove: false);
     async void OnRemoveAgent(object sender, RoutedEventArgs e) => await ConfirmAgentAsync(sender, remove: true);
+    async void OnLoadVerification(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.LoadVerificationChoicesAsync(); } }
+    async void OnRefreshVerification(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.RefreshVerificationAsync(); } }
+    async void OnCancelVerification(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is { } v && sender is Button { Tag: string request }) { await v.CancelVerificationAsync(request); }
+    }
+    async void OnRunVerification(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is not { CanRunVerification: true } v) { return; }
+        var selection = v.CaptureVerificationSelection();
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot, Title = "Open a new verification session?",
+            Content = selection.Consent, PrimaryButtonText = "Open test session", CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary) { await v.RunVerificationAsync(selection); }
+    }
 
     async Task ConfirmAgentAsync(object sender, bool remove)
     {

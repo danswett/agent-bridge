@@ -226,8 +226,19 @@ A verified result applies only to that selected agent/profile/workspace on this 
 not relay connectivity, every configured agent, or a separately proven account entitlement.
 Before using it as a finish gate, read fresh `host.status`. Changed setup/configuration,
 incomplete discovery, a changed/missing session process or ten-minute-old evidence projects
-`needsAction`. Restart discards every result. This backend alone does not provide the guided
-first-run shell, Settings controls or disposable clean-machine acceptance.
+`needsAction`. Restart discards every result.
+
+Windows Settings loads `launch.options` before offering explicitly selected agent,
+approved workspace and optional Agency profile choices. Opening its confirmation alone
+sends no verification request. Confirmation explains the exact folder/isolation, profile,
+paid usage and manual sign-in/trust, with Cancel as the default. Before starting, the app
+revalidates the folder path, isolation and offered profile and pins the request to that
+host process. A host replacement or changed choice requires a new confirmation.
+It never automatically resends a start after a lost response. Status subscription restores
+reports after reconnecting to the same host; disconnected rows are hidden and a new host
+cannot inherit a cached success. Rows label the timestamped last reported result, with
+an explicit status recheck, and cancellation says only that observation stopped.
+The guided first-run shell and disposable clean-machine acceptance remain incomplete.
 
 ### Agent readiness evidence
 
