@@ -259,7 +259,7 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
     async Task<CodexProbeOutcome> ConverseAsync(IRpcLink link, CodexWatch? watch)
     {
         var rpc = new Rpc(link);
-        var init = await rpc.CallAsync("initialize", new { clientInfo = new { name = "agent_bridge", title = "Agent Bridge", version = probes.ClientVersion } });
+        var init = await rpc.CallAsync("initialize", new { clientInfo = new { name = "agent_bridge", title = Product.Name, version = probes.ClientVersion } });
         if (init.Error is { } initError) { return Failure(initError); }
         await link.SendAsync(JsonSerializer.Serialize(new { method = "initialized" }));
         watch?.Begin();

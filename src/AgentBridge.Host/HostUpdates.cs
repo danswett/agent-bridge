@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core.Updates;
+using AgentBridge.Protocol;
 using Velopack;
 using Velopack.Locators;
 using Velopack.Sources;
@@ -208,7 +209,7 @@ static class HostUpdateGate
     }
 
     static string? Others(Func<string?> otherHosts) => otherHosts() is { } others
-        ? $"{others}, whose usage probes cannot be held from here; install from the Agent Bridge app on this machine, which waits for them"
+        ? $"{others}, whose usage probes cannot be held from here; install from the {Product.App} on this machine, which waits for them"
         : null;
 
     // Another profile's host running from this installation, or one that cannot be looked at
