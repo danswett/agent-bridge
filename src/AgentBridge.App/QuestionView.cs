@@ -325,6 +325,14 @@ public sealed class QuestionView : StackPanel
         var box = new TextBox { PlaceholderText = placeholder, TextWrapping = TextWrapping.Wrap, AcceptsReturn = multiline, MinHeight = multiline ? 64 : 0, MaxHeight = 240 };
         box.GotFocus += (_, _) => editing(true);
         box.LostFocus += (_, _) => editing(false);
+        // Its text changed by the person however they did it, keys or not (a paste or Cut from the
+        // context menu, an IME, undo): the box growing with it is theirs (acted). A paste or Cut
+        // says so before anything is put in or taken out; any other edit, as early as the box tells
+        // of it. (Text set from code is laid out before the box tells of it, so a self-test can't
+        // stand in for a paste here.)
+        box.BeforeTextChanging += (_, _) => { if (box.IsLoaded) { acted?.Invoke(); } };
+        box.Paste += (_, _) => acted?.Invoke();
+        box.CuttingToClipboard += (_, _) => acted?.Invoke();
         // Preview: a multi-line TextBox handles Enter itself and marks KeyDown handled, so a
         // KeyDown handler never saw Ctrl+Enter, and it inserted a line instead of sending (#119).
         box.PreviewKeyDown += (_, e) =>

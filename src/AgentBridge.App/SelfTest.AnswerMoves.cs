@@ -120,6 +120,25 @@ static partial class SelfTest
                 await Task.Delay(100);
                 var held = view.QuestionShown is { IsHitTestVisible: false };
                 check(opened && !held, $"holds nothing as the person's own act lays out their question: Other's box opening as Other is activated (opened: {opened}; held: {held})");
+
+                // A press while the person's own act still holds, with their question grown since
+                // the last layout pass: the pass that press brings is read with nothing exempt, so
+                // Send, moved, drops it. Their typing opens the moment; the box then grows unlaid out.
+                var box = ById<TextBox>(view, "OtherText");
+                var settled = await Until(() => view.QuestionShown is { IsHitTestVisible: true }, TimeSpan.FromSeconds(5));
+                if (box is not null && ById<Button>(view, "SendAnswer") is { ActualWidth: > 0 } sendButton)
+                {
+                    var at = Centre(sendButton);
+                    box.Text += ".";
+                    var margin = box.Margin;
+                    box.Margin = new Thickness(margin.Left, margin.Top, margin.Right, margin.Bottom + 80);
+                    var clear = view.QuestionShown is { IsHitTestVisible: true };
+                    var let = view.PointerLets(sendButton);
+                    var moved = await Moved(() => [sendButton], [at]);
+                    box.Margin = margin;
+                    check(settled && clear && moved && !let, $"drops a pointer's press on Send as the person's question, theirs a moment ago, grows above it before any layout pass (held before: {!clear}; moved: {moved}; let through: {let})");
+                }
+                else { check(false, $"shows Send under Other's box ({size})"); }
             }
             else { check(false, $"draws a question with Other to open ({size})"); }
             card.Update(original);

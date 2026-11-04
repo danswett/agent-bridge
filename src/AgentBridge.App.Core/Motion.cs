@@ -283,9 +283,14 @@ public sealed class AnswerMoves
 
     // Pulled back from past its new end: it was scrolled further than it can be now. However far
     // it went, part of it wasn't the person's, so none of it is taken off: a person scrolling up in
-    // the same look as the clamp ends short of the end, and still finds the move.
+    // the same look as the clamp ends short of the end, and still finds the move. Strictly, not to
+    // within Slack: a clamp of under a pixel a look, taken off as the person's scroll, would hide
+    // the whole of it however many looks it went on for.
     public static bool Clamped(double was, double now, double scrollable) =>
-        now < was - Slack && was > scrollable + Slack;
+        now < was - Exact && was > scrollable + Exact;
+
+    // Offsets that differ by less than this are the same: what a layout rounds.
+    const double Exact = 0.01;
 
     // The person's own question resized, and nothing outside it changed: the window and every
     // scroller's viewport the same size and in the same place, the question where it was in what

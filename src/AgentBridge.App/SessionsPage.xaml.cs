@@ -237,6 +237,9 @@ public sealed partial class SessionsPage : UserControl
     void OnSessionsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         if (!ready) { Ready(); }
+        // Rows coming, going or moving can scroll the list to keep those in sight in place, which
+        // moves Needs you: not a scroll of the person's, even while they are scrolling (#491).
+        laneAnswers.Unsettled();
         if (e.Action == NotifyCollectionChangedAction.Add && viewModel is not null)
         {
             foreach (SessionCardViewModel card in e.NewItems ?? Array.Empty<object>())
@@ -611,7 +614,10 @@ public sealed partial class SessionsPage : UserControl
     internal bool LanePointerLets(DependencyObject target)
     {
         if (laneAnswers.AnswerAt(target) is null) { return true; }
-        try { laneAnswers.Check(); }
+        try
+        {
+            if (laneAnswers.Check()) { GuardLane(); return false; }
+        }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
             AppLog.Write($"Needs you: where its answers are can't be read as a pointer pressed one ({e.GetType().Name})");

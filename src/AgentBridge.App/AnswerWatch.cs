@@ -49,20 +49,33 @@ sealed class AnswerWatch
         foreach (var (sv, p) in scrollers) { p.Unhook(sv); }
         scrollers.Clear();
         moves.Forget();
-        StopFrames();
     }
 
     // A new set of answers drawn (another question, another session): measured from where they are.
     public void Forget() => moves.Forget();
 
-    // The person pressed, typed or clicked in the question: what it lays out for the frame that act
-    // is drawn in is theirs, if nothing else changes with it (AnswerMoves.Theirs). Each act holds it
-    // from the latest, so an earlier act's frames can't cut a later one's short.
-    public void Own() => own = Frames(2);
+    // The person pressed, typed, pasted or clicked in the question: what it lays out for a moment
+    // after is theirs, if nothing else changes with it (AnswerMoves.Theirs). Each act holds it from
+    // the latest. A moment, not a count of frames: a control shown for the first time (Other's box)
+    // takes more than one layout pass, and on a machine drawing at 60 Hz two frames had gone before
+    // the last of them, so the person's own click held their question (CI, x64). Where nothing is
+    // drawn (a disconnected session) frames hardly come at all, and the window never closed.
+    public void Own() => ownUntil = DateTimeOffset.UtcNow + Act;
 
     // The app drew something in the question itself (who asks, its heading): whatever moves in the
-    // frames it is drawn in counts, whatever the person is doing.
-    public void NotOwn() => forced = Frames(2);
+    // moment it is drawn in counts, whatever the person is doing.
+    public void NotOwn() => forcedUntil = DateTimeOffset.UtcNow + Act;
+
+    // Rows of the list holding the answers came, went or moved: the list may keep the rows in sight
+    // in place by scrolling (ListView's KeepItemsInView), which moves Needs you above them. For a
+    // moment no scroll is taken to be the person's, so that one is found as a move, even mid-scroll.
+    public void Unsettled() => unsettledUntil = DateTimeOffset.UtcNow + Act;
+
+    static readonly TimeSpan Act = TimeSpan.FromMilliseconds(300);
+    DateTimeOffset ownUntil, forcedUntil, unsettledUntil;
+    // Set while a pointer's press lays out what is pending: the read that layout pass brings, as
+    // the one after it, exempts nothing.
+    bool checking;
 
     // Read now, as a pointer's press on an answer comes: a change made since the last layout pass
     // (an update in the same task as the click, before any frame) is laid out and found before the
@@ -70,9 +83,16 @@ sealed class AnswerWatch
     // throws if where the answers are can't be read.
     public bool Check()
     {
-        (holder.XamlRoot?.Content ?? holder).UpdateLayout();
-        return Read(exempt: false);
+        // A move the layout pass's own read finds counts for this press too: that read takes it
+        // in, and the one after it has nothing left to find.
+        checking = true;
+        foundChecking = false;
+        try { (holder.XamlRoot?.Content ?? holder).UpdateLayout(); }
+        finally { checking = false; }
+        return Read(exempt: false) | foundChecking;
     }
+
+    bool foundChecking;
 
     void OnLayout(object? sender, object e) => ReadOrHold();
 
@@ -106,8 +126,9 @@ sealed class AnswerWatch
                 root.Size.Width,
                 root.Size.Height,
                 QuestionBox(chain.FirstOrDefault()));
-            var found = moves.Read(look, own: exempt && own > frame && forced <= frame);
-            if (found) { moved(); }
+            var now = DateTimeOffset.UtcNow;
+            var found = moves.Read(look, own: exempt && !checking && now < ownUntil && now >= forcedUntil);
+            if (found) { foundChecking |= checking; moved(); }
             return found;
         }
         finally { reading = false; }
@@ -155,7 +176,8 @@ sealed class AnswerWatch
     {
         var at = sv.TransformToVisual(null).TransformPoint(default);
         return new ScrollerLook(at.X, at.Y, sv.HorizontalOffset, sv.VerticalOffset, sv.ScrollableWidth, sv.ScrollableHeight,
-            sv.ViewportWidth, sv.ViewportHeight, sv.ExtentWidth, sv.ExtentHeight, scrollers.TryGetValue(sv, out var p) && p.Scrolling);
+            sv.ViewportWidth, sv.ViewportHeight, sv.ExtentWidth, sv.ExtentHeight,
+            DateTimeOffset.UtcNow >= unsettledUntil && scrollers.TryGetValue(sv, out var p) && p.Scrolling);
     }
 
     // The question's box in what the innermost scroller scrolls, which that scroller's own
@@ -165,35 +187,6 @@ sealed class AnswerWatch
         if (question?.Invoke() is not { } q || inner?.Content is not UIElement content || q.XamlRoot is null) { return null; }
         var at = q.TransformToVisual(content).TransformPoint(default);
         return new LookBox(at.X, at.Y, q.ActualWidth, q.ActualHeight);
-    }
-
-    // Frames, counted by CompositionTarget.Rendering while something is held for a few of them.
-    long frame;
-    long own;
-    long forced;
-    bool counting;
-
-    long Frames(int n)
-    {
-        if (!counting)
-        {
-            counting = true;
-            CompositionTarget.Rendering += OnFrame;
-        }
-        return frame + n;
-    }
-
-    void OnFrame(object? sender, object e)
-    {
-        frame++;
-        if (frame >= own && frame >= forced) { StopFrames(); }
-    }
-
-    void StopFrames()
-    {
-        if (!counting) { return; }
-        counting = false;
-        CompositionTarget.Rendering -= OnFrame;
     }
 
     // Whether the person is scrolling a scroller: a wheel turned or a key pressed over it a moment

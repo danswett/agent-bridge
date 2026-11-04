@@ -294,6 +294,12 @@ public sealed class MotionTests
         moves = From(Look());
         Assert.True(moves.Read(Look(dy: 150, offset: 150, scrollable: 200, person: true, extent: 900)));
 
+        // Pulled back 0.75 a look, forty looks running, as the person scrolls: each one a clamp,
+        // and the slide adds up to a move as any other does.
+        moves = From(Look());
+        var found = Enumerable.Range(1, 40).Where(i => moves.Read(Look(dy: 0.75 * i, offset: 300 - 0.75 * i, scrollable: 300 - 0.75 * i, person: true, extent: 1000 - 0.75 * i))).ToList();
+        Assert.Equal(Enumerable.Range(1, 20).Select(i => 2 * i), found);
+
         // The person scrolling to the end is no clamp.
         moves = From(Look(offset: 100));
         Assert.False(moves.Read(Look(dy: -200, offset: 300, person: true)));

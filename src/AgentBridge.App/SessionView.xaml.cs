@@ -595,7 +595,12 @@ public sealed partial class SessionView : UserControl
     internal bool PointerLets(DependencyObject target)
     {
         if (answers.AnswerAt(target) is null) { return true; }
-        try { answers.Check(); }
+        try
+        {
+            // Held here as well as by the move's own call: that one holds only a conversation on
+            // screen, and this press is on the question whatever the layout says.
+            if (answers.Check()) { GuardAnswer(); return false; }
+        }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
             AppLog.Write($"answers: unreadable as a pointer pressed one ({e.GetType().Name})");
