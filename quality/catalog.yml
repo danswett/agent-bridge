@@ -547,12 +547,13 @@ suites:
     ring: 2
     select: affected
     # pages.yml on main: builds the site (the PWA at /app/ and the spikes' pages), checks its CSP
-    # names the relay and blob store, and publishes it to GitHub Pages.
+    # names the relay and blob store, and publishes it to GitHub Pages: built in one job, with no
+    # install scripts and no token that can publish, and deployed by another (#650).
     platforms: [linux-x64]
     runner: hosted
     triggers: ['spikes/**/web/**', pwa/**, design/fonts/**, .github/workflows/pages.yml]
-    command: see pages.yml deploy
-    where: pages.yml deploy
+    command: see pages.yml build, deploy
+    where: pages.yml build, deploy
     status: exists
 
   - id: pwa-iphone
@@ -740,7 +741,8 @@ suites:
     # The review blocks on high or critical vulnerabilities in newly added dependencies, and needs
     # the repository's dependency graph (on since 2026-11-03). The audit is advisory: existing ones.
     # Both run in one job, on one runner. Not on a draft: ready for review runs it.
-    command: see dependencies.yml (dependency-review-action; dotnet list package --vulnerable; npm audit --omit=dev)
+    # Also blocking: every package-lock.json pins its packages by SHA-512, never SHA-1 (#650).
+    command: see dependencies.yml (dependency-review-action; no sha1- integrity in a package-lock.json; dotnet list package --vulnerable; npm audit --omit=dev)
     where: dependencies.yml review
     status: exists
 

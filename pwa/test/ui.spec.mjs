@@ -516,6 +516,27 @@ test.describe('installed', () => {
     const scope = await page.evaluate(async () => (await navigator.serviceWorker.ready).scope);
     expect(new URL(scope).pathname).toBe('/agent-bridge/app/');
   });
+
+  test('an app whose new releases keep failing to install says so, and goes on with the one it has', async ({ page }) => {
+    await openDemo(page);
+    await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+    await expect(page.locator('#stuck-banner')).toBeHidden();
+    // Three starts' tries under the release in control, each failed (js/release-watch.js;
+    // test/unit/release-watch.test.mjs).
+    const release = () => page.evaluate(async () => {
+      const record = await caches.match(new URL('releases.json', (await navigator.serviceWorker.ready).scope).href);
+      return (await record?.json())?.active ?? null;
+    });
+    // The worker writes its record as it takes over, alongside taking the page.
+    await expect.poll(release).toMatch(/^agent-bridge-app-/);
+    const active = await release();
+    await page.evaluate((r) => localStorage.setItem('agent-bridge.app.installFailures', JSON.stringify({ release: r, failures: 3 })), active);
+    await page.reload();
+    await page.waitForSelector('html[data-demo-ready]');
+    await expect(page.locator('#stuck-banner')).toBeVisible();
+    await expect(page.locator('#stuck-banner')).toContainText('keeps failing to install');
+    await expect(page.locator('.session').first()).toBeVisible();
+  });
 });
 
 test('a long unbroken path never makes a row or a session wider than a phone screen', async ({ page }) => {

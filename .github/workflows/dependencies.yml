@@ -44,6 +44,16 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           persist-credentials: false
+      # npm checks each package it installs against the lockfile's integrity, and a SHA-1 one is
+      # a weak check: a lockfile made through a mirror that gives only SHA-1 kept them (#650).
+      # Every lockfile pins every package by SHA-512, as registry.npmjs.org gives. Blocking.
+      - name: Every npm lockfile pins its packages by SHA-512
+        if: ${{ !cancelled() }}
+        run: |
+          if git grep -n '"integrity": "sha1-' -- '*package-lock.json'; then
+            echo "::error title=SHA-1 integrity::A package-lock.json pins a package by SHA-1 (above). Make it again against registry.npmjs.org, which gives SHA-512."
+            exit 1
+          fi
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         if: ${{ !cancelled() }}
         with:

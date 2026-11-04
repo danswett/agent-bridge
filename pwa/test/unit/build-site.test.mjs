@@ -60,6 +60,15 @@ test('the page loads the app as one minified bundle without the demo, preloads w
   assert.ok(bundled < size(path.join(site, 'js'), sources) / 2, `the bundle (${bundled} bytes) is minified`);
   rmSync(scratch, { recursive: true, force: true });
 });
+test('a shell file the site lacks fails the build, so no release goes out that no app could install', () => {
+  rmSync(scratch, { recursive: true, force: true });
+  const root = appCopy('lacking');
+  const worker = path.join(root, 'sw.js');
+  writeFileSync(worker, readFileSync(worker, 'utf8').replace("'./app.css',", "'./app.css', './gone.css',"));
+  assert.throws(() => buildSite({ root, out: out('lacking-site') }), /sw\.js keeps files the site lacks.*gone\.css/);
+  rmSync(scratch, { recursive: true, force: true });
+});
+
 test('the page may reach the relay and the one storage account its blob store uses, and nothing else', () => {
   const csp = contentSecurityPolicy('https://relay.example', ['https://abblobprodwus2.blob.core.windows.net']);
   assert.match(csp, /connect-src 'self' https:\/\/relay\.example wss:\/\/relay\.example https:\/\/abblobprodwus2\.blob\.core\.windows\.net;/);
