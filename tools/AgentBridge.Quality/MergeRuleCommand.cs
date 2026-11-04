@@ -476,15 +476,15 @@ static class MergeRuleCommand
             if (status != "COMPLETED")
                 checks.Add(new CheckFact(workflow, "pending", status?.ToLowerInvariant()));
             if (runs.Count > 0)
-            {
                 checks.AddRange(runs
                     .GroupBy(cr => cr.GetProperty("name").GetString() ?? "")
                     .Select(g => Classify(g.Key, g.MaxBy(cr => cr.GetProperty("databaseId").GetInt64()))));
-                continue;
-            }
-            // A run that ended before any job (a workflow file that doesn't parse:
-            // startup_failure) failed. Not action_required: a run waiting for approval, as the
-            // review relay's do when Copilot's review starts them.
+            // The run's own result counts too, jobs or none: one cancelled between jobs, or failed
+            // expanding a later matrix, ends red with every job it made green; one that ended
+            // before any job (a workflow file that doesn't parse) is startup_failure. GitHub
+            // updates it when failed jobs are rerun, so a green retry clears it. Not
+            // action_required: a run waiting for approval, as the review relay's do when Copilot's
+            // review starts them.
             if (status == "COMPLETED" && conclusion is "STARTUP_FAILURE" or "FAILURE" or "TIMED_OUT" or "CANCELLED")
                 checks.Add(new CheckFact(workflow, "failure", conclusion.ToLowerInvariant()));
         }

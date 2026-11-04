@@ -339,7 +339,7 @@ public class MergeRuleTests
     }
 
     [Fact]
-    public void Each_workflow_counts_by_its_latest_run_each_job_by_its_latest_attempt_a_run_without_jobs_by_its_own_state_and_the_merge_rules_own_not_at_all()
+    public void Each_workflow_counts_by_its_latest_run_and_that_runs_own_result_each_job_by_its_latest_attempt_and_the_merge_rules_own_not_at_all()
     {
         using var doc = JsonDocument.Parse(GraphQLPullRequest(Head,
             extraSuites:
@@ -348,7 +348,11 @@ public class MergeRuleTests
                 Suite("github-actions", Workflow(10, "CI"), "COMPLETED", "CANCELLED", Job(100, "product", "COMPLETED", "CANCELLED")),
                 Suite("github-actions", Workflow(11, "CI"), "COMPLETED", "SUCCESS",
                     Job(110, "product", "COMPLETED", "FAILURE"), Job(111, "product", "COMPLETED", "SUCCESS"), Job(112, "pwa-ui", "COMPLETED", "SKIPPED")),
-                Suite("github-actions", Workflow(12, "Apple"), "IN_PROGRESS", null, Job(120, "native-clients", "IN_PROGRESS")),
+                Suite("github-actions", Workflow(12, "Apple clients"), "IN_PROGRESS", null, Job(120, "native-clients", "IN_PROGRESS")),
+                // Cancelled between jobs: every job it made passed, but the run didn't.
+                Suite("github-actions", Workflow(20, "HA contract drift"), "COMPLETED", "CANCELLED", Job(200, "drift", "COMPLETED", "SUCCESS")),
+                // Failed jobs rerun green: GitHub updates the run's result, so it passes.
+                Suite("github-actions", Workflow(21, "IaC scan"), "COMPLETED", "SUCCESS", Job(210, "psrule", "COMPLETED", "FAILURE"), Job(211, "psrule", "COMPLETED", "SUCCESS")),
                 // Every job so far passed, but the run isn't over: a job that needs them is still to start.
                 Suite("github-actions", Workflow(18, "Perf"), "IN_PROGRESS", null, Job(180, "perf", "COMPLETED", "SUCCESS")),
                 TruncatedSuite("github-actions", Workflow(19, "Relay deploy"), Job(190, "scan", "COMPLETED", "SUCCESS")),
@@ -364,8 +368,24 @@ public class MergeRuleTests
         var (facts, _, _) = MergeRuleCommand.ParseFacts(doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest"), Config);
 
         Assert.Equal(
-            ["Apple pending", "CodeQL success", "Dependencies pending", "Perf pending", "Relay deploy failure", "Workflow lint failure", "ci/legacy failure", "external failure", "native-clients pending", "perf success", "product success", "pwa-ui success", "scan success"],
+            ["Apple clients pending", "CodeQL success", "Dependencies pending", "HA contract drift failure", "Perf pending", "Relay deploy failure", "Workflow lint failure", "ci/legacy failure", "drift success", "external failure", "native-clients pending", "perf success", "product success", "psrule success", "pwa-ui success", "scan success"],
             facts.Checks.Select(c => $"{c.Name} {c.State}").Order(StringComparer.Ordinal));
+    }
+
+    // apple.yml (#260) sits outside quality-gate: a red native-clients must hold the merge on its own.
+    [Fact]
+    public void A_red_native_clients_job_fails_the_merge_rule_though_quality_gate_passed()
+    {
+        using var doc = JsonDocument.Parse(GraphQLPullRequest(Head, extraSuites:
+        [
+            Suite("github-actions", Workflow(30, "CI"), "COMPLETED", "SUCCESS", Job(300, "quality-gate", "COMPLETED", "SUCCESS")),
+            Suite("github-actions", Workflow(31, "Apple clients"), "COMPLETED", "FAILURE", Job(310, "native-clients", "COMPLETED", "FAILURE")),
+        ]));
+        var (facts, _, _) = MergeRuleCommand.ParseFacts(doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest"), Config);
+
+        var verdict = MergeRule.Evaluate(Config, facts)!;
+
+        Assert.Equal(("failure", "Check native-clients ended failure on abcdef0 (+1 more)"), (verdict.State, verdict.Description));
     }
 
     // A workflow left out of merge-rule.yml's workflow_run list could still fail after the last

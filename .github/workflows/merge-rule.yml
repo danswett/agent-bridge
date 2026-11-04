@@ -45,14 +45,6 @@ on:
 
 permissions: {}
 
-concurrency:
-  # One run at a time, all triggers together, so no two runs read and post on the same head at
-  # once, and an older read can't land after a newer one. A newer run waits rather than cancelling;
-  # GitHub keeps one waiting run and cancels any older waiting one, which is safe because every run
-  # judges every pull request.
-  group: merge-rule
-  cancel-in-progress: false
-
 jobs:
   # Named evaluate, not merge-rule: GitHub requires every check and status of a required name to
   # pass, so a job of that name would be one more thing for each pull request to wait on.
@@ -73,6 +65,15 @@ jobs:
     # A Dependabot-triggered run's token may be read-only (see above); its post failing mustn't
     # turn the run red when the schedule will post in its place.
     continue-on-error: ${{ github.actor == 'dependabot[bot]' }}
+    # One evaluation at a time, all triggers together, so no two read and post on the same head at
+    # once, and an older read can't land after a newer one. A newer one waits rather than
+    # cancelling; GitHub keeps one waiting and cancels any older waiting one, which is safe because
+    # every evaluation judges every pull request. On the job, not the workflow: a run whose `if`
+    # skips the job (main's own runs) then never enters the group, so it can't displace a waiting
+    # evaluation and leave nothing to run.
+    concurrency:
+      group: merge-rule
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
