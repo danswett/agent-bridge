@@ -10,7 +10,6 @@ using Xunit;
 static class Speed
 {
     public static readonly TimeSpan Floor = TimeSpan.FromMilliseconds(200);
-    public static readonly TimeSpan Cap = TimeSpan.FromSeconds(2);
 
     public static void IsLinear(Func<int, string> input, int size, Action<string> work)
     {
@@ -19,7 +18,7 @@ static class Speed
         var verdict = Verdict(Measure(texts, work));
         // One stall can land in a single size's runs, as the PWA's 22.9 → 250.8 ms did; a quadratic
         // fails again when measured afresh, a stall rarely lands the same way twice.
-        if (verdict is { Retry: true })
+        if (verdict is not null)
         {
             verdict = Verdict(Measure(texts, work));
         }
@@ -27,19 +26,12 @@ static class Speed
         Assert.True(verdict is null, verdict?.Reason);
     }
 
-    public sealed record Failure(string Reason, bool Retry);
+    public sealed record Failure(string Reason);
 
-    // Fails if the full size takes the cap or longer, or if it is past the floor and grows at least 9
-    // times over the quarter size and at least 100 times over the sixteenth: both, so one slow size
-    // doesn't decide.
+    // Past the floor, both growth bounds must fail so one slow size doesn't decide.
     public static Failure? Verdict(TimeSpan[] times)
     {
         var (smallest, middle, largest) = (times[0], times[1], times[2]);
-        if (largest >= Cap)
-        {
-            return new($"{largest.TotalMilliseconds:F0} ms at full size, over {Cap.TotalMilliseconds:F0} ms", false);
-        }
-
         if (largest < Floor)
         {
             return null;
@@ -48,7 +40,7 @@ static class Speed
         var overMiddle = largest.TotalMilliseconds / Math.Max(0.1, middle.TotalMilliseconds);
         var overSmallest = largest.TotalMilliseconds / Math.Max(0.1, smallest.TotalMilliseconds);
         return overMiddle >= 9 && overSmallest >= 100
-            ? new($"{largest.TotalMilliseconds:F0} ms at full size: {overMiddle:F1} times the quarter size and {overSmallest:F0} times the sixteenth", true)
+            ? new($"{largest.TotalMilliseconds:F0} ms at full size: {overMiddle:F1} times the quarter size and {overSmallest:F0} times the sixteenth")
             : null;
     }
 
@@ -79,13 +71,15 @@ public sealed class SpeedTests
     [Fact]
     public void Linear_growth_past_the_floor_passes() => Assert.Null(Speed.Verdict(Ms(60, 240, 960)));
 
-    [Fact]
-    public void Quadratic_growth_inside_the_cap_fails_and_is_measured_again()
+    [Theory]
+    [InlineData(1000)]
+    [InlineData(2169)]
+    [InlineData(20000)]
+    public void Quadratic_growth_fails_on_fast_and_slow_runners(double largest)
     {
-        var verdict = Speed.Verdict(Ms(4, 63, 1000));
+        var verdict = Speed.Verdict(Ms(largest / 256, largest / 16, largest));
 
         Assert.NotNull(verdict);
-        Assert.True(verdict.Retry);
     }
 
     [Fact]
@@ -98,12 +92,10 @@ public sealed class SpeedTests
     [Fact]
     public void Anything_under_the_floor_passes_whatever_its_growth() => Assert.Null(Speed.Verdict(Ms(0.1, 3, 199)));
 
-    [Fact]
-    public void The_cap_fails_linear_work_too_and_is_not_measured_again()
-    {
-        var verdict = Speed.Verdict(Ms(130, 520, 2000));
-
-        Assert.NotNull(verdict);
-        Assert.False(verdict.Retry);
-    }
+    [Theory]
+    [InlineData(2000)]
+    [InlineData(2169)]
+    [InlineData(20000)]
+    public void Linear_growth_still_passes_when_a_slow_runner_takes_more_than_two_seconds(double largest) =>
+        Assert.Null(Speed.Verdict(Ms(largest / 16, largest / 4, largest)));
 }
