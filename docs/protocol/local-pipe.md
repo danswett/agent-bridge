@@ -215,9 +215,12 @@ normalization, leaving room for defaults, the request envelope, baseline token a
 settings/status fields within the pipe's frame limit. Defaults do not consume the workspace
 budget. Oversized proposals fail explicitly without writing;
 paths and labels are never silently truncated, and accepted lists remain editable.
-Existing CLI/manual configurations can exceed that budget. In status and settings results,
+Existing CLI/manual configurations can exceed that budget or contain oversized defaults.
+The complete outbound launch snapshot is also bounded to 41 KiB: the allowed workspace
+list plus 1 KiB for validated defaults, reserving the rest of the pipe frame for status.
+In status and settings results,
 `settings.launch` is then absent and `settings.launchProblem` explains that the full list
-could not be loaded and must be reduced in this profile's `config.json` before reloading.
+or defaults could not be loaded and must be reduced in this profile's `config.json` before reloading.
 The host retains all authorizations and computes restart requirements from the full
 configuration; it does not truncate or rewrite it. The app keeps the connection and other
 Settings available, preserves any draft, and blocks launch edits instead of treating the

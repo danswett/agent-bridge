@@ -158,11 +158,11 @@ public sealed class HostControl
         new(settings.RemoteApproval, name, settings.Launch.RemoteFolderTrust, settings.Launch.RemoteFolderTrustDevices is { Count: > 0 } d ? d : null,
             settings.DevBox.KeepAwake, LaunchSettingsEditor.View(settings.Launch));
 
-    static HostSettingsView ForPipe(HostSettingsView settings) => settings.Launch is { FitsMessage: false }
+    static HostSettingsView ForPipe(HostSettingsView settings) => settings.Launch is { } launch && (!launch.FitsMessage || !launch.FitsSnapshot)
         ? settings with
         {
             Launch = null,
-            LaunchProblem = "The configured workspace list is too large to load in the app. No launch settings were changed. Edit this profile's config.json to use fewer folders or shorter labels and paths, then reload.",
+            LaunchProblem = "The configured launch settings are too large to load in the app. No launch settings were changed. Edit this profile's config.json to shorten launch defaults or use fewer folders or shorter labels and paths, then reload.",
         }
         : settings;
 

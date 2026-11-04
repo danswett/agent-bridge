@@ -207,14 +207,21 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.False(status.RestartRequired);
     }
 
-    [Fact]
-    public async Task Oversized_existing_workspaces_do_not_break_subscription_or_unrelated_settings_or_erase_authorizations()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Oversized_existing_launch_settings_do_not_break_subscription_or_unrelated_settings_or_erase_authorizations(bool oversizedDefault)
     {
-        var workspaces = Enumerable.Range(0, LaunchProtocol.MaxWorkspaces).Select(i => new ApprovedWorkspace($"Repo{i}",
+        var workspaces = Enumerable.Range(0, oversizedDefault ? 0 : LaunchProtocol.MaxWorkspaces).Select(i => new ApprovedWorkspace($"Repo{i}",
             Path.Combine([profile, $"repo{i}", .. Enumerable.Repeat(new string('x', 100), 10)]))).ToList();
+        var defaultWorkspace = oversizedDefault ? new string('d', 70_000) : null;
         var root = new JsonObject
         {
-            ["launch"] = new JsonObject { ["workspaces"] = JsonSerializer.SerializeToNode(workspaces, ProtocolJson.Options) },
+            ["launch"] = new JsonObject
+            {
+                ["workspaces"] = JsonSerializer.SerializeToNode(workspaces, ProtocolJson.Options),
+                ["defaultWorkspace"] = defaultWorkspace,
+            },
         };
         var path = Path.Combine(profile, HostSettings.FileName);
         File.WriteAllText(path, root.ToJsonString());
@@ -234,8 +241,10 @@ public sealed class LocalApiTests : IAsyncLifetime
         var pushed = (await NextAsync(ch)).Data.Deserialize<HostStatus>(ProtocolJson.Options)!;
         Assert.Equal(saved.Settings, pushed.Settings);
         Assert.Equal(workspaces, LaunchSettingsEditor.View(HostSettings.Load(profile).Settings.Launch).Workspaces);
+        Assert.Equal(defaultWorkspace, LaunchSettingsEditor.View(HostSettings.Load(profile).Settings.Launch).DefaultWorkspace);
 
         root["launch"]!["workspaces"] = JsonSerializer.SerializeToNode(workspaces.Take(1), ProtocolJson.Options);
+        root["launch"]!["defaultWorkspace"] = null;
         File.WriteAllText(path, root.ToJsonString());
         control.Refresh();
         var recovered = (await NextAsync(ch)).Data.Deserialize<HostStatus>(ProtocolJson.Options)!;

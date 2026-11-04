@@ -103,6 +103,11 @@ public sealed record HostLaunchSettings(IReadOnlyList<ApprovedWorkspace> Workspa
     [JsonIgnore]
     public bool FitsMessage => JsonSerializer.SerializeToUtf8Bytes(new { workspaces = Workspaces }, ProtocolJson.Options).Length <= LaunchProtocol.MaxOptionsBytes;
 
+    // Keep the full allowed workspace budget plus room for validated defaults, while
+    // reserving the rest of the pipe frame for the surrounding settings/status.
+    [JsonIgnore]
+    public bool FitsSnapshot => JsonSerializer.SerializeToUtf8Bytes(this, ProtocolJson.Options).Length <= LaunchProtocol.MaxOptionsBytes + 1024;
+
     public void CheckMessageBudget()
     {
         if (!FitsMessage)
