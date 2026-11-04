@@ -284,8 +284,8 @@ address. The action group and the budget each keep a copy. So:
   receiver, and each of the budget's four notifications with that one contact, case and all),
   the preview uses it, and no address property shows as changed;
 - otherwise (a new or differing address, an extra or missing copy, one resource missing, or a
-  lookup that failed),
-  monitoring is left out of the preview, with a message, and the real run applies it.
+  failed budget lookup), monitoring is left out of the preview, with a message, and the real
+  run applies it. A failed action group lookup stops the script.
 
 The budget's start date can't change once the budget exists, and must be in the current month
 when it's created, so `deploy.ps1` passes the existing budget's date, or the first of this month.

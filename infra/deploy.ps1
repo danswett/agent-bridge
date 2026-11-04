@@ -166,8 +166,8 @@ function Test-AddressUnchanged([string]$target) {
 # - both exist, and every stored copy is exactly the address being applied, in the shape the
 #   template writes (Test-AddressUnchanged): preview with it, so no address property changes and
 #   what-if prints no address;
-# - anything else (a new address, copies that differ, one resource missing, a lookup that
-#   failed): leave monitoring out of the preview.
+# - anything else (a new address, copies that differ, one resource missing, a budget lookup that
+#   failed): leave monitoring out of the preview. A failed action group lookup stops the script.
 if ($WhatIf -and $Production -and $env:RELAY_ALERT_EMAIL) {
     $target = $env:RELAY_ALERT_EMAIL
     $unchanged = Test-AddressUnchanged $target
