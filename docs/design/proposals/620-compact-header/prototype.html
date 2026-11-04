@@ -195,6 +195,7 @@
 
   let fullH = 257, room = fullH - BAR;      // room: how far the header can slide before only the bar is left
   let last = 0, dir = 0, run = 0, returned = false, focusInside = false, programmatic = false, animTimer = 0, fadeTimer = 0;
+  let fading = false, held = null, ty = 0;   // held: how far an app-made scroll left the header slid, kept until the reader scrolls it on
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
 
   const measure = () => {
@@ -210,26 +211,33 @@
     animTimer = setTimeout(() => phone.classList.remove('animating'), 260);
   };
 
-  const setReturned = (v) => {
+  // instant: focus arriving in the header shows it at once; a slide would leave the focused control under the bar.
+  const setReturned = (v, instant = false) => {
+    if (!v && fading) return;   // let a fade under way finish; restarting it every 32 pt kept the compact title away
     clearTimeout(fadeTimer);
+    fading = false;
     phone.classList.remove('fading');
-    if (returned === v) return;
+    if (instant) { clearTimeout(animTimer); phone.classList.remove('animating'); }
+    if (returned === v) { render(); return; }
     run = 0;
+    held = null;
     if (!v && reduced.matches) {
       // Reduced motion: the header fades out where it is, then goes under the bar without travelling.
+      fading = true;
       phone.classList.add('fading');
-      fadeTimer = setTimeout(() => { returned = false; render(); phone.classList.remove('fading'); }, 83);
+      fadeTimer = setTimeout(() => { fading = false; returned = false; render(); phone.classList.remove('fading'); }, 83);
       return;
     }
     returned = v;
-    animate(); render();
+    if (!instant) animate();
+    render();
   };
 
   // Near the top the header rides up with the conversation (iOS's large title); past that it is compact,
   // and comes back over the conversation on 64 pt up (Material's enterAlways), going again on 32 pt down.
   function render() {
     const s = last;
-    const ty = returned || focusInside ? 0 : -Math.min(s, room);   // focus in the header holds it open
+    ty = returned || focusInside ? 0 : held !== null ? -held : -Math.min(s, room);   // focus in the header holds it open
     phone.style.setProperty('--ty', `${ty}px`);
     phone.style.setProperty('--covered', `${Math.max(BAR, fullH + ty)}px`);
     const hidden = -ty;
@@ -247,7 +255,9 @@
     const nd = d > 0 ? 1 : -1;
     if (nd !== dir) { dir = nd; run = 0; }
     run += Math.abs(d);
-    if (s <= 0) { returned = false; run = 0; }
+    if (held !== null && d > 0) { held = Math.min(room, held + d); if (held >= room) held = null; }   // the reader carries on from where the app left it
+    if (held !== null && d < 0 && s <= held) held = null;   // going up, it rides with the conversation again from where they meet: no snap at the top
+    if (s <= 0) { returned = false; run = 0; held = null; }
     else if (focusInside && !returned) returned = true;   // focus taken at the top: the header stays as it is
     else if (returned && dir > 0 && run >= DOWN && !focusInside) setReturned(false);
     else if (!returned && dir < 0 && run >= UP && s > room) setReturned(true);
@@ -257,16 +267,18 @@
   scroller.addEventListener('scroll', onScroll, { passive: true });
   bt.addEventListener('click', () => setReturned(true));
   // Focus is never hidden: reaching anything in the header brings the header back first, and holds it.
-  full.addEventListener('focusin', () => { focusInside = true; if (last > 0) setReturned(true); });
+  full.addEventListener('focusin', () => { focusInside = true; if (last > 0) setReturned(true, true); });
   full.addEventListener('focusout', (e) => { if (!full.contains(e.relatedTarget)) focusInside = false; });
   if ('ResizeObserver' in window) new ResizeObserver(measure).observe(full); else addEventListener('resize', measure);
 
   // A scroll the app makes (to an arriving question, a restored position) never folds or brings back the header.
   const scrollProgrammatically = (target) => {
-    const wasFull = phone.dataset.state === 'rest' || phone.dataset.state === 'returned';
+    const hidden = -ty, wasFull = hidden === 0;
     programmatic = true;
-    returned = wasFull;   // hold the header as it was while the scroll happens: no flash
-    const top = target(wasFull ? fullH : BAR);
+    // Hold the header exactly as it was, part-way slid included, while the scroll happens: no flash, no fold.
+    returned = wasFull;
+    held = !wasFull && hidden < room ? hidden : null;
+    const top = target(Math.max(BAR, fullH - hidden));
     scroller.scrollTop = top;
     requestAnimationFrame(() => requestAnimationFrame(() => {
       last = Math.max(0, scroller.scrollTop);
