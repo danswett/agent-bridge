@@ -1,4 +1,5 @@
 using AgentBridge.HostLauncher;
+using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -48,7 +49,7 @@ public sealed class HostSupervisorTests
 
         Assert.Equal(UnhandledException, exit);
         Assert.Equal([0], codes.ToArray());
-        Assert.Contains("the host was stopped from the Agent Bridge app; not starting it again", logged);
+        Assert.Contains($"the host was stopped from the {Product.App}; not starting it again", logged);
     }
 
     [Fact]

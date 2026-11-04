@@ -119,7 +119,7 @@ public sealed class EndSessionViewModel : Observable
             case DeliveryState.Sending:
                 return (e.Payload is string ? "Ending the session…" : "Sending…", Tone.Progress);
             case DeliveryState.Waiting:
-                return (e.Reason == "still being delivered" ? "The machine is still ending it…" : $"Waiting for the Bridge Host{at}. Your press goes as soon as it is back.", Tone.Progress);
+                return (e.Reason == "still being delivered" ? "The machine is still ending it…" : $"Waiting for the {Product.HostName}{at}. Your press goes as soon as it is back.", Tone.Progress);
             case DeliveryState.Failed:
                 return ($"Couldn't send it: {e.Reason ?? "the machine said no"}.", Tone.Bad);
         }

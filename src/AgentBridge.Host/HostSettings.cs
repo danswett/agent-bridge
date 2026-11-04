@@ -3,6 +3,7 @@ using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core.DevBox;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
 
@@ -123,7 +124,7 @@ public sealed record HostSettings(bool RemoteApproval)
                 if (version.ValueKind != JsonValueKind.Number || !version.TryGetInt32(out var v) || v < 1) { throw new JsonException("version is not a whole number from 1"); }
                 if (v > Version)
                 {
-                    return (Off, $"{path} is version {v}, written by a newer Agent Bridge than this host (version {Version}); remote approval of permission prompts, launching, notifications and agent usage are off, and the host is read-only, until the host is updated");
+                    return (Off, $"{path} is version {v}, written by a newer {Product.Name} than this host (version {Version}); remote approval of permission prompts, launching, notifications and agent usage are off, and the host is read-only, until the host is updated");
                 }
             }
             var (launch, launchProblems) = LaunchConfig.Read(root.TryGetProperty("launch", out var l) ? l : null);

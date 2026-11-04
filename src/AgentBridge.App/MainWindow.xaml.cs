@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using AgentBridge.App.Core;
+using AgentBridge.Protocol;
 using Microsoft.UI;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
@@ -37,11 +38,13 @@ public sealed partial class MainWindow : Window
         Launch = launch;
         this.placementFile = selfTest ? null : placementFile;
         InitializeComponent();
+        Title = Product.Name;
+        AppTitleBar.Title = Product.Name;
         Motion.Banner(Banner);
         Motion.Banner(DiscoveryHeld);
         Handle = WinRT.Interop.WindowNative.GetWindowHandle(this);
         CurrentHandle = Handle;
-        AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AgentBridge.ico"));
+        AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, AppAssets.Icon));
 
         // The title bar is the window's own (ui.md §7), over Mica; the caption buttons stay the
         // system's, as tall as the bar and in the app's theme (PaintCaptionButtons).

@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.ApplicationModel.DataTransfer;
@@ -24,7 +25,8 @@ public sealed partial class SettingsView : UserControl
     // The page came into view: the log is read then, not on every host event.
     public void Opened() => viewModel?.RefreshLog();
 
-    public static string HaNote(string? why) => $"{why}. Agent Bridge only watches while it runs: answering, replying and ending sessions stay with agent-ha-bridge until you move over.";
+    public static string HaNote(string? why) => $"{why}. {Product.Name} only watches while it runs: answering, replying and ending sessions stay with agent-ha-bridge until you move over.";
+    public static string HostSection => $"{Product.HostName} on this machine";
     public static string HostLine(string version, string profile) => version.Length > 0 ? $"Version {version} · profile {profile}" : $"Profile {profile}";
     public static string AppLine(string version, string installed) => $"App {version} · {installed}";
 

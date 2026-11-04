@@ -290,7 +290,7 @@ static bool Refused(string what)
 {
     var inside = AgentAncestry.Inside(Environment.GetEnvironmentVariable(Launchers.SessionVariable), ProcessChain.Read(Environment.ProcessId), () => KnownAgents.Running(new SystemProcessInspector()));
     if (inside is null) { return false; }
-    Console.Error.WriteLine($"agent-bridge-host: refused to {what}: this is running {inside}. That is for a person to do, in a terminal of their own or from the Agent Bridge app.");
+    Console.Error.WriteLine($"agent-bridge-host: refused to {what}: this is running {inside}. That is for a person to do, in a terminal of their own or from the {Product.App}.");
     return true;
 }
 
@@ -552,7 +552,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // (HostHandover.StoppedFromTheApp, #106's review): not served at all.
     if (handover.StoppedFromTheApp(identity.Folder))
     {
-        Log("stopped from the Agent Bridge app while starting; not serving");
+        Log($"stopped from the {Product.App} while starting; not serving");
         return 0;
     }
     Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");

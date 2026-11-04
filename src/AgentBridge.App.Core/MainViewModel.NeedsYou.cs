@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
 
@@ -12,6 +13,9 @@ public sealed partial class MainViewModel
     public bool HasNeedsYou => NeedsYou.Count > 0;
     public string NeedsYouHeader => $"Needs you · {NeedsYou.Count}";
     public int Waiting => NeedsYou.Count;
+
+    // The tray icon's tooltip, from the start (nothing waiting yet) and on every tick after.
+    public static string TrayTip(int waiting) => waiting > 0 ? $"{Product.Name}: {waiting} waiting on you" : Product.Name;
 
     // The lane from the cards as they are: an entry per question, kept while its question and what
     // it offers stay the same, so a button with focus is not replaced under it.

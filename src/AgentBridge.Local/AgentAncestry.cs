@@ -1,3 +1,5 @@
+using AgentBridge.Protocol;
+
 namespace AgentBridge.Local;
 
 // A process known to be an agent's: a live session's own process, one a launch started, or any
@@ -38,7 +40,7 @@ public static class AgentAncestry
     // read in full may have an agent above what was read.
     public static string? Inside(string? sessionVariable, ProcessAncestry ancestry, Func<IReadOnlyList<KnownProcess>> agents, IReadOnlyList<string>? agentNames = null)
     {
-        if (!string.IsNullOrWhiteSpace(sessionVariable)) { return $"inside a session the Bridge Host launched ({SessionVariable} is set)"; }
+        if (!string.IsNullOrWhiteSpace(sessionVariable)) { return $"inside a session the {Product.HostName} launched ({SessionVariable} is set)"; }
         if (ancestry.Processes.Count > 0 && Find(ancestry.Processes, agents(), agentNames) is { } found) { return $"inside {found.Which} (pid {found.At.Id})"; }
         if (!ancestry.Complete) { return "in a process tree that could not be traced in full, so it cannot be told from one inside an agent session"; }
         return null;

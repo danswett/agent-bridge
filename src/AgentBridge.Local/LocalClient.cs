@@ -46,7 +46,7 @@ public static class LocalClient
             catch (Exception e) when (e is OperationCanceledException or TimeoutException or IOException && !ct.IsCancellationRequested)
             {
                 await pipe.DisposeAsync();
-                throw new HostNotRunningException("the Bridge Host is not running for this profile", e);
+                throw new HostNotRunningException($"the {Product.HostName} is not running for this profile", e);
             }
             catch (UnauthorizedAccessException e)
             {
@@ -62,7 +62,7 @@ public static class LocalClient
             catch (Exception e) when (e is SocketException or TimeoutException)
             {
                 socket.Dispose();
-                throw new HostNotRunningException("the Bridge Host is not running for this profile", e);
+                throw new HostNotRunningException($"the {Product.HostName} is not running for this profile", e);
             }
             stream = new NetworkStream(socket, ownsSocket: true);
         }

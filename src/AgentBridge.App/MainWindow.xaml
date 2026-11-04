@@ -4,8 +4,9 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:AgentBridge.App"
-    xmlns:core="using:AgentBridge.App.Core"
-    Title="Agent Bridge">
+    xmlns:core="using:AgentBridge.App.Core">
+    <!-- Its title, here and in the TitleBar, is the product's name, set from Product.Name in the
+         constructor (#537). -->
     <!-- The Windows shell (docs/design/ui.md §7): Mica behind a 48 px title bar with the mark, the
          name and a centred search box, a compact rail, and the pages on a layer with an 8 px
          top-left radius, which NavigationView draws in its left modes. -->
@@ -28,7 +29,6 @@
         <TitleBar
             x:Name="AppTitleBar"
             Height="{StaticResource AbLayoutTitleBar}"
-            Title="Agent Bridge"
             IsBackButtonVisible="False"
             IsPaneToggleButtonVisible="False"
             AutomationProperties.AutomationId="TitleBar">

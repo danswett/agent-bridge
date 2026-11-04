@@ -1,4 +1,5 @@
 using AgentBridge.Host;
+using AgentBridge.Protocol;
 using Xunit;
 
 public sealed class HostSettingsTests : IDisposable
@@ -77,7 +78,7 @@ public sealed class HostSettingsTests : IDisposable
 
         Assert.False(settings.RemoteApproval);
         Assert.False(settings.Launch.Enabled);
-        Assert.Contains("written by a newer Agent Bridge", problem);
+        Assert.Contains($"written by a newer {Product.Name}", problem);
         Assert.True(With("{ \"version\": 1 }").Settings.RemoteApproval);
     }
 

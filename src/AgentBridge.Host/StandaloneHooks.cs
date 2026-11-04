@@ -6,6 +6,7 @@ using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Host.Migration;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
 
@@ -203,7 +204,7 @@ public sealed class StandaloneHooks(
             savedState = savedState with { Homes = saved with { ClaudeConfigDirExplicit = explicitConfigDir } };
         }
         savedState.Save(profile);
-        output.WriteLine("Registered. Restart the host from the Agent Bridge app, then start new agent sessions to load the hooks.");
+        output.WriteLine($"Registered. Restart the host from the {Product.App}, then start new agent sessions to load the hooks.");
         if (agent == "codex") { output.WriteLine("Start Codex at this machine and approve its hook trust prompt once; until then Codex silently skips its hooks."); }
     }
 
@@ -428,7 +429,7 @@ public sealed class StandaloneHooks(
         var plugin = Path.Combine(CodexMarketplace, "plugins", Marketplace);
         Write(Path.Combine(plugin, ".codex-plugin", "plugin.json"), new JsonObject
         {
-            ["name"] = Marketplace, ["version"] = "1.0.0", ["description"] = "Agent Bridge hooks", ["hooks"] = "./hooks.json",
+            ["name"] = Marketplace, ["version"] = "1.0.0", ["description"] = $"{Product.Name} hooks", ["hooks"] = "./hooks.json",
         });
         var hooks = new JsonObject();
         foreach (var name in new[] { "SessionStart", "UserPromptSubmit", "PermissionRequest", "PreToolUse", "Stop", "SessionEnd" })
@@ -438,10 +439,10 @@ public sealed class StandaloneHooks(
                 ["type"] = "command", ["command"] = $"{Hook} codex hook", ["timeout"] = name == "SessionEnd" ? 3 : 20,
             }) });
         }
-        Write(Path.Combine(plugin, "hooks.json"), new JsonObject { ["description"] = "Agent Bridge", ["hooks"] = hooks });
+        Write(Path.Combine(plugin, "hooks.json"), new JsonObject { ["description"] = Product.Name, ["hooks"] = hooks });
         Write(Path.Combine(CodexMarketplace, ".agents", "plugins", "marketplace.json"), new JsonObject
         {
-            ["name"] = Marketplace, ["interface"] = new JsonObject { ["displayName"] = "Agent Bridge" },
+            ["name"] = Marketplace, ["interface"] = new JsonObject { ["displayName"] = Product.Name },
             ["plugins"] = new JsonArray(new JsonObject
             {
                 ["name"] = Marketplace, ["source"] = new JsonObject { ["source"] = "local", ["path"] = "./plugins/agent-bridge" },

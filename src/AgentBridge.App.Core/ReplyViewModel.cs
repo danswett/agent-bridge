@@ -409,7 +409,7 @@ public sealed class ReplyViewModel : Observable
                 var sending = e.Attempts > 1 ? "Sending again…" : "Sending…";
                 return (session.Status == SessionStatus.Working ? $"{sending} The session is working, and takes it at its next step." : sending, Tone.Progress);
             case DeliveryState.Waiting:
-                return (e.Reason == "still being delivered" ? "The machine is still delivering it…" : $"Waiting for the Bridge Host{at}. Your reply goes as soon as it is back.", Tone.Progress);
+                return (e.Reason == "still being delivered" ? "The machine is still delivering it…" : $"Waiting for the {Product.HostName}{at}. Your reply goes as soon as it is back.", Tone.Progress);
             case DeliveryState.Failed:
                 return ($"Couldn't send it: {e.Reason ?? "the machine said no"}.", Tone.Bad);
         }

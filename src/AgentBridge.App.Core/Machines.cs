@@ -232,9 +232,9 @@ public sealed class Fleet : IAsyncDisposable
     public string? Note => !main.Connected ? null : link.State switch
     {
         FleetState.Off => null,
-        FleetState.SignedOut => "Your other machines appear here once this machine's Bridge Host is signed in to the relay (Settings).",
+        FleetState.SignedOut => $"Your other machines appear here once this machine's {Product.HostName} is signed in to the relay (Settings).",
         FleetState.Connecting => $"Connecting to your other machines…{(Detail is { Length: > 0 } d ? $" ({d})" : "")}",
-        FleetState.Refused => $"The relay refused this app: {Detail}. Sign this machine's Bridge Host in again in Settings.",
+        FleetState.Refused => $"The relay refused this app: {Detail}. Sign this machine's {Product.HostName} in again in Settings.",
         FleetState.Elsewhere => Detail,
         _ => null,
     };
@@ -493,7 +493,7 @@ public sealed class RelayFleetLink : IFleetLink
     public IBlobStore Blobs { get; }
 
     public const string ElsewhereNote = "Your other machines are shown by this app in another of your Windows sessions. Close it there and they appear here.";
-    public const string ReplacedNote = "Another copy of this app, with this app's key, took over the connection to your other machines. They come back here when this machine's Bridge Host signs in again or restarts, or when this app is opened again.";
+    public const string ReplacedNote = $"Another copy of this app, with this app's key, took over the connection to your other machines. They come back here when this machine's {Product.HostName} signs in again or restarts, or when this app is opened again.";
 
     // How long to wait for a sign-in that has not happened, before asking again.
     public TimeSpan Recheck { get; init; } = TimeSpan.FromSeconds(30);

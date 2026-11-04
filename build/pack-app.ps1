@@ -64,7 +64,7 @@ Publish 'src/AgentBridge.App/AgentBridge.App.csproj' @()
 
 # The .pri carries the compiled XAML: without it the installed app fails at startup with
 # nothing but 0xC000027B (spike S3), while the build output runs fine.
-$required = 'AgentBridge.exe', 'AgentBridge.pri', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'agent-bridge-host-hook.exe', 'Assets\AgentBridge.ico', 'Assets\AgentBridge.png'
+$required = 'AgentBridge.exe', 'AgentBridge.pri', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'agent-bridge-host-hook.exe', $AppIconFile, $AppLogoFile
 # The bundled monospace and its licence (Design/DesignKeys.cs FontFiles): the app names the font
 # by its file, so one left out would quietly fall back.
 $keys = Get-Content (Join-Path $root 'src' 'AgentBridge.App' 'Design' 'DesignKeys.cs') -Raw
@@ -131,6 +131,6 @@ if ($ReleaseNotes) { $more += @('--releaseNotes', [IO.Path]::GetFullPath($Releas
 # so vpk gives it Velopack's Arm64 Update.exe, Setup.exe and stub, and the package records the
 # machine it is for.
 if ($Runtime -ne 'win-x64') { $more += @('--runtime', $Runtime) }
-& vpk pack -u $packId -v $Version -c $target.Channel -p $publish -e AgentBridge.exe -o $releases --packTitle 'Agent Bridge' --icon (Join-Path $publish 'Assets\AgentBridge.ico') @more
+& vpk pack -u $packId -v $Version -c $target.Channel -p $publish -e AgentBridge.exe -o $releases --packTitle $AppProductName --icon (Join-Path $publish $AppIconFile) @more
 if ($LASTEXITCODE) { throw 'vpk pack failed' }
 Write-Host "packed $Version for the $($target.Channel) channel to $releases"

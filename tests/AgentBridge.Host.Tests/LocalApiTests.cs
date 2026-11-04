@@ -537,7 +537,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         foreach (var op in new[] { HostOps.Restart, HostOps.Stop, HostOps.Settings, HostOps.SignIn, HostOps.SignInCancel, HostOps.RelayAccount })
         {
             var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(op, new { }));
-            Assert.Equal($"refused: this connection is from pid {Environment.ProcessId}, inside the copilot session 77777777 (pid {parent.Id}); stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the Agent Bridge app", refused.Message);
+            Assert.Equal($"refused: this connection is from pid {Environment.ProcessId}, inside the copilot session 77777777 (pid {parent.Id}); stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the {Product.App}", refused.Message);
         }
         var answer = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), text = "yes" }));
         Assert.StartsWith("refused: this connection is from pid", answer.Message);
@@ -564,7 +564,7 @@ public sealed class LocalApiTests : IAsyncLifetime
 
         var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Restart));
 
-        Assert.Equal($"refused: this connection is from a copilot process (pid {Environment.ProcessId}); stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the Agent Bridge app", refused.Message);
+        Assert.Equal($"refused: this connection is from a copilot process (pid {Environment.ProcessId}); stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the {Product.App}", refused.Message);
         Assert.Equal(0, Volatile.Read(ref restarts));
     }
 
@@ -578,7 +578,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         var hello = await ch.HelloAsync();
         Assert.DoesNotContain(HostOps.Capability, hello.Capabilities);
         var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Stop));
-        Assert.EndsWith("which is not the Agent Bridge app beside this host; only the Agent Bridge app beside this host may stop, restart, sign in, change settings or read the relay account", refused.Message);
+        Assert.EndsWith($"which is not the {Product.App} beside this host; only the {Product.App} beside this host may stop, restart, sign in, change settings or read the relay account", refused.Message);
         var answered = await ch.CallAsync<AnswerResult>(Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), text = "yes" });
         Assert.Equal("this host does not take answers; answer at the machine", answered.Reason);
         await Task.Delay(200);
@@ -594,7 +594,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         foreach (var op in new[] { HostOps.Stop, HostOps.Settings, HostOps.SignIn })
         {
             var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(op, new { }));
-            Assert.Contains("only the Agent Bridge app beside this host may", refused.Message);
+            Assert.Contains($"only the {Product.App} beside this host may", refused.Message);
         }
         await ch.CallAsync(HostOps.Restart);
 
@@ -690,14 +690,14 @@ public sealed class LocalApiTests : IAsyncLifetime
             callers.Current = new FixedCallerGuard(new Caller(kind, "pid 4242"));
             var other = await ConnectAsync();
             var refused = await Assert.ThrowsAsync<HostErrorException>(() => other.CallAsync(HostOps.UpdateReport, new UpdateReport(state with { Available = "9.9.9" })));
-            Assert.StartsWith("refused: this connection is from pid 4242; only the Agent Bridge app", refused.Message);
+            Assert.StartsWith($"refused: this connection is from pid 4242; only the {Product.App}", refused.Message);
         }
         Assert.Equal(state, updates.State());
     }
 
     sealed class Callers : ICallerGuard
     {
-        public ICallerGuard Current { get; set; } = new FixedCallerGuard(new Caller(CallerKind.App, "the Agent Bridge app"));
+        public ICallerGuard Current { get; set; } = new FixedCallerGuard(new Caller(CallerKind.App, $"the {Product.App}"));
         public Caller Classify(IProtocolChannel channel, bool fresh = false) => Current.Classify(channel, fresh);
     }
 

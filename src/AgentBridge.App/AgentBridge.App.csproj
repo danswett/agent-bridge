@@ -26,14 +26,23 @@
     <AssemblyName>AgentBridge</AssemblyName>
     <RootNamespace>AgentBridge.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon>Assets\AgentBridge.ico</ApplicationIcon>
+    <!-- The product's name and brand art for the build (#537): the exe's ProductName and
+         FileDescription (Task Manager, the file's properties; without them both said the assembly
+         name, "AgentBridge"), its icon, and through build/app-channels.ps1 the installer's title
+         and icon. The app's code reads the same from Product.Name and AppAssets; AppBrandTests
+         holds them together. AssemblyName and the files' names are identifiers and stay (#541). -->
+    <Product>Agent Bridge</Product>
+    <AssemblyTitle>$(Product)</AssemblyTitle>
+    <AppIconFile>Assets\AgentBridge.ico</AppIconFile>
+    <AppLogoFile>Assets\AgentBridge.png</AppLogoFile>
+    <ApplicationIcon>$(AppIconFile)</ApplicationIcon>
     <Version>0.1.0</Version>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="Assets\AgentBridge.ico" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="Assets\AgentBridge.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(AppIconFile)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(AppLogoFile)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Agent Bridge Mono (docs/design/ui.md §4.1), from design/fonts rather than a second copy:

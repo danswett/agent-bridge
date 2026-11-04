@@ -109,18 +109,26 @@ test('the Windows icon holds every size Windows asks for, the small tile at 24 p
 });
 
 // The app finds its icon by these paths: the exe's icon, the window's and the tray's, the toast
-// logo, and Velopack's setup and shortcut icon. Each must be a generated file.
+// logo, and Velopack's setup and shortcut icon. Each must be a generated file. The project names
+// them once (AppIconFile, AppLogoFile), for the build and through build/app-channels.ps1 the
+// installer; the app's code reads them from AppAssets (#537).
 test('the app project, its window, tray, toasts and installer use the generated icon', () => {
   const targets = Object.keys(appIconTargets(appIconSpec(path.join(repoRoot, 'design'))));
   const read = (rel) => readFileSync(path.join(repoRoot, rel), 'utf8');
   const csproj = read('src/AgentBridge.App/AgentBridge.App.csproj');
-  assert.match(csproj, /<ApplicationIcon>Assets\\AgentBridge\.ico<\/ApplicationIcon>/);
-  assert.match(csproj, /<Content Include="Assets\\AgentBridge\.ico" CopyToOutputDirectory="PreserveNewest" \/>/);
-  assert.match(csproj, /<Content Include="Assets\\AgentBridge\.png" CopyToOutputDirectory="PreserveNewest" \/>/);
-  assert.match(read('src/AgentBridge.App/MainWindow.xaml.cs'), /AppWindow\.SetIcon\(Path\.Combine\(AppContext\.BaseDirectory, "Assets", "AgentBridge\.ico"\)\)/);
-  assert.match(read('src/AgentBridge.App/App.xaml.cs'), /new TrayIcon\([^)]*"Assets", "AgentBridge\.ico"\)/);
-  assert.match(read('src/AgentBridge.App/App.xaml.cs'), /ToastActivator\.Register\([^)]*"Assets", "AgentBridge\.png"\)/);
-  assert.match(read('build/pack-app.ps1'), /--icon \(Join-Path \$publish 'Assets\\AgentBridge\.ico'\)/);
+  assert.match(csproj, /<AppIconFile>Assets\\AgentBridge\.ico<\/AppIconFile>/);
+  assert.match(csproj, /<AppLogoFile>Assets\\AgentBridge\.png<\/AppLogoFile>/);
+  assert.match(csproj, /<ApplicationIcon>\$\(AppIconFile\)<\/ApplicationIcon>/);
+  assert.match(csproj, /<Content Include="\$\(AppIconFile\)" CopyToOutputDirectory="PreserveNewest" \/>/);
+  assert.match(csproj, /<Content Include="\$\(AppLogoFile\)" CopyToOutputDirectory="PreserveNewest" \/>/);
+  const assets = read('src/AgentBridge.App.Core/AppAssets.cs');
+  assert.match(assets, /Icon = Path\.Combine\("Assets", "AgentBridge\.ico"\)/);
+  assert.match(assets, /Logo = Path\.Combine\("Assets", "AgentBridge\.png"\)/);
+  assert.match(read('src/AgentBridge.App/MainWindow.xaml.cs'), /AppWindow\.SetIcon\(Path\.Combine\(AppContext\.BaseDirectory, AppAssets\.Icon\)\)/);
+  assert.match(read('src/AgentBridge.App/App.xaml.cs'), /new TrayIcon\([^)]*AppAssets\.Icon\)/);
+  assert.match(read('src/AgentBridge.App/App.xaml.cs'), /ToastActivator\.Register\([^)]*AppAssets\.Logo\)/);
+  assert.match(read('build/app-channels.ps1'), /\$AppIconFile = Get-AppProjectProperty 'AppIconFile'/);
+  assert.match(read('build/pack-app.ps1'), /--icon \(Join-Path \$publish \$AppIconFile\)/);
   for (const f of ['src/AgentBridge.App/Assets/AgentBridge.ico', 'src/AgentBridge.App/Assets/AgentBridge.png']) { assert.ok(targets.includes(f), f); }
   assert.deepEqual(pngSize(readFileSync(path.join(repoRoot, 'src/AgentBridge.App/Assets/AgentBridge.png'))), { width: 256, height: 256 });
 });

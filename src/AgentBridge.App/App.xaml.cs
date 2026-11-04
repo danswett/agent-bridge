@@ -90,7 +90,7 @@ public partial class App : Application
         if (installed)
         {
             FirstRun(Prefs, SavePrefs, atSignIn);
-            try { ToastActivator.Register(Paths.Exe, Path.Combine(AppContext.BaseDirectory, "Assets", "AgentBridge.png")); }
+            try { ToastActivator.Register(Paths.Exe, Path.Combine(AppContext.BaseDirectory, AppAssets.Logo)); }
             catch (Exception e) when (e is UnauthorizedAccessException or IOException or System.Security.SecurityException) { AppLog.Write($"toasts not registered: {e.Message}"); }
         }
 
@@ -176,12 +176,12 @@ public partial class App : Application
             return;
         }
 
-        tray = new TrayIcon(window.Handle, Path.Combine(AppContext.BaseDirectory, "Assets", "AgentBridge.ico"), () => ShowWindow(null, null), Quit);
+        tray = new TrayIcon(window.Handle, Path.Combine(AppContext.BaseDirectory, AppAssets.Icon), () => ShowWindow(null, null), Quit);
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         timer.Tick += (_, _) =>
         {
             main.Tick();
-            tray?.SetTip(main.Waiting > 0 ? $"Agent Bridge: {main.Waiting} waiting on you" : "Agent Bridge");
+            tray?.SetTip(MainViewModel.TrayTip(main.Waiting));
         };
         timer.Start();
 
@@ -290,7 +290,7 @@ public partial class App : Application
             }
             Volatile.Write(ref last, now);
             return now;
-        }, identity.Key, $"{Environment.MachineName} · Agent Bridge app", AppLog.Write, () => ClaimRelay(identity.Folder));
+        }, identity.Key, Product.DeviceName(Environment.MachineName), AppLog.Write, () => ClaimRelay(identity.Folder));
         link.Changed += () => { if (link.State == FleetState.Refused) { Volatile.Write(ref last, null); } };
         ui.Post(() =>
         {

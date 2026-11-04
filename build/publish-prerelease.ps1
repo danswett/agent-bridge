@@ -237,7 +237,7 @@ if ($publishing) {
         # upload creates the draft; each other channel's joins it (--merge), adding its own feed.
         $first = $true
         foreach ($b in $builds) {
-            $upload = @('upload', 'github', '--outputDir', $b.Dir, '--channel', $b.Channel, '--repoUrl', "https://github.com/$Repository", '--token', $env:GH_TOKEN, '--pre', '--releaseName', "Agent Bridge $Version (pre-release)", '--tag', $tag, '--targetCommitish', $Commit)
+            $upload = @('upload', 'github', '--outputDir', $b.Dir, '--channel', $b.Channel, '--repoUrl', "https://github.com/$Repository", '--token', $env:GH_TOKEN, '--pre', '--releaseName', "$AppProductName $Version (pre-release)", '--tag', $tag, '--targetCommitish', $Commit)
             if (-not $first) { $upload += '--merge' }
             & vpk @upload | Out-Host
             if ($LASTEXITCODE) { throw "vpk upload github failed for the $($b.Channel) channel" }
@@ -250,7 +250,7 @@ if ($publishing) {
         $hasDelta = [bool]($builds | Where-Object { Test-Path $_.DeltaPath })
         $installers = @($builds | ForEach-Object { "$($_.Expected.Installer) on $(if ($_.Machine -eq 'x64') { 'an x64 PC' } else { 'a Windows on Arm PC' })" })
         $notes = @(
-            "Pre-release of the Agent Bridge Windows app and host, built from main at $Commit$run."
+            "Pre-release of the $AppProductName Windows app and host, built from main at $Commit$run."
             ''
             $changeNotes
             ''

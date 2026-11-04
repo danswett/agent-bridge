@@ -15,7 +15,7 @@
                 <ProgressBar IsIndeterminate="True" Visibility="{x:Bind local:Ui.Show(ViewModel.Busy), Mode=OneWay}" />
     
                 <!-- The host: the background program that watches this machine's agent sessions. -->
-                <TextBlock Style="{StaticResource AbSectionTitle}" Text="Bridge Host on this machine" />
+                <TextBlock Style="{StaticResource AbSectionTitle}" Text="{x:Bind local:SettingsView.HostSection}" />
                 <InfoBar
                     Severity="Warning"
                     Title="agent-ha-bridge is running here"

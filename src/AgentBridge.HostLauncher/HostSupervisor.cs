@@ -1,3 +1,5 @@
+using AgentBridge.Protocol;
+
 namespace AgentBridge.HostLauncher;
 
 // Starts the host again after it crashed (#106), a few times, sooner rather than later, then
@@ -56,7 +58,7 @@ public sealed class HostSupervisor
             if (Time.GetElapsedTime(started) >= Healthy) { crashes = 0; }
             if (crashes == Backoff.Count)
             {
-                Log($"the host crashed (exit code {Describe(code)}) {crashes + 1} times in a row; not starting it again: start it from the Agent Bridge app once the cause is fixed");
+                Log($"the host crashed (exit code {Describe(code)}) {crashes + 1} times in a row; not starting it again: start it from the {Product.App} once the cause is fixed");
                 return code;
             }
             var wait = Backoff[crashes++];
@@ -68,7 +70,7 @@ public sealed class HostSupervisor
 
     int Stop(int code)
     {
-        Log("the host was stopped from the Agent Bridge app; not starting it again");
+        Log($"the host was stopped from the {Product.App}; not starting it again");
         return code;
     }
 

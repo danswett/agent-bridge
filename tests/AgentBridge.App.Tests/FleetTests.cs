@@ -333,7 +333,7 @@ public sealed class FleetTests : IAsyncLifetime
         TestUi.Read(() =>
         {
             Assert.False(question.CanAnswer);
-            Assert.Equal("Waiting for the Bridge Host on Build server. Answer once it is back.", question.StatusText);
+            Assert.Equal($"Waiting for the {Product.HostName} on Build server. Answer once it is back.", question.StatusText);
             Assert.False(idle.Reply!.CanSend);
             Assert.False(idle.Reply.CanAttach);
             Assert.False(idle.End!.CanPress);
@@ -1561,7 +1561,7 @@ public sealed class RelayFleetLinkTests
         host.Hub.JsonOptions = ProtocolJson.Options;
         host.Hub.Handler = (_, op, _) => Task.FromResult<object?>(op == Ops.Hello ? new HelloResult(1, new MachineInfo(host.Id, "Build server", "linux", "0.1.0"), [Capabilities.SessionsRead]) : null);
         var asked = 0;
-        await using var link = new RelayFleetLink(_ => { Interlocked.Increment(ref asked); return Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")); }, P256KeyPair.Generate(), "Test PC · Agent Bridge app");
+        await using var link = new RelayFleetLink(_ => { Interlocked.Increment(ref asked); return Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")); }, P256KeyPair.Generate(), Product.DeviceName("Test PC"));
 
         link.Start();
         await Wait.UntilAsync(() => link.State == FleetState.Connected && link.Hosts.Any(h => h.Id == host.Id), "the other machine in presence", Patience);
@@ -1582,7 +1582,7 @@ public sealed class RelayFleetLinkTests
         await using var relay = await TestRelay.StartAsync();
         var token = relay.TokenFor(7, "octo");
         var host = await relay.ConnectAsync(token, "Build server", "host");
-        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), P256KeyPair.Generate(), "Test PC · Agent Bridge app");
+        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), P256KeyPair.Generate(), Product.DeviceName("Test PC"));
         link.Start();
         await Wait.UntilAsync(() => link.State == FleetState.Connected && link.Hosts.Any(h => h.Id == host.Id), "the other machine in presence", Patience);
         Assert.Empty(link.Offline!);
@@ -1602,7 +1602,7 @@ public sealed class RelayFleetLinkTests
         await using var relay = await TestRelay.StartAsync(o => { o.Blobs.Backend = "local"; o.Blobs.MaxBytesPerAccountPerDay = 8L * 1024 * 1024; });
         var token = relay.TokenFor(7, "octo");
         await using var host = await relay.ConnectAsync(token, "Build server", "host");
-        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), P256KeyPair.Generate(), "Test PC · Agent Bridge app");
+        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), P256KeyPair.Generate(), Product.DeviceName("Test PC"));
         link.Start();
         await Wait.UntilAsync(() => link.State == FleetState.Connected && link.Blobs.Max > 0, "the relay's blob store", Patience);
         var file = System.Security.Cryptography.RandomNumberGenerator.GetBytes(3 * 1024 * 1024);
@@ -1630,7 +1630,7 @@ public sealed class RelayFleetLinkTests
         await using var relay = await TestRelay.StartAsync(o => o.Blobs.Backend = "local");
         var token = relay.TokenFor(7, "octo");
         await using var host = await relay.ConnectAsync(token, "Build server", "host");
-        await using var app = await relay.ConnectAsync(token, "Test PC · Agent Bridge app", "app");
+        await using var app = await relay.ConnectAsync(token, Product.DeviceName("Test PC"), "app");
         var blobs = new RelayBlobStore(() => app.Relay, new HttpClient(new Stalls())) { UploadFor = TimeSpan.FromMilliseconds(300) };
 
         var e = await Assert.ThrowsAsync<IOException>(() => blobs.PutAsync(host.Id, "photo.png", new byte[400_000], _ => { }));
@@ -1669,7 +1669,7 @@ public sealed class RelayFleetLinkTests
             });
         }
         var me = P256KeyPair.Generate();
-        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), me, "Test PC · Agent Bridge app");
+        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), me, Product.DeviceName("Test PC"));
         link.Start();
         await Wait.UntilAsync(() => link.State == FleetState.Connected && link.Hosts.Count == 3, "the machines in presence", Patience);
 
@@ -1717,7 +1717,7 @@ public sealed class RelayFleetLinkTests
         await using var host = await relay.ConnectAsync(token, "Build server", "host");
         // A peer that introduces itself without a name or kind.
         typeof(ChannelHub).GetField("intro", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(host.Hub, "{}"u8.ToArray());
-        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), P256KeyPair.Generate(), "Test PC · Agent Bridge app");
+        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), P256KeyPair.Generate(), Product.DeviceName("Test PC"));
         link.Start();
         await Wait.UntilAsync(() => link.Hosts.Any(h => h.Id == host.Id), "the other machine in presence", Patience);
 
@@ -1731,7 +1731,7 @@ public sealed class RelayFleetLinkTests
     {
         await using var relay = await TestRelay.StartAsync();
         RelayAccount? account = null;
-        await using var link = new RelayFleetLink(_ => Task.FromResult(account), P256KeyPair.Generate(), "Test PC · Agent Bridge app") { Recheck = TimeSpan.FromSeconds(30) };
+        await using var link = new RelayFleetLink(_ => Task.FromResult(account), P256KeyPair.Generate(), Product.DeviceName("Test PC")) { Recheck = TimeSpan.FromSeconds(30) };
 
         link.Start();
         await Task.Delay(300);
@@ -1754,7 +1754,7 @@ public sealed class RelayFleetLinkTests
         await using var host7 = await relay.ConnectAsync(seven, "Seven's PC", "host");
         await using var host8 = await relay.ConnectAsync(eight, "Eight's PC", "host");
         var account = new RelayAccount(relay.Url.ToString(), seven, "7", "octo");
-        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(account), P256KeyPair.Generate(), "Test PC · Agent Bridge app");
+        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(account), P256KeyPair.Generate(), Product.DeviceName("Test PC"));
         link.Start();
         await Wait.UntilAsync(() => link.Hosts.Any(h => h.Id == host7.Id), "account 7's machine", Patience);
 
@@ -1780,7 +1780,7 @@ public sealed class RelayFleetLinkTests
         var token = relay.TokenFor(7, "octo");
         await using var host = await relay.ConnectAsync(token, "Build server", "host");
         var key = P256KeyPair.Generate();
-        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), key, "Test PC · Agent Bridge app");
+        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), key, Product.DeviceName("Test PC"));
         var seen = new List<(FleetState, int)>();
         link.Changed += () => { lock (seen) { seen.Add((link.State, link.Hosts.Count)); } };
         link.Start();
@@ -1818,7 +1818,7 @@ public sealed class RelayFleetLinkTests
         var mine = false;
         var asked = 0;
         await using var link = new RelayFleetLink(_ => { Interlocked.Increment(ref asked); return Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")); },
-            P256KeyPair.Generate(), "Test PC · Agent Bridge app", claim: () => Volatile.Read(ref mine)) { Recheck = TimeSpan.FromSeconds(30) };
+            P256KeyPair.Generate(), Product.DeviceName("Test PC"), claim: () => Volatile.Read(ref mine)) { Recheck = TimeSpan.FromSeconds(30) };
 
         link.Start();
         await Wait.UntilAsync(() => link.State == FleetState.Elsewhere, "the lock held elsewhere", Patience);

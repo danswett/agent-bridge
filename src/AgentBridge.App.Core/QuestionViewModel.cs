@@ -231,7 +231,7 @@ public sealed partial class QuestionViewModel : Observable
     public void Refresh()
     {
         var e = deliveries.Get(Key);
-        (StatusText, StatusTone) = !current() && (Unsent(e) || e!.State == DeliveryState.Failed) ? ($"Waiting for the Bridge Host{at}. Answer once it is back.", Tone.Progress)
+        (StatusText, StatusTone) = !current() && (Unsent(e) || e!.State == DeliveryState.Failed) ? ($"Waiting for the {Product.HostName}{at}. Answer once it is back.", Tone.Progress)
             : e is null ? ("", Tone.None) : Describe(e, at);
         if (e is { State: DeliveryState.Done, Outcome: "busy" } && !pausedAfterBusy)
         {
@@ -252,7 +252,7 @@ public sealed partial class QuestionViewModel : Observable
     public static (string Text, Tone Tone) Describe(Delivery e, string at) => e.State switch
     {
         DeliveryState.Sending => (e.Attempts > 1 ? "Sending again…" : "Sending…", Tone.Progress),
-        DeliveryState.Waiting => (e.Reason == "still being delivered" ? "The machine is still delivering it…" : $"Waiting for the Bridge Host{at}. Your answer goes as soon as it is back.", Tone.Progress),
+        DeliveryState.Waiting => (e.Reason == "still being delivered" ? "The machine is still delivering it…" : $"Waiting for the {Product.HostName}{at}. Your answer goes as soon as it is back.", Tone.Progress),
         DeliveryState.Failed => ($"Couldn't send it: {e.Reason ?? "the machine said no"}.", Tone.Bad),
         _ => Outcome(e, at),
     };

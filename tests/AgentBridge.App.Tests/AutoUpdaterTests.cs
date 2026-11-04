@@ -560,7 +560,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         AutoUpdater.Announce(() => prefs, p => prefs = p, updater, toasts, log.Add);
 
         var toast = Assert.Single(toasts.Shown);
-        Assert.Contains("Agent Bridge updated to 0.2.0", toast.Xml);
+        Assert.Contains($"{Product.Name} updated to 0.2.0", toast.Xml);
         Assert.Contains("from 0.1.0", toast.Xml);
         Assert.Contains("Offline machines and Forget", toast.Xml);
         Assert.Null(prefs.UpdatedFrom);

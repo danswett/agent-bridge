@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using AgentBridge.App.Core;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.App;
 
@@ -21,7 +23,7 @@ sealed unsafe partial class TrayIcon : IDisposable
     readonly uint taskbarCreated;
     readonly Action open;
     readonly Action quit;
-    string tip = "Agent Bridge";
+    string tip = MainViewModel.TrayTip(0);
     bool added;
 
     public TrayIcon(nint hwnd, string iconPath, Action open, Action quit)
@@ -82,7 +84,7 @@ sealed unsafe partial class TrayIcon : IDisposable
     void Menu()
     {
         var menu = CreatePopupMenu();
-        AppendMenuW(menu, MfString, CmdOpen, "Open Agent Bridge");
+        AppendMenuW(menu, MfString, CmdOpen, $"Open {Product.Name}");
         AppendMenuW(menu, MfSeparator, 0, null);
         AppendMenuW(menu, MfString, CmdQuit, "Quit (the host keeps running)");
         GetCursorPos(out var at);

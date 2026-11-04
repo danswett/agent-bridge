@@ -519,6 +519,18 @@ removed by Velopack's uninstall hook. A click on an answer button answers throug
 without opening a window. Only the installed app registers anything: a development copy,
 another `--profile` and the demo show no toasts and write nothing to the registry.
 
+**The product's name and art** (#537): every place the app, the host and its launcher name
+the product, or the host service ("Bridge Host"), reads it from `Product` (`AgentBridge.Protocol`):
+the window and title bar, the tray's tooltip (`MainViewModel.TrayTip`) and menu, the toasts'
+sender (the AUMID's `DisplayName`, not the AUMID) and default title, the update toast, the
+device name other devices see, the logon task's description and the host's messages. The exe's
+`Product` and `AssemblyTitle`, its icon and the toast icon are named once in the app's project
+(`Product`, `AppIconFile`, `AppLogoFile`); `build/app-channels.ps1` reads them for the
+installer's title and icon and the releases' titles, and the app's code reads the files from
+`AppAssets`. `AppBrandTests` holds these together and fails on copy that names the product by
+hand. Identifiers that contain the name (the AUMID, the pack id, exe names, paths, the pipe,
+HA ids and names) are not the name and stay (#541).
+
 **Demo** (`AgentBridge.exe --demo`): the app with a pretend host of its own, serving the
 protocol's example sessions on a private pipe and answering every op as a cooperative
 host would, and a second pretend host ("Build server") that the app reaches as it would

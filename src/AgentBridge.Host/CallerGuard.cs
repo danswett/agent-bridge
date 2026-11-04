@@ -84,13 +84,13 @@ public sealed class CallerGuard(Func<IReadOnlyList<KnownProcess>> known, string?
         }
         if (appImage is not null && self.Image is { } image && string.Equals(Path.GetFullPath(image), Path.GetFullPath(appImage), StringComparison.OrdinalIgnoreCase))
         {
-            return new Caller(CallerKind.App, "the Agent Bridge app");
+            return new Caller(CallerKind.App, $"the {Product.App}");
         }
         if (hostImage is not null && self.Image is { } program && string.Equals(Path.GetFullPath(program), Path.GetFullPath(hostImage), StringComparison.OrdinalIgnoreCase))
         {
             return new Caller(CallerKind.HostCli, $"agent-bridge-host's command line (pid {self.Id})");
         }
-        return new Caller(CallerKind.Other, $"{(AgentAncestry.FileName(self.Image) is { Length: > 0 } file ? file : "a process")} (pid {self.Id}), which is not the Agent Bridge app beside this host");
+        return new Caller(CallerKind.Other, $"{(AgentAncestry.FileName(self.Image) is { Length: > 0 } file ? file : "a process")} (pid {self.Id}), which is not the {Product.App} beside this host");
     }
 
     static Caller Inside(IReadOnlyList<PeerProcess> chain, PeerProcess at, string which) =>

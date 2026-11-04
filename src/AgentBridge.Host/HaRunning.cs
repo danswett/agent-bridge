@@ -2,6 +2,7 @@ using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
 
@@ -36,7 +37,7 @@ public sealed class HaRunning : IAsyncDisposable
         if (!first)
         {
             claim.Dispose();
-            log($"the Home Assistant connector is off: another Agent Bridge host already publishes agent_bridge_{slug} for this user");
+            log($"the Home Assistant connector is off: another {Product.Name} host already publishes agent_bridge_{slug} for this user");
             return null;
         }
         string? token;

@@ -12,7 +12,7 @@ public enum LinkState { Connecting, Connected, NotRunning, Refused }
 // the sessions, the agents' usage and the host's own status. What it hears is applied on the
 // UI thread, so view models never see a change from anywhere else.
 // The host process a request went to has been replaced: it is not sent to the new one.
-public sealed class HostRestartedException() : Exception("the Bridge Host restarted");
+public sealed class HostRestartedException() : Exception($"the {Product.HostName} restarted");
 
 public sealed class HostConnection : IAsyncDisposable
 {
@@ -144,8 +144,8 @@ public sealed class HostConnection : IAsyncDisposable
     public Task<JsonElement> CallAsync(string op, object? data, TimeSpan? timeout, bool knownHost, string? onlyTo, out string? instance, CancellationToken ct = default)
     {
         var now = Volatile.Read(ref current);
-        if (now is null || !now.Channel.IsOpen) { throw new HostNotRunningException("not connected to the Bridge Host"); }
-        if (knownHost && now.Instance is null) { throw new HostNotRunningException("still connecting to the Bridge Host"); }
+        if (now is null || !now.Channel.IsOpen) { throw new HostNotRunningException($"not connected to the {Product.HostName}"); }
+        if (knownHost && now.Instance is null) { throw new HostNotRunningException($"still connecting to the {Product.HostName}"); }
         if (onlyTo is not null && now.Instance != onlyTo) { throw new HostRestartedException(); }
         instance = now.Instance;
         return now.Channel.CallAsync(op, data, timeout, ct);
@@ -163,7 +163,7 @@ public sealed class HostConnection : IAsyncDisposable
     public async Task RefreshStatusAsync(CancellationToken ct = default)
     {
         var now = Volatile.Read(ref current);
-        if (now is null || !now.Channel.IsOpen || now.Instance is null) { throw new HostNotRunningException("not connected to the Bridge Host"); }
+        if (now is null || !now.Channel.IsOpen || now.Instance is null) { throw new HostNotRunningException($"not connected to the {Product.HostName}"); }
         var heard = Interlocked.Read(ref statusEvents);
         var status = await now.Channel.CallAsync<HostStatus>(HostOps.Status, ct: ct);
         ui.Post(() =>

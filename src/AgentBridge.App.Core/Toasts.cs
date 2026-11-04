@@ -320,7 +320,7 @@ public static partial class ToastXml
     public static string Updated(string version, string from, string? notes)
     {
         var body = Plain(notes, 300);
-        return Start(Args(("action", "open")), $"Agent Bridge updated to {version}", $"from {from}", body.Length > 0 ? body : null).Append("</toast>").ToString();
+        return Start(Args(("action", "open")), $"{Product.Name} updated to {version}", $"from {from}", body.Length > 0 ? body : null).Append("</toast>").ToString();
     }
 
     // What became of an answer given on a toast, replacing that toast.
