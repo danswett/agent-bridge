@@ -32,21 +32,27 @@ public sealed class StandaloneHooks(
     };
     string InstructionBackup(string agent) => Path.Combine(HookFolder, "backups", "instructions", $"{agent}.bin");
 
-    internal IReadOnlyList<string> OwnedAgents()
+    internal bool OwnsAgent(string agent)
     {
-        var owned = new List<string>();
-        foreach (var agent in new[] { "copilot", "claude", "codex" })
+        var path = Path.Combine(Home(agent), OwnerFile);
+        FileAttributes attributes;
+        try { attributes = File.GetAttributes(path); }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException)
         {
-            var path = Path.Combine(Home(agent), OwnerFile);
-            if (!File.Exists(path)) { continue; }
-            var record = Read(path);
-            if ((int?)record["version"] != 1 || (string?)record["profile"] is not { } owner || !Path.IsPathFullyQualified(owner))
-            {
-                throw new InvalidDataException($"{path} has unrecognized ownership; inspect it before cleanup");
-            }
-            if (Same(owner, profile)) { owned.Add(agent); }
+            _ = PhysicalHome(Home(agent));
+            return false;
         }
-        return owned;
+        if ((attributes & FileAttributes.Directory) != 0)
+        {
+            throw new InvalidDataException($"{path} is a directory, not an ownership record; it was left alone");
+        }
+        var record = Read(path);
+        if ((int?)record["version"] != 1 || (string?)record["profile"] is not { } owner || !Path.IsPathFullyQualified(owner))
+        {
+            throw new InvalidDataException($"{path} has unrecognized ownership; inspect it before cleanup");
+        }
+        return Same(owner, profile);
     }
 
     string Home(string agent) => agent switch

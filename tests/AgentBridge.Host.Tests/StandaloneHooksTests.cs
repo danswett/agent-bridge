@@ -166,6 +166,67 @@ public sealed class StandaloneHooksTests : IDisposable
     }
 
     [Theory]
+    [InlineData("{invalid")]
+    [InlineData("[]")]
+    [InlineData("{\"version\":\"invalid\"}")]
+    [InlineData("{\"version\":1,\"profile\":\"relative-profile\"}")]
+    public async Task Cleanup_preserves_invalid_ownership_and_still_removes_other_valid_owned_agents(string damaged)
+    {
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Write(Owner("copilot"), damaged);
+        var before = File.ReadAllBytes(Owner("copilot"));
+        using var errors = new StringWriter();
+
+        var result = await HookCommands.CleanupAsync(Profile, _ => Setup, TextWriter.Null, errors);
+
+        Assert.Equal(1, result);
+        Assert.Contains("copilot", errors.ToString());
+        Assert.Equal(before, File.ReadAllBytes(Owner("copilot")));
+        Assert.True(File.Exists(Registration("copilot")));
+        Assert.False(File.Exists(Owner("claude")));
+        Assert.False(File.Exists(Instructions("claude")));
+    }
+
+    [Fact]
+    public async Task Cleanup_reports_an_ownership_directory_as_failure_and_continues_other_valid_agents()
+    {
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        File.Delete(Owner("copilot"));
+        Directory.CreateDirectory(Owner("copilot"));
+        using var errors = new StringWriter();
+
+        var result = await HookCommands.CleanupAsync(Profile, _ => Setup, TextWriter.Null, errors);
+
+        Assert.Equal(1, result);
+        Assert.Contains(Owner("copilot"), errors.ToString());
+        Assert.True(Directory.Exists(Owner("copilot")));
+        Assert.True(File.Exists(Registration("copilot")));
+        Assert.False(File.Exists(Owner("claude")));
+    }
+
+    [Fact]
+    public async Task Cleanup_reports_an_unreadable_owner_and_preserves_it_while_removing_other_valid_agents()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var before = File.ReadAllBytes(Owner("copilot"));
+        using var errors = new StringWriter();
+        using (var unreadable = new FileStream(Owner("copilot"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            var result = await HookCommands.CleanupAsync(Profile, _ => Setup, TextWriter.Null, errors);
+
+            Assert.Equal(1, result);
+            Assert.Contains("copilot", errors.ToString());
+            Assert.True(File.Exists(Registration("copilot")));
+            Assert.False(File.Exists(Owner("claude")));
+        }
+        Assert.Equal(before, File.ReadAllBytes(Owner("copilot")));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Cleanup_never_guesses_homes_or_takes_over_migrated_hooks(bool migrated)

@@ -136,7 +136,9 @@ only valid ownership records belonging to that profile and runs the same guarded
 Unowned agents, migrated hooks and profiles with no recorded intake are not taken over;
 custom profiles can be cleaned explicitly with `--profile <name>`. Broken intake or ownership,
 legacy conflicts and partial removals return failure rather than guessing. Independent agents
-are still attempted after one removal fails. The callback has a bounded cleanup window and
+are still attempted after one ownership check or removal fails. Only genuinely missing
+ownership records are skipped; unreadable records and directories in their place report
+an explicit per-agent failure and are retained for repair. The callback has a bounded cleanup window and
 logs failures; it retains profile data, backups, ownership needed for repair and the private
 binary/runtime, so reinstalling can repair unfinished cleanup. Interrupted setup without a
 saved intake is not guessed at during uninstall. CLI bootstrapping remains follow-up (#231).

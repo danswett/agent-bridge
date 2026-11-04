@@ -106,12 +106,19 @@ public static class HookCommands
             }
             if (state.Homes is not { } homes) { throw new InvalidDataException("Standalone hook intake has no saved agent homes; inspect it before cleanup."); }
             var setup = create(homes);
-            var agents = setup.OwnedAgents();
             var code = 0;
-            foreach (var agent in agents)
+            foreach (var agent in new[] { "copilot", "claude", "codex" })
             {
                 ct.ThrowIfCancellationRequested();
-                if (await RunSetupAsync(setup, [agent], false, false, output, error, ct) != 0) { code = 1; }
+                try
+                {
+                    if (setup.OwnsAgent(agent) && await RunSetupAsync(setup, [agent], false, false, output, error, ct) != 0) { code = 1; }
+                }
+                catch (Exception e) when (ExpectedSetupFailure(e))
+                {
+                    error.WriteLine($"Hook cleanup incomplete for {agent}: {e.Message}");
+                    code = 1;
+                }
             }
             output.WriteLine(code == 0 ? "Owned hook cleanup finished. Profile data and private runtime were retained."
                 : "Owned hook cleanup is incomplete. Profile data and failed-agent ownership were retained for repair.");
