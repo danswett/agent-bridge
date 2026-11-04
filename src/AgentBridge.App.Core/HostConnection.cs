@@ -393,6 +393,12 @@ public sealed class HostConnection : IAsyncDisposable
         ui.Post(() => Sessions.Answered(ch, before, resumed, asked));
     }
 
+    // What the host tells hello.changed of: its read-only reason can change on its own (a host
+    // read-only by setting that agent-ha-bridge starts beside), and was dropped when only the
+    // capabilities were compared.
+    static bool Differs(HelloResult was, HelloResult now) =>
+        was.Machine.ReadOnly != now.Machine.ReadOnly || !was.Capabilities.SequenceEqual(now.Capabilities);
+
     // Whether the host sends hello.changed on this connection (it was asked with every hello), so
     // asking every CapabilityRefresh is not needed. Not this machine's own host (host.*): a refresh
     // there also reads host.status, whose agent-ha-bridge note and restart-required change without
@@ -415,7 +421,7 @@ public sealed class HostConnection : IAsyncDisposable
         announces = Announces(hello);
         ui.Post(() =>
         {
-            if (Hello is not null && !Hello.Capabilities.SequenceEqual(hello.Capabilities)) { Hello = hello; Changed?.Invoke(); }
+            if (Hello is not null && Differs(Hello, hello)) { Hello = hello; Changed?.Invoke(); }
         });
         if (hello.Capabilities.Contains(HostOps.Capability))
         {
@@ -458,7 +464,7 @@ public sealed class HostConnection : IAsyncDisposable
         ui.Post(() =>
         {
             var changed = false;
-            if (Hello is not null && !Hello.Capabilities.SequenceEqual(hello.Capabilities)) { Hello = hello; changed = true; }
+            if (Hello is not null && Differs(Hello, hello)) { Hello = hello; changed = true; }
             if (update is not null && Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; changed = true; }
             if (status is not null && Status is { } now && (now.AgentHaBridge != status.AgentHaBridge || now.RestartRequired != status.RestartRequired))
             {

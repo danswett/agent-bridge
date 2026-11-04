@@ -534,6 +534,12 @@ public sealed class ConnectionTests : IAsyncLifetime
 
         await Wait.UntilAsync(() => !watching.Can(Capabilities.SessionsAnswer), "answering to be taken away");
         Assert.Equal(2, fresh.Sent(Ops.Hello).Count);
+
+        // Only the reason changed (a host already read-only by setting): still taken up.
+        const string Reason = "agent-ha-bridge is running for this user";
+        fresh.On(Ops.Hello, _ => readOnly with { Machine = readOnly.Machine with { ReadOnly = Reason } });
+        await fresh.SendAsync(Events.HelloChanged, new { });
+        await Wait.UntilAsync(() => watching.Hello?.Machine.ReadOnly == Reason, "the new read-only reason");
     }
 
     [Fact]

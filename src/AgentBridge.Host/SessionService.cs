@@ -300,7 +300,7 @@ public sealed class SessionService
     }
 
     // Only what a client acts on; machine.sessions changes all the time and is not a change here.
-    static string Said(HelloResult hello) => (hello.Machine.ReadOnly ?? "") + "\n" + string.Join("\n", hello.Capabilities);
+    static string Said(string? readOnly, IEnumerable<string> offered) => (readOnly ?? "") + "\n" + string.Join("\n", offered);
 
     void WatchHello(IProtocolChannel channel, HelloResult hello)
     {
@@ -309,7 +309,7 @@ public sealed class SessionService
             _ = c.Closed.ContinueWith(closed => helloWatches.TryRemove(c, out _), TaskScheduler.Default);
             return new HelloWatch();
         });
-        lock (watch) { watch.Said = Said(hello); }
+        lock (watch) { watch.Said = Said(hello.Machine.ReadOnly, hello.Capabilities); }
         lock (helloGate) { helloTimer ??= Time.CreateTimer(_ => CheckHellos(), null, HelloCheck, HelloCheck); }
     }
 
@@ -328,8 +328,8 @@ public sealed class SessionService
                     helloWatches.TryRemove(channel, out _);
                     continue;
                 }
-                var hello = HelloFor(channel);
-                var said = Said(hello);
+                // Not HelloFor: a look needs no copy of the session list, only what Said compares.
+                var said = Said(ReadOnly?.Invoke(), Offered(channel));
                 lock (watch)
                 {
                     if (said == watch.Said) { continue; }
