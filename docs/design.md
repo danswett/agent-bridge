@@ -470,8 +470,8 @@ at `danswett.github.io/agent-bridge/s2/` for real-device runs.
 
 ### 5.4 Accounts, devices and the signed roster
 
-The detailed design for device approval and the signed roster, with the decisions it needs
-from the owner, is [design/device-approval.md](design/device-approval.md) (#55, proposed). It
+The detailed design for device approval and the signed roster, with the owner's decisions on it
+(made 2026-11-04), is [design/device-approval.md](design/device-approval.md) (#55). It
 refines the roster and pairing bullets below.
 
 * **Account** = GitHub user id, through the "Agent Bridge" GitHub OAuth app registered

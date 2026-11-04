@@ -1,9 +1,9 @@
 # Device approval and the signed roster (#55)
 
-**Status: proposed design, not built.** It needs the owner's decisions (§11) and an
-independent security review before any slice starts. It refines design.md
-[§5.4](../design.md#54-accounts-devices-and-the-signed-roster). Where the two disagree,
-this note is the newer reasoning; design.md §5.4 will be updated when the decisions are made.
+**Status: decided design, not built.** The owner decided every §11 decision on 2026-11-04, each
+option (a). Each slice is still security-reviewed independently before merge (§12). It refines
+design.md [§5.4](../design.md#54-accounts-devices-and-the-signed-roster). Where the two disagree,
+this note is the newer reasoning; design.md §5.4 is to be updated to these decisions.
 A bare § number below is a section of this note; design.md's are always named as such.
 
 The aim: a device that signs in with the account's GitHub login can do nothing until a
@@ -1314,7 +1314,7 @@ enrolls again into it. A host moves to the new generation only by a local action
 Until then it keeps the old generation, which refuses everyone when nobody in it is left. That is
 fail-closed: a machine the owner cannot reach stays unusable remotely until they can.
 
-An optional **recovery key** (owner decision 5) would avoid the trip. At genesis, a person's
+An optional **recovery key** (owner decision 5(b), not chosen) would have avoided the trip. At genesis, a person's
 device makes an extra ECDSA key, shows its private half once as 24 words and a QR code to keep
 offline, and enters its public half as a `recovery` approver. Typed into a new device, it signs
 that device's `add`. The cost is a long-lived secret that, with the GitHub account, is enough to
@@ -1559,7 +1559,7 @@ in the host's roster, the handshake completes so the device can learn why, and t
 | `roster.submit` | Accepted, write-only (below) |
 | Everything else, including the other `roster.*` | Refused with `not-approved` |
 
-Recommended: **nothing beyond "pending approval"** (owner decision 4). A pending device gets its
+Decided: **nothing beyond "pending approval"** (owner decision 4(a)). A pending device gets its
 roster from its approver during enrollment (§4.2).
 
 **`roster.submit`** exists because the host may be the one that is behind. A device approved on a
@@ -1745,8 +1745,8 @@ A host and a client each have a roster mode, set locally (host: `security.roster
 
 ### 8.2 The cutover for the owner's devices
 
-Existing devices are **grandfathered by an explicit approval, never silently**. Recommended (owner
-decision 6): every existing device enrolls with the mutual codes, once, as a new one would:
+Existing devices are **grandfathered by an explicit approval, never silently**. Decided (owner
+decision 6(a)): every existing device enrolls with the mutual codes, once, as a new one would:
 
 1. Release the relay, then hosts and clients with roster support in `off`, then `observe` (§8.3).
 2. The owner starts the roster on a device that can approve (§5.1): under decision 3(a), the first
@@ -1857,8 +1857,8 @@ lock) are unaffected and still open.
 
 ### 9.3 Forget (#138)
 
-Owner decision 7 is whether Forget on a host becomes Remove:
-* **Remove revokes and forgets** (recommended). It is a roster entry with a presence proof (§6),
+Owner decision 7 was whether Forget on a host becomes Remove:
+* **Remove revokes and forgets** (decided, 7(a)). It is a roster entry with a presence proof (§6),
   and the relay also drops the machine from `known`. A machine that is gone, perhaps with its disk,
   is revoked too. If it connects again it is listed as waiting for approval, and one exchange brings
   it back. agent-ha-bridge let a forgotten machine come back by itself; this is a deliberate
@@ -2523,25 +2523,28 @@ Each slice adds its own. Together they cover:
 * A name holding a hidden character: removed by the approver before signing; refused by a verifier
   if it is a control; shown escaped otherwise.
 
-## 11. Decisions for the owner
+## 11. Owner decisions
 
-1. **Trust root.**
+The owner decided all ten on 2026-11-04, each option (a). The rejected options are kept for the
+record.
+
+1. **Trust root.** **Decided by the owner (2026-11-04): (a).**
    (a) Approved, presence-proven person's devices (decision 3) sign roster entries with a new
    ECDSA key and a presence proof, under seniority, probation and confirmation (§3.4): a device's
    grants are held for its first 72 hours, and it can take part in removing a device that is not
    junior to it only once its approver has confirmed it. Hosts never sign. (b) One account root
    key on the first device. (c) Per-machine approval lists only.
-   **Recommended: (a)**, with seniority, probation and confirmation (decision 9) and the voiding rules of §3.5.
+   **Decided: (a)**, with seniority, probation and confirmation (decision 9) and the voiding rules of §3.5.
    Without them, one hostile device could remove every other. Under (a), the most senior device is
    the most powerful one, and if it is stolen and unlocked the answer is a reset.
-2. **Hosts in the roster.**
+2. **Hosts in the roster.** **Decided by the owner (2026-11-04): (a).**
    (a) Hosts are approved by the mutual codes like any device, and confirm the genesis fingerprint
    at the machine; clients refuse unapproved hosts. (b) Hosts are trusted on sign-in as today, and
    only person's devices are approved.
-   **Recommended: (a)**, since the mutual check of §4.2 stops a relay from enrolling a host into a
+   **Decided: (a)**, since the mutual check of §4.2 stops a relay from enrolling a host into a
    roster of its own. Under (b), a stolen token registers a fake machine that collects what people
    type.
-3. **Who can approve and do person-only actions.**
+3. **Who can approve and do person-only actions.** **Decided by the owner (2026-11-04): (a).**
    (a) Only devices recorded with presence (§4.6): an iPhone or iPad running the Apple client
    (Secure Enclave, `key`); a Mac app only with a Touch-ID-only key, since `.userPresence` falls
    back to the login password; the Windows app, and PWAs in a Windows browser, once R4 proves that
@@ -2561,7 +2564,7 @@ Each slice adds its own. Together they cover:
    (c) One code, compared rather than typed, with no presence requirement. This gives up the
    mutual check of §4.2 and the presence proof together, so a relay acting as an approver, or
    same-user malware, could approve devices.
-   **Recommended: (a).** The cutover then starts on the first presence-proven device. Genesis is the
+   **Decided: (a).** The cutover then starts on the first presence-proven device. Genesis is the
    most senior device and the hardest to lose (§5.4), so prefer an iPhone or iPad running the Apple
    client when one exists: its prompt is the phone's own, and it runs no agents. The alternative,
    the Windows app on the desk machine once R4 has proven it (R4 before R8), keeps the most senior
@@ -2571,22 +2574,22 @@ Each slice adds its own. Together they cover:
    Under any option, presence and platform are the enrolling device's own claims, checked by
    attestation where the platform gives one (§3.1). They hold for devices that were not
    compromised when they enrolled.
-4. **What an unapproved device of the account sees.**
+4. **What an unapproved device of the account sees.** **Decided by the owner (2026-11-04): (a).**
    (a) Nothing beyond "pending approval": no roster, no heads. (b) A read-only list of machines.
-   **Recommended: (a).**
-5. **Recovery when every approved person's device is lost.**
+   **Decided: (a).**
+5. **Recovery when every approved person's device is lost.** **Decided by the owner (2026-11-04): (a).**
    (a) Reset to a new generation, held 72 hours at the relay with veto, and confirmed at each machine.
    A stolen senior device can veto every reset, so recovery from that needs the relay operator's
    out-of-band override (the owner, for this relay); machines still move only by local action.
    (b) As (a), plus an optional offline recovery key made at genesis.
-   **Recommended: (a).** A recovery key is one more secret that, with the GitHub account, takes the
+   **Decided: (a).** A recovery key is one more secret that, with the GitHub account, takes the
    account. Total loss is unlikely if the person keeps at least three approving devices, two of them
    approved and confirmed directly by the genesis device (§5.4), and enrolls a fresh device straight after removing a
    stolen senior one (§5.4). Losing a senior device without two such confirmed,
    independently approved survivors is also a reset. A senior device **stolen with its presence
    check passable** can force one regardless, if every approver is junior to it: for the genesis
    device that is always the case (§3.5, the tie).
-6. **Grandfathering the devices in use now.**
+6. **Grandfathering the devices in use now.** **Decided by the owner (2026-11-04): (a).**
    (a) Enroll each with the mutual codes once (one exchange per machine, about six). Hosts go to
    `observe` first, then `enforce` per host and on every person's device, and the relay's
    restrictions on unapproved devices come last, when the owner switches them on (§4.5), so nothing
@@ -2596,18 +2599,18 @@ Each slice adds its own. Together they cover:
    nothing pre-ticked (not even `remoteFolderTrustDevices` ids, whose names can be
    look-alikes), and each machine confirming the genesis fingerprint locally. (b) has no mutual
    check.
-   **Recommended: (a).**
-7. **Forget and Remove for a machine.**
+   **Decided: (a).**
+7. **Forget and Remove for a machine.** **Decided by the owner (2026-11-04): (a).**
    (a) One action, Remove, a presence-proven roster entry that revokes and forgets; a machine that
    returns waits for approval. (b) Keep Forget listing-only (behind a person command), with Remove
    separate.
-   **Recommended: (a).**
-8. **Which kinds count as a person's.**
+   **Decided: (a).**
+8. **Which kinds count as a person's.** **Decided by the owner (2026-11-04): (a).**
    (a) `app`, `pwa` and `phone` everywhere, so the native iPhone client can answer folder trust and
    press Install. (b) Keep folder trust and update to `app` and `pwa`.
-   **Recommended: (a)**, provided person-only actions need presence-proven person commands (§7.2).
+   **Decided: (a)**, provided person-only actions need presence-proven person commands (§7.2).
    The kind alone does not show that a person acted.
-9. **Seniority, probation and confirmation.**
+9. **Seniority, probation and confirmation.** **Decided by the owner (2026-11-04): (a).**
    (a) A device removes only itself or devices junior to it: those whose add descends from its own
    add. Removing any other device needs two signers whose lineages of add entries, cut to leave out
    the target's add and every add senior to it, share nothing (not parent and child, not siblings
@@ -2719,8 +2722,8 @@ Each slice adds its own. Together they cover:
    (b) Seniority without the two-signature removal: a lost senior device then always means a reset.
    (c) Neither: any approver removes any device, and one hostile device can remove all the others
    before the person notices.
-   **Recommended: (a).**
-10. **Freshness.**
+   **Decided: (a).**
+10. **Freshness.** **Decided by the owner (2026-11-04): (a).**
     (a) A host without an attestation of the current roster from another device for 24 hours
     (counted by the larger of monotonic and wall-clock elapsed time, so a clock change makes it
     stale sooner, never later; and stale at once after any restart, or a wall-clock jump of more
@@ -2737,13 +2740,14 @@ Each slice adds its own. Together they cover:
     partitions the account (keeping a group of machines and their apps from every device that holds
     the removal) keeps the removed device served inside that group until the partition ends. The
     person sees it as machines that never confirm the removal (§6.3).
-    **Recommended: (a)**, with `selfAttest` left off. Other hosts every 5 minutes, and the app on
+    **Decided: (a)**, with `selfAttest` left off. Other hosts every 5 minutes, and the app on
     the same machine, keep a host fresh in normal use; turning `selfAttest` on is a per-machine
     choice to accept the weaker rule there.
 
 ## 12. Slices
 
-Each is one PR, security-reviewed independently before merge.
+Each is one PR, security-reviewed independently before merge. Every owner decision a slice depends
+on below was made on 2026-11-04 (§11), so none is waiting for one.
 
 | # | Slice | Depends on | Changes behaviour |
 |---|---|---|---|
