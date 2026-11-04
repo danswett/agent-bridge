@@ -70,12 +70,12 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
         if (problem is not null) { return null; }
         if (!Path.IsPathFullyQualified(spec.Executable) || !Path.IsPathFullyQualified(spec.WorkingDirectory)
             || spec.Executable.Contains('\0') || spec.WorkingDirectory.Contains('\0') || spec.Arguments.Any(a => a.Contains('\0'))
-            || spec.Environment?.Any(p => p.Key.Length == 0 || p.Key.Contains('=') || p.Key.Contains('\0') || p.Value.Contains('\0')) == true)
+            || spec.Environment?.Any(p => p.Key.Length == 0 || p.Key.Contains('=') || p.Key.Contains('\0') || p.Value?.Contains('\0') == true) == true)
         { problem = "the launch paths, arguments or environment are invalid"; return null; }
         if (spec.Environment?.Keys.Any(k => k is "HOME" or "CODEX_HOME") == true)
         { problem = "managed sessions do not replace HOME or CODEX_HOME; use explicit agent options"; return null; }
         if (spec.Arguments.Sum(a => (long)Encoding.UTF8.GetByteCount(a) + 1) + Encoding.UTF8.GetByteCount(spec.Executable)
-            + (spec.Environment?.Sum(p => (long)Encoding.UTF8.GetByteCount(p.Key) + Encoding.UTF8.GetByteCount(p.Value) + 2) ?? 0) > 128 * 1024)
+            + (spec.Environment?.Sum(p => (long)Encoding.UTF8.GetByteCount(p.Key) + (p.Value is null ? 0 : Encoding.UTF8.GetByteCount(p.Value)) + 2) ?? 0) > 128 * 1024)
         { problem = "the launch command is too large"; return null; }
         if (imageFor(spec.Executable) is null) { problem = "the agent's executable or script interpreter cannot be verified"; return null; }
         // This is only a display string. Start always passes separate argv entries.
@@ -92,10 +92,18 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
             var args = new List<string> { "new-session", "-d", "-P", "-F", PaneFormat, "-s", name, "-c", spec.WorkingDirectory.Replace("#", "##", StringComparison.Ordinal), "-x", "220", "-y", "50" };
             // An already-running server does not inherit a later launch's PATH.
             args.AddRange(["-e", "PATH=" + (Environment.GetEnvironmentVariable("PATH") ?? "/usr/bin:/bin")]);
-            foreach (var item in spec.Environment ?? new Dictionary<string, string>()) { args.AddRange(["-e", item.Key + "=" + item.Value]); }
+            foreach (var item in spec.Environment ?? new Dictionary<string, string?>())
+            {
+                if (item.Value is not null) { args.AddRange(["-e", item.Key + "=" + item.Value]); }
+            }
             // tmux invokes a shell for a single command argument. env ensures even an
             // argument-free native executable takes its direct-exec, multiple-argv path.
-            args.AddRange(["--", "/usr/bin/env", spec.Executable]);
+            args.AddRange(["--", "/usr/bin/env"]);
+            foreach (var item in spec.Environment ?? new Dictionary<string, string?>())
+            {
+                if (item.Value is null) { args.AddRange(["-u", item.Key]); }
+            }
+            args.AddRange(["--", spec.Executable]);
             args.AddRange(spec.Arguments);
             TmuxResult result;
             try { result = Run(args); }

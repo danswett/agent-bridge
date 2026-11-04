@@ -59,12 +59,25 @@ public sealed class ManagedTmuxTests
     {
         var commands = new Commands(); var probe = new Probe();
         var backend = new ManagedTmuxBackend(commands, probe, _ => Absolute("/test/agent"));
-        backend.Start(new(Absolute("/test/agent"), [], Absolute("/workspace/#{name}"), new Dictionary<string, string> { ["PRIVATE_TOKEN"] = "secret", ["AGENT_BRIDGE_SESSION"] = "not-a-session" }));
+        backend.Start(new(Absolute("/test/agent"), [], Absolute("/workspace/#{name}"), new Dictionary<string, string?> { ["PRIVATE_TOKEN"] = "secret", ["AGENT_BRIDGE_SESSION"] = "not-a-session" }));
         var launch = commands.Calls.Single(c => c[0] == "new-session");
-        Assert.Equal(new[] { "--", "/usr/bin/env", Absolute("/test/agent") }, launch[^3..]);
+        Assert.Equal(new[] { "--", "/usr/bin/env", "--", Absolute("/test/agent") }, launch[^4..]);
         Assert.Contains(Absolute("/workspace/##{name}"), launch);
         Assert.Null(Assert.Single(backend.Snapshot()).BridgeSession);
         Assert.DoesNotContain("secret", Assert.Single(backend.Snapshot()).ToString());
+    }
+
+    [Fact]
+    public void A_null_environment_value_removes_the_inherited_value_from_the_launched_agent()
+    {
+        var commands = new Commands();
+        var backend = new ManagedTmuxBackend(commands, new Probe(), _ => Absolute("/test/agent"));
+        backend.Start(new(Absolute("/test/agent"), [], Absolute("/workspace"),
+            new Dictionary<string, string?> { ["CLAUDE_CONFIG_DIR"] = null, ["COPILOT_HOME"] = "/test/home" }));
+        var launch = commands.Calls.Single(c => c[0] == "new-session");
+        Assert.Equal(new[] { "--", "/usr/bin/env", "-u", "CLAUDE_CONFIG_DIR", "--", Absolute("/test/agent") }, launch[^6..]);
+        Assert.DoesNotContain("CLAUDE_CONFIG_DIR=", launch);
+        Assert.Contains("COPILOT_HOME=/test/home", launch);
     }
 
     [Fact]
@@ -230,7 +243,7 @@ public sealed class ManagedTmuxTests
         probe.Identities[Environment.ProcessId] = probe.Identities[Environment.ProcessId] with { UserId = 0 };
         Assert.NotNull(backend.Unavailable());
         probe.Identities[Environment.ProcessId] = probe.Identities[Environment.ProcessId] with { UserId = 501 };
-        Assert.Null(backend.CommandLine(new(Absolute("/test/agent"), [], Absolute("/workspace"), new Dictionary<string, string> { ["HOME"] = "/other" }), out var reason));
+        Assert.Null(backend.CommandLine(new(Absolute("/test/agent"), [], Absolute("/workspace"), new Dictionary<string, string?> { ["HOME"] = "/other" }), out var reason));
         Assert.NotNull(reason);
         Assert.Empty(commands.Calls);
     }

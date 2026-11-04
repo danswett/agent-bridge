@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Delivery.Launch;
@@ -220,10 +221,26 @@ public sealed class ManagedSessionDiscoveryTests
         if (!OperatingSystem.IsMacOS()) { return; }
         using var fixture = new Fixture();
         var path = fixture.CodexLock("11111111-1111-4111-8111-111111111111");
-        await using var opened = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
-        Assert.Equal(new[] { Environment.ProcessId }, MacFileHolders.Find(path, [Environment.ProcessId]));
-        var other = fixture.CodexLock("22222222-2222-4222-8222-222222222222");
-        Assert.Empty(MacFileHolders.Find(other, [Environment.ProcessId]));
+        // The test runner opens and closes files concurrently. Use a waiting child so
+        // the two descriptor snapshots can prove a stable holder without weakening the guard.
+        var start = new ProcessStartInfo("/bin/sh") { UseShellExecute = false, RedirectStandardInput = true, RedirectStandardOutput = true };
+        start.ArgumentList.Add("-c");
+        start.ArgumentList.Add("exec 3<\"$1\"; printf 'ready\n'; read -r done");
+        start.ArgumentList.Add("file-holder-fixture");
+        start.ArgumentList.Add(path);
+        using var child = Process.Start(start)!;
+        try
+        {
+            Assert.Equal("ready", await child.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.Equal(new[] { child.Id }, MacFileHolders.Find(path, [child.Id]));
+            var other = fixture.CodexLock("22222222-2222-4222-8222-222222222222");
+            Assert.Empty(MacFileHolders.Find(other, [child.Id]));
+        }
+        finally
+        {
+            if (!child.HasExited) { child.Kill(); }
+            await child.WaitForExitAsync();
+        }
     }
 
     [ManagedTmuxFact]

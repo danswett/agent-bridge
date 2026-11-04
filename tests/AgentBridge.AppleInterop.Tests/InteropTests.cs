@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
@@ -60,7 +61,7 @@ public sealed class InteropTests : IDisposable
             await using var local = await LocalClient.ConnectAsync(LocalEndpoint.For(root), Patience);
             var hello = await local.HelloAsync();
             Assert.Equal(stack.HostDeviceId, hello.Machine.Id);
-            Assert.Equal([Capabilities.SessionsRead], hello.Capabilities);
+            Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], hello.Capabilities);
             Assert.Contains("Synthetic", hello.Machine.ReadOnly);
             await Assert.ThrowsAsync<HostErrorException>(() => local.CallAsync(HostOps.Stop));
             using var http = new HttpClient { Timeout = Patience };
@@ -120,7 +121,9 @@ public sealed class InteropTests : IDisposable
         var names = new SubjectAlternativeNameBuilder();
         names.AddDnsName("localhost");
         request.CertificateExtensions.Add(names.Build());
-        using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
+        using var generated = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
+        // Schannel needs an imported key. Match the executable's PFX loading path.
+        using var certificate = X509CertificateLoader.LoadPkcs12(generated.Export(X509ContentType.Pkcs12), password: null);
         var manifest = Path.Combine(Path.GetTempPath(), "abi-manifest-" + Guid.NewGuid().ToString("N") + ".json");
         await using var stack = await InteropStack.StartAsync(manifest, certificate);
         Assert.Equal("https", stack.RelayUrl.Scheme);
@@ -179,8 +182,11 @@ public sealed class InteropTests : IDisposable
         Assert.False(File.Exists(manifest));
         Assert.False(Directory.Exists(root));
         Assert.False(File.Exists(socket));
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
-        await Assert.ThrowsAsync<HttpRequestException>(() => http.GetAsync(new Uri(relay, "/healthz")));
+        using var closedListener = new TcpClient(AddressFamily.InterNetwork);
+        using var connectionDeadline = new CancellationTokenSource(Patience);
+        var refused = await Assert.ThrowsAsync<SocketException>(
+            () => closedListener.ConnectAsync(IPAddress.Loopback, relay.Port, connectionDeadline.Token).AsTask());
+        Assert.Equal(SocketError.ConnectionRefused, refused.SocketErrorCode);
     }
 
     static async Task<T> Call<T>(SecureChannel channel, string operation, object? data = null)

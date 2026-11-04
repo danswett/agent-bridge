@@ -387,7 +387,7 @@ async Task<int> ServeAsync(HostHandover handover)
     using var usageHttp = new UsageHttp(TimeSpan.FromSeconds(15));
     foreach (var problem in settings.UsageProblems) { Log($"config.json: {problem}"); }
     await using var usageMonitor = settings.Usage.Publish
-        ? NewUsageMonitor(source, usageHttp, Log, deliveryProbe.Active)
+        ? NewUsageMonitor(source, usageHttp, Log, g5.Active)
         : null;
     Log(usageMonitor is null ? "agent usage is off (usage.publish)"
         : $"agent usage is on{(settings.Usage.CopilotAccounts.Count == 0 ? "" : $", with {settings.Usage.CopilotAccounts.Count} further Copilot account(s) (usage.copilotAccounts)")}");
@@ -414,7 +414,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // The Home Assistant connector (docs/ha-connector.md): this machine's sessions on the dashboard
     // agent-ha-bridge's writer generates. Off unless config.json turns it on, and paused while
     // agent-ha-bridge runs for this user (looked at every few seconds, as the app's view of it is).
-    Func<string?> haActive = HostControl.Cached(deliveryProbe.Active, () => Environment.TickCount64);
+    Func<string?> haActive = HostControl.Cached(g5.Active, () => Environment.TickCount64);
     // Ended sessions moved between the account's machines, on commands a person's device signs,
     // through the relay's blob store (docs/host-transfer.md). Bundles wait in the profile's own
     // private folder, never a shared temporary one.

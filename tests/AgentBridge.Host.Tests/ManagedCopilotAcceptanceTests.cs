@@ -232,7 +232,7 @@ public sealed class ManagedCopilotAcceptanceTests(ITestOutputHelper output)
     {
         StartSpec Isolated(StartSpec spec) => spec with
         {
-            Environment = new Dictionary<string, string>(spec.Environment ?? new Dictionary<string, string>()) { ["COPILOT_HOME"] = home },
+            Environment = new Dictionary<string, string?>(spec.Environment ?? new Dictionary<string, string?>()) { ["COPILOT_HOME"] = home },
         };
         public string? Unavailable() => backend.Unavailable();
         public string? CommandLine(StartSpec spec, out string? problem) => backend.CommandLine(Isolated(spec), out problem);
