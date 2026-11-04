@@ -84,9 +84,11 @@ static class MergeTakeoverCommand
               again just before the merge (--admin --match-head-commit), and at most --max-merges
               (default 10) a takeover, since main's CI doesn't run between them; exits when
               Actions is operational and merge-rule succeeds again on two ticks 4+ min apart,
-              removing the bypass and checking the ruleset against quality/ruleset-main.json.
-              Outside a takeover, every tick checks the ruleset too: the takeover's own bypass
-              with no takeover recorded is removed, and anything else that differs asks the owner.
+              removing its own bypass actor (and nothing else) and checking the ruleset against
+              quality/ruleset-main.json.
+              Every tick checks the ruleset too: in a takeover, any other actor or drift stops
+              merging and asks the owner; outside one, the takeover's own actor is removed
+              whatever else differs, and anything else asks the owner.
               State lives in --state (default %LOCALAPPDATA%\agent-bridge\merge-takeover.json, or
               $XDG_STATE_HOME/agent-bridge/ elsewhere), with a lock file beside it so two ticks
               never overlap. Fetches origin/main first (quietly), then refuses, like merge-rule,
@@ -226,70 +228,44 @@ static class MergeTakeoverCommand
                     SaveState(statePath, state);
             }
 
-            // Anything wrong with the ruleset is the owner's, asked once on #170 for each new set
-            // of problems; nothing enters or merges until it's clean again.
-            int AskOwner(long? id, List<string> trouble)
+            // Anything wrong with the ruleset beyond the takeover's own actor is the owner's, asked
+            // once on #170 for each new set of problems. Quality changes none of it.
+            void FlagOwner(long? id, List<string> trouble, bool inTakeover)
             {
                 var words = string.Join("; ", trouble);
-                output.WriteLine($"::error::merge-takeover: ruleset {id?.ToString(CultureInfo.InvariantCulture) ?? "(not found)"} needs @{Owner}: {words}. Changing nothing, and nothing merges.");
+                var which = id?.ToString(CultureInfo.InvariantCulture) ?? "(not found)";
+                output.WriteLine($"::error::merge-takeover: ruleset {which} needs @{Owner}: {words}. Quality changes none of that{(inTakeover ? ", and merges nothing more until it's put right" : "")}.");
+                rulesetProblem = true;
                 if (dryRun)
-                    return 1;
+                    return;
                 state.NeedsOwner = true;
                 if (state.OwnerAsked == words)
-                    SaveState(statePath, state);
-                else
                 {
-                    state.OwnerAsked = words;
-                    Post($"**Quality: main's ruleset {id?.ToString(CultureInfo.InvariantCulture) ?? "(not found)"} needs you ({FlakeReport.Pacific(now)}).** @{Owner}, it doesn't match `quality/ruleset-main.json` with no bypass: {words}. "
-                        + "Quality isn't in a takeover, so it changes nothing, and won't take over merging until the ruleset matches again.");
+                    SaveState(statePath, state);
+                    return;
                 }
-                return 1;
+                state.OwnerAsked = words;
+                Post($"**Quality: main's ruleset {which} needs you ({FlakeReport.Pacific(now)}).** @{Owner}: {words}. "
+                    + (inTakeover
+                        ? "Quality is in an Actions takeover: it merges nothing more until this is put right, and when Actions recovers it removes only its own admin pull-request bypass, leaving the rest as it is."
+                        : "Quality isn't in a takeover, so it changes none of this, and won't take over merging until the ruleset matches `quality/ruleset-main.json` with no bypass again."));
             }
 
-            // The takeover's own bypass with no takeover recorded: the state was lost or set
-            // aside, or another machine's tick added it. Left alone, it would outlive the incident.
-            int RemoveStrayBypass(long id, JsonObject live)
+            // Removes exactly the takeover's actor, whatever else differs: the rules go back as
+            // they are now and every other actor is kept. Then reads the ruleset back; Live is
+            // null when it can't be.
+            (JsonObject? Live, List<string> Drift) DropOurs(long id, JsonObject live)
             {
-                output.WriteLine($"Ruleset {id} has the takeover's admin bypass, but no takeover is recorded here (the state was lost, or another machine added it).");
-                if (dryRun)
-                {
-                    output.WriteLine($"Would PUT it with no bypass actors, verify it, and post a receipt on #{Issue}.");
-                    return 0;
-                }
                 try
                 {
-                    github.Send("PUT", $"repos/{slug}/rulesets/{id}", PutBody(live, []).ToJsonString()).Dispose();
+                    github.Send("PUT", $"repos/{slug}/rulesets/{id}", WithoutOurs(live).ToJsonString()).Dispose();
                 }
                 catch (Exception e) when (MergeRuleCommand.IsReadFailure(e))
                 {
                     output.WriteLine($"The PUT to ruleset {id} failed ({e.Message}); checking what landed.");
                 }
                 var (_, reread, drift, unreadable) = ReadRuleset(github, slug, expected, id);
-                if (unreadable || reread is null)
-                {
-                    output.WriteLine($"Couldn't read ruleset {id} back ({string.Join("; ", drift)}); trying again next tick.");
-                    Save();
-                    return 2;
-                }
-                var trouble = Trouble(reread, drift);
-                if (trouble.Count == 0)
-                {
-                    output.WriteLine($"Removed it: ruleset {id} has no bypass and matches quality/ruleset-main.json (verified).");
-                    state.NeedsOwner = false;
-                    state.OwnerAsked = null;
-                    state.ExitedAt = now;
-                    state.FirstHealthyAt = null;
-                    Post($"**Quality: removed a stray takeover bypass ({FlakeReport.Pacific(now)}).** Ruleset {id} had the takeover's temporary admin pull-request bypass, but no takeover was recorded here (this machine's state was lost, or another machine added it). "
-                        + "It's removed and verified: 0 bypass actors, and the ruleset matches `quality/ruleset-main.json`.");
-                    return otherProblem ? 2 : 0;
-                }
-                if (drift.Count == 0 && OnlyAdminBypass(reread))
-                {
-                    output.WriteLine($"Ruleset {id} still has the takeover's bypass; trying again next tick.");
-                    Save();
-                    return 2;
-                }
-                return AskOwner(id, trouble);
+                return (unreadable ? null : reread, drift);
             }
 
             if (!dryRun && state.PendingComments.Count > 0)
@@ -304,8 +280,9 @@ static class MergeTakeoverCommand
                 : $"State: not in takeover{(state.ExitedAt is { } ended ? $", last ended {FlakeReport.Pacific(ended)}" : "")}.");
 
             // Outside a takeover, the ruleset should match the file with no bypass. Checked every
-            // tick, not only on entering, so a bypass left by a lost state, another machine or a
-            // hand-back that didn't verify is found, and a drift is put to the owner.
+            // tick, not only on entering. The takeover's own actor, left by a lost state, another
+            // machine or a hand-back that didn't land, is removed whatever else differs; anything
+            // else is put to the owner.
             if (!state.InTakeover)
             {
                 var (id, live, drift, unreadable) = ReadRuleset(github, slug, expected);
@@ -315,9 +292,38 @@ static class MergeTakeoverCommand
                     Save();
                     return 2;
                 }
-                var trouble = live is null ? drift : Trouble(live, drift);
-                if (live is not null && drift.Count == 0 && trouble.Count > 0 && OnlyAdminBypass(live))
-                    return RemoveStrayBypass(id!.Value, live);
+                var removed = false;
+                if (live is not null && HasOurs(live))
+                {
+                    output.WriteLine($"Ruleset {id} has the takeover's admin bypass, but no takeover is recorded here (the state was lost, or another machine added it).");
+                    if (dryRun)
+                        output.WriteLine($"Would PUT it without that actor (its rules and any other actors unchanged), verify, and post a receipt on #{Issue}.");
+                    else
+                    {
+                        var (reread, after) = DropOurs(id!.Value, live);
+                        if (reread is null)
+                        {
+                            output.WriteLine($"Couldn't read ruleset {id} back ({string.Join("; ", after)}); trying again next tick.");
+                            Save();
+                            return 2;
+                        }
+                        (live, drift) = (reread, after);
+                        if (HasOurs(live))
+                            output.WriteLine($"Ruleset {id} still has the takeover's bypass; trying again next tick.");
+                        else
+                        {
+                            removed = true;
+                            var rest = OwnerTrouble(live, drift);
+                            output.WriteLine($"Removed it: ruleset {id} no longer has the takeover's bypass (verified).");
+                            state.ExitedAt = now;
+                            state.FirstHealthyAt = null;
+                            Post($"**Quality: removed a stray takeover bypass ({FlakeReport.Pacific(now)}).** Ruleset {id} had the takeover's temporary admin pull-request bypass, but no takeover was recorded here (this machine's state was lost, or another machine added it). "
+                                + "Only that actor was removed; the rules and any other bypass actors were left as they were. "
+                                + (rest.Count == 0 ? "Verified: 0 bypass actors, and the ruleset matches `quality/ruleset-main.json`." : "The rest still differs from `quality/ruleset-main.json`; see the next comment."));
+                        }
+                    }
+                }
+                var trouble = live is null ? drift : OwnerTrouble(live, drift);
                 if (trouble.Count > 0 && behind)
                 {
                     output.WriteLine($"Ruleset {id?.ToString(CultureInfo.InvariantCulture) ?? "(not found)"} differs from this checkout's quality/ruleset-main.json ({string.Join("; ", trouble)}), which may be older than main's; asking @{Owner} waits for the checkout to be origin/{config.Base}'s.");
@@ -325,12 +331,25 @@ static class MergeTakeoverCommand
                     return 2;
                 }
                 if (trouble.Count > 0)
-                    return AskOwner(id, trouble);
+                {
+                    FlagOwner(id, trouble, inTakeover: false);
+                    return 1;
+                }
                 if (state.NeedsOwner || state.OwnerAsked is not null)
                 {
-                    output.WriteLine("The ruleset matches quality/ruleset-main.json with no bypass again.");
+                    output.WriteLine("The ruleset matches quality/ruleset-main.json again.");
                     state.NeedsOwner = false;
                     state.OwnerAsked = null;
+                }
+                if (live is not null && HasOurs(live))
+                {
+                    Save();
+                    return dryRun ? 0 : 2;
+                }
+                if (removed)
+                {
+                    Save();
+                    return otherProblem ? 2 : 0;
                 }
             }
 
@@ -399,10 +418,13 @@ static class MergeTakeoverCommand
                             }
                         }
                         var (_, reread, after, _) = ReadRuleset(github, slug, expected, id);
-                        var verified = reread is not null && after.Count == 0 && OnlyAdminBypass(reread);
-                        output.WriteLine(verified ? $"Ruleset {id} now has the one admin pull-request bypass (verified)." : $"::error::merge-takeover: ruleset {id} did NOT verify after the PUT: {string.Join("; ", after.Append(OnlyAdminBypass(reread) ? "" : "its bypass actors aren't exactly the admin pull-request one").Where(p => p.Length > 0))}. Nothing merges until @{Owner} has looked.");
-                        // Unverified, it stays a takeover, so recovery removes the bypass and verifies again.
+                        var issues = TakeoverIssues(reread, after);
+                        var verified = issues.Count == 0;
+                        output.WriteLine(verified ? $"Ruleset {id} now has the one admin pull-request bypass (verified)." : $"::error::merge-takeover: ruleset {id} did NOT verify after the PUT: {string.Join("; ", issues)}. Nothing merges until @{Owner} has looked.");
+                        // Unverified, it stays a takeover, so recovery removes the bypass and verifies
+                        // again. The receipt asks the owner, so "stay in" ticks don't ask again.
                         state.NeedsOwner = !verified;
+                        state.OwnerAsked = verified ? null : string.Join("; ", issues);
                         Post(EnterReceipt(now, id!.Value, evidence, verified, maxMerges));
                         if (!verified)
                             return 1;
@@ -413,11 +435,11 @@ static class MergeTakeoverCommand
                     {
                         if (dryRun)
                         {
-                            output.WriteLine($"Would PUT ruleset {state.RulesetId} with no bypass actors, verify it against quality/ruleset-main.json, and post the takeover-ended receipt on #{Issue}.");
+                            output.WriteLine($"Would PUT ruleset {state.RulesetId} without the takeover's actor (its rules and any other actors unchanged), verify it against quality/ruleset-main.json, and post the takeover-ended receipt on #{Issue}.");
                             break;
                         }
-                        // A read or a PUT that fails before anything changed keeps the takeover, so the
-                        // next tick tries again, rather than leave the bypass for the owner to find.
+                        // A read or a PUT that fails before our actor is gone keeps the takeover, so
+                        // the next tick tries again, rather than leave the bypass for the owner to find.
                         var (id, live, readProblems, _) = ReadRuleset(github, slug, expected, state.RulesetId);
                         if (live is null)
                         {
@@ -425,31 +447,28 @@ static class MergeTakeoverCommand
                             SaveState(statePath, state);
                             return 2;
                         }
-                        try
-                        {
-                            github.Send("PUT", $"repos/{slug}/rulesets/{id}", PutBody(live, []).ToJsonString()).Dispose();
-                        }
-                        catch (Exception e) when (MergeRuleCommand.IsReadFailure(e))
-                        {
-                            output.WriteLine($"The PUT to ruleset {id} failed ({e.Message}); checking what landed.");
-                        }
-                        var (_, reread, after, _) = ReadRuleset(github, slug, expected, id);
+                        var (reread, after) = HasOurs(live) ? DropOurs(id!.Value, live) : (live, readProblems);
                         if (reread is null)
                         {
                             output.WriteLine($"Couldn't read ruleset {id} back after the PUT ({string.Join("; ", after)}); still in takeover, checking again next tick.");
                             SaveState(statePath, state);
                             return 2;
                         }
-                        // Our bypass and nothing else: whatever gh said about the PUT, it didn't
-                        // take, and the next tick can simply try again. Only something else wrong
-                        // is the owner's.
-                        if (after.Count == 0 && OnlyAdminBypass(reread))
+                        var trouble = OwnerTrouble(reread, after);
+                        // Our actor still there, whatever gh said about the PUT and whatever else
+                        // differs: stay in takeover so the next tick removes it again. Drift or
+                        // another actor is the owner's, asked about apart from this.
+                        if (HasOurs(reread))
                         {
                             output.WriteLine($"Ruleset {id} still has the takeover's bypass; still in takeover, trying again next tick.");
+                            if (trouble.Count > 0 && !behind)
+                            {
+                                FlagOwner(id, trouble, inTakeover: true);
+                                return 1;
+                            }
                             SaveState(statePath, state);
                             return 2;
                         }
-                        var trouble = Trouble(reread, after);
                         var merged = state.Merged.ToList();
                         var lasted = now - (state.EnteredAt ?? now);
                         state.InTakeover = false;
@@ -463,31 +482,47 @@ static class MergeTakeoverCommand
                             output.WriteLine($"Ruleset {id} has no bypass and matches quality/ruleset-main.json (verified).");
                         else
                         {
-                            output.WriteLine($"::error::merge-takeover: ruleset {id} did NOT verify after removing the bypass: {string.Join("; ", trouble)}. It needs @{Owner}.");
+                            output.WriteLine($"::error::merge-takeover: the takeover's bypass is gone from ruleset {id}, but it did NOT verify: {string.Join("; ", trouble)}. It needs @{Owner}.");
                             rulesetProblem = true;
                         }
                         Post(ExitReceipt(now, id ?? state.RulesetId ?? 0, lasted, merged, observed, trouble));
                         break;
                     }
                 case "stay in":
-                    merging = !state.NeedsOwner;
-                    if (state.NeedsOwner)
                     {
-                        output.WriteLine($"::error::merge-takeover: ruleset {state.RulesetId} didn't verify when the takeover began, so nothing merges; it needs @{Owner}.");
-                        rulesetProblem = true;
-                    }
-                    if (state.EnteredAt is { } since && now - since > OwnerConfirmsAfter && !state.ConfirmAsked)
-                    {
-                        if (dryRun)
-                            output.WriteLine($"Would ask @{Owner} on #{Issue} to confirm the takeover, now over {OwnerConfirmsAfter.TotalHours:0} h.");
-                        else
+                        // Read every tick: an actor someone added or changed during the takeover
+                        // is flagged now, not found (or deleted) at the hand-back.
+                        var (id, live, drift, unreadable) = ReadRuleset(github, slug, expected, state.RulesetId);
+                        var issues = unreadable ? null : TakeoverIssues(live, drift);
+                        if (issues is null)
                         {
-                            state.ConfirmAsked = true;
-                            Post($"**Quality: the Actions takeover has lasted over {OwnerConfirmsAfter.TotalHours:0} hours** (since {FlakeReport.Pacific(since)}). @{Owner}, please confirm Quality should keep merging under the temporary admin bypass on ruleset {state.RulesetId}. Until Actions recovers it stays in place, with the same rules; {state.Merged.Count} PR(s) merged so far.");
+                            output.WriteLine($"Couldn't read ruleset {state.RulesetId} ({string.Join("; ", drift)}); nothing merges this tick.");
+                            otherProblem = true;
                         }
+                        else if (issues.Count > 0 && behind)
+                            output.WriteLine($"Ruleset {id} differs from this checkout's quality/ruleset-main.json ({string.Join("; ", issues)}), which may be older than main's; nothing merges, and asking @{Owner} waits for the checkout to be origin/{config.Base}'s.");
+                        else if (issues.Count > 0)
+                            FlagOwner(id, issues, inTakeover: true);
+                        else if (state.NeedsOwner)
+                        {
+                            output.WriteLine($"Ruleset {id} verifies now: the takeover's bypass and nothing else differs.");
+                            state.NeedsOwner = false;
+                            state.OwnerAsked = null;
+                        }
+                        merging = issues is { Count: 0 } && !state.NeedsOwner;
+                        if (state.EnteredAt is { } since && now - since > OwnerConfirmsAfter && !state.ConfirmAsked)
+                        {
+                            if (dryRun)
+                                output.WriteLine($"Would ask @{Owner} on #{Issue} to confirm the takeover, now over {OwnerConfirmsAfter.TotalHours:0} h.");
+                            else
+                            {
+                                state.ConfirmAsked = true;
+                                Post($"**Quality: the Actions takeover has lasted over {OwnerConfirmsAfter.TotalHours:0} hours** (since {FlakeReport.Pacific(since)}). @{Owner}, please confirm Quality should keep merging under the temporary admin bypass on ruleset {state.RulesetId}. Until Actions recovers it stays in place, with the same rules; {state.Merged.Count} PR(s) merged so far.");
+                            }
+                        }
+                        Save();
+                        break;
                     }
-                    Save();
-                    break;
                 default:
                     Save();
                     break;
@@ -637,13 +672,28 @@ static class MergeTakeoverCommand
         }
     }
 
-    /// <summary>Everything that keeps the ruleset from being clean: its drift from the file, and any bypass actor, ours or not.</summary>
-    static List<string> Trouble(JsonObject live, List<string> drift)
+    /// <summary>What's wrong with the ruleset during a takeover: the owner's trouble, and the takeover's own actor missing. Unreadable, the read's problem.</summary>
+    static List<string> TakeoverIssues(JsonObject? live, List<string> drift)
+    {
+        if (live is null)
+            return drift;
+        var issues = OwnerTrouble(live, drift);
+        if (!HasOurs(live))
+            issues.Add("the takeover's admin pull-request bypass is missing");
+        return issues;
+    }
+
+    /// <summary>
+    /// What in the ruleset is the owner's to put right: its drift from the file, and every bypass
+    /// actor that isn't exactly the takeover's. The takeover's own actor isn't listed: Quality
+    /// removes that itself.
+    /// </summary>
+    static List<string> OwnerTrouble(JsonObject live, List<string> drift)
     {
         var trouble = drift.ToList();
-        var count = Bypass(live).Count;
-        if (count > 0)
-            trouble.Add(OnlyAdminBypass(live) ? "it has the takeover's admin bypass" : $"it has {count} bypass actor(s) that aren't exactly the takeover's admin pull-request one");
+        var others = Bypass(live).Where(a => !IsOurs(a)).ToList();
+        if (others.Count > 0)
+            trouble.Add($"it has {others.Count} bypass actor(s) other than the takeover's admin pull-request one: {string.Join(", ", others.Select(a => a?.ToJsonString()))}");
         return trouble;
     }
 
@@ -721,11 +771,24 @@ static class MergeTakeoverCommand
 
     static JsonArray Bypass(JsonObject? ruleset) => ruleset?["bypass_actors"] as JsonArray ?? [];
 
-    static bool OnlyAdminBypass(JsonObject? ruleset) =>
-        Bypass(ruleset) is [JsonObject actor]
-        && actor["actor_id"]?.ToJsonString() == "5"
-        && actor["actor_type"]?.GetValue<string>() == "RepositoryRole"
-        && actor["bypass_mode"]?.GetValue<string>() == "pull_request";
+    static bool OnlyAdminBypass(JsonObject? ruleset) => Bypass(ruleset) is [var actor] && IsOurs(actor);
+
+    /// <summary>Whether a bypass actor is exactly the takeover's: admin, repository role, pull requests only. Changed in any way, it's someone else's.</summary>
+    static bool IsOurs(JsonNode? actor) =>
+        actor is JsonObject o
+        && o["actor_id"]?.ToJsonString() == "5"
+        && o["actor_type"]?.ToJsonString() == "\"RepositoryRole\""
+        && o["bypass_mode"]?.ToJsonString() == "\"pull_request\"";
+
+    static bool HasOurs(JsonObject? ruleset) => Bypass(ruleset).Any(IsOurs);
+
+    /// <summary>
+    /// The live ruleset as a PUT body without the takeover's own actor: its rules exactly as they
+    /// are now (drift included, which is the owner's to judge) and every other actor kept, so
+    /// handing back never deletes what someone else added.
+    /// </summary>
+    static JsonObject WithoutOurs(JsonObject live) =>
+        PutBody(live, Bypass(live).Where(a => !IsOurs(a)).Select(a => a!.DeepClone()).ToArray());
 
     /// <summary>The live ruleset as a PUT body: what it says, with these bypass actors and none of the server's own fields.</summary>
     internal static JsonObject PutBody(JsonObject live, JsonNode[] bypass) => new()
@@ -879,6 +942,13 @@ static class MergeTakeoverCommand
             catch (InvalidOperationException e)
             {
                 output.WriteLine($"#{number} {MergeRule.Short(sha)}: the merge failed: {e.Message}");
+                // A call that timed out or lost its answer may still have merged on GitHub's side,
+                // and an unrecorded merge would slip past the cap and the receipts.
+                if (!MergedAt(github, owner, name, number, sha))
+                    return false;
+                output.WriteLine($"#{number} {MergeRule.Short(sha)}: read again, it did merge at the judged head; recorded.");
+                state.Merged.Add(new(number, sha, now));
+                SaveState(statePath, state);
                 return false;
             }
             state.Merged.Add(new(number, sha, now));
@@ -888,6 +958,23 @@ static class MergeTakeoverCommand
         }
         output.WriteLine($"Nothing merged this tick. API: {judge.Cost}.");
         return true;
+    }
+
+    /// <summary>Whether the pull request, read again, is merged with its head at <paramref name="sha"/>; false when it isn't or can't be read.</summary>
+    static bool MergedAt(IGitHub github, string owner, string name, int number, string sha)
+    {
+        try
+        {
+            using var doc = github.GraphQL(RecheckQuery, new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["number"] = number });
+            var pr = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest");
+            return pr.ValueKind == JsonValueKind.Object
+                && pr.GetProperty("state").GetString() == "MERGED"
+                && string.Equals(pr.GetProperty("headRefOid").GetString(), sha, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception e) when (MergeRuleCommand.IsReadFailure(e))
+        {
+            return false;
+        }
     }
 
     /// <summary>

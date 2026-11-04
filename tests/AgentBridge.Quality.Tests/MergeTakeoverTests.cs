@@ -159,26 +159,122 @@ public sealed class MergeTakeoverTests : IDisposable
     }
 
     [Fact]
-    public void A_hand_back_whose_ruleset_has_drifted_exits_1_and_asks_the_owner()
+    public void A_hand_back_whose_ruleset_has_drifted_removes_only_its_bypass_exits_1_and_asks_the_owner()
     {
         InTakeover(Now.AddHours(-1));
         var live = JsonNode.Parse(LiveRuleset)!.AsObject();
         live["enforcement"] = "evaluate";
         var github = new FakeGitHub(stall: "none", recovered: true, live: live, bypass: true);
 
-        Tick(github, "operational", Now.AddMinutes(-5));
+        Tick(github, "operational", Now.AddMinutes(-5)); // the "stay in" tick flags the drift
         var output = new StringWriter();
         var exit = Tick(github, "operational", output: output);
         Tick(github, "operational", Now.AddMinutes(3)); // the owner isn't asked again
 
         Assert.Equal(1, exit);
-        Assert.Single(github.Puts);
+        var (_, body) = Assert.Single(github.Puts);
+        Assert.Equal("evaluate", JsonNode.Parse(body)!["enforcement"]!.GetValue<string>()); // the drift is the owner's to undo
+        Assert.Empty(github.BypassActors);
         Assert.Contains("did NOT verify", output.ToString(), StringComparison.Ordinal);
-        var receipt = Assert.Single(github.Comments);
-        Assert.Contains("did NOT verify", receipt, StringComparison.Ordinal);
-        Assert.Contains("@danswett", receipt, StringComparison.Ordinal);
+        Assert.Equal(2, github.Comments.Count);
+        Assert.Contains("@danswett", github.Comments[0], StringComparison.Ordinal);
+        Assert.Contains("did NOT verify", github.Comments[1], StringComparison.Ordinal);
         Assert.True(State().NeedsOwner);
         Assert.False(State().InTakeover);
+    }
+
+    [Theory]
+    [InlineData("added beside ours")]
+    [InlineData("ours changed to always")]
+    public void A_hand_back_with_a_foreign_actor_present_keeps_the_foreign_actor(string how)
+    {
+        InTakeover(Now.AddHours(-1));
+        var foreign = how == "added beside ours"
+            ? new JsonObject { ["actor_id"] = 7, ["actor_type"] = "Team", ["bypass_mode"] = "always" }
+            : new JsonObject { ["actor_id"] = 5, ["actor_type"] = "RepositoryRole", ["bypass_mode"] = "always" };
+        var live = JsonNode.Parse(LiveRuleset)!.AsObject();
+        live["bypass_actors"] = how == "added beside ours"
+            ? new JsonArray(MergeTakeoverCommand.AdminBypass.DeepClone(), foreign.DeepClone())
+            : new JsonArray(foreign.DeepClone());
+        var github = new FakeGitHub(stall: "none", recovered: true, live: live);
+
+        Tick(github, "operational", Now.AddMinutes(-5));
+        var exit = Tick(github, "operational");
+
+        Assert.Equal(1, exit);
+        Assert.True(JsonNode.DeepEquals(new JsonArray(foreign), github.BypassActors));
+        Assert.All(github.Puts, put => Assert.True(JsonNode.DeepEquals(new JsonArray(foreign.DeepClone()), JsonNode.Parse(put.Body)!["bypass_actors"])));
+        Assert.False(State().InTakeover);
+        Assert.True(State().NeedsOwner);
+    }
+
+    [Fact]
+    public void Drift_plus_a_failed_hand_back_PUT_retries_the_removal_on_the_next_tick()
+    {
+        InTakeover(Now.AddHours(-1));
+        var live = JsonNode.Parse(LiveRuleset)!.AsObject();
+        live["enforcement"] = "evaluate";
+        var github = new FakeGitHub(stall: "none", recovered: true, live: live, bypass: true, failPuts: 1);
+
+        Tick(github, "operational", Now.AddMinutes(-5));
+        Assert.Equal(1, Tick(github, "operational")); // the PUT fails: still in takeover, the drift flagged
+
+        Assert.True(State().InTakeover);
+        Assert.Single(github.BypassActors);
+
+        Tick(github, "operational", Now.AddMinutes(2));
+
+        Assert.Single(github.Puts);
+        Assert.Empty(github.BypassActors);
+        Assert.False(State().InTakeover);
+    }
+
+    [Fact]
+    public void A_stray_bypass_is_removed_even_when_the_ruleset_has_drifted_and_the_owner_is_asked_about_the_drift()
+    {
+        var live = JsonNode.Parse(LiveRuleset)!.AsObject();
+        live["enforcement"] = "evaluate";
+        var github = new FakeGitHub(stall: "none", live: live, bypass: true);
+
+        var exit = Tick(github, "operational");
+
+        Assert.Equal(1, exit);
+        var (_, body) = Assert.Single(github.Puts);
+        Assert.Equal("evaluate", JsonNode.Parse(body)!["enforcement"]!.GetValue<string>());
+        Assert.Empty(github.BypassActors);
+        Assert.Equal(2, github.Comments.Count);
+        Assert.Contains("removed a stray takeover bypass", github.Comments[0], StringComparison.Ordinal);
+        Assert.Contains("enforcement", github.Comments[1], StringComparison.Ordinal);
+        Assert.True(State().NeedsOwner);
+    }
+
+    [Fact]
+    public void A_merge_that_lands_though_gh_reports_a_failure_is_still_recorded_against_the_cap()
+    {
+        InTakeover(Now.AddMinutes(-20));
+        var github = new FakeGitHub(stall: "queued", bypass: true, prs: [new(7, Sha(7))]) { MergeTimesOut = true };
+
+        var exit = Tick(github, "major_outage");
+
+        Assert.Equal(2, exit);
+        Assert.Equal(new[] { 7 }, State().Merged.Select(m => m.Number));
+    }
+
+    [Fact]
+    public void A_stay_in_tick_that_sees_a_foreign_actor_flags_it_once_and_stops_merging()
+    {
+        InTakeover(Now.AddMinutes(-20));
+        var live = JsonNode.Parse(LiveRuleset)!.AsObject();
+        live["bypass_actors"] = new JsonArray(MergeTakeoverCommand.AdminBypass.DeepClone(), new JsonObject { ["actor_id"] = 7, ["actor_type"] = "Team", ["bypass_mode"] = "always" });
+        var github = new FakeGitHub(stall: "queued", live: live, prs: [new(7, Sha(7))]);
+
+        Assert.Equal(1, Tick(github, "major_outage"));
+        Assert.Equal(1, Tick(github, "major_outage", Now.AddMinutes(3)));
+
+        Assert.Contains("other than the takeover's", Assert.Single(github.Comments), StringComparison.Ordinal);
+        Assert.Empty(github.Merges);
+        Assert.Empty(github.Puts);
+        Assert.True(State().InTakeover);
     }
 
     [Fact]
@@ -252,7 +348,7 @@ public sealed class MergeTakeoverTests : IDisposable
     public void In_a_takeover_it_merges_one_armed_unheld_pull_request_that_main_evaluator_passes_with_quality_gate_green_at_the_head_it_judged()
     {
         InTakeover(Now.AddMinutes(-20));
-        var github = new FakeGitHub(stall: "queued", prs:
+        var github = new FakeGitHub(stall: "queued", bypass: true, prs:
         [
             new(1, Sha(1), Armed: false),
             new(2, Sha(2), Labels: ["hold"]),
@@ -299,7 +395,7 @@ public sealed class MergeTakeoverTests : IDisposable
     {
         InTakeover(Now.AddMinutes(-20));
         var pr = new Pr(7, Sha(7));
-        var github = new FakeGitHub(stall: "queued", prs: [pr]);
+        var github = new FakeGitHub(stall: "queued", bypass: true, prs: [pr]);
         github.Later[7] = change switch
         {
             "head" => pr with { Head = Sha(9) },
@@ -325,7 +421,7 @@ public sealed class MergeTakeoverTests : IDisposable
     {
         InTakeover(Now.AddMinutes(-20));
         var pr = why == "main red" ? new Pr(7, Sha(7)) : new Pr(7, Sha(7), Files: ["secret/key.cs"], Receipt: false);
-        var github = new FakeGitHub(stall: "queued", prs: [pr], mainRed: why == "main red");
+        var github = new FakeGitHub(stall: "queued", bypass: true, prs: [pr], mainRed: why == "main red");
         var output = new StringWriter();
 
         Tick(github, "major_outage", output: output);
@@ -340,7 +436,7 @@ public sealed class MergeTakeoverTests : IDisposable
     public void A_quality_gate_that_isnt_GitHub_Actions_own_check_doesnt_count(string gate)
     {
         InTakeover(Now.AddMinutes(-20));
-        var github = new FakeGitHub(stall: "queued", prs: [new(7, Sha(7), Gate: gate)]);
+        var github = new FakeGitHub(stall: "queued", bypass: true, prs: [new(7, Sha(7), Gate: gate)]);
         var output = new StringWriter();
 
         Tick(github, "major_outage", output: output);
@@ -353,7 +449,7 @@ public sealed class MergeTakeoverTests : IDisposable
     public void After_its_merge_cap_a_takeover_stops_merging_and_asks_the_owner_once()
     {
         InTakeover(Now.AddMinutes(-60), Enumerable.Range(1, 10).Select(n => new MergedPullRequest(600 + n, Sha(1), Now.AddMinutes(-50 + n))).ToArray());
-        var github = new FakeGitHub(stall: "queued", prs: [new(7, Sha(7))]);
+        var github = new FakeGitHub(stall: "queued", bypass: true, prs: [new(7, Sha(7))]);
 
         Tick(github, "major_outage");
         Tick(github, "major_outage", Now.AddMinutes(3));
@@ -562,10 +658,10 @@ public sealed class MergeTakeoverTests : IDisposable
 
         IEnumerable<Pr> Open => prs.Where(p => !Merges.Any(m => m.Number == p.Number));
 
-        static object Node(Pr p) => new
+        object Node(Pr p) => new
         {
             number = p.Number,
-            state = "OPEN",
+            state = Merges.Any(m => m.Number == p.Number) ? "MERGED" : "OPEN",
             baseRefName = "main",
             isDraft = p.Draft,
             headRefOid = p.Head,
@@ -674,7 +770,15 @@ public sealed class MergeTakeoverTests : IDisposable
             return JsonDocument.Parse("{}");
         }
 
-        public void MergePullRequest(string slug, int number, string headSha) => Merges.Add((number, headSha));
+        /// <summary>When set, a merge lands but gh reports a failure, as a call killed at its timeout would.</summary>
+        public bool MergeTimesOut { get; set; }
+
+        public void MergePullRequest(string slug, int number, string headSha)
+        {
+            Merges.Add((number, headSha));
+            if (MergeTimesOut)
+                throw new InvalidOperationException("gh pr merge timed out after 120 s and was stopped.");
+        }
 
         public void PostStatus(string slug, string sha, string state, string context, string description, string? targetUrl) =>
             throw new InvalidOperationException("merge-takeover never posts a status");

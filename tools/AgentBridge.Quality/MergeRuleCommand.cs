@@ -94,11 +94,16 @@ sealed class GhCli : IGitHub
             process.StandardInput.Close();
         }
         var stderr = process.StandardError.ReadToEndAsync();
-        var stdout = process.StandardOutput.ReadToEnd();
-        process.WaitForExit();
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        // A hung gh (a stalled API call in an incident) mustn't hold merge-takeover's lock forever.
+        if (!process.WaitForExit(TimeSpan.FromSeconds(120)))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new InvalidOperationException($"gh {string.Join(' ', start.ArgumentList.Take(4))} timed out after 120 s and was stopped.");
+        }
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"gh {string.Join(' ', start.ArgumentList.Take(4))} failed ({process.ExitCode}): {stderr.Result.Trim()}");
-        return stdout;
+        return stdout.Result;
     }
 }
 

@@ -475,11 +475,12 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
        `merge-takeover.json.corrupt-<time>` and the tick carries on as if there were none, which
        the ruleset check below makes safe.
      - *Outside a takeover*, every tick reads the live ruleset. If it matches `ruleset-main.json`
-       with no bypass, all is well. If its only difference is exactly the takeover's own admin
-       bypass (the state was lost or set aside, or another machine's tick added it), it removes
-       the bypass, verifies, and posts a receipt on #170. Any other bypass or drift exits 1 and
-       asks @danswett once on #170 (the state remembers what it asked), and nothing enters until
-       the ruleset is clean again.
+       with no bypass, all is well. If it has the takeover's own admin bypass (exactly
+       `{5, RepositoryRole, pull_request}`; the state was lost or set aside, another machine's
+       tick added it, or a hand-back didn't land), it removes that one actor whatever else
+       differs, leaving the rules and any other actors as they are, verifies, and posts a receipt
+       on #170. Any other bypass or drift exits 1 and asks @danswett once on #170 (the state
+       remembers what it asked), and nothing enters until the ruleset is clean again.
      - *On entering*, it first compares the live ruleset (found by `ruleset-main.json`'s name)
        with [`ruleset-main.json`](ruleset-main.json): target, enforcement, conditions and rules,
        ignoring server-only fields and the empty or default parameters GitHub fills in. If they
@@ -488,7 +489,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
        bypass actor (repository role 5, admin, in `pull_request` mode, so admins can merge a pull
        request past the rules but not push to main), reads it back to verify, and posts a
        receipt on #170 with the start time, the evidence and the rules below.
-     - *While in takeover*, it merges at most one pull request a tick, and none outside a
+     - *While in takeover*, every tick also reads the ruleset: an actor someone added or changed,
+       drift, or the takeover's own actor gone stops merging and asks the owner once on #170.
+       It merges at most one pull request a tick, and none outside a
        takeover. A pull request qualifies only if it is open, not a draft, into main, has
        auto-merge armed (the session's intent) and no `hold` or `do-not-merge` label, 0 unresolved
        threads and `MERGEABLE`. It must also pass main's evaluator in process (the verdict
@@ -504,14 +507,17 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      - *Untested commits:* while Actions is down, main's CI doesn't run after each merge, so
        untested commits pile up on main. A takeover therefore merges at most 10 pull requests
        (`--max-merges N` changes it), then stops merging and asks @danswett on #170, once.
-     - *On exiting*, it PUTs the ruleset with no bypass actors and reads it back. It must match
-       `ruleset-main.json` with 0 bypass actors. It then posts "takeover ended" with how long the
-       takeover lasted and what it merged. If the check fails, it exits 1 and asks the owner on
-       #170, and does nothing more until the ruleset is right again. A read or PUT that fails
-       before the bypass is gone keeps the takeover and tries again next tick, and so does a
-       read-back that still shows only the takeover's own bypass, whatever gh said about the PUT;
+     - *On exiting*, it PUTs the ruleset without the takeover's own actor (its rules and any other
+       actors exactly as they are now, so nothing someone else added is deleted) and reads it
+       back. It must then match `ruleset-main.json` with 0 bypass actors. It posts "takeover
+       ended" with how long the takeover lasted and what it merged. If the check fails, it exits
+       1 and asks the owner on #170, and does nothing more until the ruleset is right again.
+       While the read-back still shows the takeover's actor, whatever gh said about the PUT and
+       whatever else differs, it stays in takeover and removes it again next tick (any drift is
+       put to the owner apart from that), as it does when a read fails;
        a receipt that fails to post is kept in the state and posted on a later tick. After 12
-       hours it stays in takeover, but asks the owner once to confirm.
+       hours it stays in takeover, but asks the owner once to confirm. Every gh and git call
+       is stopped after 120 s, so a hung call can't hold the lock.
      - `--dry-run` prints the observation, the decision and what it would do, and writes nothing:
        no fetch, lock, PUT, comment, merge or state.
      - Its limit: sessions share one GitHub account, so while the bypass is on, any admin session
