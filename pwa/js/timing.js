@@ -34,8 +34,13 @@ function markAt(run, what) {
 export function tapped(kind, request) {
   const run = { kind, request, start: perf()?.now() ?? Date.now(), marks: [] };
   open.set(request, run);
-  // A delivery that never ends (signed out mid-send) doesn't stay forever.
-  if (open.size > KEEP) { open.delete(open.keys().next().value); }
+  // A delivery that never ends (signed out mid-send, a cancelled reply) doesn't stay forever,
+  // nor do its marks on the browser's timeline.
+  if (open.size > KEEP) {
+    const [oldest, gone] = open.entries().next().value;
+    open.delete(oldest);
+    for (const [what] of gone.marks) { try { perf()?.clearMarks(name(gone, what)); } catch { /* as in markAt */ } }
+  }
   markAt(run, 'tap');
 }
 

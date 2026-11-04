@@ -50,7 +50,8 @@ export class AnswerService {
   #any = new Set();
 
   // send(client, data, entry, progress, stage): the op, which may call progress(anything) as it
-  // goes, and passes stage to the client as its onProgress for the host's progress frames.
+  // goes, and passes stage to the client as its onProgress for the host's progress frames. It
+  // marks 'sent' (timing.js) as the request itself goes, after anything sent ahead of it.
   // payload(entry): its request data. final(entry): whether a settled outcome stands, so that
   // giving the answer again sends nothing.
   constructor({
@@ -61,7 +62,7 @@ export class AnswerService {
     giveUpMs = 9 * 60 * 1000,
     // How long one entry may go on being resent, when some ops take longer than others.
     giveUpFor = null,
-    send = (client, data, entry, progress, stage) => client.answer(data, { onProgress: stage }),
+    send = (client, data, entry, progress, stage) => { marked(entry.request, 'sent'); return client.answer(data, { onProgress: stage }); },
     payload = (e) => ({ id: e.sessionId, question: e.questionId, request: e.request, ...e.answer }),
     final = (e) => !['busy', 'refused'].includes(e.outcome),
     // Whether busy on a resend means the first copy is still being delivered. A launch's host
@@ -170,7 +171,6 @@ export class AnswerService {
     entry.attempts++;
     entry.firstSentAt ??= this.now();
     this.#set(entry, { state: 'sending', reason: null, progress: null });
-    if (this.marks) { marked(entry.request, 'sent'); }
     const data = this.payload(entry);
     // What the op has done so far, for one that takes a while (a reply's files going first).
     const progress = (p) => { if (token === entry.token && entry.state === 'sending') { this.#set(entry, { progress: p }); } };

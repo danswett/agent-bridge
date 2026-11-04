@@ -322,7 +322,10 @@ export function prepareAnswer(question, state, sessionId) {
   const { answer, problems } = buildAnswer(question, state);
   if (problems.length) { return { answer: null, problem: problems[0].message, field: problems[0].field }; }
   const data = answerRequest({ sessionId, questionId: question.id, request: '00000000-0000-4000-8000-000000000000', answer });
-  const problem = checkAnswer(question, data);
+  // Checked as a host offering progress gets it, "progress": true and all (#600): its 16 KiB
+  // counts the whole request, so an answer within the flag's 16 bytes of the limit would pass
+  // here and be refused there. A host without it gets that much headroom spare.
+  const problem = checkAnswer(question, { ...data, progress: true });
   if (problem) { return { answer: null, problem, field: problemField(question, problem) ?? (question.fields.length === 0 ? '' : null) }; }
   return { answer, problem: null, field: null };
 }
