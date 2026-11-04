@@ -44,10 +44,13 @@ public sealed class SettingsViewModel : Observable
     bool nameEdited;
     string? error;
     bool busy;
+    int busyActions;
     string updateStatus = "";
     string? updateVersion;
     string log = "";
     string agentSetupStatus = "";
+    string agentInstallStatus = "";
+    bool agentInstallInProgress;
 
     public SettingsViewModel(HostConnection host, HostManager manager, IUpdater updater, IAppAtSignIn appAtSignIn, Func<AppPreferences> prefs, Action<AppPreferences> savePrefs, string appVersion, string defaultRelay)
     {
@@ -88,10 +91,14 @@ public sealed class SettingsViewModel : Observable
     public bool ElevatedWarning => Status?.Elevated == true;
 
     public IReadOnlyList<AgentReadinessRow> Agents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && Status?.Agents is { } report
-        ? [.. report.Agents.Select(a => new AgentReadinessRow(a, CanManageAgents))] : [];
+        ? [.. report.Agents.Select(a => new AgentReadinessRow(a, CanManageAgents, CanInstallAgents))] : [];
     public bool CanManageAgents => HostRunning && host.Can(HostOps.AgentSetupCapability) && !Busy
         && Status?.ReadOnly is null && Status?.AgentHaBridge is null;
     public string AgentSetupStatus { get => agentSetupStatus; private set => Set(ref agentSetupStatus, value); }
+    public bool CanInstallAgents => HostRunning && host.Can(HostOps.AgentInstallCapability) && !Busy
+        && Status?.ReadOnly is null && Status?.AgentHaBridge is null;
+    public string AgentInstallStatus { get => agentInstallStatus; private set => Set(ref agentInstallStatus, value); }
+    public bool AgentInstallInProgress { get => agentInstallInProgress; private set => Set(ref agentInstallInProgress, value); }
     public bool CanCheckAgents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && !Busy;
     public string AgentsState => !HostRunning ? "Connect to this machine's host to check its agents."
         : !host.Can(HostOps.AgentReadinessCapability) ? "This host does not report agent readiness. Update the app and restart the host."
@@ -383,7 +390,7 @@ public sealed class SettingsViewModel : Observable
     public bool Busy
     {
         get => busy;
-        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(Agents)); } }
+        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(Agents)); } }
     }
     public string UpdateStatus { get => updateStatus; private set => Set(ref updateStatus, value); }
     public bool UpdateAvailable => updateVersion is not null;
@@ -468,6 +475,47 @@ public sealed class SettingsViewModel : Observable
         }
     });
 
+    public Task InstallAgentAsync(string agent) => RunAsync(async () =>
+    {
+        if (AgentInstallInProgress) { throw new InvalidOperationException("A CLI installation is still running. Cancel it or wait for its result before installing another CLI."); }
+        if (!HostRunning || !host.Can(HostOps.AgentInstallCapability))
+        {
+            throw new InvalidOperationException("This host does not support CLI installation. Update the app and restart the host.");
+        }
+        if (Status?.ReadOnly is not null || Status?.AgentHaBridge is not null)
+        {
+            throw new InvalidOperationException($"CLI installation is unavailable: {Status.ReadOnly ?? Status.AgentHaBridge}");
+        }
+        AgentInstallStatus = "Installing the CLI and required runtimes with Windows Package Manager...";
+        AgentInstallInProgress = true;
+        AgentInstallResult result;
+        var reported = false;
+        try
+        {
+            result = await host.CallAsync<AgentInstallResult>(HostOps.AgentsInstall,
+                new AgentInstallRequest(agent, AcceptAgreements: true), TimeSpan.FromMinutes(11));
+            AgentInstallStatus = result.Detail;
+            reported = true;
+        }
+        finally
+        {
+            AgentInstallInProgress = false;
+            if (!reported) { AgentInstallStatus = "The installation result is unavailable. It may still be running; check agents again before retrying."; }
+        }
+        if (host.Can(HostOps.AgentReadinessCapability))
+        {
+            await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromMinutes(1));
+            await host.RefreshStatusAsync();
+        }
+        if (!result.Completed) { throw new InvalidOperationException(result.Detail); }
+    });
+
+    public Task CancelAgentInstallAsync() => RunAsync(async () =>
+    {
+        if (!AgentInstallInProgress) { return; }
+        await host.CallAsync(HostOps.AgentsInstallCancel);
+    }, changeBusy: false);
+
     public Task CheckForUpdatesAsync() => RunAsync(async () =>
     {
         if (updater.InstalledVersion is null) { UpdateStatus = "Updates are off in a development copy."; return; }
@@ -528,10 +576,10 @@ public sealed class SettingsViewModel : Observable
     // Every action here ends up behind an async void click handler, where an escaping exception
     // ends the app (and every unsent draft on its cards). So whatever goes wrong (the pipe, Task
     // Scheduler, the registry, the network under an update check) is shown, not thrown.
-    async Task RunAsync(Func<Task> act)
+    async Task RunAsync(Func<Task> act, bool changeBusy = true)
     {
         Error = null;
-        Busy = true;
+        if (changeBusy) { busyActions++; Busy = true; }
         try { await act(); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
@@ -539,7 +587,7 @@ public sealed class SettingsViewModel : Observable
         }
         finally
         {
-            Busy = false;
+            if (changeBusy) { Busy = --busyActions > 0; }
             RaiseAll();
         }
     }

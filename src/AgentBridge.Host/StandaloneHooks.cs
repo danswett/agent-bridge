@@ -74,6 +74,8 @@ public sealed class StandaloneHooks(
 
     static void Write(string path, JsonNode value) => DurableFile.Replace(path, Bytes(value), MigrationRecord.Hash(path));
 
+    internal void CheckInstall(string agent) => Preflight(agent, removing: false);
+
     void Preflight(string agent, bool removing)
     {
         _ = Home(agent);

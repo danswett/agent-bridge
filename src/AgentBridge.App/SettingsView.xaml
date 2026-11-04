@@ -65,6 +65,8 @@
                 <TextBlock Style="{StaticResource AbSecondaryText}" AutomationProperties.AutomationId="AgentsState" Text="{x:Bind ViewModel.AgentsState, Mode=OneWay}" />
                 <Button Content="Check agents again" AutomationProperties.AutomationId="CheckAgents" Click="OnCheckAgents" IsEnabled="{x:Bind ViewModel.CanCheckAgents, Mode=OneWay}" />
                 <TextBlock Text="{x:Bind ViewModel.AgentSetupStatus, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" AutomationProperties.AutomationId="AgentSetupStatus" />
+                <TextBlock Text="{x:Bind ViewModel.AgentInstallStatus, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" AutomationProperties.AutomationId="AgentInstallStatus" />
+                <Button Content="Cancel CLI installation" Click="OnCancelAgentInstall" Visibility="{x:Bind local:Ui.Show(ViewModel.AgentInstallInProgress), Mode=OneWay}" AutomationProperties.AutomationId="CancelAgentInstall" />
                 <ItemsControl ItemsSource="{x:Bind ViewModel.Agents, Mode=OneWay}" AutomationProperties.AutomationId="AgentReadiness">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="core:AgentReadinessRow">
@@ -77,6 +79,7 @@
                                     <TextBlock Text="{x:Bind Checks}" TextWrapping="Wrap" />
                                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind HookActivity}" />
                                     <local:WrapRow Spacing="8">
+                                        <Button Content="Install CLI" Tag="{x:Bind Id}" IsEnabled="{x:Bind CanInstall}" Click="OnInstallAgent" AutomationProperties.AutomationId="InstallAgent" />
                                         <Button Content="Set up / Repair" Tag="{x:Bind Id}" IsEnabled="{x:Bind CanSetUp}" Click="OnSetUpAgent" AutomationProperties.AutomationId="SetUpAgent" />
                                         <Button Content="Remove connection" Tag="{x:Bind Id}" IsEnabled="{x:Bind CanRemove}" Click="OnRemoveAgent" AutomationProperties.AutomationId="RemoveAgent" />
                                     </local:WrapRow>

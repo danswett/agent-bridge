@@ -12,6 +12,9 @@ public static class HostOps
     public const string AgentsRefresh = "host.agents.refresh";
     public const string AgentSetupCapability = "host.agents.setup";
     public const string AgentsSetup = "host.agents.setup";
+    public const string AgentInstallCapability = "host.agents.install";
+    public const string AgentsInstall = "host.agents.install";
+    public const string AgentsInstallCancel = "host.agents.install.cancel";
 
     public const string Status = "host.status";
     // Answers with the status, then sends a host.status event whenever it changes.
@@ -147,3 +150,6 @@ public sealed record AgentSetupRequest(string Agent, string Action);
 // A failure can leave owned, repairable partial work. Neither completion nor a restart is
 // evidence of authentication, hook trust or a successful fresh session.
 public sealed record AgentSetupResult(bool Completed, string Detail, bool RestartRequired);
+
+public sealed record AgentInstallRequest(string Agent, bool AcceptAgreements = false);
+public sealed record AgentInstallResult(bool Completed, string Detail, string? Executable = null);

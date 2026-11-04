@@ -496,11 +496,23 @@ async Task<int> ServeAsync(HostHandover handover)
         ClaudeConfigDirExplicit = options.ClaudeConfigDirExplicit,
     };
     var codexEnvironment = new Dictionary<string, string> { ["CODEX_HOME"] = agentHomes.Codex };
-    var agentSetup = OperatingSystem.IsWindows() ? new AgentSetupService(new StandaloneHooks(identity.Folder,
+    var standaloneHooks = OperatingSystem.IsWindows() ? new StandaloneHooks(identity.Folder,
         agentHomes, Path.Combine(AppContext.BaseDirectory, "agent-bridge-host-hook.exe"),
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge"),
-        ServeReadOnly, agentLocator, new BatchFileRunner(new CommandRunner(codexEnvironment), codexEnvironment)),
-        ServeReadOnly, stop.Token) : null;
+        ServeReadOnly, agentLocator, new BatchFileRunner(new CommandRunner(codexEnvironment), codexEnvironment)) : null;
+    var agentSetup = standaloneHooks is null ? null : new AgentSetupService(standaloneHooks, ServeReadOnly, stop.Token);
+    var agentInstall = standaloneHooks is null ? null : new AgentInstallService(identity.Folder,
+        agentLocator, agentLocator.Refresh, new CommandRunner(),
+        () =>
+        {
+            var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "winget.exe");
+            return File.Exists(path) ? path : null;
+        },
+        agent =>
+        {
+            if (ServeReadOnly() is { } why) { throw new InvalidOperationException($"CLI installation is unavailable while this host is read-only: {why}"); }
+            standaloneHooks.CheckInstall(agent);
+        }, stop.Token);
     await using var agentReadiness = new AgentReadinessService(identity.Folder, agentHomes,
         settings.Launch, agentLocator, new VersionCommandRunner(), ServeReadOnly, intake);
     var control = new HostControl(new HostControlOptions
@@ -532,6 +544,7 @@ async Task<int> ServeAsync(HostHandover handover)
         ReadOnlyNow = ServeReadOnly,
         Agents = agentReadiness,
         AgentSetup = agentSetup,
+        AgentInstall = agentInstall,
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();

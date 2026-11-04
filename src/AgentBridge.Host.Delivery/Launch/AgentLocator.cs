@@ -18,6 +18,11 @@ public sealed class AgentLocator(TimeProvider? time = null) : IAgentLocator
     IReadOnlyList<string> path = [];
     DateTimeOffset readAt = DateTimeOffset.MinValue;
 
+    public void Refresh()
+    {
+        lock (gate) { readAt = DateTimeOffset.MinValue; }
+    }
+
     public string? Find(Launcher launcher, AgentConfig config)
     {
         // A configured path that does not exist means the agent is not here, never "look

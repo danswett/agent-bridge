@@ -40,6 +40,22 @@ public sealed partial class SettingsView : UserControl
     async void OnCheckAgents(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.CheckAgentsAsync(); } }
     async void OnSetUpAgent(object sender, RoutedEventArgs e) => await ConfirmAgentAsync(sender, remove: false);
     async void OnRemoveAgent(object sender, RoutedEventArgs e) => await ConfirmAgentAsync(sender, remove: true);
+    async void OnCancelAgentInstall(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.CancelAgentInstallAsync(); } }
+
+    async void OnInstallAgent(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is not { CanInstallAgents: true } v || sender is not Button { Tag: string id }) { return; }
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Install this CLI and its required runtimes?",
+            Content = "Use the Windows Package Manager community source and accept its source and package agreements. Required runtimes may request Windows administrator approval; declining leaves setup incomplete. Existing CLIs are not upgraded. No hook setup, sign-in, folder trust or restart is requested. Agency is installed through your organization.",
+            PrimaryButtonText = "Install CLI and runtimes",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary) { await v.InstallAgentAsync(id); }
+    }
 
     async Task ConfirmAgentAsync(object sender, bool remove)
     {
