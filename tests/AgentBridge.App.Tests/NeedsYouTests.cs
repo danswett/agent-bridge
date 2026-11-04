@@ -178,7 +178,7 @@ public sealed class NeedsYouTests : IAsyncLifetime
         // A second press while it goes sends nothing, from the lane or the card.
         ui.Post(entry.Deny);
         reply.SetResult(new AnswerResult(AnswerOutcome.Delivered));
-        await Wait.UntilAsync(() => entry.StatusText == "You answered · Approve once", "delivered");
+        await Wait.UntilAsync(() => entry.StatusText == "You answered · \u2068Approve once\u2069", "delivered");
         var sent = Assert.Single(host.Sent(Ops.SessionAnswer));
         Assert.Equal("approval", sent.GetProperty("id").GetString());
         Assert.Equal("r1#d", sent.GetProperty("question").GetString());

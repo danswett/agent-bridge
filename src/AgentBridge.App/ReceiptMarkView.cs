@@ -4,17 +4,16 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Shapes;
 
 namespace AgentBridge.App;
 
 // What stands beside a reply's or an answer's receipt (ReceiptMark; ui.md §6.5, decided on #617):
 // the progress ring while it is on its way, still and in text3 while it waits for a machine that
-// isn't connected, or the check badge once delivered: a Bridge disc with the check of the done
-// glyph knocked out to the surface behind it. A Path of the design's own geometry
-// (design/glyphs/check.svg), not Segoe's CheckMark (the owner's decision on #617), so it reads as
-// the PWA's does, and holds in high contrast as Highlight on Window. Drawn only: the words beside
-// it say what it means.
+// isn't connected, or the check badge once delivered: a Bridge disc with the check cut out of it,
+// a hole that shows whatever surface is behind (a card, the reply box, a contrast theme's Window).
+// A Path of the design's own geometry (design/icons/check.svg, #617), not Segoe's CheckMark (the
+// owner's decision), so it reads as the PWA's does, and holds in high contrast as Highlight with
+// the check knocked out. Drawn only: the words beside it say what it means.
 public sealed partial class ReceiptMarkView : UserControl
 {
     public static readonly DependencyProperty MarkProperty = DependencyProperty.Register(
@@ -42,30 +41,27 @@ public sealed partial class ReceiptMarkView : UserControl
     public static string GetAnnouncement(DependencyObject o) => (string)o.GetValue(AnnouncementProperty);
     public static void SetAnnouncement(DependencyObject o, string value) => o.SetValue(AnnouncementProperty, value);
 
+    // design/icons/check.svg on its 20 px box: the disc, then the check as a second figure, which
+    // the even-odd fill ("F0") leaves as a hole rather than painting it in a colour of its own,
+    // which would show as a patch on any surface but the one it was picked for.
+    const string CheckBadge = "F0 M18 10A8 8 0 0 1 2 10A8 8 0 0 1 18 10Z" +
+        "M5.463 11.08L8.091 13.709A1.143 1.143 0 0 0 9.73 13.686L14.687 8.443A1.143 1.143 0 0 0 13.027 6.871L8.877 11.261L7.08 9.463A1.143 1.143 0 0 0 5.463 11.08Z";
+
     readonly InFlightRing ring = new();
-    readonly Grid check = new() { Width = 16, Height = 16 };
+    readonly Viewbox check = new() { Width = 16, Height = 16 };
 
     public ReceiptMarkView()
     {
         IsTabStop = false;
         AutomationProperties.SetAccessibilityView(this, AccessibilityView.Raw);
-        // The disc, r 6.6 on the 16 grid, and the check across it in the surface's colour.
-        check.Children.Add(new Ellipse { Width = 13.2, Height = 13.2, Fill = Ui.Brush("AbBridge") });
-        // M5.3 8.2 l1.9 1.9 3.6-3.8, as the glyph draws it.
-        var tick = new PathFigure { StartPoint = new Windows.Foundation.Point(5.3, 8.2), IsClosed = false, IsFilled = false };
-        tick.Segments.Add(new LineSegment { Point = new Windows.Foundation.Point(7.2, 10.1) });
-        tick.Segments.Add(new LineSegment { Point = new Windows.Foundation.Point(10.8, 6.3) });
-        var geometry = new PathGeometry();
-        geometry.Figures.Add(tick);
-        check.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
+        // The icon's 20 px box scaled to 16, its margin and all, as the PWA's sprite is drawn.
+        var box = new Grid { Width = 20, Height = 20 };
+        box.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
         {
-            Data = geometry,
-            Stroke = Ui.Brush("AbLayer"),
-            StrokeThickness = 1.6,
-            StrokeStartLineCap = PenLineCap.Round,
-            StrokeEndLineCap = PenLineCap.Round,
-            StrokeLineJoin = PenLineJoin.Round,
+            Data = (Geometry)Microsoft.UI.Xaml.Markup.XamlBindingHelper.ConvertValue(typeof(Geometry), CheckBadge),
+            Fill = Ui.Brush("AbBridge"),
         });
+        check.Child = box;
         var root = new Grid { Width = 16, Height = 16, VerticalAlignment = VerticalAlignment.Center };
         root.Children.Add(ring);
         root.Children.Add(check);

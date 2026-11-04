@@ -50,6 +50,8 @@ public static class ReceiptTiming
 public static class ReceiptWords
 {
     const int ValueMax = 40;
+    // A word break before the 21st character would leave too little of the value: cut at ValueMax instead.
+    const int MinCut = 20;
 
     // The room a receipt keeps from Send to the outcome (ui.md §6.5): the longest outcome's words,
     // which the view lays out unseen under the line, so it wraps them as it would wrap the line
@@ -121,16 +123,28 @@ public static class ReceiptWords
         return null;
     }
 
+    // ui.md §6.5: the first line, runs of white space as one space, cut at the last word break
+    // within 40 characters (or at 40, with no break after the 20th), and "…" when there is more.
     static string? FirstLine(string text)
     {
         var lines = text.Trim().Split(["\r\n", "\r", "\n", "\u0085", "\u2028", "\u2029"], StringSplitOptions.None);
-        var first = lines[0].Trim();
+        var first = string.Join(' ', lines[0].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         if (first.Length == 0) { return null; }
         var chars = first.EnumerateRunes().ToList();
         var cut = chars.Count > ValueMax;
-        var shown = cut ? string.Concat(chars.Take(ValueMax - 1)).TrimEnd() : first;
+        var shown = first;
+        if (cut)
+        {
+            var space = chars.Take(ValueMax + 1).ToList().FindLastIndex(r => r.Value == ' ');
+            shown = string.Concat(chars.Take(space >= MinCut ? space : ValueMax)).TrimEnd();
+        }
         return HiddenText.Reveal(cut || lines.Length > 1 ? $"{shown}…" : shown);
     }
+
+    // Drawn in a direction of its own (ui.md §6.5): an answer in Hebrew or Arabic can't carry the
+    // words or the "·" around it into its own direction. The isolates are layout only: nothing
+    // spoken carries them.
+    public static string Isolated(string value) => $"\u2068{value}\u2069";
 }
 
 // Times one line's receipt. describe(delivery, stalled): its words now. show(line): puts them on

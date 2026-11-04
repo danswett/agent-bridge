@@ -247,9 +247,33 @@ public sealed class ReceiptTests
         var text = Make.Choice() with { Fields = [] };
         Assert.Equal("Fixes first", ReceiptWords.AnsweredValue(text, new AnswerRequest { Id = "s1", Question = "q1", Request = "r", Text = "Fixes first" }));
         Assert.Equal("MariaDB…", ReceiptWords.AnsweredValue(text, new AnswerRequest { Id = "s1", Question = "q1", Request = "r", Text = "MariaDB\nbecause" }));
-        Assert.Equal($"{new string('x', 39)}…", ReceiptWords.AnsweredValue(text, new AnswerRequest { Id = "s1", Question = "q1", Request = "r", Text = new string('x', 60) }));
+        Assert.Equal($"{new string('x', 40)}…", ReceiptWords.AnsweredValue(text, new AnswerRequest { Id = "s1", Question = "q1", Request = "r", Text = new string('x', 60) }));
         var form = Make.Choice() with { Fields = [.. Make.Choice().Fields, new Field { Name = "why", Type = FieldType.Text }] };
         Assert.Null(ReceiptWords.AnsweredValue(form, Answer(form, "pg")));
+    }
+
+    // ui.md §6.5: white space runs as one space, then cut at the last word break within 40
+    // characters, or at 40 where the last break comes before the 21st.
+    [Theory]
+    [InlineData("Use   the\tsession   store", "Use the session store")]
+    [InlineData("Keep the session store in SQLite for now and revisit later", "Keep the session store in SQLite for now…")]
+    [InlineData("Ok supercalifragilisticexpialidociousandthensome words", "Ok supercalifragilisticexpialidociousand…")]
+    [InlineData("abcdefghijklmnopqrst uvwxyzabcdefghijklmnopqrstuvwxyz", "abcdefghijklmnopqrst…")]
+    [InlineData("abcdefghijklmnopqrs tuvwxyzabcdefghijklmnopqrstuvwxyz", "abcdefghijklmnopqrs tuvwxyzabcdefghijklm…")]
+    public void A_free_text_answers_value_is_cut_at_a_word_break_within_40_characters(string answer, string value)
+    {
+        var text = Make.Choice() with { Fields = [] };
+        Assert.Equal(value, ReceiptWords.AnsweredValue(text, new AnswerRequest { Id = "s1", Question = "q1", Request = "r", Text = answer }));
+    }
+
+    [Fact]
+    public void A_confirmed_answers_value_is_shown_in_a_direction_of_its_own_but_spoken_without_the_isolates()
+    {
+        var tap = Make.Choice();
+        var line = QuestionViewModel.Describe(new Delivery { Key = "k", Request = "r", State = DeliveryState.Done, Outcome = "delivered", Payload = Answer(tap, "pg") }, null, question: tap);
+
+        Assert.Equal("You answered · \u2068PostgreSQL (Recommended)\u2069", line.Whole);
+        Assert.Equal("Answer delivered. You answered PostgreSQL (Recommended)", line.Speech);
     }
 
     [Fact]

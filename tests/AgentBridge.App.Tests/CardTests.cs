@@ -53,7 +53,7 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Equal(["PostgreSQL (Recommended)", "sqlite"], q.Fields[0].Options.Select(o => o.Label));
         q.Choose(q.Fields[0].Options.Single(o => o.Value == "sqlite"));
 
-        await Wait.UntilAsync(() => q.StatusText == "You answered · sqlite", "delivered");
+        await Wait.UntilAsync(() => q.StatusText == "You answered · \u2068sqlite\u2069", "delivered");
         var sent = Assert.Single(host.Sent(Ops.SessionAnswer));
         Assert.Equal("sqlite", sent.GetProperty("fields").GetProperty("answer").GetString());
         Assert.Equal("q1", sent.GetProperty("question").GetString());
@@ -78,7 +78,7 @@ public sealed class CardTests : IAsyncLifetime
         clock.Advance(ReceiptTiming.StillSending);
         Assert.Equal("Your answer: Still sending…", card.ReceiptText);
         gate.SetResult();
-        await Wait.UntilAsync(() => card.ReceiptText == "You answered · PostgreSQL (Recommended)", "delivered");
+        await Wait.UntilAsync(() => card.ReceiptText == "You answered · \u2068PostgreSQL (Recommended)\u2069", "delivered");
         card.Detach();
     }
 

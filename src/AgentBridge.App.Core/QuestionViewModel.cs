@@ -347,7 +347,7 @@ public sealed partial class QuestionViewModel : Observable
         if (outcome == "delivered")
         {
             var value = ReceiptWords.AnsweredValue(question, e.Payload as AnswerRequest);
-            return new("delivered", "You answered", value, Tone.Ok, ReceiptMark.Check, value is null ? "Answer delivered. You answered" : $"Answer delivered. You answered {value}");
+            return new("delivered", "You answered", value is null ? null : ReceiptWords.Isolated(value), Tone.Ok, ReceiptMark.Check, value is null ? "Answer delivered. You answered" : $"Answer delivered. You answered {value}");
         }
         var text = OutcomeText[outcome](at);
         if (outcome == "refused" && e.Reason is { } r) { text = $"The machine refused this answer: {r}."; }
