@@ -56,6 +56,15 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
   * text and number: the words (a number as its JSON text). An optional text field left
     out is skipped with Enter; an option list cannot be left out, since Enter commits
     whatever its caret is on.
+  * text and number with a schema `default` (#662): Copilot opens the field with the default
+    already typed in, and keys typed there are added to it (`90` typed into a field that
+    opened with `90` was recorded as `9090`). Nothing known here clears it, so an answer
+    that is the default, as the prompt shows it, types nothing and only the field's Enter goes,
+    keeping it; any other answer to the field, or none, is `refused` whole before a key goes:
+    `answer at the machine (this field has a pre-filled default)`. A `null` or empty default
+    fills nothing in, and is typed as before. Seen in a real session for a number field; a text field is
+    assumed to open the same way. Claude's and Codex's prompts take no typed field values, so
+    have no such field.
 * **Other** (a lone option list): Up × (N−1), Down × N as one burst with no Enter, 400 ms
   for Other to hand over the input, then the words, 300 ms, Enter (agent-ha-bridge #240:
   Down on the last option opens Other at once, and an empty Enter returns to the last

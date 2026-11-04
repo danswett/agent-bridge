@@ -336,6 +336,62 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Single(injector.Plans);
     }
 
+    // ---- a field that opens with its default typed in (#662) ----
+
+    // An option list, then a number the prompt opens with 3 already in it.
+    static string AskDays(string id, int s) => Copilot.ToolStart(id, "ask_user", new
+    {
+        message = "How many?",
+        requestedSchema = new { properties = new { pick = new { type = "string", @enum = new[] { "a", "b", "c" } }, days = new { type = "integer", @default = 3 } }, required = new[] { "pick" } },
+    }, s);
+
+    async Task AskDaysAsync()
+    {
+        Fixture.Append(events, AskDays("q2", second++));
+        await source.RefreshAsync();
+    }
+
+    [Fact]
+    public async Task An_answer_that_would_be_added_to_a_pre_filled_default_is_refused_with_nothing_typed_and_the_question_stays_answerable()
+    {
+        await AskDaysAsync();
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b", days = 33 }, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.EndsWith("answer at the machine (this field has a pre-filled default)", reason);
+        Assert.Empty(injector.Plans);
+        // Nothing typed, so it may still be answered: with the default, left as it is.
+        injector.OnInject = () => Fixture.Append(events, Recorded("q2", new { pick = "b", days = 3 }));
+        Assert.Equal("delivered", (await AnswerAsync(ch, new { pick = "b", days = 3 }, question: "q2")).Outcome);
+        var (_, plan) = Assert.Single(injector.Plans);
+        Assert.Equal(new KeySend("", true, AgentBridge.Host.Delivery.Copilot.CopilotPlanner.FieldEnterDelayMs, AgentBridge.Host.Delivery.Copilot.CopilotPlanner.AfterFieldMs), plan.Sends[^1]);
+        Assert.DoesNotContain(plan.Sends, s => s.Text.Contains('3'));
+    }
+
+    [Fact]
+    public async Task A_pre_filled_default_kept_is_delivered_once_however_often_the_request_is_resent()
+    {
+        await AskDaysAsync();
+        var release = new TaskCompletionSource();
+        injector.Gate = release.Task;
+        injector.OnInject = () => Fixture.Append(events, Recorded("q2", new { pick = "a", days = 3 }));
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+
+        var first = AnswerAsync(ch, new { pick = "a", days = 3 }, request, "q2");
+        await Wait.UntilAsync(() => injector.Plans.Count == 1, "the answer to start typing", Patience);
+        var during = AnswerAsync(ch, new { pick = "a", days = 3 }, request, "q2");
+        release.SetResult();
+        var again = await AnswerAsync(await OpenAsync(), new { pick = "a", days = 3 }, request, "q2");
+
+        Assert.Equal(["delivered", "delivered", "delivered"], [(await first).Outcome, (await during).Outcome, again.Outcome]);
+        Assert.Single(injector.Plans);
+        // Left as it opened: the 3 is never typed, which would make it 33.
+        Assert.DoesNotContain(injector.Plans[0].Plan.Sends, s => s.Text.Contains('3'));
+    }
+
     [Fact]
     public async Task While_agent_ha_bridge_runs_an_answer_is_refused_with_its_reason_and_nothing_is_typed()
     {

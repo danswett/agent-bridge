@@ -10,13 +10,15 @@ public enum CopilotFieldKind { Choice, Boolean, Multi, Text, Number }
 public sealed record CopilotOption(string Value, JsonElement Raw);
 
 // One field of Copilot's ask_user prompt, as the keys have to drive it. Checked is the rows
-// a multi-select list opens with ticked (its schema default).
+// a multi-select list opens with ticked (its schema default). Prefill is a text or number
+// field's schema default, which the prompt opens with already typed into it (#662).
 public sealed record CopilotField(
     string Name,
     CopilotFieldKind Kind,
     IReadOnlyList<CopilotOption> Options,
     IReadOnlyList<int> Checked,
-    bool AllowsEmpty);
+    bool AllowsEmpty,
+    JsonElement? Prefill = null);
 
 // The ask_user prompt read from the tool call's own arguments, the way agent-ha-bridge
 // reads it (Get-DecisionSchemaFields), rather than from the Question a client saw: the
@@ -79,7 +81,12 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
         {
             if (isArray) { return (null, $"\"{name}\" is a list with no options to choose from"); }
             var kind = type is "number" or "integer" ? CopilotFieldKind.Number : CopilotFieldKind.Text;
-            return (new CopilotField(name, kind, [], [], false), null);
+            // Copilot opens such a field with its default already in it, and keys typed there
+            // are added to it: 90 typed into a field that opened with 90 was recorded as 9090
+            // (#662). A null default names nothing, and an empty one leaves the field empty.
+            var prefilled = hasDefault && def.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined)
+                && !(def.ValueKind == JsonValueKind.String && def.GetString()!.Length == 0);
+            return (new CopilotField(name, kind, [], [], false, prefilled ? def.Clone() : null), null);
         }
 
         if (isArray)
@@ -163,6 +170,14 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
 
     // As QuestionMapper writes Option.Value: a string as itself, anything else as its JSON.
     internal static string Scalar(JsonElement v) => v.ValueKind == JsonValueKind.String ? v.GetString()! : v.GetRawText();
+
+    // Whether an answer is what a field opens with, as the prompt shows it: the same scalar, or a
+    // string and a number that read the same. Anything else (an object, a list) never is.
+    public static bool Keeps(JsonElement prefill, JsonElement value) =>
+        SameScalar(prefill, value)
+        || (prefill.ValueKind is JsonValueKind.String or JsonValueKind.Number
+            && value.ValueKind is JsonValueKind.String or JsonValueKind.Number
+            && Scalar(prefill) == Scalar(value));
 
     // Two JSON scalars are the same value: equal strings, the same literal, or equal numbers.
     public static bool SameScalar(JsonElement a, JsonElement b)

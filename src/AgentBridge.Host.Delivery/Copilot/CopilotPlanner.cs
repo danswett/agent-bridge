@@ -60,7 +60,16 @@ public static class CopilotPlanner
             var has = given.TryGetValue(field.Name, out var value) && value.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined);
             List<string> keys;
             Expected record;
-            if (!has)
+            if (field.Prefill is { } prefill)
+            {
+                // The field opens with its default typed in, and nothing here is known to clear
+                // it, so a key typed into it is added to it (#662). Only the default itself can be
+                // given: by typing nothing, and letting the field's Enter keep what is there. Any
+                // other answer, or none, is refused whole, before a key goes.
+                if (!has || !CopilotForm.Keeps(prefill, value)) { return (null, Prefilled(field.Name)); }
+                (keys, record) = ([""], Kept(field, value));
+            }
+            else if (!has)
             {
                 // A text box left empty is skipped by Enter. An option list cannot be: Enter
                 // commits whatever its caret is on, which is an answer nobody gave.
@@ -85,6 +94,19 @@ public static class CopilotPlanner
             expected.Add((field.Name, record));
         }
         return (new CopilotPlan(new KeyPlan(sends), null, expected), null);
+    }
+
+    // Why an answer to a field that opens with its default typed in cannot be typed. The
+    // parenthesis is what a client shows of it.
+    static string Prefilled(string name) =>
+        $"\"{name}\" opens with a value already filled in, which the host cannot clear, so anything it typed would be added to it; answer at the machine (this field has a pre-filled default)";
+
+    // What the session records for a field left as it opened.
+    static Expected Kept(CopilotField field, JsonElement value)
+    {
+        if (field.Kind == CopilotFieldKind.Number) { return new Expected.Number(value.Clone()); }
+        var words = value.ValueKind == JsonValueKind.String ? value.GetString()! : CopilotForm.Scalar(value);
+        return string.IsNullOrWhiteSpace(words) ? new Expected.Omitted() : new Expected.Words(words);
     }
 
     // The keys that answer one field, each its own send; null keys mean the words go

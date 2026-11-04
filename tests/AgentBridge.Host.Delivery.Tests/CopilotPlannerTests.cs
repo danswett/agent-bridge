@@ -129,6 +129,66 @@ public class CopilotPlannerTests
         Assert.Equal(["colour", "go", "notes", "count"], plan.Fields.Select(f => f.Name));
     }
 
+    // A number field the prompt opens with 3 already typed into it (#662).
+    const string Days = """{ "message": "m", "requestedSchema": { "properties": { "days": { "type": "integer", "default": 3 } } } }""";
+    const string Note = """{ "message": "m", "requestedSchema": { "properties": { "note": { "type": "string", "default": "none" } } } }""";
+
+    [Fact]
+    public void A_field_answered_with_the_default_it_opens_with_is_left_as_it_is_and_only_its_Enter_goes()
+    {
+        var plan = Plan(Days, Answer(new { days = 3 }));
+
+        Assert.Equal([("", true)], Keys(plan));
+        Assert.Equal(3, Assert.IsType<Expected.Number>(Assert.Single(plan.Fields).Value).Raw.GetInt32());
+        // As the prompt shows it: 3.0 is the 3 it opened with, and so is "3".
+        Assert.Equal([("", true)], Keys(Plan(Days, Answer(new { days = 3.0 }))));
+        Assert.Equal([("", true)], Keys(Plan(Note, Answer(new { note = "none" }))));
+        Assert.Equal("none", Assert.IsType<Expected.Words>(Plan(Note, Answer(new { note = "none" })).Fields[0].Value).Text);
+    }
+
+    [Fact]
+    public void Anything_but_the_default_a_field_opens_with_is_refused_whole_since_its_keys_would_be_added_to_the_default()
+    {
+        // 33 typed into a field that opened with 3 would be 333, and 3 into one that opened with 3, 33.
+        Assert.EndsWith("answer at the machine (this field has a pre-filled default)", Refusal(Days, Answer(new { days = 33 })));
+        Assert.Contains("\"days\"", Refusal(Days, Answer(new { days = 4 })));
+        Assert.Contains("pre-filled default", Refusal(Note, Answer(new { note = "nonenone" })));
+        Assert.Contains("pre-filled default", Refusal(Note, Answer(new { note = "" })));
+        // Left out, the field would still be recorded with its default, which nobody gave.
+        const string PickAndDays = """{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] }, "days": { "type": "integer", "default": 3 } } } }""";
+        Assert.Contains("pre-filled default", Refusal(PickAndDays, Answer(new { pick = "a" })));
+    }
+
+    [Fact]
+    public void A_number_or_text_field_without_a_default_or_with_an_empty_one_is_typed_as_before()
+    {
+        const string NoDefault = """{ "message": "m", "requestedSchema": { "properties": { "days": { "type": "integer" } } } }""";
+        const string NullDefault = """{ "message": "m", "requestedSchema": { "properties": { "days": { "type": "integer", "default": null } } } }""";
+        const string EmptyDefault = """{ "message": "m", "requestedSchema": { "properties": { "note": { "type": "string", "default": "" } } } }""";
+
+        Assert.Equal([("33", true)], Keys(Plan(NoDefault, Answer(new { days = 33 }))));
+        Assert.Equal([("3", true)], Keys(Plan(NullDefault, Answer(new { days = 3 }))));
+        Assert.Equal([("hello", true)], Keys(Plan(EmptyDefault, Answer(new { note = "hello" }))));
+    }
+
+    [Fact]
+    public void A_field_left_at_its_default_is_followed_by_the_next_fields_and_lists_with_defaults_are_still_walked()
+    {
+        const string Form = """
+            { "message": "m", "requestedSchema": { "properties": {
+              "window": { "type": "integer", "default": 90 },
+              "pick": { "type": "string", "enum": ["a", "b", "c", "d"], "default": "c" },
+              "go": { "type": "boolean", "default": false },
+              "notes": { "type": "string" } } } }
+            """;
+
+        var plan = Plan(Form, Answer(new { window = 90, pick = "a", go = true, notes = "hi" }));
+
+        Assert.Equal([("", true), (U + U + U, true), (U, true), ("hi", true)], Keys(plan));
+        // Refused whole: not the fields before it either.
+        Assert.Contains("\"window\"", Refusal(Form, Answer(new { window = 9090, pick = "a", go = true, notes = "hi" })));
+    }
+
     [Fact]
     public void A_boolean_is_a_Yes_No_list_walked_from_its_top_row_like_any_option_list()
     {
