@@ -1,4 +1,5 @@
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Discovery;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Protocol;
 using Xunit;
@@ -11,6 +12,7 @@ public class DiscoveryHoldTests
     const string A = "11111111-1111-4111-8111-111111111111";
     const string B = "22222222-2222-4222-8222-222222222222";
     const string C = "33333333-3333-4333-8333-333333333333";
+    const string D = "44444444-4444-4444-8444-444444444444";
 
     [Fact]
     public async Task A_process_list_that_cannot_be_read_in_full_is_not_read_as_no_sessions()
@@ -224,6 +226,350 @@ public class DiscoveryHoldTests
         Assert.Null(source.Held);
     }
 
+    // #437: a Codex launch waiting on its hooks-trust question fired its hooks before they could
+    // tell which Codex was theirs, so its registration named no process, and the Codex exited
+    // before its SessionEnd. Nothing rewrote the file, and discovery held for 4.5 hours.
+    [Fact]
+    public async Task A_codex_registration_naming_no_process_left_by_a_launch_that_exited_stops_holding_after_the_grace_and_says_so_once()
+    {
+        using var f = new Fixture();
+        f.Processes.Run(AgentKind.Codex, 960, "codex.exe");
+        f.CodexRegistration(C, 0, null, updated: f.Time.GetUtcNow());
+        var log = new List<string>();
+        await using var source = f.Source(log: log.Add);
+        await source.RefreshAsync();
+        Assert.Equal("a codex registration names no process, an unrecognised codex process (pid 960)", source.Held?.Reason);
+
+        f.Processes.Exit(AgentKind.Codex, 960);
+        f.Time.Advance(TimeSpan.FromSeconds(119));
+        await source.RefreshAsync();
+        Assert.Equal("a codex registration names no process", source.Held?.Reason);
+
+        f.Time.Advance(TimeSpan.FromSeconds(1));
+        await source.RefreshAsync();
+        Assert.Null(source.Held);
+        f.Time.Advance(TimeSpan.FromHours(4.5));
+        await source.RefreshAsync();
+        Assert.Null(source.Held);
+        Assert.Single(log, l => l == $"carrying on without codex registration {C}: it names no process, was written 2 min ago, and no running codex could have written it");
+    }
+
+    [Fact]
+    public async Task A_codex_registration_naming_no_process_holds_naming_the_codex_that_could_be_its_session_and_says_so_once()
+    {
+        // Past the grace, and past the process's own: a Codex still waiting on its question is a
+        // live session nothing else shows. Found in review: the hold read as #437's own, while
+        // the log said it carried on without that process. Gone, it holds no more.
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null, updated: f.Time.GetUtcNow());
+        f.Processes.Run(AgentKind.Codex, 960, "codex.exe");
+        var log = new List<string>();
+        await using var source = f.Source(log: log.Add);
+        await source.RefreshAsync();
+        f.Time.Advance(TimeSpan.FromMinutes(30));
+        await source.RefreshAsync();
+        f.Time.Advance(TimeSpan.FromMinutes(29));
+        await source.RefreshAsync();
+        Assert.Equal("a codex registration names no process (codex pid 960 could have written it)", source.Held?.Reason);
+        Assert.Contains(log, l => l.StartsWith("carrying on without codex process 960:", StringComparison.Ordinal));
+        Assert.Single(log, l => l.StartsWith($"holding for codex registration {C}: it names no process, and codex process 960, which nothing accounts for, could have written it", StringComparison.Ordinal));
+
+        f.Processes.Exit(AgentKind.Codex, 960);
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+    }
+
+    [Fact]
+    public async Task A_codex_that_could_be_the_session_a_registration_naming_no_process_is_for_holds_it_for_an_hour_at_most()
+    {
+        // Found in review: whatever only looks like a session, where what launched what cannot be
+        // read, held discovery for as long as it ran, as #437 did.
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null, updated: f.Time.GetUtcNow());
+        f.Processes.Run(AgentKind.Codex, 960, "codex.exe");
+        var log = new List<string>();
+        await using var source = f.Source(log: log.Add);
+        await source.RefreshAsync();
+        f.Time.Advance(SessionSource.PidlessWriterLimit - TimeSpan.FromSeconds(1));
+        await source.RefreshAsync();
+        Assert.Equal("a codex registration names no process (codex pid 960 could have written it)", source.Held?.Reason);
+
+        f.Time.Advance(TimeSpan.FromSeconds(1));
+        await source.RefreshAsync();
+        f.Time.Advance(TimeSpan.FromHours(4.5));
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+        Assert.Single(log, l => l == $"carrying on without codex registration {C}: it names no process, and codex process 960, which could have written it, has held it the most it may, 60 min");
+    }
+
+    // Found in review: npx, bunx, pnpm dlx and a version manager's shim read as an interactive
+    // Codex, and held a registration naming no process for as long as the session they launched
+    // ran. The session is the executable they launched, registered with its own pid.
+    [Theory]
+    [InlineData("\"C:\\Program Files\\nodejs\\node.exe\" \"C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js\" -y @openai/codex@latest")]
+    [InlineData("bun x @openai/codex")]
+    [InlineData("node /usr/lib/node_modules/pnpm/bin/pnpm.cjs dlx @openai/codex")]
+    [InlineData("C:\\Users\\u\\AppData\\Local\\Volta\\bin\\codex.exe")]
+    public async Task A_launcher_of_another_codex_session_is_not_the_session_a_registration_naming_no_process_is_for(string launcher)
+    {
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null, updated: f.Time.GetUtcNow());
+        f.CodexRegistration(D, 961, f.CodexTranscript(D));
+        f.Processes.Run(AgentKind.Codex, 960, launcher);
+        f.Processes.Run(AgentKind.Codex, 961, "codex.exe");
+        f.Processes.Launches(960);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        f.Time.Advance(Unaccounted.Grace);
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+        Assert.Equal(D, Assert.Single(source.Snapshot()).Id);
+    }
+
+    [Fact]
+    public async Task A_session_launched_through_npx_waiting_on_its_question_still_holds_by_its_own_executable()
+    {
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null, updated: f.Time.GetUtcNow());
+        f.Processes.Run(AgentKind.Codex, 960, "node /usr/lib/node_modules/npm/bin/npx-cli.js -y @openai/codex");
+        f.Processes.Run(AgentKind.Codex, 961, "/home/u/.npm/_npx/0a1b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex");
+        f.Processes.Launches(960);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromMinutes(30));
+        await source.RefreshAsync();
+
+        Assert.Equal("a codex registration names no process (codex pid 961 could have written it)", source.Held?.Reason);
+    }
+
+    [Fact]
+    public async Task A_codex_that_started_after_a_registration_naming_no_process_was_written_is_not_its_session()
+    {
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        f.Processes.Run(AgentKind.Codex, 970, "codex.exe", startedAt: f.Time.GetUtcNow());
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+        Assert.Equal("an unrecognised codex process (pid 970)", source.Held?.Reason);
+
+        f.Time.Advance(Unaccounted.Grace);
+        await source.RefreshAsync();
+        Assert.Null(source.Held);
+    }
+
+    [Fact]
+    public async Task A_codex_server_running_since_before_a_registration_naming_no_process_was_written_is_not_its_session()
+    {
+        // Found in review: an IDE's `codex mcp-server` nothing accounts for held it for as long as
+        // the IDE ran, as #437 did. Only its own unrecognised-process grace holds.
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        f.Processes.Run(AgentKind.Codex, 980, "codex mcp-server");
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Equal("an unrecognised codex process (pid 980)", source.Held?.Reason);
+
+        f.Time.Advance(TimeSpan.FromHours(4.5));
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+    }
+
+    // Found in review: a server's name anywhere in the arguments ruled out a terminal waiting on
+    // its question. What runs is told by the subcommand.
+    [Theory]
+    [InlineData("codex.exe --profile mcp-server", true)]
+    [InlineData("codex.exe -- app-server", true)]
+    [InlineData("codex.exe \"Explain the app-server protocol\"", true)]
+    [InlineData("codex.exe -c k=v mcp-server", false)]
+    [InlineData("codex.exe exec \"list the files\"", false)]
+    [InlineData("node /usr/lib/node_modules/@openai/codex/bin/codex.js", true)]
+    [InlineData("node /usr/lib/node_modules/@openai/codex/bin/codex.js mcp-server", false)]
+    [InlineData("node /usr/lib/node_modules/@openai/codex/bin/codex.js exec \"list the files\"", false)]
+    [InlineData("node --require /work/preload.cjs /usr/lib/node_modules/@openai/codex/bin/codex.js mcp-server", false)]
+    [InlineData("node --require /work/preload.cjs /usr/lib/node_modules/@openai/codex/bin/codex.js exec \"list the files\"", false)]
+    [InlineData("node --require /work/preload.cjs /usr/lib/node_modules/@openai/codex/bin/codex.js", true)]
+    [InlineData("node --require /work/codex-preload.cjs /usr/lib/node_modules/@openai/codex/bin/codex.js exec list-files", false)]
+    [InlineData("node --require /work/codex-preload.cjs /usr/lib/node_modules/@openai/codex/bin/codex.js mcp-server", false)]
+    [InlineData("/opt/codex/codex-x86_64-unknown-linux-musl exec list-files", false)]
+    [InlineData("codex.exe --remote-auth-token-env app-server --remote ws://localhost:4500", true)]
+    // Found in review: a preload named codex was taken for Codex, and what followed for its subcommand.
+    [InlineData("node --require /work/codex.cjs /usr/lib/node_modules/@openai/codex/bin/codex.js exec list", false)]
+    [InlineData("node -r /work/codex.cjs /usr/lib/node_modules/@openai/codex/bin/codex.js mcp-server", false)]
+    [InlineData("bun --preload /work/codex.ts /usr/lib/node_modules/@openai/codex/bin/codex.js exec list", false)]
+    [InlineData("node --import /work/codex.mjs /work/vendored/codex.js exec list", false)]
+    [InlineData("node --require /work/codex.cjs /usr/lib/node_modules/@openai/codex/bin/codex.js", true)]
+    // Found in review: a loader's path in the prompt, and a preload given inline.
+    [InlineData("node --require /work/preload.cjs /usr/local/bin/codex exec \"Review /usr/local/lib/node_modules/@openai/codex/bin/codex.js\"", false)]
+    [InlineData("node --require=/work/codex.cjs /work/vendored/codex.js exec list", false)]
+    [InlineData("node --require=/work/codex.cjs /work/vendored/codex.js", true)]
+    // Found in review: npx's package option named the package, not the command it runs.
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js --package @openai/codex codex app-server", false)]
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js -p @openai/codex codex exec task", false)]
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js -p @openai/codex codex", true)]
+    // Found in review: a pinned package lost to a later folder, value or prompt word named codex,
+    // and npx's -c runs the command it is given.
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js -y @openai/codex@latest exec --cd /work/codex task", false)]
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js -y @openai/codex@0.50.0 mcp-server -C /home/u/src/codex", false)]
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js -y @openai/codex@latest exec \"fix C:\\src\\codex\"", false)]
+    [InlineData("bun x @openai/codex@latest exec --cd /work/codex x", false)]
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js -c \"codex app-server\"", false)]
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js -c \"codex\"", true)]
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js --package @openai/codex --call=\"codex exec list\"", false)]
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js --package @openai/codex --call=\"codex app-server\"", false)]
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js --package @openai/codex --call=codex", true)]
+    [InlineData("node /usr/lib/node_modules/pnpm/bin/pnpm.cjs --dir /work/codex dlx @openai/codex exec task", false)]
+    [InlineData("node /usr/lib/node_modules/pnpm/bin/pnpm.cjs -C /work/codex dlx @openai/codex exec task", false)]
+    [InlineData("node /usr/lib/node_modules/pnpm/bin/pnpm.cjs --dir /work/codex dlx @openai/codex", true)]
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js -y @openai/codex@latest", true)]
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js -y @openai/codex@latest exec codex", false)]
+    [InlineData("node --conditions codex /usr/lib/node_modules/@openai/codex/bin/codex.js exec task", false)]
+    [InlineData("node -C codex /work/vendored/codex.js exec task", false)]
+    // an option naming codex is never the program
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js --package=@openai/codex codex exec task", false)]
+    public async Task Only_an_interactive_codex_by_its_subcommand_could_be_the_session_a_registration_naming_no_process_is_for(string commandLine, bool holds)
+    {
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null, updated: f.Time.GetUtcNow());
+        f.Processes.Run(AgentKind.Codex, 960, commandLine);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromMinutes(30));
+        await source.RefreshAsync();
+
+        Assert.Equal(holds ? "a codex registration names no process (codex pid 960 could have written it)" : null, source.Held?.Reason);
+    }
+
+    [Fact]
+    public async Task A_codex_whose_command_line_cannot_be_read_could_be_the_session_a_registration_naming_no_process_is_for()
+    {
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null, updated: f.Time.GetUtcNow());
+        f.Processes.Run(AgentKind.Codex, 990);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromMinutes(30));
+        await source.RefreshAsync();
+
+        Assert.Equal("a codex registration names no process (codex pid 990 could have written it)", source.Held?.Reason);
+    }
+
+    // A second of slack, as for a registration's own process: start times the OS rounds.
+    [Theory]
+    [InlineData(1000, true)]
+    [InlineData(1001, false)]
+    public async Task A_codex_that_started_up_to_a_second_after_a_registration_naming_no_process_was_written_could_have_written_it(int afterMs, bool holds)
+    {
+        using var f = new Fixture();
+        var written = f.Time.GetUtcNow();
+        f.CodexRegistration(C, 0, null, updated: written);
+        f.Processes.Run(AgentKind.Codex, 960, "codex.exe", startedAt: written.AddMilliseconds(afterMs));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromMinutes(30));
+        await source.RefreshAsync();
+
+        Assert.Equal(holds ? "a codex registration names no process (codex pid 960 could have written it)" : null, source.Held?.Reason);
+    }
+
+    [Fact]
+    public async Task A_codex_registration_naming_no_process_with_no_time_of_its_own_is_dated_by_its_file()
+    {
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        var path = Path.Combine(f.CodexRegistrations, C + ".json");
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        json.Remove("Updated");
+        File.WriteAllText(path, json.ToJsonString());
+        File.SetLastWriteTimeUtc(path, f.Time.GetUtcNow().UtcDateTime);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        f.Time.Advance(TimeSpan.FromSeconds(119));
+        await source.RefreshAsync();
+        Assert.Equal("a codex registration names no process", source.Held?.Reason);
+
+        f.Time.Advance(TimeSpan.FromSeconds(1));
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+    }
+
+    [Fact]
+    public async Task A_codex_registration_naming_no_process_that_cannot_be_listed_with_the_processes_holds()
+    {
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        f.Processes.Unreadable(AgentKind.Codex);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Equal("a codex registration names no process, the codex processes could not be listed", source.Held?.Reason);
+
+        f.Processes.Unreadable(AgentKind.Codex, false);
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+    }
+
+    [Fact]
+    public async Task A_codex_registration_naming_no_process_carried_on_without_is_said_once_across_a_pass_that_held()
+    {
+        // Found in review: a pass that could not list the processes held, and forgot it was said.
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        var log = new List<string>();
+        await using var source = f.Source(log: log.Add);
+        await source.RefreshAsync();
+        f.Processes.Unreadable(AgentKind.Codex);
+        await source.RefreshAsync();
+        f.Processes.Unreadable(AgentKind.Codex, false);
+
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+        Assert.Single(log, l => l.StartsWith($"carrying on without codex registration {C}:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_codex_registration_naming_no_process_rewritten_while_it_is_read_holds_until_it_reads_whole()
+    {
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        var rewrite = true;
+        await using var source = f.Source(afterRegistrationRead: path =>
+        {
+            if (rewrite) { File.AppendAllText(path, " "); }
+        });
+        await source.RefreshAsync();
+        Assert.Equal("a codex registration changed while it was read", source.Held?.Reason);
+
+        rewrite = false;
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+    }
+
+    [Fact]
+    public async Task A_claude_registration_naming_no_process_holds_as_it_did_while_a_codex_one_is_carried_on_without()
+    {
+        using var f = new Fixture();
+        f.ClaudeRegistration(B, 0, null);
+        f.CodexRegistration(C, 0, null);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Equal(new DiscoveryHeld("a claude registration names no process", [AgentKind.Claude]), source.Held, HeldComparer.Instance);
+    }
+
     [Fact]
     public async Task A_registration_that_cannot_be_parsed_keeps_its_session_rather_than_retiring_it()
     {
@@ -408,6 +754,8 @@ public class DiscoveryHoldTests
     [InlineData("codex resume 0199a213-81c0-7800-8aa1-bbab2a035a53", false)]
     [InlineData("codex.exe --no-daemon -c model_reasoning_summary=detailed -- app-server", false)]
     [InlineData("codex.exe -- \"Explain /app-server-daemon/ in this repo\"", false)]
+    [InlineData("codex --remote-auth-token-env app-server --remote ws://localhost:4500", false)]
+    [InlineData("node --require /work/codex-preload.cjs /usr/lib/node_modules/@openai/codex/bin/codex.js app-server", true)]
     public void Codexs_app_server_is_the_subcommand_not_the_word_in_a_prompt(string commandLine, bool appServer)
     {
         Assert.Equal(appServer, CommandLine.IsCodexAppServer(commandLine));

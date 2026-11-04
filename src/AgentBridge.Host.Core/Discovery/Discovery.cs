@@ -486,14 +486,6 @@ internal static class CodexLockDiscovery
     internal static bool IsAppServer(string? commandLine) =>
         CommandLine.Split(commandLine).Skip(1).Any(a => a is "app-server" or "mcp-server");
 
-    // Global options that take a value (codex-rs cli/src/main.rs and tui/src/cli.rs), so a value
-    // is never read as the subcommand.
-    static readonly HashSet<string> ValueOptions = new(StringComparer.Ordinal)
-    {
-        "-c", "--config", "--enable", "--disable", "--remote", "--remote-auth-token-env", "-a", "--ask-for-approval",
-        "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-C", "--cd", "-i", "--image", "--add-dir", "--local-provider",
-    };
-
     // Every subcommand but the interactive ones, with their aliases. The first argument that is
     // not an option is the subcommand if it names one, else the prompt, as clap reads it; after
     // `--` everything is the prompt.
@@ -505,16 +497,20 @@ internal static class CodexLockDiscovery
         "responses-api-proxy", "stdio-to-uds", "exec-server", "features", "help",
     };
 
+    // Read from Codex's own arguments, after its program (CommandLine.CodexCommand): read from
+    // the runtime an npm install runs it in, the script's path was the prompt, and a wrapped
+    // `exec` or server was taken for a terminal.
     internal static bool IsInteractive(string commandLine)
     {
-        var args = CommandLine.Split(commandLine).Skip(1).ToList();
+        var all = CommandLine.Split(commandLine);
+        var args = CommandLine.CodexCommand(all).Arguments;
         for (var i = 0; i < args.Count; i++)
         {
             var a = args[i];
             if (a == "--") { return true; }
             if (a.StartsWith('-'))
             {
-                if (ValueOptions.Contains(a)) { i++; }
+                if (CommandLine.CodexValueOptions.Contains(a)) { i++; }
                 continue;
             }
             return !Subcommands.Contains(a);
@@ -679,10 +675,12 @@ internal static class RegistrationDiscovery
     // Anything it could not read is added to holds, in words, and every running process a
     // readable registration names (live, ended or stale) to accounted: agent-ha-bridge's
     // Read-DaemonAdapterRegistrations. A registration it could not read may be a live session's.
+    // An unended one that names no process holds too, unless pidless is given: then it goes
+    // there, for the caller to decide once it knows which processes nothing accounts for (#437).
     public static IReadOnlyList<DiscoveredSession> Find(
         AgentKind agent, IReadOnlyList<string> roots, IReadOnlyList<AgentProcess> processes, Func<string, string?> findTranscript,
         ICollection<string>? holds = null, ISet<int>? accounted = null, Action<string>? afterRead = null, IReadOnlyList<AgentProcess>? unidentified = null,
-        ISet<string>? ended = null)
+        ISet<string>? ended = null, ICollection<Registration>? pidless = null)
     {
         var name = agent.ToString().ToLowerInvariant();
         var running = processes.ToDictionary(p => p.Id);
@@ -700,7 +698,12 @@ internal static class RegistrationDiscovery
                 {
                     holds?.Add($"a {name} process that could not be read (pid {registration.ProcessId})");
                 }
-                if (!registration.Ended && registration.ProcessId <= 0) { holds?.Add($"a {name} registration names no process"); continue; }
+                if (!registration.Ended && registration.ProcessId <= 0)
+                {
+                    if (pidless is not null) { pidless.Add(registration); }
+                    else { holds?.Add($"a {name} registration names no process"); }
+                    continue;
+                }
                 // The same session registered under both the runtime and the legacy temp
                 // root: the one written last is the current one.
                 if (best.TryGetValue(registration.SessionId, out var other) && (other.Updated ?? DateTimeOffset.MinValue) >= (registration.Updated ?? DateTimeOffset.MinValue)) { continue; }

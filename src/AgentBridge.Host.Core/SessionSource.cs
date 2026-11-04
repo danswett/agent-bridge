@@ -45,6 +45,14 @@ public sealed class SessionSource : ISessionSource
     DiscoveryHeld? _held;
     // Only on the pass, under _pass.
     readonly Unaccounted _unaccounted;
+    // Codex registrations naming no process that no longer hold, by file and when it was written,
+    // so each is said once (#437).
+    readonly HashSet<(string Path, DateTimeOffset? Written)> _pidlessExcused = [];
+    readonly HashSet<(string Path, DateTimeOffset? Written, int Pid)> _pidlessHeldSaid = [];
+    // The most a Codex nothing accounts for keeps a registration naming no process held, from when
+    // it was written: a backstop where what launched what cannot be read (macOS), so nothing
+    // that only looks like a session holds discovery for good.
+    public static readonly TimeSpan PidlessWriterLimit = TimeSpan.FromHours(1);
     string? _heldLogged;
     DateTimeOffset _heldLoggedAt;
     // Only on the pass: whether the first discovery pass has looked at StateFile (Restore), what it
@@ -446,7 +454,8 @@ public sealed class SessionSource : ISessionSource
         var holds = new List<string>();
         var accounted = new HashSet<int>();
         var ended = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        IReadOnlyList<DiscoveredSession> sessions = RegistrationDiscovery.Find(agent, roots, observed.Processes, findTranscript, holds, accounted, _options.AfterRegistrationRead, observed.Unidentified, ended);
+        var pidless = agent == AgentKind.Codex ? new List<Registration>() : null;
+        IReadOnlyList<DiscoveredSession> sessions = RegistrationDiscovery.Find(agent, roots, observed.Processes, findTranscript, holds, accounted, _options.AfterRegistrationRead, observed.Unidentified, ended, pidless);
         if (codexLocks)
         {
             // agent-ha-bridge's registration, where there is one, carries what its hooks saw
@@ -472,9 +481,78 @@ public sealed class SessionSource : ISessionSource
         if (agent == AgentKind.Codex)
         {
             accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsCodexAppServer(p.CommandLine)).Select(p => p.Id));
+            HoldForPidless(observed, accounted, pidless!, holds);
         }
         Account(agent, observed, accounted, previous, holds);
         return new(agent, sessions, holds, observed, ended);
+    }
+
+    // A Codex registration naming no process: its hooks fired before they could tell which Codex
+    // was theirs (one waiting on its hooks-trust question, #437). It may be a live session's that
+    // cannot be seen, so it holds for Unaccounted.Grace after it was written, as a process nothing
+    // accounts for does, and while the processes cannot be listed. Past that, it holds only while
+    // a Codex nothing accounts for could be that session and have written it, and for at most
+    // PidlessWriterLimit after it was written. Such a process:
+    //   - is interactive by its subcommand, or its command line could not be read: a server or
+    //     `exec` run is no session (#144), and counted, an IDE's `codex mcp-server` held for as
+    //     long as the IDE ran;
+    //   - is no launcher (npx, bunx, pnpm dlx, a version manager's shim) of an interactive Codex
+    //     below it, which is the session if any is, and is found as such;
+    //   - started no later than a second after it was written (the slack OfGeneration allows for
+    //     rounded start times), or its start is unknown.
+    // Past both, no running Codex is taken for its session: one that exited before its SessionEnd
+    // left the file behind, which held discovery for 4.5 hours with nothing to rewrite it. It is
+    // carried on without, and that is said once; so is a process keeping it held past the grace,
+    // since Unaccounted has said it carries on without that process. Claude's rule is unchanged.
+    void HoldForPidless(AgentProcessObservation observed, HashSet<int> accounted, List<Registration> pidless, List<string> holds)
+    {
+        const string Reason = "a codex registration names no process";
+        var now = _time.GetUtcNow();
+        var current = new HashSet<(string, DateTimeOffset?)>();
+        foreach (var r in pidless)
+        {
+            var written = Written(r);
+            // Kept while the file is unchanged, held or not, so a pass that could not list the
+            // processes does not have it said again after.
+            current.Add((r.Path, written));
+            // Unlisted, the processes' own hold says so.
+            if (!observed.Listed || written is not { } at || now - at < Unaccounted.Grace) { holds.Add(Reason); continue; }
+            var waited = now - at;
+            var writer = observed.Processes.Where(p => !accounted.Contains(p.Id) && !observed.Launchers.Contains(p.Id)
+                    && (string.IsNullOrEmpty(p.CommandLine) || CodexLockDiscovery.IsInteractive(p.CommandLine))
+                    && (p.StartedAt is not { } started || started <= at + TimeSpan.FromSeconds(1)))
+                .OrderBy(p => p.Id).FirstOrDefault();
+            if (writer is not null && waited < PidlessWriterLimit)
+            {
+                holds.Add($"{Reason} (codex pid {writer.Id} could have written it)");
+                if (_pidlessHeldSaid.Add((r.Path, written, writer.Id)))
+                {
+                    Log($"holding for codex registration {r.SessionId}: it names no process, and codex process {writer.Id}, which nothing accounts for, could have written it, so may be a session waiting on a question; it holds for at most {(int)PidlessWriterLimit.TotalMinutes} min after it was written");
+                }
+                continue;
+            }
+            if (_pidlessExcused.Add((r.Path, written)))
+            {
+                Log(writer is null
+                    ? $"carrying on without codex registration {r.SessionId}: it names no process, was written {(int)waited.TotalMinutes} min ago, and no running codex could have written it"
+                    : $"carrying on without codex registration {r.SessionId}: it names no process, and codex process {writer.Id}, which could have written it, has held it the most it may, {(int)PidlessWriterLimit.TotalMinutes} min");
+            }
+        }
+        _pidlessExcused.IntersectWith(current);
+        _pidlessHeldSaid.RemoveWhere(k => !current.Contains((k.Path, k.Written)));
+    }
+
+    // When it was last written: its own Updated (the hook writes it on this machine, by this
+    // clock), or the file's when it has none.
+    static DateTimeOffset? Written(Registration r)
+    {
+        if (r.Updated is { } updated) { return updated; }
+        try
+        {
+            var info = new FileInfo(r.Path);
+            return info.Exists ? new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero) : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
     // What makes an agent's pass incomplete beyond what it could not read: agent-ha-bridge's

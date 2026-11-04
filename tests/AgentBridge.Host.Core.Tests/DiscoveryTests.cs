@@ -492,6 +492,12 @@ public class DiscoveryTests
     [InlineData("codex.exe review --uncommitted", false)]
     [InlineData("codex.exe migrate-rollouts", false)]
     [InlineData("codex.exe -c model=example app-server --listen stdio://", false)]
+    [InlineData("node /usr/lib/node_modules/@openai/codex/bin/codex.js", true)]
+    [InlineData("node.exe C:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js resume --last", true)]
+    [InlineData("node /usr/lib/node_modules/@openai/codex/bin/codex.js exec \"do it\"", false)]
+    [InlineData("node --no-warnings /usr/lib/node_modules/@openai/codex/bin/codex.js mcp-server", false)]
+    [InlineData("node --require /work/preload.cjs /usr/lib/node_modules/@openai/codex/bin/codex.js exec \"do it\"", false)]
+    [InlineData("node -r /work/preload.cjs /usr/lib/node_modules/@openai/codex/bin/codex.js resume --last", true)]
     [InlineData(null, false)]
     public void A_Codex_terminal_is_the_interactive_CLI_not_a_headless_run_or_a_server(string? commandLine, bool terminal) =>
         Assert.Equal(terminal, CodexLockDiscovery.IsTerminal(commandLine));
@@ -682,6 +688,98 @@ public class DiscoveryTests
         };
         Assert.Equal([2192], SystemProcessInspector.Classify(AgentKind.Codex, "codex", codex, listed: true, windows: true, _ => false)
             .Observation.Processes.Select(p => p.Id));
+    }
+
+    // Found in review (#437): npx, bunx, pnpm dlx and a version manager's shim read as an
+    // interactive Codex. Above an interactive executable they launched, they are told apart;
+    // a Codex above one, started through its shell tool, is not a wrapper.
+    [Fact]
+    public void A_launcher_above_an_interactive_codex_executable_is_told_apart_from_its_session()
+    {
+        var t = DateTimeOffset.Parse("2026-11-01T00:54:42Z", System.Globalization.CultureInfo.InvariantCulture);
+        const string Native = @"C:\Users\u\AppData\Local\npm-cache\_npx\0a1b\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\codex\codex.exe";
+        const string Loader = @"""C:\Program Files\nodejs\node.exe"" C:\Users\u\AppData\Local\npm-cache\_npx\0a1b\node_modules\@openai\codex\bin\codex.js";
+        const string Unix = "/home/u/.npm/_npx/0a1b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex";
+        const string Npx = @"""C:\Program Files\nodejs\node.exe"" ""C:\Program Files\nodejs\node_modules\npm\bin\npx-cli.js"" -y @openai/codex@latest";
+        var listing = new SystemProcessInspector.ListedProcess[]
+        {
+            // npx, then a shell, then npm's loader, then the executable
+            new("codex", 100, t.AddSeconds(2), Native, Parent: 101, Ancestors: [101, 102, 103]),
+            new("node", 101, t.AddSeconds(1), Loader),
+            new("node", 103, t, Npx),
+            new("codex", 200, t.AddSeconds(2), "/home/u/.bun/install/cache/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex",
+                Parent: 201, Ancestors: [201]),
+            new("bun", 201, t, "bun x @openai/codex"),
+            // a version manager's shim, itself named codex
+            new("codex", 300, t.AddSeconds(2), Native, Parent: 301, Ancestors: [301, 302, 9]),
+            new("node", 301, t.AddSeconds(1), Loader),
+            new("codex", 302, t, @"C:\Users\u\AppData\Local\Volta\bin\codex.exe", Parent: 9, Ancestors: [9]),
+            // what an `exec` run's launcher launched is no session
+            new("codex", 400, t.AddSeconds(2), Native + " exec list", Parent: 401, Ancestors: [401]),
+            new("node", 401, t, Npx + " exec list"),
+            // a pid above that started after the executable went to another process
+            new("codex", 500, t, Native, Parent: 501, Ancestors: [501]),
+            new("node", 501, t.AddSeconds(5), Npx),
+            // one whose start cannot be read is not known to have launched anything
+            new("codex", 600, t.AddSeconds(2), Native, Parent: 601, Ancestors: [601]),
+            new("node", 601, null, Npx),
+            // an interactive Codex that started another through its shell tool is still a session
+            new("codex", 700, t.AddSeconds(2), Native, Parent: 701, Ancestors: [701, 702]),
+            new("codex", 702, t, Native, Parent: 9, Ancestors: [9]),
+            // shims and npx elsewhere; a Homebrew install is Codex itself, and a wrapper not
+            // known as one, or one whose command line cannot be read, may be the session
+            new("codex", 800, t.AddSeconds(2), Unix, Parent: 801, Ancestors: [801]),
+            new("codex", 801, t, "/home/u/.volta/bin/codex"),
+            new("codex", 810, t.AddSeconds(2), Unix, Parent: 811, Ancestors: [811]),
+            new("codex", 811, t, "/home/u/.asdf/shims/codex"),
+            new("codex", 820, t.AddSeconds(2), Unix, Parent: 821, Ancestors: [821]),
+            new("codex", 821, t, "/home/u/.local/share/mise/shims/codex"),
+            new("codex", 830, t.AddSeconds(2), Native, Parent: 831, Ancestors: [831]),
+            new("codex", 831, t, @"C:\Users\u\scoop\shims\codex.exe"),
+            new("codex", 840, t.AddSeconds(2), Unix, Parent: 841, Ancestors: [841]),
+            new("codex", 841, t, "/opt/homebrew/bin/codex"),
+            new("codex", 850, t.AddSeconds(2), Unix, Parent: 851, Ancestors: [851]),
+            new("codex", 851, t, "/home/u/tools/codex-wrapper"),
+            new("codex", 860, t.AddSeconds(2), Unix, Parent: 861, Ancestors: [861]),
+            new("codex", 861, t, null),
+            new("codex", 870, t.AddSeconds(2), Unix, Parent: 871, Ancestors: [871, 872]),
+            new("node", 871, t, "node /usr/local/lib/node_modules/npm/bin/npx-cli.js -y @openai/codex"),
+            // a native Codex built under a folder named shims is no shim
+            new("codex", 880, t.AddSeconds(2), Unix, Parent: 881, Ancestors: [881]),
+            new("codex", 881, t, "/home/u/work/shims/codex/target/release/codex"),
+            new("codex", 890, t.AddSeconds(2), Unix, Parent: 891, Ancestors: [891]),
+            new("codex", 891, t, "/home/u/.volta/bin/tools/codex"),
+        };
+
+        var (observation, _) = SystemProcessInspector.Classify(AgentKind.Codex, "codex", listing, listed: true, windows: true, _ => false);
+
+        Assert.Equal([100, 103, 200, 201, 300, 302, 400, 401, 500, 501, 600, 601, 700, 702, 800, 801, 810, 811, 820, 821, 830, 831, 840, 841, 850, 851, 860, 861, 870, 871, 880, 881, 890, 891], observation.Processes.Select(p => p.Id).Order());
+        Assert.Equal([103, 201, 302, 801, 811, 821, 831, 871], observation.Launchers.Order());
+    }
+
+    // Found in review (#437): on Windows a parent's pid outlives it. Another waiting Codex's child
+    // took the pid of this executable's exited parent, and the walk went on up to that Codex,
+    // which was then taken for this one's launcher and its hold dropped.
+    [Fact]
+    public void An_executables_ancestry_ends_at_a_process_that_started_after_the_one_below_it()
+    {
+        var t = DateTimeOffset.Parse("2026-11-01T00:54:42Z", System.Globalization.CultureInfo.InvariantCulture);
+        var parents = new Dictionary<int, int> { [2] = 3, [5] = 6, [6] = 7, [7] = 8, [8] = 9, [10] = 11, [11] = 10 };
+        var starts = new Dictionary<int, DateTimeOffset>
+        {
+            [2] = t.AddSeconds(20), // the pid of the executable's exited parent, taken by W's child
+            [3] = t, // W, a Codex waiting on its question
+            [5] = t.AddSeconds(5), [6] = t.AddSeconds(1), [7] = t.AddHours(-1), // a shell, npx, a terminal
+            [9] = t.AddHours(-2), // above one whose start cannot be read
+            [10] = t, [11] = t, // a loop
+        };
+        int[] Walk(int parent, DateTimeOffset? started) => SystemProcessInspector.Ancestors(parent, started,
+            pid => parents.TryGetValue(pid, out var p) ? p : null, pid => starts.TryGetValue(pid, out var s) ? s : null);
+
+        Assert.Empty(Walk(2, t.AddSeconds(10)));
+        Assert.Equal([5, 6, 7], Walk(5, t.AddSeconds(10)));
+        Assert.Empty(Walk(5, null));
+        Assert.Equal([10, 11], Walk(10, t));
     }
 
     [Fact]

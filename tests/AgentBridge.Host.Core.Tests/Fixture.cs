@@ -197,6 +197,11 @@ internal sealed class FakeProcesses : IProcessInspector
     readonly HashSet<AgentKind> _unreadable = [];
     // The host's discovery reads these while a test's fake agent starts or exits on another thread.
     readonly object _gate = new();
+    readonly HashSet<int> _launchers = [];
+
+    // pid started (through any processes between) an interactive executable of its agent that is
+    // listed too, as a launcher such as npx does.
+    public void Launches(int pid) { lock (_gate) { _launchers.Add(pid); } }
 
     public void Run(AgentKind agent, int pid, string? commandLine = null, DateTimeOffset? startedAt = null)
     {
@@ -270,11 +275,17 @@ internal sealed class FakeProcesses : IProcessInspector
     public AgentProcessObservation Observe(AgentKind agent)
     {
         List<AgentProcess> unidentified;
-        lock (_gate) { unidentified = _unidentified.TryGetValue(agent, out var u) ? u.ToList() : []; }
+        HashSet<int> launchers;
+        lock (_gate)
+        {
+            unidentified = _unidentified.TryGetValue(agent, out var u) ? u.ToList() : [];
+            launchers = [.. _launchers];
+        }
         return new(GetAgentProcesses(agent), !_unreadable.Contains(agent) && unidentified.Count == 0)
         {
             Listed = !_unreadable.Contains(agent),
             Unidentified = unidentified,
+            Launchers = launchers,
         };
     }
 }
