@@ -93,34 +93,36 @@
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="Workspaces and launch defaults" AutomationProperties.HeadingLevel="Level2" />
                 <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind ViewModel.LaunchSettingsState, Mode=OneWay}" AutomationProperties.AutomationId="LaunchSettingsState" />
                 <TextBlock Style="{StaticResource AbSecondaryText}" Text="Bridge approval permits launches in the exact folder, or managed worktrees for an isolated workspace; subfolders need separate approval. This is not CLI folder trust or hook trust. No folders are approved automatically." />
-                <StackPanel Spacing="8" IsEnabled="{x:Bind ViewModel.CanEditLaunchSettings, Mode=OneWay}">
-                    <ToggleSwitch Header="Allow launching sessions on this machine" IsOn="{x:Bind ViewModel.LaunchEnabled, Mode=TwoWay}" AutomationProperties.AutomationId="LaunchEnabled" />
-                    <ItemsControl ItemsSource="{x:Bind ViewModel.Workspaces, Mode=OneWay}" AutomationProperties.AutomationId="ApprovedWorkspaces">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="contract:ApprovedWorkspace">
-                                <Border Background="{ThemeResource AbSubtle}" CornerRadius="{StaticResource AbRadiusCard}" Padding="16" Margin="0,0,0,8">
-                                    <StackPanel Spacing="4">
-                                        <TextBlock Text="{x:Bind Label}" FontWeight="SemiBold" />
-                                        <TextBlock Text="{x:Bind Path}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
-                                        <CheckBox Content="Use a separate git worktree for each new session" IsChecked="{x:Bind Isolate}" IsEnabled="False" />
-                                        <Button Content="Remove from draft" Tag="{x:Bind Path}" Click="OnRemoveWorkspace" />
-                                    </StackPanel>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <TextBox Header="Workspace label" Text="{x:Bind ViewModel.WorkspaceLabel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.AutomationId="WorkspaceLabel" />
-                    <TextBox Header="Absolute folder path" Text="{x:Bind ViewModel.WorkspaceFolder, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="Choose an existing folder you approve for launches" AutomationProperties.AutomationId="WorkspaceFolder" />
-                    <Button Content="Choose folder" Click="OnChooseWorkspace" AutomationProperties.AutomationId="ChooseWorkspace" />
-                    <CheckBox Content="Use a separate git worktree for each new session" IsChecked="{x:Bind ViewModel.WorkspaceIsolated, Mode=TwoWay}" />
-                    <Button Content="Add to draft" Click="OnAddWorkspace" AutomationProperties.AutomationId="AddWorkspace" />
-                    <ComboBox Header="Default agent" ItemsSource="{x:Bind ViewModel.DefaultAgents}" SelectedItem="{x:Bind ViewModel.DefaultAgent, Mode=TwoWay}" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="DefaultAgent" />
-                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="auto uses the first installed agent." />
-                    <ComboBox Header="Default workspace" ItemsSource="{x:Bind ViewModel.DefaultWorkspaces, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.DefaultWorkspace, Mode=TwoWay}" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="DefaultWorkspace" />
-                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="Blank leaves the configured default unset. Launch may suggest the first approved folder." />
-                    <ToggleSwitch Header="Bypass agent permission prompts by default" IsOn="{x:Bind ViewModel.UnrestrictedPermissions, Mode=TwoWay}" AutomationProperties.AutomationId="UnrestrictedPermissions" />
-                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="Off is recommended: standard CLI permission prompts remain. On asks supported agents to run with unrestricted permissions. This is separate from folder trust and permission approvals on your devices." />
-                </StackPanel>
+                <ContentControl IsEnabled="{x:Bind ViewModel.CanEditLaunchSettings, Mode=OneWay}" HorizontalContentAlignment="Stretch" IsTabStop="False">
+                    <StackPanel Spacing="8">
+                        <ToggleSwitch Header="Allow launching sessions on this machine" IsOn="{x:Bind ViewModel.LaunchEnabled, Mode=TwoWay}" AutomationProperties.AutomationId="LaunchEnabled" />
+                        <ItemsControl ItemsSource="{x:Bind ViewModel.Workspaces, Mode=OneWay}" AutomationProperties.AutomationId="ApprovedWorkspaces">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="contract:ApprovedWorkspace">
+                                    <Border Background="{ThemeResource AbSubtle}" CornerRadius="{StaticResource AbRadiusCard}" Padding="16" Margin="0,0,0,8">
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="{x:Bind Label}" FontWeight="SemiBold" />
+                                            <TextBlock Text="{x:Bind Path}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                            <CheckBox Content="Use a separate git worktree for each new session" IsChecked="{x:Bind Isolate}" IsEnabled="False" />
+                                            <Button Content="Remove from draft" Tag="{x:Bind Path}" Click="OnRemoveWorkspace" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBox Header="Workspace label" Text="{x:Bind ViewModel.WorkspaceLabel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.AutomationId="WorkspaceLabel" />
+                        <TextBox Header="Absolute folder path" Text="{x:Bind ViewModel.WorkspaceFolder, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="Choose an existing folder you approve for launches" AutomationProperties.AutomationId="WorkspaceFolder" />
+                        <Button Content="Choose folder" Click="OnChooseWorkspace" AutomationProperties.AutomationId="ChooseWorkspace" />
+                        <CheckBox Content="Use a separate git worktree for each new session" IsChecked="{x:Bind ViewModel.WorkspaceIsolated, Mode=TwoWay}" />
+                        <Button Content="Add to draft" Click="OnAddWorkspace" AutomationProperties.AutomationId="AddWorkspace" />
+                        <ComboBox Header="Default agent" ItemsSource="{x:Bind ViewModel.DefaultAgents}" SelectedItem="{x:Bind ViewModel.DefaultAgent, Mode=TwoWay}" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="DefaultAgent" />
+                        <TextBlock Style="{StaticResource AbSecondaryText}" Text="auto uses the first installed agent." />
+                        <ComboBox Header="Default workspace" ItemsSource="{x:Bind ViewModel.DefaultWorkspaces, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.DefaultWorkspace, Mode=TwoWay}" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="DefaultWorkspace" />
+                        <TextBlock Style="{StaticResource AbSecondaryText}" Text="Blank leaves the configured default unset. Launch may suggest the first approved folder." />
+                        <ToggleSwitch Header="Bypass agent permission prompts by default" IsOn="{x:Bind ViewModel.UnrestrictedPermissions, Mode=TwoWay}" AutomationProperties.AutomationId="UnrestrictedPermissions" />
+                        <TextBlock Style="{StaticResource AbSecondaryText}" Text="Off is recommended: standard CLI permission prompts remain. On asks supported agents to run with unrestricted permissions. This is separate from folder trust and permission approvals on your devices." />
+                    </StackPanel>
+                </ContentControl>
                 <local:WrapRow Spacing="8">
                     <Button Content="Review and save launch settings" Click="OnSaveLaunchSettings" IsEnabled="{x:Bind ViewModel.CanSaveLaunchSettings, Mode=OneWay}" AutomationProperties.AutomationId="SaveLaunchSettings" />
                     <Button Content="Discard draft and reload" Click="OnReloadLaunchSettings" IsEnabled="{x:Bind ViewModel.CanReloadLaunchSettings, Mode=OneWay}" />
