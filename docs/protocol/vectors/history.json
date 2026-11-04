@@ -1,0 +1,2294 @@
+{
+  "about": "A session's earlier turns, a page at a time, for the conversation pane.",
+  "spec": "v1-history.md",
+  "generatedBy": "tests/AgentBridge.Protocol.Tests/ProtocolVectors.cs",
+  "contexts": {},
+  "records": {
+    "HistoryRequest": {
+      "direction": "client",
+      "check": "HistoryProtocol.Check",
+      "valid": [
+        {
+          "name": "the-newest-page",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b"
+          }
+        },
+        {
+          "name": "an-earlier-page",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "before": "h1.AQAAAAAAABI0AAIUeA",
+            "limit": 20
+          }
+        },
+        {
+          "name": "the-most-a-page-holds",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "limit": 50
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "no-turns",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "limit": 0
+          },
+          "refusedBy": "HistoryProtocol.Check",
+          "reason": "limit must be 1 to 50"
+        },
+        {
+          "name": "more-than-a-page-holds",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "limit": 51
+          },
+          "refusedBy": "HistoryProtocol.Check",
+          "reason": "limit must be 1 to 50"
+        },
+        {
+          "name": "a-blank-session",
+          "json": {
+            "id": " "
+          },
+          "refusedBy": "HistoryProtocol.Check",
+          "reason": "session.history needs a session id"
+        },
+        {
+          "name": "an-empty-cursor",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "before": ""
+          },
+          "refusedBy": "HistoryProtocol.Check",
+          "reason": "a cursor is 1 to 256 bytes"
+        },
+        {
+          "name": "a-cursor-over-256-bytes",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "before": "h1.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          },
+          "refusedBy": "HistoryProtocol.Check",
+          "reason": "a cursor is 1 to 256 bytes"
+        },
+        {
+          "name": "a-limit-that-is-not-a-number",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "limit": true
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-id",
+          "json": {},
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-id",
+          "json": {
+            "id": 42
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "HistoryPrompt": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "the-persons",
+          "json": {
+            "text": "Run the tests"
+          }
+        },
+        {
+          "name": "a-scheduled-prompt",
+          "json": {
+            "text": "[Scheduled prompt #4] Check CI and report.",
+            "from": "schedule",
+            "label": "4"
+          }
+        },
+        {
+          "name": "one-an-agent-sent",
+          "json": {
+            "text": "Carry on with the next step.",
+            "from": "agent"
+          }
+        },
+        {
+          "name": "cut-short",
+          "json": {
+            "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "truncated": true
+          }
+        },
+        {
+          "name": "an-unknown-sender-reads-as-other-never-the-person",
+          "json": {
+            "text": "Carry on.",
+            "from": "robot"
+          },
+          "reads": {
+            "text": "Carry on.",
+            "from": "other"
+          }
+        },
+        {
+          "name": "missing-text",
+          "json": {},
+          "reads": {
+            "text": ""
+          }
+        },
+        {
+          "name": "wrong-type-text",
+          "json": {
+            "text": 42
+          },
+          "reads": {
+            "text": ""
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "a-sender-that-is-not-text",
+          "json": {
+            "text": "Carry on.",
+            "from": 4
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "DelegateEvent": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "started",
+          "json": {
+            "agent": "agent-1",
+            "event": "started",
+            "name": "Run the suite",
+            "kind": "background"
+          }
+        },
+        {
+          "name": "reported-back",
+          "json": {
+            "agent": "agent-1",
+            "event": "reported",
+            "name": "Run the suite",
+            "outcome": "failed"
+          }
+        },
+        {
+          "name": "reported-back-unnamed",
+          "json": {
+            "agent": "agent-2",
+            "event": "reported",
+            "outcome": "done"
+          }
+        },
+        {
+          "name": "an-unknown-event-reads-as-unknown",
+          "json": {
+            "agent": "agent-1",
+            "event": "paused"
+          },
+          "reads": {
+            "agent": "agent-1",
+            "event": "unknown"
+          }
+        },
+        {
+          "name": "missing-event",
+          "json": {
+            "agent": "agent-1",
+            "name": "Run the suite",
+            "kind": "background"
+          },
+          "reads": {
+            "agent": "agent-1",
+            "event": "unknown",
+            "name": "Run the suite",
+            "kind": "background"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "an-agent-that-is-not-text",
+          "json": {
+            "agent": 1,
+            "event": "started"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-agent",
+          "json": {
+            "event": "started",
+            "name": "Run the suite",
+            "kind": "background"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-agent",
+          "json": {
+            "agent": 42,
+            "event": "started",
+            "name": "Run the suite",
+            "kind": "background"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "HistoryPart": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "a-response",
+          "json": {
+            "id": "Zp1Lr0aH2cQ8sV3n.0",
+            "kind": "response",
+            "at": "2026-10-28T04:25:43.182Z",
+            "text": "All **47** tests pass."
+          }
+        },
+        {
+          "name": "reasoning",
+          "json": {
+            "id": "Hq2Nf7Ka0Lw4Xe1R.0",
+            "kind": "reasoning",
+            "at": "2026-10-28T04:22:43.182Z",
+            "text": "The suite is in tests/."
+          }
+        },
+        {
+          "name": "a-response-cut-short",
+          "json": {
+            "id": "Zp1Lr0aH2cQ8sV3n.0",
+            "kind": "response",
+            "at": "2026-10-28T04:25:43.182Z",
+            "text": "…the end of a long reply.",
+            "truncated": true
+          }
+        },
+        {
+          "name": "a-tool",
+          "json": {
+            "id": "Hq2Nf7Ka0Lw4Xe1R.1",
+            "kind": "tool",
+            "at": "2026-10-28T04:22:43.182Z",
+            "tool": {
+              "id": "call_6",
+              "name": "edit",
+              "summary": "src/AgentBridge.Protocol/Sessions.cs",
+              "status": "done",
+              "startedAt": "2026-10-28T04:22:43.182Z",
+              "endedAt": "2026-10-28T04:22:45.182Z"
+            }
+          }
+        },
+        {
+          "name": "a-delegate-starting",
+          "json": {
+            "id": "Bd4Qe8Wm1Rt5Yu9I.0",
+            "kind": "delegate",
+            "at": "2026-10-28T04:22:43.182Z",
+            "delegate": {
+              "agent": "agent-1",
+              "event": "started",
+              "name": "Run the suite",
+              "kind": "background"
+            }
+          }
+        },
+        {
+          "name": "a-delegate-reporting-back",
+          "json": {
+            "id": "Cf5Rg9Xn2Sy6Zv0J.0",
+            "kind": "delegate",
+            "at": "2026-10-28T04:25:43.182Z",
+            "delegate": {
+              "agent": "agent-1",
+              "event": "reported",
+              "name": "Run the suite",
+              "outcome": "failed"
+            }
+          }
+        },
+        {
+          "name": "a-question-answered",
+          "json": {
+            "id": "Dg6Sh0Yo3Tz7Aw1K.0",
+            "kind": "question",
+            "at": "2026-10-28T04:22:43.182Z",
+            "question": {
+              "id": "call_q1",
+              "kind": "form",
+              "message": "Which spike next, and **why**?",
+              "fields": [
+                {
+                  "name": "spike",
+                  "title": "Spike",
+                  "description": "Which spike to run next",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "s6",
+                      "label": "S6: TPM-backed device keys (Recommended)"
+                    },
+                    {
+                      "value": "s7"
+                    }
+                  ],
+                  "allowOther": true,
+                  "default": "s6",
+                  "required": true
+                },
+                {
+                  "name": "parts",
+                  "title": "Parts",
+                  "type": "multi",
+                  "options": [
+                    {
+                      "value": "host"
+                    },
+                    {
+                      "value": "relay"
+                    },
+                    {
+                      "value": "pwa"
+                    }
+                  ],
+                  "allowOther": true
+                },
+                {
+                  "name": "confirm",
+                  "type": "boolean"
+                },
+                {
+                  "name": "notes",
+                  "type": "text"
+                },
+                {
+                  "name": "count",
+                  "type": "number",
+                  "default": 3
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z"
+            },
+            "outcome": "answered",
+            "answer": "spike: s6\nconfirm: true",
+            "answeredAt": "2026-10-28T04:23:23.182Z"
+          }
+        },
+        {
+          "name": "an-approval-approved",
+          "json": {
+            "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+            "kind": "question",
+            "at": "2026-10-28T04:22:43.182Z",
+            "question": {
+              "id": "req-41#3f9a",
+              "kind": "approval",
+              "message": "Run `git push`?",
+              "fields": [
+                {
+                  "name": "decision",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "approve",
+                      "label": "Approve once"
+                    },
+                    {
+                      "value": "deny",
+                      "label": "Deny"
+                    }
+                  ]
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z"
+            },
+            "outcome": "approved",
+            "answeredAt": "2026-10-28T04:22:48.182Z"
+          }
+        },
+        {
+          "name": "an-approval-denied",
+          "json": {
+            "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+            "kind": "question",
+            "at": "2026-10-28T04:22:43.182Z",
+            "question": {
+              "id": "req-41#3f9a",
+              "kind": "approval",
+              "message": "Run `git push`?",
+              "fields": [
+                {
+                  "name": "decision",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "approve",
+                      "label": "Approve once"
+                    },
+                    {
+                      "value": "deny",
+                      "label": "Deny"
+                    }
+                  ]
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z"
+            },
+            "outcome": "denied",
+            "answeredAt": "2026-10-28T04:22:48.182Z"
+          }
+        },
+        {
+          "name": "a-delegates-approval",
+          "json": {
+            "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+            "kind": "question",
+            "at": "2026-10-28T04:22:43.182Z",
+            "question": {
+              "id": "req-41#3f9a",
+              "kind": "approval",
+              "message": "Run `git push`?",
+              "fields": [
+                {
+                  "name": "decision",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "approve",
+                      "label": "Approve once"
+                    },
+                    {
+                      "value": "deny",
+                      "label": "Deny"
+                    }
+                  ]
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z",
+              "agent": "agent-1"
+            },
+            "outcome": "approved",
+            "answeredAt": "2026-10-28T04:22:48.182Z"
+          }
+        },
+        {
+          "name": "a-question-left-unanswered",
+          "json": {
+            "id": "Dg6Sh0Yo3Tz7Aw1K.0",
+            "kind": "question",
+            "at": "2026-10-28T04:22:43.182Z",
+            "question": {
+              "id": "call_q1",
+              "kind": "form",
+              "message": "Which spike next, and **why**?",
+              "fields": [
+                {
+                  "name": "spike",
+                  "title": "Spike",
+                  "description": "Which spike to run next",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "s6",
+                      "label": "S6: TPM-backed device keys (Recommended)"
+                    },
+                    {
+                      "value": "s7"
+                    }
+                  ],
+                  "allowOther": true,
+                  "default": "s6",
+                  "required": true
+                },
+                {
+                  "name": "parts",
+                  "title": "Parts",
+                  "type": "multi",
+                  "options": [
+                    {
+                      "value": "host"
+                    },
+                    {
+                      "value": "relay"
+                    },
+                    {
+                      "value": "pwa"
+                    }
+                  ],
+                  "allowOther": true
+                },
+                {
+                  "name": "confirm",
+                  "type": "boolean"
+                },
+                {
+                  "name": "notes",
+                  "type": "text"
+                },
+                {
+                  "name": "count",
+                  "type": "number",
+                  "default": 3
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z"
+            },
+            "outcome": "cancelled",
+            "answeredAt": "2026-10-28T04:23:23.182Z"
+          }
+        },
+        {
+          "name": "a-question-still-waiting",
+          "json": {
+            "id": "Dg6Sh0Yo3Tz7Aw1K.0",
+            "kind": "question",
+            "at": "2026-10-28T04:22:43.182Z",
+            "question": {
+              "id": "call_q1",
+              "kind": "form",
+              "message": "Which spike next, and **why**?",
+              "fields": [
+                {
+                  "name": "spike",
+                  "title": "Spike",
+                  "description": "Which spike to run next",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "s6",
+                      "label": "S6: TPM-backed device keys (Recommended)"
+                    },
+                    {
+                      "value": "s7"
+                    }
+                  ],
+                  "allowOther": true,
+                  "default": "s6",
+                  "required": true
+                },
+                {
+                  "name": "parts",
+                  "title": "Parts",
+                  "type": "multi",
+                  "options": [
+                    {
+                      "value": "host"
+                    },
+                    {
+                      "value": "relay"
+                    },
+                    {
+                      "value": "pwa"
+                    }
+                  ],
+                  "allowOther": true
+                },
+                {
+                  "name": "confirm",
+                  "type": "boolean"
+                },
+                {
+                  "name": "notes",
+                  "type": "text"
+                },
+                {
+                  "name": "count",
+                  "type": "number",
+                  "default": 3
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z"
+            },
+            "outcome": "unknown"
+          }
+        },
+        {
+          "name": "an-unknown-kind-reads-as-unknown",
+          "json": {
+            "id": "x.0",
+            "kind": "poll",
+            "at": "2026-10-28T04:22:43.182Z"
+          },
+          "reads": {
+            "id": "x.0",
+            "kind": "unknown",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "an-unknown-outcome-reads-as-unknown-never-approved",
+          "json": {
+            "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+            "kind": "question",
+            "at": "2026-10-28T04:22:43.182Z",
+            "question": {
+              "id": "req-41#3f9a",
+              "kind": "approval",
+              "message": "Run `git push`?",
+              "fields": [
+                {
+                  "name": "decision",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "approve",
+                      "label": "Approve once"
+                    },
+                    {
+                      "value": "deny",
+                      "label": "Deny"
+                    }
+                  ]
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z"
+            },
+            "outcome": "maybe",
+            "answeredAt": "2026-10-28T04:22:48.182Z"
+          },
+          "reads": {
+            "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+            "kind": "question",
+            "at": "2026-10-28T04:22:43.182Z",
+            "question": {
+              "id": "req-41#3f9a",
+              "kind": "approval",
+              "message": "Run `git push`?",
+              "fields": [
+                {
+                  "name": "decision",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "approve",
+                      "label": "Approve once"
+                    },
+                    {
+                      "value": "deny",
+                      "label": "Deny"
+                    }
+                  ]
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z"
+            },
+            "outcome": "unknown",
+            "answeredAt": "2026-10-28T04:22:48.182Z"
+          }
+        },
+        {
+          "name": "a-question-that-cannot-be-read",
+          "json": {
+            "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+            "kind": "question",
+            "at": "2026-10-28T04:22:43.182Z",
+            "question": {
+              "id": "req-41#3f9a",
+              "kind": "approval",
+              "message": 7,
+              "fields": [
+                {
+                  "name": "decision",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "approve",
+                      "label": "Approve once"
+                    },
+                    {
+                      "value": "deny",
+                      "label": "Deny"
+                    }
+                  ]
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z"
+            },
+            "outcome": "approved",
+            "answeredAt": "2026-10-28T04:22:48.182Z"
+          },
+          "reads": {
+            "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+            "kind": "question",
+            "at": "2026-10-28T04:22:43.182Z",
+            "outcome": "approved",
+            "answeredAt": "2026-10-28T04:22:48.182Z"
+          }
+        },
+        {
+          "name": "missing-kind",
+          "json": {
+            "id": "Zp1Lr0aH2cQ8sV3n.0",
+            "at": "2026-10-28T04:25:43.182Z",
+            "text": "All **47** tests pass."
+          },
+          "reads": {
+            "id": "Zp1Lr0aH2cQ8sV3n.0",
+            "kind": "unknown",
+            "at": "2026-10-28T04:25:43.182Z",
+            "text": "All **47** tests pass."
+          }
+        },
+        {
+          "name": "missing-at",
+          "json": {
+            "id": "Zp1Lr0aH2cQ8sV3n.0",
+            "kind": "response",
+            "text": "All **47** tests pass."
+          },
+          "reads": {
+            "id": "Zp1Lr0aH2cQ8sV3n.0",
+            "kind": "response",
+            "at": "0001-01-01T00:00:00.000Z",
+            "text": "All **47** tests pass."
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "an-outcome-that-is-not-text",
+          "json": {
+            "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+            "kind": "question",
+            "at": "2026-10-28T04:22:43.182Z",
+            "question": {
+              "id": "req-41#3f9a",
+              "kind": "approval",
+              "message": "Run `git push`?",
+              "fields": [
+                {
+                  "name": "decision",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "approve",
+                      "label": "Approve once"
+                    },
+                    {
+                      "value": "deny",
+                      "label": "Deny"
+                    }
+                  ]
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z"
+            },
+            "outcome": true,
+            "answeredAt": "2026-10-28T04:22:48.182Z"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-id",
+          "json": {
+            "kind": "response",
+            "at": "2026-10-28T04:25:43.182Z",
+            "text": "All **47** tests pass."
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-id",
+          "json": {
+            "id": 42,
+            "kind": "response",
+            "at": "2026-10-28T04:25:43.182Z",
+            "text": "All **47** tests pass."
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "HistoryTurn": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "whole",
+          "json": {
+            "id": "w8Vb3l0V7lH2eQ3c",
+            "at": "2026-10-28T04:22:43.182Z",
+            "prompt": {
+              "text": "Run the tests"
+            },
+            "parts": [
+              {
+                "id": "Hq2Nf7Ka0Lw4Xe1R.0",
+                "kind": "reasoning",
+                "at": "2026-10-28T04:22:43.182Z",
+                "text": "The suite is in tests/."
+              },
+              {
+                "id": "Hq2Nf7Ka0Lw4Xe1R.1",
+                "kind": "tool",
+                "at": "2026-10-28T04:22:43.182Z",
+                "tool": {
+                  "id": "call_6",
+                  "name": "edit",
+                  "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                  "status": "done",
+                  "startedAt": "2026-10-28T04:22:43.182Z",
+                  "endedAt": "2026-10-28T04:22:45.182Z"
+                }
+              },
+              {
+                "id": "Bd4Qe8Wm1Rt5Yu9I.0",
+                "kind": "delegate",
+                "at": "2026-10-28T04:22:43.182Z",
+                "delegate": {
+                  "agent": "agent-1",
+                  "event": "started",
+                  "name": "Run the suite",
+                  "kind": "background"
+                }
+              },
+              {
+                "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+                "kind": "question",
+                "at": "2026-10-28T04:22:43.182Z",
+                "question": {
+                  "id": "req-41#3f9a",
+                  "kind": "approval",
+                  "message": "Run `git push`?",
+                  "fields": [
+                    {
+                      "name": "decision",
+                      "type": "choice",
+                      "options": [
+                        {
+                          "value": "approve",
+                          "label": "Approve once"
+                        },
+                        {
+                          "value": "deny",
+                          "label": "Deny"
+                        }
+                      ]
+                    }
+                  ],
+                  "askedAt": "2026-10-28T04:22:43.182Z"
+                },
+                "outcome": "approved",
+                "answeredAt": "2026-10-28T04:22:48.182Z"
+              },
+              {
+                "id": "Cf5Rg9Xn2Sy6Zv0J.0",
+                "kind": "delegate",
+                "at": "2026-10-28T04:25:43.182Z",
+                "delegate": {
+                  "agent": "agent-1",
+                  "event": "reported",
+                  "name": "Run the suite",
+                  "outcome": "failed"
+                }
+              },
+              {
+                "id": "Zp1Lr0aH2cQ8sV3n.0",
+                "kind": "response",
+                "at": "2026-10-28T04:25:43.182Z",
+                "text": "All **47** tests pass."
+              }
+            ]
+          }
+        },
+        {
+          "name": "a-scheduled-prompt",
+          "json": {
+            "id": "Zp1Lr0aH2cQ8sV3n",
+            "at": "2026-10-28T04:25:43.182Z",
+            "prompt": {
+              "text": "[Scheduled prompt #4] Check CI and report.",
+              "from": "schedule",
+              "label": "4"
+            },
+            "parts": [
+              {
+                "id": "Zp1Lr0aH2cQ8sV3n.0",
+                "kind": "response",
+                "at": "2026-10-28T04:25:43.182Z",
+                "text": "All **47** tests pass."
+              }
+            ]
+          }
+        },
+        {
+          "name": "just-asked",
+          "json": {
+            "id": "Zp1Lr0aH2cQ8sV3n",
+            "at": "2026-10-28T04:25:43.182Z",
+            "prompt": {
+              "text": "And the docs?"
+            },
+            "parts": []
+          }
+        },
+        {
+          "name": "cut-short",
+          "json": {
+            "id": "w8Vb3l0V7lH2eQ3c",
+            "at": "2026-10-28T04:22:43.182Z",
+            "prompt": {
+              "text": "Run the tests"
+            },
+            "parts": [
+              {
+                "id": "Zp1Lr0aH2cQ8sV3n.0",
+                "kind": "response",
+                "at": "2026-10-28T04:25:43.182Z",
+                "text": "All **47** tests pass."
+              }
+            ],
+            "partsMore": 5,
+            "truncated": true
+          }
+        },
+        {
+          "name": "unreadable",
+          "json": {
+            "id": "Zp1Lr0aH2cQ8sV3n",
+            "at": "2026-10-28T04:25:43.182Z",
+            "parts": [],
+            "unreadable": true
+          }
+        },
+        {
+          "name": "a-part-that-cannot-be-read",
+          "json": {
+            "id": "Zp1Lr0aH2cQ8sV3n",
+            "at": "2026-10-28T04:25:43.182Z",
+            "prompt": {
+              "text": "[Scheduled prompt #4] Check CI and report.",
+              "from": "schedule",
+              "label": "4"
+            },
+            "parts": [
+              {
+                "id": "Zp1Lr0aH2cQ8sV3n.0",
+                "kind": "response",
+                "at": "2026-10-28T04:25:43.182Z",
+                "text": "All **47** tests pass."
+              },
+              {
+                "kind": "response",
+                "at": "2026-10-28T04:25:43.182Z"
+              }
+            ]
+          },
+          "reads": {
+            "id": "Zp1Lr0aH2cQ8sV3n",
+            "at": "2026-10-28T04:25:43.182Z",
+            "prompt": {
+              "text": "[Scheduled prompt #4] Check CI and report.",
+              "from": "schedule",
+              "label": "4"
+            },
+            "parts": [
+              {
+                "id": "Zp1Lr0aH2cQ8sV3n.0",
+                "kind": "response",
+                "at": "2026-10-28T04:25:43.182Z",
+                "text": "All **47** tests pass."
+              }
+            ]
+          }
+        },
+        {
+          "name": "missing-at",
+          "json": {
+            "id": "w8Vb3l0V7lH2eQ3c",
+            "prompt": {
+              "text": "Run the tests"
+            },
+            "parts": [
+              {
+                "id": "Hq2Nf7Ka0Lw4Xe1R.0",
+                "kind": "reasoning",
+                "at": "2026-10-28T04:22:43.182Z",
+                "text": "The suite is in tests/."
+              },
+              {
+                "id": "Hq2Nf7Ka0Lw4Xe1R.1",
+                "kind": "tool",
+                "at": "2026-10-28T04:22:43.182Z",
+                "tool": {
+                  "id": "call_6",
+                  "name": "edit",
+                  "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                  "status": "done",
+                  "startedAt": "2026-10-28T04:22:43.182Z",
+                  "endedAt": "2026-10-28T04:22:45.182Z"
+                }
+              },
+              {
+                "id": "Bd4Qe8Wm1Rt5Yu9I.0",
+                "kind": "delegate",
+                "at": "2026-10-28T04:22:43.182Z",
+                "delegate": {
+                  "agent": "agent-1",
+                  "event": "started",
+                  "name": "Run the suite",
+                  "kind": "background"
+                }
+              },
+              {
+                "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+                "kind": "question",
+                "at": "2026-10-28T04:22:43.182Z",
+                "question": {
+                  "id": "req-41#3f9a",
+                  "kind": "approval",
+                  "message": "Run `git push`?",
+                  "fields": [
+                    {
+                      "name": "decision",
+                      "type": "choice",
+                      "options": [
+                        {
+                          "value": "approve",
+                          "label": "Approve once"
+                        },
+                        {
+                          "value": "deny",
+                          "label": "Deny"
+                        }
+                      ]
+                    }
+                  ],
+                  "askedAt": "2026-10-28T04:22:43.182Z"
+                },
+                "outcome": "approved",
+                "answeredAt": "2026-10-28T04:22:48.182Z"
+              },
+              {
+                "id": "Cf5Rg9Xn2Sy6Zv0J.0",
+                "kind": "delegate",
+                "at": "2026-10-28T04:25:43.182Z",
+                "delegate": {
+                  "agent": "agent-1",
+                  "event": "reported",
+                  "name": "Run the suite",
+                  "outcome": "failed"
+                }
+              },
+              {
+                "id": "Zp1Lr0aH2cQ8sV3n.0",
+                "kind": "response",
+                "at": "2026-10-28T04:25:43.182Z",
+                "text": "All **47** tests pass."
+              }
+            ]
+          },
+          "reads": {
+            "id": "w8Vb3l0V7lH2eQ3c",
+            "at": "0001-01-01T00:00:00.000Z",
+            "prompt": {
+              "text": "Run the tests"
+            },
+            "parts": [
+              {
+                "id": "Hq2Nf7Ka0Lw4Xe1R.0",
+                "kind": "reasoning",
+                "at": "2026-10-28T04:22:43.182Z",
+                "text": "The suite is in tests/."
+              },
+              {
+                "id": "Hq2Nf7Ka0Lw4Xe1R.1",
+                "kind": "tool",
+                "at": "2026-10-28T04:22:43.182Z",
+                "tool": {
+                  "id": "call_6",
+                  "name": "edit",
+                  "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                  "status": "done",
+                  "startedAt": "2026-10-28T04:22:43.182Z",
+                  "endedAt": "2026-10-28T04:22:45.182Z"
+                }
+              },
+              {
+                "id": "Bd4Qe8Wm1Rt5Yu9I.0",
+                "kind": "delegate",
+                "at": "2026-10-28T04:22:43.182Z",
+                "delegate": {
+                  "agent": "agent-1",
+                  "event": "started",
+                  "name": "Run the suite",
+                  "kind": "background"
+                }
+              },
+              {
+                "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+                "kind": "question",
+                "at": "2026-10-28T04:22:43.182Z",
+                "question": {
+                  "id": "req-41#3f9a",
+                  "kind": "approval",
+                  "message": "Run `git push`?",
+                  "fields": [
+                    {
+                      "name": "decision",
+                      "type": "choice",
+                      "options": [
+                        {
+                          "value": "approve",
+                          "label": "Approve once"
+                        },
+                        {
+                          "value": "deny",
+                          "label": "Deny"
+                        }
+                      ]
+                    }
+                  ],
+                  "askedAt": "2026-10-28T04:22:43.182Z"
+                },
+                "outcome": "approved",
+                "answeredAt": "2026-10-28T04:22:48.182Z"
+              },
+              {
+                "id": "Cf5Rg9Xn2Sy6Zv0J.0",
+                "kind": "delegate",
+                "at": "2026-10-28T04:25:43.182Z",
+                "delegate": {
+                  "agent": "agent-1",
+                  "event": "reported",
+                  "name": "Run the suite",
+                  "outcome": "failed"
+                }
+              },
+              {
+                "id": "Zp1Lr0aH2cQ8sV3n.0",
+                "kind": "response",
+                "at": "2026-10-28T04:25:43.182Z",
+                "text": "All **47** tests pass."
+              }
+            ]
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "a-prompt-whose-sender-is-not-text",
+          "json": {
+            "id": "Zp1Lr0aH2cQ8sV3n",
+            "at": "2026-10-28T04:25:43.182Z",
+            "prompt": {
+              "text": "[Scheduled prompt #4] Check CI and report.",
+              "from": 4,
+              "label": "4"
+            },
+            "parts": [
+              {
+                "id": "Zp1Lr0aH2cQ8sV3n.0",
+                "kind": "response",
+                "at": "2026-10-28T04:25:43.182Z",
+                "text": "All **47** tests pass."
+              }
+            ]
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "an-id-that-is-not-text",
+          "json": {
+            "id": 7,
+            "at": "2026-10-28T04:25:43.182Z",
+            "prompt": {
+              "text": "[Scheduled prompt #4] Check CI and report.",
+              "from": "schedule",
+              "label": "4"
+            },
+            "parts": [
+              {
+                "id": "Zp1Lr0aH2cQ8sV3n.0",
+                "kind": "response",
+                "at": "2026-10-28T04:25:43.182Z",
+                "text": "All **47** tests pass."
+              }
+            ]
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-id",
+          "json": {
+            "at": "2026-10-28T04:22:43.182Z",
+            "prompt": {
+              "text": "Run the tests"
+            },
+            "parts": [
+              {
+                "id": "Hq2Nf7Ka0Lw4Xe1R.0",
+                "kind": "reasoning",
+                "at": "2026-10-28T04:22:43.182Z",
+                "text": "The suite is in tests/."
+              },
+              {
+                "id": "Hq2Nf7Ka0Lw4Xe1R.1",
+                "kind": "tool",
+                "at": "2026-10-28T04:22:43.182Z",
+                "tool": {
+                  "id": "call_6",
+                  "name": "edit",
+                  "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                  "status": "done",
+                  "startedAt": "2026-10-28T04:22:43.182Z",
+                  "endedAt": "2026-10-28T04:22:45.182Z"
+                }
+              },
+              {
+                "id": "Bd4Qe8Wm1Rt5Yu9I.0",
+                "kind": "delegate",
+                "at": "2026-10-28T04:22:43.182Z",
+                "delegate": {
+                  "agent": "agent-1",
+                  "event": "started",
+                  "name": "Run the suite",
+                  "kind": "background"
+                }
+              },
+              {
+                "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+                "kind": "question",
+                "at": "2026-10-28T04:22:43.182Z",
+                "question": {
+                  "id": "req-41#3f9a",
+                  "kind": "approval",
+                  "message": "Run `git push`?",
+                  "fields": [
+                    {
+                      "name": "decision",
+                      "type": "choice",
+                      "options": [
+                        {
+                          "value": "approve",
+                          "label": "Approve once"
+                        },
+                        {
+                          "value": "deny",
+                          "label": "Deny"
+                        }
+                      ]
+                    }
+                  ],
+                  "askedAt": "2026-10-28T04:22:43.182Z"
+                },
+                "outcome": "approved",
+                "answeredAt": "2026-10-28T04:22:48.182Z"
+              },
+              {
+                "id": "Cf5Rg9Xn2Sy6Zv0J.0",
+                "kind": "delegate",
+                "at": "2026-10-28T04:25:43.182Z",
+                "delegate": {
+                  "agent": "agent-1",
+                  "event": "reported",
+                  "name": "Run the suite",
+                  "outcome": "failed"
+                }
+              },
+              {
+                "id": "Zp1Lr0aH2cQ8sV3n.0",
+                "kind": "response",
+                "at": "2026-10-28T04:25:43.182Z",
+                "text": "All **47** tests pass."
+              }
+            ]
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-id",
+          "json": {
+            "id": 42,
+            "at": "2026-10-28T04:22:43.182Z",
+            "prompt": {
+              "text": "Run the tests"
+            },
+            "parts": [
+              {
+                "id": "Hq2Nf7Ka0Lw4Xe1R.0",
+                "kind": "reasoning",
+                "at": "2026-10-28T04:22:43.182Z",
+                "text": "The suite is in tests/."
+              },
+              {
+                "id": "Hq2Nf7Ka0Lw4Xe1R.1",
+                "kind": "tool",
+                "at": "2026-10-28T04:22:43.182Z",
+                "tool": {
+                  "id": "call_6",
+                  "name": "edit",
+                  "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                  "status": "done",
+                  "startedAt": "2026-10-28T04:22:43.182Z",
+                  "endedAt": "2026-10-28T04:22:45.182Z"
+                }
+              },
+              {
+                "id": "Bd4Qe8Wm1Rt5Yu9I.0",
+                "kind": "delegate",
+                "at": "2026-10-28T04:22:43.182Z",
+                "delegate": {
+                  "agent": "agent-1",
+                  "event": "started",
+                  "name": "Run the suite",
+                  "kind": "background"
+                }
+              },
+              {
+                "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+                "kind": "question",
+                "at": "2026-10-28T04:22:43.182Z",
+                "question": {
+                  "id": "req-41#3f9a",
+                  "kind": "approval",
+                  "message": "Run `git push`?",
+                  "fields": [
+                    {
+                      "name": "decision",
+                      "type": "choice",
+                      "options": [
+                        {
+                          "value": "approve",
+                          "label": "Approve once"
+                        },
+                        {
+                          "value": "deny",
+                          "label": "Deny"
+                        }
+                      ]
+                    }
+                  ],
+                  "askedAt": "2026-10-28T04:22:43.182Z"
+                },
+                "outcome": "approved",
+                "answeredAt": "2026-10-28T04:22:48.182Z"
+              },
+              {
+                "id": "Cf5Rg9Xn2Sy6Zv0J.0",
+                "kind": "delegate",
+                "at": "2026-10-28T04:25:43.182Z",
+                "delegate": {
+                  "agent": "agent-1",
+                  "event": "reported",
+                  "name": "Run the suite",
+                  "outcome": "failed"
+                }
+              },
+              {
+                "id": "Zp1Lr0aH2cQ8sV3n.0",
+                "kind": "response",
+                "at": "2026-10-28T04:25:43.182Z",
+                "text": "All **47** tests pass."
+              }
+            ]
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "HistoryStart": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "the-start-of-the-session",
+          "json": {
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "as-far-as-the-host-serves",
+          "json": {
+            "limited": true
+          }
+        }
+      ],
+      "refused": []
+    },
+    "HistoryResult": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "a-page-with-more-before-it",
+          "json": {
+            "turns": [
+              {
+                "id": "w8Vb3l0V7lH2eQ3c",
+                "at": "2026-10-28T04:22:43.182Z",
+                "prompt": {
+                  "text": "Run the tests"
+                },
+                "parts": [
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.0",
+                    "kind": "reasoning",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "text": "The suite is in tests/."
+                  },
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.1",
+                    "kind": "tool",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "tool": {
+                      "id": "call_6",
+                      "name": "edit",
+                      "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                      "status": "done",
+                      "startedAt": "2026-10-28T04:22:43.182Z",
+                      "endedAt": "2026-10-28T04:22:45.182Z"
+                    }
+                  },
+                  {
+                    "id": "Bd4Qe8Wm1Rt5Yu9I.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "started",
+                      "name": "Run the suite",
+                      "kind": "background"
+                    }
+                  },
+                  {
+                    "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+                    "kind": "question",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "question": {
+                      "id": "req-41#3f9a",
+                      "kind": "approval",
+                      "message": "Run `git push`?",
+                      "fields": [
+                        {
+                          "name": "decision",
+                          "type": "choice",
+                          "options": [
+                            {
+                              "value": "approve",
+                              "label": "Approve once"
+                            },
+                            {
+                              "value": "deny",
+                              "label": "Deny"
+                            }
+                          ]
+                        }
+                      ],
+                      "askedAt": "2026-10-28T04:22:43.182Z"
+                    },
+                    "outcome": "approved",
+                    "answeredAt": "2026-10-28T04:22:48.182Z"
+                  },
+                  {
+                    "id": "Cf5Rg9Xn2Sy6Zv0J.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "reported",
+                      "name": "Run the suite",
+                      "outcome": "failed"
+                    }
+                  },
+                  {
+                    "id": "Zp1Lr0aH2cQ8sV3n.0",
+                    "kind": "response",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "text": "All **47** tests pass."
+                  }
+                ]
+              },
+              {
+                "id": "Zp1Lr0aH2cQ8sV3n",
+                "at": "2026-10-28T04:25:43.182Z",
+                "prompt": {
+                  "text": "[Scheduled prompt #4] Check CI and report.",
+                  "from": "schedule",
+                  "label": "4"
+                },
+                "parts": [
+                  {
+                    "id": "Zp1Lr0aH2cQ8sV3n.0",
+                    "kind": "response",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "text": "All **47** tests pass."
+                  }
+                ]
+              }
+            ],
+            "before": "h1.AQAAAAAAABI0AAIUeA"
+          }
+        },
+        {
+          "name": "the-start-of-the-session",
+          "json": {
+            "turns": [
+              {
+                "id": "w8Vb3l0V7lH2eQ3c",
+                "at": "2026-10-28T04:22:43.182Z",
+                "prompt": {
+                  "text": "Run the tests"
+                },
+                "parts": [
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.0",
+                    "kind": "reasoning",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "text": "The suite is in tests/."
+                  },
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.1",
+                    "kind": "tool",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "tool": {
+                      "id": "call_6",
+                      "name": "edit",
+                      "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                      "status": "done",
+                      "startedAt": "2026-10-28T04:22:43.182Z",
+                      "endedAt": "2026-10-28T04:22:45.182Z"
+                    }
+                  },
+                  {
+                    "id": "Bd4Qe8Wm1Rt5Yu9I.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "started",
+                      "name": "Run the suite",
+                      "kind": "background"
+                    }
+                  },
+                  {
+                    "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+                    "kind": "question",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "question": {
+                      "id": "req-41#3f9a",
+                      "kind": "approval",
+                      "message": "Run `git push`?",
+                      "fields": [
+                        {
+                          "name": "decision",
+                          "type": "choice",
+                          "options": [
+                            {
+                              "value": "approve",
+                              "label": "Approve once"
+                            },
+                            {
+                              "value": "deny",
+                              "label": "Deny"
+                            }
+                          ]
+                        }
+                      ],
+                      "askedAt": "2026-10-28T04:22:43.182Z"
+                    },
+                    "outcome": "approved",
+                    "answeredAt": "2026-10-28T04:22:48.182Z"
+                  },
+                  {
+                    "id": "Cf5Rg9Xn2Sy6Zv0J.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "reported",
+                      "name": "Run the suite",
+                      "outcome": "failed"
+                    }
+                  },
+                  {
+                    "id": "Zp1Lr0aH2cQ8sV3n.0",
+                    "kind": "response",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "text": "All **47** tests pass."
+                  }
+                ]
+              }
+            ],
+            "start": {
+              "at": "2026-10-28T04:22:43.182Z"
+            }
+          }
+        },
+        {
+          "name": "the-most-a-host-serves",
+          "json": {
+            "turns": [
+              {
+                "id": "w8Vb3l0V7lH2eQ3c",
+                "at": "2026-10-28T04:22:43.182Z",
+                "prompt": {
+                  "text": "Run the tests"
+                },
+                "parts": [
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.0",
+                    "kind": "reasoning",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "text": "The suite is in tests/."
+                  },
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.1",
+                    "kind": "tool",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "tool": {
+                      "id": "call_6",
+                      "name": "edit",
+                      "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                      "status": "done",
+                      "startedAt": "2026-10-28T04:22:43.182Z",
+                      "endedAt": "2026-10-28T04:22:45.182Z"
+                    }
+                  },
+                  {
+                    "id": "Bd4Qe8Wm1Rt5Yu9I.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "started",
+                      "name": "Run the suite",
+                      "kind": "background"
+                    }
+                  },
+                  {
+                    "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+                    "kind": "question",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "question": {
+                      "id": "req-41#3f9a",
+                      "kind": "approval",
+                      "message": "Run `git push`?",
+                      "fields": [
+                        {
+                          "name": "decision",
+                          "type": "choice",
+                          "options": [
+                            {
+                              "value": "approve",
+                              "label": "Approve once"
+                            },
+                            {
+                              "value": "deny",
+                              "label": "Deny"
+                            }
+                          ]
+                        }
+                      ],
+                      "askedAt": "2026-10-28T04:22:43.182Z"
+                    },
+                    "outcome": "approved",
+                    "answeredAt": "2026-10-28T04:22:48.182Z"
+                  },
+                  {
+                    "id": "Cf5Rg9Xn2Sy6Zv0J.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "reported",
+                      "name": "Run the suite",
+                      "outcome": "failed"
+                    }
+                  },
+                  {
+                    "id": "Zp1Lr0aH2cQ8sV3n.0",
+                    "kind": "response",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "text": "All **47** tests pass."
+                  }
+                ]
+              }
+            ],
+            "start": {
+              "limited": true
+            }
+          }
+        },
+        {
+          "name": "no-messages-yet",
+          "json": {
+            "turns": [],
+            "start": {
+              "at": "2026-10-28T04:22:43.182Z"
+            }
+          }
+        },
+        {
+          "name": "partial",
+          "json": {
+            "turns": [
+              {
+                "id": "w8Vb3l0V7lH2eQ3c",
+                "at": "2026-10-28T04:22:43.182Z",
+                "parts": [],
+                "unreadable": true
+              },
+              {
+                "id": "Zp1Lr0aH2cQ8sV3n",
+                "at": "2026-10-28T04:25:43.182Z",
+                "prompt": {
+                  "text": "[Scheduled prompt #4] Check CI and report.",
+                  "from": "schedule",
+                  "label": "4"
+                },
+                "parts": [
+                  {
+                    "id": "Zp1Lr0aH2cQ8sV3n.0",
+                    "kind": "response",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "text": "All **47** tests pass."
+                  }
+                ]
+              }
+            ],
+            "before": "h1.AQAAAAAAABI0AAIUeA",
+            "partial": true
+          }
+        },
+        {
+          "name": "missing",
+          "json": {
+            "missing": true
+          }
+        },
+        {
+          "name": "stale",
+          "json": {
+            "stale": true
+          }
+        },
+        {
+          "name": "unavailable",
+          "json": {
+            "unavailable": "this session's transcript can't be found"
+          }
+        },
+        {
+          "name": "a-turn-that-cannot-be-read",
+          "json": {
+            "turns": [
+              {
+                "id": "w8Vb3l0V7lH2eQ3c",
+                "at": "2026-10-28T04:22:43.182Z",
+                "prompt": {
+                  "text": "Run the tests"
+                },
+                "parts": [
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.0",
+                    "kind": "reasoning",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "text": "The suite is in tests/."
+                  },
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.1",
+                    "kind": "tool",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "tool": {
+                      "id": "call_6",
+                      "name": "edit",
+                      "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                      "status": "done",
+                      "startedAt": "2026-10-28T04:22:43.182Z",
+                      "endedAt": "2026-10-28T04:22:45.182Z"
+                    }
+                  },
+                  {
+                    "id": "Bd4Qe8Wm1Rt5Yu9I.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "started",
+                      "name": "Run the suite",
+                      "kind": "background"
+                    }
+                  },
+                  {
+                    "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+                    "kind": "question",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "question": {
+                      "id": "req-41#3f9a",
+                      "kind": "approval",
+                      "message": "Run `git push`?",
+                      "fields": [
+                        {
+                          "name": "decision",
+                          "type": "choice",
+                          "options": [
+                            {
+                              "value": "approve",
+                              "label": "Approve once"
+                            },
+                            {
+                              "value": "deny",
+                              "label": "Deny"
+                            }
+                          ]
+                        }
+                      ],
+                      "askedAt": "2026-10-28T04:22:43.182Z"
+                    },
+                    "outcome": "approved",
+                    "answeredAt": "2026-10-28T04:22:48.182Z"
+                  },
+                  {
+                    "id": "Cf5Rg9Xn2Sy6Zv0J.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "reported",
+                      "name": "Run the suite",
+                      "outcome": "failed"
+                    }
+                  },
+                  {
+                    "id": "Zp1Lr0aH2cQ8sV3n.0",
+                    "kind": "response",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "text": "All **47** tests pass."
+                  }
+                ]
+              },
+              {
+                "id": "Zp1Lr0aH2cQ8sV3n",
+                "at": "2026-10-28T04:25:43.182Z",
+                "prompt": {
+                  "text": "[Scheduled prompt #4] Check CI and report.",
+                  "from": 4,
+                  "label": "4"
+                },
+                "parts": [
+                  {
+                    "id": "Zp1Lr0aH2cQ8sV3n.0",
+                    "kind": "response",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "text": "All **47** tests pass."
+                  }
+                ]
+              }
+            ],
+            "before": "h1.AQAAAAAAABI0AAIUeA"
+          },
+          "reads": {
+            "turns": [
+              {
+                "id": "w8Vb3l0V7lH2eQ3c",
+                "at": "2026-10-28T04:22:43.182Z",
+                "prompt": {
+                  "text": "Run the tests"
+                },
+                "parts": [
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.0",
+                    "kind": "reasoning",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "text": "The suite is in tests/."
+                  },
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.1",
+                    "kind": "tool",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "tool": {
+                      "id": "call_6",
+                      "name": "edit",
+                      "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                      "status": "done",
+                      "startedAt": "2026-10-28T04:22:43.182Z",
+                      "endedAt": "2026-10-28T04:22:45.182Z"
+                    }
+                  },
+                  {
+                    "id": "Bd4Qe8Wm1Rt5Yu9I.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "started",
+                      "name": "Run the suite",
+                      "kind": "background"
+                    }
+                  },
+                  {
+                    "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+                    "kind": "question",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "question": {
+                      "id": "req-41#3f9a",
+                      "kind": "approval",
+                      "message": "Run `git push`?",
+                      "fields": [
+                        {
+                          "name": "decision",
+                          "type": "choice",
+                          "options": [
+                            {
+                              "value": "approve",
+                              "label": "Approve once"
+                            },
+                            {
+                              "value": "deny",
+                              "label": "Deny"
+                            }
+                          ]
+                        }
+                      ],
+                      "askedAt": "2026-10-28T04:22:43.182Z"
+                    },
+                    "outcome": "approved",
+                    "answeredAt": "2026-10-28T04:22:48.182Z"
+                  },
+                  {
+                    "id": "Cf5Rg9Xn2Sy6Zv0J.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "reported",
+                      "name": "Run the suite",
+                      "outcome": "failed"
+                    }
+                  },
+                  {
+                    "id": "Zp1Lr0aH2cQ8sV3n.0",
+                    "kind": "response",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "text": "All **47** tests pass."
+                  }
+                ]
+              }
+            ],
+            "before": "h1.AQAAAAAAABI0AAIUeA"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "a-cursor-that-is-not-text",
+          "json": {
+            "turns": [
+              {
+                "id": "w8Vb3l0V7lH2eQ3c",
+                "at": "2026-10-28T04:22:43.182Z",
+                "prompt": {
+                  "text": "Run the tests"
+                },
+                "parts": [
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.0",
+                    "kind": "reasoning",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "text": "The suite is in tests/."
+                  },
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.1",
+                    "kind": "tool",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "tool": {
+                      "id": "call_6",
+                      "name": "edit",
+                      "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                      "status": "done",
+                      "startedAt": "2026-10-28T04:22:43.182Z",
+                      "endedAt": "2026-10-28T04:22:45.182Z"
+                    }
+                  },
+                  {
+                    "id": "Bd4Qe8Wm1Rt5Yu9I.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "started",
+                      "name": "Run the suite",
+                      "kind": "background"
+                    }
+                  },
+                  {
+                    "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+                    "kind": "question",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "question": {
+                      "id": "req-41#3f9a",
+                      "kind": "approval",
+                      "message": "Run `git push`?",
+                      "fields": [
+                        {
+                          "name": "decision",
+                          "type": "choice",
+                          "options": [
+                            {
+                              "value": "approve",
+                              "label": "Approve once"
+                            },
+                            {
+                              "value": "deny",
+                              "label": "Deny"
+                            }
+                          ]
+                        }
+                      ],
+                      "askedAt": "2026-10-28T04:22:43.182Z"
+                    },
+                    "outcome": "approved",
+                    "answeredAt": "2026-10-28T04:22:48.182Z"
+                  },
+                  {
+                    "id": "Cf5Rg9Xn2Sy6Zv0J.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "reported",
+                      "name": "Run the suite",
+                      "outcome": "failed"
+                    }
+                  },
+                  {
+                    "id": "Zp1Lr0aH2cQ8sV3n.0",
+                    "kind": "response",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "text": "All **47** tests pass."
+                  }
+                ]
+              }
+            ],
+            "before": 7
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "a-start-that-is-not-a-record",
+          "json": {
+            "turns": [
+              {
+                "id": "w8Vb3l0V7lH2eQ3c",
+                "at": "2026-10-28T04:22:43.182Z",
+                "prompt": {
+                  "text": "Run the tests"
+                },
+                "parts": [
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.0",
+                    "kind": "reasoning",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "text": "The suite is in tests/."
+                  },
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.1",
+                    "kind": "tool",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "tool": {
+                      "id": "call_6",
+                      "name": "edit",
+                      "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                      "status": "done",
+                      "startedAt": "2026-10-28T04:22:43.182Z",
+                      "endedAt": "2026-10-28T04:22:45.182Z"
+                    }
+                  },
+                  {
+                    "id": "Bd4Qe8Wm1Rt5Yu9I.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "started",
+                      "name": "Run the suite",
+                      "kind": "background"
+                    }
+                  },
+                  {
+                    "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+                    "kind": "question",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "question": {
+                      "id": "req-41#3f9a",
+                      "kind": "approval",
+                      "message": "Run `git push`?",
+                      "fields": [
+                        {
+                          "name": "decision",
+                          "type": "choice",
+                          "options": [
+                            {
+                              "value": "approve",
+                              "label": "Approve once"
+                            },
+                            {
+                              "value": "deny",
+                              "label": "Deny"
+                            }
+                          ]
+                        }
+                      ],
+                      "askedAt": "2026-10-28T04:22:43.182Z"
+                    },
+                    "outcome": "approved",
+                    "answeredAt": "2026-10-28T04:22:48.182Z"
+                  },
+                  {
+                    "id": "Cf5Rg9Xn2Sy6Zv0J.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "reported",
+                      "name": "Run the suite",
+                      "outcome": "failed"
+                    }
+                  },
+                  {
+                    "id": "Zp1Lr0aH2cQ8sV3n.0",
+                    "kind": "response",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "text": "All **47** tests pass."
+                  }
+                ]
+              }
+            ],
+            "start": "session"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-before",
+          "json": {
+            "turns": [
+              {
+                "id": "w8Vb3l0V7lH2eQ3c",
+                "at": "2026-10-28T04:22:43.182Z",
+                "prompt": {
+                  "text": "Run the tests"
+                },
+                "parts": [
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.0",
+                    "kind": "reasoning",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "text": "The suite is in tests/."
+                  },
+                  {
+                    "id": "Hq2Nf7Ka0Lw4Xe1R.1",
+                    "kind": "tool",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "tool": {
+                      "id": "call_6",
+                      "name": "edit",
+                      "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                      "status": "done",
+                      "startedAt": "2026-10-28T04:22:43.182Z",
+                      "endedAt": "2026-10-28T04:22:45.182Z"
+                    }
+                  },
+                  {
+                    "id": "Bd4Qe8Wm1Rt5Yu9I.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "started",
+                      "name": "Run the suite",
+                      "kind": "background"
+                    }
+                  },
+                  {
+                    "id": "Eh7Ti1Zp4Ua8Bx2L.0",
+                    "kind": "question",
+                    "at": "2026-10-28T04:22:43.182Z",
+                    "question": {
+                      "id": "req-41#3f9a",
+                      "kind": "approval",
+                      "message": "Run `git push`?",
+                      "fields": [
+                        {
+                          "name": "decision",
+                          "type": "choice",
+                          "options": [
+                            {
+                              "value": "approve",
+                              "label": "Approve once"
+                            },
+                            {
+                              "value": "deny",
+                              "label": "Deny"
+                            }
+                          ]
+                        }
+                      ],
+                      "askedAt": "2026-10-28T04:22:43.182Z"
+                    },
+                    "outcome": "approved",
+                    "answeredAt": "2026-10-28T04:22:48.182Z"
+                  },
+                  {
+                    "id": "Cf5Rg9Xn2Sy6Zv0J.0",
+                    "kind": "delegate",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "delegate": {
+                      "agent": "agent-1",
+                      "event": "reported",
+                      "name": "Run the suite",
+                      "outcome": "failed"
+                    }
+                  },
+                  {
+                    "id": "Zp1Lr0aH2cQ8sV3n.0",
+                    "kind": "response",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "text": "All **47** tests pass."
+                  }
+                ]
+              },
+              {
+                "id": "Zp1Lr0aH2cQ8sV3n",
+                "at": "2026-10-28T04:25:43.182Z",
+                "prompt": {
+                  "text": "[Scheduled prompt #4] Check CI and report.",
+                  "from": "schedule",
+                  "label": "4"
+                },
+                "parts": [
+                  {
+                    "id": "Zp1Lr0aH2cQ8sV3n.0",
+                    "kind": "response",
+                    "at": "2026-10-28T04:25:43.182Z",
+                    "text": "All **47** tests pass."
+                  }
+                ]
+              }
+            ],
+            "before": 42
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    }
+  },
+  "knownDifferences": []
+}

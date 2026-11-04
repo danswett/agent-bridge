@@ -319,6 +319,7 @@ internal sealed class SessionTracker
                 UserMessage = Limits.KeepStart(_state.UserMessage, Limits.UserMessage),
                 UserMessageFrom = _state.UserMessage is null ? null : _state.UserMessageFrom,
                 UserMessageLabel = _state.UserMessage is null ? null : Limits.KeepStart(_state.UserMessageLabel, Limits.UserMessageLabel),
+                Turn = _state.TurnId,
                 TurnCount = _state.Seen ? Math.Max(0, _state.Prompts - (effective == SessionStatus.Idle || _state.UncountedTurn ? 0 : 1)) : null,
                 Compactions = _state.Seen ? _state.Compactions : null,
                 Background = Protocol.Background.Of(agents, shells),

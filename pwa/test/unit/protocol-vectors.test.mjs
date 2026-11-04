@@ -411,6 +411,16 @@ const NOT_REPLAYED = {
   RestoreNotice: 'the PWA does not read machine.restore yet (#780)',
   RestoreSession: 'the PWA does not read machine.restore yet (#780)',
   SessionRestored: 'no host sends a session\'s restored yet, and the PWA does not read it (#780)',
+
+  // Its client slice is #292's next step; the protocol and host land first (v1-history.md).
+  HistoryRequest: 'the PWA does not page a session\'s history yet (#292)',
+  HistoryResult: 'the PWA does not page a session\'s history yet (#292)',
+  HistoryStart: 'the PWA does not page a session\'s history yet (#292)',
+  HistoryTurn: 'the PWA does not page a session\'s history yet (#292)',
+  HistoryPrompt: 'the PWA does not page a session\'s history yet (#292)',
+  HistoryPart: 'the PWA does not page a session\'s history yet (#292)',
+  DelegateEvent: 'the PWA does not page a session\'s history yet (#292)',
+
 };
 
 // ---- the replay ----

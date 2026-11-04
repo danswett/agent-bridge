@@ -66,6 +66,8 @@ public class SubagentTests
         node.Remove("waitingOn");
         node["activity"]!.AsObject().Remove("source");
         node["activity"]!.AsObject().Remove("own");
+        // The latest turn's id (#292) is newer than the recording too, and older clients ignore it.
+        node["activity"]!.AsObject().Remove("turn");
         node["question"]?.AsObject().Remove("agent");
         return node;
     }

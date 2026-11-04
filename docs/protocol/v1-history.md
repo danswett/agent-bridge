@@ -144,7 +144,7 @@ A prompt and everything until the next prompt (H7).
 | `parts` | Part[] | Everything else in the turn, in the order the transcript has it. Empty when there is nothing (a turn just started, or a prompt the agent never answered) |
 | `partsMore` | number? | Parts left out: by the per-turn count caps, or by the turn's budget. Absent when none are |
 | `truncated` | bool? | Something in the turn was cut or left out: a part's text cut (`truncated` on it), parts left out (`partsMore`), or only the end of a long turn read ([Caps](#caps)). A client ends the turn with "Cut short · see the machine" (H5) |
-| `unreadable` | bool? | The host found a record that starts a turn here but could not read it (malformed, or longer than the host reads). It holds only `id` and `at` (`at` may be the time of the turn before it, when the record's own can't be read). A client draws "A turn here couldn't be read" in its place, keeping the turns around it (H5) |
+| `unreadable` | bool? | The host found a record that starts a turn here but could not read it (malformed, or longer than the host reads). It holds only `id` and `at` (`at` is the time of the first record after it that has one). A client draws "A turn here couldn't be read" in its place, keeping the turns around it (H5) |
 
 #### Prompt
 
@@ -234,6 +234,8 @@ part left out in `partsMore` and setting `truncated`:
    as Session budget steps 10 and 11 do, then `answer`.
 6. The last `response` to its last 4 KiB.
 7. `prompt.text` to its first 2 KiB.
+8. Should a turn still not fit (only a pathological number of ids and flags could do that), parts
+   from the oldest on.
 
 Never trimmed: ids, times, `from`, `label`, `outcome`, flags. A turn's budget is the session
 budget's, so a turn never carries more of any one text than `activity` carries of it, except
@@ -246,7 +248,8 @@ any one turn (a longer turn is read from its prompt and its **last** 8 MiB, `tru
 and what it skipped counted in neither `parts` nor `partsMore`), and at most 32 MiB for a page
 (it stops adding older turns there, at least one). A turn whose prompt is more than 256 MiB
 before the cursor ends the history there, with `start.limited`. A transcript line longer than
-32 MiB is not read, as the tail does not.
+32 MiB is not read, as the tail does not. A host reads at most two pages at once; a further request
+waits its turn.
 
 ### The cursor
 
@@ -254,11 +257,12 @@ before the cursor ends the history there, with `start.limited`. A transcript lin
 same session's id; it never parses, builds or compares one.
 
 A host makes it from where the page's oldest turn starts in the transcript, that turn's id, how
-many turns have been served before it, and a fingerprint of the transcript's first bytes, and
-seals it with a MAC under a key the host keeps in its profile folder (32 random bytes, made once).
-So it is the same after the host restarts, and it stays good as the transcript grows. Nothing in it
-names a path. A client cannot make one that reads anything but the turns it could page to, nor
-skip the 500-turn limit.
+many turns have been served before it, and a fingerprint of the transcript's first record, and
+seals it with an HMAC-SHA256 under a key the host keeps in its profile folder
+(`history-cursor.key`: 32 random bytes, made once). So it is the same after the host restarts, and
+it stays good as the transcript grows. Nothing in it names a path. A client cannot make one that
+reads anything but the turns it could page to, nor skip the 500-turn limit. A host that cannot keep
+the key uses one for its run only, and its cursors are then stale after a restart.
 
 A host checks every cursor before using it: its MAC, its session, the transcript's fingerprint,
 and that the record where it says the turn starts is still that turn's prompt. Any of those
@@ -305,14 +309,14 @@ turn was the latest, with the same `from`.
 
 | | Copilot `events.jsonl` | Claude `<id>.jsonl` | Codex rollout |
 |---|---|---|---|
-| A turn starts | `user.message` of the main agent (no `agentId`) with text, whose `data.source` is not `memory`, `system` or `skill-…`. `from` and `label` from `data.source` (#489) | A `user` entry, not a sidechain's, meta or a compaction summary, with text and no `tool_result`, that is not a task notification Claude marked as one or "[Request interrupted by user…]" | `event_msg` `user_message`, or `item_completed` `UserMessage`, with text; the same text again before the next `task_started` is the same prompt |
+| A turn starts | `user.message` of the main agent (no `agentId`) with text, whose `data.source` is not `memory`, `system` or `skill-…`. `from` and `label` from `data.source` (#489) | A `user` entry, not a sidechain's, meta or a compaction summary, with text and no `tool_result`, that is not a task notification Claude marked as one or "[Request interrupted by user…]" | `event_msg` `user_message`, or `item_completed` `UserMessage`, with text |
 | `response` | `assistant.message` `content`, main agent's | `assistant` `text` blocks | `agent_message`; `item_completed` `AgentMessage` |
 | `reasoning` | `assistant.message` `reasoningText`, main agent's | `thinking` blocks | `agent_reasoning`; `Reasoning` `summary_text` (only when the user asked for summaries) |
 | `tool` | `tool.execution_start` and `_complete`, main agent's | `tool_use`, ended by its `tool_result` | `exec_command_*`, `patch_apply_*`, `mcp_tool_call_*`, `CommandExecution` |
 | `question` (form) | `ask_user`'s `tool.execution_start`; `answered` at `human_response.recorded` (its content is the `answer`) or the call's end | `AskUserQuestion`'s `tool_use`; `answered` at its `tool_result` (its text is the `answer`) | none: Codex asks nothing as a form |
 | `question` (approval) | `permission.requested`; `approved` or `denied` from `permission.completed`'s `result.kind` | not in the transcript (agent-ha-bridge's hook only): none | `exec_approval_request`, `apply_patch_approval_request`, always `answerAtMachine`; `approved` when the call then starts, else `unknown` |
 | `delegate` `started` | `subagent.started` with no parent, named from its `task` call | an `Agent` call's `tool_result` with `async_launched` | `CollabAgentToolCall` `spawn_agent` |
-| `delegate` `reported` | `subagent.completed` (`done`), `subagent.failed` (`failed`), or an `agent_idle` notification (`done`) | a task notification Claude marked as one, for a delegate it started | a `subagent_notification` |
+| `delegate` `reported` | `subagent.completed` (`done`), `subagent.failed` (`failed`), or an `agent_idle` notification (`done`); once per run, though Copilot can write both for one run, and again after a message wakes it | a task notification Claude marked as one, for a delegate this page saw start or the session lists | a `subagent_notification` that says it completed (`done`), errored or was interrupted (`failed`) |
 | The start | the first record's time | the first record's time | `session_meta`'s time |
 
 A question still waiting is in its turn with `outcome` `unknown`, and is also `session.question`,
@@ -336,10 +340,12 @@ line that isn't is an `unreadable` turn with `partial` on its page.
   conversation of every session on the machine, including words the person pasted into other
   sessions, is more than it needs. Not a `host` peer (another machine), and not a `service` peer.
 * **Home Assistant.** The HA connector (`service` role) gets **no history**: `session.history` is
-  not among the reads its role allows, its hello never lists `sessions.history`, and the
-  [connector read profile](connector-read.md) (`hello`, `sessions.list`, `session.get`,
-  `sessions.subscribe`) is unchanged. It keeps what it has today: the latest exchange in
-  `activity` (with `activity.turn`, which it may ignore), the question, and the counts.
+  not among the reads its role allows, a `service` peer's hello never lists `sessions.history`, and
+  the [connector read profile](connector-read.md) (`hello`, `sessions.list`, `session.get`,
+  `sessions.subscribe`) is unchanged. (Its recording, taken from a host without pinned peers, shows
+  the capability in `hello`, as it shows `sessions.patch`; the profile uses neither.) It keeps what
+  it has today: the latest exchange in `activity` (with `activity.turn`, which it may ignore), the
+  question, and the counts.
 * **Nothing new in kind.** History is `activity` applied to earlier turns: prompts, the main
   agent's responses and reasoning, tool names and one-line summaries, questions and approvals as
   `session.question` showed them, delegate names. Never tool arguments or results, file contents,

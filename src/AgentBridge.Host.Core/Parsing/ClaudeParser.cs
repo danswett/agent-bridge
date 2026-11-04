@@ -120,7 +120,9 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                 if (IsNotice(e, text)) { S.UncountedTurn = true; break; }
                 S.FirstUserMessage ??= text;
                 S.UserMessage = text;
+                TurnStarts();
                 S.Prompt(Json.Time(e, "timestamp"));
+
                 S.UncountedTurn = false;
                 break;
             case "system" when Json.Str(e, "subtype") == "compact_boundary":
@@ -351,10 +353,10 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     // A notice Claude delivered, marked as such (origin.kind "task-notification", turnOrigin
     // "task_notification", as 2.1.316 writes). The person can type the same text: Claude marks
     // that "human", and it is their prompt like any other.
-    static bool IsNotice(JsonElement e, string text) => IsNoticeText(text)
+    internal static bool IsNotice(JsonElement e, string text) => IsNoticeText(text)
         && (Json.Obj(e, "origin") is { } origin && Json.Str(origin, "kind") == "task-notification" || Json.Str(e, "turnOrigin") == "task_notification");
 
-    static string? Tag(string text, string name)
+    internal static string? Tag(string text, string name)
     {
         var open = $"<{name}>";
         var start = text.IndexOf(open, StringComparison.Ordinal);
@@ -446,11 +448,20 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         S.Activity(at);
     }
 
-    static bool IsInterrupt(string text) => text.StartsWith("[Request interrupted by user", StringComparison.Ordinal);
+    internal static bool IsInterrupt(string text) => text.StartsWith("[Request interrupted by user", StringComparison.Ordinal);
+
+    // Whether a record starts a turn (docs/protocol/v1-history.md), and its prompt: exactly the
+    // entries Count and User take as the person's prompt, so history's turn ids are activity.turn's.
+    internal static string? TurnStart(JsonElement e)
+    {
+        if (Json.Str(e, "type") != "user" || Json.Bool(e, "isSidechain") == true || Json.Bool(e, "isMeta") == true || Json.Bool(e, "isCompactSummary") == true) { return null; }
+        if (Prompt(e) is not { } text || IsInterrupt(text) || IsNotice(e, text)) { return null; }
+        return text;
+    }
 
     // The text of a prompt, or null for an entry that is not one: tool results, and the
     // echoes of slash commands, which Claude writes as user entries.
-    static string? Prompt(JsonElement e)
+    internal static string? Prompt(JsonElement e)
     {
         var message = Json.Obj(e, "message");
         string? text;

@@ -23,7 +23,27 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
     {
         if (!SkimWants(line.Span)) { return; }
         using var doc = TryParse(line);
-        if (doc is { RootElement.ValueKind: JsonValueKind.Object } d) { Count(d.RootElement); }
+        if (doc is { RootElement.ValueKind: JsonValueKind.Object } d)
+        {
+            _line = line;
+            try { Count(d.RootElement); }
+            finally { _line = default; }
+        }
+    }
+
+    // The line being read, for the id of a turn its record starts (TurnIds): history gives the
+    // turn the same id from the same bytes.
+    ReadOnlyMemory<byte> _line;
+
+    // The id of the turn the record being read starts, for activity.turn.
+    protected void TurnStarts() => S.TurnId = _line.IsEmpty ? null : Conversation.TurnIds.Of(_line.Span);
+
+    void ILineSink.Skipped()
+    {
+        // The latest turn may have begun in the bytes never read: its id is not known, and the
+        // last one the skim saw is not it.
+        S.TurnId = null;
+        Skipped();
     }
 
     protected virtual bool SkimWants(ReadOnlySpan<byte> line)
@@ -44,7 +64,10 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
         // Only events that can change what a client shows move updatedAt: hook runs,
         // usage records and model internals are a fifth of a Copilot transcript, and
         // counting them sent an upsert for every one.
-        var visible = Apply(d.RootElement, at);
+        _line = line;
+        bool visible;
+        try { visible = Apply(d.RootElement, at); }
+        finally { _line = default; }
         S.Observe(at, before, visible);
     }
 
@@ -78,6 +101,7 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
         S.UserMessageFrom = from;
         S.UserMessageLabel = label;
         S.UserMessageKey = key;
+        TurnStarts();
     }
 
     // from and label: who wrote it, when not the person (#489). injected: context the agent was

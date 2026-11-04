@@ -211,6 +211,36 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         }
     }
 
+    public bool ServesHistory => true;
+
+    // Reads of history at once: each is bounded (HistoryBudgets), and a client asks for the next
+    // page only as its reader scrolls, so more than this waiting is a client asking too much.
+    readonly SemaphoreSlim _historyReads = new(2, 2);
+    Conversation.HistoryReader? _history;
+
+    Conversation.HistoryReader HistoryReader() =>
+        LazyInitializer.EnsureInitialized(ref _history, () => new Conversation.HistoryReader(_options.HistoryBudgets with { MaxLineBytes = _options.MaxLineBytes }, Conversation.HistoryKey.Load(_options.HistoryKeyFile, Log)));
+
+    // Off the pass and its lock: it reads only the transcript, which the agent keeps writing, and
+    // what the session listed when it was asked.
+    public async Task<HistoryResult> HistoryAsync(string id, string? before, int limit, CancellationToken cancellationToken = default)
+    {
+        AgentKind agent;
+        string? transcript;
+        Dictionary<string, string?> delegates;
+        lock (_gate)
+        {
+            if (!_entries.TryGetValue(id, out var e)) { return HistoryResult.Gone; }
+            agent = e.Tracker.Discovered.Agent;
+            transcript = e.Tracker.Discovered.TranscriptPath;
+            delegates = (e.Full?.Subagents ?? []).Where(a => a.Parent is null).ToDictionary(a => a.Id, a => a.Name, StringComparer.Ordinal);
+        }
+        var reader = HistoryReader();
+        await _historyReads.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await Task.Run(() => reader.Read(id, agent, transcript, before, limit, delegates, _options.CopilotRemoteApproval), cancellationToken).ConfigureAwait(false); }
+        finally { _historyReads.Release(); }
+    }
+
     public SessionSubscription Subscribe() => Subscribe(null);
 
     // A run's revisions only go up and every live session is in memory, so resuming needs no

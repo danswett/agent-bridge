@@ -434,6 +434,55 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         S.UserMessage = text;
         S.FirstUserMessage ??= text;
         S.UserMessageKey = Key(at);
+        TurnStarts();
+    }
+
+    // Whether a record starts a turn (docs/protocol/v1-history.md), and its prompt: the records
+    // Count and Event take as the user's message, so history's turn ids are activity.turn's.
+    internal static string? TurnStart(JsonElement e)
+    {
+        if (Json.Str(e, "type") != "event_msg" || Json.Obj(e, "payload") is not { } p) { return null; }
+        return Json.Str(p, "type") switch
+        {
+            "user_message" => Text.NonBlank(Json.Str(p, "message")),
+            "item_completed" when Json.Obj(p, "item") is { } item && Json.Str(item, "type") == "UserMessage" => ContentText(item),
+            _ => null,
+        };
+    }
+
+    // Shared with history, so an earlier turn's approval reads as the live one did. Codex's reason is
+    // its own words, literal; the command or files are code (#209).
+    internal static Question ApprovalQuestion(string id, string ask, string? reason, string? subject, DateTimeOffset at)
+    {
+        var parts = new[] { ask, CopilotPermission.Literal(reason), subject is { Length: > 0 } s ? CopilotPermission.Fence(s) : null };
+        return QuestionMapper.Approval(id, string.Join("\n\n", parts.Where(x => !string.IsNullOrWhiteSpace(x))), at, atMachine: true);
+    }
+
+    // A <subagent_notification> user message, as history reads it: which sub-agent stopped, and how.
+    // A status that is not a stop (running, shut down) is none.
+    internal static (string Agent, SubagentOutcome Outcome)? ReadNotification(JsonElement p)
+    {
+        if (Json.Obj(p, "internal_chat_message_metadata_passthrough") is not { } metadata || Json.Arr(metadata, "content_item_kinds") is not { } kinds
+            || !kinds.EnumerateArray().Any(k => k.ValueKind == JsonValueKind.String && k.GetString() == NotificationKind)) { return null; }
+        if (ContentText(p) is not { } text || !text.StartsWith(NotificationStart, StringComparison.Ordinal)) { return null; }
+        var close = text.LastIndexOf(NotificationEnd, StringComparison.Ordinal);
+        var start = text.IndexOf('{', NotificationStart.Length);
+        if (close < 0 || start < 0 || start > close) { return null; }
+        try
+        {
+            var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(text, start, close - start));
+            using var doc = JsonDocument.ParseValue(ref reader);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object || Text.NonBlank(Json.Str(doc.RootElement, "agent_path")) is not { } agent
+                || Json.Get(doc.RootElement, "status") is not { } status) { return null; }
+            return status.ValueKind switch
+            {
+                JsonValueKind.String when status.GetString() == "interrupted" => (agent, SubagentOutcome.Failed),
+                JsonValueKind.Object when Json.Get(status, "completed") is not null => (agent, SubagentOutcome.Done),
+                JsonValueKind.Object when Json.Get(status, "errored") is not null => (agent, SubagentOutcome.Failed),
+                _ => null,
+            };
+        }
+        catch (JsonException) { return null; }
     }
 
     void UserMessage(string text, DateTimeOffset? at)
@@ -467,15 +516,13 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         // Answered only at the machine: what agent-ha-bridge answers is the approval its
         // hook recorded (the marker, which SessionTracker prefers), since only that has a
         // generation to check before typing. A request seen only in the rollout has none.
-        // Codex's reason is its own words, literal; the command or files are code (#209).
-        var parts = new[] { ask, CopilotPermission.Literal(reason), subject is { Length: > 0 } s ? CopilotPermission.Fence(s) : null };
-        S.Ask(QuestionMapper.Approval(id, string.Join("\n\n", parts.Where(x => !string.IsNullOrWhiteSpace(x))), Now(at), atMachine: true));
+        S.Ask(ApprovalQuestion(id, ask, reason, subject, Now(at)));
     }
 
-    static string? Files(JsonElement p) =>
+    internal static string? Files(JsonElement p) =>
         Json.Obj(p, "changes") is { } changes ? ToolSummary.Cut(string.Join(", ", changes.EnumerateObject().Select(c => Path.GetFileName(c.Name)))) : null;
 
-    static string? ContentText(JsonElement item)
+    internal static string? ContentText(JsonElement item)
     {
         if (Json.Arr(item, "content") is not { } content) { return Text.NonBlank(Json.Str(item, "text")); }
         var sb = new StringBuilder();

@@ -226,9 +226,21 @@ public sealed class SessionService
                 return await SubscribeAsync(channel, data);
             case Ops.SessionsFocus:
                 return Focus(channel, data);
+            case HistoryProtocol.Op when source.ServesHistory:
+                return await HistoryAsync(data);
             default:
                 return null;
         }
+    }
+
+    // session.history (docs/protocol/v1-history.md), read strictly as every request a client sends:
+    // a request with a field missing, of the wrong type or out of range fails as a request.
+    async Task<HistoryResult> HistoryAsync(JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.history needs a session id"); }
+        var request = data.Deserialize<HistoryRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.history needs a session id");
+        if (HistoryProtocol.Check(request) is { } problem) { throw new ArgumentException(problem); }
+        return await source.HistoryAsync(request.Id, request.Before, request.Limit ?? HistoryLimits.DefaultTurns);
     }
 
     // A channel has one subscription. A second subscribe (a client recovering from a gap)
@@ -512,6 +524,8 @@ public sealed class SessionService
     {
         List<string> offered = [Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus];
         if (SignInEntrypointApproved && SignIn?.Offered(channel) == true) { offered.Add(AgentSignIn.Capability); }
+        // Who may read history is narrowed by the channel's caller (LocalApi, RemoteAuthorization).
+        if (source.ServesHistory) { offered.Add(HistoryProtocol.Capability); }
         if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }
         if (answers?.ApprovesPermissions == true) { offered.Add(Capabilities.SessionsApprove); }
         if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }

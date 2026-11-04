@@ -102,6 +102,18 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     // A shell's completion notice Copilot delivered while no turn ran: it starts a turn of its own.
     static bool Notice(JsonElement data) => Json.Str(data, "source") == "system" && Json.Str(data, "delivery") != "steering";
 
+    // Whether a record starts a turn (docs/protocol/v1-history.md), and its prompt: exactly the
+    // records that move activity.userMessage, here and in Count, so history's turn ids are
+    // activity.turn's.
+    internal static (string Text, UserMessageFrom? From, string? Label)? TurnStart(JsonElement e)
+    {
+        if (Json.Str(e, "type") != "user.message" || IsSubagent(e)) { return null; }
+        var data = Json.Obj(e, "data") ?? default;
+        if (Text.NonBlank(Json.Str(data, "content")) is not { } text) { return null; }
+        var (from, label, injected) = Source(Json.Str(data, "source"));
+        return injected ? null : (text, from, label);
+    }
+
     // The schedule's number as its label, and only a number: the label is shown as it is.
     static string? ScheduleNumber(string n) =>
         n.Length is > 0 and <= Limits.UserMessageLabel && n.All(char.IsAsciiDigit) ? n : null;

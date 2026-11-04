@@ -227,6 +227,9 @@ export function readActivity(raw) {
     // a schedule's number: an agent's text, shown only through prompt-origin.js (#489).
     userMessageFrom: readUserMessageFrom(a.userMessageFrom),
     userMessageLabel: str(a.userMessageLabel),
+    // The latest turn's id, the one session.history gives it (#292, v1-history.md): the key a
+    // conversation merging live activity with history pages draws it once by.
+    turn: str(a.turn),
     turnCount: num(a.turnCount),
     compactions: num(a.compactions),
     background: readBackground(a.background),

@@ -117,6 +117,8 @@ var options = new SessionSourceOptions
     Log = command == "serve" ? Log : null,
     // Only serve keeps what it listed for its next start (#147); no other command reads or writes it.
     StateFile = command == "serve" && serveFolder is not null ? Path.Combine(serveFolder, "sessions-listed.json") : null,
+    // session.history's cursors outlive a restart of serve (docs/protocol/v1-history.md).
+    HistoryKeyFile = command == "serve" && serveFolder is not null ? Path.Combine(serveFolder, "history-cursor.key") : null,
 };
 var pretty = new JsonSerializerOptions(ProtocolJson.Options) { WriteIndented = !Flag("--compact") };
 var agentLocator = new AgentLocator();

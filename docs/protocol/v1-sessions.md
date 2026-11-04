@@ -106,6 +106,11 @@ with the wrong type):
 | `TransferResult` | | `blob`, `size`, `sha256`, `agent`, `launcher`, `files` |
 | `ManageCommand` (#801) | | `command` |
 | `ManageHaTokenRequest` (#801, held until #55) | | `command`, `secret` |
+| `HistoryResult` ([v1-history.md](v1-history.md)) | `before`, `start` | |
+| `HistoryTurn` | `id` | `prompt` |
+| `HistoryPrompt` | | `from` |
+| `HistoryPart` | `id` | `outcome` |
+| `DelegateEvent` | `agent` | |
 
 So, for example, a session with no `status` reads as `idle`, one whose `title` is a number has
 no title, and a `ToolCall` with no `id` is left out of `history`. A question whose `message` is a
