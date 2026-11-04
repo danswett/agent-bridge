@@ -71,7 +71,18 @@ export function signTrust({ question, choice, ...rest }) {
 // machine's static key, which the command is signed for: [{ hostId, machineName, key,
 // resumable }]. One machine at a time, each over a short channel, as fleet.js looks at them; a
 // machine that does not answer, or does not hand its sessions on, contributes nothing.
-export async function collectRemote({ connection, targetId, me, makeClient, timeoutMs = 10000 }) {
+// Lookups under way, from the first channel's opening to the last one closed: the connection
+// doesn't rest under one (main.js busy), or Launch would show a list cut short that nothing asks
+// again for.
+let collecting = 0;
+export const collectingRemote = () => collecting > 0;
+
+export async function collectRemote(args) {
+  collecting += 1;
+  try { return await collectEach(args); } finally { collecting -= 1; }
+}
+
+async function collectEach({ connection, targetId, me, makeClient, timeoutMs = 10000 }) {
   const out = [];
   for (const d of connection.presence ?? []) {
     if (d.kind !== 'host' || d.id === me || d.id === targetId) { continue; }

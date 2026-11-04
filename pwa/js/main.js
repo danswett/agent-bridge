@@ -31,7 +31,7 @@ import { BridgeConnection } from './connection.js';
 import { ALL, HostSession } from './host-session.js';
 import { HostClient } from './host-client.js';
 import { TRUST } from './launch.js';
-import { TRANSFER, collectRemote, signTransfer, signTrust } from './transfer.js';
+import { TRANSFER, collectRemote, collectingRemote, signTransfer, signTrust } from './transfer.js';
 import { PushRegistrar, closeMachineNotices, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities } from './protocol.js';
 import { offlineMachines } from './ui/views.js';
@@ -592,7 +592,7 @@ function begin(account) {
   const { answers, replies, stops, launches } = page;
   // The relay connection rests while the app is out of sight (connection.js), but not with
   // anything on its way: that finishes first.
-  connection.busy = () => [answers, replies, stops, launches].some((s) => s.busy) || hosts.busy || fleet.busy || connection.relay?.busy === true;
+  connection.busy = () => [answers, replies, stops, launches].some((s) => s.busy) || hosts.busy || fleet.busy || collectingRemote() || connection.relay?.busy === true;
 
   // ---- notifications ----
   const worker = () => new Promise((resolve, reject) => {
