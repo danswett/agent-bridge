@@ -92,6 +92,10 @@ function Format-Pacific([DateTimeOffset] $t) {
 
 $results = [Collections.Generic.List[object]]::new()
 function Add-Result([string] $name, [string] $check, [ValidateSet('PASS', 'WARN', 'FAIL')] [string] $status, [string] $detail) {
+    # Every detail passes through here, so no exception message or header echoed from a target
+    # can put an address in output that's pasted into public incident issues.
+    $detail = $detail -replace '\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b', '<address>' -replace '(?i)\[?(?<![\w:.])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![\w:])\]?(:\d+)?', '<address>'
+    if ($detail.Length -gt 200) { $detail = $detail.Substring(0, 200) + '…' }
     $results.Add([pscustomobject]@{ Target = $name; Check = $check; Status = $status; Detail = $detail })
 }
 
@@ -189,7 +193,12 @@ foreach ($entry in $selected.GetEnumerator()) {
             $online = if ($body.PSObject.Properties['online']) { $body.online } else { '?' }
         }
         catch { $body = $null }
-        if ($null -eq $body) { Add-Result $name 'healthz' 'FAIL' "HTTP 200 but not the expected JSON (first 80 chars: $($h.Body.Substring(0, [math]::Min(80, $h.Body.Length))))" }
+        # Never echo the body: the output goes into public incident issues, and a wrong target
+        # or an error page could carry an address or a credential. Its type and size are enough.
+        if ($null -eq $body) {
+            $type = Get-Header $h.Headers 'Content-Type'
+            Add-Result $name 'healthz' 'FAIL' "HTTP 200 but not the expected JSON ($(if ($type) { $type } else { 'no content type' }), $($h.Body.Length) chars)"
+        }
         else {
             $latency = if ($h.Ms -gt $latencyWarnMs -and $name -ne 'staging') { 'WARN' } else { 'PASS' }
             if (-not $ok) { Add-Result $name 'healthz' 'FAIL' 'answered, but ok is not true' }
