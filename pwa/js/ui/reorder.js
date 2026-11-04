@@ -182,7 +182,10 @@ export class Reorder {
     // still sends that finger's touches, which carry the drag on.
     add(doc, 'touchstart', (e) => {
       if (e.touches.length > 1) { this.cancel(); return; }
-      if (g.touchId === undefined) { g.touchId = e.changedTouches[0]?.identifier; }
+      // The press's own finger: where its pointerdown came first, the one remembered may be the
+      // finger before's.
+      const t = e.changedTouches[0];
+      if (t && g.phase === 'pending') { g.touchId = t.identifier; }
     }, { passive: true, capture: true });
     add(doc, 'touchmove', (e) => {
       if (this.#g !== g) { return; }
@@ -596,7 +599,9 @@ export class Reorder {
     this.#unswallow();
     const win = this.win;
     let timer = 0;
-    const eat = (e) => { e.preventDefault(); e.stopImmediatePropagation(); off(); };
+    // A key's or assistive technology's click (detail 0) is no release's: it goes through, and
+    // the release's is still waited for.
+    const eat = (e) => { if (e.detail === 0) { return; } e.preventDefault(); e.stopImmediatePropagation(); off(); };
     const ends = ['pointerup', 'pointercancel', 'touchend', 'touchcancel'];
     const up = (e) => {
       if (e.type.startsWith('pointer') ? e.pointerId !== g.id : !this.#own(g, e.changedTouches)) { return; }

@@ -249,7 +249,7 @@ test.describe('on a phone', () => {
     await longPress(page, CODEX, 1800);
     await expect(card(page, CODEX).getByRole('menu')).toBeVisible();
     // The click a real finger's release brings.
-    await card(page, CODEX).locator('.row-main').dispatchEvent('click');
+    await card(page, CODEX).locator('.row-main').dispatchEvent('click', { detail: 1 });
     await expect(view(page, CODEX)).toBeHidden();
     await expect(card(page, CODEX).getByRole('menu')).toBeVisible();
   });

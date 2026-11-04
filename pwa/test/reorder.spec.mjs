@@ -184,6 +184,38 @@ test.describe('on an Android phone, by touch', () => {
     await expect.poll(() => order(page)).toEqual([CLAUDE, CODEX, COPILOT, DELEGATING]);
   });
 
+  test('a press just after another finger\'s tap follows its own finger once the browser takes the pointer', async ({ page }) => {
+    await openDemo(page, { ua: UA.android, hint: 'Android' });
+    await card(page, COPILOT).scrollIntoViewIfNeeded();
+    const row = card(page, COPILOT).locator('.row-main');
+    const [x, y, box] = await middle(row);
+    const fire = (type, id, dy) => row.evaluate((el, { type, id, x, y, dy }) => {
+      const t = new Touch({ identifier: id, target: el, clientX: x, clientY: y + dy });
+      const touches = type === 'touchend' ? [] : [t];
+      el.dispatchEvent(new TouchEvent(type, { bubbles: true, cancelable: true, touches, targetTouches: touches, changedTouches: [t] }));
+    }, { type, id, x, y, dy });
+    // A tap by finger 4, then within 100 ms a press by finger 5 whose pointerdown comes before
+    // its touchstart, as Chromium sends them.
+    await row.evaluate((el, { x, y }) => {
+      const touch = (type, id) => {
+        const t = new Touch({ identifier: id, target: el, clientX: x, clientY: y });
+        const touches = type === 'touchend' ? [] : [t];
+        el.dispatchEvent(new TouchEvent(type, { bubbles: true, cancelable: true, touches, targetTouches: touches, changedTouches: [t] }));
+      };
+      touch('touchstart', 4);
+      touch('touchend', 4);
+      el.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 9, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, bubbles: true }));
+      touch('touchstart', 5);
+    }, { x, y });
+    await expect(card(page, COPILOT)).toHaveClass(/\blifted\b/);
+    await row.dispatchEvent('pointercancel', { pointerId: 9, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, bubbles: true });
+    for (const dy of [10, 30, box.height + 4, 2 * box.height + 8]) { await fire('touchmove', 5, dy); }
+    await expect.poll(() => shifted(page, CODEX)).toBeLessThan(-box.height + 1);
+    await fire('touchend', 5, 2 * box.height + 8);
+    await expect.poll(() => order(page)).toEqual([CLAUDE, CODEX, COPILOT, DELEGATING]);
+    await expect(page.locator('.lifted')).toHaveCount(0);
+  });
+
   test('held near the bottom edge the list scrolls under the card, and stops as it leaves the edge', async ({ page }) => {
     await openDemo(page, { ua: UA.android, hint: 'Android' });
     await many(page);
@@ -229,6 +261,23 @@ test.describe('on an Android phone, by touch', () => {
     await expect(card(page, CODEX).getByRole('menu')).toBeVisible();
     await expect(view(page, CODEX)).toBeHidden();
     expect(await order(page)).toEqual(FIRST);
+  });
+
+  test('a session opened by a key straight after a touch drag opens', async ({ page }) => {
+    await openDemo(page, { ua: UA.android, hint: 'Android' });
+    await card(page, COPILOT).scrollIntoViewIfNeeded();
+    const [x, y, box] = await middle(card(page, COPILOT).locator('.row-main'));
+    const f = await finger(page);
+    await f.down(x, y);
+    await expect(card(page, COPILOT)).toHaveClass(/\blifted\b/);
+    await f.to(x, y + 2 * (box.height + 2) + 4);
+    await f.up();
+    await expect.poll(() => order(page)).toEqual([CLAUDE, CODEX, COPILOT, DELEGATING]);
+    // A finger that moved brings no click: within the wait for one, a key's click (detail 0)
+    // isn't the release's.
+    await card(page, CLAUDE).locator('.row-main').focus();
+    await page.keyboard.press('Enter');
+    await expect(view(page, CLAUDE)).toBeVisible();
   });
 
   test('a held card let go over Needs you puts the card back and never presses its answers', async ({ page }) => {
