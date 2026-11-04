@@ -53,10 +53,14 @@ internal static class QuestionMapper
             return tool is null && command is null ? held with { Truncated = true } : held with { AnswerAtMachine = true };
         }
         var q = Approval(id, $"{who}\n\n{CopilotPermission.Fence(command)}", askedAt, atMachine);
+        if (cut) { q = q with { Truncated = true }; }
         // Whatever the command, what is sent is that shape, which every client checks before it
-        // offers Approve; one that is not would be answered nowhere else, so it is held here.
-        if (!ApprovalShape.IsFencedCommand(q.Message)) { q = q with { AnswerAtMachine = true }; }
-        return cut ? q with { Truncated = true } : q;
+        // offers Approve; one that is not would be answered nowhere else, so it is held here. One
+        // already truncated is refused for that, and is left so: cut past the message's limit, it
+        // has lost its closing fence, and held here too, a client said only that it is answered at
+        // the machine, not that part of it is missing.
+        if (q.Truncated != true && !ApprovalShape.IsFencedCommand(q.Message)) { q = q with { AnswerAtMachine = true }; }
+        return q;
     }
 
     // Copilot's ask_user. Current builds pass `message` and `requestedSchema` (a JSON
