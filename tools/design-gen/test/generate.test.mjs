@@ -87,6 +87,8 @@ test('a rename is one change to the brand token, reaching the Windows app and ho
   assert.deepEqual(staleFiles(root).sort(), [...brandFiles, XAML].sort());
   const out = generate(root);
   assert.match(out['src/AgentBridge.Protocol/DesignBrand.cs'], /public const string Name = "Gatehouse";/);
+  // The launcher links the file and also references AgentBridge.Protocol, so its copy is internal, as Product's is.
+  assert.match(out['src/AgentBridge.Protocol/DesignBrand.cs'], /#if AGENT_BRIDGE_HOSTW\r?\ninternal\r?\n#else\r?\npublic\r?\n#endif\r?\nstatic class DesignBrand\r?\n/);
   assert.match(out['pwa/design/brand.js'], /supportEmail: 'help@example\.org',/);
   assert.match(out['design/apple/Brand.swift'], /public static let shortName = "Gatehouse"/);
   assert.match(out['design/android/values/brand.xml'], /<string name="brand_name" translatable="false">Gatehouse<\/string>/);

@@ -20,7 +20,14 @@ namespace AgentBridge.Protocol;
 // The product's user-facing name and contact (${DOC}), beside Product: for the
 // Windows app, the host and AgentBridge.Local, and linked into the host launcher as Product is.
 // Identifiers, paths, package IDs and protocol names are not the brand, and don't come from here.
-public static class DesignBrand
+// Internal in the launcher, as Product is: a public copy there made the name ambiguous to a test
+// project that references both the launcher and AgentBridge.Protocol.
+#if AGENT_BRIDGE_HOSTW
+internal
+#else
+public
+#endif
+static class DesignBrand
 {
     public const string Name = "${b.name}";
     public const string ShortName = "${b.shortName}";
