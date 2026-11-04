@@ -201,5 +201,6 @@ public static class ReorderWords
     public static string HeaderCue(bool pinned) => pinned ? " · drop to pin" : " · drop to unpin";
     public static string Chip(bool pinned) => pinned ? "Pin" : "Unpin";
     public const string Cancel = "Cancel";
-    public const string KeepPinned = "Drop here to keep it pinned";
+    // The slot a group the held card leaves empty keeps, for dropping it back (#594: the owner's words).
+    public static string Keep(bool pinned) => pinned ? "Drop here to keep it pinned" : "Drop here to unpin";
 }

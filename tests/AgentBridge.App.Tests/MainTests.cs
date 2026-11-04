@@ -172,6 +172,21 @@ public sealed class MainTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_card_is_movable_by_drag_only_in_your_order_and_its_row_is_told_as_the_sort_changes()
+    {
+        await SnapshotAsync();
+        var old = Card("old");
+        Assert.True(TestUi.Read(() => old.Movable));
+        var told = 0;
+        ui.Post(() => old.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(SessionCardViewModel.Movable)) { told++; } });
+        ui.Post(() => main.SortIndex = (int)SessionSort.Recent);
+        Assert.False(TestUi.Read(() => old.Movable));
+        ui.Post(() => main.SortIndex = (int)SessionSort.Yours);
+        Assert.True(TestUi.Read(() => old.Movable));
+        Assert.Equal(2, TestUi.Read(() => told));
+    }
+
+    [Fact]
     public async Task A_row_not_open_gets_the_new_activity_dot_when_its_session_updates_and_opening_it_clears_the_dot()
     {
         await SnapshotAsync();

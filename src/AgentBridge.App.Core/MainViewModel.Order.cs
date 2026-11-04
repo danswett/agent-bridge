@@ -135,6 +135,7 @@ public sealed partial class MainViewModel
         foreach (var c in want)
         {
             c.Pinned = pins.Contains(c);
+            c.Movable = c.Row?.CanDrag == true;
             var key = KeyOf(c);
             // The row open in the session pane sees its news as it comes (ui.md §6.1, Unread).
             if (c == open) { Order.MarkSeen(key, c.Session.UpdatedAt); }

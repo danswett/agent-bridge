@@ -22,6 +22,11 @@ static partial class SelfTest
         window.ShowPage("sessions");
         var page = window.Sessions;
         var list = page.Rows;
+        // The window, the machine tab and the session open as the checks before left them, given back
+        // to the checks after.
+        var size = window.AppWindow.Size;
+        var machine = main.SelectedMachine;
+        var open = main.Selected;
         main.SelectedMachine = main.Machines[0];
         main.SortIndex = (int)SessionSort.Yours;
         if (window.RootElement.ActualWidth < 1439) { Resize(window, 1440, 1000); }
@@ -34,6 +39,9 @@ static partial class SelfTest
         if (pin is null || movable.Count < 4)
         {
             check(false, $"finds four sessions to move and one to pin ({Order()})");
+            main.SelectedMachine = machine;
+            main.Selected = open;
+            window.AppWindow.Resize(size);
             return;
         }
         if (!pin.Pinned) { pin.Row!.TogglePin(); }
@@ -74,6 +82,8 @@ static partial class SelfTest
         // With Windows' animation effects on, whatever the runner's are: its remote desktop may have them off.
         Motion.Forced = true;
         var looks = new List<string>();
+        var shadowed = new List<string>();
+        var legible = new List<string>();
         var motions = page.ReorderMotions;
         foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
         {
@@ -91,6 +101,9 @@ static partial class SelfTest
             {
                 looks.Add($"{name}: lifted {row?.Lifted}, above {(item is null ? 0 : Canvas.GetZIndex(item))}, at {page.Target} of {origin}, said \"{SessionRow.LastSaid}\"");
             }
+            // Its shadow in the generated drag-shadow colours (#594), the PWA's too.
+            var want = new[] { DesignColour("AbDragShadow", theme), DesignColour("AbDragShadowEdge", theme) };
+            if (row is null || !row.ShadowColours.SequenceEqual(want) || want.Any(c => c.A == 0)) { shadowed.Add($"{name}: {string.Join(" and ", row?.ShadowColours.Select(c => c.ToString()) ?? [])}, not {string.Join(" and ", want.Select(c => c.ToString()))}"); }
             await ScreenPicture(window, Path.ChangeExtension(outFile, $".reorder.lifted.{name}.png"));
 
             // Two cards down: those two move up a slot each, and the gap opens below them.
@@ -111,12 +124,14 @@ static partial class SelfTest
             {
                 looks.Add($"{name}: over Pinned, at {page.Target}, chip {row?.ChipShown ?? "none"}");
             }
+            if (row is not null && ChipContrast(row) is var pinRatio && pinRatio < 4.5) { legible.Add($"{name} Pin: {pinRatio:0.00}:1"); }
             await ScreenPicture(window, Path.ChangeExtension(outFile, $".reorder.pin.{name}.png"));
 
             // Far outside the list: Cancel in place of the age, and the gap back where it came from.
             page.MoveTo(new Point(list.ActualWidth + 80, over.Y));
             await Task.Delay(300);
             if (row?.ChipShown != ReorderWords.Cancel || page.Target != origin) { looks.Add($"{name}: outside, chip {row?.ChipShown ?? "none"}, at {page.Target}"); }
+            if (row is not null && ChipContrast(row) is var cancelRatio && cancelRatio < 4.5) { legible.Add($"{name} Cancel: {cancelRatio:0.00}:1"); }
             page.PutBack();
             await Task.Delay(400);
             if (page.Dragging || Order() != before || SessionRow.LastSaid != $"Cancelled. Back at position 2 of {main.Sessions.Count(c => !c.Pinned)}.") { looks.Add($"{name}: put back, still held {page.Dragging}, order {Order()}, said \"{SessionRow.LastSaid}\""); }
@@ -125,6 +140,8 @@ static partial class SelfTest
         await Task.Delay(300);
         check(looks.Count == 0 && page.ReorderMotions > motions,
             $"lifts a card above the list, the cards it passes making room, says it will pin over Pinned and Cancel outside the list, and puts it back, in Light and Dark{(looks.Count > 0 ? $": not {string.Join("; ", looks)}" : "")}");
+        check(shadowed.Count == 0, $"casts the lifted card's shadow in the generated drag-shadow colours, in Light and Dark{(shadowed.Count > 0 ? $": {string.Join("; ", shadowed)}" : "")}");
+        check(legible.Count == 0, $"sets the Pin and Cancel chips' words at 4.5:1 or more on their fills over the lifted card, in Light and Dark{(legible.Count > 0 ? $": {string.Join("; ", legible)}" : "")}");
 
         // Dropped two places down: saved there, focus with the session, Needs you held for a moment.
         {
@@ -172,9 +189,12 @@ static partial class SelfTest
             page.Begin(held, at);
             page.MoveTo(new Point(at.X, at.Y + slot + 6));
             await Task.Delay(200);
+            // After the animated drops above, which faded its look out as each card settled.
+            var shown = (page.HeldItem?.ContentTemplateRoot as SessionRow)?.LookShown == true;
             page.LetGo();
             await Task.Delay(300);
             Motion.Forced = true;
+            check(shown, $"draws the lifted look with animation effects off after an animated drop faded it out ({(shown ? "drawn" : "not drawn")})");
             check(page.ReorderMotions == start && main.Sessions.Where(c => !c.Pinned).ToList().IndexOf(held) == 1,
                 $"with animation effects off, moves the cards a dragged card passes at once and animates nothing ({page.ReorderMotions - start} motions; {Order()})");
         }
@@ -207,12 +227,26 @@ static partial class SelfTest
 
         Motion.Forced = null;
 
+        // Where no drag can move a card (Most recent), a touch on its grip's strip scrolls the list.
+        {
+            main.SortIndex = (int)SessionSort.Recent;
+            await Task.Delay(300);
+            var taking = Rows(window).Where(r => r.Card is not null && r.GripTakesTouch).Select(r => r.Card!.Id).ToList();
+            main.SortIndex = (int)SessionSort.Yours;
+            await Task.Delay(300);
+            var refusing = Rows(window).Where(r => r.Card is { Movable: true } && !r.GripTakesTouch).Select(r => r.Card!.Id).ToList();
+            check(taking.Count == 0 && refusing.Count == 0, $"lets a touch on the grip scroll the list where the order can't be changed, and takes it again in Your order (taking in Most recent: {string.Join(", ", taking)}; refusing in Your order: {string.Join(", ", refusing)})");
+        }
+
         // Back as it was, pins and all.
         foreach (var group in original.GroupBy(c => c.Pinned))
         {
             var cards = group.ToList();
             for (var i = 0; i < cards.Count; i++) { cards[i].Row?.MoveTo(group.Key, i); }
         }
+        main.SelectedMachine = machine;
+        main.Selected = open;
+        window.AppWindow.Resize(size);
         await Task.Delay(400);
     }
 
@@ -318,6 +352,37 @@ static partial class SelfTest
         // The pointer out of the way of the checks that follow.
         MouseTo(grip.X + 600, grip.Y);
         return "run";
+    }
+
+    // A generated colour as a theme has it, read from the design dictionary itself.
+    static Windows.UI.Color DesignColour(string key, ElementTheme theme)
+    {
+        var design = Application.Current.Resources.MergedDictionaries.FirstOrDefault(d => d.Source?.ToString().EndsWith(Design.DesignKeys.Source["ms-appx:///".Length..], StringComparison.OrdinalIgnoreCase) == true);
+        return design?.ThemeDictionaries.TryGetValue(theme.ToString(), out var d) == true && d is ResourceDictionary themed && themed.TryGetValue(key, out var b) && b is Microsoft.UI.Xaml.Media.SolidColorBrush brush ? brush.Color : default;
+    }
+
+    // The held card's chip: its words against its fill, laid over the lifted plate (card, then tint),
+    // as WCAG measures contrast.
+    static double ChipContrast(SessionRow row)
+    {
+        var c = row.ChipColours;
+        var plate = Over(c.Tint, c.TintOpacity, c.Card);
+        var fill = Over(c.Fill, c.FillOpacity, plate);
+        var words = Over(c.Text, 1, fill);
+        double Lum(Windows.UI.Color x)
+        {
+            static double L(byte v) { var s = v / 255.0; return s <= 0.04045 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4); }
+            return (0.2126 * L(x.R)) + (0.7152 * L(x.G)) + (0.0722 * L(x.B));
+        }
+        double a = Lum(words) + 0.05, b = Lum(fill) + 0.05;
+        return Math.Max(a, b) / Math.Min(a, b);
+    }
+
+    static Windows.UI.Color Over(Windows.UI.Color top, double opacity, Windows.UI.Color under)
+    {
+        var a = top.A / 255.0 * opacity;
+        byte Mix(byte t, byte u) => (byte)Math.Round((t * a) + (u * (1 - a)));
+        return new Windows.UI.Color { A = 255, R = Mix(top.R, under.R), G = Mix(top.G, under.G), B = Mix(top.B, under.B) };
     }
 
     // The order as saved on disk, its keys in order.

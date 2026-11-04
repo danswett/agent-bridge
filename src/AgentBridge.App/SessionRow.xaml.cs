@@ -133,6 +133,7 @@ public sealed partial class SessionRow : UserControl
         if (all || e.PropertyName == nameof(SessionCardViewModel.Unread)) { ShowUnread(); }
         if (all || e.PropertyName is nameof(SessionCardViewModel.RowLabel) or nameof(SessionCardViewModel.Unread)) { NameRow(); }
         if (e.PropertyName == nameof(SessionCardViewModel.WantsRowFocus)) { TakeFocus(); }
+        if (e.PropertyName == nameof(SessionCardViewModel.Movable)) { ShowGrip(); }
     }
 
     // The session updated while not open: the dot fades in. Opened: it fades out where it was.
@@ -345,9 +346,15 @@ public sealed partial class SessionRow : UserControl
 
     void ShowGrip()
     {
-        var state = held ? "GripHeld" : Card?.Row?.CanDrag != true ? "GripHidden" : touchGrips ? "GripTouch" : hovered ? "GripHover" : "GripHidden";
+        var can = Card?.Row?.CanDrag == true;
+        var state = held ? "GripHeld" : !can ? "GripHidden" : touchGrips ? "GripTouch" : hovered ? "GripHover" : "GripHidden";
         VisualStateManager.GoToState(this, state, false);
+        // Where no drag can move the card, a touch on the grip's strip scrolls the list as anywhere else.
+        GripArea.IsHitTestVisible = can || held;
+        GripArea.ManipulationMode = can || held ? ManipulationModes.TranslateY : ManipulationModes.System;
     }
+
+    internal bool GripTakesTouch => GripArea.IsHitTestVisible && GripArea.ManipulationMode != ManipulationModes.System;
 
     // A press on the grip is the list's to lift the card (SessionsPage.Reorder sees it, handled or
     // not): handled here, so the list item neither shows it pressed nor takes it for a click.
@@ -399,6 +406,8 @@ public sealed partial class SessionRow : UserControl
     }
 
     internal bool Lifted => held;
+    // The lifted look drawn, not left faded out by an earlier settle.
+    internal bool LookShown => LiftLook.Visibility == Visibility.Visible && ElementCompositionPreview.GetElementVisual(LiftLook).Opacity > 0.99f;
     // Drawn as high contrast and reduced motion draw it: an outline, with no shadow or tint.
     internal bool Outlined => LiftOutline.Visibility == Visibility.Visible && LiftShadow.Visibility == Visibility.Collapsed && LiftTint.Visibility == Visibility.Collapsed;
 
@@ -411,10 +420,17 @@ public sealed partial class SessionRow : UserControl
 
     internal string? ChipShown => Chip.Visibility == Visibility.Visible ? ChipText.Text : null;
 
-    // The drag shadow (ui.md §5.3, Lift): dark 0 8 16 black at 0.28 with 0 0 2 at 0.24; light 0.14
-    // and 0.12. Fluent's 16, as two composition drop shadows of the card's rounded shape, since a
-    // ThemeShadow would be cast by the whole list item, its group header included.
-    readonly List<(LayerVisual Layer, ShapeVisual Shape, CompositionRoundedRectangleGeometry Geometry, DropShadow Drop, float Light, float Dark)> shadows = [];
+    // The chip's words and fill as drawn, and the plate under it (card, then its tint), for the self-test.
+    internal (Windows.UI.Color Text, Windows.UI.Color Fill, double FillOpacity, Windows.UI.Color Card, Windows.UI.Color Tint, double TintOpacity) ChipColours =>
+        (Colour(ChipText.Foreground), Colour(ChipFill.Background), ChipFill.Opacity, Colour(LiftPlate.Background), Colour(LiftTint.Background), LiftTint.Visibility == Visibility.Visible ? LiftTint.Opacity : 0);
+
+    static Windows.UI.Color Colour(Brush? brush) => brush is SolidColorBrush s ? s.Color : default;
+
+    // The drag shadow (ui.md §5.3, Lift): 0 8 16 in dragShadow with 0 0 2 in dragShadowEdge, the
+    // generated tokens the PWA's lift reads too (#594). Fluent's 16, as two composition drop shadows
+    // of the card's rounded shape, since a ThemeShadow would be cast by the whole list item, its group
+    // header included.
+    readonly List<(LayerVisual Layer, ShapeVisual Shape, CompositionRoundedRectangleGeometry Geometry, CompositionColorBrush Fill, DropShadow Drop, string Key)> shadows = [];
 
     void CastShadow()
     {
@@ -422,15 +438,13 @@ public sealed partial class SessionRow : UserControl
         {
             var c = ElementCompositionPreview.GetElementVisual(LiftShadow).Compositor;
             var root = c.CreateContainerVisual();
-            // The shadow's colour, whole: how dark each shadow is is its opacity, by theme.
-            var ink = (Application.Current.Resources["AbShadow"] as SolidColorBrush)?.Color ?? default;
-            ink.A = 255;
-            foreach (var (y, blur, light, dark) in new[] { (8f, 16f, 0.14f, 0.28f), (0f, 2f, 0.12f, 0.24f) })
+            foreach (var (y, blur, key) in new[] { (8f, 16f, "AbDragShadow"), (0f, 2f, "AbDragShadowEdge") })
             {
                 var geometry = c.CreateRoundedRectangleGeometry();
                 geometry.CornerRadius = new Vector2(8, 8);
+                var fill = c.CreateColorBrush();
                 var sprite = c.CreateSpriteShape(geometry);
-                sprite.FillBrush = c.CreateColorBrush(ink);
+                sprite.FillBrush = fill;
                 var shape = c.CreateShapeVisual();
                 shape.Shapes.Add(sprite);
                 var layer = c.CreateLayerVisual();
@@ -438,17 +452,32 @@ public sealed partial class SessionRow : UserControl
                 var drop = c.CreateDropShadow();
                 drop.BlurRadius = blur;
                 drop.Offset = new Vector3(0, y, 0);
-                drop.Color = ink;
                 layer.Shadow = drop;
                 root.Children.InsertAtTop(layer);
-                shadows.Add((layer, shape, geometry, drop, light, dark));
+                shadows.Add((layer, shape, geometry, fill, drop, key));
             }
             ElementCompositionPreview.SetElementChildVisual(LiftShadow, root);
             LiftShadow.SizeChanged += (_, _) => SizeShadow();
         }
         SizeShadow();
-        var isDark = ActualTheme != ElementTheme.Light;
-        foreach (var s in shadows) { s.Drop.Opacity = isDark ? s.Dark : s.Light; }
+        foreach (var s in shadows)
+        {
+            var ink = Themed(s.Key, ActualTheme);
+            s.Drop.Color = ink;
+            // The shape casting it is opaque, under the plate: the shadow takes its alpha from it.
+            ink.A = 255;
+            s.Fill.Color = ink;
+        }
+    }
+
+    // The colours the shadows are cast in now, for the self-test.
+    internal IReadOnlyList<Windows.UI.Color> ShadowColours => [.. shadows.Select(s => s.Drop.Color)];
+
+    // A generated colour as the row's own theme has it, which may not be the app's.
+    internal static Windows.UI.Color Themed(string key, ElementTheme theme)
+    {
+        var design = Application.Current.Resources.MergedDictionaries.FirstOrDefault(d => d.Source?.ToString().EndsWith(Design.DesignKeys.Source["ms-appx:///".Length..], StringComparison.OrdinalIgnoreCase) == true);
+        return design?.ThemeDictionaries.TryGetValue(theme == ElementTheme.Light ? "Light" : "Dark", out var d) == true && d is ResourceDictionary themed && themed.TryGetValue(key, out var b) && b is SolidColorBrush brush ? brush.Color : default;
     }
 
     void SizeShadow()

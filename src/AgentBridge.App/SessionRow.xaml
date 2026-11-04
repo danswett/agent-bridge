@@ -66,16 +66,15 @@
                     </VisualState.Setters>
                 </VisualState>
             </VisualStateGroup>
-            <!-- The held card's chip, in place of its age: Pin or Unpin in Bridge on a 14% Bridge fill,
-                 or a neutral Cancel. -->
+            <!-- The held card's chip, in place of its age: Pin or Unpin in bridge-on on a Bridge fill (Bridge
+                 on a 14% fill, as #592 drew it, is under 4.5:1 in light, as the PWA found), or a neutral Cancel. -->
             <VisualStateGroup x:Name="Chips">
                 <VisualState x:Name="ChipNone" />
                 <VisualState x:Name="ChipBridge">
                     <VisualState.Setters>
                         <Setter Target="Chip.Visibility" Value="Visible" />
                         <Setter Target="ChipFill.Background" Value="{ThemeResource AbBridge}" />
-                        <Setter Target="ChipFill.Opacity" Value="0.14" />
-                        <Setter Target="ChipText.Foreground" Value="{ThemeResource AbBridge}" />
+                        <Setter Target="ChipText.Foreground" Value="{ThemeResource AbBridgeOn}" />
                         <Setter Target="Age.Opacity" Value="0" />
                         <Setter Target="UnreadDot.Opacity" Value="0" />
                     </VisualState.Setters>
@@ -83,7 +82,7 @@
                 <VisualState x:Name="ChipCancel">
                     <VisualState.Setters>
                         <Setter Target="Chip.Visibility" Value="Visible" />
-                        <Setter Target="ChipFill.Background" Value="{ThemeResource AbSelected}" />
+                        <Setter Target="ChipFill.Background" Value="{ThemeResource AbSubtle}" />
                         <Setter Target="ChipText.Foreground" Value="{ThemeResource AbText2}" />
                         <Setter Target="ChipIcon.Foreground" Value="{ThemeResource AbText2}" />
                         <Setter Target="ChipIcon.Visibility" Value="Visible" />
@@ -218,7 +217,7 @@
                 Text="{x:Bind Card.AgeText, Mode=OneWay}"
                 Visibility="{x:Bind local:Ui.Show(Card.ShowAge), Mode=OneWay}" />
             <!-- While held, over the age and the dot: Pin or Unpin across the other group's header, in
-                 Bridge on a 14% Bridge fill, or a neutral Cancel outside the list. -->
+                 bridge-on on a Bridge fill, or a neutral Cancel outside the list. -->
             <Border
                 x:Name="Chip"
                 Padding="6,0,6,0"

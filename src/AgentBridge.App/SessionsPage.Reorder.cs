@@ -325,6 +325,8 @@ public sealed partial class SessionsPage
             d.LiftStart = Stopwatch.GetTimestamp();
             d.Lift = lift;
             Animate(visual, "Scale", new Vector3(d.LiftFrom, d.LiftFrom, 1), new Vector3(LiftScale, LiftScale, 1), lift);
+            // Tracked, so the row puts its opacity back when it is shown again (Motion.Settle).
+            Motion.Track(row.LiftLayer);
             var look = Visual(row.LiftLayer);
             look.Opacity = 0;
             AnimateOpacity(look, 0, 1, lift);
@@ -478,7 +480,7 @@ public sealed partial class SessionsPage
         Glide(ReorderGap, layout.GapTop - gapFrom, instant);
         ReorderKeep.Visibility = layout.Placeholder is not null ? Visibility.Visible : Visibility.Collapsed;
         if (layout.Placeholder is { } keep) { Canvas.SetTop(ReorderKeep, keep + 2); }
-        ReorderKeepText.Text = d.Card.Pinned ? ReorderWords.KeepPinned : "";
+        ReorderKeepText.Text = ReorderWords.Keep(d.Card.Pinned);
         Chip(d);
     }
 
@@ -886,6 +888,7 @@ public sealed partial class SessionsPage
         Animate(visual, "Translation", new Vector3(0, (float)dy, 0), Vector3.Zero, step);
         Motion.Track(item);
         Animate(visual, "Scale", new Vector3(scale, scale, 1), Vector3.One, step);
+        Motion.Track(row.LiftLayer);
         AnimateOpacity(Visual(row.LiftLayer), 1, 0, step);
         batch.End();
         batch.Completed += (_, _) => { if (settling.Remove(item, out var done)) { done(); } };
