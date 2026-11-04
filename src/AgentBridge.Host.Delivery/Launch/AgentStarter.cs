@@ -7,8 +7,8 @@ using AgentBridge.Host.Delivery.Windows;
 namespace AgentBridge.Host.Delivery.Launch;
 
 // What to start: the program, its arguments, and where; Environment is added to (or replaces
-// what) the host's own environment the agent inherits.
-public sealed record StartSpec(string Executable, IReadOnlyList<string> Arguments, string WorkingDirectory, IReadOnlyDictionary<string, string>? Environment = null);
+// what) the host's own environment the agent inherits. A null value removes a variable.
+public sealed record StartSpec(string Executable, IReadOnlyList<string> Arguments, string WorkingDirectory, IReadOnlyDictionary<string, string?>? Environment = null);
 
 // A started process, by id and start time (which tells it from a later one given the same id),
 // or why nothing started.
@@ -84,11 +84,15 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
 
     // This process's environment with extra over it, as CreateProcess takes one: name=value
     // strings sorted by name, each ended by a NUL, then one more.
-    internal static string EnvironmentBlock(IReadOnlyDictionary<string, string> extra)
+    internal static string EnvironmentBlock(IReadOnlyDictionary<string, string?> extra)
     {
         var all = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (System.Collections.DictionaryEntry e in System.Environment.GetEnvironmentVariables()) { all[(string)e.Key] = (string?)e.Value ?? ""; }
-        foreach (var (name, value) in extra) { all[name] = value; }
+        foreach (var (name, value) in extra)
+        {
+            if (value is null) { all.Remove(name); }
+            else { all[name] = value; }
+        }
         var block = new StringBuilder();
         foreach (var (name, value) in all) { block.Append(name).Append('=').Append(value).Append('\0'); }
         return block.Append('\0').ToString();

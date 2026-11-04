@@ -10,6 +10,7 @@ public sealed class SessionSourceOptions
 
     // ~/.claude: projects/<slug>/<id>.jsonl.
     public required string ClaudeHome { get; init; }
+    public bool? ClaudeConfigDirExplicit { get; init; }
 
     // ~/.codex: sessions/<yyyy>/<MM>/<dd>/rollout-*-<id>.jsonl.
     public required string CodexHome { get; init; }
@@ -68,6 +69,7 @@ public sealed class SessionSourceOptions
     public static SessionSourceOptions ForCurrentUser()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var claudeConfigDir = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
         string Root(string variable, string folder) =>
             Environment.GetEnvironmentVariable(variable) is { Length: > 0 } set ? set : Path.Combine(home, folder);
 
@@ -76,7 +78,8 @@ public sealed class SessionSourceOptions
         return new SessionSourceOptions
         {
             CopilotHome = Root("COPILOT_HOME", ".copilot"),
-            ClaudeHome = Root("CLAUDE_CONFIG_DIR", ".claude"),
+            ClaudeHome = claudeConfigDir is { Length: > 0 } ? claudeConfigDir : Path.Combine(home, ".claude"),
+            ClaudeConfigDirExplicit = claudeConfigDir is { Length: > 0 },
             CodexHome = Root("CODEX_HOME", ".codex"),
             ClaudeRegistrationRoots = [Path.Combine(runtime, "agent-bridge-claude"), Path.Combine(temp, "agent-bridge-claude")],
             CodexRegistrationRoots = [Path.Combine(runtime, "agent-bridge-codex"), Path.Combine(temp, "agent-bridge-codex")],

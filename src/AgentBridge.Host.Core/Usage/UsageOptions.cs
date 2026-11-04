@@ -77,7 +77,7 @@ public sealed class UsageOptions
             CopilotHome = sessions.CopilotHome,
             CopilotCacheRoots = cacheRoots,
             ClaudeHome = sessions.ClaudeHome,
-            ClaudeAccountPath = ClaudeAccountFor(sessions.ClaudeHome),
+            ClaudeAccountPath = ClaudeAccountFor(sessions.ClaudeHome, sessions.ClaudeConfigDirExplicit),
             CodexHome = sessions.CodexHome,
             Interval = (usage ?? UsageSettings.Default).Interval,
             IdleInterval = (usage ?? UsageSettings.Default).IdleInterval,
@@ -89,9 +89,13 @@ public sealed class UsageOptions
     // Claude Code keeps .claude.json inside CLAUDE_CONFIG_DIR when that is set, and beside
     // ~/.claude otherwise. When neither file is there the reading goes ungrouped rather than
     // under a guessed account.
-    public static string ClaudeAccountFor(string claudeHome)
+    public static string ClaudeAccountFor(string claudeHome, bool? explicitConfigDir = null)
     {
         var inside = Path.Combine(claudeHome, ".claude.json");
+        if (explicitConfigDir is { } explicitMode)
+        {
+            return explicitMode ? inside : Path.GetFullPath(Path.Combine(claudeHome, "..", ".claude.json"));
+        }
         if (File.Exists(inside)) { return inside; }
         var trimmed = Path.TrimEndingDirectorySeparator(claudeHome);
         return Path.GetFileName(trimmed) == ".claude" && Path.GetDirectoryName(trimmed) is { Length: > 0 } parent

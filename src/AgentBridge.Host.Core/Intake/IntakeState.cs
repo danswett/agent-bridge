@@ -2,13 +2,12 @@ using System.Text.Json;
 
 namespace AgentBridge.Host.Core.Intake;
 
-// Whether this profile has taken over hook handling from an agent-ha-bridge installation, and
-// where that installation's runtime folder is: intake.json in the profile's folder, written by
-// `agent-bridge-host migrate` and removed by `rollback` (docs/host-hooks.md, docs/migration.md).
-// Its absence is the answer for every machine that has not migrated, and on those the host
-// never reads the spool, never writes a heartbeat and never writes a registration.
+// Explicit permission to take a hook spool: either migration's shared legacy runtime, or a
+// fresh installation's private runtime set up by `hooks install`. Without this record the host
+// never reads a spool, writes a heartbeat or writes an agent registration.
 public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string InstallationId, DateTimeOffset MigratedAt)
 {
+    public bool Standalone { get; init; }
     public const string FileName = "intake.json";
     public const int Version = 1;
 
@@ -18,9 +17,14 @@ public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string I
     // or CODEX_HOME that agent-ha-bridge was installed under. Null in a record without them.
     public AgentHomes? Homes { get; init; }
 
-    public sealed record AgentHomes(string Copilot, string Claude, string Codex);
+    public sealed record AgentHomes(string Copilot, string Claude, string Codex)
+    {
+        // The same home uses different account files with and without CLAUDE_CONFIG_DIR.
+        // Null preserves compatibility with records that did not capture that distinction.
+        public bool? ClaudeConfigDirExplicit { get; init; }
+    }
 
-    // Null when the profile has not migrated, or the file cannot be trusted: a file that cannot
+    // Null when the profile has not opted in, or the file cannot be trusted: a file that cannot
     // be read is not taken as permission to consume another program's spool.
     public static (IntakeState? State, string? Problem) Load(string profileFolder)
     {
@@ -50,9 +54,19 @@ public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string I
                 {
                     return (null, $"{path} has unusable agentHomes; hook intake is off");
                 }
-                homes = new AgentHomes(copilot, claude, codex);
+                bool? explicitConfigDir = null;
+                if (h.TryGetProperty("claudeConfigDirExplicit", out var mode))
+                {
+                    if (mode.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) { return (null, $"{path} has unusable agentHomes; hook intake is off"); }
+                    explicitConfigDir = mode.GetBoolean();
+                }
+                homes = new AgentHomes(copilot, claude, codex) { ClaudeConfigDirExplicit = explicitConfigDir };
             }
-            return (new IntakeState(runtime, bridge, id, Json.Time(e, "migratedAt") ?? DateTimeOffset.MinValue) { Homes = homes }, null);
+            return (new IntakeState(runtime, bridge, id, Json.Time(e, "migratedAt") ?? DateTimeOffset.MinValue)
+            {
+                Homes = homes,
+                Standalone = e.TryGetProperty("standalone", out var standalone) && standalone.ValueKind == JsonValueKind.True,
+            }, null);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -74,12 +88,14 @@ public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string I
             writer.WriteString("bridgeHome", BridgeHome);
             writer.WriteString("installationId", InstallationId);
             writer.WriteString("migratedAt", MigratedAt.ToString("o"));
+            if (Standalone) { writer.WriteBoolean("standalone", true); }
             if (Homes is { } homes)
             {
                 writer.WriteStartObject("agentHomes");
                 writer.WriteString("copilot", homes.Copilot);
                 writer.WriteString("claude", homes.Claude);
                 writer.WriteString("codex", homes.Codex);
+                if (homes.ClaudeConfigDirExplicit is { } explicitConfigDir) { writer.WriteBoolean("claudeConfigDirExplicit", explicitConfigDir); }
                 writer.WriteEndObject();
             }
             writer.WriteEndObject();

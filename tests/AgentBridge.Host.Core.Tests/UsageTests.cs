@@ -407,6 +407,25 @@ public sealed class UsageTests : IDisposable
         Assert.DoesNotContain("octo@example.com", json, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_known_Claude_configuration_mode_does_not_choose_the_other_layout_s_account(bool explicitConfigDir)
+    {
+        Directory.CreateDirectory(f.ClaudeHome);
+        var inside = Path.Combine(f.ClaudeHome, ".claude.json");
+        var outside = Path.Combine(f.Root, "home", ".claude.json");
+        File.WriteAllText(outside, "{}");
+        if (!explicitConfigDir) { File.WriteAllText(inside, "{}"); }
+        var sessions = new SessionSourceOptions
+        {
+            CopilotHome = f.CopilotHome, ClaudeHome = f.ClaudeHome, CodexHome = f.CodexHome,
+            ClaudeConfigDirExplicit = explicitConfigDir,
+        };
+
+        Assert.Equal(explicitConfigDir ? inside : outside, UsageOptions.For(sessions).ClaudeAccountPath);
+    }
+
     [Fact]
     public void A_Claude_profile_names_its_own_account_whichever_layout_it_has()
     {

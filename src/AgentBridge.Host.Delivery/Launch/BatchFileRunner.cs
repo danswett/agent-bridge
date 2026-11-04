@@ -8,7 +8,7 @@ namespace AgentBridge.Host.Delivery.Launch;
 // installed as agency.cmd, as npm installs agents) goes through cmd.exe with
 // WindowsCommandLine's quoting. Started directly, as CommandRunner starts everything, a batch
 // file does not run at all, so Agency's profiles and sessions would quietly go missing.
-public sealed class BatchFileRunner(ICommandRunner inner) : ICommandRunner
+public sealed class BatchFileRunner(ICommandRunner inner, IReadOnlyDictionary<string, string>? environment = null) : ICommandRunner
 {
     public async Task<CommandResult> RunAsync(string program, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
@@ -25,6 +25,10 @@ public sealed class BatchFileRunner(ICommandRunner inner) : ICommandRunner
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        if (environment is not null)
+        {
+            foreach (var (name, value) in environment) { start.Environment[name] = value; }
+        }
         Process process;
         try { process = ProcessLaunch.Start(start) ?? throw new InvalidOperationException(); }
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or FileNotFoundException) { return new CommandResult(false, false, -1, ""); }

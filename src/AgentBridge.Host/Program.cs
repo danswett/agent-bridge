@@ -104,6 +104,8 @@ var options = new SessionSourceOptions
     // A migrated installation's agent homes, where its hooks were re-pointed, unless told otherwise.
     CopilotHome = Option("--copilot-home") ?? intakeState?.Homes?.Copilot ?? defaults.CopilotHome,
     ClaudeHome = Option("--claude-home") ?? intakeState?.Homes?.Claude ?? defaults.ClaudeHome,
+    ClaudeConfigDirExplicit = Option("--claude-home") is not null ? true
+        : HookCommands.ClaudeModeFor(intakeState?.Homes, defaults, command == "hooks"),
     CodexHome = Option("--codex-home") ?? intakeState?.Homes?.Codex ?? defaults.CodexHome,
     ClaudeRegistrationRoots = WithIntake(defaults.ClaudeRegistrationRoots, SpoolContract.ClaudeFolder),
     CodexRegistrationRoots = WithIntake(defaults.CodexRegistrationRoots, SpoolContract.CodexFolder),
@@ -248,6 +250,9 @@ switch (command)
         // Read only: the profile's folder is looked in, never created, and no identity is loaded.
         if (intakeFolder is null) { Console.Error.WriteLine("agent-bridge-host: --profile is not a valid profile name"); return 2; }
         return HookCommands.Status(intakeFolder, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge", "runtime"), Console.Out, DateTimeOffset.Now);
+    case "hooks":
+        return await HookCommands.SetupAsync(arguments, Identity.DefaultRoot, options, Console.Out, Console.Error,
+            () => Refused("change agent hook registrations"));
     case "migrate" or "rollback" or "migration":
         if (MigrateCommands.Writes(arguments) && Refused("migrate this machine or roll it back")) { return 4; }
         {
@@ -270,7 +275,8 @@ switch (command)
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
-        Console.Error.WriteLine("       agent-bridge-host hooks status | migrate [--dry-run] [--bridge-home <dir>] [--hook <file>] | rollback [--dry-run] | migration status");
+        Console.Error.WriteLine("       agent-bridge-host hooks status | hooks install|remove <copilot|claude|codex> [...] [--dry-run]");
+        Console.Error.WriteLine("       agent-bridge-host migrate [--dry-run] [--bridge-home <dir>] [--hook <file>] | rollback [--dry-run] | migration status");
         Console.Error.WriteLine("       agent-bridge-host devbox status | devbox dry-run");
         Console.Error.WriteLine("       [--copilot-home <dir>] [--claude-home <dir>] [--codex-home <dir>] [--profile <name>]");
         return command == "help" ? 0 : 2;
@@ -437,7 +443,12 @@ async Task<int> ServeAsync(HostHandover handover)
     // On a machine migrated from agent-ha-bridge, the hooks hand their events to this host
     // (docs/host-hooks.md). Its notices are there for the Home Assistant connector to subscribe to.
     // Migrated agents run a copy of the hook beside this host; an app update brings a new one.
-    if (intakeState is not null && OperatingSystem.IsWindows()
+    if (intakeState is { Standalone: true } && OperatingSystem.IsWindows())
+    {
+        try { StandaloneHooks.Refresh(serveFolder!, Path.Combine(AppContext.BaseDirectory, "agent-bridge-host-hook.exe")); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log($"the fresh installation's hook could not be refreshed: {e.Message}"); }
+    }
+    else if (intakeState is not null && OperatingSystem.IsWindows()
         && AgentBridge.Host.Migration.Migrator.RefreshHook(serveFolder!, Path.Combine(AppContext.BaseDirectory, "agent-bridge-host-hook.exe")) is { } refreshed)
     {
         Log(refreshed);
@@ -673,6 +684,7 @@ LaunchService Launcher(ISessionSource source, AttachmentStore? attachments, Sess
     {
         CopilotHome = options.CopilotHome,
         ClaudeHome = options.ClaudeHome,
+        ClaudeConfigDirExplicit = options.ClaudeConfigDirExplicit,
         CodexHome = options.CodexHome,
         Config = settings.Launch,
         WorktreeUsage = new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots),
@@ -748,7 +760,8 @@ HookIntake? StartIntake(AgentHaBridgeProbe? probe, CancellationToken cancellatio
         AgentHaBridgeActive = active,
     }, new SystemProcessInspector(), log: Log);
     intake.Start(cancellationToken);
-    Log($"hook intake is on: taking agent-ha-bridge installation {intakeState.InstallationId}'s hook spool in {intakeState.RuntimeRoot}{(active() is { } why ? $", once it stops ({why})" : "")}");
+    var owner = intakeState.Standalone ? "this fresh installation" : $"agent-ha-bridge installation {intakeState.InstallationId}";
+    Log($"hook intake is on: taking {owner}'s hook spool in {intakeState.RuntimeRoot}{(active() is { } why ? $", once it stops ({why})" : "")}");
     return intake;
 }
 

@@ -7,9 +7,97 @@ approval marker, and tells the rest of the host. It never reaches Home Assistant
 path. When the host is down, every hook still answers its agent at once with the fixed safe
 reply. Issue #37; design §6.1 `Host.Intake`, §6.3 invariants 3 and 14.
 
-On every other machine nothing here runs: no spool is read, no heartbeat is written and no
-registration is touched (G4, G5). Taking over is the explicit migration of #38
+On a fresh machine, explicitly opt in with `hooks install` below. Until setup or migration,
+no spool is read, no heartbeat is written and no registration is touched (G4, G5). Taking
+over an existing legacy installation still requires the explicit migration of #38
 (`agent-bridge-host migrate`, [migration.md](migration.md)).
+
+## Fresh Windows installation
+
+Run these commands from a terminal you opened yourself, not inside an agent session (#67).
+Use the installed `agent-bridge-host.exe` beside the app if it is not on PATH:
+
+```
+agent-bridge-host hooks install copilot claude codex --dry-run
+agent-bridge-host hooks install copilot claude codex
+agent-bridge-host workspace add <folder-you-approve>
+```
+
+Choose only agents you have installed. `copilot` covers Copilot and Agency. Setup honors
+`COPILOT_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and the corresponding host home options;
+Codex plugin commands receive that selected `CODEX_HOME`. `--profile <name>` selects the
+host profile. Nothing automatically approves launch workspaces or trusts agent hooks.
+CLI lookup uses that profile's `launch.agents.<id>.path`, including Agency as the Copilot
+fallback and Codex removal. Unreadable profile or invalid launch settings refuse setup
+instead of silently choosing another CLI.
+Saved agent homes are also passed into bridge-launched agents, so an app-started host
+discovers sessions in the same homes where setup registered their hooks and plugins.
+Claude's explicit/default configuration-directory mode is saved alongside its home:
+`CLAUDE_CONFIG_DIR` and `--claude-home` select explicit mode, even for the default path.
+Launched agents and usage account lookup restore that mode, so an app restart neither
+switches account files nor inherits the wrong configuration directory. Other matching
+homes remain inherited. Older records without the optional `agentHomes.claudeConfigDirExplicit`
+boolean retain their previous inheritance behavior; rerunning setup in the original
+configuration records the missing mode without replacing a mode already recorded.
+
+Restart the host from the app and **start new agent sessions**: open sessions retain their
+old commands. Start Codex locally and approve its hook trust prompt once; until then Codex
+silently skips untrusted hooks. Codex currently requires a hook executable path without
+spaces; setup refuses otherwise rather than installing a command it cannot execute.
+
+Setup writes `intake.json` with `standalone: true`, a private `<profile>\runtime` and a
+stable native hook and pointer in `<profile>\hooks`. It refuses an existing legacy install,
+legacy registrations, migrated profiles and another profile's ownership marker. G5 still
+checks the legacy daemon before intake or delivery. Fresh setup never writes the legacy
+home, changes a legacy task or starts a host automatically.
+Every agent's preflight checks Claude bridge commands, excluding this profile's owned
+standalone commands. Every agent's setup and removal also check an existing Codex home
+using the profile's configured Codex CLI, refusing retained `agent-ha-bridge` or
+`copilot-ha-bridge` marketplaces even when their old directories are gone. If that home
+exists but Codex is unavailable or its marketplace list cannot be read, the operation
+refuses without changing hooks; install/configure Codex so the legacy check can finish.
+An absent Codex home does not require Codex when setting up another agent.
+Hook updates reuse migration's recoverable Windows-safe image swap: a running invocation
+finishes on the previous image, and an interrupted replacement restores that image before
+retrying. Startup refresh and setup share the migration lock so swaps cannot overlap.
+Equivalent home paths (including trailing separators, Windows casing and extended UNC syntax) do not block
+setup or removal, and Windows profile casing does not leave owned Claude commands behind.
+The three agents must use separate home directories: setup and removal resolve links
+through existing parents even for homes not yet created, and refuse shared homes before
+changing registrations or ownership. Unresolvable links refuse rather than guess. If an
+existing configuration shares homes, inspect its registrations before changing those
+homes; removal cannot safely decide which agent owns the shared marker.
+
+Copilot gets a dedicated `hooks\agent-bridge.json`; Claude gets entries merged into
+`settings.json` with unrelated settings and hooks preserved, plus its first original settings
+saved under `<profile>\hooks\backups`. Malformed Claude hook groups are refused before any
+registration or ownership changes, including in dry runs. Claude executable paths are
+shell-escaped so dollar signs, command substitutions and apostrophes remain literal;
+repair/removal still recognize registrations from the older double-quoted format.
+JSON formatting/comments can change. Codex gets a
+local plugin installed using its supported CLI, never a rewrite of hook trust settings.
+Each selected agent home gets `agent-bridge-owner.json`. Setup is repeatable; failures
+report incomplete setup and retain ownership so retry/removal is possible. Multiple agents
+are handled in order, not as one transaction.
+
+Inspect `agent-bridge-host hooks status` after restart: intake must be on, the heartbeat
+fresh, and hook runs must appear when the new sessions emit events. A fresh heartbeat alone
+does **not** prove an agent loaded its hooks. Workspace approval is separate from agents'
+own repository/folder trust and sign-in; complete those prompts at the machine.
+
+Before uninstalling, or to stop registering hooks for future sessions:
+
+```
+agent-bridge-host hooks remove copilot claude codex --dry-run
+agent-bridge-host hooks remove copilot claude codex
+```
+
+Removal touches only owned entries/plugin registrations; unrelated hooks, settings, trust
+and backups remain. An empty dedicated Copilot file is deleted; one containing somebody
+else's additions retains its ownership marker so it can safely be reinstalled later.
+The private binary/runtime/intake remain for already-open sessions
+until those end. Removing an unowned agent is refused. Automatic uninstall cleanup,
+instruction blocks, Settings setup and CLI bootstrapping remain follow-up work (#54, #231).
 
 ## Decision: the host ships its own native hook, speaking agent-ha-bridge's spool contract
 
@@ -63,8 +151,9 @@ its end and judged on what it holds, with no deadline at all.
 
 ## The spool contract (both bridges)
 
-All of it lives under the installation's runtime folder: agent-ha-bridge's
-`<bridgeHome>\runtime`, which is `~\.agent-ha-bridge\runtime` by default. `SpoolContract`
+All of it lives under the installation's runtime folder: a fresh profile's `<profile>\runtime`,
+or agent-ha-bridge's `<bridgeHome>\runtime` after migration (`~\.agent-ha-bridge\runtime`
+by default). `SpoolContract`
 holds every name; it is tested against files the Go hook writes and the daemon reads.
 
 | Path | Who writes it | What |

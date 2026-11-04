@@ -380,7 +380,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         return new(hookPath, pointerPath, created, pointerCreated);
     }
 
-    static void CopyHook(string source, string destination)
+    internal static void CopyHook(string source, string destination)
     {
         var staged = destination + ".new";
         var previous = destination + ".old";
@@ -411,7 +411,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
     // A replacement cut short (a crash between moving the hook aside and the new one into place)
     // leaves only the previous one, beside where every registration looks: put back. False when
     // there was nothing to put back.
-    static bool RecoverHook(string destination)
+    internal static bool RecoverHook(string destination)
     {
         var previous = destination + ".old";
         if (File.Exists(destination) || !File.Exists(previous)) { return false; }
