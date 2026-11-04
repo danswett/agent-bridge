@@ -76,6 +76,8 @@ public sealed partial class MainWindow : Window
             active = e.WindowActivationState != WindowActivationState.Deactivated;
             SyncSessionsOnScreen();
             if (active) { Reactivated(); }
+            // A card held in the list goes back as the window loses focus (#592).
+            else { SessionsView.Deactivated(); }
             if (active && maximizeWhenShown && AppWindow.Presenter is OverlappedPresenter p)
             {
                 maximizeWhenShown = false;

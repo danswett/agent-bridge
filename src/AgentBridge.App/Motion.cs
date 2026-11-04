@@ -25,7 +25,9 @@ public static class Motion
     public static MotionCatalogue Catalogue => catalogue ??= MotionCatalogue.From(key =>
         Application.Current.Resources.TryGetValue(key, out var v) ? Convert.ToString(v, CultureInfo.InvariantCulture) : null);
 
-    public static bool Enabled => Settings.AnimationsEnabled;
+    // Windows' animation effects, unless the self-test has set them for a check.
+    public static bool Enabled => Forced ?? Settings.AnimationsEnabled;
+    internal static bool? Forced { get; set; }
 
     // StartBringIntoView's own smooth scroll, at the platform's pace, unless it should jump.
     public static bool Scrolls => Catalogue.Enter("Scroll", Enabled).Runs;
@@ -79,6 +81,9 @@ public static class Motion
     static int Generation(UIElement e) => ++Generations.GetValue(e, _ => new()).Value;
     static readonly System.Runtime.CompilerServices.ConditionalWeakTable<UIElement, object> Animated = new();
     static readonly object Marker = new();
+
+    // An element something else has moved on its visual (a drag, SessionsPage.Reorder): Settle puts it back too.
+    internal static void Track(UIElement element) => Animated.AddOrUpdate(element, Marker);
 
     // Whatever is moving on the element stops, and it shows where it is: a first draw, a row
     // given to another session, a question arriving under a push.

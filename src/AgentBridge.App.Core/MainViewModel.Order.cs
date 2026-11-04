@@ -52,14 +52,47 @@ public sealed partial class MainViewModel
         Rearrange(chosen: true);
     }
 
-    // A drag: the card with key `dragged` goes before or after `target`.
-    public bool Place(string dragged, SessionCardViewModel target, bool after)
+    // A drag's drop (#592): the card goes to `index` among the other cards of the group it is dropped
+    // in, pinned or not, as one change; `drawn`, those cards' keys as the drag drew them.
+    public bool MoveTo(SessionCardViewModel card, bool pinned, int index, IReadOnlyList<string>? drawn = null)
     {
-        if (!Order.Place(dragged, KeyOf(target), after)) { return false; }
-        // The dragged card keeps focus, as after a keyboard or menu move, so the next Alt+Up/Down moves it.
-        if (byId.TryGetValue(dragged, out var moved)) { moved.WantsRowFocus = true; }
+        if (!Order.MoveTo(KeyOf(card), pinned, index, drawn)) { return false; }
+        // The dropped card keeps focus, as after a keyboard or menu move, so the next Alt+Up/Down moves it.
+        card.WantsRowFocus = true;
         Rearrange(chosen: true);
         return true;
+    }
+
+    public bool IsFixed(SessionCardViewModel card) => Order.IsFixed(KeyOf(card));
+
+    // The card a person holds in a drag (#592). While one is, the list's own changes (a session
+    // arriving, ending or moving in Most recent) apply to the model at once but reach Sessions, and
+    // so the screen, only once it is let go: a row appearing or going under the held card would move
+    // the place it is about to land in. Its own session ending is said (HeldGone), so the drag ends.
+    public SessionCardViewModel? Held
+    {
+        get => held;
+        set
+        {
+            if (held == value) { return; }
+            held = value;
+            if (held is null && heldChanges)
+            {
+                heldChanges = false;
+                Rearrange();
+            }
+        }
+    }
+    SessionCardViewModel? held;
+    bool heldChanges;
+    public event Action<SessionCardViewModel>? HeldGone;
+
+    // A card leaving the list, at once unless one is held.
+    void Unlist(SessionCardViewModel card)
+    {
+        if (held is null) { Sessions.Remove(card); return; }
+        heldChanges = true;
+        if (card == held) { HeldGone?.Invoke(card); }
     }
 
     void Hook(SessionCardViewModel card)
@@ -78,6 +111,12 @@ public sealed partial class MainViewModel
     // updates move rows). chosen: the person moved, pinned or sorted, which moves rows anyway.
     void Rearrange(bool chosen = false)
     {
+        if (held is not null && !chosen)
+        {
+            heldChanges = true;
+            if (!Visible(held)) { HeldGone?.Invoke(held); }
+            return;
+        }
         var sort = Order.Sort;
         var a = Arranged();
         var want = a.Pinned.Concat(a.Sessions).Select(e => byId[e.Key]).ToList();
@@ -154,9 +193,9 @@ public sealed class RowActions(MainViewModel main, SessionCardViewModel card)
     public string Key => main.KeyOf(card);
     public bool CanMoveUp => main.CanMove(card, -1);
     public bool CanMoveDown => main.CanMove(card, 1);
-    public bool CanDrag => main.Order.Sort == SessionSort.Yours;
+    public bool CanDrag => main.Order.Sort == SessionSort.Yours && !main.IsFixed(card);
     public bool MoveUp() => main.Move(card, -1);
     public bool MoveDown() => main.Move(card, 1);
     public void TogglePin() => main.SetPinned(card, !card.Pinned);
-    public bool Drop(string dragged, bool after) => main.Place(dragged, card, after);
+    public bool MoveTo(bool pinned, int index, IReadOnlyList<string>? drawn = null) => main.MoveTo(card, pinned, index, drawn);
 }

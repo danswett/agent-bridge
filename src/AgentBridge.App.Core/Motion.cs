@@ -20,6 +20,24 @@ public readonly record struct MotionEase(double X1, double Y1, double X2, double
         var n = parts.Select(p => double.Parse(p, NumberStyles.Float, CultureInfo.InvariantCulture)).ToArray();
         return new MotionEase(n[0], n[1], n[2], n[3]);
     }
+
+    // How far along the curve is at `time` (0 to 1) of its duration: where a motion interrupted
+    // part-way has got to, so the next one starts from there rather than from either end.
+    public double At(double time)
+    {
+        if (time <= 0) { return 0; }
+        if (time >= 1) { return 1; }
+        // The curve's x only grows: halve the parameter's range until x is the time asked for.
+        double lo = 0, hi = 1, s = time;
+        for (var i = 0; i < 40; i++)
+        {
+            s = (lo + hi) / 2;
+            if (Bezier(X1, X2, s) < time) { lo = s; } else { hi = s; }
+        }
+        return Bezier(Y1, Y2, s);
+    }
+
+    static double Bezier(double p1, double p2, double s) => (3 * (1 - s) * (1 - s) * s * p1) + (3 * (1 - s) * s * s * p2) + (s * s * s);
 }
 
 // One catalogue entry: in, out (an entry with no exit of its own leaves as it came), how far it
@@ -37,7 +55,7 @@ public sealed class MotionCatalogue
 {
     // Every entry in ui.md §5.3's catalogue, by its tokens.json name with a capital.
     public static readonly IReadOnlyList<string> Names =
-        ["Push", "Pane", "Tab", "Disclosure", "ListItem", "Glyph", "ActivityDot", "Selection", "Press", "Acknowledge", "Toast", "Sheet", "Menu", "Scroll", "Reorder"];
+        ["Push", "Pane", "Tab", "Disclosure", "ListItem", "Glyph", "ActivityDot", "Selection", "Press", "Acknowledge", "Toast", "Sheet", "Menu", "Scroll", "Reorder", "Lift"];
 
     readonly Dictionary<string, MotionEntry> entries;
 

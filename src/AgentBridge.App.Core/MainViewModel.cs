@@ -313,7 +313,7 @@ public sealed partial class MainViewModel : Observable
             byId.Remove(id);
             owner.Remove(card);
             card.Detach();
-            Sessions.Remove(card);
+            Unlist(card);
         }
         Rearrange();
         m.Toasts?.MachineGone();
@@ -542,7 +542,7 @@ public sealed partial class MainViewModel : Observable
         Deselect(card);
         owner.Remove(card);
         card.Detach();
-        Sessions.Remove(card);
+        Unlist(card);
         Order.Ended(m.Key, card.Session);
         Rearrange();
         m.Toasts?.Remove(id);

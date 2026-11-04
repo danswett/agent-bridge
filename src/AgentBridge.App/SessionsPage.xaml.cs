@@ -35,6 +35,7 @@ public sealed partial class SessionsPage : UserControl
         List.Loaded += (_, _) => WatchListScroll();
         List.GettingFocus += (_, e) => (focusItem, focusRow) = e.NewFocusedElement is ListViewItem item && (item.Content ?? List.ItemFromContainer(item)) is SessionCardViewModel card ? (item, card) : (null, null);
         List.LayoutUpdated += KeepFocusWithSession;
+        WatchReorder();
     }
 
     // The list item given keyboard focus last, and the session it drew then. Taken as focus moves
@@ -90,6 +91,7 @@ public sealed partial class SessionsPage : UserControl
             value.Machines.CollectionChanged += (_, _) => BuildMachineTabs();
             value.Sessions.CollectionChanged += OnSessionsChanged;
             value.NeedsYou.CollectionChanged += OnLaneChanged;
+            WatchHeld(value);
             BuildMachineTabs();
             Bindings.Update();
             Measure();
@@ -224,6 +226,7 @@ public sealed partial class SessionsPage : UserControl
         if (args.ItemContainer?.ContentTemplateRoot is not SessionRow row) { return; }
         // A row put aside or given to another session shows that one as it is.
         Motion.Settle(args.ItemContainer);
+        if ((drag is not null || settling.Count > 0) && args.ItemContainer is ListViewItem item) { ReorderRecycled(item); }
         if (args.InRecycleQueue) { row.Park(); }
         else { row.Unpark(); }
     }
@@ -233,6 +236,8 @@ public sealed partial class SessionsPage : UserControl
     void OnSessionsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         if (!ready) { Ready(); }
+        // Only a person's own change reaches the list while a card is held (MainViewModel.Held).
+        Abandon();
         if (e.Action == NotifyCollectionChangedAction.Add && viewModel is not null)
         {
             foreach (SessionCardViewModel card in e.NewItems ?? Array.Empty<object>())
@@ -272,7 +277,7 @@ public sealed partial class SessionsPage : UserControl
             DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FollowFocus);
             return;
         }
-        if (e.Key is not (VirtualKey.Up or VirtualKey.Down)) { return; }
+        if (e.Key is not (VirtualKey.Up or VirtualKey.Down) || drag is not null) { return; }
         if (!alt || RowOf(e.OriginalSource as DependencyObject) is not { } row) { return; }
         e.Handled = true;
         row.MoveBy(e.Key == VirtualKey.Up ? -1 : 1);
@@ -599,7 +604,11 @@ public sealed partial class SessionsPage : UserControl
     {
         if (listScroll is not null || Find<ScrollViewer>(List) is not { } scroll) { return; }
         listScroll = scroll;
-        scroll.ViewChanged += (_, _) => laneGuard.Scrolled(DateTimeOffset.UtcNow);
+        scroll.ViewChanged += (_, _) =>
+        {
+            laneGuard.Scrolled(DateTimeOffset.UtcNow);
+            OnListScrolled();
+        };
     }
 
     static T? Find<T>(DependencyObject node) where T : DependencyObject
