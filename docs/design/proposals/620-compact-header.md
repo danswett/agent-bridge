@@ -364,7 +364,7 @@ There is no Windows board: the Windows app doesn't change (see [Where it applies
 
 The boards are generated: `node render.js ../../design/canvas ../../docs/design/proposals/620-compact-header Proposal-620-`
 from [tools/design-mockups](../../../tools/design-mockups/README.md). Their sources are
-`design/canvas/Proposal-620-*.dc.html`, from y = 22400 on the canvas.
+`design/canvas/Proposal-620-*.dc.html`, from y = 25400 on the canvas, below the #544 boards.
 
 ### The prototype
 
