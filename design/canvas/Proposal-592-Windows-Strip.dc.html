@@ -47,7 +47,7 @@ class Component extends DCLogic {
       { label: '2 · Hover the grip', slots: [P, ...rows('ab'), S, ...rows('cdefgh', { c: { st: 'sel', hover: true } })], ptr: { kind: 'mouse', at: 4, dx: 10, dy: 24 },
         notes: ['Cursor: grab. Pressing the grip lifts at once. Pressing the card lifts after 4 px of movement, so a click still opens the session.'] },
       { label: '3 · Lifted', slots: [P, ...rows('ab'), S, { gap: true }, ...rows('defgh')], lift: { r: 'c', at: 4, sel: true }, ptr: { kind: 'mouse', at: 4, dx: 10, dy: 24 },
-        notes: ['No drag ghost and no “Move below” caption: the card itself lifts, with scale 1.02, ThemeShadow and the tint. Cursor: grabbing.'] },
+        notes: ['No drag ghost and no “Move below” caption: the card itself lifts, with scale 1.02, Composition DropShadow and the tint. Cursor: grabbing.'] },
       { label: '4 · Dragging, neighbours part', slots: [P, ...rows('ab'), S, ...rows('def', { d: { trace: 1 }, e: { trace: 1 }, f: { trace: 1 } }), { gap: true }, ...rows('gh')], lift: { r: 'c', at: 7, dy: -20, sel: true }, ptr: { kind: 'mouse', at: 7, dx: 10, dy: 4 },
         notes: ['The card tracks the pointer 1:1. The cards it passes ease up one row with reorder (167 ms). It stays above the rows and below the title bar.'] },
       { label: '5 · Release, settle', slots: [P, ...rows('ab'), S, ...rows('def'), { gap: true }, ...rows('gh')], lift: { r: 'c', at: 7, dy: -5, scale: 1.006, shadow: 0.3, sel: true }, ptr: { kind: 'mouse', at: 7, dx: 10, dy: 18 },
