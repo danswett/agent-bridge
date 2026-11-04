@@ -36,8 +36,8 @@ static partial class SelfTest
         var size = $"{root.Size.Width:0}×{root.Size.Height:0}, {layout.Mode}";
         List<FrameworkElement> Choices() => [.. new[] { "Option:approve", "Option:deny" }.Select(id => ById<Button>(view, id)).OfType<FrameworkElement>().Where(b => b.ActualWidth > 0)];
         List<FrameworkElement> LaneAnswers() => [.. Find<Button>(lane).Where(b => b.IsEnabled && AutomationId(b) is "NeedsYouApprove" or "NeedsYouDeny" && b.ActualWidth > 0)];
-        bool Pressed(Point at) => Presses(root, at, view.QuestionShown, view.PointerLets);
-        bool LanePressed(Point at) => Presses(root, at, lane, page.LanePointerLets);
+        string Pressed(List<Point> before) => Press(root, Resting(before, Choices()), Choices(), view.QuestionShown, view.PointerLets);
+        string LanePressed(List<Point> before) => Press(root, Resting(before, LaneAnswers()), LaneAnswers(), lane, page.LanePointerLets);
         async Task<bool> Takes() => await Until(() => view.QuestionShown is { IsHitTestVisible: true } && Choices().Count == 2, TimeSpan.FromSeconds(5));
         async Task<bool> LaneTakes() => await Until(() => lane.IsHitTestVisible && LaneAnswers().Count > 0, TimeSpan.FromSeconds(5));
         async Task<bool> Moved(Func<List<FrameworkElement>> answers, List<Point> before) =>
@@ -60,13 +60,16 @@ static partial class SelfTest
             }
             else { check(false, $"finds Approve once on the permission prompt ({size})"); }
 
-            // The banner's words growing to more lines over the question.
+            // The banner's words growing to more lines over the question, Approve once brought near
+            // the top of the conversation first, so it is still in sight in a short window.
+            if (Choices() is [var first, ..]) { first.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false, VerticalAlignmentRatio = 0.2 }); }
+            await Task.Delay(200);
             ready = await Takes();
             var before = Choices().Select(Centre).ToList();
-            banner.Message = Long();
+            banner.Message = Longer(root);
             var grew = await Moved(Choices, before);
-            var pressed = Pressed(Resting(before, Choices()));
-            check(ready && grew && !pressed, $"holds the question's answers from a pointer resting where they moved as a banner above them grows ({size}; moved: {grew}; pressed: {pressed})");
+            var pressed = Pressed(before);
+            check(ready && grew && Stopped(pressed), $"holds the question's answers from a pointer resting where they moved as a banner above them grows ({size}; moved: {grew}; the press: {pressed})");
             banner.IsOpen = false;
             banner.Message = "";
 
@@ -78,15 +81,15 @@ static partial class SelfTest
                 var listing = DemoHost.Delegating(DateTimeOffset.UtcNow);
                 card.Update(original with { Subagents = listing.Subagents, Activity = (original.Activity ?? new Activity()) with { Background = listing.Activity!.Background } });
                 var shown = await Until(() => layout.ShowStrip && ById<FrameworkElement>(view, "DelegateStrip") is { ActualHeight: > 0 }, TimeSpan.FromSeconds(5)) && await Moved(Choices, before);
-                pressed = Pressed(Resting(before, Choices()));
-                check(ready && shown && !pressed, $"holds the question's answers from a pointer resting where they moved as the delegate strip appears above them (shown: {shown}; pressed: {pressed})");
+                pressed = Pressed(before);
+                check(ready && shown && Stopped(pressed), $"holds the question's answers from a pointer resting where they moved as the delegate strip appears above them (shown: {shown}; the press: {pressed})");
 
                 ready = await Takes();
                 before = Choices().Select(Centre).ToList();
                 card.Update(original);
                 var gone = await Until(() => !layout.ShowStrip, TimeSpan.FromSeconds(5)) && await Moved(Choices, before);
-                pressed = Pressed(Resting(before, Choices()));
-                check(ready && gone && !pressed, $"holds the question's answers from a pointer resting where they moved as the delegate strip goes (gone: {gone}; pressed: {pressed})");
+                pressed = Pressed(before);
+                check(ready && gone && Stopped(pressed), $"holds the question's answers from a pointer resting where they moved as the delegate strip goes (gone: {gone}; the press: {pressed})");
             }
             else
             {
@@ -99,11 +102,11 @@ static partial class SelfTest
             var listed = await Until(() => layout.ShowList, TimeSpan.FromSeconds(5));
             ready = listed && await LaneTakes();
             before = LaneAnswers().Select(Centre).ToList();
-            banner.Message = Long();
+            banner.Message = Longer(root);
             banner.IsOpen = true;
             grew = await Moved(LaneAnswers, before);
-            pressed = LanePressed(Resting(before, LaneAnswers()));
-            check(ready && grew && !pressed, $"holds Needs you's answers from a pointer resting where they moved as a banner opens above the list ({size}; moved: {grew}; pressed: {pressed})");
+            pressed = LanePressed(before);
+            check(ready && grew && Stopped(pressed), $"holds Needs you's answers from a pointer resting where they moved as a banner opens above the list ({size}; moved: {grew}; the press: {pressed})");
             banner.IsOpen = false;
             banner.Message = "";
 
@@ -119,7 +122,15 @@ static partial class SelfTest
         }
     }
 
-    static string Long() => string.Join(' ', Enumerable.Repeat("The demo machine's host stopped answering, and the app is trying it again.", 6));
+    // A banner's words a line or two longer than one line at this width: a move small enough to
+    // leave the answers in sight in a short window.
+    static string Longer(XamlRoot root)
+    {
+        var words = "The demo machine's host stopped answering, and the app is trying it again.";
+        var text = words;
+        while (text.Length < root.Size.Width / 4) { text += " " + words; }
+        return text;
+    }
 
     // Needs you is the list's header: with the list scrolled to its end and what is below the lane
     // getting shorter, the list is pulled back and the lane slides down under a still pointer. The
@@ -127,7 +138,7 @@ static partial class SelfTest
     // height (a short list, or a small screen that shows little of it): its bottom space grows to
     // make it longer, and rows are taken out for a moment to make it shorter.
     static async Task CheckLaneClamp(MainViewModel main, SessionsPage page, Func<List<FrameworkElement>> answers, Func<Task<bool>> takes,
-        Func<Point, bool> pressed, string size, Action<bool, string> check)
+        Func<List<Point>, string> pressed, string size, Action<bool, string> check)
     {
         var list = page.Rows;
         var padding = list.Padding;
@@ -170,9 +181,9 @@ static partial class SelfTest
             // What is below the lane gets shorter by `slide`: the list is pulled back by as much.
             list.Padding = padding with { Bottom = padding.Bottom + Math.Max(0, end - natural) };
             var slid = await Until(() => scroller.VerticalOffset < offset - 1 && answers() is [var a, ..] && before.Count > 0 && Centre(a).Y - before[0].Y > 1, TimeSpan.FromSeconds(5));
-            var press = pressed(Resting(before, answers()));
-            check(fits && atEnd && ready && slid && !press,
-                $"holds Needs you's answers from a pointer resting where they moved as the list, at its end, is pulled back by what is below getting shorter ({size}; {offset:0}→{scroller.VerticalOffset:0}, {taken.Count} rows taken out; fits: {fits}, at the end: {atEnd}, slid: {slid}, pressed: {press})");
+            var press = pressed(before);
+            check(fits && atEnd && ready && slid && Stopped(press),
+                $"holds Needs you's answers from a pointer resting where they moved as the list, at its end, is pulled back by what is below getting shorter ({size}; {offset:0}→{scroller.VerticalOffset:0}, {taken.Count} rows taken out; fits: {fits}, at the end: {atEnd}, slid: {slid}, the press: {press})");
         }
         finally
         {
@@ -193,17 +204,22 @@ static partial class SelfTest
         return answers.Count > 0 ? Centre(answers[0]) : default;
     }
 
-    // A pointer pressing at `at` now, as Windows would route it: whether it reaches an answer in
-    // holder (anything held is out of hit testing) and that answer lets it through.
-    static bool Presses(XamlRoot root, Point at, UIElement? holder, Func<DependencyObject, bool> lets)
+    // A pointer pressing at `at` now, as Windows would route it: "answered" if it reaches an answer
+    // in holder and the answer lets it through; "held" if nothing there takes it (held answers are
+    // out of hit testing); "dropped" if the answer drops it. "On no answer" and "out of sight" (not
+    // in what scrolls the holder's view) prove nothing, and fail the case.
+    static string Press(XamlRoot root, Point at, IReadOnlyList<FrameworkElement> answers, UIElement? holder, Func<DependencyObject, bool> lets)
     {
-        if (holder is null) { return false; }
+        if (holder is null || !answers.Any(a => Bounds(a).Contains(at))) { return "on no answer"; }
+        if (Above<ScrollViewer>(holder, _ => true) is { } scroller && !Bounds(scroller).Contains(at)) { return "out of sight"; }
         var top = VisualTreeHelper.FindElementsInHostCoordinates(at, root.Content).FirstOrDefault();
-        if (top is null || !Motion.Within(top, holder)) { return false; }
+        if (top is null || !Motion.Within(top, holder)) { return "held"; }
         for (DependencyObject? up = top; up is not null && up != holder; up = VisualTreeHelper.GetParent(up))
         {
-            if (up is ButtonBase) { return lets(top); }
+            if (up is ButtonBase) { return lets(top) ? "answered" : "dropped"; }
         }
-        return false;
+        return "held";
     }
+
+    static bool Stopped(string press) => press is "held" or "dropped";
 }
