@@ -353,11 +353,11 @@ test('progress frames tell a reply how far it has got, in order, and never settl
   const re = t.lastRequest('session.reply').id;
   t.host({ re, progress: { stage: 'received' } });
   t.host({ re, progress: { stage: 'typed', working: true } });
-  // A stage this app doesn't know, from a newer host, is passed over and settles nothing either.
+  // A stage this app doesn't know, from a newer host, settles nothing either: the service passes it over.
   t.host({ re, progress: { stage: 'pondering' } });
   await flush();
   assert.equal(settled, false);
-  assert.deepEqual(heard, [{ stage: 'received', working: false }, { stage: 'typed', working: true }]);
+  assert.deepEqual(heard, [{ stage: 'received', working: false }, { stage: 'typed', working: true }, { stage: 'pondering', working: false }]);
   t.host({ re, ok: true, result: { outcome: 'delivered', timings: { typed: 352, recorded: 1190, confirmed: 1361, bogus: 'x' } } });
   assert.deepEqual(await p, { outcome: 'delivered', reason: null, timings: { typed: 352, recorded: 1190, confirmed: 1361 } });
 });

@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import {
-  readActivity, readAnswerResult, readAttachmentState, readBackground, readDiscoveryHeld, readHello, readOwn,
+  readActivity, readAnswerResult, readAttachmentState, readBackground, readDiscoveryHeld, readHello, readOwn, readProgress,
   readQuestion, readSession, readSource, readStopResult, readSubagent, readTool,
 } from '../../js/protocol.js';
 import { checkAnswer } from '../../js/answers.js';
@@ -200,6 +200,10 @@ const READS = {
   SessionPatch: { read: readPatch },
   SubagentsPatch: { read: (j) => readPatch({ id: SESSION_ID, subagents: j })?.subagents ?? null },
   AnswerResult: { read: readAnswerResult },
+  // An answer's or a reply's progress frame and its result's timings, which only a host asked
+  // for progress sends (#600): read as the service gets them.
+  DeliveryProgress: { read: readProgress },
+  DeliveryTimings: { read: (j) => readAnswerResult({ outcome: 'delivered', timings: j }).timings ?? {} },
   ReplyResult: { read: readAnswerResult },
   StopResult: { read: readStopResult },
   AttachmentState: { read: readAttachmentState },
@@ -384,9 +388,6 @@ const NOT_REPLAYED = {
   TransferRequest: 'host to host: no client sends it',
   TransferResult: 'host to host: no client reads it',
   UpdateCommand: 'built inside UpdateControl from a fresh request, with nothing else in it',
-  // The PWA asks for progress from #600; until then a host sends neither to it.
-  DeliveryProgress: 'progress frames come only to a client that sends progress: true, which the PWA does not yet',
-  DeliveryTimings: 'timings come only to a client that sends progress: true, which the PWA does not yet',
 };
 
 // ---- the replay ----

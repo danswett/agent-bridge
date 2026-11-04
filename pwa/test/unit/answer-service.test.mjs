@@ -253,7 +253,7 @@ test("an answer's stages from the machine are shown in order: Sent, then Typed, 
   assert.deepEqual(service.get('h1', 's1', 'q1').detail.timings, { typed: 40, confirmed: 90 });
 });
 
-test('typed into a working session is Queued, and a stage behind one already reached changes nothing', async () => {
+test('typed into a working session is Queued, and a stage behind one already reached, or unknown, changes nothing', async () => {
   const { conn, service, submit } = setup();
   conn.client = progressClient();
   submit();
@@ -262,6 +262,9 @@ test('typed into a working session is Queued, and a stage behind one already rea
   assert.equal(service.get('h1', 's1', 'q1').stage, 'queued');
   // A resend's repeat replays the stages reached, received first: what was typed stays typed.
   call.progress({ stage: 'received', working: false });
+  assert.equal(service.get('h1', 's1', 'q1').stage, 'queued');
+  // Nor does a stage this app doesn't know, from a newer host.
+  call.progress({ stage: 'pondering', working: false });
   assert.equal(service.get('h1', 's1', 'q1').stage, 'queued');
 });
 
