@@ -74,6 +74,9 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
         {
             _info ??= new FileInfo(Path);
             _info.Refresh();
+            // A link (a symlink or junction to the transcript) has a size and time of its own, not
+            // its target's, and would read as unchanged for ever: no stamp, so it is read each pass.
+            if (_info.Exists && _info.Attributes.HasFlag(FileAttributes.ReparsePoint)) { return null; }
             return _info.Exists ? (_info.Length, _info.LastWriteTimeUtc) : null;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }

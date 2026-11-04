@@ -655,13 +655,18 @@ public sealed class HaAuthGuard
     // one could not record before.
     void Refresh()
     {
-        if (Unchanged()) { return; }
-        Sync(null);
+        // Under the lock, whoever calls: what Unchanged reads (pending, the stamp) is what Sync
+        // changes. The callers hold it already, and it is re-entrant.
+        lock (gate)
+        {
+            if (Unchanged()) { return; }
+            Sync(null);
+        }
     }
 
     // Whether the record is as this process last read it, so reading it again would change
     // nothing: only with nothing of this process's waiting to be written, and the record readable
-    // the last time. Without the lock: a stamp is all this looks at.
+    // the last time. Called under the lock (Refresh).
     bool Unchanged() =>
         path is not null && !unavailable && pending.Count == 0
         && readStamp is { } last && Stamp(out _) is { } now && now == last && now.Written < stampedAt - Racy;

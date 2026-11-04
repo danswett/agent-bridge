@@ -76,7 +76,10 @@ internal sealed class SessionTracker
             {
                 _subagents ??= new ClaudeSubagents();
                 var nested = _subagents.Read(path);
-                foreach (var record in nested) { claude.Nested(record); }
+                // What Nested took counts as well as which records there are: a child sorted before
+                // its parent (spawnDepth left out reads as 2) is taken a pass later, from the same
+                // records (#634).
+                foreach (var record in nested) { changed |= claude.Nested(record); }
                 if (!nested.SequenceEqual(_nested)) { (_nested, changed) = (nested, true); }
             }
         }
