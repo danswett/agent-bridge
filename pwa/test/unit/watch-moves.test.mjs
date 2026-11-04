@@ -193,3 +193,20 @@ test('a move laid out since the last read is found when a click asks, before any
   assert.equal(p.moves(), 1);
   assert.equal(p.watcher.check(), false);
 });
+
+test('what the conversation shows growing as the person types, its clamp\'s scroll event before the read, is a move (#491)', () => {
+  const p = page();
+  p.read();
+  // Settled: the read before this moment saw nothing change outside the page.
+  p.read();
+  p.watcher.own();
+  // A bar above the conversation goes, the window as it was: the conversation shows more, and its
+  // scroll is pulled back. The scroll event comes first, while their own question grows a line.
+  p.scroller.clientHeight = 430;
+  p.scroller.scrollTop = 1803;
+  p.at.top += 120;
+  p.scroll();
+  p.at.top += 20;
+  p.read([p.holder, p.scroller]);
+  assert.equal(p.moves(), 1);
+});

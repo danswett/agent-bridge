@@ -121,6 +121,9 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
   // Whether the last read saw the window or what a scroller shows change size: a clamp after it
   // isn't the person's, whatever they are doing in the question.
   let wasOutside = false;
+  // What each scroller showed at the last read: a scroll event between reads updates the scroll
+  // accounting, and mustn't hide from the next read that what a scroller shows changed size.
+  let readInner = [];
   // How far everything holding the answers is scrolled and how big each is inside and out; for
   // each the holder's place doesn't pin (nothing fixed between them), how far the browser's
   // anchoring moved its scrolling to keep what's at its top in place as content above changed.
@@ -263,11 +266,12 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
     const changed = was && (at.length !== was.length || at.some(([y, x], i) => Math.abs(y - was[i][0]) > 1 || Math.abs(x - was[i][1]) > 1));
     const size = [win.innerWidth, win.innerHeight];
     const outside = !view || size[0] !== view[0] || size[1] !== view[1]
-      || by.some(([, , inner, carried], i) => carried && wasBy.length === by.length && inner !== wasBy[i][2]);
+      || by.some(([, , inner, carried], i) => carried && readInner.length === by.length && inner !== readInner[i]);
     const fired = !!(count && changed && !theirs(entries, outside));
     if (fired) { moved(); }
     view = size;
     wasOutside = outside;
+    readInner = by.map(([, , inner]) => inner);
     was = at;
     wasBy = overEnd(by);
     return fired;
@@ -352,6 +356,7 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
       pending = false;
       was = null;
       wasBy = [];
+      readInner = [];
       sized?.disconnect();
       watched.clear();
     },
