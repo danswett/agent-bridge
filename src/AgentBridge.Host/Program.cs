@@ -501,6 +501,8 @@ async Task<int> ServeAsync(HostHandover handover)
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge"),
         ServeReadOnly, agentLocator, new BatchFileRunner(new CommandRunner(codexEnvironment), codexEnvironment)) : null;
     var agentSetup = standaloneHooks is null ? null : new AgentSetupService(standaloneHooks, ServeReadOnly, stop.Token);
+    var agentProbes = new VersionCommandRunner(() => AgentEnvironment.For(agentHomes.Copilot,
+        agentHomes.Claude, agentHomes.Codex, agentHomes.ClaudeConfigDirExplicit, agentLocator.ChildPath()));
     void CheckAgentMutation(string agent)
     {
         if (ServeReadOnly() is { } why) { throw new InvalidOperationException($"CLI setup is unavailable while this host is read-only: {why}"); }
@@ -517,9 +519,9 @@ async Task<int> ServeAsync(HostHandover handover)
         CheckAgentMutation, stop.Token);
     var agentSignIn = OperatingSystem.IsWindows() && standaloneHooks is not null
         ? new AgentSignInService(identity.Folder, agentHomes, agentLocator, agentLocator.Refresh,
-            new WindowsAgentStarter(), new VersionCommandRunner(), CheckAgentMutation, stop.Token) : null;
+            new WindowsAgentStarter(), agentProbes, CheckAgentMutation, stop.Token) : null;
     await using var agentReadiness = new AgentReadinessService(identity.Folder, agentHomes,
-        settings.Launch, agentLocator, new VersionCommandRunner(), ServeReadOnly, intake);
+        settings.Launch, agentLocator, agentProbes, ServeReadOnly, intake);
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
