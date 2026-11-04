@@ -359,6 +359,9 @@ public sealed class ReplyViewModel : Observable
         var entry = deliveries.Submit(Key, Ops.SessionReply, r => Request(r, sentText, files), _ => false, payload: files, before: (call, progress) => UploadAsync(call, files, progress), replayAfterRestart: false);
         sent = (entry.Request, sentText, files);
         keepRoom = true;
+        // Sent inside the last one's check: Send shows this one's ring, not that check.
+        checkTimer?.Dispose();
+        SetCheck(false);
         Refresh();
     }
 

@@ -255,7 +255,11 @@ public sealed class Deliveries
             {
                 // No outcome: the host went (or was never there). It may have acted, so the
                 // same request goes again once it is back.
-                Update(entry.Key, x => x with { State = DeliveryState.Waiting, Reason = e is HostNotRunningException ? NotConnected : e.Message });
+                // A channel that closed under the request is the machine gone too, not a slow answer
+                // (Waiting for machine, its ring still); the next try, on no channel, says so if this
+                // one is seen before the link notices. A failure while connected keeps its words.
+                var down = e is HostNotRunningException || (e is IOException && !host.WhenConnectedAsync().IsCompleted);
+                Update(entry.Key, x => x with { State = DeliveryState.Waiting, Reason = down ? NotConnected : e.Message });
                 // Waited on only for what is left of the limits, so a Try again pressed late does not hold
                 // the page past them while the machine is away.
                 if (Left() is var left && left > TimeSpan.Zero)

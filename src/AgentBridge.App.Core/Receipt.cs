@@ -266,7 +266,20 @@ public sealed class Receipt : IDisposable
         if (disposed) { return; }
         timer?.Dispose();
         timer = null;
-        if (instead is not null) { Voice(null); Put(instead); return; }
+        if (instead is not null)
+        {
+            // An override that speaks (an answer to a question since reworded) is said as the
+            // request's own words are; one that doesn't (reading a file, offline) stays silent.
+            if (entry is { } held && instead.Speech is not null)
+            {
+                var h0 = HistoryFor(held.Request, Now());
+                Voice(h0);
+                Put(instead);
+                Speak(h0, instead);
+            }
+            else { Voice(null); Put(instead); }
+            return;
+        }
         if (entry is not { } e) { Voice(null); Put(ReceiptLine.None); return; }
         var t = Now();
         var h = HistoryFor(e.Request, t);
@@ -296,8 +309,10 @@ public sealed class Receipt : IDisposable
         }
         else if (h.Shown is { InFlight: true } s && s.Key != line.Key && t < s.At + ReceiptTiming.Dwell)
         {
-            // The state showing hasn't been up long enough to read: it stays, then the furthest reached.
+            // The state showing hasn't been up long enough to read: it stays, then the furthest
+            // reached. What is said doesn't wait for it: the latest stage wins.
             Put(s.Line);
+            Speak(h, line);
             wake = wake is { } w && w < s.At + ReceiptTiming.Dwell ? w : s.At + ReceiptTiming.Dwell;
         }
         else
@@ -315,8 +330,14 @@ public sealed class Receipt : IDisposable
     {
         h.Shown = h.Shown is { } s && s.Key == line.Key ? s with { Line = line } : new ShownLine(line.Key, t, line, inFlight);
         Put(line);
-        // Each change is said once for the request, however often its view model is made afresh.
-        if (line.Speech is { } speech && !h.Said.Contains(speech)) { h.Pending = speech; }
+        Speak(h, line);
+    }
+
+    // Each change is said once for the request, however often its view model is made afresh, and
+    // only the latest: a state since replaced, or already said, is never said late.
+    void Speak(History h, ReceiptLine line)
+    {
+        h.Pending = line.Speech is { } speech && !h.Said.Contains(speech) ? speech : null;
         Announce(h);
     }
 

@@ -643,8 +643,10 @@ it goes, whatever stage the host reports; once delivered, Send cross-fades from 
 check for about a second (`ReceiptTiming.SendCheckHold`) and back to its arrow (`CheckGlyph`: the
 `check` icon's geometry as a stroked Path in the button's own ink, never Segoe's CheckMark). A single-choice question sends on a tap, so the tapped option is the
 control that sent it: it keeps full opacity with the ring, then the check, at its trailing edge,
-while the other options are disabled; only a busy or refused outcome enables them again (a stale
-or unconfirmed answer is the prompt's one attempt). Send, too, keeps its look while it shows its
+while the other options are disabled. After a stale or unconfirmed outcome the tapped option stays
+pressed (marked ✓) and the others disabled, since the answer may have been typed and a prompt gets
+one attempt; only busy or refused enables them all again, none pressed. A failed answer's Send again
+resends the same request. Send, too, keeps its look while it shows its
 ring or check, doing nothing until it can send. An
 answer's card then says "You answered · *value*" in text2 (a tap's option, free text's first
 line cut to about 40 characters, nothing for a form of several fields). There is no badge and no

@@ -21,12 +21,10 @@ public static class Ui
     // A reply's or an answer's receipt (ui.md §6.5, decided on #617): its stalls and waits, and
     // You answered, in text2; the exceptions in their own tone. In a contrast theme every word is
     // the window's text (§9).
-    public static Brush ReceiptBrush(Tone tone) => tone switch
-    {
-        Tone.Progress => Brush("AbText2"),
-        Tone.Ok when new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast => Brush("AbText"),
-        _ => ToneBrush(tone),
-    };
+    public static Brush ReceiptBrush(Tone tone) =>
+        new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast ? Brush("AbText")
+        : tone == Tone.Progress ? Brush("AbText2")
+        : ToneBrush(tone);
 
     public static Brush ToneBrush(Tone tone) => Brush(ToneKey(tone));
 

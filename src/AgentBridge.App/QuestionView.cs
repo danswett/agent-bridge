@@ -185,7 +185,7 @@ public sealed class QuestionView : StackPanel
             // look while it shows them (ui.md §6.5), and vm.Send does nothing unless CanAnswer.
             var mine = !(vm.Tap && vm.Fields is [var tapped, ..] && tapped.Options.Any(o => o.Value == vm.SentValue));
             send.IsEnabled = vm.CanAnswer || (mine && (vm.InFlight || vm.SendCheck));
-            Ring(send, mine && vm.InFlight, mine && vm.SendCheck);
+            Ring(send, mine && vm.InFlight, mine && vm.SendCheck, vm.StatusMark == ReceiptMark.Still);
         }
         foreach (var r in refreshers) { r(); }
     }
@@ -218,13 +218,14 @@ public sealed class QuestionView : StackPanel
             {
                 var sent = vm.SentValue == o.Value;
                 // Tap to answer (ui.md §6.5): the tapped option is the control that sent it, so it
-                // keeps full opacity, with its ring and then its check, while the others are
-                // disabled. Only busy or refused enables them again for a retry: a stale or unconfirmed
-                // answer is the prompt's one attempt (QuestionViewModel.CanAnswer).
-                b.IsEnabled = vm.CanAnswer || (sent && (vm.InFlight || vm.SendCheck));
+                // keeps full opacity, with its ring and then its check, while the others are disabled,
+                // and stays pressed after: a stale or unconfirmed answer may have been typed, and is the
+                // prompt's one attempt. Busy or refused typed nothing, so all are enabled again, none
+                // pressed (QuestionViewModel.CanAnswer, SentValue). A press on it does nothing (Click).
+                b.IsEnabled = vm.CanAnswer || sent;
                 // Its ring and check say it goes; the ✓ marks which option went once they are done.
                 label.Text = sent && !vm.InFlight && !vm.SendCheck ? $"✓ {o.Label}" : o.Label;
-                Ring(b, sent && vm.InFlight, sent && vm.SendCheck);
+                Ring(b, sent && vm.InFlight, sent && vm.SendCheck, vm.StatusMark == ReceiptMark.Still);
             });
             panel.Children.Add(b);
         }
@@ -380,9 +381,11 @@ public sealed class QuestionView : StackPanel
         return grid;
     }
 
-    static void Ring(Button b, bool on, bool check)
+    // still: the answer waits on this device for its machine, so the ring stands still (§6.5).
+    static void Ring(Button b, bool on, bool check, bool still)
     {
         if (b.Content is not Grid { Children: [InFlightRing ring, CheckGlyph glyph, ..] }) { return; }
+        ring.Still = on && still;
         ring.Active = on;
         glyph.Visibility = Ui.Show(check && !on);
     }
