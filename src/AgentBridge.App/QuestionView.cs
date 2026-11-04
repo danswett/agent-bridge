@@ -213,11 +213,16 @@ public sealed class QuestionView : StackPanel
         send = SendButton();
     }
 
+    // The bar sits in the gutter to the field's left, pulled out by a margin as wide as it and its
+    // padding: the field's own controls stay where they are, invalid or not. Pushing them right
+    // moved the next field's box under the pointer as a second Send marked it, which the answer
+    // guard (#491) held as a move, dropping the person's click into it.
     static void FieldInvalid(Border frame, FieldViewModel f)
     {
         frame.BorderThickness = new Thickness(f.Invalid ? 2 : 0, 0, 0, 0);
         frame.BorderBrush = Ui.Brush("AbDanger");
         frame.Padding = new Thickness(f.Invalid ? 8 : 0, 2, 0, 2);
+        frame.Margin = new Thickness(f.Invalid ? -10 : 0, 0, 0, 0);
     }
 
     UIElement Control(FieldViewModel f)

@@ -17,7 +17,7 @@ namespace AgentBridge.App;
 // strip is drawn only at three panes, and below that the list and the session take turns.
 static partial class SelfTest
 {
-    static async Task CheckAnswerMoves(MainWindow window, MainViewModel main, Action<bool, string> check)
+    static async Task CheckAnswerMoves(MainWindow window, MainViewModel main, Action<bool, string> check, string outFile)
     {
         var page = window.Sessions;
         var layout = page.Layout!;
@@ -160,6 +160,71 @@ static partial class SelfTest
                 else { check(false, $"shows Send under Other's box ({size})"); }
             }
             else { check(false, $"draws a question with Other to open ({size})"); }
+
+            // A second Send marks the next required field: its box stays where it was, so the
+            // person's click into it isn't held. Marking it pushed the box right without the
+            // question resizing, which the guard held as a move (Copilot on ced8dfb).
+            card.Update(original with
+            {
+                Question = new Question
+                {
+                    Id = "self-test-required",
+                    Kind = QuestionKind.Form,
+                    Message = "Name the store and its host.",
+                    AskedAt = DateTimeOffset.UtcNow,
+                    Fields = [new Field { Name = "store", Title = "Store", Type = FieldType.Text, Required = true }, new Field { Name = "host", Title = "Host", Type = FieldType.Text, Required = true }],
+                },
+            });
+            var formed = await Until(() => ById<Button>(view, "SendAnswer") is { ActualWidth: > 0 } && view.QuestionShown is { IsHitTestVisible: true }, TimeSpan.FromSeconds(5));
+            var boxes = view.QuestionShown is { } shownForm ? Find<TextBox>(shownForm).ToList() : [];
+            if (formed && boxes.Count == 2 && ById<Button>(view, "SendAnswer") is { } sendForm)
+            {
+                void Send() => ((Microsoft.UI.Xaml.Automation.Provider.IInvokeProvider)new Microsoft.UI.Xaml.Automation.Peers.ButtonAutomationPeer(sendForm)
+                    .GetPattern(Microsoft.UI.Xaml.Automation.Peers.PatternInterface.Invoke)).Invoke();
+                Send();
+                var marked = await Until(() => boxes[0].Parent is FrameworkElement { Parent: Border { BorderThickness.Left: > 0 } }, TimeSpan.FromSeconds(3));
+                boxes[0].Text = "pg";
+                await Task.Delay(700);
+                var at = Centre(boxes[1]);
+                Send();
+                var next = await Until(() => boxes[1].Parent is FrameworkElement { Parent: Border { BorderThickness.Left: > 0 } }, TimeSpan.FromSeconds(3));
+                await Task.Delay(150);
+                var shift = Centre(boxes[1]).X - at.X;
+                var heldForm = view.QuestionShown is { IsHitTestVisible: false };
+                check(marked && next && Math.Abs(shift) <= 1 && !heldForm, $"holds nothing as a second Send marks the next required field, its box where it was (marked: {marked}, then {next}; moved {shift:0.#}; held: {heldForm})");
+
+                // The bar, pulled out into the gutter, is drawn there, not clipped to the field: in
+                // each theme its pixels differ from the padding's beside it.
+                var drawn = new List<string>();
+                if (view.QuestionShown is FrameworkElement form && boxes[1].Parent is FrameworkElement { Parent: Border frame })
+                {
+                    foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
+                    {
+                        window.RootElement.RequestedTheme = theme;
+                        await Task.Delay(300);
+                        var name = theme.ToString().ToLowerInvariant();
+                        await Picture(form, Path.ChangeExtension(outFile, $".invalid.{name}.png"));
+                        var bar = frame.TransformToVisual(form).TransformPoint(new Point(1, frame.ActualHeight / 2));
+                        var bitmap = new Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap();
+                        await bitmap.RenderAsync(form);
+                        var pixels = System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.ToArray(await bitmap.GetPixelsAsync());
+                        var scale = bitmap.PixelWidth / form.ActualWidth;
+                        uint Pixel(double x, double y)
+                        {
+                            var (px, py) = ((int)(x * scale), (int)(y * scale));
+                            if (px < 0 || py < 0 || px >= bitmap.PixelWidth || py >= bitmap.PixelHeight) { return 0; }
+                            return BitConverter.ToUInt32(pixels, (py * bitmap.PixelWidth + px) * 4);
+                        }
+                        var (barPixel, padPixel) = (Pixel(bar.X, bar.Y), Pixel(bar.X + 6, bar.Y));
+                        drawn.Add($"{name} at {bar.X:0.#}: {barPixel:X8} beside {padPixel:X8}");
+                        if (bar.X < 0 || barPixel == padPixel) { drawn.Add("not drawn"); }
+                    }
+                    window.RootElement.RequestedTheme = ElementTheme.Default;
+                }
+                else { drawn.Add("not drawn: no field"); }
+                check(drawn.Count == 2, $"draws a marked field's bar in the gutter beside it, in Light and Dark ({string.Join("; ", drawn)})");
+            }
+            else { check(false, $"draws a form of two required text fields ({size}; boxes: {boxes.Count})"); }
             card.Update(original);
 
             // Needs you: on screen beside the session, or, in one column, with the session closed.
