@@ -420,7 +420,7 @@ public sealed class AnswerService : ISessionAnswerer
     // text to look for, so it can never be ruled out. Null when none is.
     static CopilotPermissionScreen.Crowd? Crowd(CopilotPermissionPrompt pending, CopilotPermissionState state) =>
         state.Others.Count == 0 ? null
-        : new(pending.Subject, [.. state.Others.Select(o => new CopilotPermissionScreen.Other($"{KindName(o.Prompt?.Kind)}, request {Short(o.RequestId)}", o.Prompt?.Drawn ?? []))]);
+        : new(pending.Dialog, pending.Drawn, [.. state.Others.Select(o => new CopilotPermissionScreen.Other($"{KindName(o.Prompt?.Kind)}, request {Short(o.RequestId)}", o.Prompt?.Drawn ?? [], o.Prompt?.Dialog))]);
 
     static string KindName(string? kind) => kind switch
     {

@@ -188,20 +188,28 @@ shutdown) after it, reading exactly as shown (`stale` otherwise), and no `ask_us
 waiting (`refused`). Copilot can have several permission requests waiting at once, one for
 each of a batch of parallel tool calls, and draws one at a time; the session lists the
 earliest, saying how many wait (#690). While others wait, the screen, not the order
-asked, says which is drawn, and a probe is not enough: it is agent-written text, which
-another request's command can end in or its diff hold. The key goes only if:
-* no other waiting request was given text holding one of this one's probes;
-* the dialog's top edge (a box's top corner, or a rule) is on screen within 30 rows of the
-  options, so the dialog is read alone, never the conversation above it;
-* nothing given for another waiting request is drawn from that edge down;
-* this request's whole subject (full command, file, first path, URL or tool name) is;
+asked, says which is drawn, and it is identified positively, never by a probe (agent-written
+text, which another request's command can end in or its diff hold). The key goes only if:
+* no waiting request holds a line-drawing character (U+2500-U+257F), a tab or a character
+  drawn other than as it runs (`ShownText.Misleads`), so nothing the agent wrote can draw a
+  part of Copilot's frame or hide what it draws;
+* the options are inside one round frame whose top edge is on screen;
+* every row in it above the options is this request's dialog as Copilot CLI 1.0.105 draws
+  it (`CopilotDialog`): the title, a rule, each part of the body a blank row apart (a box's
+  lines one to a row, exactly as given, so a wrapped line is never taken for two), and the
+  question, with nothing else. Only the shell prompt (the intention, the command in a box,
+  "Do you want to run this command?") and the path prompt ("Allow path access", the paths
+  and any read-only directories in boxes, "Do you want to allow this?") are known so;
 * and this request is the earliest still waiting.
 
-Otherwise it is `refused` ("the machine is showing a different permission (read, request
-ed05e9d7)", or why the screen cannot say), and never typed for the request on screen
-instead. The key is held from the dialog's top edge. The transcript is checked so before
-the screen is read and again after, so what the screen showed was this request while it was
-still waiting, and no request that arrived meanwhile is drawn in its place. A
+Otherwise it is `refused` ("the machine is showing a different permission (path access,
+request ed05e9d7)" when another's dialog is the one drawn, or why the screen cannot say),
+and never typed for the request on screen instead: answer it at the machine. The key is
+held from the frame's top edge. The transcript is checked so before the screen is read and
+again after, so what the screen showed was this request while it was still waiting, and no
+request that arrived meanwhile is drawn in its place. Copilot 1.0.105 shows a waiting shell
+or other request before a waiting path request, whichever was asked first, so a mix of the
+two is answered at the machine until the earlier is. A
 request to run outside the sandbox, a kind not listed
 above, or one whose details cannot be read is `answerAtMachine`.
 

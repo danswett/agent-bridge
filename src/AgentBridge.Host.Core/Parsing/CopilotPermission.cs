@@ -39,13 +39,13 @@ namespace AgentBridge.Host.Core.Parsing;
 //
 // While other requests wait too, Copilot draws one of them, and a probe is too little to say
 // which (#690): a probe is a piece of agent-written text, and another request's text can hold
-// it. Subject is then what this prompt's dialog must show whole (the full command, the file or
-// first path as written, the URL, the tool's name), and Drawn every piece of text Copilot was
-// given for it, as written, which no other waiting request's dialog may show.
+// it. Dialog is then what Copilot's dialog for this prompt must show, row for row, to be taken
+// for it (null for a kind whose dialog the host does not know), and Drawn every piece of text
+// Copilot was given for it, as written.
 public sealed record CopilotPermissionPrompt(string RequestId, string? ToolCallId, string Kind, string Message, string Digest, string? AtMachine)
 {
     public IReadOnlyList<string> Probes { get; init; } = [];
-    public IReadOnlyList<string> Subject { get; init; } = [];
+    public CopilotDialog? Dialog { get; init; }
     public IReadOnlyList<string> Drawn { get; init; } = [];
 
     // Where Message holds the host's own escapes (ShownText.RevealMarked), for EscapedText.Marks.
@@ -59,6 +59,17 @@ public sealed record CopilotPermissionPrompt(string RequestId, string? ToolCallI
         return at <= 0 || at == id.Length - 1 ? null : (id[..at], id[(at + 1)..]);
     }
 }
+
+// What Copilot CLI 1.0.105 draws for a permission prompt inside its dialog's frame, above the
+// options: its title, a rule, the body's parts a blank row apart (each plain text, or lines in a
+// box of their own), and its question. Read from its renderer: the Dialog component (a round
+// frame, the title, then a rule) holding the shell prompt (the command in a box, then "Do you
+// want to run this command?") or the path prompt ("Allow path access": what it may do, the paths
+// in a box, the read-only directories in another, then "Do you want to allow this?").
+public sealed record CopilotDialog(string Title, IReadOnlyList<CopilotDialogPart> Body, string Question);
+
+// Boxed: Lines are drawn one to a row, as written, in a box; else Lines[0] is text, wrapped.
+public sealed record CopilotDialogPart(bool Boxed, IReadOnlyList<string> Lines);
 
 public static partial class CopilotPermission
 {
@@ -107,24 +118,50 @@ public static partial class CopilotPermission
         {
             Probes = Probes(kind, p),
             Marks = marks,
-            Subject = Subject(kind, p),
+            Dialog = prompt is { } drawn ? Dialog(kind, drawn) : null,
             Drawn = [.. Strings(prompt), .. Strings(permission)],
         };
     }
 
-    static List<string> Subject(string kind, JsonElement p)
+    // The dialog Copilot draws for the prompt as its promptRequest describes it; null for a kind
+    // whose dialog is not known here, or one drawn with more than the request says (a sandbox
+    // bypass).
+    static CopilotDialog? Dialog(string kind, JsonElement p)
     {
-        IEnumerable<string?> found = kind switch
+        static List<string> Each(JsonElement p, string name) =>
+            Json.Arr(p, name) is { } list ? [.. list.EnumerateArray().Select(e => e.ValueKind == JsonValueKind.String ? e.GetString() : null).OfType<string>()] : [];
+        static CopilotDialogPart Text(string text) => new(false, [text]);
+        switch (kind)
         {
-            "commands" => [Json.Str(p, "fullCommandText")],
-            "write" => [Json.Str(p, "fileName")],
-            "read" => [Json.Str(p, "path")],
-            "path" => Json.Arr(p, "paths") is { } paths ? paths.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Take(1).Select(e => e.GetString()) : [],
-            "url" => [Json.Str(p, "url")],
-            "mcp" or "custom-tool" => [Json.Str(p, "toolName")],
-            _ => [],
-        };
-        return [.. found.OfType<string>().Where(s => s.Trim().Length > 0)];
+            case "commands" when Json.Str(p, "fullCommandText") is { } command && Json.Bool(p, "requestSandboxBypass") != true:
+                {
+                    List<CopilotDialogPart> body = [];
+                    if (Json.Str(p, "warning") is { Length: > 0 } warning) { body.Add(Text(warning)); }
+                    body.Add(new CopilotDialogPart(true, command.Split('\n')));
+                    return new CopilotDialog(Json.Str(p, "intention") ?? "", body, "Do you want to run this command?");
+                }
+            case "path":
+                {
+                    var paths = Each(p, "paths");
+                    var directories = Each(p, "readOnlyDirectories");
+                    if (paths.Count == 0) { return null; }
+                    var access = Json.Str(p, "accessKind") switch { "read" => "read", "write" => "write", _ => "read or write" };
+                    List<CopilotDialogPart> body =
+                    [
+                        Text($"This action may {access} the following {(paths.Count == 1 ? "path" : "paths")} outside the paths currently allowed for this session."),
+                        new(true, paths),
+                    ];
+                    if (access == "read" && directories.Count > 0)
+                    {
+                        var one = directories.Count == 1;
+                        body.Add(Text($"File-tool read-only access covers {(one ? "this directory" : "these directories")} and {(one ? "its" : "their")} descendants:"));
+                        body.Add(new CopilotDialogPart(true, directories));
+                    }
+                    return new CopilotDialog("Allow path access", body, "Do you want to allow this?");
+                }
+            default:
+                return null;
+        }
     }
 
     // Every string in a request, at any depth, but the ones naming its kind or tool call, which

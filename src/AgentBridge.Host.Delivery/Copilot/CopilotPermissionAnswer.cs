@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.Host.Core.Parsing;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery.Copilot;
 
@@ -146,12 +147,14 @@ public static class CopilotPermissionScreen
     // the list (the No row's message box opened at the machine, say) stops it.
     public sealed record Choice(string Key, int Row, IReadOnlyList<ScreenRow> Hold);
 
-    // Another permission request waiting beside this one: a name for a person, and everything
-    // Copilot was given for it as written (CopilotPermissionPrompt.Drawn); empty if unreadable.
-    public sealed record Other(string Name, IReadOnlyList<string> Drawn);
+    // Another permission request waiting beside this one: a name for a person, everything Copilot
+    // was given for it as written (CopilotPermissionPrompt.Drawn, empty if unreadable), and the
+    // dialog Copilot draws for it, if known.
+    public sealed record Other(string Name, IReadOnlyList<string> Drawn, CopilotDialog? Dialog = null);
 
-    // While others wait: this prompt's whole subject (CopilotPermissionPrompt.Subject), and them.
-    public sealed record Crowd(IReadOnlyList<string> Subject, IReadOnlyList<Other> Others);
+    // While others wait: the dialog Copilot draws for this prompt, if known, what it was given,
+    // and the others.
+    public sealed record Crowd(CopilotDialog? Dialog, IReadOnlyList<string> Drawn, IReadOnlyList<Other> Others);
 
     // probes: CopilotPermissionPrompt.Probes, what this prompt is about. crowd: set when other
     // permission requests are waiting too.
@@ -182,10 +185,11 @@ public static class CopilotPermissionScreen
         // there down, so another prompt with the same options in its place (the next path
         // request, say) stops the key.
         var top = Top(rows, block[0].Row, probes);
-        if (crowd is { Others.Count: > 0 } && Crowded(rows, block[0].Row, end, probes, crowd) is { } crowded)
+        if (crowd is { Others.Count: > 0 })
         {
-            if (crowded.Problem is { } why) { return (null, why); }
-            top = crowded.Start;
+            var (start, why) = Crowded(rows, block[0].Row, end, crowd);
+            if (why is not null) { return (null, why); }
+            top = start;
         }
         if (top < 0) { return (null, "the session's screen does not show what this permission prompt is for"); }
         var hold = Enumerable.Range(top, end - top + 1).Select(r => new ScreenRow(r, rows[r])).ToList();
@@ -208,63 +212,126 @@ public static class CopilotPermissionScreen
         return (new Choice(chosen.Number.ToString(System.Globalization.CultureInfo.InvariantCulture), chosen.Row, hold), null);
     }
 
-    // Copilot can have several requests waiting and draws one of them (#690). Being the earliest
-    // asked is not proof of which, nor is a probe: it is a piece of agent-written text, which
-    // another request's command can end in, or its diff hold, and a probe not found says nothing
-    // of where the other request is drawn. So, while others wait, the prompt on screen is taken
-    // for this one only when all of these hold, and otherwise nothing is typed:
-    //   * no other waiting request was given text holding one of this one's probes, so nothing of
-    //     it drawn can read as this one;
-    //   * the dialog's own top (a box's top edge or a rule) is on screen within 30 rows above the
-    //     options, so what is read is the dialog alone, never the conversation above it;
-    //   * none of the other requests' text is drawn there, top edge included (one drawn there is
-    //     the one shown, however its subject is drawn);
-    //   * and this request's whole subject is.
-    // Start: the dialog's top edge, where the key's hold begins, so a different dialog drawn in
-    // its place, however it ends, stops the key.
-    static (int Start, string? Problem)? Crowded(IReadOnlyList<string> rows, int options, int end, IReadOnlyList<string> probes, Crowd crowd)
+    // Copilot can have several requests waiting and draws one of them (#690). Neither the order
+    // asked nor a probe says which: a probe is agent-written text, which another request's command
+    // can end in, and a probe not found says nothing of where another is drawn. While others wait,
+    // the prompt on screen is identified positively, as Copilot CLI 1.0.105 draws it
+    // (CopilotDialog), or nothing is typed:
+    //   * no waiting request holds a line-drawing character, a tab or anything drawn other than
+    //     as it runs (ShownText.Misleads), so nothing given to the agent can draw a part of
+    //     Copilot's frame or hide what it draws;
+    //   * the options are inside one round frame, every row from its top edge to the options
+    //     inside it, the edge on screen;
+    //   * and every non-blank row in it above the options is this prompt's dialog: its title,
+    //     the rule, each part of its body (a box's lines one to a row, exactly as given, so a
+    //     wrapped line is never taken for two), and its question, with nothing else.
+    // Start: the frame's top edge, where the key's hold begins.
+    static (int Start, string? Problem) Crowded(IReadOnlyList<string> rows, int options, int end, Crowd crowd)
     {
-        var mine = probes.Select(Squeeze).Where(s => s.Length > 0).ToList();
         foreach (var other in crowd.Others)
         {
             if (other.Drawn.Count == 0) { return (-1, $"another waiting permission request ({other.Name}) cannot be checked against the session's screen"); }
-            if (other.Drawn.Any(d => mine.Any(m => Squeeze(d).Contains(m, StringComparison.Ordinal))))
-            {
-                return (-1, $"another waiting permission ({other.Name}) also shows what this one is for, so the screen cannot say which is shown");
-            }
         }
-        var start = -1;
-        for (var i = options - 1; i >= Math.Max(0, options - 30) && start < 0; i--)
+        if (crowd.Others.Select(o => o.Drawn).Prepend(crowd.Drawn).Any(d => d.Any(Unsafe)))
         {
-            if (Edge(rows[i])) { start = i; }
+            return (-1, "a waiting permission holds characters that could be drawn as part of Copilot's own dialog or hide what it draws, so the screen cannot say which is shown");
         }
-        if (start < 0) { return (-1, "the session's screen does not show where the prompt begins, so it cannot say which waiting permission it is"); }
-        var dialog = string.Concat(Enumerable.Range(start, end - start + 1).Select(r => Squeeze(Clean(rows[r]).Text)));
-        var edge = Squeeze(rows[start]);
-        foreach (var other in crowd.Others)
-        {
-            var pieces = other.Drawn.SelectMany(d => d.Split('\n')).Select(Squeeze).Where(s => s.Length >= 3).Select(s => s[..Math.Min(16, s.Length)]);
-            if (pieces.Any(s => dialog.Contains(s, StringComparison.Ordinal) || edge.Contains(s, StringComparison.Ordinal)))
-            {
-                return (-1, $"the machine is showing a different permission ({other.Name})");
-            }
-        }
-        var subject = crowd.Subject.Select(Squeeze).Where(s => s.Length > 0).ToList();
-        if (subject.Count == 0 || !subject.All(s => dialog.Contains(s, StringComparison.Ordinal)))
-        {
-            return (-1, "the session's screen does not show this permission's whole subject, so it cannot say which waiting permission it is");
-        }
-        return (start, null);
+        if (crowd.Dialog is not { } mine) { return (-1, "the host cannot tell this kind of permission prompt from the others waiting on the session's screen"); }
+        if (Frame(rows, options, end) is not { } frame) { return (-1, "the session's screen does not show the prompt's whole frame, so it cannot say which waiting permission it is"); }
+        if (Shows(rows, frame, options, mine)) { return (frame.Top, null); }
+        var shown = crowd.Others.FirstOrDefault(o => o.Dialog is { } theirs && Shows(rows, frame, options, theirs));
+        return (-1, shown is not null
+            ? $"the machine is showing a different permission ({shown.Name})"
+            : "the session's screen does not show this permission as Copilot draws it, so it cannot say which waiting permission it is");
     }
 
-    // A dialog's top edge: a box's top corner, or a rule of three or more line characters with
-    // nothing else on the row.
-    static bool Edge(string row)
+    static bool Unsafe(string text) => text.Any(c => c is >= '\u2500' and <= '\u257F' or '\t') || ShownText.Misleads(text);
+
+    // The round frame around the options: its left and right edge columns, the same on every row
+    // from its top edge (a corner, a rule and a corner, nothing else on the row) down through the
+    // options. Null if any row of it is not so, or its top edge is not on screen.
+    static (int Top, int Left, int Right)? Frame(IReadOnlyList<string> rows, int options, int end)
     {
-        var s = row.Trim();
-        if (s.Length == 0) { return false; }
-        if (s[0] is '\u256D' or '\u250C' or '\u250F' or '\u2554') { return true; }
-        return s.Count(c => c is '\u2500' or '\u2501' or '\u2550' or '\u254C' or '\u254D') >= 3 && s.All(c => Box(c) || c == ' ');
+        var first = rows[options].TrimEnd();
+        var left = first.IndexOf('\u2502');
+        var right = first.Length - 1;
+        if (left < 0 || right < left + 4 || first[right] != '\u2502' || first[..left].Trim().Length > 0) { return null; }
+        bool Edged(string row, char l, char r, Func<string, bool> inside)
+        {
+            var t = row.TrimEnd();
+            return t.Length == right + 1 && t[left] == l && t[right] == r && t[..left].Trim().Length == 0 && inside(t[(left + 1)..right]);
+        }
+        bool Framed(string row) => Edged(row, '\u2502', '\u2502', _ => true);
+        for (var i = options; i <= end; i++)
+        {
+            if (!Framed(rows[i])) { return null; }
+        }
+        var top = options - 1;
+        while (top >= 0 && Framed(rows[top])) { top--; }
+        return top >= 0 && Edged(rows[top], '\u256D', '\u256E', mid => mid.All(c => c == '\u2500')) ? (top, left, right) : null;
+    }
+
+    // Whether the frame holds exactly this dialog above its options.
+    static bool Shows(IReadOnlyList<string> rows, (int Top, int Left, int Right) frame, int options, CopilotDialog dialog)
+    {
+        var mids = Enumerable.Range(frame.Top + 1, options - frame.Top - 1).Select(r => rows[r].TrimEnd()[(frame.Left + 1)..frame.Right]).ToList();
+        var i = 0;
+        var title = new List<string>();
+        for (; i < mids.Count && !Rule(mids[i]); i++)
+        {
+            if (mids[i].Trim().Length > 0) { title.Add(mids[i]); }
+        }
+        if (i == mids.Count || !Reads(title, dialog.Title)) { return false; }
+        i++;
+        foreach (var part in dialog.Body)
+        {
+            while (i < mids.Count && mids[i].Trim().Length == 0) { i++; }
+            if (part.Boxed)
+            {
+                if (i == mids.Count || !Edge(mids[i], '\u256D', '\u256E')) { return false; }
+                var lines = new List<string>();
+                for (i++; i < mids.Count && !Edge(mids[i], '\u2570', '\u256F'); i++)
+                {
+                    if (Boxed(mids[i]) is not { } line) { return false; }
+                    lines.Add(line);
+                }
+                if (i == mids.Count || !lines.SequenceEqual(part.Lines.Select(l => l.TrimEnd()), StringComparer.Ordinal)) { return false; }
+                i++;
+            }
+            else if (!Reads(Text(), part.Lines[0])) { return false; }
+        }
+        while (i < mids.Count && mids[i].Trim().Length == 0) { i++; }
+        if (!Reads(Text(), dialog.Question)) { return false; }
+        while (i < mids.Count && mids[i].Trim().Length == 0) { i++; }
+        return i == mids.Count;
+
+        // The rows of a part drawn as text, up to a blank row.
+        List<string> Text()
+        {
+            var text = new List<string>();
+            for (; i < mids.Count && mids[i].Trim().Length > 0; i++) { text.Add(mids[i]); }
+            return text;
+        }
+    }
+
+    // Text wrapped onto rows reads as it was given, its runs of white space aside.
+    static bool Reads(List<string> drawn, string text) =>
+        string.Equals(Collapse(string.Join(' ', drawn)), Collapse(text), StringComparison.Ordinal);
+
+    static string Collapse(string text) => string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+    static bool Rule(string mid) => mid.Trim() is { Length: >= 3 } s && s.All(c => c == '\u2500');
+
+    static bool Edge(string mid, char l, char r) => mid.Trim() is { Length: >= 2 } s && s[0] == l && s[^1] == r && s[1..^1].All(c => c == '\u2500');
+
+    // One row of a box inside the frame: its line, after the box's one column of padding.
+    static string? Boxed(string mid)
+    {
+        var m = mid.TrimEnd();
+        var a = m.IndexOf('\u2502');
+        if (a < 0 || m[..a].Trim().Length > 0 || m.Length < a + 2 || m[^1] != '\u2502' || m.Length - 1 == a) { return null; }
+        var inner = m[(a + 1)..^1];
+        return inner.Length == 0 ? "" : inner[0] == ' ' ? inner[1..].TrimEnd() : null;
     }
 
     // The nearest row above the options from which the rows down to them show one of the

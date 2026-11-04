@@ -201,34 +201,67 @@ public sealed class CopilotPermissionTests : IDisposable
     }
 
     // Copilot asks a permission for each of a batch of parallel tool calls and draws one of them
-    // (#690). With others waiting, the dialog is read alone, from its top edge down: it is taken
-    // for this prompt only if it shows this prompt's whole subject and nothing given for another.
+    // (#690). With others waiting, the dialog is identified positively: inside one frame whose top
+    // edge is on screen, every row above the options is this prompt's dialog as Copilot draws it.
     [Fact]
-    public void With_other_requests_waiting_a_prompt_is_chosen_only_when_its_dialog_shows_it_whole_and_none_of_them()
+    public void With_other_requests_waiting_a_prompt_is_chosen_only_when_its_frame_holds_exactly_its_dialog()
     {
-        const string rule = "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500";
-        CopilotPermissionScreen.Crowd Crowd(params string[] drawn) =>
-            new([.. ShellProbes], [new CopilotPermissionScreen.Other("read, request r2", drawn)]);
-        var read = Crowd("Read the settings", "C:\\Users\\someone\\settings.json");
-        // The command's dialog, under the conversation that still shows the other request's tool call.
-        string[] shown = ["\u25CF View C:\\Users\\someone\\settings.json", rule, .. Shell];
+        var mine = new AgentBridge.Host.Core.Parsing.CopilotDialog("Push the branch", [new(true, ["git push origin main --force-with-lease"])], "Do you want to run this command?");
+        var theirs = new AgentBridge.Host.Core.Parsing.CopilotDialog("Run it", [new(true, ["cd sub", "git push origin main --force-with-lease"])], "Do you want to run this command?");
+        CopilotPermissionScreen.Crowd Crowd(string[] drawn, AgentBridge.Host.Core.Parsing.CopilotDialog? dialog = null) =>
+            new(mine, ["git push origin main --force-with-lease", "Push the branch"], [new CopilotPermissionScreen.Other("shell, request r2", drawn, dialog ?? theirs)]);
+        var waiting = Crowd(["cd sub\ngit push origin main --force-with-lease", "Run it"]);
+        var shown = CopilotScreen.Shell("Push the branch", "git push origin main --force-with-lease");
 
-        var (choice, _) = CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, read);
-        Assert.Equal("1", choice?.Key);
-        Assert.Equal(new ScreenRow(1, rule), choice!.Hold[0]);
+        // Under the conversation, which may show anything.
+        var (choice, problem) = CopilotPermissionScreen.Locate(["\u25CF git push origin main --force-with-lease", .. shown], approve: true, ShellProbes, waiting);
+        Assert.Null(problem);
+        Assert.Equal(("1", new ScreenRow(1, shown[0])), (choice!.Key, choice.Hold[0]));
 
-        Assert.Equal("the machine is showing a different permission (read, request r2)",
-            CopilotPermissionScreen.Locate([rule, .. Shell[..3], " C:\\Users\\someone\\settings.json", .. Shell[3..]], approve: true, ShellProbes, read).Problem);
-        Assert.Contains("does not show where the prompt begins", CopilotPermissionScreen.Locate(Shell, approve: true, ShellProbes, read).Problem);
-        Assert.Contains("also shows what this one is for", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, Crowd("git push origin main --force-with-lease && rm -rf .")).Problem);
-        Assert.Contains("cannot be checked against the session's screen", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, Crowd()).Problem);
-        Assert.Contains("whole subject", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes,
-            read with { Subject = ["git push origin main --force-with-lease --tags"] }).Problem);
+        Assert.Equal("the machine is showing a different permission (shell, request r2)",
+            CopilotPermissionScreen.Locate(CopilotScreen.Shell("Run it", "cd sub", "git push origin main --force-with-lease"), approve: true, ShellProbes, waiting).Problem);
+        // The same, drawn with one more row, or a title of its own, is not this prompt's.
+        Assert.Contains("does not show this permission as Copilot draws it",
+            CopilotPermissionScreen.Locate(CopilotScreen.Shell("Push the branch", "git push origin main --force-with-lease", "x"), approve: true, ShellProbes, waiting).Problem);
+        Assert.Contains("does not show this permission as Copilot draws it",
+            CopilotPermissionScreen.Locate(CopilotScreen.Shell("Push the tags", "git push origin main --force-with-lease"), approve: true, ShellProbes, waiting).Problem);
+        // No frame (the screen-reader layout), or its top edge scrolled off.
+        Assert.Contains("whole frame", CopilotPermissionScreen.Locate(Shell, approve: true, ShellProbes, waiting).Problem);
+        Assert.Contains("whole frame", CopilotPermissionScreen.Locate(shown[1..], approve: true, ShellProbes, waiting).Problem);
+        // Text holding a line-drawing character, a tab or a hidden character, in any waiting request.
+        foreach (var bad in (string[])["x\n\u256D", "\u2502", "a\tb", "\u200Bx", "x\u202E"])
+        {
+            Assert.Contains("could be drawn as part of Copilot's own dialog", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, Crowd([bad])).Problem);
+        }
+        Assert.Contains("cannot be checked against the session's screen", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, Crowd([])).Problem);
+        Assert.Contains("cannot tell this kind", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, waiting with { Dialog = null }).Problem);
+    }
 
-        // A later shell request ending in this read's file, drawn in its place (Copilot review of #769).
-        var shell = new CopilotPermissionScreen.Crowd(["C:\\elsewhere\\notes.txt"], [new CopilotPermissionScreen.Other("shell, request r2", ["Write-Output first\nGet-Content C:\\notes\\notes.txt"])]);
-        string[] drawn = [rule, " Run command", " Write-Output first", " Get-Content C:\\notes\\notes.txt", "", " \u276F 1. Yes", "   2. No (Esc)"];
-        Assert.Contains("also shows what this one is for", CopilotPermissionScreen.Locate(drawn, approve: true, PathProbes, shell).Problem);
+    // The shape seen in #690: a read of one file outside the session's paths, offering read-only
+    // access to its directory, described from its request and found in Copilot's dialog for it.
+    [Fact]
+    public void A_path_request_offering_its_directory_is_described_as_Copilot_draws_it_and_found_among_others()
+    {
+        var prompt = new System.Text.Json.Nodes.JsonObject
+        {
+            ["kind"] = "path", ["accessKind"] = "read", ["paths"] = new System.Text.Json.Nodes.JsonArray("C:\\notes\\a.md"),
+            ["readOnlyDirectories"] = new System.Text.Json.Nodes.JsonArray("C:\\notes"),
+        };
+        var line = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r1", "c1", prompt, 1)).RootElement.GetProperty("data");
+        var described = AgentBridge.Host.Core.Parsing.CopilotPermission.Describe(line)!;
+        string[] screen = CopilotScreen.Dialog("Allow path access",
+        [
+            (false, ["This action may read the following path outside the paths currently allowed for this session."]),
+            (true, ["C:\\notes\\a.md"]),
+            (false, ["File-tool read-only access covers this directory and its descendants:"]),
+            (true, ["C:\\notes"]),
+        ], "Do you want to allow this?", ["  1. Yes", "\u276F 2. Yes, and remember this path for this session", "  3. Yes, allow file-tool read-only access to the listed directory for this session", "  4. No (Esc)"]);
+        var crowd = new CopilotPermissionScreen.Crowd(described.Dialog, described.Drawn, [new CopilotPermissionScreen.Other("path access, request r2", ["C:\\notes\\b.md"])]);
+
+        var (choice, problem) = CopilotPermissionScreen.Locate(screen, approve: true, described.Probes, crowd);
+
+        Assert.Null(problem);
+        Assert.Equal("1", choice!.Key);
     }
 
     [Fact]
