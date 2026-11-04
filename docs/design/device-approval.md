@@ -172,9 +172,9 @@ The exact field set per `op`:
 |---|---|
 | `genesis` | `device` (a person's), `approval` (`method: genesis`, no `transcript`); no `prev` |
 | `add` | `prev`, `device`, `approval` |
-| `remove` | `prev`, `target` (`{ "id": <device id>, "add": <entry hash of the add it revokes> }`), optional `voidGrants` (only ever `true`), optional `cosigner` |
-| `rename` | `prev`, `target` (`{ "id", "add" }`, as for `remove`), `name` |
-| `confirm` | `prev`, `target` (`{ "id", "add" }`, as for `remove`) |
+| `remove` | `prev`, `targets` (1 to 512 of `{ "id": <device id>, "add": <entry hash of the add it revokes> }`, distinct ids, ascending by id), optional `cosigner` |
+| `rename` | `prev`, `target` (`{ "id", "add" }`, one element as in `remove`), `name` |
+| `confirm` | `prev`, `target` (`{ "id", "add" }`, one element as in `remove`) |
 | `merge` | `prev` (two to four), optional `adopt` (only ever `true`; §3.5) |
 
 **Strict parsing** (all three implementations, with shared negative vectors in R1). The body
@@ -266,14 +266,15 @@ history state. It is valid only if:
     active, so its parents descend from H's own add, whose ancestors include every senior device's
     add; and an id is never added twice in one history (above);
   * every copy names H, and is announced;
-  * a removal of H voids the copies: one by a device senior to H carries `voidGrants`, and any
-    removal signed on a parent from before the copies (as the remover's client signs, below) makes
-    them concurrent with it and void (§3.5). Subordination and conflict are structural over
-    non-void adds, so once the copy is void the genuine add is neither subordinate nor conflicted:
-    the devices are active again under their own descriptors, with their subtrees, and with no new
-    enrollment. Only when neither is possible, because no device senior to H is left and the
-    honest line was built on top of a copy, does a device stay disabled after H's removal, and the
-    person enrolls it again with a new key.
+  * a removal of H takes the copies away: it lists every copy the remover holds, as part of H's
+    cascade, and a removal signed on a parent from before the copies (as the remover's client
+    signs, below) makes the ones it does not hold concurrent with it and void (§3.5). Conflict
+    sets are formed from adds that are neither void nor revoked (§3.5, the order of computation),
+    so once the copy is listed or void the genuine add is neither subordinate nor conflicted: the
+    devices are active again under their own descriptors, with their subtrees, and with no new
+    enrollment. Only when the remover cannot list H's copies or sign before them, because H is
+    senior to every device left and the honest line was built on top of a copy, does a device stay
+    disabled after H's removal, and the person enrolls it again with a new key.
 
   So the damage is a denial of service, attributed and reversible, never a gain of trust. It
   needs a reset only when no device senior to H is left and the conflicted devices include the two
@@ -283,24 +284,25 @@ history state. It is valid only if:
   add (§3.5), such as
   one a removed device fabricates on an old head from a key it learned, never conflicts with
   anything;
-* `remove`: its `target` names both the device id and **the entry hash of the `add` it revokes**.
-  That add must be active in the parents' state, and the seniority rule of §3.4 must hold. A
-  removal with a `cosigner` is **invalid if either signer is its target**: a device removes itself
-  only alone, by a self-removal. Otherwise a stolen D could cosign its own removal with J, a device
-  it added (D's lineage cut at D is empty, so the pair would pass the lineage test), and get a
-  cosigned removal that might outrank the person's. A
-  removal revokes the device that **that** add made active and, under the conditions of §3.5, bars
-  its key from coming back through another add. A removal of a fabricated add never touches the
-  device a real add made, even with the same id.
-  Whether removals leave a person's device is a property of the state, not of one entry (§3.5).
-  `voidGrants: true` voids every grant (add, rename or confirm) signed by the target, whatever its ancestry
-  (§3.5), **except the genesis entry**, which is never void: the genesis device's self-removal with
-  the flag voids its grants, and the removal still names the genesis entry as the
-  add it revokes. It is valid only on a removal without `cosigner`, where the target is `by` itself
-  or junior to it. It
-  then gives the remover no power it lacks anyway: everything the target added is junior to the
-  target and so to the remover, which could remove it through the cascade. It is one flag rather
-  than a list of entries, so it fits however many entries the target signed;
+* `remove`: it **lists** its targets, each naming a device id and **the entry hash of the `add` it
+  revokes**. One removal is the whole of a recovery: the stolen or lost device and every device in
+  its approval subtree that the person did not keep (§3.4, the cascade), in one entry, so that
+  nothing about the recovery depends on which of several entries a verifier or a fork holds. Each
+  listed add must be active in the parents' state, and the seniority rule of §3.4 must hold for
+  each target: it is `by` itself (a **self-removal**, which lists only `by` and has no
+  `cosigner`), or junior to `by`, or, with a `cosigner`, passes the cosign test of §3.4 for that
+  target. A removal with a `cosigner` is **invalid if either signer is among its targets**:
+  otherwise a stolen D could cosign its own removal with J, a device it added (D's lineage cut at
+  D is empty, so the pair would pass the lineage test). A removal revokes the devices those adds
+  made active and, under the conditions of §3.5, bars their keys from coming back through another
+  add. A removal of a fabricated add never touches the device a real add made, even with the same
+  id. Whether removals leave a person's device is a property of the state, not of one entry
+  (§3.5). A removal **ranks 2** when it is cosigned and its two signers pass the cosign test of
+  §3.4 for every target, and **1** otherwise, which covers every self-removal and every removal by
+  one device. A removal counts as one against its signers' budgets however many targets it lists.
+  There is no flag that voids a target's past grants: the devices it added that the person does
+  not keep are listed, and its grants that are not ancestors of the removal are void anyway
+  (§3.5);
 * `rename`: like a removal, its `target` names the device id and the add it applies to, which must
   be active in the parents' state and be `by` itself or junior to it. The 8-rename quota belongs to
   that add. A device's name is set only by renames naming its **active** add, so a rename of a
@@ -370,10 +372,9 @@ history state. It is valid only if:
     removal of T signed on a head synced from Y would need, at X, J's entries beyond J's budget. So
     a removal R is accepted with ancestors over a cap or budget only when all of these hold:
     * R is signed by a device other than its target T (a self-removal brings no evidence);
-    * every such ancestor is signed by T, or, when R carries `voidGrants`, by a device in T's
-      **subtree**: one whose add was signed by T or, transitively, by a device in T's subtree.
-      `voidGrants` makes every such device's add void (§3.5), so R takes away exactly what its
-      evidence comes from;
+    * every such ancestor is signed by T or by a device in T's **subtree** (one whose add was
+      signed by T or, transitively, by a device in T's subtree) that R also lists, so R takes away
+      exactly what its evidence comes from;
     * R brings at most 256 such entries from each of those signers, no signer has had more than
       256 evidence entries admitted at this verifier, across all removals, and the verifier holds
       at most **1,024 evidence entries in all**. The last bound matters because the entries of a
@@ -411,9 +412,8 @@ history state. It is valid only if:
     and held ones included, each ticked for removal unless the person unticks it. If every candidate
     holding the required entries has some of the target's grants as ancestors, because the honest
     line was built on them (they were then unquarantined and announced when made, held or not), the
-    client takes the smallest candidate and says which grants it cannot void by position. A removal
-    by a device senior to the target voids them with `voidGrants`; a cosigned removal cannot, and
-    the cascade lists them as removals of their own, within the signers' budgets. If
+    client takes the smallest candidate and says which grants it cannot void by position. The
+    removal lists the devices those grants added, unless the person keeps them. If
     the required entries are not all held by every attested host (a signer confirmed minutes ago,
     say), the client signs on the unquarantined entry that holds them with the fewest ancestors outside
     the common set, and says which hosts lack it. Those hosts receive the few missing ancestors with
@@ -448,7 +448,13 @@ there before it. So:
   approved itself are independent: their lineages meet only at the target's add, which the cut
   removes. A hostile device H therefore cannot pair with a device it enrolled, nor pair two devices
   it enrolled (siblings) or their descendants (cousins). A fabricated copy of a device's key is
-  another add, with its own lineage.
+  another add, with its own lineage. Both signers confirmed and their lineages, cut at the target,
+  disjoint: that is the **cosign test** for a target. A cosigned removal may also list targets
+  junior to `by`; it ranks 2 only if the cosign test holds for every target it lists (§3.3). For a
+  target junior to `by` the cut removes `by`'s whole lineage, so a senior device can rank 2 with
+  any confirmed device, even one it approved. That gives a stolen senior and its own device nothing
+  against a recovery that lists the senior device: the approval-ancestry precedence of §3.5
+  decides between equal ranks.
 * **Confirmation** is the clock-free gate on that power. A device is **confirmed** in a state
   when the state holds a `confirm` entry naming its add, signed by its **approver**, the device
   that signed its add, itself confirmed. Being senior to the device is not enough: otherwise a
@@ -481,7 +487,8 @@ there before it. So:
   concurrently), and for the genesis device, to which every device is junior, a reset can be
   forced. Short of the tie, the thief can revoke, once, every device that was active and junior to
   it on the head it holds, and what the cosigners did after removing it survives; what it or the
-  devices it made add never survives the person's removal of it (§3.5, disowning). So the person
+  devices it made add never survives the person's removal of it, except what the person kept
+  (§3.5, "What this guarantees"). So the person
   enrolls a fresh device straight after the removal, from an approver not junior to the stolen
   device where there is one (§5.4). Decision 5 says this.
 * **What that leaves.** One hostile device cannot remove anything above it, alone or with any
@@ -489,7 +496,7 @@ there before it. So:
   the person's own devices can, once their approvers have confirmed both, which takes two approval
   mistakes and two confirmation mistakes, each announced on every device (§6.4). Before that:
   * removing them stops a **takeover**: their grants are held and then void (concurrent with the
-    removal, or voided by its `voidGrants`), so they never add anyone. Unconfirmed, they cannot
+    removal) or revoked (listed by it), so they never add anyone. Unconfirmed, they cannot
     cosign, so they cannot remove anything that is not junior to them;
   * after both are confirmed, unnoticed, they can remove the devices above them and keep going.
     With a relay that partitions the account, the grants they make after removing a senior device
@@ -521,26 +528,18 @@ there before it. So:
     by a clock:
     * a grant that is not an ancestor of the removal (§3.5), because the device acted
       concurrently with being removed;
-    * every add and rename it signed, when the removal carries `voidGrants`. The remover's device
-      sets it whenever the target is still on probation by its own clock, **unless the person kept
-      some of the target's devices** in the cascade: `voidGrants` voids every grant, so it would
-      revoke the kept ones too. A partial cascade therefore carries no flag; the parent choice of
-      §3.3 still leaves every grant that is not kept, or needed by a kept one, concurrent and void,
-      and the confirmation says so, and that the kept devices take effect only when the target's
-      hold would have ended. A later self-removal by the target cannot void the kept devices
-      either (§3.5, "One removal cannot undo what another kept"). This covers the case where
-      the remover had already synced the held add before removing: the add is then an ancestor of
-      the removal, but it is void all the same. The flag needs the target to be junior to the
-      remover, which a probationary device almost always is; a cosigned removal of a probationary
-      device not junior to either signer gets only the first case.
+    * an add the removal **lists**: the remover's client lists every device the target added that
+      the person did not keep, held ones included. This covers the case where the remover had
+      already synced the held add before removing: the add is then an ancestor of the removal,
+      but it is revoked all the same. The devices the person kept are simply not listed, and take
+      effect only when the target's hold would have ended; the confirmation says so. A later
+      self-removal by the target cannot void them (§3.5, "A self-removal cannot undo what another
+      removal kept").
   * Anything the voided entries added is void too, transitively. What removal during probation
-    guarantees is therefore this: every add by that device, held or not, never takes effect, when
-    the remover is senior to it and the person kept none of them; otherwise every add concurrent
-    with the removal, which the parent choice of §3.3 makes every add the person did not keep,
-    except ones the honest line was built on (§3.3 lists them for removal). The one exception
-    is the cutoff of §3.5: if the remover was itself revoked by a removal X that the probationary
-    device did not sign and that shields against the remover's removal (§3.5), and is so a revoked signer acting from an
-    old head, the probationary device's grants that descend from X are not voided by it.
+    guarantees is therefore this: every add by that device, held or not, never takes effect,
+    except the ones the person kept. The one exception is precedence (§3.5): if the remover was
+    itself revoked by a removal X that shields against the remover's removal, the probationary
+    device's grants that descend from X are not voided by it.
   * Holds only delay effects, never change which entries exist or which are void. Every verifier
     therefore reaches the same state once its holds expire.
 * **Where a verifier's clock starts.** A verifier that learns of a device late, such as a host
@@ -554,13 +553,16 @@ there before it. So:
     remains by its own clock (§4.2 step 7), and N adopts that.
   * **The local app.** A host adopts the earlier first-acceptance times that its own app reports
     over the pipe.
-* **Cascade.** Removing a device shows the devices it added, ticked by default. When every one
-  is ticked and the target is junior to the remover, the cascade is **one** removal carrying
-  `voidGrants`, which voids everything the target added, transitively; so a cascade costs one
-  removal of the remover's budget (§3.3), however many devices it takes. When the person unticks
-  some, or the removal needs a cosigner, it is one `remove` per ticked device, in one batch. After
-  probation the flag is never set without that confirmation, since it also voids devices the
-  person may want to keep.
+* **Cascade.** Removing a device shows the devices in its approval subtree (the devices it added,
+  the devices they added, and so on), each ticked by default. The removal is **one** entry listing
+  the device and every ticked device (§3.3), so it costs one removal of the remover's budget,
+  however many devices it takes, and no fork can hold part of it without the rest. It is never
+  split into one entry per device: separate removals of a stolen device's subtree are what let a
+  fork that leaves some of them out keep its devices active (§3.5). When the removed device
+  approved any devices, the client asks for a cosignature from a second confirmed device whose
+  approval is independent of the remover's, even when the remover alone could remove it: a
+  removal that ranks 2 is what keeps the remover's later work safe from a pair the removed device
+  made (§3.5). Devices the person unticks stay active.
 * **Announced.** Every add, remove and rename is shown on every person's device with who did it
   (§6.4).
 
@@ -658,7 +660,7 @@ trust they were not already given.
 entries:
 
 * Every `add` that is not void, and not conflicted (§3.3), makes a device active.
-* **Removals are monotone.** Every valid `remove` revokes the add it names (§3.3), in any order,
+* **Removals are monotone.** Every valid `remove` revokes the adds it lists (§3.3), in any order,
   and nothing ever un-applies one. Valid means valid in the state of its own parents (§3.3), which
   a later or concurrent entry cannot change. Revision 2's first draft settled conflicting removals
   by voiding some of them. A host that had already applied a removal could then make the revoked
@@ -673,126 +675,96 @@ entries:
   host then refuses all relay devices, and only a reset (§5.5) continues. This needs concurrent
   removals that an honest relay serializes, so it happens only with a dishonest relay or two
   devices acting while partitioned. Keeping a device the person removed would be worse.
+* **Revocation.** An add is **revoked** by every applying removal that lists it, and **barred** by
+  every removal whose bar reaches it (below). Revocation and bars are never undone (§3.5,
+  "Removals are monotone").
 * **Voiding** applies to **grants** only (adds, renames and confirms), never to removals or
-  merges. A grant signed by a device whose removal applies is void, unless it is an ancestor of
-  every removal of that device that applies: the device acted concurrently with being removed.
-  Every grant the device signed is void if any removal of it that applies carries `voidGrants`,
-  ancestor or not. So is anything a void entry added, and every grant signed by those devices,
-  transitively. A void `confirm` confirms nothing; a cosigned removal that was valid when signed
-  stays valid, since validity is decided in its own parents' state. A removed device's concurrent
-  additions therefore never survive, while its concurrent removals, valid where they were signed,
-  stand.
-* **One removal cannot undo what another kept.** When several removals of one device D apply, a
-  removal L of D that D signed itself, or one that ranks below another applying removal X of D,
-  voids none of D's grants that are ancestors of X, neither as a concurrent removal nor through
-  `voidGrants`, **provided no signer of X is D itself or in D's approval subtree** (a device D
-  approved, or one approved by such a device, transitively). Otherwise a stolen probationary B,
-  removed by the person with C kept, could remove itself with `voidGrants` on a head from before
-  C's add and void C and all it enrolls. The proviso matters as much: devices D made carry no
-  weight against a removal of D. Without it, a stolen S could, from a head before the person's
-  removal of it, enroll and confirm J, K and Y and have J and K cosign a removal of S (rank 2),
-  which would keep J, K and Y against the person's removal, with `voidGrants` or without: the adds
-  of J and K can be ancestors of the person's removal, so a test on its raw chain alone, as the
-  previous revision had, misses them while D's confirms of them sit on the fork. The proviso costs
-  the person nothing: their own removals are signed by devices outside D's subtree.
-  * **A revoked signer's removal does not reach past its revocation.** Let R be a removal one of
-    whose signers, S, is **revoked by** a removal X that applies, with R not an ancestor of X. X
-    revokes S directly (it removes S's add), **through S's approval lineage** (S's own add is in
-    X's raw chain, below, as when X removes the device that approved S on a branch concurrent with
-    X), or by **disowning** S (below). X **shields** what descends from it against R when no signer
-    of X is disowned, and X **ranks higher** than R, or ranks the same and none of X's signers has
-    its own add in R's
-    **raw chain**: what R would void, directly or transitively, if nothing were shielded and the
-    same-target rule (below) did not apply. Lineage revocation, the shield test and the same-target
-    proviso all use raw chains, which depend only on the entries, never on another shield or on
-    actual voiding, so none of them can form a cycle. Then R
-    still revokes its target, but no entry that has
-    X among its ancestors is void **because of R**: not directly, not through `voidGrants`
-    (including on a self-removal by S), and not through any chain of voiding that starts at R. A
-    removal **ranks 1**, the lowest, when its target is its own signer or junior to it, which covers
-    every self-removal and every uncosigned removal, and **2** when it is a cosigned removal of a
-    target that is not junior to its signer. Nothing else limits the shield: in particular a grant
-    whose own signer's add R voided is protected like any other entry descending from X, which is
-    what keeps the devices a recovery enrolls. So:
-    * **A single senior removing its juniors (rank 1) never shields itself from a cosigned
-      recovery (rank 2).** Otherwise a stolen senior H that C1 and C2 remove could remove both
-      from an old head and add Y on top of those removals: Y would descend from removals of C1
-      and C2, and survive the removal of H that they signed.
-    * **A cosigned recovery (rank 2) is never undone by a lower-ranked removal's voiding.** If G
-      approved P and C2, P approved C1, and confirmed C1 and C2 remove G, then G's old-head
-      removal of P with `voidGrants` (rank 1) voids C1's own add, but what C1 enrolls after
-      removing G stands. A self-removal by G with `voidGrants`, even one signed on the entry right
-      after genesis, cannot do it either. It voids G's adds of C1 and C2 (the same-target rule
-      below does not stop it, since C1 and C2 are in its raw chain), but it ranks below the
-      removal of G that C1 and C2 cosigned, which therefore shields R1 and R2, enrolled after it.
-      The generation continues through them, and the person enrolls C1's and C2's devices again.
-    * **Disowning: devices a removed device made carry no weight against its removal.** A device
-      Q is **disowned** by an applying removal L when L revokes a device above Q in Q's approval
-      lineage (Q's approver, or that device's approver, transitively), L is concurrent with the
-      removal being judged (neither its ancestor nor its descendant), L is not a self-removal, Q
-      did not sign L, and either L ranks at least as high as the removal Q signed or that removal
-      does not revoke a signer of L. A removal one of whose signers is disowned shields nothing;
-      and L counts as revoking a disowned device, so L itself can shield against that device's
-      removals when L ranks at least as high. The conditions are each needed:
-      * without disowning, a stolen S that approved J and K, and that the person removes with C1
-        and C2 (rank 2) on a line where J and K are ancestors, as when C1's and C2's confirms
-        came after them, could have J and K cosign removals of C1 and C2 (rank 2) on a withheld
-        branch: those would shield J's later add Y against C1's and C2's separate removals of J
-        and K (rank 1) by revoking their signers, while voiding F, which C1 enrolled afterwards.
-        With it, J and K are disowned by the removal of S, Y is void, and the removal of S, which
-        disowns J and K, shields F;
-      * self-removals do not disown: otherwise a stolen genesis G's self-removal would disown the
-        C1 and C2 it approved and undo their recovery;
-      * the rank-or-target condition keeps recovery from a stolen senior: if stolen G removes P
-        (rank 1), which approved C1, while C1 and C2 remove G (rank 2), C1 is not disowned, since
-        G's removal ranks lower and C1's removal revokes its signer, G. Where the removal Q signed
-        revokes nobody who signed L, as when J and K revoke C1 after a single senior G removed S,
-        J and K are disowned whatever L's rank;
-      * concurrency keeps devices the person kept, and acts after syncing, unaffected.
-    * **Removals by enrollments the other side voids shield nothing at equal rank.** A stolen S,
-      genesis included, could add and confirm J and K on an old branch, have them cosign removals
-      of C1 and C2 (rank 2), and add Y above those removals. When C1 and C2 remove S (rank 2), J's
-      and K's adds are void by a chain starting at that removal, so their removals do not shield
-      Y, which is void, and neither does anything J or K add later.
-    * **The tie the rule cannot break.** If instead J and K, made by S on an old branch before C1's
-      add, cosign the removal of S itself (rank 2) there, then S's adds of C1 and C2 are concurrent
-      with that removal and void, while J's and K's adds are void by the removal of S that C1 and
-      C2 cosign. The two removals have the same rank and each voids the other's signers, so neither
-      shields: C1, C2, J and K are all void, and so is everything any of them enrolled on either
-      branch, before or after its removal of S, such as replacements C1 enrolls after the
-      person's removal. S is revoked, and if no other approver is left the generation needs a
-      reset (§5.5). The same tie can target a device below S instead: if J and K cosign the
-      removal of P, which S approved and which approved C1, then P, C1 and everything C1 enrolls
-      are void, while C2, approved by S directly, survives with what it enrolls. The same works
-      against any device added after S, inside S's subtree or not, since J and K, cut at such a
-      target, pass the lineage test. Only approvers not junior to S are sure to survive. No
-      tie-break over the entries is safe: the graph is symmetric, and DAG
-      position, oldest enrollment and entry hash can each be ground or favour a fabrication on an
-      old head. So it stays a residual: it takes a stolen senior device whose thief passes its
-      presence check, and it is announced. Decision 9 states it.
+  merges. A grant signed through an add that is revoked or barred is void unless it is an
+  ancestor of **every** applying removal that revokes or bars that add: the device acted
+  concurrently with losing it. So is anything a void entry added, and every grant signed by those
+  devices, transitively. A barred enrollment is no different from a revoked one here: a removed key
+  that comes back through a second enrollment, and is barred, cannot grant anyone access through
+  it either. A void `confirm` confirms nothing; a removal that was valid when signed stays valid,
+  since validity is decided in its own parents' state. A removed device's concurrent additions
+  therefore never survive, while its concurrent removals, valid where they were signed, stand,
+  limited by the two rules that follow.
+* **A self-removal cannot undo what another removal kept.** A self-removal of D voids none of D's
+  grants that are ancestors of another applying removal of D that D did not sign. Otherwise a
+  stolen probationary B, removed by the person with C kept, could remove itself on a head from
+  before C's add and void C and all it enrolls; and a stolen genesis G could remove itself on the
+  entry right after genesis and void C1 and C2, which are removing it. Only self-removals get this
+  limit: a removal of D by another device is the person's, or is subject to the precedence below.
+* **Precedence between removals that revoke each other's signers.** Let R be an applying removal
+  one of whose signers is **revoked by** an applying removal M, with R not an ancestor of M. M
+  revokes a device if it lists the device's add, or if that add is in M's **raw chain**: what M
+  would void, directly or transitively, if no removal were shielded. M **shields** what descends
+  from it against R, so that no entry with M among its ancestors is void because of R, directly
+  or through any chain of voiding that starts at R, when:
+  1. M ranks higher than R (§3.3); or
+  2. they rank the same and R **yields** to M: M lists a device above some signer of R in that
+     signer's approval lineage (its approver, or that device's approver, transitively), and R lists
+     no device above any signer of M; or
+  3. they rank the same, neither yields, and no signer of M is revoked by R.
 
-    Without this rule, a
-    stolen senior S that the person removes with two cosigners C1 and C2 could remove C1 and C2
-    from an old head, or have devices it approved there remove them, and so void everything C1
-    and C2 did afterwards, transitively: the replacement
-    devices they enrolled after removing S, and, with S as genesis, the whole generation. With it,
-    what C1 and C2 did after removing S stands against those revocations, though not against the
-    tie below, which a thief who passes S's presence check can force. The same holds when S acts through devices it
-    approved: J and K, added and confirmed by S on an old branch, are revoked through S's lineage
-    by C1's and C2's removal of S (their adds are S's grants concurrent with it, so void), and
-    their cosigned removal of C1 and C2 voids nothing that descends from that removal of S. C1 and
-    C2 themselves may still be revoked, and an entry they signed before removing S may still be
-    void. Whether an entry has X among its ancestors, the ranks of two removals and whether an add
-    is void are questions of the entries alone, so this is as monotone as the rest.
-  * **The other side of that rule.** No rule over the entries alone can tell a stolen senior device
-    removed by two honest juniors from an honest senior device removed by two hostile juniors: the
-    graphs are the same. So the rule also protects what two hostile devices do after cosigning the
-    removal of a senior device, even when, through a partitioning relay, that senior device
-    removes them on another branch with `voidGrants`. Their grants made after that removal are not
-    voided by it, and every device announces them. To cosign at all, both must already be confirmed
-    (§3.4), so this needs two independent approval mistakes, two confirmation mistakes three days
-    later, and a relay that partitions the account. The person's other devices senior to them can
-    then remove what they added, and if none are left it is a reset. Decision 9 states it.
+  R still revokes what it lists. Every input here (which removals list what, approval lineages,
+  ranks and raw chains) is read from the entries alone, never from another shield, so the rule
+  has no cycles and every verifier computes the same result for the same applied entries.
+
+  **What this guarantees.** Let S be a device the person removes with M, which lists S and every
+  device in S's approval subtree that the remover holds and did not keep, and whose signers are
+  not in S's subtree:
+  * **Nothing S made survives M, except what the person kept.** A grant Y by S or by a device in
+    S's subtree, not an ancestor of M and not by a kept device, is void because of M, unless a
+    removal X shields it against M. X would have to revoke a signer of M and be signed by
+    devices active where it was signed. If X descends from M, its signers are active in a state
+    that holds M, so none is listed by M, added by a listed device after M (such an add is
+    invalid), or a concurrent grant of one (void there): they are the person's own or kept
+    devices. That is why the fork point no longer matters: a fork from M itself has every listed
+    device already revoked. If X is concurrent with M and signed by devices of S's subtree, X cannot
+    rank higher than M when M ranks 2; when M ranks 1, X can only rank higher by revoking M's
+    single signer, which is senior to S, and a pair from S's subtree cannot pass the cosign test
+    at a device senior to S (their lineages, cut there, share S). At equal rank, X yields to M
+    (M lists S, which is above X's signers) unless X lists a device above one of M's signers; and
+    if neither yields, X's signers are listed by M or, if the remover never saw them, are S's
+    concurrent grants in M's raw chain, so condition 3 fails for X. So no such X shields Y.
+  * **Everything that descends from M survives a pair from S's subtree, if M ranks 2 and no
+    device above M's signers is junior to S.** Such a pair can pass the cosign test only at
+    devices junior to S (cut at anything else, their lineages share S), and can list without it
+    only devices junior to one of them. So its removal X lists no device above M's signers, X
+    yields to M, and M shields what descends from it against X, whoever signed it. If M ranks 1,
+    the pair cannot touch M's single signer, which is senior to S, but its rank-2 removal outranks
+    M and can revoke another device not junior to the pair and void what that device did after M.
+    The client therefore asks for a cosignature on every recovery of a device that approved
+    others (§3.4).
+  * **Recovery from a stolen senior device.** When the person's devices remove a stolen senior S
+    with M (rank 2) while S, on an old head, removes them (rank 1, or rank 2 with a device of its
+    own), M ranks higher or, at equal rank, S's removal yields to M unless it lists a device above
+    one of M's signers: what M's signers do after M survives. A stolen genesis G's self-removal
+    cannot undo C1 and C2 (the self-removal rule), and G's removal of P, which approved C1, ranks
+    1 against their rank 2, so what C1 enrolls after removing G stands even though C1's own add
+    becomes void.
+
+  **What it does not guarantee: the tie.** A pair from S's subtree can list a device above one of
+  M's signers, if that device is junior to S: S itself when S approved the signer, or a device P
+  added after S that approved it. Then neither removal yields, both rank 2, each revokes the
+  other's signers, and neither shields. If J and K, made by S on an old branch, cosign the removal
+  of S there, S's adds of C1 and C2 are concurrent with it and void, while J and K are listed by
+  the removal of S that C1 and C2 cosign: C1, C2, J and K and everything any of them enrolled, on
+  either branch, are void, and if no other approver is left, the generation needs a reset (§5.5).
+  Aimed at P, which approved C1, it voids P, C1 and C1's work and spares C2. So recovery is
+  guaranteed only through cosigners none of whose approvers is junior to the stolen device, and a
+  stolen genesis, to which every device is junior, can force a reset. No tie-break over the
+  entries is safe: the graph is symmetric, and DAG position, oldest enrollment and entry hash can
+  each be ground or favour a fabrication on an old head. It takes a stolen senior device whose
+  thief passes its presence check, it is announced, and decision 9 states it.
+
+  **The other side.** No rule over the entries alone can tell a stolen senior device removed by
+  two honest devices from an honest senior device removed by two hostile ones: the graphs are the
+  same. So the rule also keeps what two hostile confirmed devices, approved independently, do
+  after cosigning the removal of a senior device that removes them on another branch through a
+  partitioning relay. That needs two approval mistakes, two confirmation mistakes three days
+  later, and the partition; the person's other devices senior to them can remove what they
+  added, and if none are left it is a reset. Decision 9 states it.
 * **A copy can bring back a removed key.** A bar holds only where the removal's signer was active
   in the barred add's parents' state. A hostile senior H can sign a copy of a removed device's key
   on a parent from before the removal's signer was added, which no bar reaches, and make the id
@@ -830,11 +802,12 @@ entries:
   its own state.
 * **The order of computation.** A verifier computes the state in one global pass, so that copies
   across ids cannot deadlock it (X2 copying Y while Y2 copies X, say):
-  1. Revocation and voiding by removals: which removals apply, their ranks, raw chains and
-     shields, `voidGrants`, the cutoff and the same-target rule, then the voiding that follows
-     transitively. All of these depend only on ancestry, on parents' states and on raw chains,
-     never on subordination or conflicts.
-  2. Conflict sets: for each id, the adds not void after step 1, formed for every id at once.
+  1. Revocation, bars and voiding by removals: which removals apply, what they list, their ranks,
+     raw chains and bars, the self-removal rule and precedence, then the voiding that follows
+     transitively. All of these depend only on ancestry, on parents' states, on approval lineages
+     and on raw chains, never on subordination or conflicts.
+  2. Conflict sets: for each id, the adds neither void nor revoked after step 1, formed for every
+     id at once.
   3. Winners: each set's winner, if any, from ancestry alone, for every id at once.
   4. Subordinate adds are void, and so is everything they added and every grant signed by those
      devices, transitively. This never feeds back into steps 2 and 3: an add that step 4 voids may
@@ -1194,7 +1167,7 @@ cosign its own removal, or that of a device added after it, which voids the devi
 device approved after that point, the cosigners included, and everything they enroll, fresh
 devices too. So recovery is **guaranteed only through approvers not junior to the stolen
 device**, and a stolen genesis device can force a reset. What the stolen device and the devices
-it made add never survives the person's removal of it (§3.5, disowning). The Devices page, right
+it made add never survives the person's removal of it, except what the person kept (§3.5). The Devices page, right
 after a cosigned removal of a senior device, asks the person to enroll a fresh device (or
 re-enroll one already held, with a new key), from an approver not junior to the stolen device
 where there is one: that keeps the account's approvers against the one-time revocations, and
@@ -1259,13 +1232,10 @@ platform, 16 hex characters of the id in groups of four, when and by whom each d
 whether it is on probation, and whether it is online now or when it was last seen. It also shows
 the genesis fingerprint. **Remove** takes two presses (the first arms it for 5 seconds, "Press
 again to remove", as Forget does), then the presence check. It offers the cascade (§3.4), signs
-the `remove` entries, appends them, and sends them to every connected host and device directly
-as well as through the relay. Each `remove` names the target's active add, and carries
-`voidGrants` when the target is junior to this device and the person kept none of the target's
-devices: for the full cascade, and always while the target is still on probation by this device's
-clock. It never does when the person kept any of them, since the flag would revoke those as well
-(§3.4). A more senior device
-asks for a second device's cosignature: the
+**one** `remove` listing the target's active add and every ticked device's, appends it, and sends
+it to every connected host and device directly as well as through the relay. A more senior
+device, or any device when the target approved others (§3.4), asks for a second device's
+cosignature: the
 other device shows "*Desk app* asks to remove *Old laptop*, which is senior to it" and needs its
 own presence check. Both must be confirmed (§3.4); an unconfirmed device does not offer or accept
 a cosignature. An honest client does not offer to remove the last person's device; if
@@ -1357,12 +1327,18 @@ why every add is announced. Seniority means it cannot remove the devices that wo
 
 The relay's `removed` close code and a host's refusal in `hello` are **advisory**. The relay is
 untrusted, and a refusal can be forged by it or by a host. So a device acts on them only after it
-holds a **verified removal of itself**: a `remove` entry that applies under §3.5 and whose
-evaluated effect revokes, bars or voids **its own enrollment add**, the add of its own keys that
-it holds. One that merely names its id is not enough, since it may revoke a fabricated duplicate,
-in the generation it holds. Until then, it keeps its keys and its roster, says "The relay says this
-device was removed; not confirmed", and keeps trying its other peers. A relay that merely claims a
-removal therefore causes at most a denial of service, never the loss of a device's trust state.
+holds a **verified removal of itself**: a `remove` entry that applies under §3.5 and **lists its
+own enrollment add**, the add of its own keys that it holds. One that merely names its id is not
+enough, since it may revoke a fabricated duplicate, in the generation it holds. Only a listing
+counts, because only a revocation is permanent: a device whose add is **void** or **barred**, or
+subordinate to a copy, can become active again when another entry arrives (a removal of another
+device that keeps it, a voided copy), so for those it shows "This device is not active: *reason*"
+and keeps its keys and roster, never wiping. If B adds C and then removes itself on an old head,
+C sees its add void, and is active again when the person's removal of B that keeps C arrives
+(§3.5, the self-removal rule), whichever order they come in. Until a verified removal, it keeps
+its keys and its roster, says "The relay says this device was removed; not confirmed", and keeps
+trying its other peers. A relay that merely claims a removal therefore causes at most a denial of
+service, never the loss of a device's trust state.
 
 A removed device can no longer fetch a roster (it is refused admission and `roster.sync`), so the
 proof comes with the refusal. It is narrowly scoped:
@@ -1853,7 +1829,7 @@ Each slice adds its own. Together they cover:
   * two adds of one id on concurrent branches by signers neither of which is senior to the other's
     device: the id is conflicted and inactive, whichever arrived first;
   * G adds A and H on sibling branches, A adds X, and H adds X's public key on its own branch: X
-    is conflicted and the conflict names H; G removes H with `voidGrants`, H's copy is void, and X
+    is conflicted and the conflict names H; G removes H, listing the copy, which is revoked, and X
     is active again, in every delivery order, with no new enrollment;
   * genesis adds A and H on concurrent branches; H later adds A's public key on its own branch,
     where A is absent: H's add is subordinate and A stays active, in both delivery orders;
@@ -1882,8 +1858,8 @@ Each slice adds its own. Together they cover:
   * the genesis approves and later confirms A and B itself, and is lost: A and B together remove
     it (their lineages meet only at the genesis, which the cut removes). Lost before confirming
     them: they cannot, and it is a reset;
-  * the genesis device removes itself with `voidGrants`: its adds and renames are void, its merges are not,
-    the genesis entry is not, and the removal applies;
+  * the genesis device removes itself: it is revoked, its grants that are not ancestors of the
+    removal are void, its merges are not, the genesis entry is not, and the removal applies;
   * a host holds a hostile approver's 64 sibling adds; another device removes it on a 65th: the
     65th is kept as evidence, never applied, and the removal applies;
   * a probationary device signs 5,000 over-budget adds and then removes itself: the self-removal
@@ -1896,11 +1872,12 @@ Each slice adds its own. Together they cover:
     removes that add: H's add is void and its removal inert, and the replacement device stays
     active, whichever arrives first; the ids are not conflicted;
   * a probationary B makes a held add of C; the remover's device has synced that add before
-    removing B and sets `voidGrants`: the add of C and everything C signed are void, even though
-    the add is an ancestor of the removal. Without the flag, the same removal leaves the add held
-    and the cascade offers C;
-  * `voidGrants` on a cosigned removal, or a `target.add` that is not the target id's add:
-    refused.
+    removing B and lists C with B: C is revoked and everything C signed is void, even though the
+    add is an ancestor of the removal. Not listed (kept), C stays held and takes effect when B's
+    hold would have ended;
+  * a `targets` list that is empty, longer than 512, out of order or with a repeated id; a target
+    `add` that is not that id's add; a cosigned removal listing its own signer or cosigner; a
+    `voidGrants` member (not part of v1): refused.
 * Caps and budgets: a roster at its 4,096-entry limit (filled with renames by one device) still
   accepts a removal of that device. The ninth rename of one device, a signer's 65th add, merge or
   removal, and the 513th add of a generation are refused, counted across every branch and
@@ -1912,55 +1889,66 @@ Each slice adds its own. Together they cover:
 * Quarantine is inherited: an established signer's quarantined rename on a far fork, followed by
   an add on top of it, leaves both quarantined and the added device inactive until a merge adopts
   the branch. A removal on that branch that is valid from unquarantined entries alone applies.
-* After C1 and C2 remove the genesis G and enroll replacements R1 and R2, G removes itself with
-  `voidGrants` (rank 1) on the entry right after genesis: G is revoked; G's adds of C1 and C2 are
-  void, since C1 and C2 are in the self-removal's raw chain and so the same-target rule does not
-  protect them; but the cosigned removal of G ranks higher and shields its descendants, so R1, R2
-  and everything they add stay active, and the generation continues through them. The same when
-  the self-removing device is a non-genesis senior device S that approved C1 and C2.
+* After C1 and C2 remove the genesis G and enroll replacements R1 and R2, G removes itself (rank
+  1) on the entry right after genesis: G is revoked; G's adds of C1 and C2 are ancestors of the
+  removal of G that C1 and C2 signed, so the self-removal does not void them; R1, R2 and
+  everything they add stay active, and the generation continues through them. The same when the
+  self-removing device is a non-genesis senior device S that approved C1 and C2.
 * **A removal by fabricated devices cannot outrank the person's.** G enrolls and confirms S, which
-  is stolen. The person, on G, removes S with `voidGrants` (rank 1). From the head before that
-  removal, S enrolls and confirms J, K and Y, and J and K cosign a removal of S (rank 2). J and K
-  are in the raw chain of the person's removal, so theirs does not outrank it: J, K and Y are
-  void, S is revoked, and only G is active, in every delivery order.
+  is stolen. The person, on G, removes S (rank 1). From the head before that removal, S enrolls
+  and confirms J, K and Y, and J and K cosign a removal of S (rank 2). J's, K's and Y's adds are
+  S's grants concurrent with the person's removal, so void; J's and K's removal revokes no signer
+  of G's, so it shields nothing: only G is active, in every delivery order.
 * **Fabricated cosigners of a non-genesis device.** G enrolls and confirms D, which is stolen. D
   adds M (never confirmed), J and K, and confirms J and K; J and K cosign the removal of D (rank
-  2). The person, on G, removes D with `voidGrants` (rank 1). J and K are in the raw chain of G's
-  removal, so theirs does not outrank it: M, J and K are void and D is revoked, in every delivery
-  order. The same when D signs all of it on an old head from before G's removal.
-* **Fabricated ancestors (disowning).** G approves and confirms S, then approves C1 and C2
-  directly. Stolen S adds and confirms J and K, and G confirms C1 and C2 on the relay's line after
-  them. The person removes S with C1 and C2 (L, rank 2), and C1 and C2 remove J and K separately
-  (RJ and RK, `voidGrants`, rank 1); C1 then enrolls F. On a withheld concurrent branch, J and K
-  cosign removals of C1 and C2 (rank 2), and J enrolls and confirms Y. Without disowning, the
-  active set is {G, Y}: Y survives and F is void. With it, J and K are disowned by L, so their
-  removals shield nothing and Y is void; L disowns J and K and ranks as high as their removals,
-  so it shields F: the active set is {G, F}, with C1 and C2 revoked, in every delivery order.
-* The same, but G alone removes S (rank 1) with the cascade: J and K are disowned (their removal
-  of C1 revokes nobody who signed G's removal), so Y is void; G's removal ranks below theirs, so
-  it does not shield F, which is void with C1. G is unaffected and enrolls again (decision 9).
+  2), concurrently with the person's removal, which lists D, M, J and K. M, J and K are revoked,
+  nothing they sign afterwards is active, and D is revoked, in every delivery order. The same when
+  D signs all of it on an old head from before G's removal: then M, J and K are D's concurrent
+  grants and void.
+* **Fabricated ancestors, fork before the recovery.** G approves and confirms S, then approves C1
+  and C2 directly. Stolen S adds and confirms J and K, and G confirms C1 and C2 on the relay's
+  line after them. On a withheld branch from before the recovery, J and K cosign removals of C1
+  and C2 (rank 2), and J enrolls and confirms Y. With the previous revision's separate removals
+  (C1 and C2 remove S, rank 2, then J and K one by one, rank 1), the active set was {G, Y}: Y
+  survived and F, which C1 enrolled after the recovery, was void. Now the recovery is one removal
+  M, cosigned by C1 and C2 and listing S, J and K (rank 2). J's and K's removal yields to M (M
+  lists S, above them; it lists nothing above C1 or C2), so it shields nothing and M shields F:
+  the active set is {G, F}, with C1 and C2 revoked by the withheld removals, in every delivery
+  order.
+* **Fabricated ancestors, fork from the recovery.** The same, but J and K sign their removals on a
+  fork from M itself. They are listed by M and so inactive in every state that holds it: their
+  removals are invalid, C1 and C2 stay active, Y is invalid, and the active set is {G, C1, C2,
+  F}.
+* The same, but G alone removes S, J and K (rank 1): Y is void (J's removal revokes no signer of
+  G's, so it cannot shield against M); J's and K's rank-2 removal outranks M, so what C1 did after
+  M is void with C1. G is unaffected. With C2 as cosigner, the recovery ranks 2 and the outcome is
+  {G, F} as above, which is why the client asks for one.
+* **A remove(P) after syncing.** S approved P, P approved C1, and J and K are ancestors of the
+  recovery M, which C1 and C2 sign listing S, J and K and keeping P. J and K, after syncing M,
+  cosign a removal of P: invalid, since M lists them. On a fork from before M, the same removal
+  revokes P and voids P's concurrent grants; C1's add, an ancestor, stays, C1 is not revoked, and
+  anything J adds there is void, since the removal of P revokes no signer of M and cannot shield.
 * **A partial cascade with a fabricated pair.** Stolen D adds J and K on the main line; E, which D
   enrolled before the theft, joins heads and enrolls E2, whose add descends from J and K. The
-  person removes D keeping E and E2 (no `voidGrants`), and removes J and K separately (rank 1).
-  On a fork from before those removals, D confirms J and K and adds Y, and J and K cosign a
-  removal of D (rank 2). Without the subtree proviso, Y survives; with it, J and K are in D's
-  subtree, the person's removal of D still voids D's concurrent grants, and Y and D's confirms of
-  J and K are void, while E and E2 stay active.
-* **Two self-removals.** D removes itself twice, with `voidGrants` on one head and without on
-  another: each names D as signer, so neither keeps anything against the other, and every grant D
-  signed is void.
+  person's one removal lists D, J and K and keeps E and E2. On a fork from before it, D confirms J
+  and K and adds Y, and J and K cosign a removal of D (rank 2). Y and D's confirms of J and K are
+  D's concurrent grants and void; J's and K's removal revokes no signer of the person's, so it
+  shields nothing; E and E2 stay active.
+* **Two self-removals.** D removes itself on two heads: each is a removal of D that D signed, so
+  the self-removal rule protects nothing against either, and every grant D signed that is not an
+  ancestor of both is void.
 * **A removal of an add that step 4 subordinates.** C removes A's add of X; in step 4 that add is
   subordinate to a copy by H, senior to X. The removal still revokes A's add (step-1 voidness
   decides). If C was active in the copy's parents' state, the copy is barred and X is inactive;
   otherwise X is active under H's descriptor, announced as a displacement.
 * **A device cannot cosign its own removal.** J signs a removal of D with D as `cosigner`:
   refused as invalid at every verifier and the relay, whatever the lineage test says. G's removal
-  of D with `voidGrants` then voids M and J as above.
+  listing D, M and J then revokes them as above.
 * **Mutual equal-rank removals.** Confirmed A and B cosign the removal of C while confirmed C and
-  D cosign the removal of A, on concurrent branches, each target not junior to its removers. Each
-  removal revokes one of the other's signers directly and neither voids the other's signers'
-  adds, so each shields what descends from it against the other: A and C are revoked, and every
-  grant made after either removal on its own branch stands, A's and C's included, each announced.
+  D cosign the removal of A, on concurrent branches, each target not junior to its removers and no
+  approver of any of them listed. Neither yields, and each revokes one of the other's signers, so
+  neither shields: A and C are revoked, what A and C did after either removal is void, and B's and
+  D's work stands, each announced.
 * **Step 4 does not feed back.** Id X has adds X1 by A and X2 by H, and neither wins, so X is
   conflicted. A's own add is then subordinate to a copy (step 4), so X1 is void. X stays
   conflicted, and X2 does not become active, until the copy is voided.
@@ -1972,22 +1960,30 @@ Each slice adds its own. Together they cover:
   In step 4, A's own add is subordinate to a copy by a device senior to A, so it is void, and Y1
   with it. Y's conflict set is not recomputed: Y2 stays subordinate, and Y has no active device
   until the person removes the copier, which voids the copy, restores A, and with it Y1.
-* **Same-target rule.** The person removes probationary B, keeping C, which B added; B then
-  removes itself with `voidGrants` on a head from before C's add. C's add is an ancestor of the
-  person's removal, and B signed the other removal itself, so C and what it enrolls stay active;
-  B's other grants are void.
+* **Wiping only on a listing.** B adds C, then removes itself on a head from before C's add: C
+  shows "not active" and keeps its keys and roster. The person's removal of B that keeps C then
+  arrives and C is active again; in the other order, C never stops being active. A removal that
+  lists C's add makes C wipe, in either order.
+* **A barred enrollment grants nothing.** A, B and C as in the bar example of §3.5: X, active only
+  through B's add, signs `add(Y)` on B's old branch; C's removal bars B's add and A's is void. Y is
+  void, since it was signed through a barred add and is not an ancestor of the barring removal.
+* **Self-removal rule.** The person removes probationary B, keeping C, which B added; B then
+  removes itself on a head from before C's add. C's add is an ancestor of the person's removal of
+  B, which B did not sign, so B's self-removal does not void it: C and what it enrolls stay
+  active; B's other grants are void.
 * **Rank 1 against rank 1.** G removes H, keeping J; H, on an old head, removes J (H is senior to
-  J). J is revoked, but G's removal of H ranks the same and G's add is not in the raw chain of H's
-  removal, so J's work after G's removal of H stands.
+  J). J is revoked, but G's removal of H ranks the same, neither yields, and H's removal revokes
+  no signer of G's, so G's removal shields its descendants: J's work after it stands.
 * **Rank 1 against rank 2.** H, revoked by C1's and C2's cosigned removal, had removed C1 on an
   old head and added Y above it: the cosigned removal is not shielded against (H's rank 1 is
   lower), and Y is void.
-* **Revocation through lineage by rank 1.** G adds P, P adds Q, and G adds W after Q's add, so W
-  is junior to Q. Q, on a branch concurrent with what follows, removes W. G removes P with
-  `voidGrants` (rank 1),
-  which voids Q's add, so Q is revoked through its lineage. G's removal of P ranks the same as
-  Q's removal of W and G's add is not in its raw chain: W is revoked, but W's grants made after G's
-  removal of P stand.
+* **Yielding at rank 1.** G adds P, P adds Q, and G adds W after Q's add, so W is junior to Q. Q,
+  on a branch concurrent with what follows, removes W. G removes P and Q (rank 1). Q's removal of
+  W yields to G's (G's lists P, above Q; Q's lists nothing above G), so G's removal shields its
+  descendants: W is revoked, but W's grants made after G's removal stand.
+* **Revocation through a raw chain.** As above, but Q was added on a branch concurrent with G's
+  removal, which the remover never saw: Q's add is P's concurrent grant, in the raw chain of G's
+  removal of P, so Q counts as revoked by it, and the outcome is the same.
 * **The window boundary.** A copy-add whose parent has exactly 8 unquarantined entries it has not
   seen is within the window and applied; with 9, it is quarantined.
 * **Copies across ids.** X2 copies Y's key while Y2 copies X's key, each on a branch from before
@@ -1999,14 +1995,14 @@ Each slice adds its own. Together they cover:
   enrolls R1 while J enrolls Y. C1, C2, J, K, R1 and Y are all void, S is revoked, and with no
   other approver the generation needs a reset; every device announces it.
 * G approves P and C2, P approves C1, and confirmed C1 and C2 remove G (rank 2); C1 then enrolls
-  N. G, on an old head, removes P with `voidGrants` (rank 1): P and C1's add are void, N stays
-  active.
+  N. G, on an old head, removes P and C1 (rank 1): both are revoked, and N stays active, since the
+  removal of G ranks higher.
 * Stolen genesis S, on an old branch, adds and confirms J and K, which cosign removals of C1 and
-  C2; S adds Y above those removals. C1 and C2 cosign the removal of S. J's and K's adds are void
-  by a chain from that removal, so their equal-ranked removals shield nothing: Y is void, C1 and
-  C2 are revoked, their replacements stay, in every delivery order.
-* With a partitioning relay, confirmed A and B cosign the removal of G while G removes both with
-  `voidGrants` on another branch, and A adds X after the removal of G: X stays active, and is
+  C2; S adds Y above those removals. C1 and C2 cosign the removal of S. J's and K's adds are S's
+  grants concurrent with it, in its raw chain; their removal yields to it (it lists S, above
+  them): Y is void, C1 and C2 are revoked, their replacements stay, in every delivery order.
+* With a partitioning relay, confirmed A and B cosign the removal of G while G removes both (rank
+  1) on another branch, and A adds X after the removal of G: X stays active, and is
   announced (the residual of decision 9). The same with A or B unconfirmed: the removal of G is
   invalid, and X is void.
 * A subtree that spreads 2,000 over-budget entries over many signers with two entries each brings
@@ -2017,11 +2013,11 @@ Each slice adds its own. Together they cover:
   machine, shown the branch, adopts it, the removal applies, and the host stops serving G. Inside
   an agent session it is refused.
 * **The evidence rule with a subtree.** T, on probation, adds J; J signs 64 adds on each of two
-  branches; host X holds one set and host Y the other. G removes T with `voidGrants` on a head
-  synced from Y: X admits J's entries as evidence and applies the removal, and J's adds are void.
-  The same removal without `voidGrants` is refused at X and shown as unconfirmed, and the client
-  offers the full cascade. A removal whose over-budget ancestors are signed by a device outside the
-  target's subtree is refused.
+  branches; host X holds one set and host Y the other. G removes T, listing J, on a head synced
+  from Y: X admits J's entries as evidence and applies the removal, and J is revoked. The same
+  removal not listing J is refused at X and shown as unconfirmed, and the client offers the full
+  cascade. A removal whose over-budget ancestors are signed by a device it does not list, or
+  outside the target's subtree, is refused.
 * **Removals are signed where every host already is.** With an honest relay, T adds J1 to J6; each
   signs about 192 entries within its budget; T gossips a different set to each of hosts H1 to H4
   and another to the relay. The person's device, holding attestations from all four, removes T:
@@ -2039,7 +2035,7 @@ Each slice adds its own. Together they cover:
   a parent 22 entries back: every verifier quarantines the copy. H then puts two sibling renames
   above it and signs a merge of only those heads, leaving out the branch with X's genuine add: the
   merge adopts the copy, and X is conflicted at every verifier holding both, in every delivery
-  order. In each case G removes H with `voidGrants`: the copy is void and X active again, with no
+  order. In each case G removes H, listing the copy: it is revoked and X active again, with no
   new enrollment. A cosigned removal of H by two confirmed devices, signed on a parent from before
   the copy, does the same. H's attempt to copy G's key, or that of any device senior to it, is
   refused as a re-added id.
@@ -2062,8 +2058,8 @@ Each slice adds its own. Together they cover:
   signs a copy of X's key with its own add as parent, before A's: A is not senior to the copy and
   H is senior to X, so X's genuine add is subordinate. X stays active under H's `sign` key, X's own entries and
   subtree are void, every device announces "*H* replaced the enrollment of *X* that *A* approved",
-  and X shows "Replaced by *H*" and keeps its keys. G removes H with `voidGrants`: the copy is
-  void, X is active again under its own descriptor, with its subtree.
+  and X shows "Replaced by *H*" and keeps its keys. G removes H, listing the copy: the copy is
+  revoked, X is active again under its own descriptor, with its subtree.
 * **The target cannot choose the removal's parent.** Stolen senior S signs `add(Y1)` to
   `add(Y5)` on a far fork, with renames above them to raise its `seq`, and gossips it everywhere;
   every verifier quarantines it. Confirmed C1 and C2, approved independently, remove S. The client
@@ -2075,8 +2071,8 @@ Each slice adds its own. Together they cover:
   or a merge with `adopt` other than `true`: an honest client never signs one, and a parser
   refuses `adopt: false`.
 * When the honest line was built on two of the target's applied adds before a signer's confirm,
-  the client takes the smallest candidate, says that those two cannot be voided by position, and a
-  senior remover's `voidGrants` voids them; a cosigned removal lists them as separate removals.
+  the client takes the smallest candidate, says that those two cannot be voided by position, and
+  the removal lists the devices they added unless the person keeps them.
 * A hostile device fills J's budget at one host with entries the relay never sees, before the
   relay's line arrives: that host refuses J's entries on the line and everything after them,
   goes stale, and recovers after `devices sync` at the machine.
@@ -2112,13 +2108,13 @@ Each slice adds its own. Together they cover:
   reset 30 seconds after the transfer ran sets the floor at that transfer's `issuedAt`, and the
   asking host's replay is refused. A new command issued after the floor is accepted.
 * **Restoring past the active-device cap.** 64 active; H disables ten by copies; G approves ten
-  replacements; G removes H with `voidGrants`: the ten genuine enrollments are restored and 73
+  replacements; G removes H, listing its copies: the ten genuine enrollments are restored and 73
   devices are active, in every delivery order. The next add is refused until removals bring the
   count below 64; removals are accepted throughout.
 * **Partial cascade.** The person removes probationary B but keeps C, which B added: the removal
-  carries no `voidGrants`, its parent holds C's add but none of B's other grants, C stays (taking
-  effect when B's hold would have ended), and B's other adds are void.
-  With everything ticked, the removal carries `voidGrants` and C is void too.
+  lists B and not C, its parent holds C's add but none of B's other grants, C stays (taking
+  effect when B's hold would have ended), and B's other adds are void. With everything ticked, it
+  lists C too, and C is revoked.
 * **Durable replay.** A transfer person command used once; the source host restarts, becomes fresh
   again, and the asking host replays the same command within its lifetime: refused. The same after
   the source's wall clock is moved back 30 minutes. A host whose replay record cannot be written
@@ -2133,9 +2129,10 @@ Each slice adds its own. Together they cover:
   holding a valid removal from being checked first.
 * An approver whose head moved before its append asks the person again, and never reuses the old
   signature or assertion.
-* The cascade offers exactly the devices the removed device added. With all of them ticked and the
-  target junior to the remover, it is one removal with `voidGrants`, and spends one removal of
-  the remover's budget; with some unticked, one removal per ticked device.
+* The cascade offers exactly the devices in the removed device's approval subtree. Whatever is
+  ticked, it is one removal listing the device and every ticked device, and spends one removal of
+  each signer's budget. A device that approved others is removed with a cosignature when a second
+  confirmed device is available.
 
 **Person commands and kind spoofing**
 * A transfer, folder-trust answer, Install or forget from an **active `app` channel without a
@@ -2322,26 +2319,27 @@ Each slice adds its own. Together they cover:
    * one-time revocations by removed devices, signed on old heads (§3.5). A removed device alone can
      revoke devices that were active and junior to it there. A confirmed pair approved independently
      can also revoke one device senior to both. They never gain trust, a revoked senior device comes
-     back junior, and such a revocation never voids what its target did after the removal that
-     revoked the remover, directly or through the remover's approval lineage, when that removal
-     shields against it: when it ranks higher (a cosigned recovery outranks a removal of juniors
-     or a self-removal), or ranks the same and the revocation did not void its signers' own
-     enrollments, and no signer of the revocation is disowned. A stolen senior device whose thief
-     passes its presence check can so revoke the two devices that removed it, itself or through
-     devices it approved on an old branch; what they did afterwards stands against those
-     revocations. **What a stolen device fabricates never survives the person's concurrent removal
-     of it**: the devices it approves, at any depth, are disowned by that removal, or fail the
-     same-target proviso, so their removals neither shield nor outrank anything against it, and
-     everything they and it add concurrently is void (§3.5). Two cases do lose honest work, and are
-     stated here rather than closed. When the person's removal of the stolen device is by a single
-     senior device (rank 1), a confirmed pair the stolen device made can still, once, revoke a
-     device not junior to them, and what that device did after the removal is void, since a rank-1
-     removal cannot shield against their rank-2 one; the senior device itself is unaffected and
-     enrolls again. And recovery is guaranteed only through cosigners whose approvers above them
-     are not junior to the stolen device (were added before it, or concurrently): a fabricated pair
-     can cosign the removal of an approver added after the stolen device, which disowns the
-     cosigner it approved. That is why the person enrolls a fresh device right after removing a
-     stolen senior device, from an approver outside its reach where there is one (§5.4);
+     back junior, and such a revocation never voids what descends from the removal that revoked
+     the remover, when that removal shields against it (§3.5, precedence): when it ranks higher (a
+     cosigned recovery outranks a removal by one device), or ranks the same and the revocation
+     yields to it, or neither yields and the revocation revokes none of its signers. A stolen
+     senior device whose thief passes its presence check can so revoke the two devices that
+     removed it, itself or through devices it approved on an old branch; what they did afterwards
+     stands against those revocations.
+     **The person's recovery is one removal** listing the stolen device and every device of its
+     subtree that the person did not keep (§3.3), and **what a stolen device made never survives
+     it, except what the person kept**: a fork from the recovery has those devices revoked, and on
+     a fork from before it their removals yield to it, so nothing they or it add there is
+     protected (§3.5, "What this guarantees"). Two cases do lose honest work, and are stated here
+     rather than closed. When the recovery is signed by one senior device (rank 1), a confirmed
+     pair the stolen device made can still, once, revoke a device not junior to them, and what that
+     device did after the recovery is void, since a rank-1 removal cannot shield against their
+     rank-2 one; the senior device itself is unaffected. The client therefore asks for a
+     cosignature on every recovery of a device that approved others. And recovery is guaranteed
+     only through cosigners none of whose approvers is junior to the stolen device: a pair it made
+     can list such an approver, and then neither removal yields (the tie, below). That is why the
+     person enrolls a fresh device right after removing a stolen senior device, from an approver
+     not junior to it where there is one (§5.4);
    * a reset forced by a stolen senior device whose thief passes its presence check: it approves
      and confirms two devices on an old branch, from before the person's cosigners were added, and
      has them cosign its own removal there. That voids every device it approved after that point,
@@ -2402,7 +2400,7 @@ Each is one PR, security-reviewed independently before merge.
 
 | # | Slice | Depends on | Changes behaviour |
 |---|---|---|---|
-| R1 | Roster library: strict parser and negative vectors, entries and signing contexts, per-signer presence proofs, the acceptance rule and state (causal seniority over add entries with lineage-independent cosigners, probation holds for grants only on persisted monotonic time, the removal pass, voiding and its limit for revoked signers (through approval lineage, by rank, disowning), the same-target rule with its subtree proviso, `voidGrants`, key bars, conflicting adds by seniority, caps, per-signer budgets and the evidence rule with subtrees, quarantine and the window, merges that are never void with adoption only by `adopt: true`, the removal-parent choice, `confirm` and the confirmation rule for cosigned removals), the `approval` member sets, `veto`, person commands, head attestations, WebAuthn assertion checks, signing keys (TPM/DPAPI, WebCrypto), shared vectors (C#, JS); protocol spec `docs/protocol/devices.md` | decisions 1, 2, 9 | No |
+| R1 | Roster library: strict parser and negative vectors, entries and signing contexts, per-signer presence proofs, the acceptance rule and state (causal seniority over add entries with lineage-independent cosigners, probation holds for grants only on persisted monotonic time, the removal pass, multi-target removals and ranks, voiding (bars included), the self-removal rule, precedence between removals (rank, yielding by approval lineage, raw chains), key bars, conflicting adds by seniority, caps, per-signer budgets and the evidence rule with subtrees, quarantine and the window, merges that are never void with adoption only by `adopt: true`, the removal-parent choice, `confirm` and the confirmation rule for cosigned removals), the `approval` member sets, `veto`, person commands, head attestations, WebAuthn assertion checks, signing keys (TPM/DPAPI, WebCrypto), shared vectors (C#, JS); protocol spec `docs/protocol/devices.md` | decisions 1, 2, 9 | No |
 | R2 | Relay: store and appends, the account relay mode (`observe` until a person's device switches it, one way; `enforce` at a new account's genesis), approved/pending admission with invite hints, nothing for pending devices, bound kinds in presence, generation rules with hold and veto, bound tokens with `token-exchange` (unbound until every app exchanges, then issue bound and accept both, then enforce last), pending limits, `removed` close code, administration reset for a squatted genesis. Staging; production only with the owner's approval | R1, decision 5 | Only for accounts with a roster |
 | R3 | Host: state (with quarantine), gate in `ChannelHub`, gossip, `roster.submit` with per-key limits, freshness (monotonic and wall-clock), `selfAttest` and acknowledgements, person commands, modes `off`/`observe`/`enforce`, enrollment over the pipe and `devices join`/`reset`/`sync`/`adopt` with the genesis fingerprint | R1, decision 10 | Only when the mode is changed |
 | R4 | Windows app: join (mutual codes, fingerprint), Devices, client rule; **proof** that its presence mechanism (Windows WebAuthn/Hello, or a TPM UI policy) cannot be satisfied by same-user code, including `SendInput`, UI Automation and the project's injector, and the same proof for Windows Hello as browsers reach it, after which its approvers record `webauthn` for device-bound Windows PWA credentials (§4.6). Only after that does it approve or sign person commands | R2, R3, decision 3 | Only after genesis |
