@@ -690,7 +690,8 @@ static partial class SelfTest
         check(bar.Title == Product.Name && window.Title == Product.Name && Math.Abs(bar.ActualHeight - (double)Application.Current.Resources["AbLayoutTitleBar"]) < 0.5,
             $"draws the 48 px title bar with the app's name ({bar.ActualHeight:0.#} px)");
         var mark = ById<ContentControl>(window.RootElement, "Mark");
-        check(mark is not null && Find<Microsoft.UI.Xaml.Shapes.Path>(mark).Count > 0, "draws the mark in the title bar");
+        check(mark is not null && Find<Microsoft.UI.Xaml.Shapes.Path>(mark).Count > 0 && ReferenceEquals(mark.Style, Application.Current.Resources["AbIconMark20"]) && mark.ActualWidth == 20,
+            "draws the mark in the title bar, its native 20 px cut at 20 px");
         check(window.Search.XamlRoot is not null && window.Search.ActualWidth > 100 && FindAncestor<TitleBar>(window.Search) == bar, $"puts the search box in the title bar ({window.Search.ActualWidth:0} px wide)");
         check(window.RootElement is Grid { KeyboardAccelerators: var keys } && keys.Any(k => k.Key == Windows.System.VirtualKey.K && k.Modifiers == Windows.System.VirtualKeyModifiers.Control), "focuses search with Ctrl+K");
         await CheckNoShortcutTooltip(window, check);
