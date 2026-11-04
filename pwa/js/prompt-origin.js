@@ -95,13 +95,13 @@ function idleTurns(s) {
 export class PromptMemory {
   // The prompt shown: { key, repeat, at, settled }.
   #current = null;
-  // The most turns seen finished, while idle; whether the session ran when last seen; and when the
-  // turn seen running began, until a turn's end is accounted for.
+  // The most turns seen finished, while idle; whether the session ran when last seen; the turn
+  // count last seen, in any state; and the turns seen beginning, each with the count it ran at,
+  // until a turn's end is accounted for.
   #idle = null;
   #running = false;
-  // The turn count last seen, in any state.
   #count = null;
-  #ran = null;
+  #starts = [];
   #bySchedule = new Map();
 
   // { repeat, at, fresh } for the session's latest prompt; fresh: it is a new one since the last.
@@ -111,10 +111,12 @@ export class PromptMemory {
     const text = a.userMessage ?? null;
     const running = s?.status === 'working' || s?.status === 'waiting';
     const count = Number.isSafeInteger(a.turnCount) && a.turnCount >= 0 ? a.turnCount : null;
-    // From when it began, not from a question answered or a resume within it; a count that rose
-    // while it ran is a later turn begun, its idle between missed here.
+    // A turn begins when the session starts running, not at a question answered or a resume
+    // within it; and when the count rises while it runs, its idle between missed here. That later
+    // turn can be a prompt's or one no prompt started (Claude's for a notice), which only the count
+    // at its end tells apart.
     const later = this.#running && count !== null && this.#count !== null && count > this.#count;
-    if (running && (!this.#running || later)) { this.#ran = s.statusSince ?? null; }
+    if (running && (!this.#running || later)) { this.#starts = [...this.#starts.slice(-15), { count, at: s.statusSince ?? null }]; }
     this.#running = running;
     if (count !== null) { this.#count = count; }
     // A host that omits the words (SessionBudget can) says nothing of which prompt this is: the one
@@ -126,8 +128,10 @@ export class PromptMemory {
       if (this.#idle !== null) { more = Math.max(0, turns - this.#idle); }
       this.#idle = Math.max(this.#idle ?? -1, turns);
     }
-    const ran = this.#ran;
-    if (turns !== null) { this.#ran = null; }
+    // The latest prompt's turn ran one short of every prompt counted at its end; a turn seen at any
+    // other count wasn't its, and with none, its start wasn't seen.
+    const ran = turns === null ? null : this.#starts.filter((t) => t.count === turns - 1).at(-1)?.at ?? null;
+    if (turns !== null) { this.#starts = []; }
     // Apart, not joined: a label can hold a line break, so no separator keeps two prompts apart.
     const key = JSON.stringify([from, a.userMessageLabel ?? null, text]);
     const cur = this.#current;

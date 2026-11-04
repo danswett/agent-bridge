@@ -164,3 +164,11 @@ test('a repeat whose turn began with the idle before it missed is dated from its
   m.observe(session({ from: 'schedule', label: '4', status: 'working', turns: 4, since: '2026-11-03T19:05:00Z' }));
   assert.deepEqual(m.observe(session({ from: 'schedule', label: '4', turns: 5 })), { repeat: true, at: '2026-11-03T19:05:00Z', fresh: true });
 });
+test('a turn no prompt started, begun with the idle before it missed, does not date the repeat before it', () => {
+  const m = new PromptMemory();
+  m.observe(session({ from: 'schedule', label: '4', turns: 3 }));
+  m.observe(session({ from: 'schedule', label: '4', status: 'working', turns: 3, since: '2026-11-03T19:01:00Z' }));
+  // Claude's turn for a delegate's notice: the count rises as it runs, but it was no prompt's.
+  m.observe(session({ from: 'schedule', label: '4', status: 'working', turns: 4, since: '2026-11-03T19:05:00Z' }));
+  assert.deepEqual(m.observe(session({ from: 'schedule', label: '4', turns: 4 })), { repeat: true, at: '2026-11-03T19:01:00Z', fresh: true });
+});
