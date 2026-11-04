@@ -245,8 +245,18 @@ credential, and it is why scope, budgets and the §5.3 exclusions matter more th
 
 On success the connection is an **agent connection** for its lifetime. Its `hello` capabilities
 are the credential's scope (`sessions.read`, `agent.reply`, `agent.launch`, `agent.remote`), and
-each later op is attributed to the principal without resending the token. A pipe connection
-without `agent.hello` keeps today's rules exactly.
+each later op is attributed to the principal without resending the token.
+
+**Unattributed callers get typed status only** (revision 13, superseding local-pipe.md:93-98 for
+content reads). Taint (§5.8) can only follow a read the host can attribute to a session, so every
+**content-bearing** read (`sessions.list` with titles, `session.get`, `session.read`,
+`sessions.subscribe`) that an agent could consume requires an agent connection bound to a
+session. Every other caller gets only the **typed, non-tainting projections** (`sessions.status`
+and `session.status`, §5.8). That covers a pipe caller inside an agent session without
+`agent.hello`, the host's command line, anything else of the user's, and HTTP MCP (§3.6).
+**The app** keeps full reads: it is a person client, identified as local-pipe.md:96 describes.
+Same-user code that imitates the app is the §1.3 residual. This is a protocol change, shipped
+in AP8.
 
 **macOS and Linux.** See step 2: no agent credentials there until peer identification and
 ancestry exist. That is a prerequisite for launched and adopted sessions alike.
@@ -302,14 +312,20 @@ The MCP server ships with the host (design.md §3.1, :164). It keeps agent-ha-br
 * **stdio** (the normal case). The agent's CLI starts it as a child, so it inherits
   `AGENT_BRIDGE_TOKEN` and `AGENT_BRIDGE_SESSION`, sits under the session's process, and passes
   `agent.hello`. Every tool call goes over that one agent connection.
+* **Typed by default.** `list_agent_sessions` returns the typed, non-tainting projection (§5.8),
+  and a new `get_agent_status` returns one session's. Content (`list_agent_sessions` with
+  `include: "content"`, and `read_agent_session`) is an explicit request, and taints the caller
+  with whatever it reads.
 * **Local and remote targets.** `list_agent_sessions` lists this host's sessions and, through
   `agent.machines` (the roster's active hosts, after #55), other machines. A tool naming another
   machine becomes `agent.remote` on the pipe. The local host signs and sends it (§4) and returns
   the target's result unchanged. The MCP server never holds a key, a relay token or the device
   key.
 * **HTTP mode** (`127.0.0.1:8808`, #45). It isn't a child of one session, so it can't be
-  attributed by ancestry. Recommended: no agent principal over HTTP in v1. It reads as an
-  unattributed local caller does today (Q8).
+  attributed by ancestry. Recommended: no agent principal over HTTP in v1 (Q8). As an
+  **unattributed** caller it gets **typed status only** (§3.4), never content: otherwise a clean
+  session could read a tainted one over HTTP, stay untainted, and then use O over its own
+  attributed connection.
 * **Outcomes** map onto the old statuses as #45 requires. Reading the answer back uses
   `read_agent_session(session, since)`, which waits on the target for the session's `response` to
   change after `since`. That avoids AGENTS.md's "snapshot then poll" trap, in which the first poll
@@ -417,7 +433,7 @@ strict minimal DER, low-S, `p256-sha256-der`, as #391 specifies for roster entri
 | `heads` | The issuer's current roster heads, as #391 person commands carry them (#391 §7.2) |
 | `principal` | §3.1, plus `add`: the hash of the issuing host's add entry. Principals are keyed by **account + generation + add hash**, because device ids aren't namespaced across accounts and a copy shares its original's id (§8.10, V3, V7). `machine` must be the channel peer that delivered it: a host never relays another host's envelope as its own (§4.6) |
 | `chain` | §5.4. `via` is at most `maxDepth` entries, most recent last. Under (a), each entry may also carry the previous hop's envelope hash, and the target may fetch and check it |
-| `action` | `sessions.list`, `session.get`, `session.read` (§4.7), `session.reply`, `launch.options`, `session.launch`, `launch.result`. **Nothing else verifies.** In particular `session.answer`, `launch.trust.answer`, `session.stop`, `session.transfer`, `attachment.*`, `update.*`, `push.*` and `host.*` are not in the action set, so the envelope cannot express them. A `principal.kind: "person"` across a link (§7.12) may use only `sessions.list`, `session.get`, `session.read` and `sessions.subscribe` |
+| `action` | `sessions.status` and `session.status` (typed, non-tainting, §5.8), `sessions.list`, `session.get`, `session.read` (§4.7), `session.reply`, `launch.options`, `session.launch`, `launch.result`. **Nothing else verifies.** In particular `session.answer`, `launch.trust.answer`, `session.stop`, `session.transfer`, `attachment.*`, `update.*`, `push.*` and `host.*` are not in the action set, so the envelope cannot express them. A `principal.kind: "person"` across a link (§7.12) may use only `sessions.list`, `session.get`, `session.read` and `sessions.subscribe` |
 | `target` | `account` and `machine` must be the target host's own. `session` is required for `session.get`, `session.read` and `session.reply`. `instance` is required for `session.reply` and optional for reads (§4.5). Absent for `sessions.list`, `launch.options` and `session.launch`. `link` and `repo` are absent within one account. Across accounts `link` is required, and `repo` is required for a repo-scoped link: both must equal the link the channel was admitted under (§7.3, "Link context binding"), so a relay can't make a command run under another link's scope |
 | `dataSha256` | Binds the op's `data` (the reply text, the launch settings and prompt) to the signature: the SHA-256 of the exact bytes of the inner op's `data` JSON, which travel base64url-encoded beside the envelope (§4.6), so neither host re-serializes anything. Beside, not inside, so the envelope stays under 2 KiB and the 16 KiB reply and 20 KiB launch limits (v1-sessions.md:430; v1-launch.md:105-115) are unchanged |
 | `issuedAt`, `expiresAt` | Unix seconds. Lifetime at most **120 s**. Long enough for a relay round trip and a reply's delivery check, and short enough that a captured envelope is useless soon after |
@@ -619,7 +635,7 @@ meant as off is never read as on (host-config.md:139-141).
 | `inbound.*.reply` | `forced-ask` \| `agent-launched` \| `none` | Which sessions an agent may reply to. `forced-ask` is every session the host launched in forced-ask mode with no grant or mode change since (§5.3), which is the widest possible value. `agent-launched` is the subset an agent launched. `none` is none. **Default: `forced-ask`** (Q37). Adopted and manually started sessions are never reply targets, because their mode is unknown (§5.3) |
 | `inbound.*.gate` | `off` \| `quiet` \| `push` | Whether a reply or launch into a session that **isn't provably forced-ask** (allow-all or unknown-mode, §5.3) is **held** for the owner's per-message, presence-signed approval instead of refused (§5.7 G). `quiet` holds are counted on Needs-you and never pushed; `push` allows at most one aggregated, text-free push an hour. **Default: `quiet`** for the account's own agents; cross-account G is per link (`expose.gate`). Never offered to connectors |
 | `inbound.*.allowAllTargets` | `false`, or `{ workspaces: "same" \| "any" }` | Whether **this account's own** agents may reply into allow-all and unknown-mode sessions on this machine **without** a gate (§5.7 O). Set in `inbound.local`, it covers agents on this machine; in `inbound.remote`, agents on the account's other machines. Never for another account, a connector, a federated or `homeassistant:` principal, or a chain with a cross-account hop. **Default: `false`** in both. When enabled, the app proposes `inbound.local` with `workspaces: "same"`, and shows the escalation warning |
-| `inbound.*.launch` | `false`, or `{ workspaces: "approved" \| [labels], permissions: "ask", agents: [ids], profiles: [names] }` | Where an agent may launch. The request must state `permissions` **explicitly** (§5.2). An **unattended** launch is `ask` only. `allowAll` is possible only as a **new gated launch** (§5.7 G): the person approves the exact manifest, prompt and fresh worktree with presence, so it stays a person's decision, as design.md §5.6 requires even from a phone. `agents` and `profiles` are **allowlists**, empty by default except the machine's default agent and profile, each checked not to grant allow-all (§5.2) |
+| `inbound.*.launch` | `false`, or `{ workspaces: "approved" \| [labels], permissions: "ask", agents: [ids], profiles: [names] }` | Where an agent may launch. The request must state `permissions` **explicitly** (§5.2). An **unattended** launch is `ask` only. `allowAll` is possible only as a **new gated launch** (§5.7 G): the person approves the exact manifest, prompt, base commit and fresh worktree with presence, so it stays a person's decision, as design.md §5.6 requires even from a phone. `agents` and `profiles` are **allowlists**, empty by default except the machine's default agent and profile, each checked not to grant allow-all (§5.2) |
 | `inbound.remote.fromMachines` | `any` \| `[add hash]` | Which of the account's machines may send. `any` means any active, non-probationary rostered host. A list names **add entries**, which the app picks by machine name, never bare device ids. A machine that is re-enrolled or displaced has a new add hash, so it drops out until the owner re-selects it (§8.10, V3, V4) |
 | `inbound.exclude` | session ids and workspace labels | Never reachable by any agent, local or remote. A person can mark a private session or workspace this way |
 | `limits.*` | integers | §5.4, §5.5 |
@@ -1103,7 +1119,7 @@ Claude, Codex and organisation-managed sessions. Same account and cross-account.
 * **Batch approval.** One presence signature can cover an **immutable, bounded batch** (at most 20
   holds), and binds as much per item as a single approval does: each item's text hash, target
   instance and **origins**.
-  * A batch has **one sender**.
+  * A batch has **one sender**, and covers held messages only: **never gated launches**.
   * It never mixes tainted and untainted items.
   * Every text is shown, and each item is delivered idempotently on its own.
 * **Windows** ("Authorize @sender to run things in these sessions for N minutes", N one of 5, 15,
@@ -1131,8 +1147,22 @@ Claude, Codex and organisation-managed sessions. Same account and cross-account.
   * The approval binds the **full manifest** (agent and version, flags, profile, permissions,
     model, effort, environment changes), the **exact prompt**, the destination (a **fresh worktree
     the host makes**), an expiry and the requester's taint.
+  * **It binds the base.** Today the worktree is made at launch from a freshly fetched
+    `origin/<default>` (host-launch.md), so repository hooks, `.mcp.json`, `.claude/settings.json`,
+    `.github/hooks` and `AGENTS.md` could change between approval and launch. A collaborator with
+    write access, or a tainted agent of the owner's that pushed, could then make an approved
+    `allowAll` launch run code nobody saw. So:
+    * when the launch is **held**, the host resolves the workspace and the **base commit SHA**;
+    * both go into the presence-signed approval;
+    * the source report is computed over **that exact tree**;
+    * the worktree is created at exactly that SHA, with **no re-fetch**;
+    * if that commit is no longer available locally, the launch is refused.
   * Its **source report** separates what the host **verified**, **observed** and **can't know**.
     It never claims to list everything that will load.
+  * **Gated launches are never batched.** Each is approved on its own screen, so its manifest,
+    base and source report are always in front of the person.
+  * A **cross-account** gated launch can never request `allowAll`: a link's launch grant is
+    `ask` only (§7.4).
   * The screen says: "**Allow-all lets this run code with your account's privileges. A fresh
     worktree is organisation, not containment.**"
   * A launch an external party requested keeps external provenance (§5.8).
@@ -1157,9 +1187,21 @@ Claude, Codex and organisation-managed sessions. Same account and cross-account.
 * Off by default, and set only at the machine.
 * **Never** for: another account's principal, a connector's, a federated or a `homeassistant:`
   principal; a message whose chain has a cross-account hop (§5.4 `via`, §7.5); a **tainted**
-  sender, including one tainted only by reading or being launched by a tainted session; or a
-  sender or target in a **tainted workspace**, or one that imported a workspace instruction file
-  (§5.8). An immutable, owner-approved schedule may keep a session eligible (§5.4).
+  sender, including one tainted only by reading or being launched by a tainted session; a
+  sender or target in a **tainted workspace unit** (§5.8), or anywhere on the machine under the
+  `"any"` scope while any unit is tainted; or a sender that **loaded workspace instruction
+  files** (below). An immutable, owner-approved schedule may keep a session eligible (§5.4).
+* **The instruction-file rule applies to the sender only.**
+  * A sender is O-eligible only if the host launched it with instruction-file loading
+    (`AGENTS.md`, `CLAUDE.md`, `copilot-instructions.md`) **provably off**, by a CLI switch AP1
+    vectors prove for that agent and version. **Unknown counts as loaded**, so a session the
+    person started, or one whose CLI has no such switch, can't send through O.
+  * It doesn't apply to **targets**: a target reading its own repository's instructions is the
+    disclosed repository-read residual (§5.8). If it applied to targets, O would never work in a
+    repository with an `AGENTS.md`, the owner's included.
+  * The consequence for the owner (Q34): in a repository with instruction files, an O sender has
+    to be a host-launched coordinator with those files switched off. Everything else goes
+    through G and windows.
 * **The risk, shown in the setting:** "Any agent of yours, including one in an ask-mode session or
   one following instructions injected into it, could get commands run without a prompt through
   another of your sessions that runs in allow-all." The owner turns it on knowingly.
@@ -1241,20 +1283,47 @@ agent, connector or Home Assistant). It starts a fresh conversation from:
 It carries no transcript, summary, resume or subagent memory. "Clean" means **no retained
 external Bridge content**. It doesn't mean immune to injection through the repository or `gh`.
 
-**Residual: content laundered through the workspace.** A tainted session that can write files
-can leave instructions in a shared workspace, such as an `AGENTS.md`, which forced-ask sessions
-import (§5.3 (A)) and every agent reads. O's "same workspace" scope is exactly that shared
-workspace. The host can't taint what an agent reads from disk, so:
-* **O-eligible sessions don't import workspace instruction files.** A session that imported
-  one is not O-eligible.
-* **A workspace is tainted while a tainted session runs or has run in it**, since the host can't
-  tell whether it wrote anything. It stays tainted until a person clears it ("I've checked this
-  workspace"). A session launched there inherits its origins, and **O is refused** to and from
-  every session in a tainted workspace. That closes the sibling path O's "same workspace" scope
-  would otherwise open.
-* What remains is disclosed as a residual, like `gh` and repository reads: files a tainted session
-  wrote **outside** its workspace, and a person clearing a workspace without checking it.
+**Workspace taint: content laundered through files.** A tainted session that can write files can
+leave instructions or notes for its siblings, such as an `AGENTS.md`, which agents read from disk
+and the host can't see. So taint also attaches to the **workspace unit**:
+* **The unit** is at least as wide as O's `"same"` scope (§5.7 O): every checkout and worktree on
+  this machine that shares the **git common directory or the repository id**, the main checkout
+  and every host-made worktree together. A non-git workspace is its own unit.
+* **When it becomes tainted.** While a tainted session runs, or has run, anywhere in the unit
+  (the host can't tell whether it wrote anything), the unit carries that session's origins.
+* **Every resident inherits it.** When a unit becomes tainted, or its origins expand, the host
+  merges the origins into **every session in it**, including ones already running. A session
+  launched there starts with them. Inherited origins are the session's own from then on: they
+  persist after the unit is cleared, and travel through reads, replies and launches like any
+  other taint.
+* **Clearing** the unit is a **presence-signed person-device command** ("I've checked this
+  repository's checkouts on DESK"). It is refused while a tainted session still runs there. It
+  clears the unit, not the sessions that already inherited.
+* **O and imports.**
+  * O is refused to and from every session in a tainted unit.
+  * With O's `"any"` workspace scope, O is refused on the machine while **any** unit there is
+    tainted.
+  * The instruction-file rule for O senders is in §5.7 O.
+* **Residuals**, disclosed like `gh` and repository reads:
+  * a session **outside** the unit reading a tainted unit's files by path;
+  * reading another session's **transcript files** on disk;
+  * a tainted agent on another machine pushing a file that a clean checkout here pulls;
+  * a person clearing a unit without checking it.
 
+**Typed reads of your own sessions, which don't taint.** Any coordinator that lists sessions with
+their titles is tainted almost at once, so the host also offers **typed projections of list and
+get** for the account's own sessions: `sessions.status` and `session.status`. They have the same
+constraints as the cross-account status below: bounded enums, booleans, counts and timestamps,
+with opaque handles the reader generates, and no titles or free text. They are **the default
+read path for coordinators**: the MCP server's `list_agent_sessions` and `get_agent_status`
+return them unless the agent asks for content explicitly (§3.6). They are also all an
+unattributed caller gets (§3.4).
+
+**What this means for O.** Taint now follows content reads, launches and workspaces, and O is
+refused for any of them. So **O is a specialised, clean-workspace mode**: a coordinator that
+reads only typed status, works in an untainted repository, and doesn't load workspace instruction
+files. **The gate (G) and its windows are the general path** for agents to reach allow-all
+sessions. That is what the adversarial review concluded, and the owner should see it (Q34).
 **Typed `session.status`, which doesn't taint.** A collaborator's agent can coordinate on status
 without importing free-form content:
 * **Bounded fields only:** enums, booleans, counts and timestamps, with **opaque handles the
@@ -1265,7 +1334,6 @@ without importing free-form content:
 * **Owner decision** (Q52): hosts hold no GitHub token, so v1 fetches through the **reader's
   app**, and a broker comes later as its own design. CI state is unavailable while no person
   device of the reader is online.
-
 **The badge.** A tainted session's card reads "**External Bridge content retained · @welshofer ·
 14:05**", with its categories. **Residual:** the bridge can't taint what the agent reads through
 `gh` or the repository itself.
@@ -1390,10 +1458,10 @@ side may want to start a session on its own machine in response.
 |---|---|---|
 | Who is behind every principal | One person. Every agent works for them | Two people with different interests, either of whom may be careless, compromised or hostile to the other |
 | Root of trust | One roster (#391), approved by the person's own presence-proven devices | Two rosters that never merge. Each side trusts only its **own** person's decision to link, and pins the other's identity at that moment |
-| Data leaving | Stays with the same person (on other machines) | **Disclosure to a third party**. Organisation policy, where actually configured or enforced, applies (design.md:1338-1343, "Corporate policy (S8)"): such a machine's transcripts may not be shareable at all. Otherwise the user decides (Q51) |
+| Data leaving | Stays with the same person (on other machines) | **Disclosure to a third party**. Organisation policy may forbid it, but no detection of it exists yet (S8 is still open, design.md:1338-1343), so the person decides (Q51) |
 | Inbound text | Instructions from your own agents (still injectable) | Instructions from someone else's agents, to be treated as **untrusted input** |
 | Default reach | Any session (decision 2) | **Nothing**, until both owners consent to a scope |
-| Launch | `ask` in approved workspaces | Opt-in per link, one workspace, `ask` only |
+| Launch | In approved workspaces: `ask` unattended when provably forced-ask, otherwise a gated launch, which may request `allowAll` with the person's approval (§5.7 G) | Opt-in per link, one workspace, `ask` only. A cross-account gated launch can never request `allowAll` |
 | Relay | One untrusted operator, who sees one account's metadata | Up to two, and the target's operator learns that A and B are linked |
 
 ### 7.2 Establishing trust: options
@@ -1606,7 +1674,7 @@ A message flows only if **both** owners allowed it: A's **reach** (outbound) and
 | **Expose: content projection** | When content is allowed: `id`, `title`, `agent`, `status`, `statusSince`, `activity.response` (≤ 16 KiB), `waiting: bool`, `driverFrom` | Nothing more in v-full. **Never** `cwd`, `userMessage` (it may hold the owner's private instructions), `reasoning`, tool `history`, `subagents`, `question` content, usage, attachments, or `repository`/`branch` unless the link names that repository. Titles are content, never status; a person view shows them only under a separately authorized display projection (§7.12) |
 | **Reach: which of my sessions may send** | **None** | Only sessions launched in the link's workspace, or adopted for the link explicitly. So an agent working in a private repository with access to secrets can't be talked into posting to the collaborator: it has no reach |
 | **Reach: actions** | None | `read`, `reply`, `launch` (if the peer exposes it) |
-| **Expiry** | 30 days | Renewable with presence, or within a **renewal mandate**: a longer period (for example 6 months) the owner approves up front, inside which the app refreshes the link without presence while membership and activity stay fresh (§7.11.4). **Each side renews under its mandate only after a fresh presence-signed statement from the other side** (within the last 30 days), so a thief holding keys and the victim's GitHub session, but unable to pass the custodian's presence check, can't ride the peer's mandate. A promised final expiry is never extended silently. A link that expires stops both directions on each side's hosts without the other's help |
+| **Expiry** | 30 days | Renewable with presence, or within a **renewal mandate**: a longer period (for example 6 months) the owner approves up front, inside which the app refreshes the link without presence while membership and activity stay fresh (§7.11.4). **Each side renews under its mandate only after a fresh presence-signed statement from the other side** (within the last 30 days), so a thief holding keys and the victim's GitHub session, but unable to pass the custodian's presence check, can't ride the peer's mandate. A promised final expiry is never extended silently. A link that expires stops both directions on each side's hosts without the other's help **A mandate needs presence somewhere:** if both sides rely on mandates and neither person signs with presence within 30 days, renewal stops at 30 days and fails closed. Each side renews on the **other's** fresh statement, so a mandate keeps a link alive only if **each** person makes one presence-signed statement a month; the app asks for that one tap when it is due. The mandate's value is that the tap needs no review of scope, not that it removes presence |
 
 Consent is **asymmetric and local**: each owner's hosts enforce that owner's statement and nothing
 the other side says. B can expose read to A without A letting any of A's sessions send.
@@ -1692,7 +1760,7 @@ list.
 | **Impersonation** (B's agent claims to be A's owner, or A's own agent) | Display and prefix are built by the receiving host from the link, never from text. The external marker can't be turned off. A's own agents' envelopes verify only under A's roster, and B's only under B's statement, so neither can be mistaken for the other |
 | **Collaborator's machine compromised** | Bounded by B's expose list on A's side, rates, and the link's scope. A's trust in B never exceeds the link |
 | **Compromised relay on either side** | Same as single-account: denial of service and metadata. Plus, at RB, knowledge of the link |
-| **Corporate data** | Organisation policy wins **where it is actually configured or enforced** on the machine (design.md:1338-1343, "Corporate policy (S8)"): links are refused, and the app names that policy. Without one, **the user decides**, on a managed machine as on any other (owner decision, Q51). A personal consent button never overrides an organisation-enforced restriction |
+| **Corporate data** | **No organisation-policy detection exists yet.** design.md:1338-1343 ("Corporate policy (S8)") is a parked question, not a mechanism, and §5.3 notes there is no effective-policy signal. So on a managed machine **the person's consent is the only control** (owner decision, Q51). When S8 produces a detection, a policy actually configured or enforced on the machine will win: links refused, and the policy named. A personal consent button never overrides an organisation-enforced restriction |
 
 ### 7.9 Minimal v1 stub versus the full design
 
@@ -1951,10 +2019,11 @@ SSH-host-key rule.
   * **Nothing is pre-ticked** (Q40), as in §7.4 and #391's "pre-ticks nothing". The person ticks
     **status** (the recommended preset) or **content**, with content's provider-retention
     warning (§7.4), and/or reply. Launch is a separate opt-in.
-  * **Organisation policy** is named only when it is actually configured or enforced on this
-    machine, and then it wins: the link is refused, with the policy named. Without one, the
-    person decides, on a managed machine as on any other (Q51); the app never invents an
-    organisational reason. "External sharing is disabled on this machine" appears only when the
+  * **Organisation policy.** **No detection exists yet** (S8 is still open), so on a managed
+    machine the person decides, as on any other (Q51), and the dialog says so: "Agent Bridge
+    can't check your organisation's policy. Make sure sharing is allowed." When S8 produces a
+    detection, a policy actually configured or enforced will win: the link refused, with the
+    policy named. The app never invents an organisational reason. "External sharing is disabled on this machine" appears only when the
     person turned federation off there. A personal consent button never overrides an
     organisation-enforced restriction.
   * **Read** covers @alex's agents **and @alex in their own app** (§7.12): "@alex and their
@@ -2840,7 +2909,7 @@ In addition to design.md §5.1 (:348-361) and #391 §2.
 | **Message substitution** after approval (a relay, a host, or a resend with new text) | Holds or relays the bytes | Deliver different text, to a different session or instance, or from a different sender: the approval signs `textSha256`, the target instance and the sender principal, and is single-use in the durable replay store (§5.7 G) | Deny service by dropping the approval |
 | **Window abuse** | An open window from one sender to a fixed set of target instances | Open, extend or expand it (only the target owner's presence-signed approval can), grow it automatically (no descendants, no expiry extension, no budget reset), keep it when a new origin appears in a tainted sender (it pauses), widen it to other senders, or outlive either session's instance, a mode change or a revocation | Send up to `gateWindowPerMinute` (2) messages a minute until it ends, each typed under the guard and audited |
 | **Own-account escalation** through `allowAllTargets` | An ask-mode or prompt-injected agent of the owner's | Use it when it is off (the default), from another account, a connector, `homeassistant:`, a chain with a cross-account hop or a tainted sender, or outside its workspace and machine scope (§5.7 O) | When on, run commands without a prompt through a sibling allow-all session in scope. The owner accepts this knowingly |
-| **Taint laundering** (an agent resumes, compacts, transfers or restarts to shed what it read from a collaborator; or a clean session reads a tainted own-account session; or a tainted session launches a fresh one) | An agent that retained external content, and its own-account siblings | Shed the taint by resuming, compacting, transferring or restarting: it survives anything that keeps the context (§5.8). Pass it to a sibling **through the Bridge** untainted: every content-bearing read taints the reader transitively, and a launched session inherits the launcher's taint. Use O while tainted, or from a tainted workspace | Hand content to a sibling **through files**: an instruction file or other file written in the workspace. O is refused in a tainted workspace and O-eligible sessions import no workspace instruction files, but files written outside the workspace, and `gh` or repository reads, stay a disclosed residual (§5.8) |
+| **Taint laundering** (an agent resumes, compacts, transfers or restarts to shed what it read from a collaborator; or a clean session reads a tainted own-account session; or a tainted session launches a fresh one) | An agent that retained external content, and its own-account siblings | Shed the taint by resuming, compacting, transferring or restarting: it survives anything that keeps the context (§5.8). Pass it to a sibling **through the Bridge** untainted: every content-bearing read taints the reader transitively, and a launched session inherits the launcher's taint. Use O while tainted, from a tainted workspace unit, or after an unattributed read (unattributed callers get typed status only, §3.4) | Hand content to a sibling **through files**. Within the workspace unit (every checkout and worktree of the repository on this machine) every resident inherits the taint, and O is refused there; O senders must have workspace instruction files provably off. But files read by path from outside the unit, other sessions' transcript files, a pushed file pulled on another machine, and `gh` or repository reads stay a disclosed residual (§5.8) |
 | **Forwarding a scout's findings** | A scout that read a collaborator's sessions | Pass its output on as clean: forwarding is a gate action, "Approve forwarding this external content", that keeps provenance and taints the receiver (§5.8). Smuggle authority in fields like `approved` or `nextAction`: the template has none | Influence the receiver once the person approves forwarding |
 | **Batch approval abuse** | Many holds approved at once | Add, swap or reorder an item after signing: the batch is immutable, bounded (20) and binds each item's text, sender and target instance (§5.7 G) | Get the person to approve a long batch without reading; every text is shown |
 | **A stale queued message** | An approved hold waiting for idle | Arrive after its absolute expiry, after the person typed into the target, under a revoked link, or into a new instance: all are rechecked at delivery (§5.7 G) | Arrive within its expiry, after the context that justified it moved on a little |
@@ -2855,7 +2924,7 @@ All of 10.1, plus §7.8, and the repository-specific events of §7.11.6. In addi
 
 | Party | Must not be able to | Can (residual) |
 |---|---|---|
-| **A stolen person's device of the peer**, holding the link's `linkKey` | Add a host, change a listed host's keys, or rotate `linkKey`, without this side's person confirming it (§7.3). Renew freshness after the peer removes the device, holding only that device: renewal needs a co-signature by a peer attester off the custodian's machine, which the attesters refuse once the custodian is removed (§7.3, §7.5). Pre-date statements: `issuedAt` more than 120 s ahead is refused. Outlast a tombstone: one signed by `linkKey`, any confirmed peer host or a pinned revoker is honoured at once and permanently, and can arrive without RB (§7.3) | Before the peer removes the device: re-sign statements for already-confirmed hosts, and remove hosts. After removal: at most the remaining 24 h of the last co-signed statement, unless a tombstone arrives first. If the thief also holds an attester's keys, or the whole machine of a `singleMachine` link, **until a tombstone from another peer host or a revoker arrives, or the link expires** (30 days). This is not bounded at 24 h Under a renewal mandate, renewal also needs a fresh presence-signed statement, so the bound is the mandate's final expiry only for a thief who passes the custodian's presence check (§7.3, §7.4) |
+| **A stolen person's device of the peer**, holding the link's `linkKey` | Add a host, change a listed host's keys, or rotate `linkKey`, without this side's person confirming it (§7.3). Renew freshness after the peer removes the device, holding only that device: renewal needs a co-signature by a peer attester off the custodian's machine, which the attesters refuse once the custodian is removed (§7.3, §7.5). Pre-date statements: `issuedAt` more than 120 s ahead is refused. Outlast a tombstone: one signed by `linkKey`, any confirmed peer host or a pinned revoker is honoured at once and permanently, and can arrive without RB (§7.3) | Before the peer removes the device: re-sign statements for already-confirmed hosts, and remove hosts. After removal: at most the remaining 24 h of the last co-signed statement, unless a tombstone arrives first. If the thief also holds an attester's keys, or the whole machine of a `singleMachine` link, **until a tombstone from another peer host or a revoker arrives, or the link expires** (30 days). This is not bounded at 24 h. Under a renewal mandate, renewal also needs a fresh presence-signed statement, so the bound is the mandate's final expiry only for a thief who passes the custodian's presence check (§7.3, §7.4) |
 | **A collaborator's agent targeting an allow-all session** | Reach it unattended: allow-all and unknown sessions are never exposed for replies, and the own-account setting never applies to a link (§5.3, §5.7 O) | Read it, if the owner ticked `allowAllRead` (§5.7 R). Get a message typed into it that the owner approved through the gate, if `expose.gate` is on (§5.7 G) |
 | **Exfiltration through `allowAllRead`**: a collaborator's agent reading allow-all sessions | Read outside the pinned workspaces or past §7.4's projection, or reply through it | Read what those sessions say, including command output and any secret in it. The link dialog says so (§7.11.5) |
 | **Cross-account social engineering at the gate**: a collaborator's agent's message, shown for approval | Appear as the owner's own agent: the prompt carries the external marker and the T2 login (§6.2) | Persuade the owner, as for the same account |
@@ -2910,8 +2979,8 @@ Each slice is one PR, security-reviewed independently before merge.
 | AP5 | Cross-machine: `agent.command` host-to-host, verification §4.7, `inbound.remote`, `outbound`, durable replay via R6, `instance` on `Session`, `agent.outcome`, `session.read` wait | AP4, #391 R3 + R6, hosts in `enforce` | **Yes** |
 | AP6 | Clients: "from *X* on *Y*" in the app and PWA (extending #503/#504), Settings for the policy, the Agent activity view | AP1 (local), AP5 (remote) | n/a |
 | AP7 | Re-enable `inbound.remote` defaults per machine during the owner's cutover (#391 R8) | AP5, R8 | Yes, live |
-| AP8 | **The gate, as the main path** (§5.7 G, §5.3 (B)), and **provenance** (§5.8). It covers:<br>• `inbound.*.gate` (`off`/`quiet`/`push`, default `quiet`), holds with absolute expiry, the bounded queue, `held` and the `gateDenied`/`gateExpired`/`gateCancelled` codes;<br>• the Needs-you `agentMessage` item with its deterministic partial summary and full text;<br>• the presence-signed `gate v1` approval, batches, windows over fixed instance sets with the expansion fold, and G delegation grants;<br>• **gated launches**, with the manifest, source report and fresh worktree;<br>• mute, pause and block without biometrics, and the refusal nudge;<br>• taint tracking, **transitive through every content-bearing read and every launch**, with in-host Home Assistant presses (Q43) recorded as `automation:homeassistant`, workspace taint, `driverFrom.origins`, `taint`, `replyPath`, the badge, and "Start a fresh coordinator";<br>• workflow budgets;<br>• audit of origin, authorizer, grant and outcome.<br>**Exit tests:**<br>• an approval for different text, sender, origins, target or instance is refused, and so is a replayed one;<br>• an approval without presence, or from an agent connection, a connector or the `homeassistant:` path, is refused;<br>• a hold expires at its absolute deadline even when approved late, and the person's input cancels it;<br>• **no hold is ever pushed individually**;<br>• a batch can't change after signing;<br>• a window never grows except by a presence-signed expansion, and pauses on a new origin;<br>• taint survives resume, compaction, transfer and a person's reply, and a tainted sender can't use O;<br>• **external → A → a same-account `session.read` by B → O from B is refused**, and the same through `session.get`, a list and a wait result;<br>• a tainted session's forced-ask or gated launch produces a tainted session, which can't use O;<br>• O is refused to and from a tainted workspace;<br>• a batch with two senders, or mixed tainted and untainted items, is refused;<br>• an external sender's resend returns `held` until the common deadline;<br>• mute, pause or block from an agent, a connector or Home Assistant is refused, and none of them hides the mid-turn configuration-change notice;<br>• a gated launch can't change after approval;<br>• a connector reply into allow-all is refused with no hold;<br>• delivery still runs §5.2's guard | AP1, AP6, #391 person commands with presence (§7.2) and R6. Remote targets also AP5 | Same machine first; remote with AP5 |
-| AP9 | **Own agents into own allow-all sessions** (§5.7 O): `inbound.*.allowAllTargets`, its warning in Settings, workspace scope. **Exit tests:** off by default; refused for another account's, a connector's, a federated or `homeassistant:` principal, for a chain with a cross-account hop, and for a tainted sender; refused outside the workspace scope; `allowAllPerTargetPerMinute`, depth and budget apply; the guard still applies | AP1 and **AP8's taint tracking** (O can't ship before taint, because O's exclusions depend on it). `inbound.remote`: AP5 | Local first; remote with AP5 |
+| AP8 | **The gate, as the main path** (§5.7 G, §5.3 (B)), and **provenance** (§5.8). It covers:<br>• `inbound.*.gate` (`off`/`quiet`/`push`, default `quiet`), holds with absolute expiry, the bounded queue, `held` and the `gateDenied`/`gateExpired`/`gateCancelled` codes;<br>• the Needs-you `agentMessage` item with its deterministic partial summary and full text;<br>• the presence-signed `gate v1` approval, batches, windows over fixed instance sets with the expansion fold, and G delegation grants;<br>• **gated launches**, with the manifest, the **base commit** bound at hold time, the source report over that tree, and a fresh worktree at exactly that commit;<br>• mute, pause and block without biometrics, and the refusal nudge;<br>• taint tracking, **transitive through every content-bearing read and every launch**, with in-host Home Assistant presses (Q43) recorded as `automation:homeassistant`, **workspace-unit taint** merged into every resident, presence-signed clearing, `driverFrom.origins`, `taint`, `replyPath`, the badge, and "Start a fresh coordinator";<br>• the typed, non-tainting `sessions.status` and `session.status` for own sessions, as the MCP default; **unattributed callers (HTTP MCP, the pipe without `agent.hello`, the CLI) limited to typed status**, superseding local-pipe.md's read rows;<br>• workflow budgets;<br>• audit of origin, authorizer, grant and outcome.<br>**Exit tests:**<br>• an approval for different text, sender, origins, target or instance is refused, and so is a replayed one;<br>• an approval without presence, or from an agent connection, a connector or the `homeassistant:` path, is refused;<br>• a hold expires at its absolute deadline even when approved late, and the person's input cancels it;<br>• **no hold is ever pushed individually**;<br>• a batch can't change after signing;<br>• a window never grows except by a presence-signed expansion, and pauses on a new origin;<br>• taint survives resume, compaction, transfer and a person's reply;<br>• **external → A → a same-account `session.read` by B → B is tainted with A's origins**, and the same through `session.get`, a list and a wait result;<br>• **a content read over HTTP MCP, or over the pipe without `agent.hello`, is refused, and typed status is served instead**;<br>• typed status taints nothing;<br>• a tainted session's forced-ask or gated launch produces a tainted session;<br>• **a tainted session in worktree W1 taints the unit**: a clean resident already running in the main checkout W0 inherits its origins, and C reading that resident inherits them too;<br>• clearing a unit needs presence, and is refused while a tainted session runs there;<br>• **a push to the default branch after a gated launch's approval doesn't change what launches**, and a missing base commit refuses it;<br>• a batch containing a gated launch is refused;<br>• a batch with two senders, or mixed tainted and untainted items, is refused;<br>• an external sender's resend returns `held` until the common deadline;<br>• mute, pause or block from an agent, a connector or Home Assistant is refused, and none of them hides the mid-turn configuration-change notice;<br>• a gated launch can't change after approval, and a cross-account gated launch requesting `allowAll` is refused;<br>• a connector reply into allow-all is refused with no hold;<br>• delivery still runs §5.2's guard | AP1, AP6, #391 person commands with presence (§7.2) and R6. Remote targets also AP5 | Same machine first; remote with AP5 |
+| AP9 | **Own agents into own allow-all sessions** (§5.7 O): `inbound.*.allowAllTargets`, its warning in Settings, workspace scope. **Exit tests:**<br>• off by default;<br>• refused for another account's, a connector's, a federated or `homeassistant:` principal, and for a chain with a cross-account hop;<br>• refused for a tainted sender, including taint from a read (**external → A → read by B → O from B refused**), from a launch, and from the workspace unit;<br>• refused to and from a tainted unit, and anywhere under `"any"` while any unit is tainted;<br>• **refused for a sender that loaded workspace instruction files, or whose loading is unknown; allowed for a target that loads them**;<br>• refused outside the workspace scope;<br>• `allowAllPerTargetPerMinute`, depth and budget apply; the guard still applies | AP1 and **AP8's taint tracking** (O can't ship before taint, because O's exclusions depend on it). `inbound.remote`: AP5 | Local first; remote with AP5 |
 | AP10 | **Sandboxed allow-all** (§5.7 S): OS-enforced restriction of the filesystem, credentials, IPC and network egress. **Immediately after AP9 (owner decision, Q50).** It doesn't remove the gate without separately demonstrated boundaries | AP9, a separate design and review | Local |
 | F1-F7 | Federation (§7.10), with repo discovery (§7.11) as F6 and the person view (§7.12) as F7 | AP5, owner approval, separate review. F6 also needs the Cosmos DB directory store (§7.11.10) | Cross-account |
 | C1-C6 | Connector API (§9.7). C1 is the read-only first slice | C1: #534, #407. Production (C5): §8.7 | C5 only |
@@ -2961,7 +3030,8 @@ Each has a recommendation. None is decided by this note.
    person-started conversation, 6 per minute per pair, and launched sessions can't launch by
    default.
 8. **Q8. MCP over HTTP.** **Recommended:** no agent principal over HTTP in v1. stdio only, since
-   HTTP can't be bound to a session by ancestry.
+   HTTP can't be bound to a session by ancestry. HTTP callers get typed status only, never
+   content reads (§3.4).
 9. **Q9. Federation trust establishment and transport.** **Recommended:** F1 links, each scoped
    to one repository and established by repo discovery (F4, §7.11) where it can verify, or by a
    repo-scoped invitation with the 64-bit link code otherwise. Each side records its own
@@ -2980,9 +3050,10 @@ Each has a recommendation. None is decided by this note.
     (§7.4).
 14. **Q14. Audit content.** **Recommended:** metadata and hashes only, 30 days. The text stays in
     the target session's transcript. Keeping full text is an opt-in for debugging.
-15. **Q15. Corporate machines and federation.** **Answered by Q51** (owner decision): organisation
-    policy wins where it is actually configured or enforced (the S8 check, design.md:1338-1343);
-    otherwise the user decides, and a managed machine isn't refused for being managed.
+15. **Q15. Corporate machines and federation.** **Answered by Q51** (owner decision): the user
+    decides, and a managed machine isn't refused for being managed. No organisation-policy
+    detection exists yet; S8 (design.md:1338-1343) is still an open question, not a mechanism.
+    Once it produces one, a policy actually configured or enforced will win.
 16. **Q16. The connector's production trust anchor** (§8.7). (a) The #55 roster, with a new
     `connector` kind approved by a presence-proven person's device, plus a local per-host grant.
     (b) #407's local pins as the production anchor before #55, which needs every person's device
@@ -3084,27 +3155,35 @@ The roster v2 requirements (§8.10), from the sixth independent review of #391:
 
 Decisions the reviews of `f3559996` asked to make explicit:
 
-34. **Q34. Replies into allow-all sessions.** **Decided by the owner (2026-11-03, 19:59 PT),
-    §5.7.** The restriction is on the **target** only; a sender's mode never matters. An
-    unattended reply into an allow-all or unknown-mode session stays refused by default (§5.3).
-    Three opt-ins, each off by default and each keeping §5.2's delivery guard:
-    * **(G) A per-message gate**, same account and cross-account: the reply is held, and the
-      target's owner approves that exact message with presence on their own device, once or for a
-      5-60 minute window per sender and target. Never for connectors in v1.
-    * **(O) Own agents into own allow-all sessions without a gate**, per machine. It is never for
-      another account, a connector, a federated or `homeassistant:` principal, a chain with a
-      cross-account hop, or a tainted sender (§5.8). The recommended scope is the same workspace
-      on the same machine, with the escalation risk shown and accepted.
+34. **Q34. Replies into allow-all sessions.** **Decided by the owner (2026-11-03, 19:59 PT, with
+    the defaults confirmed at 21:12 and 21:14 PT), §5.7.**
+    * The restriction is on the **target** only; a sender's mode never matters.
+    * An **unattended** reply into an allow-all or unknown-mode session needs one of the paths
+      below, each keeping §5.2's delivery guard.
+    * **(G) The per-message gate**, same account and cross-account.
+      * **Own-account G is on by default in `quiet` mode** (owner decision, 21:14 PT): a hold runs
+        nothing without the owner's presence, and is never pushed.
+      * The owner approves each exact message with presence, in a batch, or through a window
+        over a fixed set of target instances.
+      * A new launch that isn't provably forced-ask is held as a **gated launch** rather than
+        refused.
+      * Cross-account G is opt-in per link. Never for connectors in v1.
+    * **(O) Own agents into own allow-all sessions without a gate**: per machine, off by default.
+      * It is never for another account, a connector, a federated or `homeassistant:` principal,
+        a chain with a cross-account hop, or a **tainted** sender, including taint from a read,
+        a launch or the **workspace unit** (§5.8).
+      * Its sender must have been launched with **workspace instruction files provably off**.
+        So in a repository with an `AGENTS.md`, the owner's included, only a host-launched
+        coordinator with those files switched off can send through O.
+      * The recommended scope is the same workspace on the same machine, with the escalation risk
+        shown and accepted.
+      * **O is therefore a specialised, clean-workspace mode. G and its windows are the general
+        path** (§5.8).
     * **(R) Read-only cross-account access** to allow-all sessions in a link's pinned workspaces,
-      per link, with the content-exposure warning. Replies still need (G).
-
-    **Sandboxed allow-all** (S, §5.7) is now recommended immediately after AP9 (Q50). It is not
-    a prerequisite for reads or federation, and doesn't remove the gate without separately
-    demonstrated boundaries.
-    **Revision 11 (the adversarial PM/Security review)** changes two defaults within this
-    decision. Own-account G is **on in `quiet` mode** (a hold runs nothing without presence, and
-    is never pushed), **confirmed by the owner (2026-11-03, 21:14 PT)**. A launch that isn't provably forced-ask is **held as a gated launch** rather
-    than refused. Cross-account G, O and R stay off until opted in.
+      per link, with the content-exposure warning. Replies still need G.
+    * **(S) Sandboxed allow-all**: **decided for immediately after AP9** (AP10, Q50). It is not a
+      prerequisite for reads or federation, and doesn't remove the gate without separately
+      demonstrated boundaries.
 35. **Q35. Replies into working sessions.** **Recommended:** refused as `notIdle`, idle only
     (§5.2), re-checked before Enter. That is a new additive refusal code, since `busy` already
     means an answer or reply is being typed (v1-sessions.md:454).
@@ -3250,10 +3329,11 @@ Decisions the reviews of `f3559996` asked to make explicit:
 51. **Q51. The supported audience, and managed machines.** **Decided by the owner (2026-11-03,
     21:12 PT).**
     * **Adults only**, stated in the terms. No birth dates are collected (§7.11.5).
-    * **On a managed machine, the user decides.** Organisation policy wins only where it is
-      actually configured or enforced on that machine: then links are refused and the app names
-      the policy. Without such a policy, a managed machine is treated like any other, and the
-      absence of policy never refuses a link. A personal consent button never overrides an
+    * **On a managed machine, the user decides.** **No organisation-policy detection exists
+      yet** (S8 is still open, and §5.3 has no effective-policy signal), so the person's consent
+      is the only control, and the absence of a detected policy never refuses a link. When S8
+      produces a detection, a policy actually configured or enforced will win, with links refused
+      and the policy named. A personal consent button never overrides an
       organisation-enforced restriction (§7.8, §7.11.5). Forced-ask is unaffected: managed
       accounts still reach agents through G and O (§5.3).
 52. **Q52. Where typed status gets PR and CI state.** **Decided by the owner (2026-11-03, 21:12
