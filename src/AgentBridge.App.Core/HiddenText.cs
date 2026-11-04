@@ -12,8 +12,9 @@ public static class HiddenText
 {
     // Characters a reader cannot see as they run: format characters (bidi controls, zero-width
     // spaces and joiners), controls other than a newline or a tab (a CR too: a shell runs it as part
-    // of the command), private-use and unassigned code points, unpaired surrogates, and the line and
-    // paragraph separators (pwa/js/needs-you.js HIDDEN).
+    // of the command), private-use and unassigned code points, unpaired surrogates, the line and
+    // paragraph separators, and what draws blank but is part of a shell's word: every space but
+    // U+0020, and U+2800 (pwa/js/hidden-text.js HIDDEN).
     public static bool HasHidden(string text)
     {
         for (var i = 0; i < text.Length;)
@@ -32,12 +33,21 @@ public static class HiddenText
         (>= 0x0590 and <= 0x08FF) or (>= 0xFB1D and <= 0xFDFF) or (>= 0xFE70 and <= 0xFEFF)
         or (>= 0x10800 and <= 0x10FFF) or (>= 0x1E800 and <= 0x1EFFF);
 
-    static bool Hidden(Rune r) => r.Value is 0x2028 or 0x2029 || Ignorable(r.Value) || Rune.GetUnicodeCategory(r) switch
+    static bool Hidden(Rune r) => r.Value is 0x2028 or 0x2029 or Blank || Ignorable(r.Value) || Rune.GetUnicodeCategory(r) switch
     {
         UnicodeCategory.Format or UnicodeCategory.PrivateUse or UnicodeCategory.OtherNotAssigned or UnicodeCategory.Surrogate => true,
         UnicodeCategory.Control => r.Value is not ('\n' or '\t'),
+        // Every space but the space itself: a shell takes U+00A0, U+2000-U+200A, U+202F, U+205F,
+        // U+3000 and U+1680 as part of a word, so `true\u00A0#; curl … | sh` drew as a comment
+        // and bash ran the curl (#546).
+        UnicodeCategory.SpaceSeparator => r.Value != ' ',
         _ => false,
     };
+
+    // A symbol that always draws blank, though a shell takes it as part of a word as the spaces
+    // above (PowerShell ran `Write-Output ok\u2800#; …`'s second command, #546). The Hangul
+    // fillers and U+17B4/U+17B5, which draw blank too, are default-ignorable (Ignorable).
+    const int Blank = 0x2800;
 
     // Every default-ignorable code point, drawn as nothing though it is there: variation selectors
     // (which can make one name look like another), the combining grapheme joiner, Hangul fillers,

@@ -558,7 +558,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   Every surface shows the same safe label (the app's `DelegateLabel`): bidi controls,
   zero-width, format, control and other default-ignorable characters are removed, any
   whitespace (line and paragraph separators too) becomes one space, and the result is cut to
-  60 characters with "…". A middle dot, and the dots drawn like it (U+00B7, U+0387, U+1427,
+  60 characters with "…". The blank-looking characters a code block escapes (§6.4, #546) need no
+  escape here, since a label never runs: the spaces among them become one space, as above, and
+  the check below reads the braille blank U+2800 as a space too. A middle dot, and the dots drawn like it (U+00B7, U+0387, U+1427,
   U+16EB, U+2022, U+2027, U+2219, U+22C5, U+2E31, U+2E33, U+30FB, U+318D, U+A78F, U+FF65,
   U+10101), becomes "-": "·" separates
   a status's facts, and a name with one would add a fact of its own ("Delegate Idle · Read logs
@@ -638,6 +640,14 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   invisible characters, and a bare carriage return, which a shell does not take as a line break)
   is drawn as a visible escape such as `\u2067` (#220, the owner's
   "escape and allow" rule from #253): an agent's isolates must never draw a download as a comment.
+  So is a character that draws blank but that a shell takes as part of a word (#546): every
+  Unicode space but the space itself (U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F, U+3000) and
+  the braille blank U+2800, besides the Hangul fillers and U+17B4/U+17B5, which are
+  default-ignorable. Drawn blank, `true\u00A0#; curl … | sh` read as a comment, and bash ran the
+  `curl`. A tab is drawn as a tab. A look-alike that draws visibly, such as the fullwidth `＃`
+  (U+FF03), is drawn as itself: no list of them is complete, and escaping every one would make
+  Chinese, Japanese and Korean text in code unreadable, so reading them is the person's, as
+  telling `0` from `O` is.
   Right-to-left letters are escaped too (`\u05D0`), since even in a left-to-right line the
   punctuation between two of them joins their run and is drawn reversed: `echo א#;ב;rm -rf ~` would
   read as commented out. This is the owner's trade-off (#253): Hebrew or Arabic in a code block is
@@ -859,7 +869,9 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
 - **An approval reads as it runs** (§6.4, #220): an approval's message is drawn exactly as
   written, fence markers included, in the code face; nothing in it is read as Markdown.
 - **Code notes** (§6.4, #220): "Contains hidden characters" and "Contains right-to-left text",
-  exactly so, beside the block they describe. An approval's card has no Copy.
+  exactly so, beside the block they describe. An approval's card has no Copy. Hidden includes
+  what draws blank but runs as part of a word (U+00A0 and the other spaces but U+0020, U+2800;
+  #546), which the Needs you lane refuses as it refuses a bidi control.
 
 ## 9. Accessibility
 

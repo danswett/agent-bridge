@@ -244,12 +244,45 @@ public sealed class MarkdownTests
         Assert.False(new CodeCopy(Assert.IsType<MdCode>(Assert.Single(MarkdownModel.Approval("Allow shell?\r\n\r\n```\r\ngit status\r\n```"))), _ => true).Hidden);
     }
 
+    // A shell takes these as part of a word, so `true\u00A0#; echo RAN` runs `echo RAN`; drawn
+    // blank, it read as `true #; …`, a comment (#546). One case per added range, and its ends.
+    [Theory]
+    [InlineData("\u00A0")]
+    [InlineData("\u1680")]
+    [InlineData("\u2000")]
+    [InlineData("\u200A")]
+    [InlineData("\u202F")]
+    [InlineData("\u205F")]
+    [InlineData("\u3000")]
+    [InlineData("\u2800")]
+    public void A_blank_looking_character_in_a_command_is_drawn_and_copied_as_an_escape_with_its_note(string blank)
+    {
+        var command = $"true{blank}#; echo RAN";
+        var drawn = $"true\\u{(int)blank[0]:X4}#; echo RAN";
+
+        Assert.Equal(drawn, CopyOf($"```\n{command}\n```"));
+        Assert.Equal($"Codex wants to run:\n\n{drawn}", Codex(command));
+        Assert.True(new CodeCopy(new MdCode(command, null), _ => true).Hidden);
+        Assert.True(HiddenText.HasHidden(command));
+    }
+
+    [Fact]
+    public void A_blank_looking_command_from_the_issue_draws_its_escapes_and_spaces_and_tabs_stay_as_they_are()
+    {
+        Assert.Equal(@"true\u00A0#; echo RAN", CopyOf("```\ntrue\u00A0#; echo RAN\n```"));
+        Assert.Equal(@"ok\u2800#; echo RAN", CopyOf("```\nok\u2800#; echo RAN\n```"));
+        var plain = new CodeCopy(new MdCode("echo a\tb  c", null), _ => true);
+        Assert.Equal("echo a\tb  c", plain.Text);
+        Assert.False(plain.Hidden);
+    }
+
     [Theory]
     // A trailing line of spaces or tabs pasted after the command ends its line and runs it (#429).
     [InlineData("echo safe\n    ", "echo safe")]
     [InlineData("echo safe\n\t\n  \n", "echo safe")]
-    // The last line's own trailing space stays; a no-break space alone on a line goes.
-    [InlineData("echo safe \n\u00a0", "echo safe ")]
+    // The last line's own trailing space stays. A no-break space is part of a shell's word, not
+    // blank: it is drawn as its escape and kept (#546).
+    [InlineData("echo safe \n\u00a0", "echo safe \n\\u00A0")]
     // An all-whitespace block keeps only its first line, which has no line break to run.
     [InlineData("  \n\t\n ", "  ")]
     public void A_block_ending_in_whitespace_only_lines_draws_and_copies_without_them(string code, string drawn)

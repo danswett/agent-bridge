@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { codeText, parseApproval, parseMarkdown, renderMarkdown, revealed, safeHref, textOf, toDom } from '../../js/markdown.js';
-import { hasRightToLeft, notesFor, revealLineSeparators } from '../../js/hidden-text.js';
+import { hasHidden, hasRightToLeft, notesFor, reveal, revealLineSeparators } from '../../js/hidden-text.js';
 
 // Every element and link the parser would put on the page.
 function walk(nodes, out = { tags: [], hrefs: [], text: '' }) {
@@ -310,6 +310,25 @@ test('an escape written as text is drawn as written and is no hidden character',
   assert.equal(blockOf('```\necho \\u000D \\u2067\n```'), 'echo \\u000D \\u2067');
 });
 
+// A shell takes these as part of a word, so `true\u00A0#; echo RAN` runs `echo RAN`; drawn blank,
+// it read as `true #; …`, a comment (#546). One case per added range, and its ends.
+test('a blank-looking character in a command is drawn as its escape, says so, and counts as hidden', () => {
+  for (const blank of ['\u00A0', '\u1680', '\u2000', '\u200A', '\u202F', '\u205F', '\u3000', '\u2800']) {
+    const command = `true${blank}#; echo RAN`;
+    const drawn = `true\\u${blank.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}#; echo RAN`;
+    const what = `U+${blank.codePointAt(0).toString(16)}`;
+    assert.equal(blockOf(`\`\`\`\n${command}\n\`\`\``), drawn, what);
+    assert.deepEqual(notesOfBlock(`\`\`\`\n${command}\n\`\`\``), ['Contains hidden characters'], what);
+    assert.deepEqual(approvalDrawn(`Codex wants to run:\n\n${command}`), [`Codex wants to run:\n\n${drawn}`], what);
+    assert.equal(hasHidden(command), true, what);
+  }
+  assert.equal(blockOf('```\ntrue\u00A0#; echo RAN\n```'), 'true\\u00A0#; echo RAN');
+  assert.equal(blockOf('```\nok\u2800#; echo RAN\n```'), 'ok\\u2800#; echo RAN');
+  // The space and a tab are drawn as themselves.
+  assert.equal(blockOf('```\necho a\tb  c\n```'), 'echo a\tb  c');
+  assert.deepEqual(notesOfBlock('```\necho a\tb  c\n```'), []);
+});
+
 test('a block holding the private-use characters the parser stands separators in with still draws each as itself', () => {
   const held = '\u{F0000}\u{F0001}';
   assert.equal(blockOf(`\`\`\`\na${held}\rb\u2028c\n\`\`\``), 'a\\u{F0000}\\u{F0001}\\u000Db\\u2028c');
@@ -368,9 +387,9 @@ test('a block ending in lines of tabs and spaces drops them all', () => {
   assert.equal(codeText('echo safe\n\t\n  \n'), 'echo safe');
 });
 
-test('a block ending in a no-break space line keeps the last command line\'s own trailing space', () => {
-  assert.equal(codeText('echo safe \n\u00a0'), 'echo safe ');
-  assert.equal(codeText('echo safe\u3000\n\u3000\n'), 'echo safe\u3000');
+test('a block ending in a no-break space line keeps it, drawn as its escape, since a shell takes it as part of a word', () => {
+  assert.equal(codeText('echo safe \n\u00a0'), 'echo safe \n\\u00A0');
+  assert.equal(codeText('echo safe\u3000\n\u3000\n'), 'echo safe\\u3000\n\\u3000');
 });
 
 test('a block of only whitespace lines draws only its first line\'s spaces', () => {
@@ -393,7 +412,7 @@ test('the linear trim draws exactly what the trailing-blank-lines rule did, for 
   const alphabet = ['a', ' ', '\t', '\n', '\u00a0', '\u3000'];
   const all = [''];
   for (let from = 0, n = 0; n < 6; n++) { const to = all.length; for (let i = from; i < to; i++) { for (const c of alphabet) { all.push(all[i] + c); } } from = to; }
-  for (const s of all) { assert.equal(codeText(s), rule(s), JSON.stringify(s)); }
+  for (const s of all) { assert.equal(codeText(s), rule(reveal(s, { rightToLeft: true })), JSON.stringify(s)); }
 });
 // #429: the stand-ins for a bare CR and the separators are chosen in one read of the text.
 test('a message holding 50,000 private-use code points and a carriage return parses in linear time', () => {
