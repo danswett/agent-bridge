@@ -155,6 +155,7 @@ button { font: inherit; color: inherit; }
 /* The lifted card: it follows the pointer outside the list's clip, above rows and headers, below the bar. */
 .slot.lifted, .slot.settling { position: fixed; z-index: 30; }
 .slot.lifted { transition: none; }
+.slot.ending { opacity: 0; transition: opacity 83ms var(--ease); pointer-events: none; }
 .slot.settling { transition: transform var(--settle) var(--ease); }
 .slot.lifted .face {
   transform: scale(var(--lift-scale)); box-shadow: var(--lift-shadow); background: var(--tint);
@@ -299,6 +300,9 @@ body.dragging, body.dragging * { cursor: grabbing !important; -webkit-user-selec
     </fieldset>
     <fieldset><legend>Feel</legend>
       <label><input type="checkbox" id="haptic"> Haptic tick at lift (Android)</label>
+    </fieldset>
+    <fieldset><legend>Simulate</legend>
+      <label><input type="checkbox" id="sim-end"> The held session ends 1.5 s after the lift (reload to bring it back)</label>
     </fieldset>
     <div class="row">
       <button class="btn primary" type="button" id="copy">Copy values</button>
@@ -759,6 +763,38 @@ function lift() {
   const s = items[g.key];
   say(`Picked up ${s.title}, position ${g.origin.i + 1} of ${g.origin.n} in ${groupName(g.origin.gid)}.`);
   g.raf = requestAnimationFrame(tick);
+  if ($('#sim-end').checked) { const k = g.key; g.endTimer = setTimeout(() => endSession(k), 1500); }
+}
+
+// A host ending a session (ui.md §6.1 Cancel). If it is the held card, the move is cancelled: the
+// card fades out where it is and the others close the gap with reorder (instant when reduced).
+function endSession(key) {
+  if (!items[key]) return;
+  if (g && g.phase === 'settling') settleNow();
+  if (g && g.phase === 'pending') abort();
+  const held = !!(g && g.phase === 'lifted' && g.key === key);
+  const li = els.get(key), title = items[key].title;
+  if (held) {
+    cancelAnimationFrame(g.raf); clearTimeout(g.endTimer);
+    try { content.releasePointerCapture(g.id); } catch { /* already released */ }
+    g = null;
+    document.body.classList.remove('dragging');
+    socket.classList.remove('on');
+    hdr.pinned.classList.remove('target'); hdr.sessions.classList.remove('target');
+  } else if (g && g.phase === 'lifted') {
+    // The list's own updates wait until the drop (§4): another session ending is drawn then.
+    (g.deferred ||= []).push(key);
+    return;
+  }
+  order = order.filter((k) => k !== key);
+  delete items[key];
+  els.delete(key);
+  if (selected === key) selected = order[0];
+  li.classList.add('ending');
+  setTimeout(() => li.remove(), 120);
+  syncDom();
+  relayout(false);
+  if (held) say(`${title} ended. Move cancelled.`);
 }
 
 function placeSocket(instant) {
@@ -848,6 +884,7 @@ list.addEventListener('scroll', () => { if (g && g.phase === 'lifted') pick(); }
 function drop(cancel) {
   if (!g || g.phase !== 'lifted') return;
   cancelAnimationFrame(g.raf);
+  clearTimeout(g.endTimer);
   const holdOnly = g.type === 'touch' && !g.armed && !cancel;
   if (cancel || g.outside || holdOnly) { g.candidate = g.origin; }
   // The order is committed here, at release (ui.md §6.1). The settle below is only drawn, so a
@@ -881,6 +918,7 @@ function drop(cancel) {
 }
 
 function finish(cancelled, holdOnly, p, moved) {
+  const deferred = g.deferred || [];
   const li = g.li, key = g.key, cand = g.candidate, origin = g.origin;
   li.style.transition = 'none';
   li.classList.remove('settling');
@@ -895,6 +933,7 @@ function finish(cancelled, holdOnly, p, moved) {
   document.body.classList.remove('dragging');
   relayout(false);
   if (focused && focused !== document.activeElement && document.contains(focused)) focused.focus({ preventScroll: true });
+  for (const k of deferred) endSession(k);
   if (holdOnly) { openMenu(key); return; }
   const at = locate(groupsNow(), key, headersShown);
   if (cancelled || !moved) say(`${cancelled ? 'Cancelled. ' : ''}Back at position ${at.i + 1} of ${at.n}.`);
@@ -1024,6 +1063,7 @@ firstHint();
 // A small hook for the proposal's Playwright checks; not part of the design.
 window.__reorder = {
   cfg, order: () => order.slice(), pinned: () => order.filter((k) => items[k].pinned),
+  end: (key) => endSession(key),
   phase: () => (g ? g.phase : 'idle'), live: () => live.textContent, set: (o) => { Object.assign(cfg, o); applyCfg(); measure(); relayout(true); },
 };
 })();

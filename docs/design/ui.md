@@ -580,8 +580,9 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
     card back where it came from. So does the list recycling the held card's view (a
     virtualized list reusing it mid-drag): it is put back rather than carried on, and announced
     as a cancel. A key or menu move while a card is held puts the held card back first, and
-    then moves. If a host removes the held session, the drag ends and the card fades out where
-    it is (Arriving and leaving).
+    then moves. If the held session ends while it is held (its host removes it), the move is
+    cancelled: the card fades out where it is (Arriving and leaving), and the others close
+    the gap with `reorder`, instantly under reduced motion.
   - **Answers wait:** a lift holds Needs you's Approve once, Deny and Resend from the pointer
     (§5.3, Scroll to a question), through the whole drag, and for 1 s after a drop, a cancel,
     an abandoned drag or a move by key or menu, so a press or release meant for the list
@@ -1318,7 +1319,8 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
     *group*."; while held, when its place changes and at most every 500 ms, "Position *N* of
     *M*." or "Pinned, position *N* of *M*. Drops as pinned."; on drop, "Moved to position *N*
     of *M* in *group*.", "Pinned. Position *N* of *M* in Pinned." or "Unpinned. …"; on
-    cancel, "Cancelled. Back at position *N* of *M*.". Windows raises them with
+    cancel, "Cancelled. Back at position *N* of *M*."; and if the held session ends, "*title*
+    ended. Move cancelled.". Windows raises them with
     `RaiseNotificationEvent` (MostRecent), Apple with `AccessibilityNotification.Announcement`,
     Android and the PWA with a polite live region.
   - VoiceOver and TalkBack users move with the card's actions, Move up, Move down and Pin (or
