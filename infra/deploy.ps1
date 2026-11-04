@@ -44,7 +44,7 @@ param(
     [switch]$BaseOnly,
     # Where production alerts are emailed (modules/monitoring.bicep). Needed once: later runs
     # reuse the address already in the action group. Never committed or written out; -WhatIf
-    # previews with a placeholder, because what-if would print it.
+    # previews only in ways that can't print it (see below).
     [string]$AlertEmail,
     [switch]$WhatIf
 )
@@ -123,16 +123,11 @@ $env:RELAY_OPERATOR = az ad signed-in-user show --query id -o tsv
 
 # Production's monitoring needs an address to send alerts to. A listing, not `show`, so a missing
 # action group is an empty answer rather than an error. The address stays in this process.
-$env:RELAY_ALERT_EMAIL = if ($AlertEmail) { $AlertEmail } else {
-    az monitor action-group list --subscription $Subscription -g $ResourceGroup --query "[?name=='ag-agent-bridge-ops'] | [0].emailReceivers[0].emailAddress" -o tsv
-}
+$storedEmail = az monitor action-group list --subscription $Subscription -g $ResourceGroup --query "[?name=='ag-agent-bridge-ops'] | [0].emailReceivers[0].emailAddress" -o tsv
+$env:RELAY_ALERT_EMAIL = if ($AlertEmail) { $AlertEmail } else { $storedEmail }
 if ($Production -and -not $env:RELAY_ALERT_EMAIL) {
     Write-Host 'monitoring: no alert address yet, so production alerts, the availability test and the budget are skipped; pass -AlertEmail once'
 }
-# what-if prints each resource's predicted properties, and only masks those Azure marks secret: an
-# email receiver's address isn't one. So a preview runs with a placeholder, and shows a change to
-# the address that a real deploy won't make.
-if ($WhatIf -and $env:RELAY_ALERT_EMAIL) { $env:RELAY_ALERT_EMAIL = 'alerts@example.invalid' }
 
 # A budget's start date must fall in the current month when it's created, and can never change
 # afterwards. So it's the existing budget's date, or else the first of this month (UTC).
@@ -140,6 +135,22 @@ $existingStart = try {
     az consumption budget list --subscription $Subscription -g $ResourceGroup --query "[?name=='budget-agent-bridge-relay'] | [0].timePeriod.startDate" -o tsv
 } catch { Write-Host "budget: couldn't list existing budgets ($($_.Exception.Message)); assuming none"; $null }
 $env:RELAY_BUDGET_START = if ($existingStart) { ([datetime]$existingStart).ToUniversalTime().ToString('yyyy-MM-dd') } else { [datetime]::UtcNow.ToString('yyyy-MM-01') }
+
+# what-if prints each resource's predicted properties, and a changed property's old value too, and
+# masks only what Azure marks secret: an email receiver's address isn't. So the address may appear
+# in a preview only where it can't be printed:
+# - nothing exists yet: preview with a placeholder, so only the placeholder is shown;
+# - both exist and the address is unchanged: preview with the stored one, so nothing changes
+#   and what-if lists neither;
+# - anything else (a new address, or one resource missing): leave monitoring out of the preview.
+if ($WhatIf -and $env:RELAY_ALERT_EMAIL) {
+    if (-not $storedEmail -and -not $existingStart) { $env:RELAY_ALERT_EMAIL = 'alerts@example.invalid' }
+    elseif ($storedEmail -and $existingStart -and (-not $AlertEmail -or $AlertEmail -eq $storedEmail)) { $env:RELAY_ALERT_EMAIL = $storedEmail }
+    else {
+        $env:RELAY_ALERT_EMAIL = ''
+        Write-Host 'monitoring: left out of this preview, which would otherwise print the alert address (a new address, or the action group or budget missing); the real run applies it'
+    }
+}
 foreach ($kind in 'staging', 'production') {
     $var = "RELAY_$($kind.ToUpperInvariant())_DEPLOYER"
     if (-not (Get-Item "env:$var" -ErrorAction SilentlyContinue)) {
