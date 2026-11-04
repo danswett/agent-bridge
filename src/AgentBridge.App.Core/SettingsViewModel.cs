@@ -51,6 +51,8 @@ public sealed class SettingsViewModel : Observable
     string agentSetupStatus = "";
     string agentInstallStatus = "";
     bool agentInstallInProgress;
+    bool installRequestPending;
+    HostStatus? installStatusSeen;
 
     public SettingsViewModel(HostConnection host, HostManager manager, IUpdater updater, IAppAtSignIn appAtSignIn, Func<AppPreferences> prefs, Action<AppPreferences> savePrefs, string appVersion, string defaultRelay)
     {
@@ -92,13 +94,14 @@ public sealed class SettingsViewModel : Observable
 
     public IReadOnlyList<AgentReadinessRow> Agents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && Status?.Agents is { } report
         ? [.. report.Agents.Select(a => new AgentReadinessRow(a, CanManageAgents, CanInstallAgents))] : [];
-    public bool CanManageAgents => HostRunning && host.Can(HostOps.AgentSetupCapability) && !Busy
+    public bool CanManageAgents => HostRunning && host.Can(HostOps.AgentSetupCapability) && !Busy && !AgentInstallInProgress
         && Status?.ReadOnly is null && Status?.AgentHaBridge is null;
     public string AgentSetupStatus { get => agentSetupStatus; private set => Set(ref agentSetupStatus, value); }
-    public bool CanInstallAgents => HostRunning && host.Can(HostOps.AgentInstallCapability) && !Busy
+    public bool CanInstallAgents => HostRunning && host.Can(HostOps.AgentInstallCapability) && !Busy && !AgentInstallInProgress
+        && Status?.AgentInstallation?.Blocked != true
         && Status?.ReadOnly is null && Status?.AgentHaBridge is null;
     public string AgentInstallStatus { get => agentInstallStatus; private set => Set(ref agentInstallStatus, value); }
-    public bool AgentInstallInProgress { get => agentInstallInProgress; private set => Set(ref agentInstallInProgress, value); }
+    public bool AgentInstallInProgress => agentInstallInProgress || Status?.AgentInstallation?.InProgress == true;
     public bool CanCheckAgents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && !Busy;
     public string AgentsState => !HostRunning ? "Connect to this machine's host to check its agents."
         : !host.Can(HostOps.AgentReadinessCapability) ? "This host does not report agent readiness. Update the app and restart the host."
@@ -407,6 +410,12 @@ public sealed class SettingsViewModel : Observable
 
     public void Refresh()
     {
+        if (!installRequestPending && HostRunning && Status is { } status && !ReferenceEquals(status, installStatusSeen))
+        {
+            installStatusSeen = status;
+            agentInstallInProgress = status.AgentInstallation?.InProgress == true;
+            if (status.AgentInstallation is { } installation) { AgentInstallStatus = installation.Detail; }
+        }
         if (!nameEdited) { machineName = Status?.Settings.Name ?? Status?.Machine.Name ?? ""; }
         if (Volatile.Read(ref pendingEdits) == 0) { trustWanted = null; }
         CaughtUp();
@@ -487,7 +496,10 @@ public sealed class SettingsViewModel : Observable
             throw new InvalidOperationException($"CLI installation is unavailable: {Status.ReadOnly ?? Status.AgentHaBridge}");
         }
         AgentInstallStatus = "Installing the CLI and required runtimes with Windows Package Manager...";
-        AgentInstallInProgress = true;
+        agentInstallInProgress = true;
+        installRequestPending = true;
+        installStatusSeen = Status;
+        RaiseAll();
         AgentInstallResult result;
         var reported = false;
         try
@@ -499,8 +511,10 @@ public sealed class SettingsViewModel : Observable
         }
         finally
         {
-            AgentInstallInProgress = false;
-            if (!reported) { AgentInstallStatus = "The installation result is unavailable. It may still be running; check agents again before retrying."; }
+            installRequestPending = false;
+            agentInstallInProgress = !reported;
+            installStatusSeen = Status;
+            if (!reported) { AgentInstallStatus = "The installation result is unavailable. It may still be running; reconnect to recover progress and cancellation before retrying."; }
         }
         if (host.Can(HostOps.AgentReadinessCapability))
         {

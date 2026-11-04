@@ -132,6 +132,58 @@ public sealed class AgentInstallTests : IDisposable
     }
 
     [Fact]
+    public async Task Disposal_closes_admission_and_waits_for_confirmed_installer_cleanup()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        commands.Run = async (_, _, ct) =>
+        {
+            entered.SetResult();
+            using var registration = ct.Register(() => cancelled.TrySetResult());
+            await stopped.Task;
+            ct.ThrowIfCancellationRequested();
+            return new(true, false, 0, "");
+        };
+        await using var service = Service();
+        var states = new List<bool>();
+        service.Changed += () => states.Add(service.Snapshot!.InProgress);
+        var pending = service.InstallAsync(new("claude", true));
+        Task closing = Task.CompletedTask;
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            closing = service.DisposeAsync().AsTask();
+            await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(closing.IsCompleted);
+            Assert.True(service.Snapshot!.InProgress);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.InstallAsync(new("copilot", true)));
+        }
+        finally { stopped.TrySetResult(); }
+        Assert.False((await pending).Completed);
+        await closing.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(new[] { true, false }, states);
+        Assert.False(service.Snapshot!.InProgress);
+        Assert.Contains("cancelled", service.Snapshot.Detail);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.InstallAsync(new("codex", true)));
+    }
+
+    [Fact]
+    public async Task Unconfirmed_cleanup_is_reported_and_blocks_another_installer()
+    {
+        commands.Run = (_, _, _) => throw new CommandCleanupException(new IOException("fixture cleanup failure"));
+        await using var service = Service();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.InstallAsync(new("claude", true)));
+        Assert.Contains("cleanup could not be confirmed", error.Message);
+        Assert.True(service.Snapshot!.Blocked);
+        Assert.False(service.Snapshot.InProgress);
+        Assert.Equal(error.Message, service.Snapshot.Detail);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.InstallAsync(new("copilot", true)));
+        Assert.Equal(1, commands.Calls);
+    }
+
+    [Fact]
     public async Task Read_only_or_ownership_refusal_is_rechecked_before_starting_the_installer()
     {
         var checks = 0;

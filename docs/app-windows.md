@@ -48,8 +48,14 @@ runtimes can request Windows administrator approval. No existing CLI is upgraded
 no package manager is silently bootstrapped, and no credentials, hooks, folder trust or
 permission bypasses are configured. Agency remains organization-managed.
 Missing App Installer or an explicitly configured executable gets actionable feedback.
-Progress and cancellation remain visible until the installer returns; cancellation
-cannot promise rollback of external installers. The host refreshes executable discovery
+Progress belongs to the host and is recovered by new Settings windows and after reconnect.
+A lost reply leaves cancellation visible instead of implying the installer stopped.
+The host contains WinGet in a process job, confirms cleanup before another install, and
+cancels and awaits active installation cleanup before shutdown or replacement. Unconfirmed
+cleanup blocks further installs in that host and requires checking Windows installation
+activity before restarting. Cancellation cannot promise rollback of external installers,
+and Windows deployment services outside the job may already have changed the machine.
+The host refreshes executable discovery
 before reporting installation and Settings rechecks readiness even after incomplete work.
 This is not yet a complete first-run wizard or a clean-machine qualification.
 

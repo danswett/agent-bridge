@@ -129,6 +129,7 @@ public sealed record HostStatus
     public DevBoxStatus? DevBox { get; init; }
     // Read-only setup evidence; absent on older hosts and until the first scan completes.
     public AgentReadinessReport? Agents { get; init; }
+    public AgentInstallProgress? AgentInstallation { get; init; }
 }
 
 // host.signIn: start GitHub's device flow through this relay (or the one the profile used).
@@ -153,3 +154,4 @@ public sealed record AgentSetupResult(bool Completed, string Detail, bool Restar
 
 public sealed record AgentInstallRequest(string Agent, bool AcceptAgreements = false);
 public sealed record AgentInstallResult(bool Completed, string Detail, string? Executable = null);
+public sealed record AgentInstallProgress(string Agent, bool InProgress, string Detail, bool Blocked = false);

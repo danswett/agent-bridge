@@ -83,6 +83,7 @@ public sealed class HostControl
         if (options.Updates is { } updates) { updates.AsksChanged += Changed; }
         if (options.Agents is { } agents) { agents.Changed += Changed; }
         if (options.AgentSetup is { } setup) { setup.Changed += Changed; }
+        if (options.AgentInstall is { } install) { install.Changed += Changed; }
         relay = options.LocalOnly ? new RelayStatus(RelayState.Off, Detail: "this host serves this machine's apps only (--local-only)")
             : options.Account() is null ? new RelayStatus(RelayState.SignedOut, options.Relay()?.ToString())
             : new RelayStatus(RelayState.Connecting, options.Relay()?.ToString());
@@ -143,6 +144,7 @@ public sealed class HostControl
             ReadOnly = fresh && options.ReadOnlyNow is { } afresh ? afresh() : options.ReadOnly(),
             DevBox = options.DevBox(),
             Agents = options.Agents?.Snapshot,
+            AgentInstallation = options.AgentInstall?.Snapshot,
         };
     }
 

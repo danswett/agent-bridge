@@ -501,8 +501,8 @@ async Task<int> ServeAsync(HostHandover handover)
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge"),
         ServeReadOnly, agentLocator, new BatchFileRunner(new CommandRunner(codexEnvironment), codexEnvironment)) : null;
     var agentSetup = standaloneHooks is null ? null : new AgentSetupService(standaloneHooks, ServeReadOnly, stop.Token);
-    var agentInstall = standaloneHooks is null ? null : new AgentInstallService(identity.Folder,
-        agentLocator, agentLocator.Refresh, new CommandRunner(),
+    await using var agentInstall = standaloneHooks is null ? null : new AgentInstallService(identity.Folder,
+        agentLocator, agentLocator.Refresh, new VersionCommandRunner(),
         () =>
         {
             var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "winget.exe");

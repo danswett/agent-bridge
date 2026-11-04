@@ -66,7 +66,7 @@
                 <Button Content="Check agents again" AutomationProperties.AutomationId="CheckAgents" Click="OnCheckAgents" IsEnabled="{x:Bind ViewModel.CanCheckAgents, Mode=OneWay}" />
                 <TextBlock Text="{x:Bind ViewModel.AgentSetupStatus, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" AutomationProperties.AutomationId="AgentSetupStatus" />
                 <TextBlock Text="{x:Bind ViewModel.AgentInstallStatus, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" AutomationProperties.AutomationId="AgentInstallStatus" />
-                <Button Content="Cancel CLI installation" Click="OnCancelAgentInstall" Visibility="{x:Bind local:Ui.Show(ViewModel.AgentInstallInProgress), Mode=OneWay}" AutomationProperties.AutomationId="CancelAgentInstall" />
+                <Button Content="Cancel CLI installation" Click="OnCancelAgentInstall" Visibility="{x:Bind local:Ui.Show(ViewModel.AgentInstallInProgress), Mode=OneWay}" IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}" AutomationProperties.AutomationId="CancelAgentInstall" />
                 <ItemsControl ItemsSource="{x:Bind ViewModel.Agents, Mode=OneWay}" AutomationProperties.AutomationId="AgentReadiness">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="core:AgentReadinessRow">
