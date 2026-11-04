@@ -141,6 +141,13 @@ static class MergeRule
         new("error", Truncate(Printable($"Couldn't read #{pr.Number} on {Short(pr.HeadSha)}: {message}")), [message], []);
 
     /// <summary>
+    /// What to post instead of success when the open list stopped partway: a held pull request on
+    /// the same head could be among those unread.
+    /// </summary>
+    public static MergeVerdict ListCut(string sha, string message) =>
+        new("error", Truncate(Printable($"Couldn't read every open pull request, so one on {Short(sha)} may be unread: {message}")), [message], []);
+
+    /// <summary>
     /// The verdict on one pull request, or null when the rule doesn't apply (closed, or into
     /// another branch). Failure is anything a person must act on; pending is what's on its way
     /// (Copilot's review, CodeQL). Every missing piece is named, failures first.

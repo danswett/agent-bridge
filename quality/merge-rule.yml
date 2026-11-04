@@ -118,6 +118,8 @@ sensitive_paths:
   - pwa/js/needs-you.js
   - pwa/js/ui/question-view.js
   - pwa/js/ui/needs-you-view.js
+  # Which host and session an answer goes to, and the guard against a stray tap approving.
+  - pwa/js/ui/session-card.js
   - src/**hiddentext**
   - src/**markdown**
   - src/**needsyou**

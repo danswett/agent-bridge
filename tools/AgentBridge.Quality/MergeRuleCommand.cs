@@ -178,11 +178,12 @@ static class MergeRuleCommand
         // a head: so every mode judges all open pull requests on the head it's about, and posts the
         // worst of their verdicts. A held or unreviewed one then can't ride on another's success.
         List<PullRequestFacts> prs;
+        string? listCut = null;
         if (options.TryGetValue("pr", out var number))
         {
             if (!int.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out var n))
                 throw new ArgumentException($"--pr {number} is not a pull request number.");
-            var one = FetchOne(session, n, checks: false);
+            var one = FetchOne(session, n, checks: false, history: true);
             if (MergeRule.Evaluate(config, one) is null)
             {
                 output.WriteLine($"#{one.Number}: not judged ({one.State.ToLowerInvariant()}, into {one.BaseRef}).");
@@ -190,18 +191,17 @@ static class MergeRuleCommand
             }
             else
             {
-                var (open, error) = FetchOpen(session);
+                (var open, listCut) = FetchOpen(session);
                 prs = open.Where(p => SameSha(p.HeadSha, one.HeadSha)).ToList();
                 if (prs.Count == 0)
                     prs = [one];
-                problems += Report(output, error);
+                problems += Report(output, listCut);
             }
         }
         else
         {
-            var (open, error) = FetchOpen(session);
-            prs = open;
-            problems += Report(output, error);
+            (prs, listCut) = FetchOpen(session);
+            problems += Report(output, listCut);
             if (options.TryGetValue("sha", out var sha))
                 prs = prs.Where(p => SameSha(p.HeadSha, sha)).ToList();
         }
@@ -226,7 +226,11 @@ static class MergeRuleCommand
                     continue;
                 combined = MergeRule.Combine(judged);
             }
-            if (judged.Any(j => j.Verdict.State == "error"))
+            // With the open list cut short, a held pull request on the same head may be among the
+            // unread, so no head gets success from this run.
+            if (listCut is not null && combined.State == "success")
+                combined = MergeRule.ListCut(head.Key, listCut);
+            if (combined.State == "error" || judged.Any(j => j.Verdict.State == "error"))
                 problems++;
             var unchanged = Unchanged(config, judged[0].Pr, combined);
             var action = !post ? "dry run, not posted" : unchanged ? "unchanged, not posted again" : "posted";
@@ -283,7 +287,7 @@ static class MergeRuleCommand
     {
         if (error is null)
             return 0;
-        output.WriteLine($"The open list stopped partway ({error}); judged only the pull requests read before it.");
+        output.WriteLine($"The open list stopped partway ({error}); judged only the pull requests read before it, none to success.");
         return 1;
     }
 
@@ -293,14 +297,15 @@ static class MergeRuleCommand
 
     /// <summary>
     /// The verdict on a pull request read from the open list: its light facts' failure, if they
-    /// have one (a hold takes effect without anything more to read), otherwise the verdict on a
-    /// full read. A full read that fails gives error, never the light read's pending, so the head
+    /// have one and its receipts are all in view (a hold takes effect without anything more to
+    /// read), otherwise the verdict on a full read. A full read that fails gives the light
+    /// failure if there is one, otherwise error, never the light read's pending, so the head
     /// doesn't keep an earlier success.
     /// </summary>
     static (PullRequestFacts Pr, MergeVerdict? Verdict) Assess(Session session, PullRequestFacts light)
     {
         var verdict = MergeRule.Evaluate(session.Config, light);
-        if (verdict is null or { State: "failure" })
+        if (verdict is null || (verdict.State == "failure" && !ReceiptsHidden(session.Config, light)))
             return (light, verdict);
         try
         {
@@ -309,7 +314,7 @@ static class MergeRuleCommand
         }
         catch (Exception e) when (IsReadFailure(e))
         {
-            return (light, MergeRule.ReadError(light, e.Message));
+            return (light, verdict.State == "failure" ? verdict : MergeRule.ReadError(light, e.Message));
         }
     }
 
@@ -318,7 +323,7 @@ static class MergeRuleCommand
         PullRequestFacts light;
         try
         {
-            light = FetchOne(session, known.Number, checks: false);
+            light = FetchOne(session, known.Number, checks: false, history: false);
         }
         catch (Exception e) when (IsReadFailure(e))
         {
@@ -342,14 +347,15 @@ static class MergeRuleCommand
         && current.Creator == config.StatusPoster
         && current.State == verdict.State && current.Description == verdict.Description;
 
-    static PullRequestFacts FetchOne(Session session, int number, bool checks)
+    static PullRequestFacts FetchOne(Session session, int number, bool checks, bool history)
     {
         var (owner, name) = Split(session.Slug);
         using var doc = session.GraphQL(OneQuery(checks), new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["number"] = number });
         var node = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest");
         if (node.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException($"{session.Slug} has no pull request #{number}.");
-        return WithReceiptHistory(session, ParseFacts(node, session.Config));
+        var facts = ParseFacts(node, session.Config);
+        return history ? WithReceiptHistory(session, facts) : facts;
     }
 
     /// <summary>
@@ -359,7 +365,7 @@ static class MergeRuleCommand
     /// </summary>
     static PullRequestFacts FetchFull(Session session, int number)
     {
-        var facts = FetchOne(session, number, checks: true);
+        var facts = FetchOne(session, number, checks: true, history: true);
         var (files, complete) = FilesOf(session, facts.HeadSha);
         return facts with { Files = files, FilesComplete = complete };
     }
@@ -390,8 +396,9 @@ static class MergeRuleCommand
     }
 
     /// <summary>
-    /// The open list, light. A page that fails after others were read gives what was read and
-    /// the error, so the pull requests already known are still judged.
+    /// The open list, light: no checks, files or receipt history (Assess reads them, where a read
+    /// that fails becomes the head's error). A page that fails after others were read gives what
+    /// was read and the error, so the pull requests already known are still judged.
     /// </summary>
     static (List<PullRequestFacts> Prs, string? Error) FetchOpen(Session session)
     {
@@ -408,7 +415,7 @@ static class MergeRuleCommand
                 using var doc = session.GraphQL(OpenQuery, variables);
                 var page = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequests");
                 foreach (var node in page.GetProperty("nodes").EnumerateArray())
-                    prs.Add(WithReceiptHistory(session, ParseFacts(node, session.Config)));
+                    prs.Add(ParseFacts(node, session.Config));
                 var info = page.GetProperty("pageInfo");
                 cursor = info.GetProperty("hasNextPage").GetBoolean() ? info.GetProperty("endCursor").GetString() : null;
             }
@@ -428,9 +435,9 @@ static class MergeRuleCommand
     /// </summary>
     static PullRequestFacts WithReceiptHistory(Session session, PullRequestFacts facts)
     {
-        var receipts = session.Config.IndependentReview;
-        if (!facts.Statuses.Any(s => s.Context == receipts.Context && (s.Creator is null || !receipts.Posters.Contains(s.Creator, StringComparer.OrdinalIgnoreCase))))
+        if (!ReceiptsHidden(session.Config, facts))
             return facts;
+        var receipts = session.Config.IndependentReview;
         var history = RestPages(session, $"repos/{session.Slug}/commits/{facts.HeadSha}/statuses")
             .Where(s => s.GetProperty("context").GetString() == receipts.Context)
             .Select(s => new StatusFact(
@@ -442,6 +449,11 @@ static class MergeRuleCommand
             .ToList();
         return facts with { Statuses = facts.Statuses.Where(s => s.Context != receipts.Context).Concat(history).ToList() };
     }
+
+    /// <summary>Whether the newest receipt GraphQL shows isn't a listed poster's, so it may hide one that is.</summary>
+    static bool ReceiptsHidden(MergeRuleConfig config, PullRequestFacts facts) =>
+        facts.Statuses.Any(s => s.Context == config.IndependentReview.Context
+            && (s.Creator is null || !config.IndependentReview.Posters.Contains(s.Creator, StringComparer.OrdinalIgnoreCase)));
 
     static IEnumerable<JsonElement> RestPages(Session session, string path)
     {

@@ -354,6 +354,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      (or `--all`) prints the verdict and posts nothing; only `--post` posts.
    - A head whose facts can't be read gets `error`, which fails the required check like failure,
      so an earlier success doesn't stand; a hold label, read with the open list, still fails it.
+     When the open list itself stops partway, no head gets success from that run: a held pull
+     request on it could be among the unread.
    - Budget: `GITHUB_TOKEN` has 1,000 GraphQL points an hour for the repository. A run costs
      about one point per page of the open list plus one per pull request that isn't already
      failing (15 points and 13 REST calls with 25 open on 2026-11-03), and prints what it spent.

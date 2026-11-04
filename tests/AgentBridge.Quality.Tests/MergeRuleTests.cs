@@ -338,6 +338,46 @@ public class MergeRuleTests
         }
     }
 
+    [Fact]
+    public void With_the_open_list_cut_short_no_head_gets_success_since_a_held_pull_request_on_it_may_be_unread()
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head), listFailsAfterFirstPage: true);
+        var config = WriteConfig();
+        try
+        {
+            var all = MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github);
+            var one = MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github);
+
+            Assert.Equal((1, 1), (all, one));
+            Assert.Equal(2, github.Posted.Count);
+            Assert.All(github.Posted, p => Assert.StartsWith($"{Head} error merge-rule Couldn't read every open pull request, so one on abcdef0 may be unread: gh: HTTP 502", p, StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Fact]
+    public void A_receipt_history_that_cant_be_read_drops_no_pull_request_and_a_hold_still_fails_it()
+    {
+        // #7's newest receipt isn't a listed poster's, so its history is needed, and that read fails.
+        var held = GraphQLPullRequest(Older, labels: ["hold"], number: 7, receiptCreator: "github-actions[bot]");
+        var green = GraphQLPullRequest(Head);
+        var github = new FakeGitHub(green, listed: [held, green], byNumber: new Dictionary<int, string> { [7] = held, [42] = green }, failStatuses: true);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github);
+
+            Assert.Equal([$"{Older} failure merge-rule Held by the label 'hold' ", $"{Head} success merge-rule Copilot reviewed abcdef0; every check passed; independent review on file "], github.Posted);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
     // The live list: what rule 5 means by a sensitive change, against paths that aren't one.
     [Theory]
     [InlineData("src/AgentBridge.Host/CallerGuard.cs", true)]
@@ -378,6 +418,7 @@ public class MergeRuleTests
     [InlineData("src/AgentBridge.App/QuestionView.cs", true)]
     [InlineData("src/AgentBridge.App.Core/HiddenText.cs", true)]
     [InlineData("src/AgentBridge.App.Core/MainViewModel.NeedsYou.cs", true)]
+    [InlineData("pwa/js/ui/session-card.js", true)]
     [InlineData("pwa/js/ui/glyph.js", false)]
     [InlineData("apple/Tests/AgentBridgeCoreTests/ProtocolTests.swift", false)]
     public void The_repositorys_sensitive_paths_take_in_authorization_delivery_and_the_build_but_not_docs_or_design(string path, bool sensitive)
@@ -621,7 +662,7 @@ public class MergeRuleTests
     /// <paramref name="listed"/> (or <paramref name="one"/>) the open list's, and
     /// <paramref name="statuses"/> REST's status history.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -633,17 +674,22 @@ public class MergeRuleTests
                 throw new InvalidOperationException("gh: HTTP 502");
             if (variables.TryGetValue("number", out var number))
                 return JsonDocument.Parse(byNumber?.GetValueOrDefault((int)number) ?? one);
+            if (listFailsAfterFirstPage && variables.ContainsKey("cursor"))
+                throw new InvalidOperationException("gh: HTTP 502");
             var nodes = (listed ?? [one]).Select(json =>
             {
                 using var pr = JsonDocument.Parse(json);
                 return pr.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest").GetRawText();
             });
-            return JsonDocument.Parse("""{"data": {"repository": {"pullRequests": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": [""" + string.Join(",", nodes) + "]}}}}");
+            var pageInfo = listFailsAfterFirstPage ? """{"hasNextPage": true, "endCursor": "c1"}""" : """{"hasNextPage": false, "endCursor": null}""";
+            return JsonDocument.Parse("""{"data": {"repository": {"pullRequests": {"pageInfo": """ + pageInfo + """, "nodes": [""" + string.Join(",", nodes) + "]}}}}");
         }
 
         public JsonDocument Rest(string path)
         {
             RestPaths.Add(path);
+            if (failStatuses && path.Contains("/statuses", StringComparison.Ordinal))
+                throw new InvalidOperationException("gh: HTTP 502");
             return JsonDocument.Parse(path.Contains("/statuses", StringComparison.Ordinal)
                 ? statuses
                 : files ?? """{"files": [{"filename": "docs/status.md"}, {"filename": "docs/new.md", "previous_filename": "docs/old.md"}]}""");
