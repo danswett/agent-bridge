@@ -244,6 +244,30 @@ test.describe('progress', () => {
     expect(timing.client.map(([mark]) => mark)).toEqual(['sent', 'received', 'typed', 'result']);
   });
 
+  test('Send shows its own ring from the tap while the receipt is quiet, and the receipt keeps one height from Send to the outcome', async ({ page }) => {
+    await openDemo(page);
+    const reply = box(page, IDLE);
+    const status = reply.locator('.reply-status');
+    const send = reply.getByRole('button', { name: 'Send' });
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('carry on');
+    await hold(page);
+    // Inside the first 400 ms: nothing on the line, which already has its room, and Send's ring.
+    const early = await reply.evaluate(async (form) => {
+      const button = form.querySelector('.button.send');
+      button.click();
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const line = form.querySelector('.reply-status');
+      return { ring: getComputedStyle(button, '::after').content !== 'none', words: line.textContent, height: line.getBoundingClientRect().height };
+    });
+    expect(early).toMatchObject({ ring: true, words: '' });
+    expect(early.height).toBeGreaterThan(0);
+    await expect(status).toHaveText('Sending…');
+    await release(page);
+    await expect(status).toHaveText('Delivered');
+    expect((await status.boundingBox()).height).toBeCloseTo(early.height, 0);
+    expect(await send.evaluate((b) => getComputedStyle(b, '::after').content)).toBe('none');
+  });
+
   test('a reply typed into a working session shows Up next: the agent takes it after its current step', async ({ page }) => {
     await openDemo(page);
     await page.evaluate(({ id, t }) => {

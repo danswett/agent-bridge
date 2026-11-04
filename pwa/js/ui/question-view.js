@@ -9,7 +9,7 @@
 // the same request, until there is an outcome.
 import { h } from './dom.js';
 import { renderMarkdown } from '../markdown.js';
-import { ReceiptClock, answeredValue, describeInFlight, drawReceipt, receiptLive } from './receipt.js';
+import { ReceiptClock, answeredValue, describeInFlight, drawReceipt, drawn, receiptLive } from './receipt.js';
 import {
   Limits, draftText, initialState, isRecommended, optionTone, orderOptions, prepareAnswer,
   tapToAnswer, utf8Bytes,
@@ -233,6 +233,7 @@ export class QuestionPanel {
       describe: (entry, { stalled }) => describeAnswer(entry, this.machineName, { question: this.q, stalled }),
       draw: (d) => drawReceipt(this.els.status, 'answer-status', d),
       say: (text) => { this.els.live.textContent = text; },
+      heard: () => drawn(this.els.live),
     });
     const { service, hostId, sessionId } = answering;
     this.#unwatch = service.watch(hostId, sessionId, q.id, (e) => this.#show(e));

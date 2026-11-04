@@ -7,7 +7,7 @@ import { glyph } from './glyph.js';
 import { needsYou, AppBadge } from '../needs-you.js';
 import { tapState, prepareAnswer } from '../answers.js';
 import { BUSY_PAUSE_MS, answerControls, answerState, describeAnswer } from './question-view.js';
-import { receiptText } from './receipt.js';
+import { ReceiptClock, drawn, receiptLive, receiptText } from './receipt.js';
 import { duration, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
 
@@ -100,8 +100,11 @@ export class NeedsYouLane {
       els.deny = h('button', { type: 'button', class: 'button secondary needs-deny', dataset: { value: e.decisions.deny.value }, 'aria-pressed': 'false', onclick: () => this.#decide(view, 'deny') }, 'Deny');
       // The machine failed the op (an error, not an outcome): the card's Try again, the same request.
       els.resend = h('button', { type: 'button', class: 'button secondary needs-resend', hidden: true, onclick: () => { const x = view.entry; view.service?.resend(x.hostId, x.sessionId, x.questionId); } }, 'Try again');
-      els.status = h('p', { class: 'needs-status', role: 'status', 'aria-live': 'polite', hidden: true });
-      parts.push(h('div', { class: 'needs-actions' }, els.approve, els.deny, els.resend), els.status);
+      // The receipt's words, and apart from them the line a screen reader hears (receipt.js): its
+      // announcements are the request's, so an answer the card shows too is said once, not twice.
+      els.status = h('p', { class: 'needs-status', hidden: true });
+      els.live = receiptLive();
+      parts.push(h('div', { class: 'needs-actions' }, els.approve, els.deny, els.resend), els.status, els.live);
     } else if (e.mode === 'atMachine') {
       parts.push(h('p', { class: 'needs-at-machine' }, 'Answer at the machine'));
     }
@@ -110,6 +113,19 @@ export class NeedsYouLane {
       const ctx = this.answering(e.hostId);
       if (ctx?.service) {
         view.service = ctx.service;
+        // The lane's line keeps the receipt's quiet window, dwell and stalls, as the card's does.
+        view.receipt = new ReceiptClock({
+          describe: (entry, { stalled }) => describeAnswer(entry, this.machine(view.entry.hostId).name, { question: view.entry.question, stalled }),
+          draw: (d) => {
+            els.status.textContent = receiptText(d);
+            els.status.className = `needs-status${d?.tone ? ` ${d.tone}` : ''}`;
+            // From the tap, its line is there (empty for the quiet window), so the entry grows
+            // once, as the answer goes, not as the first words come.
+            els.status.hidden = !d;
+          },
+          say: (text) => { els.live.textContent = text; },
+          heard: () => drawn(els.live),
+        });
         view.unwatch = ctx.service.watch(e.hostId, e.sessionId, e.questionId, (entry) => this.#show(view, entry));
         this.#show(view, ctx.service.get(e.hostId, e.sessionId, e.questionId));
       }
@@ -160,9 +176,11 @@ export class NeedsYouLane {
     if (current && (current.state === 'sending' || current.state === 'waiting')) { return; }
     const { answer, problem } = prepareAnswer(e.question, tapState(e.question, e.decisions[which].value), e.sessionId);
     if (problem) {
-      view.els.status.textContent = `${problem[0].toUpperCase()}${problem.slice(1)}.`;
+      const text = `${problem[0].toUpperCase()}${problem.slice(1)}.`;
+      view.els.status.textContent = text;
       view.els.status.className = 'needs-status bad';
       view.els.status.hidden = false;
+      view.els.live.textContent = text;
       return;
     }
     service.submit({ hostId: e.hostId, sessionId: e.sessionId, questionId: e.questionId, answer });
@@ -171,14 +189,9 @@ export class NeedsYouLane {
   #show(view, entry) {
     const { els } = view;
     clearTimeout(view.pause);
-    const shown = entry ? describeAnswer(entry, this.machine(view.entry.hostId).name, { question: view.entry.question }) : { text: '', tone: '' };
     const { again, pause } = answerControls(entry);
     view.el.dataset.answer = answerState(entry);
-    // The receipt's words, as the card says them (receipt.js); the card's line, beside it, is the
-    // one that keeps the quiet window and the stalls, and the one a screen reader hears.
-    els.status.textContent = receiptText(shown);
-    els.status.className = `needs-status${shown.tone ? ` ${shown.tone}` : ''}`;
-    els.status.hidden = !shown.text;
+    view.receipt.show(entry);
     els.approve.disabled = els.deny.disabled = !again || pause;
     els.resend.hidden = entry?.state !== 'failed';
     if (pause) { view.pause = setTimeout(() => { els.approve.disabled = els.deny.disabled = false; }, BUSY_PAUSE_MS); }
@@ -188,6 +201,7 @@ export class NeedsYouLane {
 
   #drop(view) {
     view.unwatch?.();
+    view.receipt?.destroy();
     clearTimeout(view.pause);
     view.el.remove();
   }
