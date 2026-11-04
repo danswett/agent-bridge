@@ -372,6 +372,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         injector.OnInject = plan => Fixture.Append(events, Now(Prompt(plan.Sends[0].Text)));
         var ch = await OpenAsync();
         var request = Guid.NewGuid().ToString();
+        var before = DateTimeOffset.UtcNow.AddSeconds(-1);
 
         Assert.Equal("delivered", (await ReplyAsync(ch, "timed", request)).Outcome);
         Assert.Equal("delivered", (await ReplyAsync(ch, "timed", request)).Outcome);
@@ -380,7 +381,11 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         await Wait.UntilAsync(() => { lock (logged) { return logged.Any(Timing); } }, "the timing line", Patience);
         await Task.Delay(200);
         var line = Assert.Single(logged, Timing);
-        Assert.Matches($@"^reply {request[..8]} timings \(ms after \d\d:\d\d:\d\d\.\d\d\d\): checked \d+, turn \d+, inject \d+-\d+, typed \d+, recorded \d+, confirmed \d+, settled \d+, sent \d+$", line);
+        var match = Regex.Match(line, $@"^reply {request[..8]} timings \(ms after (?<at>\d{{4}}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d\d\dZ)\): checked \d+, turn \d+, inject \d+-\d+, typed \d+, recorded \d+, confirmed \d+, settled \d+, sent \d+$");
+        Assert.True(match.Success, line);
+        // UTC, not the machine's local time with a Z on it.
+        var at = DateTimeOffset.Parse(match.Groups["at"].Value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal);
+        Assert.InRange(at, before, DateTimeOffset.UtcNow);
     }
 
     [Fact]

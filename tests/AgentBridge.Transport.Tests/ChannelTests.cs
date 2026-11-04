@@ -158,6 +158,34 @@ public class ChannelTests
     }
 
     [Fact]
+    public async Task A_progress_frame_that_comes_after_its_response_reaches_no_listener()
+    {
+        var (relay, host, app) = await PairAsync();
+        await using var _ = relay;
+        host.Hub.Handler = (_, _, _) =>
+        {
+            var served = ServedRequest.Current!;
+            var id = served.Id;
+            served.Progress(new { stage = "received" });
+            // A peer breaking the rule this host keeps: progress after the response, then an event
+            // to say it has been sent.
+            return Task.FromResult<object?>(new ChannelReply(new { done = true }, async c =>
+            {
+                await ((SecureChannel)c).SendJsonAsync(new { re = id, progress = new { stage = "late" } });
+                await c.SendEventAsync("after");
+            }));
+        };
+        var ch = await app.Hub.OpenAsync(host.Id);
+        var heard = new List<string>();
+
+        var response = await ch.RequestAsync("work", new { }, progress: p => { lock (heard) { heard.Add(p.GetProperty("stage").GetString()!); } });
+        var after = await ch.Events.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(response.GetProperty("result").GetProperty("done").GetBoolean());
+        Assert.Equal("after", after.Name);
+        lock (heard) { Assert.Equal(["received"], heard); }
+    }
+    [Fact]
     public async Task Progress_given_once_the_response_is_on_its_way_is_dropped_so_nothing_follows_a_response()
     {
         var frames = new List<string>();

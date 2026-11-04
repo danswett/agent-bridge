@@ -224,11 +224,14 @@ waiting, so a slow or closed channel never holds up the typing.
 The host log's timestamps are to the second, too coarse to say where a reply's second went
 (#597). So every reply, and every answer ([host-answers.md](host-answers.md)), logs one line
 of its stages in ms after the request reached the delivery, progress asked for or not,
-correlated with the outcome line by the request id's first 8 hex digits:
+correlated with the outcome line by the request id's first 8 hex digits. When it reached the
+delivery is given in UTC, ISO 8601 with a `Z`, to the millisecond, as diagnostic timestamps
+are (the owner's rule on #611): it reads the same on every machine and against agents'
+transcripts, which are in UTC too. The log's own prefix stays local time to the second.
 
 ```
 reply 0b7e3c1d to 99999999: delivered
-reply 0b7e3c1d timings (ms after 22:56:28.441): checked 2, turn 3, inject 4-25, typed 25, recorded 1190, confirmed 1361, settled 1361, sent 1362
+reply 0b7e3c1d timings (ms after 2026-11-04T06:56:28.441Z): checked 2, turn 3, inject 4-25, typed 25, recorded 1190, confirmed 1361, settled 1361, sent 1362
 ```
 
 | Stage | When |

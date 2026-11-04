@@ -30,8 +30,11 @@ public sealed class DeliveryWatch(Action<bool>? typed = null, bool sendsResult =
 
 // When each stage of one delivery came, in milliseconds after the request was received, by the
 // delivery's own clock (options.Time), for the result's timings and one log line:
-//   reply 0b7e3c1d timings (ms after 22:56:28.441): checked 2, turn 3, inject 4-25, typed 25, recorded 1190, confirmed 1361, settled 1361, sent 1362
+//   reply 0b7e3c1d timings (ms after 2026-11-04T06:56:28.441Z): checked 2, turn 3, inject 4-25, typed 25, recorded 1190, confirmed 1361, settled 1361, sent 1362
 // The log's own timestamps are to the second, too coarse to say where a reply's second went (#597).
+// The receipt time is UTC, in ISO 8601 with a Z, the owner's rule for diagnostic timestamps (#611):
+// it reads the same on every machine and against agents' transcripts, which are in UTC too, where
+// the log's own zone-less local time does not. Pacific is for what people are shown.
 internal sealed class DeliveryTimeline
 {
     readonly TimeProvider time;
@@ -40,7 +43,6 @@ internal sealed class DeliveryTimeline
     readonly Action<string> log;
     readonly long start;
     readonly DateTimeOffset startUtc;
-    readonly DateTimeOffset startLocal;
     readonly Lock gate = new();
     readonly List<DeliveryWatch> watches = [];
     DeliveryWatch? sender;
@@ -59,7 +61,6 @@ internal sealed class DeliveryTimeline
         // request's own millisecond is 0, not before it.
         var now = time.GetUtcNow();
         startUtc = now.AddTicks(-(now.Ticks % TimeSpan.TicksPerMillisecond));
-        startLocal = time.GetLocalNow();
     }
 
     long Now() => (long)time.GetElapsedTime(start).TotalMilliseconds;
@@ -168,7 +169,7 @@ internal sealed class DeliveryTimeline
             Add("settled", settled);
             Add("sent", sent);
             if (unsent) { parts.Add("not sent"); }
-            line = FormattableString.Invariant($"{kind} {key.ToString()[..8]} timings (ms after {startLocal:HH':'mm':'ss'.'fff}): {string.Join(", ", parts)}");
+            line = FormattableString.Invariant($"{kind} {key.ToString()[..8]} timings (ms after {startUtc.UtcDateTime:yyyy'-'MM'-'dd'T'HH':'mm':'ss'.'fff'Z'}): {string.Join(", ", parts)}");
         }
         log(line);
     }

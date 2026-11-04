@@ -108,7 +108,8 @@ public sealed class LocalChannel : IClientChannel
         finally { sendLock.Release(); }
     }
 
-    async Task SendAsync(byte[] plain, CancellationToken ct)
+    // Internal for tests that send a frame by hand.
+    internal async Task SendAsync(byte[] plain, CancellationToken ct)
     {
         await sendLock.WaitAsync(ct);
         try { await SendLockedAsync(plain, ct); }
@@ -151,7 +152,12 @@ public sealed class LocalChannel : IClientChannel
                 {
                     // Progress is never the response (SecureChannel.Complete).
                     if (message.TryGetProperty("progress", out var progress)) { SecureChannel.Report(listeners, re.GetInt64(), progress); }
-                    else if (pending.TryRemove(re.GetInt64(), out var tcs)) { tcs.TrySetResult((message.Clone(), lastReceivedSeq)); }
+                    else
+                    {
+                        // As SecureChannel.Complete: the listener goes before the call is answered.
+                        listeners.TryRemove(re.GetInt64(), out _);
+                        if (pending.TryRemove(re.GetInt64(), out var tcs)) { tcs.TrySetResult((message.Clone(), lastReceivedSeq)); }
+                    }
                 }
                 else if (message.TryGetProperty("ev", out var ev))
                 {

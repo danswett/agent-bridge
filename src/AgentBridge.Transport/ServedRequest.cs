@@ -22,6 +22,9 @@ public sealed class ServedRequest
 
     public static ServedRequest? Current => current.Value;
 
+    // Tests: the request's id, for a frame sent by hand.
+    internal long Id => id;
+
     internal ServedRequest(long id, Func<object, byte[]> serialize, Func<byte[], Task> send)
     {
         this.id = id;

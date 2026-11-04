@@ -190,6 +190,9 @@ public sealed class SecureChannel : IProtocolChannel
             Report(listeners, re, progress);
             return;
         }
+        // The listener goes before the call is answered: a progress frame after the response is for a
+        // request that has finished, and reaches no one (#611, found in review of #616).
+        listeners.TryRemove(re, out _);
         if (pending.TryRemove(re, out var tcs)) { tcs.TrySetResult((response, lastReceivedSeq)); }
     }
 

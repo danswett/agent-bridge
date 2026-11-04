@@ -66,7 +66,7 @@ The same shapes as a relay channel (v1-sessions.md, Channel framing):
 A progress frame (`re` and `progress`, no `ok`) comes only for a `session.reply` or
 `session.answer` that asked for it with `"progress": true`, always before its response, and
 never completes the request ([v1-sessions.md, Progress](v1-sessions.md#progress)). In C#,
-`CallAsync` and `RequestAsync` take a `progress` listener for them.
+`CallAsync` and `RequestAsync` take a `progress` listener for them. The listener is let go as its response arrives, so a progress frame that comes after the response (from a host that breaks the rule above) reaches nobody, on the pipe and on a relay channel alike.
 
 The first request must be `hello`. Every v1 op and event works as on a relay channel,
 served by the same `SessionService` and `UsageService`, except `push.*`: Web Push is for

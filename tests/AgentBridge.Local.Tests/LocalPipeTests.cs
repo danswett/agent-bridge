@@ -123,6 +123,31 @@ public sealed class LocalPipeTests : IAsyncDisposable
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_progress_frame_that_comes_after_its_result_on_the_pipe_reaches_no_listener()
+    {
+        Serve((_, _, _) =>
+        {
+            ServedRequest.Current!.Progress(new DeliveryProgress(DeliveryProgress.Received));
+            // A host breaking the rule this one keeps: progress after the result, then an event to
+            // say it has been sent. The first request on a new connection is 1.
+            return Task.FromResult<object?>(new ChannelReply(new { done = true }, async c =>
+            {
+                await ((LocalChannel)c).SendAsync(JsonSerializer.SerializeToUtf8Bytes(new { re = 1, progress = new { stage = "late" } }), default);
+                await c.SendEventAsync("after");
+            }));
+        });
+        var ch = await ConnectAsync();
+        var heard = new List<string>();
+
+        var result = await ch.CallAsync("work", progress: p => { lock (heard) { heard.Add(p.GetProperty("stage").GetString()!); } });
+        var after = await ch.Events.ReadAsync().AsTask().WaitAsync(Patience);
+
+        Assert.True(result.GetProperty("done").GetBoolean());
+        Assert.Equal("after", after.Name);
+        lock (heard) { Assert.Equal(["received"], heard); }
+    }
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task Unknown_ops_and_failures_come_back_as_errors_and_the_connection_carries_on()
     {
         Serve(Echo);
