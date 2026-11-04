@@ -37,6 +37,7 @@
 // swapped: the op it sends, the request it builds, and which outcomes are final. A settled
 // entry's `detail` is the whole result, for ops whose result says more than outcome and reason.
 
+import { ProgressStages } from './protocol.js';
 import { finished, marked, tapped } from './timing.js';
 
 const NO_OUTCOME = 'no outcome came back from the machine in time';
@@ -174,9 +175,10 @@ export class AnswerService {
     // What the op has done so far, for one that takes a while (a reply's files going first).
     const progress = (p) => { if (token === entry.token && entry.state === 'sending') { this.#set(entry, { progress: p }); } };
     // How far the host has got with it (sessions.progress). A stage from an attempt given up
-    // on, or behind one already reached, changes nothing.
+    // on, one this app doesn't know (from a newer host), or one behind one already reached,
+    // changes nothing.
     const stage = ({ stage: s, working }) => {
-      if (token !== entry.token || entry.state !== 'sending') { return; }
+      if (token !== entry.token || entry.state !== 'sending' || !ProgressStages.includes(s)) { return; }
       const next = s === 'typed' && working ? 'queued' : s;
       if (this.marks) { marked(entry.request, next); }
       if ((STAGE_ORDER[next] ?? 0) < (STAGE_ORDER[entry.stage] ?? 0) || next === entry.stage) { return; }

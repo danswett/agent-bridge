@@ -278,13 +278,15 @@ export function readAnswerResult(raw) {
 
 // An interim frame's progress for a session.reply or session.answer that asked for it
 // (sessions.progress): { stage, working }, stage received (the host has it) or typed (the keys
-// have gone; working: the session was working, and takes it at its next step). Null for a
-// stage this app doesn't know, from a newer host: it says nothing the person can act on.
+// have gone; working: the session was working, and takes it at its next step). Read as the C#
+// reader reads it, a stage that isn't a string as '': a stage this app doesn't know (from a newer
+// host) is the service's to pass over, as it says nothing the person can act on. Null for a frame
+// that isn't an object.
 export const ProgressStages = Object.freeze(['received', 'typed']);
 export function readProgress(raw) {
   const p = obj(raw);
-  if (!p || !ProgressStages.includes(p.stage)) { return null; }
-  return { stage: p.stage, working: p.working === true };
+  if (!p) { return null; }
+  return { stage: str(p.stage) ?? '', working: p.working === true };
 }
 
 // attachment.start's and attachment.chunk's result: { received, complete }. A count that is

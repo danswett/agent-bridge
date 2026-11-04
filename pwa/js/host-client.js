@@ -68,8 +68,8 @@ export class HostClient {
   closed = false;
   synced = false;
   // What the host offered in its latest hello on this channel: a reply or an answer asks for
-  // progress only from a host that offers it, as an older one would refuse the request's
-  // unknown field or never send a frame for it.
+  // progress only from a host that offers it (#598), so an older one gets the request it always
+  // has.
   capabilities = [];
 
   // Typing and confirming an answer can take a host a while, so session.answer gets longer
@@ -282,7 +282,7 @@ export class HostClient {
       const p = this.#pending.get(m.re);
       if (!p) { return; }
       // An interim frame (re and progress, no ok) says how far the request has got, and never
-      // settles it: the response still follows. One this app can't read is passed over.
+      // settles it: the response still follows. One that isn't an object is passed over.
       if (!('ok' in m) && 'progress' in m) {
         const progress = readProgress(m.progress);
         if (progress && p.onProgress) {
