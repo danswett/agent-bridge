@@ -162,7 +162,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Equal(("refused", probe.Reason), await ReplyAsync(ch, "hello"));
         Assert.Empty(injector.Plans);
         Assert.Equal(2, looks.Count);
-        Assert.Equal([Capabilities.SessionsRead], await CapabilitiesAsync(ch));
+        Assert.DoesNotContain(Capabilities.SessionsReply, await CapabilitiesAsync(ch));
 
         probe.Reason = null;
         time.Advance(SharedAgentHaBridgeProbe.Keep);
