@@ -25,6 +25,7 @@ public sealed class UiTestFramework(IMessageSink sink) : XunitTestFramework(sink
     {
         ThreadPool.GetMinThreads(out var workers, out var io);
         ThreadPool.SetMinThreads(Math.Max(workers, 32), io);
+        StallWatch.Start();
     }
 
     protected override ITestFrameworkExecutor CreateExecutor(AssemblyName assemblyName) =>
@@ -64,6 +65,6 @@ public sealed class UiTestFramework(IMessageSink sink) : XunitTestFramework(sink
     sealed class MethodRunner(ITestMethod testMethod, IReflectionTypeInfo @class, IReflectionMethodInfo method, IEnumerable<IXunitTestCase> testCases, IMessageSink sink, IMessageBus bus, ExceptionAggregator aggregator, CancellationTokenSource cancel, object[] constructorArguments)
         : XunitTestMethodRunner(testMethod, @class, method, testCases, sink, bus, aggregator, cancel, constructorArguments)
     {
-        protected override Task<RunSummary> RunTestCaseAsync(IXunitTestCase testCase) => TestUi.RunAsync(() => base.RunTestCaseAsync(testCase));
+        protected override Task<RunSummary> RunTestCaseAsync(IXunitTestCase testCase) => TestUi.RunAsync(() => base.RunTestCaseAsync(testCase), testCase.DisplayName);
     }
 }
