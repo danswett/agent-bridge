@@ -16,6 +16,16 @@ public static class Ui
 
     public static Brush Brush(string key) => (Brush)Application.Current.Resources[key];
 
+    // A reply's or an answer's receipt (ui.md §6.5, decided on #617): words on their way in text2,
+    // beside the Bridge ring, so Delivered, in Bridge, stands out as the one good outcome. In a
+    // contrast theme every word is the window's text (§9): the badge beside it is the Highlight.
+    public static Brush ReceiptBrush(Tone tone) => tone switch
+    {
+        Tone.Progress => Brush("AbText2"),
+        Tone.Ok when new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast => Brush("AbText"),
+        _ => ToneBrush(tone),
+    };
+
     public static Brush ToneBrush(Tone tone) => Brush(ToneKey(tone));
 
     public static string ToneKey(Tone tone) => tone switch

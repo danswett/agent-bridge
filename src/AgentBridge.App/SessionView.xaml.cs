@@ -173,7 +173,12 @@ public sealed partial class SessionView : UserControl
         if (c.ReceiptText != shownReceipt)
         {
             shownReceipt = c.ReceiptText;
-            if (c.HasReceipt) { Motion.Enter(Receipt, "Acknowledge"); }
+            if (c.HasReceipt)
+            {
+                Motion.Enter(Receipt, "Acknowledge");
+                // A polite live region (ui.md §9): a screen reader hears what became of the answer.
+                DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(Receipt)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
+            }
         }
     }
 

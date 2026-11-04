@@ -220,7 +220,7 @@ static partial class SelfTest
             if (choice?.Card is { } choiceCard && ById<Button>(choice, "Option:pg") is { } pg)
             {
                 ((IInvokeProvider)new ButtonAutomationPeer(pg).GetPattern(PatternInterface.Invoke)).Invoke();
-                var answered = await Until(() => choiceCard.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
+                var answered = await Until(() => choiceCard.ReceiptText.StartsWith("You answered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
                 result["receipt"] = choiceCard.ReceiptText;
                 Check(answered, "answers a question from its session and shows it was delivered");
                 // The receipt is laid out a pass after its text changes (#247): waited for, then the
@@ -239,7 +239,7 @@ static partial class SelfTest
             if (remoteChoice?.Card is { } remoteCard && ById<Button>(remoteChoice, "Option:device") is { } device)
             {
                 ((IInvokeProvider)new ButtonAutomationPeer(device).GetPattern(PatternInterface.Invoke)).Invoke();
-                var answered = await Until(() => remoteCard.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
+                var answered = await Until(() => remoteCard.ReceiptText.StartsWith("You answered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
                 result["remoteReceipt"] = remoteCard.ReceiptText;
                 Check(answered, "answers a question on another machine from its session and shows it was delivered");
             }
@@ -342,7 +342,7 @@ static partial class SelfTest
             {
                 ((IInvokeProvider)new ButtonAutomationPeer(approveButton).GetPattern(PatternInterface.Invoke)).Invoke();
                 var approvalCard = main.AllCards.First(c => c.Id == "demo-approval");
-                var gone = await Until(() => approvalCard.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal) && main.NeedsYou.All(e => e.Card.Id != "demo-approval") && main.Waiting == waiting - 1, TimeSpan.FromSeconds(20));
+                var gone = await Until(() => approvalCard.ReceiptText.StartsWith("You answered", StringComparison.Ordinal) && main.NeedsYou.All(e => e.Card.Id != "demo-approval") && main.Waiting == waiting - 1, TimeSpan.FromSeconds(20));
                 result["laneReceipt"] = approvalCard.ReceiptText;
                 Check(gone, "approves a permission prompt from Needs you: the card shows it delivered, and the entry and the tray count go down");
             }

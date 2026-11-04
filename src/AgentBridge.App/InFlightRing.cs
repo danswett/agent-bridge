@@ -16,6 +16,11 @@ public sealed partial class InFlightRing : UserControl
     public static readonly DependencyProperty ActiveProperty = DependencyProperty.Register(
         nameof(Active), typeof(bool), typeof(InFlightRing), new PropertyMetadata(false, (d, _) => ((InFlightRing)d).Apply()));
 
+    // Still: a request held on this device for a machine that isn't connected (a receipt's
+    // "Waiting for machine", ReceiptMarkView): nothing is moving, so the arc stays still, in text3.
+    public static readonly DependencyProperty StillProperty = DependencyProperty.Register(
+        nameof(Still), typeof(bool), typeof(InFlightRing), new PropertyMetadata(false, (d, _) => ((InFlightRing)d).Apply()));
+
     readonly ProgressRing ring = new() { Width = 16, Height = 16, IsActive = false };
     readonly Windows.UI.ViewManagement.UISettings settings = new();
     bool listening;
@@ -41,11 +46,20 @@ public sealed partial class InFlightRing : UserControl
         set => SetValue(ActiveProperty, value);
     }
 
+    public bool Still
+    {
+        get => (bool)GetValue(StillProperty);
+        set => SetValue(StillProperty, value);
+    }
+
     void Apply()
     {
         Visibility = Ui.Show(Active);
-        ring.IsIndeterminate = Active && MotionCatalogue.Loops(settings.AnimationsEnabled);
+        ring.IsIndeterminate = Active && !Still && MotionCatalogue.Loops(settings.AnimationsEnabled);
         ring.IsActive = Active;
+        // In a contrast theme, GrayText (ui.md §9): a held request never looks active.
+        if (Still) { ring.Foreground = new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast ? new Microsoft.UI.Xaml.Media.SolidColorBrush(settings.UIElementColor(Windows.UI.ViewManagement.UIElementType.GrayText)) : Ui.Brush("AbText3"); }
+        else { ring.ClearValue(Control.ForegroundProperty); }
     }
 
     void Listen()

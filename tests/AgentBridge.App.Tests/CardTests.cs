@@ -53,7 +53,7 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Equal(["PostgreSQL (Recommended)", "sqlite"], q.Fields[0].Options.Select(o => o.Label));
         q.Choose(q.Fields[0].Options.Single(o => o.Value == "sqlite"));
 
-        await Wait.UntilAsync(() => q.StatusText == "Delivered. The session has your answer.", "delivered");
+        await Wait.UntilAsync(() => q.StatusText == "You answered · sqlite", "delivered");
         var sent = Assert.Single(host.Sent(Ops.SessionAnswer));
         Assert.Equal("sqlite", sent.GetProperty("fields").GetProperty("answer").GetString());
         Assert.Equal("q1", sent.GetProperty("question").GetString());
@@ -346,7 +346,7 @@ public sealed class CardTests : IAsyncLifetime
         r.Text = "Look at this and then this";
         reply.SetResult(new ReplyResult(AnswerOutcome.Delivered));
 
-        await Wait.UntilAsync(() => r.StatusText == "Delivered. The session has your reply.", "delivered");
+        await Wait.UntilAsync(() => r.StatusText == "Delivered", "delivered");
         Assert.Equal("and then this", r.Text);
         Assert.Empty(r.Attachments);
         Assert.Equal(3, host.Sent(Ops.AttachmentChunk).Count);
@@ -437,7 +437,7 @@ public sealed class CardTests : IAsyncLifetime
             bool Delivered()
             {
                 evidence.ObserveUi(r.StatusText, r.StatusTone, r.Error, state);
-                return r.StatusText == "Delivered. The session has your reply.";
+                return r.StatusText == "Delivered";
             }
             string Why()
             {
@@ -508,7 +508,7 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Equal((3_000_000L, false), (file.Size, file.Resized));
         r.Send();
 
-        await Wait.UntilAsync(() => r.StatusText == "Delivered. The session has your reply.", "delivered");
+        await Wait.UntilAsync(() => r.StatusText == "Delivered", "delivered");
         Assert.Equal(("remote-id", "photo.png", 3_000_000), Assert.Single(blobs.Puts));
         Assert.Empty(host.Sent(Ops.AttachmentChunk));
         var start = host.Sent(Ops.AttachmentStart)[0];
@@ -559,7 +559,7 @@ public sealed class CardTests : IAsyncLifetime
 
         r.Send();
 
-        await Wait.UntilAsync(() => r.StatusText == "Delivered. The session has your reply.", "delivered");
+        await Wait.UntilAsync(() => r.StatusText == "Delivered", "delivered");
         Assert.False(failed);
         Assert.Single(blobs.Puts);
     }

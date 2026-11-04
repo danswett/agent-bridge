@@ -26,7 +26,7 @@ public sealed class DemoTests
         choice.Question!.Choose(choice.Question.Fields[0].Options[0]);
 
         await Wait.UntilAsync(() => choice.Question is null && choice.HasReceipt, "the question to be answered");
-        Assert.Equal("Your answer: Delivered. The session has your answer.", choice.ReceiptText);
+        Assert.Equal("You answered · PostgreSQL (Recommended)", choice.ReceiptText);
     }
 
     // A completed setup moves the demo's readiness on as a real host's does (it saves intake with the

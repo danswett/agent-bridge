@@ -341,15 +341,24 @@
                         </StackPanel>
                     </InfoBar>
 
-                    <TextBlock
-                        x:Name="Receipt"
-                        Style="{StaticResource AbTypeRow}"
-                        TextWrapping="Wrap"
-                        IsTextSelectionEnabled="True"
-                        AutomationProperties.AutomationId="Receipt"
-                        Text="{x:Bind Card.ReceiptText, Mode=OneWay}"
-                        Foreground="{x:Bind local:Ui.ToneBrush(Card.ReceiptTone), Mode=OneWay}"
-                        Visibility="{x:Bind local:Ui.Show(Card.HasReceipt), Mode=OneWay}" />
+                    <Grid Visibility="{x:Bind local:Ui.Show(Card.HasReceipt), Mode=OneWay}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <local:ReceiptMarkView VerticalAlignment="Top" Margin="0,3,8,0" Mark="{x:Bind Card.ReceiptMark, Mode=OneWay}" />
+                        <TextBlock
+                            x:Name="Receipt"
+                            Grid.Column="1"
+                            Style="{StaticResource AbTypeRow}"
+                            TextWrapping="Wrap"
+                            IsTextSelectionEnabled="True"
+                            AutomationProperties.AutomationId="Receipt"
+                            AutomationProperties.LiveSetting="Polite"
+                            Text="{x:Bind Card.ReceiptText, Mode=OneWay}"
+                            Foreground="{x:Bind local:Ui.ReceiptBrush(Card.ReceiptTone), Mode=OneWay}"
+                            Visibility="{x:Bind local:Ui.Show(Card.HasReceipt), Mode=OneWay}" />
+                    </Grid>
 
                     <!-- A prompt you didn't type (#489, §6.4): never a bubble, and never at the right, which is
                          yours. At the column's start: a label line in agent colour (a clock for a schedule,
@@ -769,14 +778,25 @@
                     Foreground="{ThemeResource AbDangerText}"
                     Text="{x:Bind Card.Reply.Error, Mode=OneWay}"
                     Visibility="{x:Bind local:Ui.Show(Card.Reply.HasError), Mode=OneWay, FallbackValue=Collapsed}" />
-                <TextBlock
-                    Style="{StaticResource AbTypeMeta}"
-                    TextWrapping="Wrap"
-                    IsTextSelectionEnabled="True"
-                    AutomationProperties.AutomationId="ReplyStatus"
-                    Text="{x:Bind Card.Reply.StatusText, Mode=OneWay}"
-                    Foreground="{x:Bind local:Ui.ToneBrush(Card.Reply.StatusTone), Mode=OneWay}"
-                    Visibility="{x:Bind local:Ui.Some(Card.Reply.StatusText), Mode=OneWay, FallbackValue=Collapsed}" />
+                <!-- The receipt (ui.md §6.5, #600, #617): its ring or check beside its words, which
+                     keep their place from Send to the outcome, and a polite live region. -->
+                <Grid Visibility="{x:Bind local:Ui.Show(Card.Reply.ShowStatus), Mode=OneWay, FallbackValue=Collapsed}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <local:ReceiptMarkView VerticalAlignment="Top" Margin="0,2,8,0" Mark="{x:Bind Card.Reply.StatusMark, Mode=OneWay}" />
+                    <TextBlock
+                        Grid.Column="1"
+                        Style="{StaticResource AbTypeMeta}"
+                        TextWrapping="Wrap"
+                        IsTextSelectionEnabled="True"
+                        AutomationProperties.AutomationId="ReplyStatus"
+                        AutomationProperties.LiveSetting="Polite"
+                        local:ReceiptMarkView.Announcement="{x:Bind Card.Reply.Announcement, Mode=OneWay}"
+                        Text="{x:Bind Card.Reply.StatusText, Mode=OneWay}"
+                        Foreground="{x:Bind local:Ui.ReceiptBrush(Card.Reply.StatusTone), Mode=OneWay}" />
+                </Grid>
             </local:ReadingColumn>
         </ScrollViewer>
     </Grid>

@@ -73,6 +73,10 @@ public sealed class Deliveries
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(90);
     // Delivery.Stage for typed into a working session.
     public const string Queued = "queued";
+    // Why a delivery waits (its Reason), where the receipt says something of its own (Receipt):
+    // no connection to the host to send on, or a resend that met the first copy in flight.
+    public const string NotConnected = "not connected";
+    public const string StillBeingDelivered = "still being delivered";
 
     readonly HostConnection host;
     readonly IUiDispatcher ui;
@@ -248,7 +252,7 @@ public sealed class Deliveries
             {
                 // No outcome: the host went (or was never there). It may have acted, so the
                 // same request goes again once it is back.
-                Update(entry.Key, x => x with { State = DeliveryState.Waiting, Reason = e is HostNotRunningException ? "not connected" : e.Message });
+                Update(entry.Key, x => x with { State = DeliveryState.Waiting, Reason = e is HostNotRunningException ? NotConnected : e.Message });
                 // Waited on only for what is left of the limits, so a Try again pressed late does not hold
                 // the page past them while the machine is away.
                 if (Left() is var left && left > TimeSpan.Zero)
@@ -277,7 +281,7 @@ public sealed class Deliveries
                     Update(entry.Key, x => x with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = reason ?? NoOutcome });
                     return;
                 }
-                Update(entry.Key, x => x with { State = DeliveryState.Waiting, Reason = "still being delivered" });
+                Update(entry.Key, x => x with { State = DeliveryState.Waiting, Reason = StillBeingDelivered });
                 await Task.Delay(RetryDelay);
                 continue;
             }

@@ -132,7 +132,7 @@ public sealed class ToastResponder
                 return;
             }
             if (Gone()) { return; }
-            var (text, _) = QuestionViewModel.Describe(result, "");
+            var text = QuestionViewModel.Describe(result, null).Whole;
             Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, text, action.Machine));
         }
         finally { deliveries.Changed -= Watch; }

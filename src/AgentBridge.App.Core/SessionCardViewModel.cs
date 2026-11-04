@@ -53,6 +53,8 @@ public sealed partial class SessionCardViewModel : Observable
     string? orphanText;
     string? orphanNote;
     string? receiptKey;
+    // The question the receipt's answer answered, which says its value ("You answered · value").
+    Question? receiptQuestion;
     string? lastHistoryAt;
     bool historyLoading;
     string historyNote = "";
@@ -234,6 +236,7 @@ public sealed partial class SessionCardViewModel : Observable
     // What became of an answer whose question has gone from the card.
     public string ReceiptText { get; private set; } = "";
     public Tone ReceiptTone { get; private set; }
+    public ReceiptMark ReceiptMark { get; private set; }
     public bool HasReceipt => ReceiptText.Length > 0;
 
     // Why nothing on this card can be answered, replied to or ended from here, if so.
@@ -342,7 +345,7 @@ public sealed partial class SessionCardViewModel : Observable
                 OrphanText = draft;
                 OrphanNote = "The question changed before you sent your answer. It was answered at the machine, or the agent moved on. What you typed is kept here.";
             }
-            else if (ctx.Deliveries.Get(question.Key) is not null) { receiptKey = question.Key; }
+            else if (ctx.Deliveries.Get(question.Key) is not null) { (receiptKey, receiptQuestion) = (question.Key, question.Question); }
             question.Detach();
             Question = null;
         }
@@ -395,14 +398,16 @@ public sealed partial class SessionCardViewModel : Observable
     void UpdateReceipt()
     {
         var e = receiptKey is null ? null : ctx.Deliveries.Get(receiptKey);
-        if (e is null) { (ReceiptText, ReceiptTone) = ("", Tone.None); }
+        if (e is null) { (ReceiptText, ReceiptTone, ReceiptMark) = ("", Tone.None, ReceiptMark.None); }
         else
         {
-            var (text, tone) = QuestionViewModel.Describe(e, ctx.MachineName() is { Length: > 0 } m ? $" on {m}" : "");
-            (ReceiptText, ReceiptTone) = ($"Your answer: {text}", tone);
+            var line = QuestionViewModel.Describe(e, ctx.MachineName(), question: receiptQuestion);
+            // "You answered · value" says whose answer it is; anything else says it is about the answer.
+            (ReceiptText, ReceiptTone, ReceiptMark) = (line.Key == "delivered" ? line.Whole : $"Your answer: {line.Whole}", line.Tone, line.Mark);
         }
         Raise(nameof(ReceiptText));
         Raise(nameof(ReceiptTone));
+        Raise(nameof(ReceiptMark));
         Raise(nameof(HasReceipt));
     }
 

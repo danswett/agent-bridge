@@ -40,7 +40,7 @@ public sealed class ReplyViewModel : Observable
 {
     static readonly Dictionary<string, Func<string, string>> OutcomeText = new()
     {
-        ["delivered"] = _ => "Delivered. The session has your reply.",
+        ["delivered"] = _ => "Delivered",
         ["unconfirmed"] = at => $"Sent, but not confirmed. Check at the machine{at} before sending it again.",
         ["stale"] = _ => "Not sent: the session has ended.",
         ["busy"] = _ => "Not sent: an answer or another reply to this session is being delivered. Try again in a moment.",
@@ -65,6 +65,10 @@ public sealed class ReplyViewModel : Observable
     string? error;
     string statusText = "";
     Tone statusTone;
+    ReceiptMark statusMark;
+    // Times the status line's words, as the receipt of the reply (Receipt, #600, #617).
+    readonly Receipt receipt;
+    readonly string? machineName;
     int preparing;
     (string Request, string Text, List<ReplyAttachment> Files)? sent;
     string? handled;
@@ -84,13 +88,32 @@ public sealed class ReplyViewModel : Observable
         this.current = current ?? (() => true);
         sessionId = session.Id;
         at = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
+        this.machineName = machineName;
+        receipt = new Receipt(deliveries.Time, deliveries.Ui, Describe, Shown, Said);
         deliveries.Changed += OnDelivery;
         Refresh();
     }
 
     void OnDelivery(Delivery d) { if (d.Key == Key) { Refresh(); } }
 
-    public void Detach() => deliveries.Changed -= OnDelivery;
+    public void Detach()
+    {
+        deliveries.Changed -= OnDelivery;
+        receipt.Dispose();
+    }
+
+    void Shown(ReceiptLine line)
+    {
+        StatusMark = line.Mark;
+        (StatusText, StatusTone) = (line.Whole, line.Tone);
+        Raise(nameof(ShowStatus));
+    }
+
+    void Said(string speech)
+    {
+        Announcement = speech;
+        Raise(nameof(Announcement));
+    }
 
     public string Key => $"reply|{sessionId}";
     public ObservableCollection<ReplyAttachment> Attachments { get; } = [];
@@ -141,6 +164,13 @@ public sealed class ReplyViewModel : Observable
     public bool HasError => error is not null;
     public string StatusText { get => statusText; private set => Set(ref statusText, value); }
     public Tone StatusTone { get => statusTone; private set => Set(ref statusTone, value); }
+    // The ring, a still ring or the check badge beside the words (ui.md §6.5).
+    public ReceiptMark StatusMark { get => statusMark; private set => Set(ref statusMark, value); }
+    // The line keeps its place from Send to the outcome, its first quiet 400 ms included.
+    public bool ShowStatus => StatusText.Length > 0 || Pending;
+    // What a screen reader is to hear of the status line now: raised once for each, at most one a
+    // second (Receipt); the view raises LiveRegionChanged with it.
+    public string Announcement { get; private set; } = "";
 
     // Another machine's way to files over 256 KiB: the relay's blob store, and its device there.
     public IBlobStore? Blobs { get; init; }
@@ -386,10 +416,11 @@ public sealed class ReplyViewModel : Observable
             pausedAfterBusy = true;
             _ = Task.Delay(2000).ContinueWith(_ => deliveries.Ui.Post(() => { pausedAfterBusy = false; Raise(nameof(CanSend)); }), TaskScheduler.Default);
         }
-        (StatusText, StatusTone) = preparing > 0 && !Pending ? ("Reading the attachment…", Tone.Progress) : e is null ? ("", Tone.None) : Describe(e);
+        receipt.Show(e, preparing > 0 && !Pending ? new ReceiptLine("reading", "Reading the attachment…", null, Tone.Progress, ReceiptMark.Ring, null) : null);
         Raise(nameof(Held));
         Raise(nameof(HeldText));
         Raise(nameof(Pending));
+        Raise(nameof(ShowStatus));
         Raise(nameof(CanSend));
         Raise(nameof(CanAttach));
         Raise(nameof(ShowAttach));
@@ -398,28 +429,30 @@ public sealed class ReplyViewModel : Observable
 
     string? busyFor;
 
-    (string, Tone) Describe(Delivery e)
+    // What a reply's progress or outcome says: the receipt under the box (Receipt; ui.md §6.5,
+    // decided on #617). Its files going, then Sending…, Sent, Passed to the agent or Up next, and
+    // Delivered with the check badge; any other outcome keeps its words. stalled: whether the
+    // state it is in has stalled (Receipt).
+    ReceiptLine Describe(Delivery e, bool stalled)
     {
+        static ReceiptLine Said(string key, string text, Tone tone) => new(key, text, null, tone, ReceiptMark.None, $"Reply: {text}");
         switch (e.State)
         {
-            // Past its files: the reply itself is on its way, and the machine says how far.
-            case DeliveryState.Sending when QuestionViewModel.StageText(e.Stage) is { } stage:
-                return (stage, Tone.Progress);
-            case DeliveryState.Sending when e.Progress is { Total: > 0 } p:
+            case DeliveryState.Sending when e.Progress is { Total: > 0 } p && p.Sent < p.Total:
                 var count = (e.Payload as List<ReplyAttachment>)?.Count ?? 1;
-                return ($"Sending {(count == 1 ? "the attachment" : $"{count} attachments")}… {100 * p.Sent / p.Total}%", Tone.Progress);
-            case DeliveryState.Sending:
-                var sending = e.Attempts > 1 ? "Sending again…" : "Sending…";
-                return (session.Status == SessionStatus.Working ? $"{sending} The session is working, and takes it at its next step." : sending, Tone.Progress);
-            case DeliveryState.Waiting:
-                return (e.Reason == "still being delivered" ? "The machine is still delivering it…" : $"Waiting for the {Product.HostName}{at}. Your reply goes as soon as it is back.", Tone.Progress);
+                var what = $"Sending {(count == 1 ? "the attachment" : $"{count} attachments")}…";
+                // Said once, not at every percent.
+                return new("upload", $"{what} {100 * p.Sent / p.Total}%", null, Tone.Progress, ReceiptMark.Ring, $"Reply: {what}");
+            case DeliveryState.Sending or DeliveryState.Waiting:
+                return ReceiptWords.InFlight(answer: false, e, machineName, stalled, working: session.Status == SessionStatus.Working);
             case DeliveryState.Failed:
-                return ($"Couldn't send it: {e.Reason ?? "the machine said no"}.", Tone.Bad);
+                return Said("failed", $"Couldn't send it: {e.Reason ?? "the machine said no"}.", Tone.Bad);
         }
         var outcome = e.Outcome is { } o && OutcomeText.ContainsKey(o) ? o : "unconfirmed";
+        if (outcome == "delivered") { return new("delivered", "Delivered", null, Tone.Ok, ReceiptMark.Check, "Reply delivered"); }
         var t = OutcomeText[outcome](at);
         if (outcome == "refused" && e.Reason is { } r) { t = $"The machine refused this reply: {r}."; }
         if (outcome == "unconfirmed" && e.Reason is { } u) { t += $" ({u})"; }
-        return (t, outcome == "delivered" ? Tone.Ok : outcome == "refused" ? Tone.Bad : Tone.Warn);
+        return Said(outcome, t, outcome == "refused" ? Tone.Bad : Tone.Warn);
     }
 }

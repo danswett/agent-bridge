@@ -42,7 +42,7 @@ public sealed class DeliveryProgressTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task An_answer_to_a_host_offering_progress_shows_Sent_then_Typed_then_its_outcome_and_logs_its_timings()
+    public async Task An_answer_to_a_host_offering_progress_shows_Sent_then_Passed_to_the_agent_then_its_outcome_and_logs_its_timings()
     {
         await StartAsync(progress: true);
         var typed = new TaskCompletionSource();
@@ -59,10 +59,10 @@ public sealed class DeliveryProgressTests : IAsyncLifetime
 
         var entry = deliveries.Submit("answer|s1|q1", Ops.SessionAnswer, r => new AnswerRequest { Id = "s1", Question = "q1", Request = r, Text = "yes" }, o => o != "busy");
         await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.Stage == DeliveryProgress.Received, "Sent");
-        Assert.Equal("Sent. The machine is typing it…", QuestionViewModel.Describe(deliveries.Get(entry.Key)!, "").Text);
+        Assert.Equal("Sent", QuestionViewModel.Describe(deliveries.Get(entry.Key)!, null).Whole);
         typed.SetResult();
         await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.Stage == DeliveryProgress.Typed, "Typed");
-        Assert.Equal("Typed. Waiting for the session to take it…", QuestionViewModel.Describe(deliveries.Get(entry.Key)!, "").Text);
+        Assert.Equal("Passed to the agent", QuestionViewModel.Describe(deliveries.Get(entry.Key)!, null).Whole);
         Assert.Equal(DeliveryState.Sending, deliveries.Get(entry.Key)!.State);
         confirmed.SetResult();
         await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Done, "an outcome");
@@ -76,7 +76,7 @@ public sealed class DeliveryProgressTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_reply_typed_into_a_working_session_is_Queued_and_a_stage_behind_it_changes_nothing_not_even_its_timing_marks()
+    public async Task A_reply_typed_into_a_working_session_is_Up_next_and_a_stage_behind_it_changes_nothing_not_even_its_timing_marks()
     {
         await StartAsync(progress: true);
         host.OnAsync(Ops.SessionReply, _ =>
@@ -94,7 +94,7 @@ public sealed class DeliveryProgressTests : IAsyncLifetime
         await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Done, "an outcome");
 
         lock (stages) { Assert.Equal(new string?[] { null, Deliveries.Queued }, stages); }
-        Assert.Equal("Queued. The session is working, and takes it at its next step.", QuestionViewModel.StageText(Deliveries.Queued));
+        Assert.Equal("Up next · after the agent's current step", ReceiptWords.InFlight(answer: false, deliveries.Get(entry.Key)! with { State = DeliveryState.Sending }, null, stalled: false).Whole);
         // Marked only as the stage moved on: the earlier stage replayed after it adds nothing.
         await Wait.UntilAsync(() => Logged(entry.Request) is not null, "the timing line");
         Assert.Matches(new Regex($@"^reply {entry.Request[..8]} delivered: sent \d+ ms, queued \d+ ms, result \d+ ms$"), Logged(entry.Request)!);
@@ -113,7 +113,7 @@ public sealed class DeliveryProgressTests : IAsyncLifetime
 
         var entry = deliveries.Submit("reply|s1", Ops.SessionReply, r => new ReplyRequest { Id = "s1", Request = r, Text = "carry on" }, _ => false, replayAfterRestart: false);
         await Wait.UntilAsync(() => host.Sent(Ops.SessionReply).Count == 1, "the reply sent");
-        Assert.Equal("Sending…", QuestionViewModel.Describe(deliveries.Get(entry.Key)!, "").Text);
+        Assert.Equal("Sending…", QuestionViewModel.Describe(deliveries.Get(entry.Key)!, null).Whole);
         outcome.SetResult();
         await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Done, "an outcome");
 

@@ -20,7 +20,11 @@ public sealed class QuestionView : StackPanel
     readonly Action<bool> editing;
     readonly List<Action> refreshers = [];
     readonly List<(INotifyPropertyChanged Source, PropertyChangedEventHandler Handler)> subscriptions = [];
+    // The answer's receipt (ui.md §6.4, #600, #617): its ring or check beside its words, a polite
+    // live region, in a row that keeps its place from Send to the outcome.
     readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
+    readonly ReceiptMarkView mark = new() { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 2, 8, 0) };
+    readonly Grid receipt = new();
     readonly TextBlock error = new() { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
     readonly Button resend = new() { Content = "Send again" };
     Button? send;
@@ -113,7 +117,13 @@ public sealed class QuestionView : StackPanel
             footer.Children.Add(resend);
             Children.Add(footer);
             Children.Add(error);
-            Children.Add(status);
+            receipt.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            receipt.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            Grid.SetColumn(status, 1);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetLiveSetting(status, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
+            receipt.Children.Add(mark);
+            receipt.Children.Add(status);
+            Children.Add(receipt);
         }
 
         Watch(vm, Refresh);
@@ -131,6 +141,8 @@ public sealed class QuestionView : StackPanel
 
     // Past the first draw: what changes from here is news (an answer's outcome).
     bool drawn;
+    // What the receipt last told a screen reader.
+    string announced = "";
 
     // The card let go of this question; the view stops following it.
     public void Detach()
@@ -149,11 +161,20 @@ public sealed class QuestionView : StackPanel
     void Refresh()
     {
         // An answer's outcome fades in on the card (ui.md §5.3, Send and Answer).
+        // Each change of its words fades in (ui.md §5.3, Send and Answer); under reduced motion
+        // Motion makes that the cross-fade alone.
         var fade = drawn && vm.StatusText.Length > 0 && vm.StatusText != status.Text;
         status.Text = vm.StatusText;
-        status.Foreground = Ui.ToneBrush(vm.StatusTone);
-        status.Visibility = Ui.Some(vm.StatusText);
+        status.Foreground = Ui.ReceiptBrush(vm.StatusTone);
+        mark.Mark = vm.StatusMark;
+        receipt.Visibility = Ui.Show(vm.StatusText.Length > 0 || vm.InFlight);
         if (fade) { Motion.Enter(status, "Acknowledge"); }
+        // Heard as it changes, not as the card is first drawn with what was said before.
+        if (vm.Announcement != announced)
+        {
+            announced = vm.Announcement;
+            if (drawn) { ReceiptMarkView.SetAnnouncement(status, announced); }
+        }
         error.Text = vm.Error ?? "";
         error.Visibility = Ui.Show(vm.HasError);
         resend.Visibility = Ui.Show(vm.ShowResend);

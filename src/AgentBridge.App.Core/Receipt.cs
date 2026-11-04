@@ -1,0 +1,302 @@
+using AgentBridge.Protocol;
+
+namespace AgentBridge.App.Core;
+
+// The receipt of a reply or an answer on its way (#600; ui.md §6.4, §6.5 and §9, as the owner
+// decided them on #617): one line that changes its words in place from Send to the outcome.
+//
+//   Sending… → Sent → Passed to the agent (or, a reply to a working session, Up next · after
+//   the agent's current step) → Delivered (an answer: You answered · its value)
+//
+// The stages are the machine's (sessions.progress, Delivery.Stage); a machine without it goes
+// from Sending… to the outcome, and nothing here invents a stage nobody reported. What Receipt
+// decides is when each shows: nothing for the first 400 ms, which Send's own ring covers, so a
+// fast delivery never flickers through every stage; then the furthest stage reached, each
+// in-between state held at least 400 ms so it can be read; an outcome at once. When the stages
+// stop coming, the words say so (the stalls), and a screen reader hears each change once, at most
+// one a second. The PWA's pwa/js/ui/receipt.js is the same, word for word.
+
+public enum ReceiptMark { None, Ring, Still, Check }
+
+// Key: the state, which the dwell holds apart (a stall changes the words, not the state). More:
+// the secondary words, after " · ". Mark: the ring, a still ring (nothing is moving), or the
+// check badge. Speech: what a screen reader hears, or null ("Sending…" isn't spoken: Send's
+// busy state says it).
+public sealed record ReceiptLine(string Key, string Text, string? More, Tone Tone, ReceiptMark Mark, string? Speech)
+{
+    public string Whole => More is null ? Text : $"{Text} · {More}";
+    public static readonly ReceiptLine None = new("none", "", null, Tone.None, ReceiptMark.None, null);
+    internal static readonly ReceiptLine Quiet = new("quiet", "", null, Tone.None, ReceiptMark.None, null);
+}
+
+// In one place so they can be tuned once the owner has seen them live (#617, "Per platform").
+public static class ReceiptTiming
+{
+    // Nothing on the line for this long after Send.
+    public static readonly TimeSpan Quiet = TimeSpan.FromMilliseconds(400);
+    // An in-between state stays at least this long before the next replaces it.
+    public static readonly TimeSpan Dwell = TimeSpan.FromMilliseconds(400);
+    // Nothing heard from the machine: "Still sending…".
+    public static readonly TimeSpan StillSending = TimeSpan.FromSeconds(3);
+    // Sent, and not passed to the agent: "· still waiting on machine".
+    public static readonly TimeSpan SentStall = TimeSpan.FromSeconds(5);
+    // Passed to an idle agent, and not picked up: "· not picked up yet". Up next has none: the
+    // agent is busy, and waiting is expected.
+    public static readonly TimeSpan PassedStall = TimeSpan.FromSeconds(10);
+    // At most one announcement this often; of two inside it, only the later is spoken.
+    public static readonly TimeSpan AnnounceGap = TimeSpan.FromSeconds(1);
+}
+
+public static class ReceiptWords
+{
+    const int ValueMax = 40;
+
+    static string? StageText(string? stage) => stage switch
+    {
+        DeliveryProgress.Received => "Sent",
+        DeliveryProgress.Typed => "Passed to the agent",
+        Deliveries.Queued => "Up next",
+        _ => null,
+    };
+
+    // The words of an answer or a reply still on its way (Sending or Waiting). working: a reply's
+    // session is working, which today's "Sending…" says, as a machine without progress says
+    // nothing more.
+    public static ReceiptLine InFlight(bool answer, Delivery e, string? machineName, bool stalled, bool working = false)
+    {
+        var subject = answer ? "Answer" : "Reply";
+        var m = string.IsNullOrEmpty(machineName) ? "the machine" : machineName;
+        string Busy(string t) => !answer && working ? $"{t} The session is working, and takes it at its next step." : t;
+        // An answer never carries working (a question holds the session): there is no Up next for one.
+        var stage = answer && e.Stage == Deliveries.Queued ? DeliveryProgress.Typed : e.Stage;
+        if (e.State == DeliveryState.Waiting)
+        {
+            // Held on this device, with no connection to the machine: nothing is moving, so the ring is still.
+            if (e.Reason == Deliveries.NotConnected) { return new("held", $"Waiting for {m}", $"it goes when {m} is back", Tone.Progress, ReceiptMark.Still, $"{subject} waiting for {m}"); }
+            // A resend met the first copy still in flight: the stage it had reached stays.
+            if (e.Reason == Deliveries.StillBeingDelivered) { return new($"{stage ?? "sending"}+delivering", StageText(stage) ?? "Sending…", "still being delivered", Tone.Progress, ReceiptMark.Ring, $"{subject} still being delivered"); }
+            // Connected, but no answer came back (a lost response, a timeout): it goes again.
+            return new("retrying", Busy("Still sending…"), null, Tone.Progress, ReceiptMark.Ring, $"{subject} still sending");
+        }
+        return stage switch
+        {
+            DeliveryProgress.Received => stalled
+                ? new("received", "Sent", $"still waiting on {m}", Tone.Progress, ReceiptMark.Ring, $"{subject} sent, still waiting on {m}")
+                : new("received", "Sent", null, Tone.Progress, ReceiptMark.Ring, $"{subject} sent"),
+            DeliveryProgress.Typed => stalled
+                ? new("typed", "Passed to the agent", "not picked up yet", Tone.Progress, ReceiptMark.Ring, $"{subject} passed to the agent, not picked up yet")
+                : new("typed", "Passed to the agent", null, Tone.Progress, ReceiptMark.Ring, $"{subject} passed to the agent"),
+            Deliveries.Queued => new("queued", "Up next", "after the agent's current step", Tone.Progress, ReceiptMark.Ring, $"{subject} up next, after the agent's current step"),
+            _ => stalled
+                ? new("sending", Busy("Still sending…"), null, Tone.Progress, ReceiptMark.Ring, $"{subject} still sending")
+                : new("sending", Busy("Sending…"), null, Tone.Progress, ReceiptMark.Ring, null),
+        };
+    }
+
+    // What a confirmed answer says it was, after "You answered · " (the owner's decision on #617):
+    // a tap question's option by its label; free text by its first line, cut to about 40
+    // characters; nothing for a form of several fields. Its hidden and bidi characters are drawn
+    // as escapes (HiddenText, #546), so a value can't reorder or hide the words around it.
+    public static string? AnsweredValue(Question? question, AnswerRequest? answer)
+    {
+        if (answer?.Text is { } text) { return FirstLine(text); }
+        if (question is null || answer is null) { return null; }
+        if (question.Fields.Count != 1 || answer.Fields is null || !answer.Fields.TryGetValue(question.Fields[0].Name, out var v)) { return null; }
+        var field = question.Fields[0];
+        if (v.ValueKind == System.Text.Json.JsonValueKind.String)
+        {
+            var s = v.GetString()!;
+            return FirstLine(field.Type == FieldType.Choice ? field.Options?.FirstOrDefault(o => o.Value == s)?.Label ?? s : s);
+        }
+        if (field.Type == FieldType.Choice && v.ValueKind == System.Text.Json.JsonValueKind.Object && v.TryGetProperty("other", out var other) && other.ValueKind == System.Text.Json.JsonValueKind.String)
+        {
+            return FirstLine(other.GetString()!);
+        }
+        return null;
+    }
+
+    static string? FirstLine(string text)
+    {
+        var lines = text.Trim().Split(["\r\n", "\r", "\n", "\u0085", "\u2028", "\u2029"], StringSplitOptions.None);
+        var first = lines[0].Trim();
+        if (first.Length == 0) { return null; }
+        var chars = first.EnumerateRunes().ToList();
+        var cut = chars.Count > ValueMax;
+        var shown = cut ? string.Concat(chars.Take(ValueMax - 1)).TrimEnd() : first;
+        return HiddenText.Reveal(cut || lines.Length > 1 ? $"{shown}…" : shown);
+    }
+}
+
+// Times one line's receipt. describe(delivery, stalled): its words now. show(line): puts them on
+// the line, called on the UI when they change. announce(speech): what a screen reader hears,
+// rate-limited here.
+public sealed class Receipt : IDisposable
+{
+    // What a request's receipt has been through, kept apart from any one view model: a question's
+    // is made afresh when its machine's capabilities change, and the quiet window, the dwell, the
+    // stalls and what was announced belong to the request.
+    sealed class History
+    {
+        public TimeSpan Start;
+        public string? Stage;
+        public TimeSpan StageAt;
+        public TimeSpan? SendingSince;
+        public ShownLine? Shown;
+        public string? Said;
+    }
+
+    sealed record ShownLine(string Key, TimeSpan At, ReceiptLine Line, bool InFlight);
+
+    const int Keep = 50;
+    static readonly Lock Gate = new();
+    static readonly Dictionary<string, History> Histories = [];
+    static readonly Queue<string> Order = new();
+
+    readonly TimeProvider time;
+    readonly IUiDispatcher ui;
+    readonly Func<Delivery, bool, ReceiptLine> describe;
+    readonly Action<ReceiptLine> show;
+    readonly Action<string> announce;
+    Delivery? entry;
+    ReceiptLine? instead;
+    ITimer? timer;
+    ITimer? sayTimer;
+    string? drawn;
+    string? pending;
+    TimeSpan saidAt = TimeSpan.MinValue;
+    bool disposed;
+
+    public Receipt(TimeProvider time, IUiDispatcher ui, Func<Delivery, bool, ReceiptLine> describe, Action<ReceiptLine> show, Action<string> announce)
+    {
+        (this.time, this.ui, this.describe, this.show, this.announce) = (time, ui, describe, show, announce);
+    }
+
+    TimeSpan Now() => TimeSpan.FromSeconds((double)time.GetTimestamp() / time.TimestampFrequency);
+
+    // instead: a line that isn't the delivery's (the machine is not current, files being read),
+    // shown as it is until the next Show without one.
+    public void Show(Delivery? e, ReceiptLine? instead = null)
+    {
+        (entry, this.instead) = (e, instead);
+        Tick();
+    }
+
+    public void Dispose()
+    {
+        disposed = true;
+        timer?.Dispose();
+        sayTimer?.Dispose();
+    }
+
+    static History HistoryFor(string request, TimeSpan now)
+    {
+        lock (Gate)
+        {
+            if (Histories.TryGetValue(request, out var h)) { return h; }
+            h = new History { Start = now, StageAt = now };
+            Histories[request] = h;
+            Order.Enqueue(request);
+            if (Order.Count > Keep) { Histories.Remove(Order.Dequeue()); }
+            return h;
+        }
+    }
+
+    static bool Uploading(Delivery e) => e.Progress is { Total: > 0 } p && p.Sent < p.Total;
+
+    // When the delivery's current state stalls, or null for one that doesn't.
+    static TimeSpan? StallDue(Delivery e, History h)
+    {
+        if (e.State != DeliveryState.Sending || Uploading(e)) { return null; }
+        // A send that went again (a lost response, a reconnect) has been going a while: Still sending….
+        if (e.Stage is null) { return e.Attempts > 1 ? h.StageAt : h.SendingSince + ReceiptTiming.StillSending; }
+        return e.Stage switch
+        {
+            DeliveryProgress.Received => h.StageAt + ReceiptTiming.SentStall,
+            DeliveryProgress.Typed => h.StageAt + ReceiptTiming.PassedStall,
+            _ => null,
+        };
+    }
+
+    void Tick()
+    {
+        if (disposed) { return; }
+        timer?.Dispose();
+        timer = null;
+        if (instead is not null) { Put(instead, null); return; }
+        if (entry is not { } e) { Put(ReceiptLine.None, null); return; }
+        var t = Now();
+        var h = HistoryFor(e.Request, t);
+        var inFlight = e.State is DeliveryState.Sending or DeliveryState.Waiting;
+        if (!inFlight)
+        {
+            // An outcome is never held, and replaces whatever shows.
+            Shown(h, describe(e, false), t, inFlight: false);
+            return;
+        }
+        if (e.Stage != h.Stage) { (h.Stage, h.StageAt) = (e.Stage, t); }
+        if (Uploading(e)) { h.SendingSince = null; }
+        else if (e.State == DeliveryState.Sending && e.Stage is null) { h.SendingSince ??= t; }
+        var due = StallDue(e, h);
+        var line = describe(e, due is { } d0 && t >= d0);
+        TimeSpan? wake = due is { } d && t < d ? d : null;
+        if (t < h.Start + ReceiptTiming.Quiet)
+        {
+            Put(ReceiptLine.Quiet, null);
+            wake = h.Start + ReceiptTiming.Quiet;
+        }
+        else if (h.Shown is { InFlight: true } s && s.Key != line.Key && t < s.At + ReceiptTiming.Dwell)
+        {
+            // The state showing hasn't been up long enough to read: it stays, then the furthest reached.
+            Put(s.Line, null);
+            wake = wake is { } w && w < s.At + ReceiptTiming.Dwell ? w : s.At + ReceiptTiming.Dwell;
+        }
+        else
+        {
+            Shown(h, line, t, inFlight: true);
+        }
+        if (wake is { } at)
+        {
+            var delay = at - t;
+            timer = time.CreateTimer(_ => ui.Post(Tick), null, delay > TimeSpan.Zero ? delay : TimeSpan.Zero, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    void Shown(History h, ReceiptLine line, TimeSpan t, bool inFlight)
+    {
+        h.Shown = h.Shown is { } s && s.Key == line.Key ? s with { Line = line } : new ShownLine(line.Key, t, line, inFlight);
+        Put(line, h);
+    }
+
+    void Put(ReceiptLine line, History? h)
+    {
+        var signature = $"{line.Tone}|{line.Mark}|{line.Whole}";
+        if (signature != drawn)
+        {
+            drawn = signature;
+            show(line);
+        }
+        if (h is not null && line.Speech is { } speech && speech != h.Said)
+        {
+            h.Said = speech;
+            Announce(speech);
+        }
+    }
+
+    void Announce(string text)
+    {
+        pending = text;
+        var wait = saidAt == TimeSpan.MinValue ? TimeSpan.Zero : saidAt + ReceiptTiming.AnnounceGap - Now();
+        if (wait <= TimeSpan.Zero) { Flush(); }
+        else { sayTimer ??= time.CreateTimer(_ => ui.Post(Flush), null, wait, Timeout.InfiniteTimeSpan); }
+    }
+
+    void Flush()
+    {
+        sayTimer?.Dispose();
+        sayTimer = null;
+        if (disposed || pending is not { } text) { return; }
+        pending = null;
+        saidAt = Now();
+        announce(text);
+    }
+}
