@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -43,6 +44,12 @@ public sealed class HostConnection : IAsyncDisposable
         this.connect = connect;
         this.ui = ui;
         this.log = log ?? (_ => { });
+        // A resumed snapshot that can't be whole (v1-sessions.md, Resuming without a snapshot) is
+        // asked for again in full, on the channel followed now; an older channel's ends with it.
+        Sessions.SnapshotRefused += on =>
+        {
+            if (on is not null && ReferenceEquals(on, Volatile.Read(ref pumping))) { Resync(); }
+        };
     }
 
     public static HostConnection ForProfile(string profileFolder, IUiDispatcher ui, Action<string>? log = null) =>
@@ -232,7 +239,7 @@ public sealed class HostConnection : IAsyncDisposable
                     if (update is not null) { ui.Post(() => { if (Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; } }); }
                 }
                 else { ui.Post(() => Update = null); }
-                if (Subscribes) { await SubscribeSessionsAsync(ch, ct); }
+                if (Subscribes) { await SubscribeSessionsAsync(ch, hello, ct); }
                 ui.Post(() => SetState(LinkState.Connected, null));
                 Volatile.Read(ref connected).TrySetResult();
                 log($"connected to the host ({hello.Machine.Name}, {hello.Machine.HostVersion})");
@@ -343,15 +350,25 @@ public sealed class HostConnection : IAsyncDisposable
         }
     }
 
-    async Task SubscribeSessionsAsync(IClientChannel ch, CancellationToken ct)
+    async Task SubscribeSessionsAsync(IClientChannel ch, HelloResult hello, CancellationToken ct)
     {
         // The snapshot is marked before the request goes, so no upsert of it is missed. Only a
         // sessions.synced received after the response, on this channel, ends it (SessionStore).
-        ui.Post(() => Sessions.BeginSnapshot(ch));
-        // Its result (revision, count) is not used: read strictly, a result the app could not read
-        // ended the connection, and every reconnect asked again (#446).
-        var (_, before) = await ch.CallOrderedAsync(Ops.SessionsSubscribe, ct: ct);
-        ui.Post(() => Sessions.Answered(ch, before));
+        // Of a host that offers patches, they are asked for, and a list held whole from this run of
+        // the host is resumed rather than sent again (#601). A host that offers none is asked
+        // exactly as before. The resume point is read here, off the UI thread, and may be a moment
+        // old: an older revision is still true, and a list made not whole meanwhile is caught when
+        // the resumed snapshot ends (SessionStore.Finish), which then asks again in full.
+        var patch = hello.Capabilities.Contains(AgentBridge.Protocol.Capabilities.SessionsPatch);
+        var instance = hello.Machine.Instance;
+        var request = patch ? new SubscribeRequest { Patch = true, Since = Sessions.ResumeFrom(instance) } : null;
+        ui.Post(() => Sessions.BeginSnapshot(ch, patch ? instance : null));
+        // Its result is read loosely, only for resumed: read strictly, a result the app could not
+        // read ended the connection, and every reconnect asked again (#446).
+        var (result, before) = await ch.CallOrderedAsync(Ops.SessionsSubscribe, request, ct: ct);
+        var resumed = request?.Since is not null && result.ValueKind == JsonValueKind.Object
+            && result.TryGetProperty("resumed", out var r) && r.ValueKind == JsonValueKind.True;
+        ui.Post(() => Sessions.Answered(ch, before, resumed));
     }
 
     // The account's other machines' readings too, where the host keeps them (usage.shared, #172).
@@ -391,7 +408,7 @@ public sealed class HostConnection : IAsyncDisposable
             if (update is not null) { ui.Post(() => { if (Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; Changed?.Invoke(); } }); }
         }
         else { ui.Post(() => { if (Update is not null) { Update = null; Changed?.Invoke(); } }); }
-        await SubscribeSessionsAsync(ch, ct);
+        await SubscribeSessionsAsync(ch, hello, ct);
     }
     // What the host offers now, and its status (whose agent-ha-bridge note the host works out
     // when asked rather than announcing). Applied only when something changed.
@@ -424,6 +441,11 @@ public sealed class HostConnection : IAsyncDisposable
     async Task PumpAsync(IClientChannel ch, SemaphoreSlim gaps, CancellationToken ct)
     {
         long last = 0;
+        // Each session as this channel last gave it, the JSON as received and the seq it came with:
+        // what a session.patch applies to (v1-sessions.md, Patches). Read and written on the pump
+        // alone. A patch's base names one event of this channel, so an entry from an earlier
+        // subscription on it is never mistaken for the one a later patch is on.
+        var held = new Dictionary<string, (long Seq, JsonObject Json)>(StringComparer.Ordinal);
         try
         {
             await foreach (var ev in ch.Events.ReadAllAsync(ct))
@@ -434,36 +456,38 @@ public sealed class HostConnection : IAsyncDisposable
                 // Before anything of the event is applied: the snapshot under way is no longer the
                 // whole of anything, so nothing ends it, not even this event when it is the
                 // sessions.synced (#427).
-                if (ev.Seq != last + 1)
-                {
-                    var at = ev.Seq;
-                    ui.Post(() =>
-                    {
-                        // The snapshot only if it is this channel's (AbandonSnapshot checks): an old channel's
-                        // own snapshot must still end unfinished, or its sessions.synced, read next, ends it.
-                        Sessions.AbandonSnapshot(ch, at);
-                        // Gapped only for the channel followed now. RunAsync doesn't wait for a pump to
-                        // finish, so one draining a channel already replaced could read a gap after the new
-                        // channel's snapshot began, and unconfirm rows whose recovery it can't ask for (that
-                        // goes to its own channel's gap signal), holding them for good.
-                        if (ReferenceEquals(Volatile.Read(ref pumping), ch)) { Gapped?.Invoke(); }
-                    });
-                    gaps.Release();
-                }
+                if (ev.Seq != last + 1) { Resubscribe(ch, ev.Seq, gaps); }
                 last = ev.Seq;
-                Apply(ch, ev);
+                Apply(ch, ev, held, gaps);
             }
         }
         catch (OperationCanceledException) { }
+    }
+
+    // The channel's sessions may be missing changes from at on: they are subscribed again.
+    void Resubscribe(IClientChannel ch, long at, SemaphoreSlim gaps)
+    {
+        ui.Post(() =>
+        {
+            // The snapshot only if it is this channel's (AbandonSnapshot checks): an old channel's
+            // own snapshot must still end unfinished, or its sessions.synced, read next, ends it.
+            Sessions.AbandonSnapshot(ch, at);
+            // Gapped only for the channel followed now. RunAsync doesn't wait for a pump to
+            // finish, so one draining a channel already replaced could read a gap after the new
+            // channel's snapshot began, and unconfirm rows whose recovery it can't ask for (that
+            // goes to its own channel's gap signal), holding them for good.
+            if (ReferenceEquals(Volatile.Read(ref pumping), ch)) { Gapped?.Invoke(); }
+        });
+        gaps.Release();
     }
 
     // One message the app cannot read is refused, and the pump goes on (#446). Before, the
     // JsonException ended the pump and the connection with it, and the snapshot after the
     // reconnect sent the same record again: one malformed session kept the app reconnecting for
     // good, its other sessions frozen. Logged once per kind of event, without the record itself.
-    void Apply(IClientChannel ch, ChannelEvent ev)
+    void Apply(IClientChannel ch, ChannelEvent ev, Dictionary<string, (long Seq, JsonObject Json)> held, SemaphoreSlim gaps)
     {
-        try { ApplyOne(ch, ev); }
+        try { ApplyOne(ch, ev, held, gaps); }
         catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException or NotSupportedException) { Refused(ev.Name, e); }
     }
 
@@ -477,42 +501,103 @@ public sealed class HostConnection : IAsyncDisposable
         log($"refused a {kind} the app could not read ({e.GetType().Name}{where}); any more are refused without a word");
     }
 
+    // A session, from an upsert or a patch applied (revision: the patch's).
+    void Upserted(IClientChannel ch, JsonElement data, long seq, long? revision)
+    {
+        Session s;
+        bool exact;
+        try { s = Received.Read<Session>(data, out exact); }
+        catch (JsonException)
+        {
+            // A session the app could not read may be the busy one: the list is not
+            // the whole word on whether this host may be restarted.
+            ui.Post(Sessions.Refuse);
+            throw;
+        }
+        ui.Post(() =>
+        {
+            Sessions.Upsert(s, exact, ch, seq);
+            Sessions.Advance(ch, revision);
+        });
+    }
+
     // Host records are read as the spec says (Received): a field that cannot be read is absent,
     // unless the record is filed or decided on by it. The host's own status, a local-pipe record
     // the app alone reads, stays strict: its process id and start say which host it is.
-    void ApplyOne(IClientChannel ch, ChannelEvent ev)
+    void ApplyOne(IClientChannel ch, ChannelEvent ev, Dictionary<string, (long Seq, JsonObject Json)> held, SemaphoreSlim gaps)
     {
         switch (ev.Name)
         {
             case Events.SessionUpsert:
                 {
-                    Session s;
-                    bool exact;
-                    try { s = Received.Read<Session>(ev.Data, out exact); }
-                    catch (JsonException)
+                    // Kept as received, the JSON and not what the app made of it: what a patch on it
+                    // applies to. A session is refused only when its id is not text (Received), so
+                    // every session on the list is kept.
+                    if (ev.Data.ValueKind == JsonValueKind.Object && ev.Data.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
                     {
-                        // A session the app could not read may be the busy one: the list is not
-                        // the whole word on whether this host may be restarted.
-                        ui.Post(Sessions.Refuse);
-                        throw;
+                        held[id.GetString()!] = (ev.Seq, JsonObject.Create(ev.Data)!);
                     }
-                    var seq = ev.Seq;
-                    ui.Post(() => Sessions.Upsert(s, exact, ch, seq));
+                    Upserted(ch, ev.Data, ev.Seq, revision: null);
+                    break;
+                }
+            case Events.SessionPatch:
+                {
+                    SessionPatch p;
+                    JsonObject json;
+                    try
+                    {
+                        p = Received.Read<SessionPatch>(ev.Data);
+                        var had = held.TryGetValue(p.Id, out var h);
+                        json = SessionPatches.Apply(had ? h.Json : null, had ? h.Seq : null, p);
+                    }
+                    catch (Exception e) when (e is JsonException or SessionPatchException or InvalidOperationException)
+                    {
+                        // Dropped whole, and the list is no longer the host's: asked for again in
+                        // full, as after a gap, before anything after it is shown (v1-sessions.md,
+                        // A patch the client cannot apply).
+                        Refused(ev.Name, e);
+                        ui.Post(Sessions.Refuse);
+                        Resubscribe(ch, ev.Seq, gaps);
+                        break;
+                    }
+                    held[p.Id] = (ev.Seq, json);
+                    // Read exactly as an upsert of the same moment would be.
+                    Upserted(ch, JsonSerializer.SerializeToElement(json), ev.Seq, p.Revision);
                     break;
                 }
             case Events.SessionRemove:
                 {
-                    var r = Received.Read<SessionRemoved>(ev.Data);
-                    ui.Post(() => Sessions.Remove(r.Id));
+                    SessionRemoved r;
+                    try { r = Received.Read<SessionRemoved>(ev.Data); }
+                    catch (JsonException)
+                    {
+                        // A session still listed may have ended: the list is not the host's whole
+                        // list, so nothing resumes from it.
+                        ui.Post(Sessions.Refuse);
+                        throw;
+                    }
+                    held.Remove(r.Id);
+                    ui.Post(() =>
+                    {
+                        Sessions.Remove(r.Id);
+                        Sessions.Advance(ch, r.Revision);
+                    });
                     break;
                 }
             case Events.SessionsSynced:
                 {
                     // Read like any other record: one the app cannot read ends no snapshot, so it
-                    // removes no session and lifts no discovery hold.
-                    var held = Received.Read<SessionsSynced>(ev.Data).DiscoveryHeld;
+                    // removes no session and lifts no discovery hold. A resumed one is then asked
+                    // for again in full: its live set is what drops the sessions that ended.
                     var seq = ev.Seq;
-                    ui.Post(() => Sessions.EndSnapshot(held, ch, seq));
+                    SessionsSynced synced;
+                    try { synced = Received.Read<SessionsSynced>(ev.Data); }
+                    catch (JsonException)
+                    {
+                        ui.Post(() => Sessions.RefuseSynced(ch, seq));
+                        throw;
+                    }
+                    ui.Post(() => Sessions.EndSnapshot(synced.DiscoveryHeld, ch, seq, synced.Revision, synced.Live));
                     break;
                 }
             case Events.DiscoveryChanged:
@@ -580,7 +665,7 @@ public sealed class SessionStore
         // A discovery.changed read after a sessions.synced that still waits on its subscribe's
         // answer is the newer word: finishing that snapshot later must not put the synced's older
         // hold back, which hid a newly reported hold until the next change.
-        if (early is { } e) { early = (e.Seq, held); }
+        if (early is { } e) { early = e with { Held = held }; }
         ApplyHeld(held);
     }
 
@@ -598,41 +683,87 @@ public sealed class SessionStore
     // ended this one early with half its sessions; one from an earlier channel ends nothing now.
     object? snapshotOn;
     long? snapshotAfter;
-    // A synced on the right channel that was read before the response was known.
-    (long Seq, DiscoveryHeld? Held)? early;
+    // A synced on the right channel that was read before the response was known (Unreadable: one
+    // the app could not read, which a resumed snapshot cannot end with).
+    readonly record struct Early(long Seq, DiscoveryHeld? Held, long Revision, IReadOnlyList<string>? Live, bool Unreadable = false);
+    Early? early;
     // Upserts on that channel read before the response was known: counted towards the snapshot
     // once it is, if they came after it. An earlier subscription's upsert counted, and a session
     // that ended before the new snapshot was taken stayed on the list for good.
     List<(long Seq, string Id)>? earlyIds;
+    // The run of the host the snapshot under way is asked of (hello's machine.instance; null for a
+    // host that offers no patches), and whether its subscribe resumed: only the sessions changed
+    // since follow, and its synced's live set says which are left.
+    string? snapshotInstance;
+    bool snapshotResumed;
+
+    // Where a subscribe can resume from (v1-sessions.md, Resuming without a snapshot): the run of
+    // the host the list came from and the revision it is whole at, while it is whole. Written on
+    // the UI thread, read by the connection as it subscribes, so held as one record.
+    sealed record ResumePoint(string? Instance, long Revision, bool Whole);
+    ResumePoint? resume;
+    // The channel whose patches and removals move the revision: the one whose synced made the list
+    // whole, until a gap in its events. What came before a gap all arrived, so the revision held
+    // then is still true; what came after it may not have.
+    object? tracking;
 
     public void BeginSnapshot() => BeginSnapshot(null);
 
+    public void BeginSnapshot(object? on) => BeginSnapshot(on, null);
+
     // on: the channel the subscribe goes on; null for a snapshot whose synced is taken whenever it
-    // comes.
-    public void BeginSnapshot(object? on)
+    // comes. instance: the run of the host it is asked of, to resume from later.
+    public void BeginSnapshot(object? on, string? instance)
     {
         snapshot = new HashSet<string>(StringComparer.Ordinal);
         snapshotOn = on;
         snapshotAfter = on is null ? long.MinValue : null;
         early = null;
         earlyIds = null;
+        snapshotInstance = instance;
+        snapshotResumed = false;
+        tracking = null;
         Complete = false;
         refused = false;
         Snapshots++;
         SnapshotBegun?.Invoke();
     }
 
+    // sessions.subscribe's since for that run of the host, or null when the list is not whole
+    // from it. Read on any thread.
+    public SubscribeSince? ResumeFrom(string? instance) =>
+        Volatile.Read(ref resume) is { Whole: true, Instance: { } i, Revision: >= 0 and var r } && instance is not null && i == instance
+            ? new SubscribeSince { Instance = i, Revision = r }
+            : null;
+
+    // A patch or removal on that channel brought the list to revision.
+    public void Advance(object on, long? revision)
+    {
+        if (revision is not { } at || tracking is null || !ReferenceEquals(on, tracking) || resume is not { Whole: true } r) { return; }
+        Volatile.Write(ref resume, r with { Revision = at });
+    }
+
+    // A resumed snapshot that can't be whole was dropped: the connection asks for the sessions again
+    // on that channel, and, the list no longer whole, in full.
+    public event Action<object?>? SnapshotRefused;
+
     // The subscribe on that channel was answered after the event numbered before (-1: none).
-    public void Answered(object on, long before)
+    public void Answered(object on, long before) => Answered(on, before, resumed: false);
+
+    // resumed: the host said so, to a subscribe that gave since.
+    public void Answered(object on, long before, bool resumed)
     {
         if (snapshot is null || !ReferenceEquals(on, snapshotOn) || snapshotAfter is not null) { return; }
         snapshotAfter = before;
+        snapshotResumed = resumed;
         foreach (var (seq, id) in earlyIds ?? []) { if (seq > before) { snapshot.Add(id); } }
         earlyIds = null;
         if (early is { } e)
         {
             early = null;
-            if (e.Seq > before) { Finish(e.Held); }
+            if (e.Seq <= before) { }
+            else if (e.Unreadable) { if (resumed) { Reject(); } }
+            else { Finish(e.Held, e.Revision, e.Live); }
         }
     }
 
@@ -641,6 +772,8 @@ public sealed class SessionStore
     // another. Lost before its response, they were the earlier subscription's, which it covers.
     public void AbandonSnapshot(object on, long seq)
     {
+        // The revision stops moving with what this channel sends after the gap.
+        if (ReferenceEquals(on, tracking)) { tracking = null; }
         if (snapshot is null || !ReferenceEquals(on, snapshotOn) || seq <= snapshotAfter) { return; }
         snapshot = null;
         early = null;
@@ -689,7 +822,14 @@ public sealed class SessionStore
         Upserted?.Invoke(s);
     }
 
-    public void Refuse() => refused = true;
+    // A session.upsert the app could not read, or a session.patch or session.remove it could not
+    // read or apply: the list is not the host's whole word on which sessions are busy, nor whole to
+    // resume from until a full snapshot.
+    public void Refuse()
+    {
+        refused = true;
+        if (resume is { Whole: true } r) { Volatile.Write(ref resume, r with { Whole = false }); }
+    }
 
     public void Remove(string id)
     {
@@ -702,27 +842,72 @@ public sealed class SessionStore
     public void EndSnapshot(DiscoveryHeld? held)
     {
         if (snapshot is null) { return; }
-        Finish(held);
+        Finish(held, null, null);
     }
 
     // A sessions.synced read on a channel at seq.
-    public void EndSnapshot(DiscoveryHeld? held, object on, long seq)
+    public void EndSnapshot(DiscoveryHeld? held, object on, long seq) => EndSnapshot(held, on, seq, 0, null);
+
+    // With the synced's revision, and its live set, which ends a resumed snapshot.
+    public void EndSnapshot(DiscoveryHeld? held, object on, long seq, long revision, IReadOnlyList<string>? live)
     {
         if (snapshot is null || !ReferenceEquals(on, snapshotOn)) { return; }
         if (snapshotAfter is not { } after)
         {
-            if (early is not { } e || seq > e.Seq) { early = (seq, held); }
+            if (early is not { } e || seq > e.Seq) { early = new(seq, held, revision, live); }
             return;
         }
-        if (seq > after) { Finish(held); }
+        if (seq > after) { Finish(held, revision, live); }
     }
 
-    void Finish(DiscoveryHeld? held)
+    // A sessions.synced on that channel at seq the app could not read. It ends no snapshot, as
+    // before; a resumed one can't be whole without its live set, so it is asked for again in full.
+    public void RefuseSynced(object on, long seq)
+    {
+        if (snapshot is null || !ReferenceEquals(on, snapshotOn)) { return; }
+        if (snapshotAfter is not { } after)
+        {
+            if (early is not { } e || seq > e.Seq) { early = new(seq, null, 0, null, Unreadable: true); }
+            return;
+        }
+        if (seq > after && snapshotResumed) { Reject(); }
+    }
+
+    // The snapshot under way can't be whole: dropped, and the list not resumed from again.
+    void Reject()
+    {
+        var on = snapshotOn;
+        snapshot = null;
+        early = null;
+        earlyIds = null;
+        Refuse();
+        SnapshotRefused?.Invoke(on);
+    }
+
+    void Finish(DiscoveryHeld? held, long? revision, IReadOnlyList<string>? live)
     {
         if (snapshot is not { } seen) { return; }
+        if (snapshotResumed)
+        {
+            // Every live id must be one sent since the response or held from before, and the list
+            // must have stayed whole since resuming was asked for: a session the host thinks the
+            // app has, but it dropped, would otherwise be missing for good (v1-sessions.md, When
+            // the list is whole again).
+            if (live is null || refused || resume is not { Whole: true } || live.Any(id => !seen.Contains(id) && !sessions.ContainsKey(id)))
+            {
+                Reject();
+                return;
+            }
+            seen = new HashSet<string>(live, StringComparer.Ordinal);
+        }
         snapshot = null;
         Complete = true;
         foreach (var id in sessions.Keys.Where(id => !seen.Contains(id)).ToList()) { Remove(id); }
+        if (revision is { } at)
+        {
+            Volatile.Write(ref resume, new ResumePoint(snapshotInstance, at, Whole: !refused));
+            tracking = snapshotOn;
+        }
         ApplyHeld(held);
         Synced?.Invoke();
     }

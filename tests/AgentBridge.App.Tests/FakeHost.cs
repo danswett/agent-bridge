@@ -34,11 +34,29 @@ sealed class FakeHost : IAsyncDisposable
     public int SyncedSent => Volatile.Read(ref syncedSent);
     int syncedSent;
     public HostStatus Status { get; set; } = StatusOf();
+    // hello's machine.instance: the run of the host a list is resumed in (#601).
+    public string? Instance { get; set; }
+    // As a host that offers sessions.patch keeps it (SessionService): the revision of its last
+    // change, each session's, and what it sent each channel that asked for patches.
+    long revision;
+    readonly Dictionary<string, long> changedAt = new(StringComparer.Ordinal);
+    readonly ConcurrentDictionary<IProtocolChannel, Feed> feeds = new();
+    // Added once to a resumed sessions.synced's live set: an id the app neither holds nor was sent.
+    public string? Ghost { get; set; }
+    public long Revision { get { lock (Sessions) { return revision; } } }
+    // Each event sent, by name, in order.
+    public ConcurrentQueue<(string Name, JsonElement Data)> EventsSent { get; } = new();
+
+    sealed class Feed
+    {
+        public bool Live;
+        public readonly Dictionary<string, (long Seq, System.Text.Json.Nodes.JsonObject Json)> Sent = new(StringComparer.Ordinal);
+    }
 
     public FakeHost()
     {
         Directory.CreateDirectory(folder);
-        On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("host-id", "Test PC", "windows", "0.1.0"), [.. Capabilities]));
+        On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("host-id", "Test PC", "windows", "0.1.0", Instance: Instance), [.. Capabilities]));
         On(HostOps.Subscribe, _ => Status);
         On(HostOps.Status, _ => Status);
         On(UsageProtocol.Subscribe, _ => UsageReport.Empty);
@@ -99,18 +117,56 @@ sealed class FakeHost : IAsyncDisposable
         {
             var n = Interlocked.Increment(ref subscribes);
             OnSubscribe?.Invoke(n);
-            List<Session> snapshot;
-            lock (Sessions) { snapshot = [.. Sessions]; }
-            var hold = HoldSynced;
-            return Task.FromResult<object?>(new ChannelReply(SubscribeReply ?? new SubscribeResult(1, snapshot.Count), async c =>
+            // A client asks for patches, and to resume, only of a host that offers them.
+            var patch = Capabilities.Contains(AgentBridge.Protocol.Capabilities.SessionsPatch)
+                && data.ValueKind == JsonValueKind.Object && data.TryGetProperty("patch", out var p) && p.ValueKind == JsonValueKind.True;
+            long? since = null;
+            if (patch && Instance is not null && data.TryGetProperty("since", out var sv) && sv.ValueKind == JsonValueKind.Object
+                && sv.TryGetProperty("instance", out var si) && si.ValueKind == JsonValueKind.String && si.GetString() == Instance
+                && sv.TryGetProperty("revision", out var sr) && sr.ValueKind == JsonValueKind.Number && sr.TryGetInt64(out var r))
             {
-                foreach (var s in snapshot) { await c.SendEventAsync(Events.SessionUpsert, s); }
+                since = r;
+            }
+            List<Session> snapshot;
+            List<string> live;
+            long at;
+            lock (Sessions)
+            {
+                at = revision;
+                if (since > at) { since = null; }
+                snapshot = since is { } after ? [.. Sessions.Where(s => changedAt.GetValueOrDefault(s.Id) > after)] : [.. Sessions];
+                live = [.. Sessions.Select(s => s.Id)];
+            }
+            string? ghost = null;
+            if (since is not null) { ghost = Ghost; Ghost = null; }
+            if (ghost is not null) { live.Add(ghost); }
+            Feed? feed = patch ? new Feed() : null;
+            if (feed is not null) { feeds[ch] = feed; } else { feeds.TryRemove(ch, out _); }
+            var hold = HoldSynced;
+            object result = since is null ? new SubscribeResult(patch ? at : 1, snapshot.Count) : new SubscribeResult(at, snapshot.Count, Resumed: true);
+            return Task.FromResult<object?>(new ChannelReply(SubscribeReply ?? result, async c =>
+            {
+                foreach (var s in snapshot)
+                {
+                    var seq = await Send(c, Events.SessionUpsert, s);
+                    if (feed is not null) { lock (feed) { feed.Sent[s.Id] = (seq, SessionPatches.Json(s)); } }
+                }
                 if (hold is not null) { await hold.Task; }
-                await c.SendEventAsync(Events.SessionsSynced, new SessionsSynced(1, Held));
+                // Live before the synced goes, as SessionService's feed is: the app may take the synced,
+                // and the test send its next change, before this write returns.
+                if (feed is not null) { lock (feed) { feed.Live = true; } }
+                await Send(c, Events.SessionsSynced, feed is null ? new SessionsSynced(1, Held) : new SessionsSynced(at, Held, since is null ? null : live));
                 Interlocked.Increment(ref syncedSent);
             }));
         }
         return ops.TryGetValue(op, out var answer) ? answer(data) : Task.FromResult<object?>(null);
+    }
+
+    async Task<long> Send(IProtocolChannel ch, string name, object data)
+    {
+        var seq = await ch.SendEventAsync(name, data);
+        EventsSent.Enqueue((name, JsonSerializer.SerializeToElement(data, ProtocolJson.Options)));
+        return seq;
     }
 
     public async Task SendAsync(string name, object data)
@@ -119,17 +175,25 @@ sealed class FakeHost : IAsyncDisposable
         // (a reconnect, or a gap in the events) has it too. Announced only as an event, a session
         // was gone again from any snapshot after it, and its card with it. TrustTests' card to
         // open was never seen on Linux CI that way, ten times (#101).
+        long at = 0;
         if (name == Events.SessionUpsert && data is Session upserted)
         {
             lock (Sessions)
             {
-                var at = Sessions.FindIndex(s => s.Id == upserted.Id);
-                if (at >= 0) { Sessions[at] = upserted; } else { Sessions.Add(upserted); }
+                var i = Sessions.FindIndex(s => s.Id == upserted.Id);
+                if (i >= 0) { Sessions[i] = upserted; } else { Sessions.Add(upserted); }
+                at = ++revision;
+                changedAt[upserted.Id] = at;
             }
         }
         else if (name == Events.SessionRemove && data is SessionRemoved removed)
         {
-            lock (Sessions) { Sessions.RemoveAll(s => s.Id == removed.Id); }
+            lock (Sessions)
+            {
+                Sessions.RemoveAll(s => s.Id == removed.Id);
+                at = ++revision;
+                changedAt.Remove(removed.Id);
+            }
         }
         foreach (var ch in Channels.Distinct().Where(c => c.IsOpen))
         {
@@ -137,9 +201,37 @@ sealed class FakeHost : IAsyncDisposable
             // connection the app gave up on (a hello that took too long under load) or a quick look
             // at the host closed between IsOpen and the write, and the test failed with a broken
             // pipe on Linux (#101).
-            try { await ch.SendEventAsync(name, data); }
+            try
+            {
+                if (at > 0 && feeds.TryGetValue(ch, out var feed)) { await Fed(ch, feed, name, data, at); }
+                else { await Send(ch, name, data); }
+            }
             catch (IOException) when (!ch.IsOpen) { }
         }
+    }
+
+    // To a channel that asked for patches, as SessionService sends them: once its snapshot is
+    // whole, each change as a patch on what that channel was last sent, nothing for no change, and
+    // removals with the revision. The tests send one event at a time.
+    async Task Fed(IProtocolChannel ch, Feed feed, string name, object data, long at)
+    {
+        bool live;
+        lock (feed) { live = feed.Live; }
+        if (data is Session s)
+        {
+            var json = SessionPatches.Json(s);
+            (long Seq, System.Text.Json.Nodes.JsonObject Json) had;
+            bool sent;
+            lock (feed) { sent = feed.Sent.TryGetValue(s.Id, out had); }
+            var next = live ? SessionPatches.Next(sent ? had.Json : null, sent ? had.Seq : 0, json, at) : null;
+            if (live && next is null) { return; }
+            var seq = next is null ? await Send(ch, name, data) : await Send(ch, Events.SessionPatch, next);
+            lock (feed) { feed.Sent[s.Id] = (seq, json); }
+            return;
+        }
+        var gone = (SessionRemoved)data;
+        lock (feed) { feed.Sent.Remove(gone.Id); }
+        await Send(ch, name, live ? gone with { Revision = at } : gone);
     }
 
     public IReadOnlyList<JsonElement> Sent(string op) => [.. Received.Where(r => r.Op == op).Select(r => r.Data)];
