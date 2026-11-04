@@ -245,6 +245,9 @@ public sealed class SessionService
         return state;
     }
 
+    const int FocusesPerWindow = 20;
+    static readonly TimeSpan FocusWindow = TimeSpan.FromSeconds(10);
+
     // sessions.focus: kept for the channel, across subscribes on it, until it says again or closes.
     // A session it now shows whose change is being held goes at once.
     object Focus(IProtocolChannel channel, JsonElement data)
@@ -254,6 +257,18 @@ public sealed class SessionService
         try { focus = data.Deserialize<FocusRequest>(ProtocolJson.Options) ?? throw new ArgumentException("sessions.focus needs visible"); }
         catch (JsonException) { throw new ArgumentException("sessions.focus needs visible, and open only as a session id"); }
         var state = StateOf(channel);
+        // Each one puts a marker in the feed's queue; a client says it on a page or session change,
+        // so more than this in a window is a client gone wrong (#697).
+        lock (state)
+        {
+            var now = Time.GetUtcNow();
+            if (now - state.FocusWindow >= FocusWindow)
+            {
+                state.FocusWindow = now;
+                state.FocusCount = 0;
+            }
+            if (++state.FocusCount > FocusesPerWindow) { throw new InvalidOperationException($"sessions.focus is said at most {FocusesPerWindow} times in {FocusWindow.TotalSeconds:0} s"); }
+        }
         Volatile.Write(ref state.Focus, focus);
         state.Feed?.Refocus();
         return new { };
@@ -296,6 +311,9 @@ public sealed class SessionService
         public int Registered;
         // Null until the channel says (sessions.focus): every live change then goes at once, as before.
         public FocusRequest? Focus;
+        // sessions.focus said in the window that started at FocusWindow, under lock (this).
+        public DateTimeOffset FocusWindow = DateTimeOffset.MinValue;
+        public int FocusCount;
     }
 
     async Task<AnswerResult> AnswerAsync(IProtocolChannel channel, JsonElement data)
@@ -577,6 +595,8 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
         // change was made after Floor, so nothing sent meanwhile says a later revision: a client
         // that resumed from one would never be sent the change held here.
         readonly Dictionary<string, (SessionEvent Event, long Floor)> held = new(StringComparer.Ordinal);
+        // Each session as this channel was last sent it, patch or not: what Urgent compares with.
+        readonly Dictionary<string, Session> shown = new(StringComparer.Ordinal);
         readonly Lock timerGate = new();
         ITimer? timer;
         DateTimeOffset quietUntil = DateTimeOffset.MinValue;
@@ -615,7 +635,7 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
                         live = true;
                         if (synced.Revision > read) { read = synced.Revision; }
                     }
-                    if (live && ev.Data is Session session && Quiet(session.Id))
+                    if (live && ev.Data is Session session && Quiet(session.Id) && !Urgent(session))
                     {
                         var now = time.GetUtcNow();
                         // The first change after a quiet spell goes at once; the next ones wait for the
@@ -652,6 +672,25 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
 
         // Held only once the channel has said what it shows; the open session, while on screen, never.
         bool Quiet(string id) => Volatile.Read(ref state.Focus) is { } focus && !(focus.Visible && focus.Open == id);
+
+        // What a person must see at once, on screen or not: a question asked, answered or changed
+        // (its id, what it asks, its decision's choices, answerAtMachine), a session starting to
+        // wait or ask, or ending. Held with the rest, a phone on another session showed a new
+        // approval up to 12 s late (#697). Sent, it replaces what was held of the session.
+        bool Urgent(Session now)
+        {
+            // Not sent on this subscription: new, or left out of a resumed snapshot, where the client
+            // may still hold a question this change answers. Nothing to compare with, so at once,
+            // once per session per subscription.
+            if (!shown.TryGetValue(now.Id, out var before)) { return true; }
+            if (now.Status != before.Status && now.Status is SessionStatus.Waiting or SessionStatus.Ending) { return true; }
+            if (now.WaitingOn is not null && now.WaitingOn != before.WaitingOn) { return true; }
+            if (ReferenceEquals(now.Question, before.Question)) { return false; }
+            if (now.Question is null || before.Question is null) { return true; }
+            // Rebuilt on each read, so compared as sent: Fields is a list, which a record compares
+            // by reference. Only while a question is up, which is rare.
+            return JsonSerializer.Serialize(now.Question, ProtocolJson.Options) != JsonSerializer.Serialize(before.Question, ProtocolJson.Options);
+        }
 
         long? Cap(long? revision) => revision is { } r ? Math.Min(r, held.Values.Min(h => h.Floor)) : null;
 
@@ -699,6 +738,8 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
             {
                 var seq = await channel.SendEventAsync(name, data, stop.Token);
                 if (id is not null && json is not null) { sent[id] = (seq, json); }
+                if (ev.Data is Session session) { shown[session.Id] = session; }
+                else if (ev.Data is SessionRemoved removed) { shown.Remove(removed.Id); }
             }
             catch (MessageTooLargeException e)
             {

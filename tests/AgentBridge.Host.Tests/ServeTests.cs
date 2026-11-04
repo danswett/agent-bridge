@@ -15,6 +15,7 @@ public sealed class ServeTests : IAsyncLifetime
 {
     const string Id = "88888888-8888-4888-8888-888888888888";
     const string Other = "99999999-9999-4999-8999-999999999999";
+    const string Third = "77777777-7777-4777-8777-777777777777";
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
 
     readonly Fixture f = new();
@@ -404,6 +405,75 @@ public sealed class ServeTests : IAsyncLifetime
         Assert.Equal(Other, released.Id);
         Assert.Equal(source.Revision, released.Revision);
         Assert.Equal(0, feed.Held);
+    }
+
+    [Fact]
+    public async Task A_new_question_on_a_session_not_open_goes_at_once_while_another_sessions_change_stays_held()
+    {
+        var thirdEvents = f.CopilotSession(Third, 102, name: "Asking session");
+        f.Processes.Run(AgentKind.Copilot, 102);
+        var (ch, _, feed, before) = await FocusedWithAChangeHeldAsync();
+
+        Fixture.Append(thirdEvents, Copilot.User("go", 4), Copilot.TurnStart(5), Copilot.ToolStart("q1", "ask_user", new
+        {
+            message = "Which one?",
+            requestedSchema = new { properties = new { pick = new { type = "string", @enum = new[] { "a", "b" } } }, required = new[] { "pick" } },
+        }, 6));
+        await source.RefreshAsync();
+
+        var asked = await NextAsync(ch);
+        Assert.Equal(Third, asked.Data.GetProperty("id").GetString());
+        Assert.Contains("Which one?", asked.Data.GetRawText());
+        Assert.True(Received.Read<SessionPatch>(asked.Data).Revision <= before);
+        Assert.Equal(1, feed.Held);
+    }
+
+    // A resumed snapshot leaves out what did not change, which the client still holds, a pending
+    // question included: with nothing sent to compare with, a session's first change goes at once.
+    [Fact]
+    public async Task After_a_resume_the_first_change_of_a_session_not_sent_again_goes_at_once_while_another_stays_held()
+    {
+        var otherEvents = f.CopilotSession(Other, 101, name: "Quiet session");
+        f.Processes.Run(AgentKind.Copilot, 101);
+        await source.RefreshAsync();
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        SessionService.Feed? feed = null;
+        service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0", Instance: "run-1")) { Time = time };
+        service.FeedCreated += created => feed = (SessionService.Feed)created;
+        host.Hub.Handler = service.HandleAsync;
+        var first = await OpenAsync();
+        Result(await first.RequestAsync(Ops.SessionsSubscribe, new { patch = true }));
+        var revision = (await SnapshotAsync(first))[^1].Data.GetProperty("revision").GetInt64();
+        var ch = await OpenAsync();
+        Assert.True(Result(await ch.RequestAsync(Ops.SessionsSubscribe, new { patch = true, since = new { instance = "run-1", revision } })).GetProperty("resumed").GetBoolean());
+        Assert.Equal([Events.SessionsSynced], (await SnapshotAsync(ch)).Select(e => e.Name));
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = false }));
+
+        // The quiet session's first change goes for want of anything to compare with, its second
+        // after a quiet spell, its third is held.
+        for (var i = 0; i < 2; i++)
+        {
+            Fixture.Append(otherEvents, Copilot.Assistant("change " + i, 4 + i));
+            await source.RefreshAsync();
+            Assert.Equal(Other, Received.Read<SessionPatch>((await NextAsync(ch)).Data).Id);
+        }
+        Fixture.Append(otherEvents, Copilot.Assistant("held", 6));
+        await source.RefreshAsync();
+        await Wait.UntilAsync(() => feed!.Held == 1, "the quiet session's third change held", Patience);
+
+        await ChangeAsync("not sent since the resume", 7);
+        Assert.Equal(Id, Received.Read<SessionPatch>((await NextAsync(ch)).Data).Id);
+        Assert.Equal(1, feed!.Held);
+    }
+
+    [Fact]
+    public async Task A_channel_that_says_what_it_shows_too_often_is_refused()
+    {
+        var ch = await OpenAsync();
+        for (var i = 0; i < 20; i++) { Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = i % 2 == 0 ? Id : Other })); }
+
+        var refused = await ch.RequestAsync(Ops.SessionsFocus, new { visible = true });
+        Assert.False(refused.GetProperty("ok").GetBoolean());
     }
 
     [Fact]
