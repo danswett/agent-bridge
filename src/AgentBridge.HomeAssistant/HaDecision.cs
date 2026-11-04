@@ -190,7 +190,9 @@ public static partial class HaDecision
         }
         var room = QuestionMaxChars - leading - notes.Length - TerminalNote(held).Length - TruncatedNote.Length;
         var text = ShownText.Reveal(question.Message, rightToLeft: true);
-        var cut = false;
+        // One the host cut is already missing a part, whatever else holds it (a misleading
+        // reference wins the terminal reason over TooLong), so it is said even when it fits.
+        var cut = question.Truncated == true;
         while (true)
         {
             var fence = FenceFor(text);
