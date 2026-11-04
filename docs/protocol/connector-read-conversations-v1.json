@@ -22,7 +22,8 @@
           "capabilities": [
             "sessions.read",
             "sessions.patch",
-            "hello.changed"
+            "hello.changed",
+            "sessions.focus"
           ]
         }
       }

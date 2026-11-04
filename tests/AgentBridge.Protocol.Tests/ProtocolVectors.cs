@@ -246,6 +246,9 @@ public static class ProtocolVectors
             .Valid("patches-only", new SubscribeRequest { Patch = true })
             .Valid("as-before", new SubscribeRequest());
         f.Record<SubscribeSince>(Client).Valid("a-list-held-at-118", Since);
+        f.Record<FocusRequest>(Client)
+            .Valid("a-session-open", new FocusRequest { Visible = true, Open = SessionId })
+            .Valid("hidden", new FocusRequest { Visible = false });
         f.Record<SubscribeResult>(Host)
             .Valid("three-sessions", new SubscribeResult(118, 3))
             .Valid("resumed-with-one-changed", new SubscribeResult(131, 1, Resumed: true));

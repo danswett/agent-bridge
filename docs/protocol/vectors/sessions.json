@@ -5058,6 +5058,41 @@
         }
       ]
     },
+    "FocusRequest": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "a-session-open",
+          "json": {
+            "visible": true,
+            "open": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b"
+          }
+        },
+        {
+          "name": "hidden",
+          "json": {
+            "visible": false
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-visible",
+          "json": {
+            "open": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-open",
+          "json": {
+            "visible": true,
+            "open": 42
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
     "SubscribeResult": {
       "direction": "host",
       "valid": [

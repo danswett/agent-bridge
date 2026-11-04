@@ -243,6 +243,88 @@ public sealed class PushNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task A_device_on_screen_is_not_sent_a_finished_turn_it_sees_and_one_that_is_not_on_screen_is()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        notifier.Watching = device => device == Phone;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal([Laptop], Received().Select(r => r.Device));
+    }
+
+    [Fact]
+    public async Task A_finished_turn_waiting_for_the_relay_is_not_sent_to_a_device_that_has_come_on_screen_since()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, notifier.Pending);
+
+        notifier.Watching = device => device == Phone;
+        var next = new FakeSender(Account);
+        notifier.Attach(next);
+        await notifier.PumpAsync();
+        Assert.Empty(next.Sent);
+        Assert.Equal(0, notifier.Pending);
+    }
+
+    [Fact]
+    public async Task Finished_turns_of_one_session_reach_a_device_at_most_once_in_ten_minutes_until_it_replies()
+    {
+        Start();
+        Subscribe(Phone);
+        async Task TurnAsync(string response, int turns)
+        {
+            source.Upsert(S("s1", SessionStatus.Working, turns: turns - 1));
+            source.Upsert(S("s1", SessionStatus.Idle, response: response, turns: turns));
+            await After(TimeSpan.FromSeconds(3));
+        }
+        string LastBody() => Received()[^1].Notification.GetProperty("body").GetString()!;
+
+        await TurnAsync("one", 1);
+        Assert.Single(sender.Sent);
+        await TurnAsync("two", 2);
+        await TurnAsync("three", 3);
+        Assert.Single(sender.Sent);
+
+        // Only the latest, once the ten minutes since the last are up.
+        await After(new PushOptions().FinishedCollapse);
+        Assert.Equal(2, sender.Sent.Count);
+        Assert.Equal("DEV · finished\nthree", LastBody());
+
+        // A reply from the phone: the turn it starts is awaited there, and goes at once.
+        notifier.Replied(Phone, "s1");
+        await TurnAsync("four", 4);
+        Assert.Equal(3, sender.Sent.Count);
+        Assert.Equal("DEV · finished\nfour", LastBody());
+    }
+
+    [Fact]
+    public async Task A_collapsed_finished_turn_is_dropped_if_the_session_is_working_again_when_it_is_due()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "one"));
+        await After(TimeSpan.FromSeconds(3));
+        source.Upsert(S("s1", SessionStatus.Working, response: "one"));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "two", turns: 2));
+        await After(TimeSpan.FromSeconds(3));
+        source.Upsert(S("s1", SessionStatus.Working, response: "two", turns: 2));
+
+        await After(new PushOptions().FinishedCollapse);
+        Assert.Single(sender.Sent);
+        Assert.Equal(0, notifier.Pending);
+    }
+
+    [Fact]
     public async Task A_question_already_pending_when_the_host_starts_is_notified_as_after_a_daemon_restart()
     {
         Start(existing: S("s1", SessionStatus.Waiting, question: Q("q1", "Approve?", QuestionKind.Approval)));

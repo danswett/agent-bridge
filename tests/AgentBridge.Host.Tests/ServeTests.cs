@@ -5,6 +5,7 @@ using AgentBridge.Host.Core;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // The host's Protocol v1 service end to end: fixture sessions read by the real
@@ -92,7 +93,7 @@ public sealed class ServeTests : IAsyncLifetime
         Assert.Equal(1, hello.GetProperty("protocol").GetInt32());
         Assert.Equal("Test host", hello.GetProperty("machine").GetProperty("name").GetString());
         Assert.Equal("windows", hello.GetProperty("machine").GetProperty("os").GetString());
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus], hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
     }
 
     [Fact]
@@ -355,6 +356,67 @@ public sealed class ServeTests : IAsyncLifetime
         await source.RefreshAsync();
         var woke = Received.Read<SessionPatch>((await NextAsync(second)).Data);
         Assert.Equal((Other, (long?)null), (woke.Id, woke.Base));
+    }
+
+    // A client subscribed for patches that shows the fixture's session, beside a second one it
+    // does not; the quiet interval on a fake clock, the source's own 250 ms on the real one. The
+    // second session's first change after a quiet spell goes at once, and its next is held.
+    async Task<(SecureChannel Channel, FakeTimeProvider Time, SessionService.Feed Feed, long Before)> FocusedWithAChangeHeldAsync()
+    {
+        var otherEvents = f.CopilotSession(Other, 101, name: "Quiet session");
+        f.Processes.Run(AgentKind.Copilot, 101);
+        await source.RefreshAsync();
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        SessionService.Feed? feed = null;
+        service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { Time = time };
+        service.FeedCreated += created => feed = (SessionService.Feed)created;
+        host.Hub.Handler = service.HandleAsync;
+        var ch = await OpenAsync();
+        Result(await ch.RequestAsync(Ops.SessionsSubscribe, new { patch = true }));
+        await SnapshotAsync(ch);
+        Assert.Equal("{}", Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Id })).GetRawText());
+
+        Fixture.Append(otherEvents, Copilot.Assistant("first", 4));
+        await source.RefreshAsync();
+        Assert.Equal(Other, Received.Read<SessionPatch>((await NextAsync(ch)).Data).Id);
+        var before = source.Revision;
+        Fixture.Append(otherEvents, Copilot.Assistant("second", 5));
+        await source.RefreshAsync();
+        await Wait.UntilAsync(() => feed!.Held == 1, "the quiet session's next change held", Patience);
+        return (ch, time, feed!, before);
+    }
+
+    [Fact]
+    public async Task Once_a_client_says_what_it_shows_other_sessions_changes_wait_for_the_quiet_interval_and_no_revision_passes_them()
+    {
+        var (ch, time, feed, before) = await FocusedWithAChangeHeldAsync();
+
+        await ChangeAsync("shown at once", 6);
+        var shown = Received.Read<SessionPatch>((await NextAsync(ch)).Data);
+        Assert.Equal(Id, shown.Id);
+        // The held change was made after `before`: a client resuming from a later revision would
+        // never be sent it.
+        Assert.True(shown.Revision <= before, $"revision {shown.Revision} passes the change held since {before}");
+        Assert.False(ch.Events.TryRead(out _));
+
+        time.Advance(service.QuietInterval);
+        var released = Received.Read<SessionPatch>((await NextAsync(ch)).Data);
+        Assert.Equal(Other, released.Id);
+        Assert.Equal(source.Revision, released.Revision);
+        Assert.Equal(0, feed.Held);
+    }
+
+    [Fact]
+    public async Task A_session_the_client_opens_has_its_held_change_sent_at_once()
+    {
+        var (ch, _, feed, _) = await FocusedWithAChangeHeldAsync();
+
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Other }));
+
+        var released = Received.Read<SessionPatch>((await NextAsync(ch)).Data);
+        Assert.Equal(Other, released.Id);
+        Assert.Equal(source.Revision, released.Revision);
+        Assert.Equal(0, feed.Held);
     }
 
     [Theory]

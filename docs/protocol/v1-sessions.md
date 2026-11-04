@@ -249,6 +249,7 @@ once whenever `machine.readOnly` or `capabilities` would differ from what it las
 | `sessions.read` | `sessions.list`, `session.get`, `sessions.subscribe` |
 | `sessions.patch` | `sessions.subscribe` takes `patch` and `since`: live changes as `session.patch`, only what changed ([Patches](#patches-sessionpatch)), and a reconnect to the same run of the host sent only the sessions that changed meanwhile ([Resuming](#resuming-without-a-snapshot)). Without it, or without asking, a client gets whole upserts and whole snapshots as before |
 | `hello.changed` | `hello` takes `{ "changes": true }`, and the host then sends `hello.changed` on that channel when its `readOnly` or capabilities change ([Changes](#hello)). Without it, a client asks hello again to see a change |
+| `sessions.focus` | `sessions.focus`: the client says whether it is on screen and which session it shows. Live changes to the others then come together at most every 12 s, and a device on screen is not notified of finished turns ([sessions.focus](#sessionsfocus)). Without it, or until a client says, every change goes at once |
 | `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
 | `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box |
 | `sessions.progress` | `session.reply` and `session.answer` take `"progress": true`, and then report `received` and `typed` before their result, which carries `timings` ([Progress](#progress)). Offered with `sessions.reply` or `sessions.answer` |
@@ -440,6 +441,50 @@ A client gives `since` only for a list that is whole: never after it dropped a `
 list whole again; and only while it has `instance` and a `revision` from this run of the host. The
 patches that follow a resumed snapshot are on its upserts, or whole (no `base`): a host remembers
 nothing of what it sent on an earlier channel.
+
+### `sessions.focus`
+
+Each live change woke a phone's radio: while a session works, its upsert or patch goes every 250 ms
+to 4 s, and with the app open the radio barely rested (#610: the largest battery cost, estimated at
+50 to 100 mAh an hour). Most of those were of sessions nobody had open. Of a host that offers
+`sessions.focus`, a client says what it shows, and says it again whenever that changes:
+
+```json
+{ "visible": true, "open": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b" }
+```
+
+| Field | Notes |
+|---|---|
+| `visible` | Required. Whether the app is on screen now (the page is visible, the window not minimised) |
+| `open` | The session it shows, if any. Absent or `null` on the list, or another machine's session |
+
+Result: `{}`. A request without `visible`, or with a field of the wrong type, fails as a request.
+It is for a person's devices: a pinned `service` or `host` peer is neither offered nor allowed it.
+What it says holds for the channel, across `sessions.subscribe` on it, until it is said again or
+the channel closes; a new channel starts with nothing said, and a client says it again after
+subscribing (it may send both at once). Until a channel has said anything, nothing below applies
+and every live change goes at once, as without the capability.
+
+**The open session at once, the rest together.** A live `session.upsert` or `session.patch` of the
+`open` session, while `visible`, goes at once. Of every other session (all of them while not
+`visible`), the first live change after a quiet spell goes at once too; the ones that follow within
+12 s of it wait for the end of those 12 s and go together, only each session's latest state, and
+the next 12 s start then. A session that becomes `open` has its waiting change sent at once.
+`session.remove`, `discovery.changed` and the snapshot are never held; a removal drops the change
+held for that session. So a client is told of every session at most every 12 s, and of the one it
+shows as before.
+
+**Patches and resuming still hold.** A held change is only the latest state, sent as any other:
+a patch's `base` is the event that last gave the client that session, as always. While a change is
+held, no `session.patch` or `session.remove` says a `revision` past it, so a client that resumes
+from the revision it holds is still sent that session ([Resuming](#resuming-without-a-snapshot));
+the last held change to go says the revision of everything read since.
+
+**Notifications.** A device with a subscription on a channel that last said `"visible": true` is
+on screen and sees a turn finish: it is not sent `finished` for it ([Notifications](#notifications)).
+
+A client that hides should still close its subscription after a while, and rely on notifications
+(#610); `"visible": false` covers the time before that.
 
 ### Discovery held
 
@@ -951,8 +996,15 @@ agent-ha-bridge notifies a phone through Home Assistant.
 | `kind` | When | Once per |
 |---|---|---|
 | `question` | A session has a pending `question`, still pending 2 s later. A question already pending when the host starts is notified too, as agent-ha-bridge's daemon does after a restart | Question `id`, for the life of the session: further upserts, or the question briefly reading as pending again after an answer is typed, do not repeat it |
-| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Waiting on a sub-agent's question (`waitingOn`) counts if the main agent's turn was running when that wait began, or its own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified | Finished turn: the same `turnCount` and response seen ending again is not repeated |
+| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Not to a device that is on screen now, subscribed to the host on a channel whose [`sessions.focus`](#sessionsfocus) last said `"visible": true`, unless a question notice of that session is still on it (the `finished` replaces it). Waiting on a sub-agent's question (`waitingOn`) counts if the main agent's turn was running when that wait began, or its own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified | Finished turn: the same `turnCount` and response seen ending again is not repeated |
 | `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead | Question |
+
+A device is sent at most one `finished` per session every 10 minutes. One that follows sooner
+waits until the 10 minutes are up, a newer one replacing it, and is sent only if the session is
+still idle with no question then and the device is not on screen; a `question` or `resolved`
+replaces it at once, as always. Answering or replying to the session from a device (with
+`session.answer` or `session.reply`) ends this wait for that device: the person is waiting for the
+turn they started. Agents that finish turn after turn on their own sent 88% of all pushes (#610).
 
 A question answered before its 2 s are up is never notified. A notice that cannot be sent
 because the host's relay connection is down is sent when it is back; a newer notice about

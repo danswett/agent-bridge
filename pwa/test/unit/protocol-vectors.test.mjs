@@ -364,6 +364,7 @@ const BUILDS = {
 const NOT_REPLAYED = {
   SubscribeResult: 'the PWA waits for sessions.synced and uses nothing of this result',
   SubscribeSince: 'built only within SubscribeRequest, from what the store holds',
+  FocusRequest: 'the PWA does not send sessions.focus yet (#610)',
   PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
   PushKeys: 'part of PushSubscribeRequest',
   PushUnsubscribeRequest: 'PushRegistrar sends the browser\'s own endpoint, from a private method',
