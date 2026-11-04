@@ -43,6 +43,7 @@ static class StallWatch
     static int stacksRead;
     static long probeQueuedAt = -1;
     static long timerFiredAt;
+    static long readingSince = -1;
     static Timer? timer;
 
     public static long Now => clock.ElapsedMilliseconds;
@@ -86,7 +87,8 @@ static class StallWatch
         }
         var text = new StringBuilder($"\n[stall watch +{now} ms] while this waited ({now - look.Began} ms) the watch woke {count} times, ")
             .Append(count == 0 ? "" : $"at most {latest} ms late (at +{latestAt} ms), ")
-            .Append($"and last {lastWake} ms ago");
+            .Append($"and last {lastWake} ms ago")
+            .Append(Volatile.Read(ref readingSince) is var reading and >= 0 ? $", reading stacks for the last {now - reading} ms" : "");
         foreach (var (_, said) in notes.Where(n => n.At >= look.Began)) { text.Append('\n').Append(said); }
         return text.ToString();
     }
@@ -118,6 +120,11 @@ static class StallWatch
 
     static void Watch()
     {
+        // Read once before any test needs it, so a reading during a stall is not the first time
+        // ClrMD's code is compiled: in the first hunt (#660) the watch spent the whole stall in
+        // its first reading, and noted nothing.
+        try { Stacks(); }
+        catch (Exception e) { Note(Now, $"[stall watch] could not read stacks: {e.GetType().Name}: {e.Message}"); }
         // About ten seconds of counts, to say what happened over a stall that began before it was seen.
         var history = new Queue<Counts>();
         var lastStacks = long.MinValue / 2;
@@ -162,7 +169,13 @@ static class StallWatch
                     .Append($"the last timer fired {now - Volatile.Read(ref timerFiredAt)} ms ago; ")
                     .AppendLine(counts.Since(before));
                 foreach (var l in stalled) { text.AppendLine($"  not looked for {now - l.Last} ms: {l.What} ({l.Test ?? "no test"})"); }
-                text.Append(stacksRead++ < MaxStacks ? Stacks() : $"  (stacks were read {MaxStacks} times already)\n");
+                if (stacksRead++ < MaxStacks)
+                {
+                    Volatile.Write(ref readingSince, now);
+                    try { text.Append(Stacks()); }
+                    finally { Volatile.Write(ref readingSince, -1); }
+                }
+                else { text.Append($"  (stacks were read {MaxStacks} times already)\n"); }
                 Note(now, text.ToString());
             }
             catch (Exception e)
@@ -179,24 +192,27 @@ static class StallWatch
     }
 
     // Every managed thread's stack, read from a snapshot of this process (PssCaptureSnapshot), so
-    // the threads go on while it is read. Threads with the same stack are listed once.
+    // the threads go on while it is read. Threads with the same stack are listed once. A frame
+    // the runtime put there (a P/Invoke, a stub compiling a method on first call) shows as its
+    // [kind]. On x64 only: on the Arm runner ClrMD 3.1 could not start this runtime's DAC
+    // (CreateDacInstance failed 0x80131c30).
     internal static string Stacks()
     {
-        if (!OperatingSystem.IsWindows()) { return "  (stacks are read on Windows only)\n"; }
+        if (!OperatingSystem.IsWindows() || RuntimeInformation.ProcessArchitecture != Architecture.X64) { return "  (stacks are read on Windows x64 only)\n"; }
         var took = Stopwatch.StartNew();
         using var target = DataTarget.CreateSnapshotAndAttach(Environment.ProcessId);
-        // This process's own runtime's DAC, which ClrMD did not find by itself on the Arm runner.
-        var dac = Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "mscordaccore.dll");
-        var clr = target.ClrVersions[0];
-        using var runtime = File.Exists(dac) ? clr.CreateRuntime(dac) : clr.CreateRuntime();
+        using var runtime = target.ClrVersions[0].CreateRuntime();
         var same = new Dictionary<string, List<string>>();
         foreach (var thread in runtime.Threads)
         {
             if (!thread.IsAlive) { continue; }
-            var frames = thread.EnumerateStackTrace().Take(MaxFrames * 2)
-                .Select(f => f.Method?.Signature is { } s ? Short(s) : null)
-                .Where(f => f is not null).ToList();
-            if (frames.Count == 0) { continue; }
+            var frames = new List<string>();
+            foreach (var f in thread.EnumerateStackTrace().Take(MaxFrames * 3))
+            {
+                var name = f.Method?.Signature is { } s ? Short(s) : f.FrameName is { Length: > 0 } n ? $"[{n}]" : null;
+                if (name is not null && (frames.Count == 0 || frames[^1] != name)) { frames.Add(name); }
+            }
+            if (!frames.Any(f => !f.StartsWith('['))) { continue; }
             var key = string.Join("\n", frames.Take(MaxFrames).Select(f => "      " + f)) + (frames.Count > MaxFrames ? "\n      ..." : "");
             var who = $"{thread.ManagedThreadId}{(thread.IsFinalizer ? " finalizer" : "")}";
             if (same.TryGetValue(key, out var ids)) { ids.Add(who); } else { same[key] = [who]; }
