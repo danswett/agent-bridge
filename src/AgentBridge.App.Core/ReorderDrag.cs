@@ -160,9 +160,11 @@ public sealed class ReorderDrag
     // 1000 × (depth ÷ zone)² a second, up (negative) or down, at full speed past the edge.
     public const double ScrollMax = 1000;
 
+    public static double ScrollZone(double height) => Math.Clamp(height * 0.1, 40, 80);
+
     public static double ScrollSpeed(double pointer, double top, double height)
     {
-        var zone = Math.Clamp(height * 0.1, 40, 80);
+        var zone = ScrollZone(height);
         double depth;
         if (pointer < top + zone) { depth = -Math.Min(top + zone - pointer, zone); }
         else if (pointer > top + height - zone) { depth = Math.Min(pointer - (top + height - zone), zone); }

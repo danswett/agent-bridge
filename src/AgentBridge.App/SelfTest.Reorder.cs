@@ -46,14 +46,29 @@ static partial class SelfTest
         var before = Order();
 
         ListViewItem? Item(SessionCardViewModel c) => list.ContainerFromItem(c) as ListViewItem;
-        // A point on a card in the list's coordinates: its grip, at its middle.
-        Point On(SessionCardViewModel c, double dy = 0) => Item(c) is { } i ? i.TransformToVisual(list).TransformPoint(new Point(12, (i.ActualHeight / 2) + dy)) : default;
         // Just below a card: held there by its middle, a card lands after it, before the next group's header.
         Point Below(SessionCardViewModel c) => Item(c) is { } i ? i.TransformToVisual(list).TransformPoint(new Point(12, i.ActualHeight + 8)) : default;
         var held = main.Sessions.Where(c => !c.Pinned).ElementAt(1);
         var passed = main.Sessions.Where(c => !c.Pinned).Skip(2).Take(2).ToList();
         var slot = Item(passed[0])?.ActualHeight ?? 60;
         var root = window.RootElement;
+        // A card taken hold of near its top, on its grip: where the card lands goes by the card, not the
+        // pointer, and the pointer then stays furthest from the list's foot as the card goes down.
+        Point Grab(SessionCardViewModel c) => Item(c) is { } i ? i.TransformToVisual(list).TransformPoint(new Point(12, i.ActualHeight - slot + 6)) : default;
+        // Room for each drag in however short a list (a small screen): the list scrolled so the pinned
+        // card's foot is just under the top edge's auto-scroll zone, which leaves the most room below it,
+        // and every drag here held clear of both edges' zones, so the list stays still under it.
+        var scroll = Find<ScrollViewer>(list).FirstOrDefault();
+        var zone = ReorderDrag.ScrollZone(list.ActualHeight);
+        async Task Fit()
+        {
+            if (scroll is null || Item(pin) is null) { return; }
+            scroll.ChangeView(null, Math.Max(0, scroll.VerticalOffset + Below(pin).Y - (zone + 12)), null, disableAnimation: true);
+            await Task.Delay(300);
+        }
+        await Fit();
+        var room = Grab(held).Y + (2 * slot) + 6 < list.ActualHeight - zone;
+        if (!room) { check(false, $"has room in the list ({list.ActualHeight:0} px) to drag a card two down clear of its auto-scroll edges (from {Grab(held).Y:0}, {slot:0} px a card)"); }
 
         // Lifted, then making room, then over Pinned, in each theme: pictured, and put back with Escape's path.
         // With Windows' animation effects on, whatever the runner's are: its remote desktop may have them off.
@@ -63,9 +78,9 @@ static partial class SelfTest
         foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
         {
             root.RequestedTheme = theme;
-            await Task.Delay(400);
+            await Fit();
             var name = theme.ToString().ToLowerInvariant();
-            var at = On(held);
+            var at = Grab(held);
             if (!page.Begin(held, at)) { looks.Add($"{name}: did not lift ({(Item(held) is { } hi ? $"its item {hi.ActualHeight:0} px at {at.Y:0} of {list.ActualHeight:0}" : "no item")}, {page.Layout?.Mode}, list shown {page.Layout?.ShowList})"); continue; }
             page.MoveTo(new Point(at.X, at.Y + 6));
             await Task.Delay(350);
@@ -113,7 +128,8 @@ static partial class SelfTest
 
         // Dropped two places down: saved there, focus with the session, Needs you held for a moment.
         {
-            var at = On(held);
+            await Fit();
+            var at = Grab(held);
             page.Begin(held, at);
             page.MoveTo(new Point(at.X, at.Y + (2 * slot) + 6));
             await Task.Delay(300);
@@ -133,7 +149,8 @@ static partial class SelfTest
 
         // Dropped among the pinned: pinned there, said so.
         {
-            var at = On(held);
+            await Fit();
+            var at = Grab(held);
             page.Begin(held, at);
             page.MoveTo(Below(pin));
             await Task.Delay(300);
@@ -149,8 +166,9 @@ static partial class SelfTest
         // With animation effects off: the card still follows, but nothing lifts, slides or settles.
         {
             Motion.Forced = false;
+            await Fit();
             var start = page.ReorderMotions;
-            var at = On(held);
+            var at = Grab(held);
             page.Begin(held, at);
             page.MoveTo(new Point(at.X, at.Y + slot + 6));
             await Task.Delay(200);
@@ -169,9 +187,14 @@ static partial class SelfTest
             var down = SessionRow.LastSaid;
             var last = main.Sessions.Last(c => !c.Pinned);
             var count = main.Sessions.Count(c => !c.Pinned);
+            // The group's last card on screen (in a short list it is below the fold), so its row is there to move.
+            list.ScrollIntoView(last);
+            await Task.Delay(300);
             Rows(window).FirstOrDefault(r => r.Card == last)?.MoveBy(1);
             await Task.Delay(300);
             var end = SessionRow.LastSaid;
+            list.ScrollIntoView(held);
+            await Task.Delay(300);
             Rows(window).FirstOrDefault(r => r.Card == held)?.MoveBy(-1);
             await Task.Delay(400);
             check(down == $"Moved to position 3 of {count} in Sessions." && end == "End of Sessions.",
@@ -179,6 +202,7 @@ static partial class SelfTest
         }
 
         // A real mouse, through Windows' input: pressed on the grip, dragged two cards down, let go.
+        await Fit();
         result["reorderMouse"] = await RealDrag(window, main, check, held, slot, Order);
 
         Motion.Forced = null;
@@ -236,7 +260,8 @@ static partial class SelfTest
             check(false, "finds a card to drag with the mouse");
             return "no card to drag";
         }
-        var grip = Screen(window, row.GripHit, new Point(row.GripHit.ActualWidth / 2, row.GripHit.ActualHeight / 2));
+        // Near the grip's top, as the card goes down: clear of the list's foot (CheckReorder's Grab).
+        var grip = Screen(window, row.GripHit, new Point(row.GripHit.ActualWidth / 2, Math.Max(0, row.GripHit.ActualHeight - slot) + 6));
         var step = slot * window.RootElement.XamlRoot.RasterizationScale;
         MouseTo(grip.X, grip.Y);
         await Task.Delay(200);
