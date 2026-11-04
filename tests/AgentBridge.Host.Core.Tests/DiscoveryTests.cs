@@ -729,18 +729,25 @@ public class DiscoveryTests
             new("copilot", 301, t, Cli + Args, Parent: 300),
             new("copilot", 400, null, Shim + Args, Parent: 1), // no start time to tell
             new("copilot", 401, t, Cli + Args, Parent: 400),
+            // a real CLI that starts another with the same arguments: either may hold a session
+            new("copilot", 500, t, Cli + Args, Parent: 1),
+            new("copilot", 501, t.AddMilliseconds(18), Cli + Args, Parent: 500),
+            new("copilot", 510, t, Cli, Parent: 1),
+            new("copilot", 511, t.AddMilliseconds(18), Cli, Parent: 510),
+            new("copilot", 600, t, "copilot" + Args, Parent: 1), // started by bare name: nothing says it is the shim
+            new("copilot", 601, t.AddMilliseconds(18), Cli + Args, Parent: 600),
         };
 
         var (observation, _) = SystemProcessInspector.Classify(AgentKind.Copilot, "copilot", listing, listed: true, windows: true, _ => false);
 
-        Assert.Equal([100, 200, 201, 300, 301, 400, 401], observation.Processes.Select(p => p.Id));
+        Assert.Equal([100, 200, 201, 300, 301, 400, 401, 500, 501, 510, 511, 600, 601], observation.Processes.Select(p => p.Id));
 
         var codex = new SystemProcessInspector.ListedProcess[]
         {
-            new("codex", 500, t, @"C:\a\codex.exe --cd x"),
-            new("codex", 501, t.AddMilliseconds(18), @"C:\b\codex.exe --cd x", Parent: 500),
+            new("codex", 700, t, @"C:\a\copilot-shim\codex.exe --cd x"),
+            new("codex", 701, t.AddMilliseconds(18), @"C:\b\codex.exe --cd x", Parent: 700),
         };
-        Assert.Equal([500, 501], SystemProcessInspector.Classify(AgentKind.Codex, "codex", codex, listed: true, windows: true, _ => false)
+        Assert.Equal([700, 701], SystemProcessInspector.Classify(AgentKind.Codex, "codex", codex, listed: true, windows: true, _ => false)
             .Observation.Processes.Select(p => p.Id));
     }
 

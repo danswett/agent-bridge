@@ -129,8 +129,10 @@ public sealed class SystemProcessInspector : IProcessInspector
         // through, is a copilot.exe of its own that starts the real CLI with the same arguments
         // and waits on it. The real CLI holds the session's lock; counted as well, the shim was a
         // process no session accounted for, and held discovery for two minutes after every
-        // launch and every restart (#615). Only Copilot's, and only a child given the very same
-        // arguments: a CLI that starts another for some other purpose is two sessions.
+        // launch and every restart (#615). Only the shim itself, by the folder its program is in,
+        // and only a child given the very same arguments: a real CLI that starts another, even
+        // with the same arguments, may hold a session of its own, and hiding a live session is
+        // what deletes its worktree.
         var launched = agent == AgentKind.Copilot
             ? all.Where(p => p.Candidate is not ("node" or "bun") && p.Parent is > 0 && !string.IsNullOrWhiteSpace(p.CommandLine))
                 .Select(p => (Id: p.Parent!.Value, Child: p.StartedAt, Arguments: Arguments(p.CommandLine)))
@@ -166,7 +168,7 @@ public sealed class SystemProcessInspector : IProcessInspector
             }
             // A launcher whose real CLI is listed: the CLI stands for it, under the same rule
             // as a loader, both start times known and the launcher's no later than its child's.
-            if (candidate is not ("node" or "bun") && started is { } launcherStarted && !string.IsNullOrWhiteSpace(commandLine)
+            if (candidate is not ("node" or "bun") && started is { } launcherStarted && IsCopilotShim(commandLine)
                 && launched.Any(l => l.Id == id && l.Child is { } child && launcherStarted <= child && l.Arguments.SequenceEqual(Arguments(commandLine), StringComparer.Ordinal)))
             {
                 continue;
@@ -179,6 +181,19 @@ public sealed class SystemProcessInspector : IProcessInspector
     // A command line's arguments without its program, which differs between a launcher and
     // the CLI it starts.
     static string[] Arguments(string? commandLine) => [.. CommandLine.Split(commandLine).Skip(1)];
+
+    // VS Code's shim, by where its program is installed: bin\copilot-shim\copilot.exe, in each
+    // VS Code build. A shim started by bare name cannot be told from a real CLI, so it stays
+    // counted: a hold that clears after its grace, rather than a session hidden.
+    internal static bool IsCopilotShim(string? commandLine)
+    {
+        var arguments = CommandLine.Split(commandLine);
+        if (arguments.Count == 0) { return false; }
+        var parts = arguments[0].Replace('\\', '/').Split('/');
+        return parts.Length >= 2
+            && (parts[^1].Equals("copilot.exe", StringComparison.OrdinalIgnoreCase) || parts[^1].Equals("copilot", StringComparison.OrdinalIgnoreCase))
+            && parts[^2].Equals("copilot-shim", StringComparison.OrdinalIgnoreCase);
+    }
 
     static bool IsRunning(int pid)
     {
