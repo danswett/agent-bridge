@@ -373,6 +373,51 @@ public sealed class MotionTests
     }
 
     [Fact]
+    public void The_lists_own_scroll_laid_out_long_after_its_rows_changed_is_a_move_even_as_the_person_scrolls()
+    {
+        // A row inserted above while the person scrolls; the pass that lays it out comes late (a
+        // busy first layout, about a second), and KeepItemsInView scrolls the list 60 to keep the
+        // rows in place, moving Needs you up 60. Person stays true throughout. Never taken off.
+        var moves = From(Look(offset: 300, scrollable: 500));
+        Assert.False(moves.Read(Look(offset: 300, scrollable: 500, person: true) with { Rows = 1 }));
+        Assert.True(moves.Read(Look(dy: -60, offset: 360, scrollable: 560, person: true) with { Rows = 1 }));
+
+        // With no read between the rows changing and the late pass, the same.
+        moves = From(Look(offset: 300, scrollable: 500));
+        Assert.True(moves.Read(Look(dy: -60, offset: 360, scrollable: 560, person: true) with { Rows = 1 }));
+
+        // Nor with two identical looks between, as a scroll step's ViewChanged and the layout pass
+        // after it read: the list's own pass may still be to come.
+        moves = From(Look(offset: 300, scrollable: 500));
+        Assert.False(moves.Read(Look(offset: 300, scrollable: 500, person: true) with { Rows = 1 }));
+        Assert.False(moves.Read(Look(offset: 300, scrollable: 500, person: true) with { Rows = 1 }));
+        Assert.True(moves.Read(Look(dy: -60, offset: 360, scrollable: 560, person: true) with { Rows = 1 }));
+    }
+
+    [Fact]
+    public void Once_the_person_has_stopped_and_the_list_is_seen_still_their_own_scroll_is_theirs_again()
+    {
+        var moves = From(Look(offset: 300, scrollable: 500));
+        Assert.True(moves.Read(Look(dy: -60, offset: 360, scrollable: 560, person: true) with { Rows = 1 }));
+        // Still, but the person still scrolling: not yet.
+        Assert.False(moves.Read(Look(dy: -60, offset: 360, scrollable: 560, person: true) with { Rows = 1 }));
+        Assert.True(moves.Read(Look(dy: -100, offset: 400, scrollable: 560, person: true) with { Rows = 1 }));
+        // Stopped and still: their next scroll is theirs.
+        Assert.False(moves.Read(Look(dy: -100, offset: 400, scrollable: 560) with { Rows = 1 }));
+        Assert.False(moves.Read(Look(dy: -140, offset: 440, scrollable: 560, person: true) with { Rows = 1 }));
+    }
+
+    [Fact]
+    public void A_scroll_in_the_same_look_as_what_it_scrolls_changing_size_is_never_the_persons()
+    {
+        // KeepItemsInView: a row comes above, the list grows 60 and scrolls 60 with it, in one look,
+        // while the person scrolls.
+        Assert.True(From(Look(offset: 300, scrollable: 500)).Read(Look(dy: -60, offset: 360, scrollable: 560, extent: 1060, person: true)));
+        // The person's own scroll, nothing resized: theirs.
+        Assert.False(From(Look(offset: 300, scrollable: 500)).Read(Look(dy: -60, offset: 360, scrollable: 500, person: true)));
+    }
+
+    [Fact]
     public void The_persons_own_question_growing_in_a_conversation_shorter_than_its_pane_is_theirs()
     {
         // CI's three panes: the conversation fits its pane, so the extent is the pane's height (602)

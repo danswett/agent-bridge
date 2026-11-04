@@ -79,12 +79,13 @@ sealed class AnswerWatch
     int drawn;
 
     // Rows of the list holding the answers came, went or moved: the list may keep the rows in sight
-    // in place by scrolling (ListView's KeepItemsInView), which moves Needs you above them. For a
-    // moment no scroll is taken to be the person's, so that one is found as a move, even mid-scroll.
-    public void Unsettled() => unsettledUntil = DateTimeOffset.UtcNow + Act;
+    // in place by scrolling (ListView's KeepItemsInView), which moves Needs you above them. Counted,
+    // not timed (AnswerLook.Rows): no scroll is taken to be the person's until a look sees the list
+    // laid out and still, however late its layout pass comes. A moment of 300 ms let a pass delayed
+    // past it take the list's own scroll off as the person's (#648, Quality's review).
+    public void Unsettled() => rows++;
 
-    static readonly TimeSpan Act = TimeSpan.FromMilliseconds(300);
-    DateTimeOffset unsettledUntil;
+    int rows;
     // Set while a pointer's press lays out what is pending: the read that layout pass brings, as
     // the one after it, exempts nothing.
     bool checking;
@@ -138,7 +139,8 @@ sealed class AnswerWatch
                 root.Size.Width,
                 root.Size.Height,
                 QuestionBox(chain.FirstOrDefault()),
-                drawn);
+                drawn,
+                rows);
             var now = DateTimeOffset.UtcNow;
             var own = exempt && !checking && act.Holds(now);
             var found = moves.Read(look, act, now, exempt && !checking);
@@ -209,7 +211,7 @@ sealed class AnswerWatch
         var content = sv.Content is UIElement c ? c.DesiredSize : new Windows.Foundation.Size(double.NaN, double.NaN);
         return new ScrollerLook(at.X, at.Y, sv.HorizontalOffset, sv.VerticalOffset, sv.ScrollableWidth, sv.ScrollableHeight,
             sv.ViewportWidth, sv.ViewportHeight, sv.ExtentWidth, sv.ExtentHeight,
-            DateTimeOffset.UtcNow >= unsettledUntil && scrollers.TryGetValue(sv, out var p) && p.Scrolling,
+            scrollers.TryGetValue(sv, out var p) && p.Scrolling,
             content.Width, content.Height);
     }
 

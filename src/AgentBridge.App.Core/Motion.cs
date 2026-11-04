@@ -216,7 +216,7 @@ public readonly record struct LookBox(double X, double Y, double Width, double H
 // holding them (the same ones from one look to the next), the window's size, and, for the session
 // view's question, the question's own box in what the innermost scroller scrolls.
 public sealed record AnswerLook(
-    IReadOnlyList<(double X, double Y)> Answers, IReadOnlyList<ScrollerLook> Scrollers, double WindowWidth, double WindowHeight, LookBox? Question = null, int Drawn = 0);
+    IReadOnlyList<(double X, double Y)> Answers, IReadOnlyList<ScrollerLook> Scrollers, double WindowWidth, double WindowHeight, LookBox? Question = null, int Drawn = 0, int Rows = 0);
 
 // How long the person's own act in their question holds what it lays out as theirs (#491; see
 // AnswerMoves.Theirs). Not a count of frames, and not a fixed moment from the act: the first layout
@@ -283,7 +283,16 @@ public sealed class AnswerMoves
         // The app drew in the question (who asks): the next move is the app's, however late its
         // layout pass comes, and whatever reads come between.
         drawing |= now.Drawn != before.Drawn;
-        var (dx, dy) = Scrolled(before, now);
+        // Rows of the list came, went or moved: the list may scroll itself to keep rows in place
+        // (KeepItemsInView), and that scroll, whenever its layout pass comes, looks like the
+        // person's if they are scrolling. Nothing is taken off as theirs until the person has
+        // stopped and a look finds everything still: no rows changed, no scroller theirs, and none
+        // moved or resized since the look before. Two identical looks while they scroll (a scroll's
+        // ViewChanged and the layout pass after it) aren't enough: the list's own pass may still be
+        // to come. Their own scrolling meanwhile holds the answers, the safe way round.
+        if (now.Rows != before.Rows) { settling = true; }
+        else if (settling && Still(before, now) && !now.Scrollers.Any(s => s.Person)) { settling = false; }
+        var (dx, dy) = settling ? (0, 0) : Scrolled(before, now);
         var moved = now.Answers.Count != at.Length;
         for (var i = 0; i < at.Length && !moved; i++)
         {
@@ -299,6 +308,22 @@ public sealed class AnswerMoves
     }
 
     bool drawing;
+    bool settling;
+
+    static bool Resized(ScrollerLook was, ScrollerLook now) =>
+        Math.Abs(now.ExtentWidth - was.ExtentWidth) > Exact || Math.Abs(now.ExtentHeight - was.ExtentHeight) > Exact
+        || Math.Abs(now.MeasuredWidth - was.MeasuredWidth) > Exact || Math.Abs(now.MeasuredHeight - was.MeasuredHeight) > Exact;
+
+    static bool Still(AnswerLook before, AnswerLook now)
+    {
+        if (now.Scrollers.Count != before.Scrollers.Count) { return false; }
+        for (var i = 0; i < now.Scrollers.Count; i++)
+        {
+            var (s, w) = (now.Scrollers[i], before.Scrollers[i]);
+            if (Math.Abs(s.OffsetX - w.OffsetX) > Exact || Math.Abs(s.OffsetY - w.OffsetY) > Exact || Resized(w, s)) { return false; }
+        }
+        return true;
+    }
 
     // A read with the person's act (OwnAct) at the time: it exempts their own question laying itself
     // out while it holds, and any move that isn't theirs ends it, exempt or not (a move found while
@@ -319,6 +344,7 @@ public sealed class AnswerMoves
         was = null;
         at = [];
         drawing = false;
+        settling = false;
     }
 
     // How far the person's own scrolling moved what the scrollers hold since the last look; nothing
@@ -330,7 +356,10 @@ public sealed class AnswerMoves
         for (var i = 0; i < now.Scrollers.Count; i++)
         {
             var (s, w) = (now.Scrollers[i], before.Scrollers[i]);
-            if (!s.Person) { continue; }
+            // A scroll in the same look as what it scrolls changing size is the scroller keeping
+            // what is in sight in place (KeepItemsInView, a row coming or going), or a clamp: never
+            // the person's, whenever that look comes.
+            if (!s.Person || Resized(w, s)) { continue; }
             if (!Clamped(w.OffsetX, s.OffsetX, s.ScrollableWidth)) { x += s.OffsetX - w.OffsetX; }
             if (!Clamped(w.OffsetY, s.OffsetY, s.ScrollableHeight)) { y += s.OffsetY - w.OffsetY; }
         }
