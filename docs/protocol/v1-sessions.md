@@ -15,7 +15,8 @@ of it (`sessions.attach`, see [Attachments](#attachments)), can end a session
 with the app closed (`push`, see [Notifications](#notifications)). It can also launch or
 resume a session (`sessions.launch`, in [v1-launch.md](v1-launch.md)). Files too large for
 the channel go through the relay's blob store (`sessions.attach.blob`, in
-[blobs.md](blobs.md)).
+[blobs.md](blobs.md)). A session's earlier turns are paged back with `session.history`
+(`sessions.history`, in [v1-history.md](v1-history.md)).
 
 ## Rules for every message
 
@@ -282,6 +283,7 @@ once whenever `machine.readOnly`, `machine.restore` or `capabilities` would diff
 | Capability | Ops |
 |---|---|
 | `sessions.read` | `sessions.list`, `session.get`, `sessions.subscribe` |
+| `sessions.history` | `session.history`: a session's earlier turns, a page at a time, for the conversation pane ([v1-history.md](v1-history.md)). Offered to a person's devices and the app; never to the HA connector or an agent on the pipe |
 | `sessions.patch` | `sessions.subscribe` takes `patch` and `since`: live changes as `session.patch`, only what changed ([Patches](#patches-sessionpatch)), and a reconnect to the same run of the host sent only the sessions that changed meanwhile ([Resuming](#resuming-without-a-snapshot)). Without it, or without asking, a client gets whole upserts and whole snapshots as before |
 | `hello.changed` | `hello` takes `{ "changes": true }`, and the host then sends `hello.changed` on that channel when its `readOnly` or capabilities change ([Changes](#hello)). Without it, a client asks hello again to see a change |
 | `sessions.focus` | `sessions.focus`: the client says whether it is on screen and which session it shows. Live changes to the others then come together at most every 12 s, and a device on screen is not notified of finished turns ([sessions.focus](#sessionsfocus)). Without it, or until a client says, every change goes at once |
@@ -1827,6 +1829,7 @@ session left under an agent's control still says so while it is idle. It says so
 | `userMessage` | string? | The latest user message, at most 2 KiB |
 | `userMessageFrom` | `"person"` \| `"schedule"` \| `"agent"` \| `"other"`? | **New (#489).** Who wrote `userMessage` when it was not the person typing: `schedule`, a prompt the agent's own scheduler sent; `agent`, one another agent sent, including a reply an agent sent through the bridge (`driver: agent` for the turn it started); `other`, anything else that is not someone typing. Absent means the person, and so does `person`. An unknown value reads as `other`, never as the person's. Absent whenever `userMessage` is |
 | `userMessageLabel` | string? | **New (#489).** A short plain-text label for a `userMessageFrom` that is not the person's, at most 64 bytes: a schedule's number (`"4"`, shown as "Scheduled prompt · #4"). Absent whenever `userMessage` is |
+| `turn` | string? | **New (#292).** The id of the latest turn, which `userMessage`, `response`, `reasoning`, `currentTool` and `question` belong to: the same id [`session.history`](v1-history.md#live-turns-and-history) gives it, so a client merging live activity with history pages draws it once. Absent before the first prompt, and when the host could not read where the latest turn began. Never trimmed by the session budget |
 | `turnCount` | number? | User prompts whose turn has finished: the prompts sent, less one while a turn is still in progress (`working` or `waiting`). Not the agent's own model rounds: Copilot writes `assistant.turn_end` after every round of tool calls, and those are not counted |
 | `compactions` | number? | Context compactions so far |
 | `background` | Background? | Work the session started that is still running after its own turn. Absent when there is none |
