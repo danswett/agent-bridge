@@ -13,11 +13,24 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     // The main agent's own delegates, by id, with their names: those this read saw start, and those
     // the session lists now (its subagents with no parent), whose starts may be on an older page.
     readonly Dictionary<string, string?> _main = new(listed, StringComparer.Ordinal);
-    readonly HashSet<string> _reported = new(StringComparer.Ordinal);
+    readonly Dictionary<string, Run> _runs = new(StringComparer.Ordinal);
     readonly Dictionary<string, string?> _tasks = new(StringComparer.Ordinal);
+    // Who made a call (a delegate's own calls), and which delegate a task call started: two maps,
+    // since a nested delegate's task call is made by one delegate and starts another.
     readonly Dictionary<string, string> _callAgent = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string> _callDelegate = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> _permissions = new(StringComparer.Ordinal);
     const int Keep = 4096;
+
+    // A delegate's runs as the main agent hears of them, as BackgroundWork keeps them live: a run
+    // ends once, whoever says so first, and a notice for a run already said to have ended is owed
+    // to it, never spent on one a message has started since (a Codex wait, then its notice).
+    sealed class Run
+    {
+        public bool Working;
+        public bool Said;
+        public int Owed;
+    }
 
     public bool RemoteApproval { get; } = remoteApproval;
     // The session's own thread (Codex), from its first record.
@@ -37,6 +50,13 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
 
     public string? AgentOfCall(string? callId) => callId is not null ? _callAgent.GetValueOrDefault(callId) : null;
 
+    public void CallStarted(string callId, string agent)
+    {
+        if (_callDelegate.Count < Keep) { _callDelegate[callId] = agent; }
+    }
+
+    public string? DelegateOfCall(string? callId) => callId is not null ? _callDelegate.GetValueOrDefault(callId) : null;
+
     public void Permission(string requestId, string questionId)
     {
         if (_permissions.Count < Keep) { _permissions[requestId] = questionId; }
@@ -49,19 +69,47 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     public void Started(TurnBuilder turn, string agent, string? name, SubagentKind kind, DateTimeOffset at)
     {
         if (_main.Count < Keep || _main.ContainsKey(agent)) { _main[agent] = name ?? _main.GetValueOrDefault(agent); }
-        _reported.Remove(agent);
+        if (RunOf(agent) is { } run) { (run.Working, run.Said, run.Owed) = (true, false, 0); }
         turn.Delegate(new DelegateEvent { Agent = agent, Event = DelegateEventKind.Started, Name = name, Kind = kind }, at);
     }
 
-    // A run of a delegate began again (woken by a message): its next end is reported again.
-    public void Woken(string agent) => _reported.Remove(agent);
-
-    // A delegate's run ended and the main agent heard. Once per run: Copilot can say so twice (its
-    // subagent.completed and an agent_idle notice) for one run.
-    public void Reported(TurnBuilder turn, string agent, SubagentOutcome outcome, DateTimeOffset at)
+    // A delegate's run began again (woken by a message): its next end is reported again.
+    public void Woken(string agent)
     {
-        if (!_main.TryGetValue(agent, out var name) || !_reported.Add(agent)) { return; }
-        turn.Delegate(new DelegateEvent { Agent = agent, Event = DelegateEventKind.Reported, Name = name, Outcome = outcome }, at);
+        if (_main.ContainsKey(agent) && RunOf(agent) is { Working: false } run) { (run.Working, run.Said) = (true, false); }
+    }
+
+    // A delegate's run ended, said by the run's own end (Copilot's subagent.completed or .failed, a
+    // Codex wait returning its state): reported unless this run's end was already, and a notice
+    // that says it again is owed to it.
+    public void Ended(TurnBuilder turn, string agent, SubagentOutcome outcome, DateTimeOffset at)
+    {
+        if (!_main.ContainsKey(agent) || RunOf(agent) is not { } run) { return; }
+        if (run.Working || !run.Said) { Report(turn, agent, run, outcome, at); }
+        run.Owed++;
+    }
+
+    // A notice of a delegate's end (Copilot's agent_idle, Claude's task notification, Codex's
+    // subagent notification): spent on a run already said to have ended if one is owed, else it
+    // ends the run, once.
+    public void Noticed(TurnBuilder turn, string agent, SubagentOutcome outcome, DateTimeOffset at)
+    {
+        if (!_main.ContainsKey(agent) || RunOf(agent) is not { } run) { return; }
+        if (run.Owed > 0) { run.Owed--; return; }
+        if (run.Working || !run.Said) { Report(turn, agent, run, outcome, at); }
+    }
+
+    void Report(TurnBuilder turn, string agent, Run run, SubagentOutcome outcome, DateTimeOffset at)
+    {
+        (run.Working, run.Said) = (false, true);
+        turn.Delegate(new DelegateEvent { Agent = agent, Event = DelegateEventKind.Reported, Name = _main.GetValueOrDefault(agent), Outcome = outcome }, at);
+    }
+
+    Run? RunOf(string agent)
+    {
+        if (_runs.TryGetValue(agent, out var run)) { return run; }
+        if (_runs.Count >= Keep) { return null; }
+        return _runs[agent] = new Run();
     }
 }
 
@@ -78,8 +126,10 @@ internal abstract class HistoryDialect
         _ => null,
     };
 
-    // A byte search on a line's start: could it start a turn? Only these are parsed while paging back.
-    public abstract bool MayStart(ReadOnlySpan<byte> head);
+    // What a line that may start a turn carries: only those are parsed while paging back.
+    public abstract TurnMarks Marks { get; }
+
+    public bool MayStart(ReadOnlySpan<byte> line) => Marks.MayStart(line);
 
     // Whether a parsed record starts a turn, and with what prompt.
     public abstract HistoryPrompt? Start(JsonElement e);
@@ -103,7 +153,7 @@ internal abstract class HistoryDialect
 
 internal sealed class CopilotHistory : HistoryDialect
 {
-    public override bool MayStart(ReadOnlySpan<byte> head) => Has(head, "\"user.message\""u8);
+    public override TurnMarks Marks => TurnMarks.Copilot;
 
     public override HistoryPrompt? Start(JsonElement e) =>
         CopilotParser.TurnStart(e) is { } p ? Prompt(p.Text, p.From, p.Label) : null;
@@ -138,15 +188,19 @@ internal sealed class CopilotHistory : HistoryDialect
                     if (agent is not null)
                     {
                         // A delegate's call is its own work, not the main agent's; remembered for
-                        // a permission prompt that names only the call.
+                        // a permission prompt that names only the call, and for a task call's
+                        // delegate being that delegate's. What it asks is still asked of the
+                        // person, as live (status rule 2): the question is kept, with whose it is.
                         context.CallBy(id, agent);
+                        if (name == "ask_user" && arguments is { } asked) { turn.Asked(QuestionMapper.FromCopilotAskUser(id, asked, at) with { Agent = agent }, at); }
                         break;
                     }
                     turn.ToolStarted(id, name, ToolSummary.From(arguments), at);
                     if (name == "ask_user" && arguments is { } ask) { turn.Asked(QuestionMapper.FromCopilotAskUser(id, ask, at), at); }
                     break;
                 }
-            case "tool.execution_complete" when agent is null:
+            // Anyone's: a delegate's call ending answers its question as the main agent's does.
+            case "tool.execution_complete":
                 {
                     var id = Json.Str(data, "toolCallId");
                     var failed = Json.Bool(data, "success") == false || Json.Get(data, "error") is not null;
@@ -179,11 +233,17 @@ internal sealed class CopilotHistory : HistoryDialect
                     turn.Resolved(context.QuestionOf(Json.Str(data, "requestId")), outcome, at);
                     break;
                 }
-            // Only the main agent's own delegates: a nested one's start names its parent.
+            // Only the main agent's own delegates: a nested one's start names its parent, or its
+            // task call was made by a delegate (the parent then is only that call's stamp).
             case "subagent.started" when agent is not null && Json.Str(data, "parentId") is null or "":
                 {
                     var call = Json.Str(data, "toolCallId");
-                    if (call is not null) { context.CallBy(call, agent); }
+                    if (call is not null)
+                    {
+                        var nested = context.AgentOfCall(call) is not null;
+                        context.CallStarted(call, agent);
+                        if (nested) { break; }
+                    }
                     var name = DelegateName.Clean(context.TaskDescription(call)) ?? DelegateName.Clean(Json.Str(data, "agentDescription"))
                         ?? DelegateName.Clean(Json.Str(data, "agentDisplayName"))
                         ?? DelegateName.Clean(Json.Str(data, "agentType") ?? Json.Str(data, "agentName"));
@@ -191,16 +251,24 @@ internal sealed class CopilotHistory : HistoryDialect
                     break;
                 }
             case "subagent.completed":
-                if ((agent ?? context.AgentOfCall(Json.Str(data, "toolCallId"))) is { } done) { context.Reported(turn, done, SubagentOutcome.Done, at); }
+                if ((agent ?? context.DelegateOfCall(Json.Str(data, "toolCallId"))) is { } done) { context.Ended(turn, done, SubagentOutcome.Done, at); }
                 break;
             case "subagent.failed":
-                if ((agent ?? context.AgentOfCall(Json.Str(data, "toolCallId"))) is { } lost) { context.Reported(turn, lost, SubagentOutcome.Failed, at); }
+                if ((agent ?? context.DelegateOfCall(Json.Str(data, "toolCallId"))) is { } lost)
+                {
+                    context.Ended(turn, lost, SubagentOutcome.Failed, at);
+                    turn.Withdrawn(lost, at);
+                }
                 break;
             case "system.notification" when Json.Obj(data, "kind") is { } kind && Json.Str(kind, "type") == "agent_idle" && Json.Str(kind, "agentId") is { Length: > 0 } idle:
-                context.Reported(turn, idle, SubagentOutcome.Done, at);
+                context.Noticed(turn, idle, SubagentOutcome.Done, at);
                 break;
             case "abort" or "session.shutdown" when agent is null:
                 turn.Abandoned(at);
+                break;
+            // A delegate's own abort or shutdown: what it was asking is asked of no one, as live.
+            case "abort" or "session.shutdown":
+                turn.Withdrawn(agent!, at);
                 break;
         }
     }
@@ -232,7 +300,7 @@ internal sealed class CopilotHistory : HistoryDialect
 internal sealed class ClaudeHistory : HistoryDialect
 {
     // A tool result is never a prompt, and is most of the user entries.
-    public override bool MayStart(ReadOnlySpan<byte> head) => Has(head, "\"user\""u8) && !Has(head, "\"tool_result\""u8);
+    public override TurnMarks Marks => TurnMarks.Claude;
 
     public override HistoryPrompt? Start(JsonElement e) => ClaudeParser.TurnStart(e) is { } text ? Prompt(text) : null;
 
@@ -252,7 +320,7 @@ internal sealed class ClaudeHistory : HistoryDialect
                         {
                             if (ClaudeParser.Tag(said, "task-id") is { } task)
                             {
-                                context.Reported(turn, task, ClaudeParser.Tag(said, "status") == "completed" ? SubagentOutcome.Done : SubagentOutcome.Failed, at);
+                                context.Noticed(turn, task, ClaudeParser.Tag(said, "status") == "completed" ? SubagentOutcome.Done : SubagentOutcome.Failed, at);
                             }
                             break;
                         }
@@ -323,7 +391,7 @@ internal sealed class ClaudeHistory : HistoryDialect
 
 internal sealed class CodexHistory : HistoryDialect
 {
-    public override bool MayStart(ReadOnlySpan<byte> head) => Has(head, "\"user_message\""u8) || Has(head, "\"UserMessage\""u8);
+    public override TurnMarks Marks => TurnMarks.Codex;
 
     public override HistoryPrompt? Start(JsonElement e) => CodexParser.TurnStart(e) is { } text ? Prompt(text) : null;
 
@@ -348,6 +416,21 @@ internal sealed class CodexHistory : HistoryDialect
                     case "message" when Json.Str(p, "role") == "user":
                         Notification(p, at, turn, context);
                         break;
+                    // The same reply and reasoning as the event stream's, in rollouts that write
+                    // both: said once (TurnBuilder.Said).
+                    case "message" when Json.Str(p, "role") == "assistant" && CodexParser.OutputText(p) is { } text:
+                        turn.Said(HistoryPartKind.Response, text, at);
+                        break;
+                    case "reasoning" when Json.Arr(p, "summary") is { } summary:
+                        foreach (var s in summary.EnumerateArray())
+                        {
+                            if (Text.NonBlank(s.ValueKind == JsonValueKind.String ? s.GetString() : Json.Str(s, "text")) is { } said) { turn.Said(HistoryPartKind.Reasoning, said, at); }
+                        }
+                        break;
+                    case "web_search_call" when (Json.Str(p, "id") ?? Json.Str(p, "call_id")) is { } search:
+                        Started(turn, search, "web_search", ToolSummary.From(Json.Obj(p, "action")), at);
+                        turn.ToolEnded(search, true, at);
+                        break;
                     case "function_call":
                         Started(turn, Json.Str(p, "call_id"), Json.Str(p, "name") ?? "function", ToolSummary.From(Json.Get(p, "arguments")), at);
                         break;
@@ -370,10 +453,14 @@ internal sealed class CodexHistory : HistoryDialect
         switch (Json.Str(p, "type"))
         {
             case "agent_message" when Text.NonBlank(Json.Str(p, "message")) is { } text:
-                turn.Response(text, at);
+                turn.Said(HistoryPartKind.Response, text, at);
                 break;
             case "agent_reasoning" when Text.NonBlank(Json.Str(p, "text")) is { } text:
-                turn.Reasoning(text, at);
+                turn.Said(HistoryPartKind.Reasoning, text, at);
+                break;
+            // The turn's final reply, which the live parser takes over any said before it.
+            case "task_complete" when Text.NonBlank(Json.Str(p, "last_agent_message")) is { } text:
+                turn.Said(HistoryPartKind.Response, text, at);
                 break;
             case "turn_aborted":
                 turn.Abandoned(at);
@@ -410,11 +497,13 @@ internal sealed class CodexHistory : HistoryDialect
                 switch (Json.Str(item, "type"))
                 {
                     case "AgentMessage" when CodexParser.ContentText(item) is { } text:
-                        turn.Response(text, at);
+                        turn.Said(HistoryPartKind.Response, text, at);
                         break;
-                    case "Reasoning" when Json.Arr(item, "summary_text") is { } summary
-                        && Text.NonBlank(string.Join('\n', summary.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()))) is { } text:
-                        turn.Reasoning(text, at);
+                    case "Reasoning" when Json.Arr(item, "summary_text") is { } summary:
+                        foreach (var s in summary.EnumerateArray())
+                        {
+                            if (s.ValueKind == JsonValueKind.String && Text.NonBlank(s.GetString()) is { } said) { turn.Said(HistoryPartKind.Reasoning, said, at); }
+                        }
                         break;
                     case "CommandExecution":
                         {
@@ -423,8 +512,8 @@ internal sealed class CodexHistory : HistoryDialect
                             if (Json.Str(item, "status") is { } status and not "in_progress") { turn.ToolEnded(id, status == "completed" && Json.Int(item, "exit_code") is null or 0, at); }
                             break;
                         }
-                    case "CollabAgentToolCall" when Json.Str(item, "tool") == "spawn_agent" && Json.Str(item, "status") != "failed":
-                        Spawned(item, at, turn, context);
+                    case "CollabAgentToolCall":
+                        Collab(item, at, turn, context);
                         break;
                 }
                 break;
@@ -439,9 +528,11 @@ internal sealed class CodexHistory : HistoryDialect
         turn.Resolved(id, QuestionOutcome.Approved, at);
     }
 
-    static void Spawned(JsonElement item, DateTimeOffset at, TurnBuilder turn, HistoryContext context)
+    // One multi-agent call, as CodexParser.Collab reads it live: the delegates it started, woke or
+    // closed, and how each stood as it returned, which is the main agent hearing how a run ended.
+    static void Collab(JsonElement item, DateTimeOffset at, TurnBuilder turn, HistoryContext context)
     {
-        // Only the session's own: one a sub-agent started is that sub-agent's.
+        // Only the session's own: one a sub-agent called is that sub-agent's.
         var sender = Text.NonBlank(Json.Str(item, "sender_thread_id"));
         if (sender is not null && context.Thread is not null && sender != context.Thread) { return; }
         var names = new Dictionary<string, string?>(StringComparer.Ordinal);
@@ -462,11 +553,31 @@ internal sealed class CodexHistory : HistoryDialect
                 if (x.ValueKind == JsonValueKind.String && x.GetString() is { Length: > 0 } id) { names.TryAdd(id, null); }
             }
         }
-        foreach (var (id, name) in names) { context.Started(turn, id, name, SubagentKind.Background, at); }
+        // A call that failed did what it says to no one; the states it reports still hold.
+        switch (Json.Str(item, "status") == "failed" ? null : Json.Str(item, "tool"))
+        {
+            case "spawn_agent":
+                foreach (var (id, name) in names) { context.Started(turn, id, name, SubagentKind.Background, at); }
+                break;
+            // Input wakes a delegate for another run; its state as the call returned says
+            // nothing of how that run will go.
+            case "send_input" or "resume_agent" or "send_message" or "followup_task":
+                foreach (var id in names.Keys) { context.Woken(id); }
+                return;
+            case "close_agent":
+                return;
+        }
+        if (Json.Obj(item, "agents_states") is { } states)
+        {
+            foreach (var s in states.EnumerateObject())
+            {
+                if (CodexParser.StopOf(s.Value) is { } outcome) { context.Ended(turn, s.Name, outcome, at); }
+            }
+        }
     }
 
     static void Notification(JsonElement p, DateTimeOffset at, TurnBuilder turn, HistoryContext context)
     {
-        if (CodexParser.ReadNotification(p) is { } n) { context.Reported(turn, n.Agent, n.Outcome, at); }
+        if (CodexParser.ReadNotification(p) is { } n) { context.Noticed(turn, n.Agent, n.Outcome, at); }
     }
 }

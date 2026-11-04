@@ -65,6 +65,8 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
 
     protected override IReadOnlyList<byte[]> SkimMarkers => Markers;
 
+    protected override Conversation.TurnMarks Turns => Conversation.TurnMarks.Claude;
+
     // The message whose text the response holds, so its later blocks extend it.
     string? _responseMessage;
     // Notices queued and not yet delivered, by task id, oldest first, each by its content's hash.
@@ -424,6 +426,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                     // streams them) in several entries sharing the message id: they are
                     // one response, not each other's replacements.
                     S.Response = key == _responseMessage && S.Response is { } sofar ? sofar + "\n\n" + text : text;
+                    S.ResponseTurn = S.TurnId;
                     _responseMessage = key;
                     break;
                 case "tool_use":

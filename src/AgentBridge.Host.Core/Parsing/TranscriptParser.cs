@@ -21,6 +21,7 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
     // and Count checks the parsed type anyway.
     public void Skim(ReadOnlyMemory<byte> line)
     {
+        // Every turn mark (TurnMarks) is a skim marker, so a line that may start a turn is parsed.
         if (!SkimWants(line.Span)) { return; }
         using var doc = TryParse(line);
         if (doc is { RootElement.ValueKind: JsonValueKind.Object } d)
@@ -29,6 +30,7 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
             try { Count(d.RootElement); }
             finally { _line = default; }
         }
+        else { Unreadable(line.Span); }
     }
 
     // The line being read, for the id of a turn its record starts (TurnIds): history gives the
@@ -37,6 +39,24 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
 
     // The id of the turn the record being read starts, for activity.turn.
     protected void TurnStarts() => S.TurnId = _line.IsEmpty ? null : Conversation.TurnIds.Of(_line.Span);
+
+    // What a record that may start a turn carries (Conversation.TurnMarks); null for an agent
+    // without history.
+    protected virtual Conversation.TurnMarks? Turns => null;
+
+    bool MayStartTurn(ReadOnlySpan<byte> line) => Turns?.MayStart(line) == true;
+
+    // A line that could not be read but may have started a turn: history shows that turn as one it
+    // can't read, under that line's id, so what follows is not the last prompt's. Its id is not
+    // known here, so the latest turn is unknown until a prompt that can be read.
+    void Unreadable(ReadOnlySpan<byte> line)
+    {
+        if (MayStartTurn(line)) { S.TurnId = null; }
+    }
+
+    // A line longer than the tail reads, of which only its start was seen: as history decides
+    // (HistoryReader.Examine), by that start alone.
+    void ILineSink.Dropped(ReadOnlySpan<byte> head) => Unreadable(head);
 
     void ILineSink.Skipped()
     {
@@ -58,7 +78,11 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
     public void Parse(ReadOnlyMemory<byte> line)
     {
         using var doc = TryParse(line);
-        if (doc is not { RootElement.ValueKind: JsonValueKind.Object } d) { return; }
+        if (doc is not { RootElement.ValueKind: JsonValueKind.Object } d)
+        {
+            Unreadable(line.Span);
+            return;
+        }
         var before = S.Effective;
         var at = Json.Time(d.RootElement, "timestamp");
         // Only events that can change what a client shows move updatedAt: hook runs,

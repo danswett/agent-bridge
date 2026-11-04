@@ -120,7 +120,7 @@ public static class ProtocolVectors
     static readonly Activity FullActivity = new()
     {
         Response = "All **47** tests pass.", ResponseTruncated = true, Reasoning = "The suite is green; summarize.", CurrentTool = Running, History = [Finished],
-        UserMessage = "Run the tests", Turn = "w8Vb3l0V7lH2eQ3c", TurnCount = 4, Compactions = 1, Background = new Background { Agents = 1, Shells = 2 },
+        UserMessage = "Run the tests", Turn = "w8Vb3l0V7lH2eQ3c", ResponseTurn = "w8Vb3l0V7lH2eQ3c", TurnCount = 4, Compactions = 1, Background = new Background { Agents = 1, Shells = 2 },
         Source = new ActivitySource { Reasoning = "agent-1" }, Own = new OwnActivity { Reasoning = "Waiting on the delegate.", At = T0 },
     };
 

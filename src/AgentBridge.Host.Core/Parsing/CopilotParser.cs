@@ -63,6 +63,8 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
 
     protected override IReadOnlyList<byte[]> SkimMarkers => Markers;
 
+    protected override Conversation.TurnMarks Turns => Conversation.TurnMarks.Copilot;
+
     // The main agent's replies too, for activity.own: a session whose delegates filled the
     // parsed window had no reply of the main agent's in it. A delegate's carries an agentId,
     // and is not wanted; a main reply quoting that word is merely missed, except while the
@@ -164,7 +166,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     var reasoning = Text.NonBlank(Json.Str(data, "reasoningText"));
                     var content = MainText(data);
                     if (reasoning is not null) { S.OwnReasoning = Limits.KeepEnd(reasoning, Limits.Reasoning).Text; }
-                    if (content is not null) { (S.OwnResponse, S.OwnResponseCut) = Limits.KeepEnd(content, Limits.Response); }
+                    if (content is not null) { (S.OwnResponse, S.OwnResponseCut) = Limits.KeepEnd(content, Limits.Response); S.ResponseTurn = S.TurnId; }
                     if (reasoning is not null || content is not null) { S.OwnAt = Json.Time(e, "timestamp"); }
                     break;
                 }
@@ -251,6 +253,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         S.Model = null;
         S.OwnResponse = null;
         S.OwnResponseCut = false;
+        S.ResponseTurn = null;
         S.OwnReasoning = null;
         S.OwnAt = null;
         // Turns may have started and failed unread: a notice in the tail names no error of the

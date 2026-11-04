@@ -53,6 +53,8 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
 
     protected override IReadOnlyList<byte[]> SkimMarkers => Markers;
 
+    protected override Conversation.TurnMarks Turns => Conversation.TurnMarks.Codex;
+
     // The session's own thread: a sub-agent another sub-agent started is not the main agent's.
     string? _thread;
 
@@ -152,7 +154,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                 S.Activity(at);
                 break;
             case "task_complete":
-                S.Response = Text.NonBlank(Json.Str(p, "last_agent_message")) ?? S.Response;
+                if (Text.NonBlank(Json.Str(p, "last_agent_message")) is { } last) { Replied(last); }
                 S.Pending.Clear();
                 S.SetStatus(SessionStatus.Idle);
                 S.Activity(at);
@@ -165,7 +167,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                 UserMessage(text, at);
                 break;
             case "agent_message" when Text.NonBlank(Json.Str(p, "message")) is { } text:
-                S.Response = text;
+                Replied(text);
                 S.Activity(at);
                 break;
             case "agent_reasoning" when Text.NonBlank(Json.Str(p, "text")) is { } text:
@@ -224,7 +226,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                 UserMessage(text, at);
                 break;
             case "AgentMessage" when ContentText(item) is { } text:
-                S.Response = text;
+                Replied(text);
                 S.Activity(at);
                 break;
             case "Reasoning":
@@ -386,7 +388,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
             case "message" when Json.Str(p, "role") == "assistant":
                 {
                     var text = OutputText(p);
-                    if (text is not null) { S.Response = text; S.Activity(at); }
+                    if (text is not null) { Replied(text); S.Activity(at); }
                     break;
                 }
             // Otherwise what Codex injects, never shown: only a sub-agent's notice is read.
@@ -473,17 +475,21 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
             var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(text, start, close - start));
             using var doc = JsonDocument.ParseValue(ref reader);
             if (doc.RootElement.ValueKind != JsonValueKind.Object || Text.NonBlank(Json.Str(doc.RootElement, "agent_path")) is not { } agent
-                || Json.Get(doc.RootElement, "status") is not { } status) { return null; }
-            return status.ValueKind switch
-            {
-                JsonValueKind.String when status.GetString() == "interrupted" => (agent, SubagentOutcome.Failed),
-                JsonValueKind.Object when Json.Get(status, "completed") is not null => (agent, SubagentOutcome.Done),
-                JsonValueKind.Object when Json.Get(status, "errored") is not null => (agent, SubagentOutcome.Failed),
-                _ => null,
-            };
+                || Json.Get(doc.RootElement, "status") is not { } status || StopOf(status) is not { } outcome) { return null; }
+            return (agent, outcome);
         }
         catch (JsonException) { return null; }
     }
+
+    // A sub-agent's status as a notice or a wait reports it, as history reads it: how its run
+    // stopped, or null for one that is not a stop (running, shut down).
+    internal static SubagentOutcome? StopOf(JsonElement status) => status.ValueKind switch
+    {
+        JsonValueKind.String when status.GetString() == "interrupted" => SubagentOutcome.Failed,
+        JsonValueKind.Object when Json.Get(status, "completed") is not null => SubagentOutcome.Done,
+        JsonValueKind.Object when Json.Get(status, "errored") is not null => SubagentOutcome.Failed,
+        _ => null,
+    };
 
     void UserMessage(string text, DateTimeOffset? at)
     {
@@ -492,6 +498,13 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         S.Pending.Clear();
         S.SetStatus(SessionStatus.Working);
         S.Activity(at);
+    }
+
+    // The main agent's reply, and the turn it is of (activity.responseTurn).
+    void Replied(string text)
+    {
+        S.Response = text;
+        S.ResponseTurn = S.TurnId;
     }
 
     void Start(string? id, string name, string? summary, DateTimeOffset? at)
@@ -536,7 +549,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         return Text.NonBlank(sb.ToString());
     }
 
-    static string? OutputText(JsonElement p)
+    internal static string? OutputText(JsonElement p)
     {
         if (Json.Arr(p, "content") is not { } content) { return null; }
         var sb = new StringBuilder();

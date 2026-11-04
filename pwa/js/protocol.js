@@ -230,6 +230,8 @@ export function readActivity(raw) {
     // The latest turn's id, the one session.history gives it (#292, v1-history.md): the key a
     // conversation merging live activity with history pages draws it once by.
     turn: str(a.turn),
+    // The turn the main agent's latest reply is of: the latest turn's own only when it equals turn.
+    responseTurn: str(a.responseTurn),
     turnCount: num(a.turnCount),
     compactions: num(a.compactions),
     background: readBackground(a.background),

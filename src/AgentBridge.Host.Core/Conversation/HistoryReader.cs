@@ -60,13 +60,22 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         readonly HistoryBudgets b = reader._budgets;
         readonly long length = RandomAccess.GetLength(file);
         bool partial;
+        // What this request has read backwards (finding the last line's end, then prompts) against
+        // ScanBytes, and parsed (prompts found, then turns) against PageBytes: one budget each for
+        // the whole request, so no step of it reads past what the request may.
+        long scanned;
+        long parsed;
 
         public HistoryResult Page(string? before, int limit)
         {
             var (fingerprint, firstAt) = First();
             long end;
             var depth = 0;
-            if (before is null) { end = LastLineEnd(); }
+            if (before is null)
+            {
+                if (LastLineEnd() is not { } last) { return new HistoryResult { Turns = [], Start = new HistoryStart { Limited = true }, Partial = true }; }
+                end = last;
+            }
             else
             {
                 if (HistoryCursor.Open(before, reader._key) is not { } cursor || !Fits(cursor, fingerprint)) { return HistoryResult.StaleCursor; }
@@ -85,14 +94,14 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                     : new HistoryResult { Turns = [], Start = new HistoryStart { Limited = true }, Partial = true };
             }
 
-            // Newest first, as many as the page's parsing budget allows, at least one.
+            // Newest first, as many as the page's parsing budget allows, at least one. Their
+            // prompts were charged as Back parsed them.
             var turns = new List<HistoryTurn>();
-            long parsed = 0;
             var built = new List<TurnBuilder>();
             for (var i = 0; i < starts.Count; i++)
             {
                 var spanEnd = i == 0 ? end : starts[i - 1].Offset;
-                var cost = Math.Min(spanEnd - starts[i].Offset, b.TurnBytes + (starts[i].End - starts[i].Offset));
+                var cost = Math.Min(spanEnd - starts[i].End, b.TurnBytes);
                 if (i > 0 && parsed + cost > b.PageBytes) { break; }
                 parsed += cost;
                 built.Add(Builder(starts[i]));
@@ -150,7 +159,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             _firstPromptLooked = true;
             Forward(0, Math.Min(length, b.FirstBytes), (line, offset) =>
             {
-                if (!dialect.MayStart(Head(line.Span))) { return true; }
+                if (!dialect.MayStart(line.Span)) { return true; }
                 using var doc = Parse(line);
                 if (doc is null || dialect.Start(doc.RootElement) is not null)
                 {
@@ -180,8 +189,9 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             return id.AsSpan().SequenceEqual(cursor.TurnId);
         }
 
-        // Just past the last newline: a line still being written is not read.
-        long LastLineEnd()
+        // Just past the last newline: a line still being written is not read. Null when no newline
+        // is within the request's backward budget: a line that long is not read anyway.
+        long? LastLineEnd()
         {
             var chunk = ArrayPool<byte>.Shared.Rent(64 * 1024);
             try
@@ -189,8 +199,10 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 var pos = length;
                 while (pos > 0)
                 {
+                    if (scanned >= b.ScanBytes) { return null; }
                     var n = (int)Math.Min(64 * 1024, pos);
                     pos -= n;
+                    scanned += n;
                     ReadAt(chunk.AsSpan(0, n), pos);
                     var i = chunk.AsSpan(0, n).LastIndexOf((byte)'\n');
                     if (i >= 0) { return pos + i + 1; }
@@ -221,64 +233,103 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
 
         // Going back from end, the records that start the newest `want` turns before it, newest
         // first; and whether it got back to the transcript's start, so nothing is before them.
+        // Every line is searched whole for a turn's marks (TurnMarks) as its chunks go by, so a
+        // line costs a parse only when it may start a turn, wherever in it its type is.
         (List<Start> Starts, bool ReachedStart) Back(long end, int want)
         {
             var starts = new List<Start>();
+            var marks = dialect.Marks;
+            var keep = marks.Longest - 1;
+            // The first bytes of the line being read that a later chunk held, so a mark split
+            // between two chunks is found.
+            var carry = new byte[keep];
+            var carried = 0;
+            (bool Any, bool None) found = default;
+            var next = end;
             var chunk = ArrayPool<byte>.Shared.Rent(b.ChunkBytes);
             try
             {
                 var pos = end;
-                var next = end;
-                long scanned = 0;
-                while (pos > 0 && starts.Count < want)
+                while (pos > 0)
                 {
                     if (scanned >= b.ScanBytes) { return (starts, false); }
                     var n = (int)Math.Min(b.ChunkBytes, pos);
                     pos -= n;
                     scanned += n;
                     ReadAt(chunk.AsSpan(0, n), pos);
-                    for (var i = n - 1; i >= 0 && starts.Count < want; i--)
+                    var segmentEnd = n;
+                    for (var i = n - 1; i >= 0; i--)
                     {
                         if (chunk[i] != '\n') { continue; }
-                        var lineStart = pos + i + 1;
-                        if (lineStart < next) { Examine(lineStart, next, chunk.AsSpan(0, n), pos, starts); }
-                        next = lineStart;
+                        Mark(chunk.AsSpan(i + 1, segmentEnd - i - 1), segmentEnd == n);
+                        if (!Line(pos + i + 1, chunk.AsSpan(0, n), pos)) { return (starts, false); }
+                        if (starts.Count >= want) { return (starts, next == 0); }
+                        segmentEnd = i;
                     }
-                    if (pos == 0 && next > 0 && starts.Count < want) { Examine(0, next, chunk.AsSpan(0, n), 0, starts); next = 0; }
+                    // The rest belongs to a line that began in an earlier chunk, or at the start.
+                    var rest = chunk.AsSpan(0, segmentEnd);
+                    Mark(rest, segmentEnd == n);
+                    Carry(rest, segmentEnd == n);
+                    if (pos == 0 && !Line(0, chunk.AsSpan(0, n), 0)) { return (starts, false); }
                 }
-                return (starts, pos == 0 && next == 0);
+                return (starts, next == 0);
             }
             finally { ArrayPool<byte>.Shared.Return(chunk); }
+
+            void Mark(ReadOnlySpan<byte> piece, bool joined)
+            {
+                var f = marks.Find(piece);
+                found = (found.Any || f.Any, found.None || f.None);
+                if (!joined || carried == 0) { return; }
+                var tail = piece[Math.Max(0, piece.Length - keep)..];
+                Span<byte> window = stackalloc byte[tail.Length + carried];
+                tail.CopyTo(window);
+                carry.AsSpan(0, carried).CopyTo(window[tail.Length..]);
+                var g = marks.Find(window);
+                found = (found.Any || g.Any, found.None || g.None);
+            }
+
+            void Carry(ReadOnlySpan<byte> piece, bool joined)
+            {
+                Span<byte> merged = stackalloc byte[Math.Min(keep, piece.Length) + (joined ? carried : 0)];
+                piece[..Math.Min(keep, piece.Length)].CopyTo(merged);
+                if (joined) { carry.AsSpan(0, carried).CopyTo(merged[Math.Min(keep, piece.Length)..]); }
+                carried = Math.Min(keep, merged.Length);
+                merged[..carried].CopyTo(carry);
+            }
+
+            // The line [lineStart, next) is whole: examined if it may start a turn. False when the
+            // request's parsing budget stops it.
+            bool Line(long lineStart, ReadOnlySpan<byte> inChunk, long chunkAt)
+            {
+                var go = lineStart >= next || found is not (true, false) || Examine(lineStart, next, inChunk, chunkAt, starts);
+                next = lineStart;
+                found = default;
+                carried = 0;
+                return go;
+            }
         }
 
-        // One line found going back, [start, end) with its newline: a turn's start, or not.
-        void Examine(long start, long end, ReadOnlySpan<byte> chunk, long chunkAt, List<Start> starts)
+        // One line found going back, [start, end) with its newline, which carries a turn's marks:
+        // a turn's start, or not. False, adding nothing, when parsing it would spend more than the
+        // request may (PageBytes; the first is always read).
+        bool Examine(long start, long end, ReadOnlySpan<byte> chunk, long chunkAt, List<Start> starts)
         {
-            // Most lines are not looked at past their start, so their length is only roughly known
-            // (a carriage return before the newline or not) until one may start a turn.
-            var rough = end - start - 1;
-            if (rough <= 0) { return; }
-            var headLength = (int)Math.Min(HeadBytes, rough);
-            ReadOnlySpan<byte> head;
-            var inChunk = start - chunkAt;
-            if (inChunk + headLength <= chunk.Length) { head = chunk.Slice((int)inChunk, headLength); }
-            else
-            {
-                var h = new byte[headLength];
-                ReadAt(h, start);
-                head = h;
-            }
-            if (!dialect.MayStart(head)) { return; }
             var content = ContentLength(start, end);
-            if (content <= 0) { return; }
-            if (head.Length > content) { head = head[..(int)content]; }
+            if (content <= 0) { return true; }
             if (content > b.MaxLineBytes)
             {
-                // Too long to read: if it starts a turn, that turn can't be read.
+                // Too long to read. The live parser can see only such a line's start
+                // (TranscriptTail.Dropped), so only one whose start may begin a turn is taken as
+                // a turn that can't be read, as there.
+                var head = Head(start, content, chunk, chunkAt);
+                if (!dialect.MayStart(head)) { return true; }
                 starts.Add(new Start(start, end, TurnIds.RawOfLong(head, content), null, null));
                 partial = true;
-                return;
+                return true;
             }
+            if (starts.Count > 0 && parsed + content > b.PageBytes) { return false; }
+            parsed += content;
             var line = new byte[content];
             ReadAt(line, start);
             using var doc = Parse(line);
@@ -286,12 +337,24 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             {
                 starts.Add(new Start(start, end, TurnIds.Raw(line), null, null));
                 partial = true;
-                return;
+                return true;
             }
             if (dialect.Start(doc.RootElement) is { } prompt)
             {
                 starts.Add(new Start(start, end, TurnIds.Raw(line), prompt, Json.Time(doc.RootElement, "timestamp")));
             }
+            return true;
+        }
+
+        // A line's first HeadBytes, from the chunk in hand when it holds them.
+        byte[] Head(long start, long content, ReadOnlySpan<byte> chunk, long chunkAt)
+        {
+            var headLength = (int)Math.Min(HeadBytes, content);
+            var head = new byte[headLength];
+            var inChunk = start - chunkAt;
+            if (inChunk >= 0 && inChunk + headLength <= chunk.Length) { chunk.Slice((int)inChunk, headLength).CopyTo(head); }
+            else { ReadAt(head, start); }
+            return head;
         }
 
         // A line's length without its newline and any carriage return before it, as the tail reads it.
@@ -416,8 +479,6 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             }
             finally { ArrayPool<byte>.Shared.Return(chunk); }
         }
-
-        static ReadOnlySpan<byte> Head(ReadOnlySpan<byte> line) => line.Length > HeadBytes ? line[..HeadBytes] : line;
 
         void ReadAt(Span<byte> buffer, long offset)
         {

@@ -216,24 +216,32 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     // Reads of history at once: each is bounded (HistoryBudgets), and a client asks for the next
     // page only as its reader scrolls, so more than this waiting is a client asking too much.
     readonly SemaphoreSlim _historyReads = new(2, 2);
+    readonly object _historyStart = new();
     Conversation.HistoryReader? _history;
 
-    Conversation.HistoryReader HistoryReader() =>
-        LazyInitializer.EnsureInitialized(ref _history, () => new Conversation.HistoryReader(_options.HistoryBudgets with { MaxLineBytes = _options.MaxLineBytes }, Conversation.HistoryKey.Load(_options.HistoryKeyFile, Log)));
+    // Made once, by one caller: two first requests at once each loading the key could have one
+    // fall back to a key for this run only, and its cursors go stale at the next restart.
+    Conversation.HistoryReader HistoryReader()
+    {
+        lock (_historyStart)
+        {
+            return _history ??= new Conversation.HistoryReader(_options.HistoryBudgets with { MaxLineBytes = _options.MaxLineBytes }, Conversation.HistoryKey.Load(_options.HistoryKeyFile, Log));
+        }
+    }
 
     // Off the pass and its lock: it reads only the transcript, which the agent keeps writing, and
-    // what the session listed when it was asked.
+    // the main agent's delegates as of the session's last update.
     public async Task<HistoryResult> HistoryAsync(string id, string? before, int limit, CancellationToken cancellationToken = default)
     {
         AgentKind agent;
         string? transcript;
-        Dictionary<string, string?> delegates;
+        IReadOnlyDictionary<string, string?> delegates;
         lock (_gate)
         {
             if (!_entries.TryGetValue(id, out var e)) { return HistoryResult.Gone; }
             agent = e.Tracker.Discovered.Agent;
             transcript = e.Tracker.Discovered.TranscriptPath;
-            delegates = (e.Full?.Subagents ?? []).Where(a => a.Parent is null).ToDictionary(a => a.Id, a => a.Name, StringComparer.Ordinal);
+            delegates = e.Tracker.MainDelegates;
         }
         var reader = HistoryReader();
         await _historyReads.WaitAsync(cancellationToken).ConfigureAwait(false);

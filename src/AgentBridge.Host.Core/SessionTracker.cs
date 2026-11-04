@@ -100,6 +100,11 @@ internal sealed class SessionTracker
             RefreshWorkspace(Path.Combine(dir, "workspace.yaml"));
             changed |= !ReferenceEquals(workspace, _workspace);
         }
+        if (_state.Background.Version != _delegatesVersion)
+        {
+            MainDelegates = _state.Background.MainAgents();
+            _delegatesVersion = _state.Background.Version;
+        }
         // Not responding (#800) comes from the clock and from the delegates' own transcripts, which
         // nothing above looks at: a hung session is exactly one whose transcript stops changing, so
         // skipping its build left it working with no attention for ever (#634 review, H1). Asked
@@ -141,6 +146,11 @@ internal sealed class SessionTracker
 
     // Tests: how many times the session was built.
     internal int Builds { get; private set; }
+
+    // The main agent's own delegates as of the last update, for a history read on another thread:
+    // replaced whole, never changed in place.
+    public IReadOnlyDictionary<string, string?> MainDelegates { get; private set; } = new Dictionary<string, string?>();
+    int _delegatesVersion = -1;
 
     // updatedAt moves only when something a client shows changed. An event can be of a
     // kind that usually matters (a turn starting) and still change nothing (the session
@@ -320,6 +330,7 @@ internal sealed class SessionTracker
                 UserMessageFrom = _state.UserMessage is null ? null : _state.UserMessageFrom,
                 UserMessageLabel = _state.UserMessage is null ? null : Limits.KeepStart(_state.UserMessageLabel, Limits.UserMessageLabel),
                 Turn = _state.TurnId,
+            ResponseTurn = (ownResponse ?? (source?.Response is null ? response : null)) is null ? null : _state.ResponseTurn,
                 TurnCount = _state.Seen ? Math.Max(0, _state.Prompts - (effective == SessionStatus.Idle || _state.UncountedTurn ? 0 : 1)) : null,
                 Compactions = _state.Seen ? _state.Compactions : null,
                 Background = Protocol.Background.Of(agents, shells),

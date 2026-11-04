@@ -54,6 +54,17 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
 
     public void Reasoning(string text, DateTimeOffset at) => Add(Blank(HistoryPartKind.Reasoning, at) with { Text = text });
 
+    // A reply or reasoning an agent writes in two streams (Codex's events and its response items,
+    // and the final reply again at the turn's end): the same text already in the turn is not
+    // added twice.
+    public void Said(HistoryPartKind kind, string text, DateTimeOffset at)
+    {
+        if (!_said.Add((kind, text))) { return; }
+        Add(Blank(kind, at) with { Text = text });
+    }
+
+    readonly HashSet<(HistoryPartKind, string)> _said = [];
+
     public void ToolStarted(string callId, string name, string? summary, DateTimeOffset at)
     {
         // Seen twice (Codex writes a call in both its streams): the first is kept.
@@ -92,6 +103,19 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
     }
 
     public bool Pending(string questionId) => _questions.TryGetValue(questionId, out var i) && _parts[i].Outcome == QuestionOutcome.Unknown;
+
+    // A delegate stopped for good (its abort, shutdown or failure): what it was asking is asked of
+    // no one, as the live question goes with it.
+    public void Withdrawn(string agent, DateTimeOffset at)
+    {
+        for (var i = 0; i < _parts.Count; i++)
+        {
+            if (_parts[i] is { Kind: HistoryPartKind.Question, Outcome: QuestionOutcome.Unknown, Question.Agent: { } a } p && a == agent)
+            {
+                _parts[i] = p with { Outcome = QuestionOutcome.Cancelled, AnsweredAt = at };
+            }
+        }
+    }
 
     public void Delegate(DelegateEvent e, DateTimeOffset at) => Add(Blank(HistoryPartKind.Delegate, at) with { Delegate = e });
 

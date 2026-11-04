@@ -380,6 +380,173 @@ public class HistoryTests
         Assert.Null(page.Start.At);
     }
 
+    static Func<SessionSourceOptions, SessionSourceOptions> With(HistoryBudgets? budgets = null, int? maxLineBytes = null) => o => new SessionSourceOptions
+    {
+        CopilotHome = o.CopilotHome, ClaudeHome = o.ClaudeHome, CodexHome = o.CodexHome, UseFileSystemWatcher = false,
+        HistoryKeyFile = o.HistoryKeyFile, HistoryBudgets = budgets ?? new HistoryBudgets(), MaxLineBytes = maxLineBytes ?? o.MaxLineBytes,
+    };
+
+    // Found in review of #292: only a line's first 4 KiB were searched, and JSON may put a record's
+    // type after any amount of anything else. Read in chunks of a few bytes, the marks split
+    // between chunks are found too.
+    [Theory]
+    [InlineData(1024 * 1024)]
+    [InlineData(37)]
+    public async Task A_prompt_whose_type_comes_after_a_long_property_still_starts_its_turn(int chunk)
+    {
+        await using var s = new Copilot_(options: With(new HistoryBudgets { ChunkBytes = chunk }));
+        var late = new JsonObject
+        {
+            ["data"] = new JsonObject { ["content"] = "late " + new string('l', 6000), ["attachments"] = new JsonArray() },
+            ["id"] = "late-1",
+            ["timestamp"] = Copilot.At(3),
+            ["type"] = "user.message",
+        }.ToJsonString();
+        var session = await s.After(Copilot.User("one", 1), Copilot.Assistant("first", 2), late, Copilot.Assistant("second", 4));
+
+        var turns = (await s.Page()).Turns!;
+        Assert.Equal(2, turns.Count);
+        Assert.StartsWith("late ", Prompt(turns[1]));
+        Assert.Equal("second", turns[1].Parts.Single().Text);
+        Assert.Equal(session.Activity.Turn, turns[1].Id);
+    }
+
+    [Fact]
+    public async Task A_record_that_may_start_a_turn_and_cannot_be_read_leaves_the_live_turn_unknown_until_the_next_prompt()
+    {
+        await using var s = new Copilot_();
+        var session = await s.After(Copilot.User("one", 1), "{\"type\":\"user.message\",\"data\":{\"content\":", Copilot.Assistant("after it", 3));
+
+        // History puts the reply under a turn it can't read; live does not put it under "one".
+        Assert.Null(session.Activity.Turn);
+        Assert.Null(session.Activity.ResponseTurn);
+        Assert.True((await s.Page()).Turns![^1].Unreadable);
+
+        var next = await s.After(Copilot.User("two", 4));
+        Assert.Equal((await s.Page()).Turns![^1].Id, next.Activity.Turn);
+    }
+
+    [Fact]
+    public async Task A_prompt_longer_than_the_host_reads_is_a_turn_neither_live_nor_history_can_read()
+    {
+        await using var s = new Copilot_(options: With(maxLineBytes: 2048));
+        var session = await s.After(Copilot.User("one", 1), Copilot.User("huge " + new string('h', 3000), 2), Copilot.Assistant("after it", 3));
+
+        Assert.Null(session.Activity.Turn);
+        var page = await s.Page();
+        Assert.True(page.Partial);
+        Assert.Equal("one", Prompt(page.Turns![0]));
+        Assert.True(page.Turns[1].Unreadable);
+
+        var next = await s.After(Copilot.User("two", 4));
+        Assert.Equal((await s.Page()).Turns![^1].Id, next.Activity.Turn);
+    }
+
+    [Fact]
+    public async Task The_live_reply_names_its_own_turn_so_a_new_prompt_never_shows_the_last_turns_reply_as_its_own()
+    {
+        await using var s = new Copilot_();
+        var first = await s.After(Copilot.User("one", 1), Copilot.Assistant("first", 2));
+        Assert.Equal(first.Activity.Turn, first.Activity.ResponseTurn);
+
+        var asked = await s.After(Copilot.User("two", 3));
+        Assert.Equal("first", asked.Activity.Response);
+        Assert.NotEqual(asked.Activity.Turn, asked.Activity.ResponseTurn);
+        Assert.Equal(first.Activity.Turn, asked.Activity.ResponseTurn);
+
+        var replied = await s.After(Copilot.Assistant("second", 4));
+        Assert.Equal(replied.Activity.Turn, replied.Activity.ResponseTurn);
+    }
+
+    [Fact]
+    public async Task A_delegates_question_stays_in_history_with_whose_it_is_and_how_it_was_answered()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+            Copilot.User("go", 1),
+            Copilot.ToolStart("t1", "task", new { description = "Ask around", prompt = "ask" }, 2),
+            Copilot.SubagentStarted("t1", "agent-1", 2),
+            Copilot.ToolStart("q9", "ask_user", new { message = "Which one?" }, 3, agentId: "agent-1"),
+            Copilot.ToolDone("q9", 4, agentId: "agent-1"),
+            Copilot.Assistant("done", 5));
+
+        var parts = (await s.Page()).Turns!.Single().Parts;
+        var asked = parts.Single(p => p.Kind == HistoryPartKind.Question);
+        Assert.Equal(("q9", "agent-1", QuestionOutcome.Answered), (asked.Question!.Id, asked.Question.Agent, asked.Outcome!.Value));
+        // The delegate's call is its own work, as before: no tool part for it.
+        Assert.DoesNotContain(parts, p => p.Tool?.Id == "q9");
+    }
+
+    [Fact]
+    public async Task A_delegate_started_by_another_delegates_task_call_is_never_the_main_agents()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+            Copilot.User("go", 1),
+            Copilot.ToolStart("t1", "task", new { description = "Lead", prompt = "lead" }, 2),
+            Copilot.SubagentStarted("t1", "agent-1", 2),
+            // agent-1 starts agent-2; the start names no parent, only the call's stamp does.
+            Copilot.ToolStart("t2", "task", new { description = "Follow", prompt = "follow" }, 3, agentId: "agent-1"),
+            Copilot.SubagentStarted("t2", "agent-2", 3),
+            Copilot.Event("subagent.completed", new { toolCallId = "t2" }, 4),
+            Copilot.SubagentCompleted("t1", "agent-1", 5));
+
+        var delegates = (await s.Page()).Turns!.Single().Parts.Where(p => p.Delegate is not null).Select(p => (p.Delegate!.Agent, p.Delegate.Event)).ToList();
+        Assert.Equal([("agent-1", DelegateEventKind.Started), ("agent-1", DelegateEventKind.Reported)], delegates);
+    }
+
+    [Fact]
+    public async Task A_delegate_reporting_back_is_named_even_when_its_start_is_on_an_older_page_and_the_session_lists_too_many_to_show_it()
+    {
+        await using var s = new Copilot_();
+        var lines = new List<string> { Copilot.User("start them", 1) };
+        for (var i = 0; i < Limits.Subagents + 2; i++)
+        {
+            lines.Add(Copilot.ToolStart("t" + i, "task", new { description = "Job " + i, prompt = "go" }, 2 + i));
+            lines.Add(Copilot.SubagentStarted("t" + i, "agent-" + i, 2 + i));
+        }
+        lines.Add(Copilot.User("wait", 40));
+        lines.Add(Copilot.AgentIdle("agent-0", 41));
+        var session = await s.After([.. lines]);
+        Assert.DoesNotContain(session.Subagents!, a => a.Id == "agent-0");
+
+        var newest = (await s.Page(limit: 1)).Turns!.Single();
+        var reported = newest.Parts.Single(p => p.Delegate is not null).Delegate!;
+        Assert.Equal(("agent-0", DelegateEventKind.Reported, SubagentOutcome.Done), (reported.Agent, reported.Event, reported.Outcome!.Value));
+    }
+
+    [Fact]
+    public async Task A_line_still_being_written_longer_than_the_host_reads_back_is_as_far_as_history_goes()
+    {
+        await using var s = new Copilot_(options: With(new HistoryBudgets { ScanBytes = 100_000 }));
+        await s.After(Copilot.User("one", 1));
+        File.AppendAllText(s.Events, "{\"type\":\"assistant.message\",\"data\":{\"content\":\"" + new string('x', 300_000));
+
+        var page = await s.Page();
+        Assert.Empty(page.Turns!);
+        Assert.True(page.Start!.Limited);
+        Assert.True(page.Partial);
+    }
+
+    [Fact]
+    public async Task A_page_its_parsing_budget_cuts_short_goes_on_from_where_it_stopped()
+    {
+        await using var s = new Copilot_(options: With(new HistoryBudgets { PageBytes = 10_000 }));
+        await s.After([.. Enumerable.Range(0, 6).Select(i => Copilot.User($"p{i} " + new string('p', 4000), i + 1))]);
+
+        var seen = new List<string>();
+        string? before = null;
+        do
+        {
+            var page = await s.Page(before);
+            Assert.True(page.Turns!.Count is > 0 and <= 3);
+            seen.InsertRange(0, page.Turns.Select(t => Prompt(t)[..2]));
+            before = page.Before;
+        }
+        while (before is not null);
+        Assert.Equal(Enumerable.Range(0, 6).Select(i => "p" + i), seen);
+    }
+
     // ---- Claude and Codex ----
 
     [Fact]
@@ -463,6 +630,90 @@ public class HistoryTests
         Assert.Equal(ToolStatus.Done, turn.Parts[2].Tool!.Status);
     }
 
+    static async Task<(Session Session, HistoryResult Page)> ReadCodex(params string[] lines)
+    {
+        using var f = new Fixture();
+        var rollout = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, rollout, updated: Fixture.T0);
+        f.Processes.Run(AgentKind.Codex, 950);
+        Fixture.Append(rollout, [Codex.Line("session_meta", new { id = Id, timestamp = Copilot.At(0), cwd = "/work/codex" }, 0), .. lines]);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        return (source.Get(Id)!, await source.HistoryAsync(Id, null, 20));
+    }
+
+    [Fact]
+    public async Task A_codex_reply_and_reasoning_written_in_both_streams_are_each_said_once_and_one_written_only_as_items_is_kept()
+    {
+        var (session, page) = await ReadCodex(
+            Codex.Event(new { type = "user_message", message = "both streams" }, 1),
+            Codex.Item(new { type = "reasoning", summary = new[] { new { type = "summary_text", text = "First thought." }, new { type = "summary_text", text = "Second thought." } } }, 2),
+            Codex.Event(new { type = "agent_reasoning", text = "First thought." }, 2),
+            Codex.Event(new { type = "agent_reasoning", text = "Second thought." }, 2),
+            Codex.Event(new { type = "agent_message", message = "Said twice." }, 3),
+            Codex.Item(new { type = "message", role = "assistant", content = new[] { new { type = "output_text", text = "Said twice." } } }, 3),
+            Codex.Event(new { type = "task_complete", last_agent_message = "Said twice." }, 3),
+            Codex.Event(new { type = "user_message", message = "items only" }, 4),
+            Codex.Item(new { type = "reasoning", summary = new[] { new { type = "summary_text", text = "Only an item." } } }, 5),
+            Codex.Item(new { type = "message", role = "assistant", content = new[] { new { type = "output_text", text = "Item reply." } } }, 5),
+            Codex.Event(new { type = "task_complete", last_agent_message = "The final word." }, 6));
+
+        var texts = page.Turns!.Select(t => t.Parts.Select(p => (p.Kind, p.Text)).ToList()).ToList();
+        Assert.Equal([(HistoryPartKind.Reasoning, "First thought."), (HistoryPartKind.Reasoning, "Second thought."), (HistoryPartKind.Response, "Said twice.")], texts[0]);
+        Assert.Equal([(HistoryPartKind.Reasoning, "Only an item."), (HistoryPartKind.Response, "Item reply."), (HistoryPartKind.Response, "The final word.")], texts[1]);
+        Assert.Equal(("The final word.", session.Activity.Turn), (session.Activity.Response, session.Activity.ResponseTurn));
+    }
+
+    const string Thread = "019a0000-0000-7000-8000-00000000beef";
+
+    static string Collab(string tool, int s, JsonNode state) => Codex.Event(new
+    {
+        type = "item_completed",
+        item = new
+        {
+            type = "CollabAgentToolCall",
+            id = "call-" + tool + s,
+            tool,
+            status = "completed",
+            sender_thread_id = Id,
+            receiver_thread_ids = new[] { Thread },
+            receiver_agents = new[] { new { thread_id = Thread, agent_nickname = "Fermat" } },
+            agents_states = new Dictionary<string, JsonNode> { [Thread] = state },
+        },
+    }, s);
+
+    static JsonNode Completed => new JsonObject { ["completed"] = "ok" };
+
+    static string SubagentNotice(int s) => Codex.Item(new
+    {
+        type = "message",
+        role = "user",
+        content = new[] { new { type = "input_text", text = $"<subagent_notification>\n{{\"agent_path\":\"{Thread}\",\"status\":{{\"completed\":\"ok\"}}}}\n</subagent_notification>" } },
+        internal_chat_message_metadata_passthrough = new { content_item_kinds = new[] { "multi_agent.subagent_notification" } },
+    }, s);
+
+    // Found in review of #292: a delegate woken by input reported only its first run.
+    [Fact]
+    public async Task A_codex_delegate_woken_again_reports_each_run_once_and_a_late_notice_is_spent_on_the_run_it_was_for()
+    {
+        var (_, page) = await ReadCodex(
+            Codex.Event(new { type = "user_message", message = "delegate" }, 1),
+            Collab("spawn_agent", 2, JsonValue.Create("pending_init")),
+            SubagentNotice(3),
+            Collab("send_input", 4, JsonValue.Create("running")),
+            // The wait hears the second run end, and its notice comes after.
+            Collab("wait", 5, Completed),
+            SubagentNotice(6),
+            Collab("send_input", 7, JsonValue.Create("running")),
+            SubagentNotice(8));
+
+        var events = page.Turns!.Single().Parts.Where(p => p.Delegate is not null).Select(p => (p.Delegate!.Event, p.At)).ToList();
+        Assert.Equal(
+            [(DelegateEventKind.Started, Fixture.T0.AddSeconds(2)), (DelegateEventKind.Reported, Fixture.T0.AddSeconds(3)),
+             (DelegateEventKind.Reported, Fixture.T0.AddSeconds(5)), (DelegateEventKind.Reported, Fixture.T0.AddSeconds(8))],
+            events);
+    }
+
     // ---- the recorded sessions ----
 
     [Theory]
@@ -501,12 +752,13 @@ public class HistoryTests
         var session = source.Get(Id)!;
 
         var page = await source.HistoryAsync(Id, null, HistoryLimits.MaxTurns);
-        Assert.NotEmpty(page.Turns!);
+        var turns = page.Turns!;
+        Assert.NotEmpty(turns);
         Assert.NotNull(page.Start);
         Assert.Null(page.Partial);
-        Assert.Equal(session.Activity.Turn, page.Turns!.Last().Id);
-        Assert.Equal(page.Turns.Count, page.Turns.Select(t => t.Id).Distinct().Count());
-        Assert.All(page.Turns, t => Assert.Equal(t.Parts.Count, t.Parts.Select(p => p.Id).Distinct().Count()));
-        if (agent != "claude") { Assert.Contains(page.Turns.SelectMany(t => t.Parts), p => p.Delegate is { Event: DelegateEventKind.Started }); }
+        Assert.Equal(session.Activity.Turn, turns.Last().Id);
+        Assert.Equal(turns.Count, turns.Select(t => t.Id).Distinct().Count());
+        Assert.All(turns, t => Assert.Equal(t.Parts.Count, t.Parts.Select(p => p.Id).Distinct().Count()));
+        if (agent != "claude") { Assert.Contains(turns.SelectMany(t => t.Parts), p => p.Delegate is { Event: DelegateEventKind.Started }); }
     }
 }

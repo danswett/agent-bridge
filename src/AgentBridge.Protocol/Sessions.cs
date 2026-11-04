@@ -453,10 +453,13 @@ public sealed record Activity
     public UserMessageFrom? UserMessageFrom { get; init; }
     // A short plain-text label for it, at most Limits.UserMessageLabel bytes: a schedule's number.
     public string? UserMessageLabel { get; init; }
-    // The id of the latest turn, which UserMessage, Response, Reasoning, CurrentTool and the question
-    // belong to: the id session.history gives it (docs/protocol/v1-history.md), so a client merging
-    // live activity with history pages draws it once. Never trimmed by SessionBudget.
+    // The id of the latest turn, which UserMessage, Reasoning, CurrentTool and the question belong
+    // to: the id session.history gives it (docs/protocol/v1-history.md), so a client merging live
+    // activity with history pages draws it once. Never trimmed by SessionBudget.
     public string? Turn { get; init; }
+    // The turn the main agent's own latest reply (Own.Response, else Response) was written in:
+    // Turn once the latest turn has replied, an earlier turn's until then. Never trimmed.
+    public string? ResponseTurn { get; init; }
     public int? TurnCount { get; init; }
     public int? Compactions { get; init; }
     // Work the session started that outlives its own turn, still running. Absent when there
