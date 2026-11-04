@@ -39,6 +39,7 @@ import { FleetStatus } from './fleet.js';
 import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UpdateControl } from './update.js';
 import { UsageView } from './ui/usage-view.js';
+import { reveal, watchDisclosures, watchPresses } from './ui/motion.js';
 import { DemoBlobStore, DemoConnection, DemoHost, demoDelegating, demoMachines, demoTransfers, demoTrust, runScript } from './demo.js';
 import { RelayBlobs } from './blobs.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
@@ -165,7 +166,8 @@ function focusLinked() {
   const el = card.view;
   const target = el.querySelector('.question-slot button:not([disabled]):not(.md-copy), .question-slot input:not([disabled]), .question-slot textarea:not([disabled])');
   target?.focus({ preventScroll: true });
-  target?.scrollIntoView({ block: 'nearest' });
+  // Brought into sight as Needs you brings a question, so its answers wait before a click counts.
+  if (target) { card.revealQuestion('auto', target); }
 }
 
 // A tap on a notification while the app is open: the worker says where to go.
@@ -201,7 +203,7 @@ function registerServiceWorker() {
     });
   }).catch((e) => console.warn('service worker:', e.message));
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (hadController) { $('update-banner').hidden = false; }
+    if (hadController) { reveal($('update-banner')); }
   });
   $('reload').onclick = () => location.reload();
 }
@@ -607,7 +609,7 @@ function begin(account) {
   connection.on('presence', () => page.drawMachines());
   connection.on('log', (line) => console.log(line));
   connection.on('state', ({ state }) => {
-    $('replaced-banner').hidden = state !== 'replaced';
+    if (state === 'replaced') { reveal($('replaced-banner')); } else { $('replaced-banner').hidden = true; }
     switch (state) {
       // News, as reconnecting is: the strip shows on a phone, in plain words.
   case 'connecting': return setPill('Connecting…', 'busy');
@@ -673,6 +675,8 @@ async function startLive() {
 }
 
 registerServiceWorker();
+watchDisclosures(document);
+watchPresses(document);
 (params.get('demo') === '1' ? startDemo() : startLive()).catch((e) => {
   console.error(e);
   setPill('Error', 'bad');

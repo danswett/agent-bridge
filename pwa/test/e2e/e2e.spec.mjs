@@ -467,6 +467,19 @@ test.describe('notifications', () => {
     await expect(choice).not.toBeFocused();
     expect(await page.evaluate(() => !!document.activeElement?.closest('.question-slot'))).toBe(false);
   });
+
+  test('a notification\'s question, its list whole, takes no click for a moment as its answer takes focus', async ({ page }) => {
+    await host.upsert(asking('held-5', 'q-held-f', 'Approve F?'));
+    const release = await heldOpen(page, 'held-5', 'q-held-f');
+    // Longer than the wait that opening it began, so what holds a click now began with the focus.
+    try { await page.waitForTimeout(700); } finally { release(); }
+    // Read on every frame: the moment an answer has focus, its question is holding clicks back.
+    const at = await page.waitForFunction(() => {
+      const a = document.activeElement;
+      return a?.closest('.question-slot') ? { arriving: a.closest('.question')?.hasAttribute('data-arriving') ?? false } : null;
+    }, null, { polling: 'raf', timeout: 30000 });
+    expect(await at.jsonValue()).toEqual({ arriving: true });
+  });
 });
 
 test('every machine shows its sessions and version, and its agents\' usage, merged, whether or not it is the one being viewed', async ({ page }) => {

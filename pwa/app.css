@@ -422,16 +422,14 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .usage-pacefoot { font-size: .78rem; color: var(--ab-text2); margin-top: 2px; }
 .usage-verdict.ahead { color: var(--ab-needs-text); }
 .usage-bar { position: relative; height: 9px; border-radius: 5px; margin-top: 4px; overflow: hidden; background: var(--ab-stroke2); }
-.usage-fill { position: absolute; inset: 0 auto 0 0; border-radius: 5px; background: var(--ab-bridge); transition: width .4s ease; }
+/* A reading is taken at once: a bar easing every few minutes is motion on its own (ui.md §5.3). */
+.usage-fill { position: absolute; inset: 0 auto 0 0; border-radius: 5px; background: var(--ab-bridge); }
 .usage-fill.warn { background: var(--ab-needs); }
 .usage-fill.crit { background: var(--ab-danger); }
 /* The halo keeps the mark legible on both sides of the fill: without one it read as a gap
    in the bar rather than as a marker, which is how agent-ha-bridge's was first reported. */
 .usage-pace { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ab-text); box-shadow: 0 0 0 1.5px var(--ab-card); }
 .usage-error { margin: 4px 0 0; font-size: .8rem; color: var(--ab-danger-text); }
-@media (prefers-reduced-motion: reduce) {
-  .usage-fill { transition: none; }
-}
 
 .icon { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 
@@ -820,9 +818,16 @@ summary {
 .delegates-finished { margin: 2px 0; }
 .delegates-finished > summary { font-size: .82rem; }
 /* A row opens in place; its chevron says so, pointing down into it once open. */
-.delegate-chevron { width: 16px; height: 16px; margin-top: 2px; color: var(--ab-text2); transition: transform .2s ease; }
-.delegate-detail[open] .delegate-chevron { transform: rotate(90deg); }
-@media (prefers-reduced-motion: reduce) { .delegate-chevron { transition: none; } }
+/* Disclosure (ui.md §5.3): the chevron turns as the row opens, and back, quicker, as it closes.
+   The tokens are 0 under reduced motion. */
+.delegate-chevron {
+  width: 16px; height: 16px; margin-top: 2px; color: var(--ab-text2);
+  transition: transform var(--ab-motion-disclosure-exit-duration) var(--ab-motion-disclosure-exit-ease);
+}
+.delegate-detail[open] .delegate-chevron {
+  transform: rotate(90deg);
+  transition-duration: var(--ab-motion-disclosure-duration); transition-timing-function: var(--ab-motion-disclosure-ease);
+}
 .delegates-more { font-size: .8rem; }
 
 /* ---- inline mono (ui.md §4.2, #215) ----
@@ -1077,3 +1082,36 @@ summary {
 .notify h3, .account h3 { margin: 0 0 var(--ab-space-2); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
 .account p { margin: 0; color: var(--ab-text2); overflow-wrap: anywhere; }
 
+/* ---- motion (ui.md §5.3) ----
+   Only the generated tokens time anything here, and under prefers-reduced-motion they are 0, so
+   no rule below needs a reduced-motion rule of its own. js/ui/motion.js draws the motions that
+   answer a change (push, a row arriving, the selection pill, a menu, the Needs you lane's mark);
+   these are the ones CSS draws by itself.
+
+   Press: the pressed fill shows at once on press, and eases back on release. Nothing scales.
+   Only the release eases: motion.js marks a control data-press="released" for the press token's
+   length once the pointer lets go, so a row being selected, a tab chosen or the theme changing
+   takes its new fill at once. Only the fill eases, and a button's label with it (its pressed
+   label is darker or lighter, below): a tab's or a row's colours change with selection, at once.
+   An answer's choices and the toggles have no pressed fill: what changes there on release is
+   the selection itself, which shows at once. */
+:is(.button, .icon-button, .row-main, .nav-item, .view-tab, .machine-tab, .row-menu-item)[data-press="released"] {
+  transition: background-color var(--ab-motion-press-duration) var(--ab-motion-press-ease);
+}
+.button[data-press="released"] {
+  transition: background-color var(--ab-motion-press-duration) var(--ab-motion-press-ease),
+    color var(--ab-motion-press-duration) var(--ab-motion-press-ease);
+}
+:is(.icon-button, .row-main, .view-tab, .machine-tab, .row-menu-item):active:not(:disabled) { background: var(--ab-selected); }
+.nav-item:active { background: var(--ab-selected); }
+/* A button's pressed fill keeps its label at 4.5:1 (ui.md §9) rather than fading the whole
+   control: a filled button's Bridge moves toward the text colour, darker on light and lighter on
+   dark, away from its label's; an outlined one takes the selected fill, and its Bridge label moves
+   the same way, so it holds its contrast on the card and on the shell. In forced colours the
+   system pairs stay as they are. */
+@media not (forced-colors: active) {
+  .button:active:not(.secondary, :disabled, [aria-disabled="true"]) { background-color: color-mix(in srgb, var(--ab-bridge) 88%, var(--ab-text)); }
+  .button.secondary:active:not(:disabled, [aria-disabled="true"]) {
+    background-color: var(--ab-selected); color: color-mix(in srgb, var(--ab-bridge) 85%, var(--ab-text));
+  }
+}

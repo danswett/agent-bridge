@@ -24,6 +24,85 @@ import { maxPlain } from '../blobs.js';
 import { SessionOrder, SORTS, SORT_LABELS } from '../session-order.js';
 import { NeedsYouLane } from './needs-you-view.js';
 import { AppBadge } from '../needs-you.js';
+import { enter, scrollBehavior, watchLane } from './motion.js';
+import { QUESTION_ARRIVAL_GUARD_MS } from './session-card.js';
+
+// Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
+// change to the lane can put Approve once under a pointer aimed at something else (an entry
+// appearing, the entries moving, those after a removed one shifting up into its place), and so
+// can the lane coming back on screen. For QUESTION_ARRIVAL_GUARD_MS after either, a pointer's
+// click on them is dropped before any handler sees it; a key's (detail 0) goes through. The lane
+// says so (data-arriving) while it lasts. The Windows app's lane does the same (GuardLane).
+// scroller: what the lane scrolls in. While the guard runs, its scrolling (a row brought into
+// sight, smoothly) moves the lane under the pointer too, so each step runs the wait again from
+// there; once it has run out, the person's own scrolling holds nothing back.
+const LANE_ANSWERS = '.needs-approve, .needs-deny, .needs-resend';
+function guardLane(list, scroller = null) {
+  const now = () => globalThis.performance?.now() ?? Date.now();
+  let until = 0;
+  let timer = 0;
+  const arm = () => {
+    until = now() + QUESTION_ARRIVAL_GUARD_MS;
+    list.setAttribute('data-arriving', '');
+    clearTimeout(timer);
+    timer = setTimeout(() => list.removeAttribute('data-arriving'), QUESTION_ARRIVAL_GUARD_MS);
+  };
+  // The entries themselves coming, going or moving; and anything that moves their answers without
+  // that (an answer's status appearing or wrapping in an entry above, the note or machine tabs
+  // above the lane changing height, a banner or the app bar above the list appearing, the
+  // window's width). Where each answer sits is read when an entry, the lane, anything holding it
+  // or anything before any of those changes size; a move of more than a pixel runs the wait
+  // again. It is read where the page would be unscrolled (the scroller's and the window's
+  // scrolling added back), so scrolling isn't a move but the list being pushed down is; and only
+  // for answers shown, since a hidden one (Resend until a send fails) has no place to keep. An
+  // age ticking on moves nothing, and the guard's own attribute changes no size, so it can't feed
+  // itself.
+  const lane = list.parentElement ?? list;
+  const where = () => {
+    const scrolled = (scroller?.scrollTop ?? 0) + (globalThis.scrollY ?? 0);
+    return [...list.querySelectorAll(LANE_ANSWERS)]
+      .filter((b) => b.getClientRects().length > 0)
+      .map((b) => b.getBoundingClientRect().top + scrolled);
+  };
+  let was = null;
+  const moved = () => {
+    const at = where();
+    if (was && (at.length !== was.length || at.some((y, i) => Math.abs(y - was[i]) > 1))) { arm(); }
+    was = at;
+  };
+  const sized = typeof ResizeObserver === 'function' ? new ResizeObserver(moved) : null;
+  for (let up = lane; up; up = up.parentElement) {
+    for (let el = up; el; el = el.previousElementSibling) { sized?.observe(el); }
+  }
+  for (const el of list.children) { sized?.observe(el); }
+  const changes = typeof MutationObserver === 'function' ? new MutationObserver((records) => {
+    for (const r of records) {
+      for (const n of r.removedNodes) { if (n.nodeType === 1) { sized?.unobserve(n); } }
+      for (const n of r.addedNodes) { if (n.nodeType === 1) { sized?.observe(n); } }
+    }
+    arm();
+    was = where();
+  }) : null;
+  changes?.observe(list, { childList: true });
+  const click = (e) => {
+    if (e.detail === 0 || now() >= until || !e.target.closest?.(LANE_ANSWERS)) { return; }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+  list.addEventListener('click', click, true);
+  const scrolled = () => { if (now() < until) { arm(); } };
+  scroller?.addEventListener('scroll', scrolled, { passive: true });
+  return {
+    arm,
+    stop() {
+      changes?.disconnect();
+      sized?.disconnect();
+      clearTimeout(timer);
+      list.removeEventListener('click', click, true);
+      scroller?.removeEventListener('scroll', scrolled);
+    },
+  };
+}
 
 // The machine last launched on, or picked to launch on, with every machine shown.
 export const LAUNCH_HOST = 'agent-bridge.app.launchHost';
@@ -79,6 +158,11 @@ export class SessionsPage {
   #want = null;
   // Whether the address names a session: on a phone, its view is pushed over the list.
   #open = false;
+  #navigating = false;
+  #painted = false;
+  #frame = 0;
+  #unwatchLane = null;
+  #unwatchNews = null;
   #inspectorHidden = false;
   // What had focus in the list when a session was opened on a phone.
   #returnTo = null;
@@ -89,6 +173,8 @@ export class SessionsPage {
   // The delegate a phone's back stack has an entry for (#168), and the listeners that keep it.
   #delegateShown = null;
   #listening = null;
+  #shown = null;
+  #laneGuard = null;
   #stepping = false;
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
@@ -130,8 +216,11 @@ export class SessionsPage {
     this.view = new SessionListView($('session-list'), hosts.sessions, {
       views: $('session-views'),
       layout: () => ({ inspector: this.wide.matches && !this.#inspectorHidden }),
-      // Only while Sessions shows: news that comes while another page does waits for it.
-      viewing: () => (!shell || shell.route === 'sessions') && (!this.phone.matches || this.#open),
+      // Only while Sessions shows, in a page that does: news that comes while another page, or
+      // the tab or app in the background, waits for it, with no scroll and no question's wait
+      // spent unseen.
+      viewing: () => (!shell || shell.route === 'sessions') && (!this.phone.matches || this.#open)
+        && globalThis.document?.visibilityState !== 'hidden',
       fetchDetail: (hostId, id) => {
         const client = hosts.link(hostId)?.client;
         return client ? client.getSession(id) : Promise.reject(new Error('not connected'));
@@ -161,6 +250,24 @@ export class SessionsPage {
       open: (hostId, id) => this.showSession(id, hostId),
       badge,
     });
+    // An entry is news, and its mark fades in, as a row is (views.js): once the list was drawn
+    // before the change that brought it, and its machine has sent its whole list. Read as the
+    // change comes, since the list draws before the lane does. A machine whose list is current
+    // again (#269: back, and its snapshot whole) brings back questions that were there all along,
+    // hidden while it was stale: they show at once, as a machine's first list does, until the
+    // next change to the sessions.
+    let news = false;
+    let listed = new Set();
+    let returned = new Set();
+    const unwatchSessions = hosts.sessions.onChange(() => { news = this.view.drawn; returned = new Set(); });
+    const unwatchHosts = hosts.onChange(() => {
+      const now = new Set((hosts.shownIds?.() ?? []).filter((id) => !hosts.staleOf?.(id)));
+      returned = new Set([...returned, ...[...now].filter((id) => !listed.has(id))]);
+      listed = now;
+    });
+    this.#unwatchNews = () => { unwatchSessions(); unwatchHosts?.(); };
+    this.#unwatchLane = watchLane(this.lane.list, { fresh: (el) => news && this.view.settled(el.dataset.hostId) && !returned.has(el.dataset.hostId) });
+    this.#laneGuard = this.lane.list ? guardLane(this.lane.list, $('list-pane')) : null;
     this.#sortMenu($('session-sort'));
     // A new channel to a machine: what waits to be resent to it goes now, and only to it.
     hosts.onOpen((id) => {
@@ -181,11 +288,42 @@ export class SessionsPage {
       };
       // Kept, so a page retired with its account (clear()) stops answering routes: a second
       // sign-in in the same tab would otherwise have two pages rendering into one list.
+      let was = shell.route;
       this.#unroute = shell.onRoute(({ route, rest }) => {
         this.launchPanel.setOpen(route === 'launch');
+        const back = route === 'sessions' && was !== 'sessions';
+        was = route;
         // Back on Sessions, what it shows is seen now.
-        if (route === 'sessions') { this.#route(rest); this.view.schedule(); this.view.layoutChanged(); }
+        if (route === 'sessions') {
+          this.#navigate(() => this.#route(rest));
+          this.view.schedule();
+          this.view.layoutChanged();
+          // Back from another page: a question that came meanwhile is in sight now, where a
+          // click may already be headed, the same wait as a question arriving; so is the lane.
+          // Not a move within Sessions (a row chosen), which brings its own wait where it does.
+          if (back) {
+            this.view.selected?.reshow();
+            this.#laneGuard?.arm();
+          }
+        }
       });
+      // Back from the background (another tab, the app switcher, the back-forward cache, another
+      // window over a browser still partly in sight, which leaves it visible): what Sessions
+      // shows is seen now, and a question in sight waits as one arriving does, as does the lane.
+      const doc = globalThis.document;
+      if (doc) {
+        this.#shown = new AbortController();
+        const back = () => {
+          if (doc.visibilityState === 'hidden' || shell.route !== 'sessions') { return; }
+          this.view.schedule();
+          this.view.selected?.reshow();
+          this.#laneGuard?.arm();
+        };
+        doc.addEventListener('visibilitychange', back, { signal: this.#shown.signal });
+        globalThis.addEventListener?.('pageshow', (e) => { if (e.persisted) { back(); } }, { signal: this.#shown.signal });
+        // The window's own focus only (an element's doesn't reach a listener here that isn't capturing).
+        globalThis.addEventListener?.('focus', back, { signal: this.#shown.signal });
+      }
       this.launchPanel.setOpen(shell.route === 'launch');
       if (shell.route === 'sessions') { this.#route(shell.rest); }
       this.view.setFilter(shell.query);
@@ -321,11 +459,16 @@ export class SessionsPage {
       el.classList.add('linked');
       setTimeout(() => el.classList.remove('linked'), 4000);
     }
-    card.element.scrollIntoView({ block: 'nearest' });
+    // Scroll to a question (ui.md §5.3): smoothly, or at once under reduced motion.
+    const behavior = scrollBehavior();
+    // The list scrolling to its row slides Needs you under a pointer still on the entry clicked:
+    // the lane waits from now, and from each step of that scroll.
+    if (this.$('list-pane')?.getClientRects().length) { this.#laneGuard?.arm(); }
+    card.element.scrollIntoView({ block: 'nearest', behavior });
     card.els.titleText.tabIndex = -1;
     card.els.titleText.focus({ preventScroll: true });
     // A question it was opened for is in sight, however far its conversation was scrolled.
-    card.view.querySelector('.question-slot .question')?.scrollIntoView({ block: 'nearest' });
+    card.revealQuestion(behavior);
     return true;
   }
 
@@ -336,7 +479,7 @@ export class SessionsPage {
     // What had focus in the list (a row, a Needs you entry) gets it back when a phone returns there.
     const had = globalThis.document?.activeElement;
     this.#returnTo = had && this.$('list-pane')?.contains(had) ? had : card.els.open;
-    if (!this.shell) { this.view.select(SessionListView.key(card.hostId, card.id)); this.#open = true; this.#drawPanes(); return; }
+    if (!this.shell) { this.view.select(SessionListView.key(card.hostId, card.id)); this.#open = true; this.#navigate(() => this.#drawPanes()); return; }
     const phone = this.phone.matches;
     const onSessions = this.shell.route === 'sessions';
     const already = onSessions && this.shell.rest.join('/') === rest.join('/');
@@ -394,6 +537,8 @@ export class SessionsPage {
       const was = this.#open;
       this.#want = null;
       this.#open = false;
+      // On a phone the list, and its lane, are back under a pointer that was on the session.
+      if (was && this.phone.matches) { this.#laneGuard?.arm(); }
       this.#settleSelection();
       this.#drawPanes();
       // On a phone the view that had focus went: focus goes back where it came from in the list,
@@ -479,6 +624,9 @@ export class SessionsPage {
     this.view.layoutChanged();
     this.#drawPanes();
     this.#delegateStep();
+    // Across a width of §5.2 the conversation reflows, or comes into sight as Tools moves into the
+    // inspector: its question waits as one arriving does, if it is on screen.
+    this.view.selected?.reshow();
   }
 
   #toggleInspector() {
@@ -486,6 +634,28 @@ export class SessionsPage {
     this.#write(INSPECTOR, this.#inspectorHidden ? 'hidden' : 'shown');
     this.view.layoutChanged();
     this.#drawPanes();
+    // The conversation reflows to its new width, or comes into sight (Tools picked moves into the
+    // inspector): its question waits as one arriving does, if it is on screen.
+    this.view.selected?.reshow();
+    // Pane and inspector (ui.md §5.3): its column opens at once, and its content slides in from
+    // the trailing edge. Hiding closes the column at once.
+    if (!this.#inspectorHidden && this.wide.matches) { enter(this.view.selected?.els.inspector, 'pane', { dx: 1 }); }
+  }
+
+  // While the address moves (a row opened, Back): what #drawPanes shows then is a push or a pop.
+  #navigate(draw) {
+    const was = this.#navigating;
+    this.#navigating = true;
+    try { draw(); } finally { this.#navigating = was; }
+  }
+
+  // Whether the panes shown now have been painted: false from a change until the next frame.
+  #paint() {
+    this.#painted = false;
+    const frame = this.#frame = (this.#frame ?? 0) + 1;
+    const raf = globalThis.requestAnimationFrame;
+    if (typeof raf !== 'function') { this.#painted = true; return; }
+    raf(() => raf(() => { if (this.#frame === frame) { this.#painted = true; } }));
   }
 
   // Which panes show: on a phone, the list or the session pushed over it; the inspector, as its
@@ -493,10 +663,34 @@ export class SessionsPage {
   #drawPanes() {
     const body = globalThis.document?.body;
     if (!body) { return; }
+    const was = body.dataset.sessionOpen;
     body.dataset.sessionOpen = this.#open && this.view?.selected ? 'true' : 'false';
     body.dataset.inspector = this.#inspectorHidden ? 'hidden' : 'shown';
     const none = this.$('no-session');
     if (none) { none.hidden = !!this.view?.selected; }
+    // Push and pop (ui.md §5.3): on a phone the screen that comes covers the other at once, and
+    // only its content slides in, from the trailing side going in and the leading side coming
+    // back. Only for a move the address made (a row opened, Back) from a screen that was on show
+    // for a frame at least: a session the address names at startup or on a reload, and the list
+    // put beneath it then (#listBeneath), are the app starting, not a move.
+    const changed = was !== body.dataset.sessionOpen;
+    const moved = changed && this.#navigating && this.#painted && was !== undefined && this.phone.matches;
+    if (changed) { this.#paint(); }
+    if (moved) {
+      const opened = body.dataset.sessionOpen === 'true';
+      if (opened) {
+        const content = this.view.selected?.view;
+        // A session asking a question fades in where it is: an approval's command never slides
+        // or starts partly off the screen.
+        enter(content, 'push', { dx: content?.querySelector('.question-slot > *') ? 0 : 1 });
+      } else {
+        // The list's content comes back from the leading side, all but Needs you, which is there
+        // at once: its commands never move.
+        for (const part of this.$('list-pane')?.children ?? []) {
+          if (!part.matches('.needs-you') && part.getClientRects().length) { enter(part, 'push', { dx: -1 }); }
+        }
+      }
+    }
   }
 
   // Everything tied to the signed-in account goes with it.
@@ -505,6 +699,14 @@ export class SessionsPage {
     this.#unroute = null;
     this.#listening?.abort();
     this.#listening = null;
+    this.#shown?.abort();
+    this.#shown = null;
+    this.#laneGuard?.stop();
+    this.#laneGuard = null;
+    this.#unwatchLane?.();
+    this.#unwatchLane = null;
+    this.#unwatchNews?.();
+    this.#unwatchNews = null;
     this.answers.clear();
     this.replies.clear();
     this.stops.clear();

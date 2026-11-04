@@ -31,10 +31,23 @@ import { RowMenu } from './row-menu.js';
 import { DelegatesBlock } from './delegates-view.js';
 import { mainVoice } from '../attribution.js';
 import { delegateOf } from '../needs-you.js';
+import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // A tool call's glyph: running turns, as working does; a finished one is done or failed.
 const TOOL_GLYPH = { running: 'working', done: 'done', failed: 'failed' };
+// How long a question's controls ignore a pointer's click once the question appears or is
+// scrolled into view (ui.md §5.3, Scroll to a question). A click is often already on its way
+// when the content under it changes: people take about a quarter of a second to see a change
+// and more to stop a click, so twice that is kept. One click on a choice sends the answer, and
+// a click aimed at the agent's last lines must not answer a question that moved under it. No
+// motion token measures this, and reduced motion keeps it: a jump moves the content as surely.
+// A key still acts at once, since nothing moves the focus to a question.
+export const QUESTION_ARRIVAL_GUARD_MS = 500;
+// A smooth scroll steps every frame (16 ms at 60 Hz, 33 ms on a phone saving power): a pause of
+// several frames is a scroll come to rest. Short, so a scroll the person starts just after it
+// isn't taken for part of it.
+const SCROLL_SETTLED_MS = 100;
 export const TABS = Object.freeze(['conversation', 'delegates', 'tools']);
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -74,6 +87,33 @@ export class SessionCard {
   // the words that said so when last drawn, which move on with the clock.
   #stale = null;
   #shownStale = null;
+  // The question last drawn (undefined before the first drawing), and whether a finger or a
+  // mouse button is on the conversation: what decides a scroll to a question that arrives.
+  #asked = undefined;
+  #touches = false;
+  #pressing = false;
+  // A mouse or pen over the conversation: someone reading it, perhaps about to click.
+  #hovering = false;
+  // Whether the conversation is read to its end (ui.md §5.3, Scroll to a question), and where it
+  // was scrolled to when that was measured: kept while only its content changes, since a response
+  // growing below isn't followed and so doesn't take the reader from its end; measured again once
+  // it has scrolled since (read from scrollTop, before its scroll event has come). Forgotten (null)
+  // while it isn't on screen, and when it may come back, where the browser can have moved it.
+  #readToEnd = null;
+  #readAt = 0;
+  // Until when the question's controls ignore a pointer's click (QUESTION_ARRIVAL_GUARD_MS).
+  #guardUntil = 0;
+  // The question's view the guard covers, and the question it was armed for.
+  #guarded = null;
+  #guardedId = null;
+  // How the guarded question was last drawn: held (a #269 note, or null) and answerable here.
+  #guardedHeld = null;
+  #guardedAnswerable = false;
+  #guardTimer = null;
+  // Listening for the end of a smooth scroll to the question, until it ends or is replaced.
+  #scrollEnd = null;
+  // A question that arrived in the drawing under way, to bring into sight once it is all drawn.
+  #arrived = null;
   #menu = new RowMenu();
 
   // hostId: the machine the session is on, which everything the view sends goes to.
@@ -168,10 +208,13 @@ export class SessionCard {
     e.tool = h('p', { class: 'tool-line', hidden: true }, e.toolGlyph, e.toolName, e.toolSummary);
     e.agentBlock = h('div', { class: 'agent-block' }, e.speaker, e.reasoning, e.truncated, e.dropped, e.response, e.tool);
     e.question = h('div', { class: 'question-slot' });
+    this.#guardQuestion(e.question);
     e.stream = h('div', { class: 'stream' }, e.user, e.agentBlock, e.question);
     e.reply = h('div', { class: 'reply-slot' });
+    e.scroll = h('div', { class: 'stream-scroll' }, e.stream);
+    this.#watchHold(e.scroll);
     e.conversation = h('div', { class: 'conversation', id: this.ids.conversation, role: 'tabpanel', 'aria-labelledby': this.ids.tabC },
-      h('div', { class: 'stream-scroll' }, e.stream), e.reply);
+      e.scroll, e.reply);
 
     // The inspector: Details, then Tools.
     e.facts = h('dl', { class: 'facts' });
@@ -202,6 +245,8 @@ export class SessionCard {
 
   update(s) {
     const first = this.#s === null;
+    // Whether the conversation is read to its end, before this update draws anything into it.
+    const atEnd = this.#reading();
     this.#s = s;
     const e = this.els;
     const state = sessionStatus(s);
@@ -290,12 +335,16 @@ export class SessionCard {
     e.delegates.hidden = !listed;
     e.tabD.hidden = !listed;
     if (!listed && this.#tab === 'delegates') { this.setTab('conversation'); }
+    const echoed = (s.activity.userMessage ?? '') !== e.userText.textContent;
     e.user.hidden = !s.activity.userMessage;
     e.userText.textContent = s.activity.userMessage ?? '';
+    // Send acknowledged (ui.md §5.3): your message, back from the machine, rises into place.
+    if (!first && echoed && s.activity.userMessage) { enter(e.user, 'acknowledge', { dy: 1 }); }
 
     if (this.#changed('facts', [s.agent, s.model, s.repository, s.branch, s.cwd, this.machineName, s.startedAt, s.activity.turnCount, s.activity.compactions, s.activity.background, s.processId])) {
       this.#renderFacts(s);
     }
+    this.#bringQuestion(atEnd);
 
     // The tools shown follow the session: refetched (at most every 2 s) as it changes.
     if (!first && this.#history.loaded && this.#toolsShown() && this.#changed('historyAt', s.updatedAt)) { this.#scheduleHistory(); }
@@ -367,7 +416,11 @@ export class SessionCard {
       e.unread = h('span', { class: 'unread-dot' }, h('span', { class: 'sr-only', id: this.ids.unread }, 'New activity'));
       e.rowLine1.append(e.unread);
       e.open.setAttribute('aria-labelledby', `${this.ids.glyph} ${this.ids.unread}`);
+      this.element.classList.add('unread');
+      // Activity dot (ui.md §5.3): fades in, and later out; it never pulses or repeats.
+      enter(e.unread, 'activityDot');
     } else if (!unread && e.unread) {
+      leave(e.unread, 'activityDot');
       e.unread.remove();
       e.unread = null;
       e.open.setAttribute('aria-labelledby', this.ids.glyph);
@@ -388,15 +441,28 @@ export class SessionCard {
   setSelected(selected) {
     if (selected === this.#selected) { return; }
     this.#selected = selected;
+    this.#readToEnd = null;
     this.element.classList.toggle('selected', selected);
     if (selected) { this.els.open.setAttribute('aria-current', 'true'); } else { this.els.open.removeAttribute('aria-current'); }
     this.view.hidden = !selected;
+    // Its question shows now, where a tap or a click may already be headed (a phone's push puts
+    // the view under the finger that opened it): the same wait as a question arriving.
+    if (selected && this.#guarded?.isConnected) { this.#guard(); }
     if (!selected) { this.#menu.close(false); }
     this.layoutChanged();
   }
 
+  // Its view is on screen again with nothing of its own changed (Sessions back from another
+  // page, the page back from the background): a question it shows waits as one arriving does,
+  // where it is. Whether the conversation shows is read from the page, not from the tab picked:
+  // with the inspector beside it, Tools picked earlier leaves the conversation on screen.
+  reshow() {
+    if (this.#selected && this.#guarded?.isConnected && this.viewing() && this.els.scroll.getClientRects().length) { this.#guard(); }
+  }
+
   // The inspector became a pane of its own, or stopped being one.
   layoutChanged() {
+    this.#readToEnd = null;
     const { inspector } = this.layout();
     this.els.inspectorButton.setAttribute('aria-label', inspector ? 'Hide inspector' : 'Show inspector');
     this.els.inspectorButton.title = this.els.inspectorButton.getAttribute('aria-label');
@@ -405,10 +471,29 @@ export class SessionCard {
 
   // Conversation or Tools, where they are tabs; Details, from the header's button.
   setTab(tab) {
+    const was = this.#tab;
+    const before = this.#tabEl(was);
+    const from = before?.getClientRects().length ? before.getBoundingClientRect() : null;
     this.#tab = tab === 'tools' || tab === 'details' || (tab === 'delegates' && !this.els.tabD.hidden) ? tab : 'conversation';
     this.#applyTab();
     this.#revealTools();
+    if (this.#tab === was) { return; }
+    this.#readToEnd = null;
+    // Back on the conversation, its question shows again where a click may be headed: the same
+    // wait as a question arriving, one that came while another tab was shown included.
+    if (this.#tab === 'conversation' && this.#guarded?.isConnected && this.#selected) { this.#guard(); }
+    // Tab switch (ui.md §5.3): the bar under the tab slides from the one left, and what the tab
+    // shows fades in without sliding.
+    const now = this.#tabEl(this.#tab);
+    if (from && now?.getClientRects().length) {
+      const r = now.getBoundingClientRect();
+      slide(now, 'selection', from.left - r.left, 0, { pseudo: '::after', scaleX: from.width / r.width });
+    }
+    const shown = { conversation: this.els.conversation, delegates: this.els.delegates, tools: this.els.tools, details: this.els.details }[this.#tab];
+    if (from && shown?.getClientRects().length) { enter(shown, 'tab'); }
   }
+
+  #tabEl(tab) { return { conversation: this.els.tabC, delegates: this.els.tabD, tools: this.els.tabT }[tab] ?? null; }
 
   #applyTab() {
     const e = this.els;
@@ -477,9 +562,11 @@ export class SessionCard {
   // The machine's capabilities changed (a reconnect to another version of its host).
   refreshQuestion() {
     if (!this.#s) { return; }
+    const atEnd = this.#reading();
     this.#renderQuestion(this.#s);
     this.#renderReply(this.#s);
     this.#renderStop(this.#s);
+    this.#bringQuestion(atEnd);
   }
 
   // End session, while the connected machine can end sessions.
@@ -559,13 +646,176 @@ export class SessionCard {
     }
     // A new question replaces a receipt that has said its last word.
     if (q && this.#receipt?.final) { this.#dropReceipt(); }
+    // Scroll to a question (ui.md §5.3): one that arrives is brought into sight once the whole
+    // update is drawn (#bringQuestion), as long as the conversation was read to its end.
+    const arrived = this.#asked !== undefined && !!q && q.id !== this.#asked;
+    this.#asked = q?.id ?? null;
     this.els.question.replaceChildren(...[this.#orphanView(), this.#receipt?.element, view].filter(Boolean));
+    // An approval's command never slides: a push still under way stops travelling.
+    if (view) { stopTravel(view); }
+    if (this.#receipt?.fresh) {
+      this.#receipt.fresh = false;
+      enter(this.#receipt.element, 'acknowledge', { dy: 1 });
+    }
+    // A question newly drawn where the person can see it: its controls wait before a click counts.
+    // Not the same question redrawn (reworded, or its machine's capabilities changed), unless it
+    // has just become answerable: its hold lifted (#269) or its machine now taking answers. The
+    // note that said why goes, and Send or Approve once moves up under the pointer as it does.
+    const unheld = !!this.#guardedHeld && !held;
+    const opened = !this.#guardedAnswerable && answerable;
+    this.#guarded = view || null;
+    const same = view && q.id === this.#guardedId;
+    let armed = false;
+    if (view && (!same || unheld || opened)) {
+      this.#guardedId = q.id;
+      if (this.#selected && this.viewing() && this.els.scroll.getClientRects().length) {
+        this.#guard();
+        armed = true;
+      }
+    }
+    // The same question redrawn while its wait still runs: the new view says so for what is left
+    // of it, no longer.
+    if (view && !armed) { this.#mark(); }
+    this.#guardedHeld = view ? held : null;
+    this.#guardedAnswerable = !!(view && answerable);
+    this.#arrived = arrived && view ? view : null;
+  }
+
+  #guard() {
+    this.#guardUntil = (globalThis.performance?.now() ?? Date.now()) + QUESTION_ARRIVAL_GUARD_MS;
+    this.#mark();
+  }
+
+  // Said on the question while the wait lasts (data-arriving), so what waits on it can tell.
+  #mark() {
+    const view = this.#guarded;
+    const left = this.#guardUntil - (globalThis.performance?.now() ?? Date.now());
+    clearTimeout(this.#guardTimer);
+    if (left <= 0) { return; }
+    view?.setAttribute?.('data-arriving', '');
+    this.#guardTimer = setTimeout(() => view?.removeAttribute?.('data-arriving'), left);
+  }
+
+  // A click from a pointer (detail > 0) on the question's own controls during the guard is
+  // dropped before any handler, form or default action sees it: a choice, Approve once, Deny,
+  // Send, a radio or its label. A key's activation (detail 0) goes through, and so does anything
+  // else in the slot (a kept draft's Dismiss, say), which the question didn't bring.
+  #guardQuestion(slot) {
+    slot.addEventListener('click', (e) => {
+      if (e.detail === 0 || (globalThis.performance?.now() ?? Date.now()) >= this.#guardUntil) { return; }
+      if (!this.#guarded?.contains(e.target) || !e.target.closest?.('button, input, select, label, summary, a')) { return; }
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }, true);
+  }
+
+  #atEnd() {
+    const sc = this.els.scroll;
+    return sc.scrollHeight - sc.scrollTop - sc.clientHeight < 24;
+  }
+
+  #reading() {
+    const sc = this.els.scroll;
+    if (!sc.getClientRects().length) {
+      this.#readToEnd = null;
+      return this.#atEnd();
+    }
+    if (this.#readToEnd === null || sc.scrollTop !== this.#readAt) {
+      this.#readToEnd = this.#atEnd();
+      this.#readAt = sc.scrollTop;
+    }
+    return this.#readToEnd;
+  }
+
+  // Smoothly, and never into a conversation scrolled back through or held: atEnd is where the
+  // reader was before the update, since a longer response drawn with the question moves it.
+  // Held is a finger on it, a mouse button down, or a mouse or pen over it: someone reading,
+  // whose next click must land on what they were reading (ui.md §5.3).
+  #bringQuestion(atEnd) {
+    const view = this.#arrived;
+    this.#arrived = null;
+    const sc = this.els.scroll;
+    if (view?.isConnected && atEnd && !this.#touches && !this.#pressing && !this.#hovering && this.#selected && this.viewing() && sc.getClientRects().length) {
+      this.#scrollTo(view, scrollBehavior());
+    }
+  }
+
+  // The question brought into sight on purpose (a notification, a Needs you entry): its controls
+  // wait as they do for one that arrives. behavior: the page's smooth scroll, or a jump. el: the
+  // part of it to bring into sight (a notification's focused answer), the whole question if not.
+  revealQuestion(behavior = scrollBehavior(), el = null) {
+    const view = this.#guarded?.isConnected ? this.#guarded : null;
+    if (view) { this.#scrollTo(el && view.contains(el) ? el : view, behavior); }
+  }
+
+  // A scroll to the question: the guard runs from now and, for a smooth scroll that has somewhere
+  // to go, again from each step of it until it lands, since that takes the browser's own time. Only
+  // that scroll, heard for a little while: a question already in sight makes no scroll, and a
+  // scroll the person makes later must not hold the question's buttons back. A newer scroll
+  // replaces it.
+  #scrollTo(view, behavior) {
+    const sc = this.els.scroll;
+    this.#scrollEnd?.abort();
+    this.#scrollEnd = null;
+    const v = view.getBoundingClientRect();
+    const box = sc.getBoundingClientRect();
+    // A pixel's rounding is nowhere to go.
+    const moves = sc.getClientRects().length > 0 && (v.top < box.top - 1 || v.bottom > box.bottom + 1);
+    view.scrollIntoView({ block: 'nearest', behavior });
+    this.#guard();
+    if (!moves || behavior !== 'smooth') { return; }
+    // Every step of the scroll re-arms it, so it runs out only after the question has stopped
+    // moving: `scroll` fires in every engine, where `scrollend` isn't in Safari yet. Listening
+    // stops at `scrollend`, once the steps stop, or as soon as the person takes the scroller
+    // over, so a scroll of their own after it can't hold a click they mean.
+    const ended = this.#scrollEnd = new AbortController();
+    const { signal } = ended;
+    let settle = 0;
+    const done = () => { clearTimeout(settle); ended.abort(); };
+    sc.addEventListener('scroll', () => {
+      this.#guard();
+      clearTimeout(settle);
+      settle = setTimeout(done, SCROLL_SETTLED_MS);
+    }, { signal, passive: true });
+    sc.addEventListener('scrollend', () => { this.#guard(); done(); }, { signal });
+    for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) { sc.addEventListener(type, done, { signal, passive: true }); }
+    setTimeout(done, 3 * QUESTION_ARRIVAL_GUARD_MS);
+  }
+
+  // A finger on the conversation holds it until the last finger lifts. Touch events, not pointer
+  // events: once the browser takes a touch over to scroll it sends pointercancel while the finger
+  // is still down. A mouse button holds it until released, wherever that is, and a mouse or pen
+  // holds it while it is over it.
+  #watchHold(scroller) {
+    // Any scroll: measured afresh at the next update (a scroll away and back to the same place
+    // included). Not measured here: an update can come before this event does.
+    scroller.addEventListener('scroll', () => { this.#readToEnd = null; }, { passive: true });
+    // What the person opens or presses in it (Show reasoning, a disclosure in a response) can
+    // grow it with no scroll: where they are is measured afresh at the next update.
+    for (const type of ['toggle', 'click']) { scroller.addEventListener(type, () => { this.#readToEnd = null; }, true); }
+    const fingers = (e) => { this.#touches = (e.touches?.length ?? 0) > 0; };
+    scroller.addEventListener('touchstart', () => { this.#touches = true; }, { passive: true });
+    for (const end of ['touchend', 'touchcancel']) { scroller.addEventListener(end, fingers, { passive: true }); }
+    scroller.addEventListener('pointerenter', (e) => { if (e.pointerType !== 'touch') { this.#hovering = true; } });
+    scroller.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') { this.#hovering = false; } });
+    scroller.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch') { return; }
+      this.#pressing = true;
+      const win = scroller.ownerDocument?.defaultView;
+      const up = () => {
+        this.#pressing = false;
+        win?.removeEventListener('pointerup', up, true);
+        win?.removeEventListener('pointercancel', up, true);
+      };
+      win?.addEventListener('pointerup', up, true);
+      win?.addEventListener('pointercancel', up, true);
+    });
   }
 
   #watchReceipt({ service, hostId, sessionId }, questionId) {
     this.#dropReceipt();
     const element = h('p', { class: 'answer-receipt', role: 'status', 'aria-live': 'polite' });
-    const receipt = { element, final: false, unwatch: null };
+    const receipt = { element, final: false, unwatch: null, fresh: true };
     const show = (entry) => {
       if (!entry) { return; }
       const { text, tone } = describeAnswer(entry, this.machineName);

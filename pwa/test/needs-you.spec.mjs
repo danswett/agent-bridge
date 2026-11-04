@@ -54,8 +54,13 @@ async function ask(page, id, question, { host = 'demo', extra = {} } = {}) {
     m.upsert({ ...m.get(id), status: 'waiting', statusSince: t, updatedAt: t, ...extra, question: { kind: 'form', askedAt: t, fields: [], ...question } });
   }, { id, host, question, extra, t: later() });
   await expect(entryFor(page, id, host)).toHaveCount(1);
+  await still(page);
   return entryFor(page, id, host);
 }
+
+// The lane takes no click for a moment after it changes or comes back on screen (ui.md §5.3,
+// Scroll to a question): a test that clicks next clicks as a person would, once it has.
+const still = (page) => expect(lane(page).locator('.needs-you-list[data-arriving]')).toHaveCount(0);
 
 test.afterEach(async ({ page }) => {
   expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
@@ -184,6 +189,8 @@ test.describe('outcomes, as the card\'s buttons have them', () => {
       return getComputedStyle(el).color === text;
     })).toBe(true);
     await expect(e.getByRole('button', { name: /^Deny/ })).toBeEnabled();
+    // The outcome grew the entry, so the lane waits a moment before a click counts.
+    await still(page);
     await e.getByRole('button', { name: /^Deny/ }).click();
     await expect(entryFor(page, LAND)).toHaveCount(0);
     const [first, second] = await log(page);
@@ -224,6 +231,8 @@ test.describe('outcomes, as the card\'s buttons have them', () => {
     await expect(e.locator('.needs-status')).toHaveText("Couldn't send it: the host is restarting.");
     await expect(e.getByRole('button', { name: /^Approve once/ })).toBeDisabled();
     // Named for its session, as Approve once and Deny are: two failed sends can both offer it.
+    // The outcome grew the entry, so the lane waits a moment before a click counts.
+    await still(page);
     await e.getByRole('button', { name: 'Try again: Land the P1 slices', exact: true }).click();
     await expect(entryFor(page, LAND)).toHaveCount(0);
     const [first, second] = await log(page);
@@ -488,3 +497,175 @@ for (const width of [390, 900, 1440]) {
     });
   });
 }
+
+// Needs you's answers take no pointer click for a moment after the lane changes or comes back on
+// screen, as a question's do (ui.md §5.3, Scroll to a question): an entry arriving, going or
+// moving can put Approve once under a click aimed at what was there. A key acts at once.
+test.describe('a moment before the lane takes a click', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test('Approve once takes no click as another entry comes, nor as Sessions comes back, and a key acts at once', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, LAND, permission());
+    const answers = async () => (await log(page)).length;
+    const before = await answers();
+    const press = (land, { detail = 1, change = null } = {}) => page.evaluate(async ({ land, detail, change }) => {
+      const d = window.agentBridgeDemo;
+      if (change === 'ask') {
+        const t = new Date(Date.now() + 5000).toISOString();
+        d.host.upsert({ ...d.host.get('6f1c2b7e-claude-example'), status: 'waiting', statusSince: t, updatedAt: t,
+          question: { id: 'q-lane-2', kind: 'form', message: 'Which?', askedAt: t, fields: [{ name: 'answer', type: 'choice', options: [{ value: 'a' }, { value: 'b' }] }] } });
+      } else if (change === 'sessions') {
+        document.querySelector('#nav [data-nav="sessions"]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      }
+      await new Promise((r) => setTimeout(r, 0));
+      const b = document.querySelector(`#needs-you .needs-entry[data-id="${land}"] .needs-approve`);
+      if (!b || b.disabled) { return null; }
+      const armed = b.closest('.needs-you-list').hasAttribute('data-arriving');
+      b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail }));
+      return armed;
+    }, { land, detail, change });
+
+    // Another question asks, its entry joins the lane, and a click lands on Approve once.
+    expect(await press(LAND, { change: 'ask' })).toBe(true);
+    await expect(entryFor(page, CLAUDE)).toHaveCount(1);
+    await page.waitForTimeout(100);
+    expect(await answers()).toBe(before);
+    // Back on Sessions from another page, a click already on its way.
+    await page.locator('#nav [data-nav="settings"]').click();
+    await expect(page.locator('[data-route="settings"]')).toBeVisible();
+    await page.waitForTimeout(600);
+    expect(await press(LAND, { change: 'sessions' })).toBe(true);
+    await page.waitForTimeout(100);
+    expect(await answers()).toBe(before);
+    // A key's press (detail 0) is meant for what has focus, and acts at once, guard or none.
+    await page.locator('#nav [data-nav="settings"]').click();
+    await expect(page.locator('[data-route="settings"]')).toBeVisible();
+    expect(await press(LAND, { detail: 0, change: 'sessions' })).toBe(true);
+    await expect.poll(answers).toBe(before + 1);
+  });
+
+  test('an entry that grows as its answer goes moves those after it, and the lane takes no click for a moment', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, LAND, permission());
+    await ask(page, COPILOT, permission({ id: 'r2#fedcba9876543210' }));
+    await expect(entries(page)).toHaveCount(2);
+    // Responses held, so the answer stays on its way and its entry in the lane however slow the
+    // runner: what moves the next one is the status appearing, not the entry going.
+    await hold(page);
+    // The first entry answered by a key (which waits for nothing): its status appears beneath its
+    // buttons and the entry grows, moving the next one down. A frame later, a click lands on the
+    // second entry's Approve once.
+    const second = await page.evaluate(async () => {
+      const [a, b] = document.querySelectorAll('#needs-you .needs-entry');
+      a.querySelector('.needs-approve').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 0 }));
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const grew = !a.querySelector('.needs-status').hidden && a.isConnected;
+      b.querySelector('.needs-approve').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      return { grew, id: b.dataset.id };
+    });
+    expect(second.grew).toBe(true);
+    await page.waitForTimeout(100);
+    // The first went; the second didn't.
+    expect((await log(page)).map((x) => x.id)).not.toContain(second.id);
+    expect((await log(page)).length).toBe(1);
+    // A note above the lane growing moves the whole lane down: the same wait.
+    await still(page);
+    const pushed = await page.evaluate(async (id) => {
+      const note = document.getElementById('host-state');
+      note.textContent = 'Demo machine is reconnecting. Its sessions stay as they were until it is back, with everything that waits on it.';
+      note.hidden = false;
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const armed = document.querySelector('#needs-you .needs-you-list').hasAttribute('data-arriving');
+      document.querySelector(`#needs-you .needs-entry[data-id="${id}"] .needs-approve`).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      return armed;
+    }, second.id);
+    expect(pushed).toBe(true);
+    await page.waitForTimeout(100);
+    expect((await log(page)).length).toBe(1);
+    await release(page);
+  });
+  test('in a scrolled list, an answer going in the last entry moves no other answer, and the lane takes the next click', async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 500 });
+    await openDemo(page);
+    await ask(page, LAND, permission());
+    await ask(page, COPILOT, permission({ id: 'r2#fedcba9876543210' }));
+    await page.evaluate(() => { document.getElementById('list-pane').scrollTop = 40; });
+    await still(page);
+    // Responses held: the answer stays on its way, so its entry stays, however slow the runner.
+    // Its going would be a change to the lane, and rightly hold the next click.
+    await hold(page);
+    // The last entry answered by a key: its status appears beneath its own buttons, so nothing
+    // that can be clicked moves. Every Resend stays hidden throughout, with no place of its own.
+    const after = await page.evaluate(async () => {
+      const pane = document.getElementById('list-pane');
+      const [a, b] = document.querySelectorAll('#needs-you .needs-entry');
+      b.querySelector('.needs-approve').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 0 }));
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const armed = a.closest('.needs-you-list').hasAttribute('data-arriving');
+      a.querySelector('.needs-deny').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      return { scrolled: pane.scrollTop, grew: !b.querySelector('.needs-status').hidden, stays: b.isConnected, armed };
+    });
+    expect(after).toEqual({ scrolled: 40, grew: true, stays: true, armed: false });
+    await release(page);
+    await expect.poll(async () => (await log(page)).length).toBe(2);
+  });
+
+  for (const { name, viewport, push } of [
+    { name: 'a banner above the list', viewport: { width: 1000, height: 700 }, push: 'banner' },
+    { name: 'the app bar, on a phone', viewport: { width: 390, height: 664 }, push: 'appbar' },
+  ]) {
+    test(`${name} appearing pushes the lane down, and the lane takes no click for a moment`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await openDemo(page);
+      const entry = await ask(page, LAND, permission());
+      const before = (await log(page)).length;
+      const moved = await page.evaluate(async (push) => {
+        const b = document.querySelector('#needs-you .needs-approve');
+        const top = b.getBoundingClientRect().top + scrollY;
+        if (push === 'banner') { document.getElementById('update-banner').hidden = false; } else { document.body.dataset.conn = 'busy'; }
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const armed = b.closest('.needs-you-list').hasAttribute('data-arriving');
+        const by = b.getBoundingClientRect().top + scrollY - top;
+        b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+        return { armed, pushed: by > 1 };
+      }, push);
+      expect(moved).toEqual({ armed: true, pushed: true });
+      await page.waitForTimeout(100);
+      expect((await log(page)).length).toBe(before);
+      await expect(entry).toHaveCount(1);
+    });
+  }
+
+  test('an entry opened holds the lane while the list scrolls to its row, and a scroll after the wait holds nothing', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, LAND, permission());
+    await ask(page, CODEX, { id: 'q-lane-open', message: 'Which?', fields: [{ name: 'answer', type: 'choice', options: [{ value: 'a' }, { value: 'b' }] }] });
+    // The page's clock the test's, so each step lands where the test puts it, however busy the runner.
+    await page.clock.install();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+    const held = () => lane(page).locator('.needs-you-list').evaluate((l) => l.hasAttribute('data-arriving'));
+    const step = () => page.evaluate(() => document.getElementById('list-pane').dispatchEvent(new Event('scroll')));
+    // Opened from its entry: the list scrolls to its row, a step at a time over 600 ms. The
+    // browser's own scroll is stilled, as its steps would come in real time while the page's clock
+    // stands still; the test makes the steps instead.
+    await entryFor(page, CODEX).locator('.needs-title').evaluate((t) => {
+      Element.prototype.scrollIntoView = function () {};
+      t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    });
+    expect(await held()).toBe(true);
+    for (let i = 0; i < 10; i += 1) {
+      await page.clock.runFor(60);
+      await step();
+    }
+    // 900 ms after the click, 300 after the last step: still held.
+    await page.clock.runFor(300);
+    expect(await held()).toBe(true);
+    await page.clock.runFor(300);
+    expect(await held()).toBe(false);
+    // The person's own scroll, after: nothing held.
+    await step();
+    await page.clock.runFor(10);
+    expect(await held()).toBe(false);
+  });
+});
