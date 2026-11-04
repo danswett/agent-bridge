@@ -844,7 +844,7 @@ test('a scroll in the same frame as a title wrapping doesn\'t hide the move: the
   expect(after.armed).toBe(true);
 });
 
-test('content growing above what is in sight, which the browser keeps in place, holds no click', async ({ page }) => {
+test('content growing above what is in sight, which the browser keeps in place, holds no click', async ({ page, browserName }) => {
   await openDemo(page, { height: 700 });
   const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
   await askCodex(page, choices('q-anchored'), { activity: { response: long, userMessage: 'Short.' } });
@@ -864,14 +864,74 @@ test('content growing above what is in sight, which the browser keeps in place, 
     const view = document.querySelector('.session-view[data-id="019a1b2c-codex-example"]');
     return { by: Math.abs(view.querySelector('.question-slot .choice').getBoundingClientRect().top - top), armed: view.querySelector('.question-slot .question').hasAttribute('data-arriving') };
   }, top);
-  expect(after.by).toBeLessThanOrEqual(1);
-  expect(after.armed).toBe(false);
+  // WebKit keeps nothing in place (no scroll anchoring): there the question really moves, and waits.
+  if (browserName !== 'webkit') { expect(after.by).toBeLessThanOrEqual(1); }
+  expect(after.armed).toBe(after.by > 1);
 });
 
-test('scrolling while content out of sight above grows, which the browser keeps in place, holds no click', async ({ page }) => {
+// Scrolls the conversation in the same moment as grow lays out something in it, and says how far
+// the first choice moved and whether the question then took no click.
+const scrolledAsItGrew = (page, grow) => page.evaluate(async (grow) => {
+  const view = document.querySelector('.session-view[data-id="019a1b2c-codex-example"]');
+  const scroller = view.querySelector('.stream-scroll');
+  const choice = view.querySelector('.question-slot .choice');
+  const top = choice.getBoundingClientRect().top;
+  const more = (el) => el.append(' More words, growing as they stream in.'.repeat(10));
+  if (grow === 'scrolled up') {
+    // Scrolled back by 100 px as a line just above what was in sight (now in sight) grows.
+    const edge = scroller.getBoundingClientRect().top;
+    const line = [...view.querySelectorAll('.response p')].filter((p) => { const r = p.getBoundingClientRect(); return r.bottom <= edge && r.top >= edge - 100; }).at(-1);
+    scroller.scrollTop -= 100;
+    more(line);
+  } else {
+    if (grow === 'out of sight') {
+      // Your message, far above, grows: the browser keeps what's in sight in place.
+      more(view.querySelector('.user-message .bubble'));
+    } else if (grow === 'unanchored') {
+      // A browser that keeps nothing in place, as WebKit: your message far above grows.
+      scroller.style.overflowAnchor = 'none';
+      more(view.querySelector('.user-message .bubble'));
+    } else {
+      // The response's last lines, in sight between the top of the view and the question, grow.
+      more([...view.querySelectorAll('.response p')].at(-1));
+    }
+    scroller.scrollTop += 20;
+  }
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  return { by: Math.round(choice.getBoundingClientRect().top - top), armed: view.querySelector('.question-slot .question').hasAttribute('data-arriving') };
+}, grow);
+
+const growing = {
+  'out of sight': 'a scroll in the same moment as content out of sight above grows takes the click away for a moment: what the person scrolled can\'t be told from the browser keeping things in place',
+  unanchored: 'a scroll in the same moment as content above the question grows where nothing is kept in place still finds the move: the question takes no click',
+  'in sight': 'a scroll in the same moment as content above the question grows in sight still finds the move: the question takes no click',
+  'scrolled up': 'a scroll back in the same moment as content just above what was in sight grows still finds the move: the question takes no click',
+};
+for (const [grow, title] of Object.entries(growing)) {
+  test(title, async ({ page, browserName }) => {
+    await openDemo(page, { height: 700 });
+    const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+    await askCodex(page, choices('q-grown'), { activity: { response: long, userMessage: 'Short.' } });
+    const v = await open(page, CODEX);
+    await v.locator('.stream-scroll').evaluate((el) => { el.scrollTop = el.scrollHeight - el.clientHeight - 100; });
+    await expect(v.locator('.question-slot .choice').first()).toBeInViewport();
+    await expect(v.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
+    const after = await scrolledAsItGrew(page, grow);
+    if (grow === 'out of sight') {
+      // Kept in place, the question moved by the scroll alone (WebKit keeps nothing in place).
+      if (browserName !== 'webkit') { expect(after.by).toBe(-20); }
+    } else if (grow === 'scrolled up') {
+      expect(after.by).toBeGreaterThan(101);
+    } else {
+      expect(after.by).toBeGreaterThan(1);
+    }
+    expect(after.armed).toBe(true);
+  });
+}
+test('a slow scroll, a pixel a frame, leaves nothing over: a move of the same size after it still takes the click away', async ({ page }) => {
   await openDemo(page, { height: 700 });
   const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
-  await askCodex(page, choices('q-streamed'), { activity: { response: long, userMessage: 'Short.' } });
+  await askCodex(page, choices('q-slow'), { activity: { response: long, userMessage: 'Short.' } });
   const v = await open(page, CODEX);
   await v.locator('.stream-scroll').evaluate((el) => { el.scrollTop = el.scrollHeight - el.clientHeight - 100; });
   await expect(v.locator('.question-slot .choice').first()).toBeInViewport();
@@ -879,22 +939,44 @@ test('scrolling while content out of sight above grows, which the browser keeps 
   const after = await page.evaluate(async () => {
     const view = document.querySelector('.session-view[data-id="019a1b2c-codex-example"]');
     const scroller = view.querySelector('.stream-scroll');
-    const bubble = view.querySelector('.user-message .bubble');
-    const question = view.querySelector('.question-slot .question');
     const choice = view.querySelector('.question-slot .choice');
-    const steps = [];
-    for (let i = 0; i < 3; i += 1) {
-      const top = choice.getBoundingClientRect().top;
-      // Your message, far above, grows (as a response streams); in the same moment the
-      // conversation is scrolled on by 30 px.
-      bubble.append(' More words above, out of sight, growing as they stream in.'.repeat(8));
-      scroller.scrollTop += 30;
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      steps.push({ by: Math.round(choice.getBoundingClientRect().top - top), armed: question.hasAttribute('data-arriving') });
+    const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    for (let i = 0; i < 6; i += 1) {
+      scroller.scrollTop += 1;
+      await frames();
     }
-    return steps;
+    const top = choice.getBoundingClientRect().top;
+    // The response's last line, in sight just above the question, grows by as much.
+    [...view.querySelectorAll('.response p')].at(-1).style.paddingTop = '6px';
+    await frames();
+    return { by: Math.round(choice.getBoundingClientRect().top - top), armed: view.querySelector('.question-slot .question').hasAttribute('data-arriving') };
   });
-  expect(after).toEqual(Array.from({ length: 3 }, () => ({ by: -30, armed: false })));
+  expect(after).toEqual({ by: 6, armed: true });
+});
+
+test('a session not shown reads and watches nothing; shown again, it watches its question', async ({ page }) => {
+  await page.addInitScript(() => {
+    const watched = window.__watched = new Set();
+    const { observe, unobserve, disconnect } = ResizeObserver.prototype;
+    const mine = new WeakMap();
+    const of = (ro) => { if (!mine.has(ro)) { mine.set(ro, new Set()); } return mine.get(ro); };
+    ResizeObserver.prototype.observe = function (el, o) { of(this).add(el); watched.add([this, el]); return observe.call(this, el, o); };
+    ResizeObserver.prototype.unobserve = function (el) { of(this).delete(el); return unobserve.call(this, el); };
+    ResizeObserver.prototype.disconnect = function () { of(this).clear(); return disconnect.call(this); };
+    window.__stillWatched = (el) => [...watched].some(([ro, x]) => x === el && of(ro).has(el));
+  });
+  await openDemo(page);
+  await askCodex(page, choices('q-paused'));
+  await open(page, CODEX);
+  const watching = () => page.evaluate(() => {
+    const view = document.querySelector('.session-view[data-id="019a1b2c-codex-example"]');
+    return [view.querySelector('.question-slot'), view.querySelector('.question-slot .question')].map((el) => window.__stillWatched(el));
+  });
+  expect(await watching()).toEqual([true, true]);
+  await open(page, CLAUDE);
+  expect(await watching()).toEqual([false, false]);
+  await open(page, CODEX);
+  expect(await watching()).toEqual([true, true]);
 });
 
 test('a taller window pulling a conversation at its end back moves the question down, and it takes no click for a moment', async ({ page }) => {
@@ -905,14 +987,14 @@ test('a taller window pulling a conversation at its end back moves the question 
   await v.locator('.stream-scroll').evaluate((el) => { el.scrollTop = el.scrollHeight; });
   await expect(v.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
   const top = await v.locator('.question-slot .choice').first().evaluate((c) => c.getBoundingClientRect().top);
+  // The wait can't run out on a slow runner before it is looked at.
+  await holdClock(page);
   await page.setViewportSize({ width: 1440, height: 820 });
-  const after = await page.evaluate(async (top) => {
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    const view = document.querySelector('.session-view[data-id="019a1b2c-codex-example"]');
-    return { by: view.querySelector('.question-slot .choice').getBoundingClientRect().top - top, armed: view.querySelector('.question-slot .question').hasAttribute('data-arriving') };
-  }, top);
-  expect(after.by).toBeGreaterThan(1);
-  expect(after.armed).toBe(true);
+  await expect.poll(async () => {
+    await page.clock.runFor(20);
+    return v.locator('.question-slot .question').evaluate((q) => q.hasAttribute('data-arriving'));
+  }).toBe(true);
+  expect(await v.locator('.question-slot .choice').first().evaluate((c, top) => c.getBoundingClientRect().top - top, top)).toBeGreaterThan(1);
 });
 
 test('a session that goes leaves nothing of its view watched by the others', async ({ page }) => {
