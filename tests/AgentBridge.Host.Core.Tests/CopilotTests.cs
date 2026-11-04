@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 using Xunit;
@@ -504,6 +506,64 @@ public class CopilotTests
 
         Assert.Equal(hidden.Message, spelled.Message);
         Assert.NotEqual(hidden.Digest, spelled.Digest);
+    }
+
+    // Appended as text after the message, "\n\0at-machine" could be written by the message itself: a
+    // custom tool described as "run\n\0at-machine" had the id of the one described as "run" run outside
+    // the sandbox. An ordinary prompt's id is what it always was.
+    [Fact]
+    public void No_message_can_spell_the_identity_of_a_prompt_held_at_the_machine()
+    {
+        static CopilotPermissionPrompt Custom(string description, bool bypass)
+        {
+            var prompt = Copilot.Prompts["custom-tool"].DeepClone().AsObject();
+            prompt.Remove("args");
+            prompt["toolDescription"] = description;
+            if (bypass) { prompt["requestSandboxBypass"] = true; }
+            using var doc = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r1", "c1", prompt, 1));
+            return CopilotPermission.Describe(doc.RootElement.GetProperty("data"))!;
+        }
+        var outside = Custom("run", bypass: true);
+        var spelled = Custom("run\n\0at-machine", bypass: false);
+
+        Assert.NotNull(outside.AtMachine);
+        Assert.Null(spelled.AtMachine);
+        Assert.NotEqual(outside.Digest, spelled.Digest);
+        var ordinary = Custom("run", bypass: false);
+        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes($"custom-tool\n{ordinary.Message}")).AsSpan(0, 8)), ordinary.Digest);
+    }
+
+    // JSON writes a carriage return, a backspace or a form feed in a tool's arguments as \r, \b or \f,
+    // which no reader of escapes took for them: written as the \u000D a host writes for a CR, so the
+    // card's notes and the Needs you lane see it. An argument that spells "\r" is two characters of text.
+    [Fact]
+    public void A_carriage_return_in_a_tools_arguments_is_shown_as_the_escape_the_notes_and_the_lane_read()
+    {
+        static string Args(string value)
+        {
+            var prompt = Copilot.Prompts["custom-tool"].DeepClone().AsObject();
+            prompt["args"] = new System.Text.Json.Nodes.JsonObject { ["cmd"] = value };
+            using var doc = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r1", "c1", prompt, 1));
+            return CopilotPermission.Describe(doc.RootElement.GetProperty("data"))!.Message;
+        }
+        var cr = Args("Get-ChildItem # list files\rRemove-Item -Recurse ~\b\f");
+        var spelled = Args("a\\rb");
+
+        Assert.Contains("# list files\\u000DRemove-Item -Recurse ~\\u0008\\u000C", cr);
+        Assert.Equal([ShownText.HiddenNote], ShownText.Notes(cr));
+        Assert.Contains("\"a\\\\rb\"", spelled);
+        Assert.Empty(ShownText.Notes(spelled));
+    }
+
+    // A transcript line can be 32 MiB, and each escape is six characters or more: a command of hidden
+    // characters is escaped only as far as a question carries, and still said to be cut.
+    [Fact]
+    public void A_huge_command_of_hidden_characters_is_escaped_only_as_far_as_a_question_carries_and_said_to_be_cut()
+    {
+        var shown = DescribeCommand(new string('\u200B', 1_000_000));
+
+        Assert.True(shown.Message.Length < 8 * Limits.QuestionMessage, $"{shown.Message.Length} characters");
+        Assert.True(QuestionMapper.Approval(shown.QuestionId, shown.Message, DateTimeOffset.UnixEpoch).Truncated);
     }
 
     // One line of a title is shown, so "Get file" then a line of Hebrew letters, or of a reference a

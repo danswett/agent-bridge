@@ -23,7 +23,8 @@ internal static class QuestionMapper
     // it at the machine itself.
     public static Question Approval(string id, string message, DateTimeOffset askedAt, bool atMachine = false)
     {
-        var shown = ShownText.Reveal(message, rightToLeft: true);
+        // Escaped from no more than it can carry (RevealWithin): still cut, and said to be, if it is over.
+        var shown = ShownText.RevealWithin(message, Limits.QuestionMessage, rightToLeft: true);
         return new()
         {
             Id = id,

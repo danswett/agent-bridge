@@ -55,10 +55,12 @@ export const revealLineSeparators = (text) => String(text ?? '').replace(/\r(?!\
 // \u{E0041}; the host's ShownText.Reveal, #220). Each such escape read back as the character it
 // stands for, so what is said of a message a host escaped (its notes, the Needs you lane's refusal)
 // is what would be said of it as the agent wrote it. Six characters an agent wrote itself count too;
-// an escape of anything else is left as it is.
+// an escape of anything else is left as it is. A pair of surrogate escapes is one character, as JSON
+// writes one past the first plane (`\uD83D\uDE00` in a tool's arguments): read as that character,
+// not as two unpaired halves, which would refuse an emoji; a half on its own still stands for itself.
 export function unescapeShown(text) {
-  return String(text ?? '').replace(/\\u(?:([0-9A-Fa-f]{4})|\{([0-9A-Fa-f]{1,6})\})/g, (written, four, any) => {
-    const value = parseInt(four ?? any, 16);
+  return String(text ?? '').replace(/\\u([dD][89abAB][0-9A-Fa-f]{2})\\u([dD][c-fC-F][0-9A-Fa-f]{2})|\\u(?:([0-9A-Fa-f]{4})|\{([0-9A-Fa-f]{1,6})\})/g, (written, high, low, four, any) => {
+    const value = high ? 0x10000 + ((parseInt(high, 16) - 0xD800) << 10) + (parseInt(low, 16) - 0xDC00) : parseInt(four ?? any, 16);
     if (value > 0x10FFFF) { return written; }
     const c = String.fromCodePoint(value);
     return hasHidden(c) || hasRightToLeft(c) ? c : written;

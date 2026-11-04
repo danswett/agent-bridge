@@ -63,20 +63,24 @@ public static partial class ShownText
             return Hidden(r) || HasRightToLeft(r.ToString());
         }
         var name = m.Groups["name"].Value;
-        // HTML decodes its legacy names with no semicolon, even before other letters ("&shyx"), and
-        // some renderers decode others so; any such name with no semicolon counts, as a whole word.
-        return MisleadingNames.Contains(name) || name.StartsWith("shy", StringComparison.Ordinal);
+        // HTML decodes its legacy names with no semicolon, even before other letters ("&shyx",
+        // "&nbspx"), and some renderers decode others so; any such name with no semicolon counts, as a
+        // whole word.
+        return MisleadingNames.Contains(name) || name.StartsWith("shy", StringComparison.Ordinal) || name.StartsWith("nbsp", StringComparison.Ordinal);
     }
 
     // HTML5's named references (html.spec.whatwg.org/entities.json) to a character HasHidden or
-    // HasRightToLeft finds, a variation selector among them. None of its names is to a
-    // right-to-left letter.
+    // HasRightToLeft finds, a variation selector among them, and every space but U+0020 since
+    // #546 hid them (&nbsp;, &emsp;, &ThinSpace;: drawn blank, a shell's part of a word). None of its
+    // names is to a right-to-left letter.
     static readonly HashSet<string> MisleadingNames = new(StringComparer.Ordinal)
     {
-        "af", "ApplyFunction", "caps", "cups", "gesl", "gvertneqq", "gvnE", "ic", "InvisibleComma", "InvisibleTimes", "it",
-        "lates", "lesg", "lrm", "lvertneqq", "lvnE", "NegativeMediumSpace", "NegativeThickSpace", "NegativeThinSpace",
-        "NegativeVeryThinSpace", "NoBreak", "rlm", "shy", "smtes", "sqcaps", "sqcups", "varsubsetneq", "varsubsetneqq",
-        "varsupsetneq", "varsupsetneqq", "vsubne", "vsubnE", "vsupne", "vsupnE", "ZeroWidthSpace", "zwj", "zwnj",
+        "af", "ApplyFunction", "caps", "cups", "emsp", "emsp13", "emsp14", "ensp", "gesl", "gvertneqq", "gvnE", "hairsp", "ic",
+        "InvisibleComma", "InvisibleTimes", "it", "lates", "lesg", "lrm", "lvertneqq", "lvnE", "MediumSpace", "nbsp",
+        "NegativeMediumSpace", "NegativeThickSpace", "NegativeThinSpace", "NegativeVeryThinSpace", "NoBreak", "NonBreakingSpace",
+        "numsp", "puncsp", "rlm", "shy", "smtes", "sqcaps", "sqcups", "ThickSpace", "thinsp", "ThinSpace", "varsubsetneq",
+        "varsubsetneqq", "varsupsetneq", "varsupsetneqq", "VeryThinSpace", "vsubne", "vsubnE", "vsupne", "vsupnE",
+        "ZeroWidthSpace", "zwj", "zwnj",
     };
 
     [GeneratedRegex(@"&(?:#(?<dec>[0-9]+)|#[xX](?<hex>[0-9a-fA-F]+)|(?<name>[A-Za-z][A-Za-z0-9]*))(?<semi>;)?")]
@@ -104,6 +108,12 @@ public static partial class ShownText
         return b.ToString();
     }
 
+    // Reveal of no more of text than maxBytes of UTF-8 can hold, and a character over: an escape is
+    // never shorter than what it stands for, so text over maxBytes is still over it revealed, and is
+    // cut (Limits.KeepStart) knowing it was, without escaping all of a 32 MiB transcript line first.
+    public static string RevealWithin(string text, int maxBytes, bool rightToLeft = false) =>
+        Reveal(Limits.KeepStart(text, maxBytes + 4)!, rightToLeft);
+
     // Whether text holds an escape, as Reveal writes one, of a hidden character or a right-to-left
     // letter. A host sends an approval escaped, so the Needs you lane, which never offers one holding
     // such characters inline, looks for their escapes too (and refuses the six characters "\u202E"
@@ -112,11 +122,23 @@ public static partial class ShownText
 
     // Each such escape read back as the character it stands for (an escape of anything else is left
     // as it is), so what is said of a message a host escaped is what would be said of it as written.
+    // A pair of surrogate escapes is one character, as JSON writes one past the first plane
+    // (`\uD83D\uDE00` in a tool's arguments): read as that character, not as two unpaired halves, which
+    // would refuse an emoji. A half on its own still stands for itself.
     public static string Unreveal(string text) => !text.Contains("\\u", StringComparison.Ordinal) ? text : Escape().Replace(text, m =>
-        !int.TryParse(m.Groups["hex"].Value, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var v) ? m.Value
-        : v is >= 0xD800 and <= 0xDFFF ? ((char)v).ToString()
-        : Rune.TryCreate(v, out var r) && (Hidden(r) || HasRightToLeft(r.ToString())) ? r.ToString()
-        : m.Value);
+    {
+        if (m.Groups["high"].Success)
+        {
+            var pair = char.ConvertToUtf32((char)int.Parse(m.Groups["high"].Value, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture),
+                (char)int.Parse(m.Groups["low"].Value, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture));
+            var c = new Rune(pair);
+            return Hidden(c) || HasRightToLeft(c.ToString()) ? c.ToString() : m.Value;
+        }
+        return !int.TryParse(m.Groups["hex"].Value, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var v) ? m.Value
+            : v is >= 0xD800 and <= 0xDFFF ? ((char)v).ToString()
+            : Rune.TryCreate(v, out var r) && (Hidden(r) || HasRightToLeft(r.ToString())) ? r.ToString()
+            : m.Value;
+    });
 
     public const string HiddenNote = "Contains hidden characters";
     public const string RightToLeftNote = "Contains right-to-left text";
@@ -134,7 +156,7 @@ public static partial class ShownText
         return notes;
     }
 
-    [GeneratedRegex(@"\\u(?:(?<hex>[0-9A-Fa-f]{4})|\{(?<hex>[0-9A-Fa-f]{1,6})\})")]
+    [GeneratedRegex(@"\\u(?<high>[dD][89abAB][0-9A-Fa-f]{2})\\u(?<low>[dD][c-fC-F][0-9A-Fa-f]{2})|\\u(?:(?<hex>[0-9A-Fa-f]{4})|\{(?<hex>[0-9A-Fa-f]{1,6})\})")]
     private static partial Regex Escape();
 
     // As the clients' HiddenText and hidden-text.js (#546): every space but U+0020, and the braille

@@ -91,7 +91,7 @@ public static partial class HaDecision
         // which is the card's own. Who asks leads the card's Markdown as literal text, so it cannot
         // open a fence or a link around the prompt.
         var asks = $"{HaPayloads.NeutraliseTemplates(MarkdownLiteral(Titled(question, session)))} asks:\n\n";
-        var held = Misleads(question, session) ? Misleading : Unshaped(question) ?? TooLongToShow(question, asks.Length);
+        var held = Misleads(question, session) ? Misleading : HeldByHost(question) ?? Unshaped(question) ?? TooLongToShow(question, asks.Length);
         return Plan(question with { Message = asks + Shown(question, held, asks.Length) }, session.Agent, held) with { Agent = agent, AgentName = name, Asker = asker };
     }
 
@@ -125,9 +125,20 @@ public static partial class HaDecision
     // The host's question as the card should show it.
     public static DecisionPlan Plan(Question question, AgentKind agent)
     {
-        var held = Misleads(question) ? Misleading : Unshaped(question) ?? TooLongToShow(question, 0);
+        var held = Misleads(question) ? Misleading : HeldByHost(question) ?? Unshaped(question) ?? TooLongToShow(question, 0);
         return Plan(question with { Message = Shown(question, held, 0) }, agent, held);
     }
+
+    // An approval the host itself holds at the machine, or had to cut, is held here for the same
+    // reason before it is fenced, so the room for the note saying so is kept and a cut falls inside the
+    // block: fenced whole first, it was cut through its closing fence, and the notes were drawn as
+    // part of the agent's code. Before its shape, as the app's card does: a cut approval usually ends
+    // inside its fence, and the person is told that part of it is missing.
+    static string? HeldByHost(Question question) =>
+        question.Kind != QuestionKind.Approval ? null
+        : question.Truncated == true ? TooLong
+        : question.AnswerAtMachine == true ? AtMachine
+        : null;
 
     // An approval allows what runs, not what the card draws: one holding a character drawn
     // somewhere other than where it runs, right-to-left letters that reorder it, or a character
@@ -207,7 +218,7 @@ public static partial class HaDecision
         if (held is not null) { return Terminal(question, held); }
         if (question.AnswerAtMachine == true || question.Truncated == true)
         {
-            return Terminal(question, question.Truncated == true ? TooLong : "this prompt can only be answered at the machine.");
+            return Terminal(question, question.Truncated == true ? TooLong : AtMachine);
         }
         // A question the card would have to cut is never answered from it: an approval, above all,
         // must not authorise what nobody could read. (agent-ha-bridge cuts it and takes the answer.)
@@ -244,6 +255,7 @@ public static partial class HaDecision
     }
 
     const string TooLong = "it was too long to show here in full, so it is answered where it can be read.";
+    const string AtMachine = "this prompt can only be answered at the machine.";
     const string Misleading = "it holds characters that can be drawn other than as they run, so it is answered where it runs.";
     const string NotAsWritten = "it would not be drawn here as it is written, so it is answered where it runs.";
 

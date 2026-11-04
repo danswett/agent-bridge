@@ -427,6 +427,61 @@ public sealed class AnswerTests : IDisposable
         Assert.Contains("answered in the terminal", attributes.GetProperty("question").GetString());
     }
 
+    static Question DelegatesApproval => new()
+    {
+        Id = "p1", Kind = QuestionKind.Approval, Message = "Allow dotnet test?", AskedAt = FakeSessions.T0, Agent = "agent-3a91",
+        Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
+    };
+
+    // The card cannot always be armed again on the pass that finds its question reads otherwise (a
+    // channel Home Assistant cannot read just then): a tap made meanwhile, on what it said before,
+    // answers nothing, here an approval its delegate's name now holds to the terminal.
+    [Fact]
+    public async Task A_tap_made_while_an_approval_that_now_reads_otherwise_cannot_yet_be_armed_again_answers_nothing()
+    {
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { WaitingOn = "agent-3a91", Question = DelegatesApproval });
+        await using var c = Connector();
+        await Pass(c);
+        Assert.True(Attributes(SessionEntities.Decision(Node)).GetProperty("answer_on_tap").GetBoolean());
+
+        ha.GetFailsFor = id => id == SessionEntities.ReplyPayload(Node);
+        sessions.Set(sessions.Get(A)! with
+        {
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "\u202Eetius tset", Status = SubagentStatus.Waiting }],
+        });
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        Assert.Empty(answered);
+
+        ha.GetFailsFor = null;
+        await Pass(c);
+        Assert.Contains("answered in the terminal", Attributes(SessionEntities.Decision(Node)).GetProperty("question").GetString());
+        Assert.Empty(Attributes(SessionEntities.Decision(Node)).GetProperty("choices").EnumerateArray());
+        Assert.Empty(answered);
+    }
+
+    // An answer that may have reached the terminal is never typed again: the same approval coming to
+    // read otherwise (its delegate's name arriving) is not offered afresh.
+    [Fact]
+    public async Task An_approval_answered_unconfirmed_is_not_offered_again_when_it_comes_to_read_otherwise()
+    {
+        outcome = _ => new AnswerResult(AnswerOutcome.Unconfirmed);
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { WaitingOn = "agent-3a91", Question = DelegatesApproval });
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        Assert.Single(answered);
+
+        sessions.Set(sessions.Get(A)! with
+        {
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "Run full test suite", Status = SubagentStatus.Waiting }],
+        });
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+
+        Assert.Single(answered);
+    }
+
     [Fact]
     public async Task An_answer_the_host_refuses_is_said_to_be_not_sent_and_can_be_given_again()
     {

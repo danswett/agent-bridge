@@ -228,6 +228,9 @@ public sealed class CardTests : IAsyncLifetime
     [InlineData("Allow **shell**?\n\nTidy up &#x202E;sdrawkcab\n\n```\nls\n```")]
     [InlineData("Allow **shell**?\n\nTidy up&ZeroWidthSpace;now\n\n```\nls\n```")]
     [InlineData("Allow **shell**?\n\nTidy up &#x5D0; now\n\n```\nls\n```")]
+    [InlineData("Allow **shell**?\n\nTidy up&nbsp;#now\n\n```\nls\n```")]
+    [InlineData("Allow **shell**?\n\nTidy up&emsp;#now\n\n```\nls\n```")]
+    [InlineData("Allow **shell**?\n\nTidy up&nbspnow\n\n```\nls\n```")]
     public void An_approval_holding_a_reference_this_card_would_decode_to_a_hidden_or_right_to_left_character_is_answered_at_the_machine(string message)
     {
         var q = Question(Make.Approval() with { Message = message }, [.. connection.Capabilities, Capabilities.SessionsApprove]);
@@ -235,6 +238,17 @@ public sealed class CardTests : IAsyncLifetime
         Assert.False(q.Answerable);
         Assert.Equal("atMachine", q.Why);
         Assert.True(Question(Make.Approval() with { Message = "Allow **shell**?\n\nTidy up &amp; go\n\n```\nls\n```" }, [.. connection.Capabilities, Capabilities.SessionsApprove]).Answerable);
+    }
+
+    // A cut approval usually ends inside its command's block: the card says part of it is missing, not
+    // only that it is answered at the machine.
+    [Fact]
+    public void An_approval_cut_inside_its_command_says_that_part_of_it_is_missing()
+    {
+        var q = Question(Make.Approval() with { Message = "Allow **shell**?\n\n```\necho one\necho tw", Truncated = true }, [.. connection.Capabilities, Capabilities.SessionsApprove]);
+
+        Assert.False(q.Answerable);
+        Assert.Equal("truncated", q.Why);
     }
 
     [Fact]
@@ -644,6 +658,42 @@ public sealed class CardTests : IAsyncLifetime
         card.Update(Make.Session(question: Make.Choice("q1", false, "pg", "duckdb")));
 
         Assert.Equal(["pg", "duckdb"], card.Question!.Fields[0].Options.Select(o => o.Value));
+    }
+
+    // An option kept by its value could now say the opposite: nothing chosen for what a question said
+    // is kept once it says something else under its id.
+    [Fact]
+    public void A_choice_made_for_what_a_question_said_is_not_kept_once_it_changes_under_its_id()
+    {
+        var files = new Field { Name = "files", Title = "Files", Type = FieldType.Multi, Options = [new Option("x", "Keep files"), new Option("y", "Tidy up")] };
+        var card = new SessionCardViewModel(Make.Session(question: Make.Form(files)), Context());
+        card.Question!.Fields[0].Options[0].IsSelected = true;
+
+        card.Update(Make.Session(question: Make.Form(files with { Options = [new Option("x", "Delete files"), new Option("y", "Tidy up")] })));
+
+        Assert.Equal(["Delete files", "Tidy up"], card.Question!.Fields[0].Options.Select(o => o.Label));
+        Assert.DoesNotContain(card.Question.Fields[0].Options, o => o.IsSelected);
+    }
+
+    // An answer that failed to go was chosen for what the question said: once it says something else
+    // under its id, it is not sent again, what became of it is still said, and a fresh answer can go.
+    [Fact]
+    public async Task An_answer_that_failed_to_go_is_not_offered_again_once_its_question_changes_under_its_id()
+    {
+        host.On(Ops.SessionAnswer, _ => throw new InvalidOperationException("the host failed after reading it"));
+        var card = new SessionCardViewModel(Make.Session(question: Make.Choice("q1")), Context());
+        card.Question!.Choose(card.Question.Fields[0].Options.Single(o => o.Value == "sqlite"));
+        await Wait.UntilAsync(() => card.Question!.ShowResend, "the failure");
+
+        card.Update(Make.Session(question: Make.Choice("q1", false, "sqlite", "duckdb")));
+
+        var q = card.Question!;
+        Assert.False(q.ShowResend);
+        Assert.True(q.CanAnswer);
+        Assert.StartsWith("Couldn't send it:", q.StatusText, StringComparison.Ordinal);
+        Assert.EndsWith("The question changed since, so answer it again.", q.StatusText, StringComparison.Ordinal);
+        q.Resend();
+        Assert.Single(host.Sent(Ops.SessionAnswer));
     }
 
     [Fact]

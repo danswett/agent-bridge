@@ -551,19 +551,30 @@ what is drawn around it without any control. Approve once is still offered for s
 the owner's "escape and allow" rule (#253, decision 3). The digest stays over the original text
 (and over a tool's name as written, where it held such a character or right-to-left letters, and
 over whether the prompt is answered at the machine at all), so a prompt holding a real U+202E and
-one holding the six characters `\u202E` never share an id. These rules hold for every agent's
+one holding the six characters `\u202E` never share an id. An ordinary prompt's digest is a hash of
+`<kind>\n<message>`; one with more to it, or with a NUL in its message, is hashed in a
+length-prefixed form starting with a NUL, so no message can spell another prompt's identity (a
+custom tool described as `run\n\0at-machine` is not one described as `run` run outside the
+sandbox). A message over the size limit is escaped only as far as it is sent, and is `truncated`.
+A tool's arguments, written as JSON, give a carriage return, a backspace and a form feed as
+`\u000D`, `\u0008` and `\u000C`, never JSON's `\r`, `\b` and `\f`, so a client reads them as the
+characters they are; and a client reads a pair of surrogate escapes (`\uD83D\uDE00`, as JSON writes
+a character past the first plane) as the one character it is, an emoji not hidden, a tag still
+hidden. These rules hold for every agent's
 `approval`, and a client escapes an older host's approval that still carries such a character.
 Every card draws an approval as its source: the PWA's and the Windows app's exactly as written
 (#429, #323), Home Assistant's in one code block nothing in it can close
 ([ha-connector.md](../ha-connector.md)). Home Assistant's and the app's cards still answer in the
 terminal one with a character reference such as `&#x202E;` that a Markdown renderer would decode
 to such a character (with or without a semicolon, with any number of leading zeros, or an HTML5
-name such as `&ZeroWidthSpace;`). The Needs you lane
+name such as `&ZeroWidthSpace;`, or `&nbsp;` and the other spaces' names since #546 hid them). The
+Needs you lane
 never offers one inline, its escapes included, and a card says what its escapes stand for
 ("Contains hidden characters", "Contains right-to-left text") above it. Those two cards also hold
 at the machine an approval Markdown would not draw as written (the agent's own words closing the
 command's fence, a link, an image or HTML, text after a block, or a line in a block shaped as a
-fence; `ApprovalShape`). These rules cover characters only, not Markdown:
+fence; `ApprovalShape`), and both say a `truncated` approval is cut before they judge its shape,
+since one cut usually ends inside its block. These rules cover characters only, not Markdown:
 whether an approval's prose can be drawn as Markdown (a link or image hiding what runs) is #212
 for Copilot's intention and #209 for a Codex approval's command, which until then is sent as
 Markdown prose (`Needs approval: <command>`).

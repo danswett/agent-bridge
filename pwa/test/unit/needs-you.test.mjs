@@ -175,6 +175,15 @@ test('a host\'s escape of a hidden or right-to-left character keeps a prompt fro
   assert.equal(lane([entry('h1', session('a', approval('q', { message: shell("printf '\\u0041\\u{1F600}'") })))])[0].mode, 'approve');
 });
 
+// JSON writes a character past the first plane as a pair of escapes (a host's tool arguments): an
+// emoji is one character, not two unpaired halves, while a tag is still hidden, as is half a pair alone.
+test('a pair of escapes is read as the one character it is', () => {
+  assert.equal(lane([entry('h1', session('a', approval('q', { message: shell("printf '\\uD83D\\uDE00'") })))])[0].mode, 'approve');
+  for (const command of ['echo ok \\uDB40\\uDC41', 'echo ok \\uD83D x']) {
+    assert.equal(lane([entry('h1', session('a', approval('q', { message: shell(command) })))])[0].mode, 'open', command);
+  }
+});
+
 test('a plain ASCII command and a plain non-ASCII one still offer Approve once', () => {
   for (const command of ['ls -la && git status', 'echo "café, naïve, 日本"']) {
     assert.equal(lane([entry('h1', session('a', approval('q', { message: shell(command) })))])[0].mode, 'approve', command);

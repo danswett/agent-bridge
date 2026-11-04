@@ -143,6 +143,15 @@ public sealed class ToastPlanner
     void Reword(Tracked t, Session s)
     {
         if (t.Shown is not { } shown || s.Question is not { } q || q.Id != shown || t.ShownQuestion is not { } was || was.Id != q.Id || QuestionViewModel.SaysTheSame(q, was)) { return; }
+        // Not put up again where no toast would be put up now (notifications turned off, the window in
+        // front): withdrawn, so its old buttons go with it.
+        if (!Enabled() || WindowActive())
+        {
+            sink.Withdraw(TagOf(s.Id));
+            t.Shown = null;
+            t.ShownQuestion = null;
+            return;
+        }
         t.ShownQuestion = q;
         sink.Show(new ToastNotice(TagOf(s.Id), ToastXml.Question(s, Capabilities(), MachineName(), MachineKey), true));
     }

@@ -206,6 +206,10 @@ public sealed class DecisionContractTests
     [InlineData("Allow **shell**?\n\nTidy up&NoBreak;now\n\n```\nls\n```", "&NoBreak;")]
     [InlineData("Allow **shell**?\n\nTidy up &#x00000202E;sdrawkcab\n\n```\nls\n```", "&#x00000202E;")]
     [InlineData("Allow **shell**?\n\nTidy up &#8238sdrawkcab\n\n```\nls\n```", "&#8238")]
+    // A reference to a space that draws blank (#546), named, or legacy with no semicolon.
+    [InlineData("Allow **shell**?\n\nTidy up&nbsp;#now\n\n```\nls\n```", "&nbsp;")]
+    [InlineData("Allow **shell**?\n\nTidy up&ThinSpace;#now\n\n```\nls\n```", "&ThinSpace;")]
+    [InlineData("Allow **shell**?\n\nTidy up&nbspnow\n\n```\nls\n```", "&nbspnow")]
     public void An_approval_drawn_other_than_as_it_runs_is_shown_escaped_and_answered_in_the_terminal(string message, string shown)
     {
         var approval = new Question
@@ -279,6 +283,30 @@ public sealed class DecisionContractTests
         {
             Assert.Equal(message, Source(plan.Question));
         }
+    }
+
+    // An approval the host holds at the machine, or had to cut, whose block fits the card but not with
+    // the note saying why: cut inside its block, which closes before the notes, never through its fence.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void An_approval_the_host_holds_or_cut_that_only_just_fits_is_cut_inside_its_block(bool cut)
+    {
+        var approval = new Question
+        {
+            Id = "q", Kind = QuestionKind.Approval, Message = $"Allow **shell**?\n\n```\n{new string('a', 5900)}\n```", AskedAt = DateTimeOffset.UnixEpoch,
+            Truncated = cut ? true : null, AnswerAtMachine = cut ? null : true,
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = QuestionMapper.ApprovalOptions, Required = true }],
+        };
+
+        var plan = HaDecision.Plan(approval, AgentKind.Copilot);
+
+        Assert.True(plan.TerminalOnly);
+        Assert.True(plan.Question.Length <= HaDecision.QuestionMaxChars);
+        var notes = plan.Question.IndexOf(HaDecision.TruncatedNote, StringComparison.Ordinal);
+        Assert.True(notes > 0);
+        Assert.StartsWith("Allow **shell**?\n\n```\naaa", Source(plan.Question[..notes]), StringComparison.Ordinal);
+        Assert.StartsWith("\n\n**This one has to be answered in the terminal**", plan.Question[(notes + HaDecision.TruncatedNote.Length)..], StringComparison.Ordinal);
     }
 
     // A card's approval with nothing after it, as its source: the notes, if any, then one block whose

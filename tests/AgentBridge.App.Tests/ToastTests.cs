@@ -73,6 +73,27 @@ public sealed class ToastTests
         Assert.Equal(("s1", true), (replaced.Tag, replaced.Quiet));
         Assert.Equal(["Open"], Actions(replaced));
     }
+    // Where no toast would be put up now (the window in front, or notifications turned off), the toast
+    // of a question that comes back otherwise is withdrawn, not put up again.
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void A_toast_whose_question_comes_back_otherwise_where_no_toast_would_be_shown_now_is_withdrawn(bool inFront, bool turnedOff)
+    {
+        var (active, off) = (false, false);
+        var p = new ToastPlanner(sink, clock) { Capabilities = () => Caps, MachineName = () => "Test PC", WindowActive = () => active, Enabled = () => !off, Quiet = () => false };
+        p.Upsert(Make.Session(question: Make.Choice()));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        (active, off) = (inFront, turnedOff);
+        p.Upsert(Make.Session(question: Make.Choice() with { AnswerAtMachine = true }));
+
+        Assert.Single(sink.Shown);
+        Assert.Equal(["s1"], sink.Withdrawn);
+    }
+
     [Fact]
     public void After_a_reconnect_a_question_answered_meanwhile_loses_its_toast_and_one_asked_meanwhile_gets_one()
     {

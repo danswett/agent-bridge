@@ -116,12 +116,26 @@ public sealed partial class QuestionViewModel : Observable
         }
     }
 
-    // Nothing of the person's is on its way, or what went was not taken.
-    static bool Unsent(Delivery? e) => e is null || (e.State == DeliveryState.Done && e.Outcome is "busy" or "refused");
+    // Nothing of the person's is on its way, or what went was not taken, or what failed to go was an
+    // answer to what the question said before (Reworded).
+    bool Unsent(Delivery? e) => e is null || (e.State == DeliveryState.Done && e.Outcome is "busy" or "refused") || (e.State == DeliveryState.Failed && e.Request == earlier);
+
+    // The request of an answer that failed to go, or was still going, while the question said
+    // something else.
+    string? earlier;
+
+    // The same question, come back saying something else or answerable otherwise (#220): an answer
+    // that failed to go was chosen for what it said then, and an option's value can mean something
+    // else now. It is not sent again; what became of it is still said, and a fresh answer is asked for.
+    internal void Reworded()
+    {
+        if (deliveries.Get(Key) is { State: not DeliveryState.Done } e) { earlier = e.Request; }
+        Refresh();
+    }
 
     // A tap question has no Send until Other is opened.
     public bool ShowSend => !Tap || OtherOpen;
-    public bool ShowResend => !detached && current() && deliveries.Get(Key)?.State == DeliveryState.Failed;
+    public bool ShowResend => !detached && current() && deliveries.Get(Key) is { State: DeliveryState.Failed } e && e.Request != earlier;
     // The answer is on its way (ui.md §5.3, Send and Answer): the button that sent it shows a
     // progress ring, which stops with the request.
     public bool InFlight => deliveries.Get(Key)?.State is DeliveryState.Sending or DeliveryState.Waiting;
@@ -239,7 +253,9 @@ public sealed partial class QuestionViewModel : Observable
     {
         var e = deliveries.Get(Key);
         (StatusText, StatusTone) = !current() && (Unsent(e) || e!.State == DeliveryState.Failed) ? ($"Waiting for the {Product.HostName}{at}. Answer once it is back.", Tone.Progress)
-            : e is null ? ("", Tone.None) : Describe(e, at);
+            : e is null ? ("", Tone.None)
+            : e.State == DeliveryState.Failed && e.Request == earlier ? ($"{Describe(e, at).Text} The question changed since, so answer it again.", Tone.Bad)
+            : Describe(e, at);
         if (e is { State: DeliveryState.Done, Outcome: "busy" } && !pausedAfterBusy)
         {
             pausedAfterBusy = true;
@@ -295,13 +311,15 @@ public sealed partial class QuestionViewModel : Observable
                 && capabilities.Contains(Capabilities.SessionsAnswer) && !capabilities.Contains(Capabilities.SessionsApprove);
             return (false, off ? "approvalOff" : "atMachine");
         }
+        if (!capabilities.Contains(Capabilities.SessionsAnswer)) { return (false, "machine"); }
+        // Before the shape: a cut approval usually ends inside its command's fence, and the person is
+        // told that part of it is missing, not only that it is answered at the machine.
+        if (q.Truncated == true) { return (false, "truncated"); }
         // Approve once allows what runs, not what is drawn. An approval's hidden characters and
         // right-to-left letters are drawn here as escapes, with notes saying so, so it is still
         // offered (#253, decision 3); one Markdown would not draw as written is answered at the
         // machine (DrawnAsWritten).
         if (q.Kind == QuestionKind.Approval && !DrawnAsWritten(q)) { return (false, "atMachine"); }
-        if (!capabilities.Contains(Capabilities.SessionsAnswer)) { return (false, "machine"); }
-        if (q.Truncated == true) { return (false, "truncated"); }
         return (true, null);
     }
 

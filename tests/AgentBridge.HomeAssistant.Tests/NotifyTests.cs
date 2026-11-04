@@ -266,6 +266,49 @@ public sealed class NotifyTests : IDisposable
         Assert.Single(answered);
     }
 
+    // The same form can come back under its id with its options in another order (#220): its
+    // notification is sent again, and a tap on the one before, read by its button's index, would be
+    // another option now. It answers nothing.
+    [Fact]
+    public async Task A_tap_on_the_notification_of_what_a_form_said_before_it_changed_under_its_id_answers_nothing()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        var before = Buttons()[0];
+
+        Ask(Form("q1", Release with { Options = [new Option("wait", "Wait for the fix"), new Option("cut_now", "Cut the release now")] }));
+        await Pass(c);
+        Tap(c, ActionOf(before, 1));
+        await Pass(c);
+        Assert.Empty(answered);
+
+        var now = Buttons()[^1];
+        Assert.NotSame(before, now);
+        Assert.Equal(["Wait for the fix", "Cut the release now"], now["data"]!["actions"]!.AsArray().Take(2).Select(a => a!["title"]!.GetValue<string>()));
+        Tap(c, ActionOf(now, 1), decision: now["data"]!["action_data"]!["decision"]!.GetValue<string>());
+        await Pass(c);
+        Assert.Equal("cut_now", Assert.Single(answered).Fields!["release"].GetString());
+    }
+
+    // Two forms can show the same labels over other values: what a label sends is what the form
+    // says now.
+    [Fact]
+    public async Task A_form_whose_options_values_change_under_the_same_labels_answers_with_the_new_values()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+
+        Ask(Form("q1", Release with { Options = [new Option("wait", "Cut the release now"), new Option("cut_now", "Wait for the fix")] }));
+        await Pass(c);
+        var now = Buttons()[^1];
+        Tap(c, ActionOf(now, 0), decision: now["data"]!["action_data"]!["decision"]!.GetValue<string>());
+        await Pass(c);
+
+        Assert.Equal("wait", Assert.Single(answered).Fields!["release"].GetString());
+    }
+
     [Fact]
     public async Task A_tap_made_by_an_agent_is_the_agents_answer()
     {

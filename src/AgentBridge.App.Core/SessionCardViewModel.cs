@@ -300,14 +300,19 @@ public sealed partial class SessionCardViewModel : Observable
         if (q is not null && question is null)
         {
             var next = new QuestionViewModel(q, session.Id, session.Agent, caps, ctx.Deliveries, name, ctx.Current);
-            if (rebuilt is not null) { next.TakeDraft(rebuilt); }
-            // What a question that came back otherwise cannot take (its fields cut by a budget, or
-            // no longer answerable here) stays on the card, not lost with the old controls. One
-            // rebuilt for capabilities alone keeps it in its fields until it can be answered again.
-            if (reworded && carried.Length > 0 && (!next.Answerable || next.UnsentText() != carried))
+            // Only the same question rebuilt for new capabilities takes its draft along. One that came
+            // back saying something else takes nothing chosen for what it said: an option kept by its
+            // value could now be "Delete files" where it was "Keep files". What was typed stays on the
+            // card instead, and an answer that failed to go is not sent again (Reworded).
+            if (rebuilt is not null && !reworded) { next.TakeDraft(rebuilt); }
+            if (reworded)
             {
-                OrphanText = carried;
-                OrphanNote = "The question changed while you were answering it. What you typed is kept here.";
+                next.Reworded();
+                if (carried.Length > 0)
+                {
+                    OrphanText = carried;
+                    OrphanNote = "The question changed while you were answering it. What you typed is kept here.";
+                }
             }
             Question = next;
         }

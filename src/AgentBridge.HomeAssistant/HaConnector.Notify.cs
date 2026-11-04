@@ -124,13 +124,18 @@ public sealed partial class HaConnector
 
     // Whether a session's question belongs on the phones: armed, still waiting, and not an approval
     // (the daemon has no marker for one, so never sends it, however the card shows it).
-    static bool Wanted(Published p) => p.Armed is { Settled: false } a && a.Question.Kind != QuestionKind.Approval;
+    static bool Wanted(Published p) => p.Armed is { Settled: false, Superseded: false } a && a.Question.Kind != QuestionKind.Approval;
+
+    // What a question's notification is known by: its id, and how often it has been armed again for
+    // saying something else (Armed.Revision). A tap echoes it back, and its actions are named from it,
+    // so one on the notification of what the question said before matches nothing it offers now.
+    static string NotifyId(Armed armed) => armed.Revision == 0 ? armed.Question.Id : $"{armed.Question.Id}~{armed.Revision}";
 
     // The buttons' notification for the question a session's card is armed with.
     (JsonArray Actions, JsonObject Payload) Buttons(string sessionId, Published p, Armed armed)
     {
-        var marker = HaNotify.Marker(armed.Plan);
-        var actions = HaNotify.Actions(marker, armed.Question.Id, HaNotify.Options(marker), Notify.MaxButtons, textAction: TakesWords(armed.Plan));
+        var marker = HaNotify.Marker(armed.Plan) with { DecisionId = NotifyId(armed) };
+        var actions = HaNotify.Actions(marker, marker.DecisionId, HaNotify.Options(marker), Notify.MaxButtons, textAction: TakesWords(armed.Plan));
         // A sub-agent's question is titled with who asks, under the session's tag as ever.
         var title = armed.Plan.Asker is { } asker ? HaNotify.AskerTitle(asker, p.Name) : p.Name;
         return (actions, HaNotify.Payload(sessionId, title, marker, actions, options.DashboardUrlPath, options.MachineName,
@@ -148,7 +153,7 @@ public sealed partial class HaConnector
             lock (gate)
             {
                 stale = [.. onPhones.Select(x => (x.Key, Phones: x.Value.Where(phone =>
-                        !published.TryGetValue(x.Key, out var p) || !Wanted(p) || phone.Value != p.Armed!.Question.Id).Select(phone => phone.Key).ToList()))
+                        !published.TryGetValue(x.Key, out var p) || !Wanted(p) || phone.Value != NotifyId(p.Armed!)).Select(phone => phone.Key).ToList()))
                     .Where(x => x.Phones.Count > 0)];
             }
             var left = false;
@@ -162,7 +167,7 @@ public sealed partial class HaConnector
         List<(string Id, Published P)> due;
         lock (gate)
         {
-            due = [.. published.Where(x => Wanted(x.Value) && !buttonsSent.Contains(SentKey(x.Key, x.Value.Armed!.Question.Id)) && x.Value.Notify.RetryAt <= now)
+            due = [.. published.Where(x => Wanted(x.Value) && !buttonsSent.Contains(SentKey(x.Key, NotifyId(x.Value.Armed!))) && x.Value.Notify.RetryAt <= now)
                 .Select(x => (x.Key, x.Value))];
         }
         foreach (var (id, p) in due)
@@ -177,14 +182,14 @@ public sealed partial class HaConnector
                 {
                     if (!onPhones.TryGetValue(id, out var phones)) { onPhones[id] = phones = new(StringComparer.Ordinal); }
                     // The same tag: what the phone showed before is replaced.
-                    phones[phone] = armed.Question.Id;
+                    phones[phone] = NotifyId(armed);
                 }
                 SaveLedger();
             }, ct);
             if (sent.Count > 0)
             {
-                lock (gate) { buttonsSent.Add(SentKey(id, armed.Question.Id)); }
-                p.Notify.Shown = armed.Question.Id;
+                lock (gate) { buttonsSent.Add(SentKey(id, NotifyId(armed))); }
+                p.Notify.Shown = NotifyId(armed);
                 log($"Home Assistant connector sent answer buttons for {id[..Math.Min(8, id.Length)]} ({actions.Count} action(s))");
             }
             else { p.Notify.RetryAt = now + options.ButtonsRetry; }
@@ -289,9 +294,10 @@ public sealed partial class HaConnector
         var who = choice.SessionId[..Math.Min(8, choice.SessionId.Length)];
         if (p is null) { log("Home Assistant connector: an answer button for a session that is no longer live; ignored"); return; }
         var armed = p.Armed;
-        if (armed is null || armed.Question.Id != choice.DecisionId)
+        if (armed is null || NotifyId(armed) != choice.DecisionId)
         {
-            // The notification outlives its question: a tap on an old one never answers what is asked now.
+            // The notification outlives its question, or what it said: a tap on an old one never
+            // answers what is asked now.
             log($"Home Assistant connector: an answer button for {who} is for an earlier question; ignored");
             return;
         }

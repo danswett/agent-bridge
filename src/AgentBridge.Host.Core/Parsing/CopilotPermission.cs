@@ -1,7 +1,9 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Core.Parsing;
@@ -47,7 +49,7 @@ public sealed record CopilotPermissionPrompt(string RequestId, string? ToolCallI
     }
 }
 
-public static class CopilotPermission
+public static partial class CopilotPermission
 {
     // The kinds whose prompt is a plain approve-once / deny choice in every Copilot build seen
     // (1.0.10x): shell commands, file edits, file reads, path access, URL fetches, MCP tools
@@ -85,8 +87,11 @@ public static class CopilotPermission
         // What a person reads must be what runs. A bidi control or a zero-width character is drawn
         // somewhere other than where it runs (or not at all), and right-to-left letters reorder
         // what is drawn around them, so each is shown as a visible escape (#220), and Approve once
-        // is still offered (#253, decision 3). The digest stays over what Copilot wrote.
-        return new CopilotPermissionPrompt(request, toolCallId, kind, ShownText.Reveal(message, rightToLeft: true), Digest(kind, message, p, atMachine is not null), atMachine) { Probes = Probes(kind, p) };
+        // is still offered (#253, decision 3). The digest stays over what Copilot wrote, all of it.
+        // Shown from no more than a question can carry: a transcript line can be 32 MiB, and each
+        // escape is six characters or more, so escaping all of it first could make it six times that
+        // before the question cut it (QuestionMapper.Approval, which says when it was cut).
+        return new CopilotPermissionPrompt(request, toolCallId, kind, ShownText.RevealWithin(message, Limits.QuestionMessage, rightToLeft: true), Digest(kind, message, p, atMachine is not null), atMachine) { Probes = Probes(kind, p) };
     }
 
     static List<string> Probes(string kind, JsonElement p)
@@ -161,8 +166,24 @@ public static class CopilotPermission
         if (Json.Get(p, "args") is not { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } args) { return null; }
         using var buffer = new MemoryStream();
         using (var writer = new Utf8JsonWriter(buffer, Indented)) { args.WriteTo(writer); }
-        return Fence(Encoding.UTF8.GetString(buffer.ToArray()), "json");
+        return Fence(Controls(Encoding.UTF8.GetString(buffer.ToArray())), "json");
     }
+
+    // JSON writes a carriage return, a backspace and a form feed in an argument as \r, \b and \f, which
+    // no reader of escapes takes for the characters they are: the notes and the Needs you lane read
+    // the \u000D a host writes for one (ShownText.Unreveal, hidden-text.js), so a CR in a tool's
+    // argument, which PowerShell ends a `#` comment at, went without a word (#220). Each is written so;
+    // an escaped backslash before an r (\\r) is two characters of text, and stays as it is.
+    static string Controls(string json) => !json.Contains('\\') ? json : JsonEscape().Replace(json, m => m.Value switch
+    {
+        @"\r" => @"\u000D",
+        @"\b" => @"\u0008",
+        @"\f" => @"\u000C",
+        _ => m.Value,
+    });
+
+    [GeneratedRegex(@"\\(?:u[0-9A-Fa-f]{4}|.)", RegexOptions.Singleline)]
+    private static partial Regex JsonEscape();
 
     static string Join(params string?[] parts) => string.Join("\n\n", parts.Where(s => !string.IsNullOrWhiteSpace(s)));
 
@@ -192,17 +213,27 @@ public static class CopilotPermission
     // are not the same prompt. Any other prompt's id is as it was.
     static readonly string[] Named = ["toolTitle", "toolName", "accessKind"];
 
+    // An ordinary prompt's identity is "<kind>\n<message>", as it always was. One with more to it
+    // (held at the machine, or a misleading name) or a NUL in it is written so no other can spell it:
+    // a NUL first, which the ordinary form never has, then each part with its length. Appended as
+    // text after the message, "\n\0at-machine" could be written by the message itself: a custom
+    // tool described as "run\n\0at-machine" had the id of "run" run outside the sandbox.
     static string Digest(string kind, string message, JsonElement p, bool atMachine)
     {
-        var identity = new StringBuilder($"{kind}\n{message}");
-        // And whether it is answered here at all: no prompt that is can share an id with one that
-        // is not, whatever the reason.
-        if (atMachine) { identity.Append("\n\0at-machine"); }
-        foreach (var name in Named)
+        var named = Named.Select(name => (name, raw: Json.Str(p, name))).Where(x => x.raw is { } raw && ShownText.Misleads(raw)).ToList();
+        string identity;
+        if (!atMachine && named.Count == 0 && !kind.Contains('\0') && !message.Contains('\0')) { identity = $"{kind}\n{message}"; }
+        else
         {
-            if (Json.Str(p, name) is { } raw && ShownText.Misleads(raw)) { identity.Append($"\n\0{name}\0{raw}"); }
+            var b = new StringBuilder("\0identity/2");
+            void Part(string text) => b.Append('\0').Append(text.Length.ToString(CultureInfo.InvariantCulture)).Append(':').Append(text);
+            Part(kind);
+            Part(message);
+            Part(atMachine ? "at-machine" : "");
+            foreach (var (name, raw) in named) { Part(name); Part(raw!); }
+            identity = b.ToString();
         }
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(identity.ToString()));
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(identity));
         return Convert.ToHexStringLower(hash.AsSpan(0, 8));
     }
 }
