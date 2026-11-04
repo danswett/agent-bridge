@@ -20,6 +20,7 @@
     <ProjectReference Include="..\..\src\AgentBridge.Protocol\AgentBridge.Protocol.csproj" />
     <ProjectReference Include="..\..\src\AgentBridge.Transport\AgentBridge.Transport.csproj" />
     <ProjectReference Include="..\..\src\AgentBridge.Host.Core\AgentBridge.Host.Core.csproj" />
+    <ProjectReference Include="..\..\src\AgentBridge.Host.Delivery\AgentBridge.Host.Delivery.csproj" />
     <ProjectReference Include="..\..\src\AgentBridge.App.Core\AgentBridge.App.Core.csproj" />
   </ItemGroup>
 

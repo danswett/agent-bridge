@@ -180,8 +180,10 @@ In order, for every reply:
    `permission.completed`, since the last abort or shutdown. The whole transcript counts,
    since a subagent's question stops only that subagent and other work can write any
    amount after it (and the session source does not report a subagent's question): it is
-   read from the start once per session, before the typing turn, and from where it was
-   left on every later read. A transcript that cannot be read is `refused`, never taken to
+   read from the start once per session, in the background as soon as the session is found
+   and again as it changes (a 96 to 169 MB `events.jsonl` took 0.3 to 0.6 s, which the first
+   reply after a start used to spend before typing, #599), and from where it was
+   left on every later read, so the read before typing covers only what was written since. A transcript that cannot be read is `refused`, never taken to
    mean nothing is asking. A Copilot session with no `events.jsonl` yet (its folder there,
    and no transcript ever read for it) is refused with its own reason. Copilot 1.0.105
    creates the file only with the first prompt, and it registers the session while its
@@ -200,7 +202,11 @@ In order, for every reply:
    same words need two prompts. `delivered` on one whose `attachments` list every staged
    path; `unconfirmed` on one that lacks any (Copilot leaves a mention it could not read as
    text); a `session.shutdown`, or the wait running out, is `unconfirmed`, saying whether
-   something else was recorded instead.
+   something else was recorded instead. The transcript is looked at again as soon as the
+   session source's file watcher hears it written, and every 250 ms whatever it hears (a
+   watcher drops events). Polling alone left 0.66 to 0.86 s between the prompt being recorded
+   and `delivered` (#599). The same goes for Claude Code and Codex replies, and for answers
+   ([host-answers.md](host-answers.md)).
 
 **What no check can see.** Words somebody left half-typed in the CLI's input are in no
 transcript; the reply is added to them, and the prompt recorded differs, so the outcome is

@@ -94,3 +94,58 @@ public class TranscriptAppendBenchmarks
         return _tail.Offset;
     }
 }
+
+// The read a reply makes before typing, to rule out a question or permission prompt holding the
+// session (#599): a 21 MB events.jsonl caught up from the start, as the first reply after a start
+// did (FirstRead), against one the host read ahead in the background when it found the session,
+// which then reads only the turn appended since (ReadAhead).
+[InvocationCount(64, 1)]
+public class CopilotInputBenchmarks
+{
+    string _dir = null!;
+    string _path = null!;
+    long _baseLength;
+    byte[][] _turns = null!;
+    FileStream _writer = null!;
+    AgentBridge.Host.Delivery.Copilot.CopilotInput _ahead = null!;
+    int _next;
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        _dir = Directory.CreateTempSubdirectory("abbench-").FullName;
+        _path = Path.Combine(_dir, "events.jsonl");
+        using (var file = File.Create(_path)) { Fixtures.WriteCopilotTranscript(file, Fixtures.LargeTranscriptTurns); }
+        _baseLength = new FileInfo(_path).Length;
+        _turns = [.. Enumerable.Range(Fixtures.LargeTranscriptTurns + 1, 64).Select(Fixtures.CopilotTurnBytes)];
+        _writer = new FileStream(_path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+    }
+
+    [IterationSetup]
+    public void Rewind()
+    {
+        _writer.SetLength(_baseLength);
+        _writer.Seek(0, SeekOrigin.End);
+        _ahead = new AgentBridge.Host.Delivery.Copilot.CopilotInput(_path);
+        _ahead.Read();
+        _next = 0;
+    }
+
+    [GlobalCleanup]
+    public void Cleanup()
+    {
+        _writer.Dispose();
+        Directory.Delete(_dir, recursive: true);
+    }
+
+    [Benchmark(Baseline = true)]
+    public long FirstRead() => new AgentBridge.Host.Delivery.Copilot.CopilotInput(_path).Read().ScannedTo;
+
+    [Benchmark]
+    public long ReadAhead()
+    {
+        _writer.Write(_turns[_next++ % _turns.Length]);
+        _writer.Flush();
+        return _ahead.Read().ScannedTo;
+    }
+}

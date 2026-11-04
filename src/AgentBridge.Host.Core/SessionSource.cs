@@ -914,8 +914,19 @@ public sealed class SessionSource : ISessionSource
         // Appends to a transcript need only a re-read; anything else (a lock appearing, a
         // registration written, a folder made) can mean a session started or ended.
         if (!e.FullPath.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase)) { _discoverRequested = true; }
+        else
+        {
+            // Raised on the watcher's thread; a handler that throws must not stop the wake.
+            try { TranscriptWritten?.Invoke(e.FullPath); }
+            catch (Exception) { }
+        }
         _wake.Writer.TryWrite(true);
     }
+
+    // A transcript (a .jsonl under the agents' folders) was written to, as the file watcher heard
+    // it, with its full path: a delivery confirming a prompt looks again at once (TranscriptWrites).
+    // Never raised without UseFileSystemWatcher, and a watcher can miss writes.
+    public event Action<string>? TranscriptWritten;
 
     public async ValueTask DisposeAsync()
     {

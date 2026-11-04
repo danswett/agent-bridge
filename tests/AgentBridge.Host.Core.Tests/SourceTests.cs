@@ -323,6 +323,25 @@ public class SourceTests
     }
 
     [Fact]
+    public async Task The_watcher_says_which_transcript_was_written_so_a_delivery_waiting_on_it_looks_again_at_once()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        Fixture.Append(events, Copilot.User("go", 1));
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = new SessionSource(f.Options(watch: true), f.Processes);
+        var writes = new TranscriptWrites();
+        source.TranscriptWritten += writes.Written;
+        await source.StartAsync();
+        var next = writes.Next(events);
+        Assert.False(next.IsCompleted);
+
+        Fixture.Append(events, Copilot.Assistant("written", 2));
+
+        await next.WaitAsync(TimeSpan.FromSeconds(20));
+    }
+
+    [Fact]
     public async Task A_Changed_handler_that_throws_does_not_stop_the_handlers_after_it()
     {
         using var f = new Fixture();
