@@ -288,15 +288,14 @@ static class ReportCommand
             var runs = new List<MainRun>();
             var flakyJobs = new List<(long, DateTimeOffset)>();
             var nodeIds = new Dictionary<long, string>();
-            bool? redNow = null;
+            var states = new List<(long Id, string? Status, string? Conclusion, int Attempt)>();
             foreach (var run in RestPages($"repos/{slug}/actions/workflows/ci.yml/runs?branch={Uri.EscapeDataString(baseBranch)}&event=push&created=%3E%3D{Since}", "workflow_runs", complete: true))
             {
                 var id = run.GetProperty("id").GetInt64();
                 var conclusion = run.GetProperty("conclusion").GetString();
                 var attempt = run.GetProperty("run_attempt").GetInt32();
                 var created = Time(run, "created_at");
-                if (redNow is null && conclusion is not (null or "cancelled" or "skipped"))
-                    redNow = conclusion != "success";
+                states.Add((id, run.TryGetProperty("status", out var status) ? status.GetString() : null, conclusion, attempt));
                 var earlierFailed = false;
                 if (conclusion == "success" && attempt > 1)
                 {
@@ -312,7 +311,7 @@ static class ReportCommand
             // Main's still-red runs' failed test jobs too, newest first.
             var jobs = flakyJobs.Concat(FailedTestJobs(runs.Where(r => r.Break).Take(maxLogs).Select(r => (nodeIds[r.Id], r.CreatedAt))))
                 .OrderByDescending(j => j.Item2).ToList();
-            return (runs, redNow, jobs);
+            return (runs, MainRed(states), jobs);
         }
 
         List<(long Job, DateTimeOffset At)> FailedTestJobs(IEnumerable<(string NodeId, DateTimeOffset At)> runs)
@@ -406,6 +405,23 @@ static class ReportCommand
             return ([.. doc.RootElement.GetProperty("data").GetProperty("nodes").EnumerateArray().Zip(runs).Select(pair =>
                 new PrCiRun(pair.Second.Id, pair.Second.Wall, ParseJobTimes(pair.First)))], rerunGreen);
         }
+    }
+
+    /// <summary>
+    /// Whether main is red now, as merge-rule's ReadMain judges it: the newest finished run decides,
+    /// and anything but success (cancelled or skipped too) is red; a run being re-run is red; a new
+    /// run still going doesn't count. Null when no run in the window decides.
+    /// </summary>
+    internal static bool? MainRed(IEnumerable<(long Id, string? Status, string? Conclusion, int Attempt)> runs)
+    {
+        foreach (var run in runs.OrderByDescending(r => r.Id))
+        {
+            if (run.Status == "completed")
+                return run.Conclusion != "success";
+            if (run.Attempt > 1)
+                return true;
+        }
+        return null;
     }
 
     static DateTimeOffset Time(JsonElement e, string property) =>

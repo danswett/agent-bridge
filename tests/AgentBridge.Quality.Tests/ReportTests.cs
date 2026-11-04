@@ -83,6 +83,14 @@ public sealed class ReportTests
     public void An_open_pull_request_is_stuck_on_the_first_item_merge_rule_names_after_a_red_main(string state, string description, string expected) =>
         Assert.Equal(expected, WeeklyReport.StuckOn(Open(1, rule: state, description: description), "main", mainRed: false));
 
+    [Theory]
+    [InlineData("completed", "cancelled", 1, true)]
+    [InlineData("completed", "success", 1, false)]
+    [InlineData("in_progress", null, 1, false)]
+    [InlineData("in_progress", null, 2, true)]
+    public void Main_is_red_now_as_merge_rule_judges_it_by_its_newest_finished_or_rerunning_run(string status, string? conclusion, int attempt, bool red) =>
+        Assert.Equal(red, ReportCommand.MainRed([(1, "completed", "success", 1), (2, status, conclusion, attempt)]));
+
     [Fact]
     public void One_merge_rule_passed_is_stuck_on_conflicts_then_threads_then_a_red_main_and_one_on_another_branch_is_stacked()
     {
@@ -91,6 +99,8 @@ public sealed class ReportTests
         Assert.Equal("unresolved threads", WeeklyReport.StuckOn(Open(1, rule: "success", description: ok, threads: 2), "main", true));
         Assert.Equal("main red", WeeklyReport.StuckOn(Open(1, rule: "success", description: ok), "main", true));
         Assert.Equal("ready: waiting to be merged", WeeklyReport.StuckOn(Open(1, rule: "success", description: ok), "main", false));
+        // A fix for main, which merge-rule lets through a red main.
+        Assert.Equal("ready: waiting to be merged", WeeklyReport.StuckOn(Open(1, rule: "success", description: ok + "; main isn't green, but it's labelled fixes-main"), "main", true));
         Assert.Equal("stacked on another branch", WeeklyReport.StuckOn(Open(1, baseRef: "codex/base"), "main", false));
         Assert.Equal("no merge-rule status", WeeklyReport.StuckOn(Open(1, rule: null, description: null), "main", false));
     }
@@ -354,7 +364,7 @@ public sealed class ReportTests
 
         public JsonDocument Rest(string path)
         {
-            const string run = """{"id": 1, "node_id": "%N", "conclusion": "failure", "run_attempt": 1, "head_sha": "abc", "created_at": "2026-11-08T10:00:00Z", "updated_at": "2026-11-08T10:10:00Z", "run_started_at": "2026-11-08T10:00:00Z"}""";
+            const string run = """{"id": 1, "node_id": "%N", "status": "completed", "conclusion": "failure", "run_attempt": 1, "head_sha": "abc", "created_at": "2026-11-08T10:00:00Z", "updated_at": "2026-11-08T10:10:00Z", "run_started_at": "2026-11-08T10:00:00Z"}""";
             if (endlessMain && path.Contains("branch=main", StringComparison.Ordinal))
                 return JsonDocument.Parse("""{"workflow_runs": [""" + string.Join(",", Enumerable.Repeat(run.Replace("%N", "main-node", StringComparison.Ordinal), 100)) + "]}");
             if (mainRerun && path.Contains("branch=main", StringComparison.Ordinal))

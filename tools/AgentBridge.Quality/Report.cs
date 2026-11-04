@@ -290,7 +290,8 @@ static class WeeklyReport
             return "conflicts";
         if (pr.UnresolvedThreads > 0)
             return "unresolved threads";
-        if (mainRed == true)
+        // merge-rule lets a fix for main through a red main (its main_green exempt labels) and says so.
+        if (mainRed == true && !(pr.MergeRuleDescription ?? "").Contains("isn't green, but it's labelled", StringComparison.Ordinal))
             return "main red";
         return "ready: waiting to be merged";
     }
