@@ -24,7 +24,7 @@ public sealed class MotionTests
     [Fact]
     public void Every_entry_runs_for_its_generated_token_and_none_runs_past_300_ms()
     {
-        Assert.Equal(15, MotionCatalogue.Names.Count);
+        Assert.Equal(16, MotionCatalogue.Names.Count);
         foreach (var name in MotionCatalogue.Names)
         {
             var entry = Catalogue[name];
@@ -40,6 +40,8 @@ public sealed class MotionTests
         Assert.Equal(TimeSpan.FromMilliseconds(83), Catalogue.Exit("Pane", true).Duration);
         Assert.Equal(new MotionEase(0, 0, 0, 1), Catalogue["Push"].Ease);
         Assert.Equal(new MotionEase(1, 0, 1, 1), Catalogue["Toast"].ExitEase);
+        // Lift (#592): the held card rises fast and decelerating.
+        Assert.Equal((TimeSpan.FromMilliseconds(83), new MotionEase(0, 0, 0, 1)), (Catalogue["Lift"].Duration, Catalogue["Lift"].Ease));
     }
 
     [Fact]
