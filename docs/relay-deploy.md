@@ -280,9 +280,11 @@ predicted properties, and a changed property's old value, and Azure doesn't mask
 address. The action group and the budget each keep a copy. So:
 - if both lookups succeed and find neither resource, the preview uses the placeholder
   `alerts@example.invalid`;
-- if both exist and every stored copy is exactly the address being applied, the preview uses it.
-  Both show as unchanged, without their properties;
-- otherwise (a new or differing address, one resource missing, or a lookup that failed),
+- if both exist and already hold exactly what the template writes (the action group's single
+  receiver, and each of the budget's four notifications with that one contact, case and all),
+  the preview uses it, and no address property shows as changed;
+- otherwise (a new or differing address, an extra or missing copy, one resource missing, or a
+  lookup that failed),
   monitoring is left out of the preview, with a message, and the real run applies it.
 
 The budget's start date can't change once the budget exists, and must be in the current month
