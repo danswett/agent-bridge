@@ -54,7 +54,7 @@ test.describe('on a phone', () => {
     await hold(page);
     await reply.getByRole('button', { name: 'Send' }).tap();
     await expect(reply.locator('.reply-status')).toHaveText('Sending…');
-    await expect(reply).toHaveAttribute('aria-busy', 'true');
+    await expect(reply.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-busy', 'true');
     await expect(reply.getByRole('button', { name: 'Send' })).toBeDisabled();
     await release(page);
 
@@ -228,7 +228,7 @@ test.describe('progress', () => {
     await holdBefore(page, 'result');
     await reply.getByRole('button', { name: 'Send' }).click();
     await expect(status).toHaveText('Sent');
-    await expect(reply).toHaveAttribute('aria-busy', 'true');
+    await expect(reply.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-busy', 'true');
     await releaseBefore(page, 'typing');
     await expect(status).toHaveText('Passed to the agent');
     await expect(reply.getByRole('button', { name: 'Send' })).toBeDisabled();
