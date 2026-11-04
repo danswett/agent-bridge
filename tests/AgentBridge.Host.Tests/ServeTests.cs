@@ -428,6 +428,82 @@ public sealed class ServeTests : IAsyncLifetime
         Assert.Equal(1, feed.Held);
     }
 
+    // Queue exact states so a question disappearing can be tested independently of status,
+    // and a field changing independently of the parser's other changes to the session.
+    async Task AssertUrgentChangeAsync(Func<Session, Session> change, SessionStatus status = SessionStatus.Waiting,
+        bool question = true, bool answerAtMachine = false)
+    {
+        var (ch, _, feed, floor) = await FocusedWithAChangeHeldAsync();
+        var before = source.Snapshot().Single(s => s.Id == Id) with
+        {
+            Id = Third,
+            Status = status,
+            Question = question ? new Question
+            {
+                Id = "q1",
+                Kind = QuestionKind.Form,
+                Message = "Which one?",
+                AskedAt = Fixture.T0,
+                AnswerAtMachine = answerAtMachine,
+                Fields = [new Field { Name = "pick", Type = FieldType.Choice, Options = [new("a"), new("b")] }],
+            } : null,
+        };
+        Assert.True(feed.Subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionUpsert, before, source.Revision + 1)));
+        var sent = await NextAsync(ch);
+        Assert.Equal(Third, sent.Data.GetProperty("id").GetString());
+        var heldJson = SessionPatches.Apply(null, null, Received.Read<SessionPatch>(sent.Data));
+
+        // Make this session quiet too: its urgent change must replace its held state without
+        // releasing the other session or advancing the watermark past that session's floor.
+        var held = before with { Title = "A held title" };
+        Assert.True(feed.Subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionUpsert, held, source.Revision + 2)));
+        await Wait.UntilAsync(() => feed.Held == 2, "both quiet sessions' changes held", Patience);
+        var after = change(held);
+        Assert.True(feed.Subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionUpsert, after, source.Revision + 3)));
+
+        // No clock advance: removing the matching Urgent branch leaves this event held.
+        var live = await NextAsync(ch);
+        Assert.Equal(Events.SessionPatch, live.Name);
+        var patch = Received.Read<SessionPatch>(live.Data);
+        Assert.Equal(Third, patch.Id);
+        Assert.Equal(sent.Seq, patch.Base);
+        Assert.True(patch.Revision <= floor);
+        Assert.True(JsonNode.DeepEquals(SessionPatches.Json(after), SessionPatches.Apply(heldJson, sent.Seq, patch)));
+        Assert.Equal(1, feed.Held);
+        Assert.False(ch.Events.TryRead(out _));
+    }
+
+    [Theory]
+    [InlineData("id")]
+    [InlineData("fields")]
+    public async Task Replacing_a_question_while_still_waiting_goes_at_once_even_when_the_session_is_not_open(string changed) =>
+        await AssertUrgentChangeAsync(session => session with
+        {
+            Question = changed == "id" ? session.Question! with { Id = "q2" } : session.Question! with
+            {
+                Fields = [new Field { Name = "pick", Type = FieldType.Choice, Options = [new("a"), new("c")] }],
+            },
+        });
+
+    [Fact]
+    public async Task Removing_a_question_while_still_waiting_goes_at_once_even_when_the_session_is_not_open() =>
+        await AssertUrgentChangeAsync(session => session with { Question = null });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Changing_only_answer_at_machine_while_still_waiting_goes_at_once_even_when_the_session_is_not_open(bool before) =>
+        await AssertUrgentChangeAsync(session => session with
+        {
+            Question = session.Question! with { AnswerAtMachine = !before },
+        }, answerAtMachine: before);
+
+    [Theory]
+    [InlineData(SessionStatus.Waiting)]
+    [InlineData(SessionStatus.Ending)]
+    public async Task Changing_only_status_to_waiting_or_ending_goes_at_once_even_when_the_session_is_not_open(SessionStatus status) =>
+        await AssertUrgentChangeAsync(session => session with { Status = status }, status: SessionStatus.Working, question: false);
+
     // A resumed snapshot leaves out what did not change, which the client still holds, a pending
     // question included: with nothing sent to compare with, a session's first change goes at once.
     [Fact]
@@ -467,13 +543,30 @@ public sealed class ServeTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_channel_that_says_what_it_shows_too_often_is_refused()
+    public async Task The_focus_rate_window_resets_after_ten_seconds_and_a_refusal_does_not_end_the_channel_or_feed()
     {
-        var ch = await OpenAsync();
-        for (var i = 0; i < 20; i++) { Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = i % 2 == 0 ? Id : Other })); }
+        var (ch, time, feed, _) = await FocusedWithAChangeHeldAsync();
+        // The helper already sent the first focus request in this window.
+        for (var i = 1; i < 20; i++) { Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Id })); }
 
-        var refused = await ch.RequestAsync(Ops.SessionsFocus, new { visible = true });
+        time.Advance(TimeSpan.FromMilliseconds(9_999));
+        var refused = await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Other });
         Assert.False(refused.GetProperty("ok").GetBoolean());
+        Result(await ch.RequestAsync(Ops.Hello, new { }));
+        Assert.Equal(1, feed.Held);
+
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Other }));
+        var released = Received.Read<SessionPatch>((await NextAsync(ch)).Data);
+        Assert.Equal(Other, released.Id);
+        Assert.Equal(0, feed.Held);
+
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Id }));
+        await ChangeAsync("still delivering after a refusal", 6);
+        var live = Received.Read<SessionPatch>((await NextAsync(ch)).Data);
+        Assert.Equal(Id, live.Id);
+        Assert.True(ch.IsOpen);
+        Assert.Equal(1, service.Subscribers);
     }
 
     [Fact]
