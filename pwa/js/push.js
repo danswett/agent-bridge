@@ -10,6 +10,7 @@
 // service never read it. Turning off unsubscribes the browser, so any machine still holding
 // the subscription is told it is gone (410) by the push service on its next push.
 import { Capabilities, Ops } from './protocol.js';
+import { NOTIFICATIONS_BLOCKED } from './brand.js';
 
 const SETTING = 'agent-bridge.app.notify';
 
@@ -101,7 +102,7 @@ export class PushRegistrar {
         const permission = await asked;
         if (permission !== 'granted') {
           throw new Error(permission === 'denied'
-            ? 'Notifications are blocked for Agent Bridge. Allow them in Settings, then try again.'
+            ? `${NOTIFICATIONS_BLOCKED} Allow them in Settings, then try again.`
             : 'Notifications were not allowed.');
         }
         if (generation !== this.#generation || !await this.#subscription(true, generation)) { return; }

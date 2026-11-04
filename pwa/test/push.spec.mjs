@@ -3,6 +3,7 @@
 // the notifications it shows are read back from the registration. WebKit has no such hook;
 // test/unit/sw.test.mjs covers the same handlers there.
 import { test, expect } from '@playwright/test';
+import { BRAND } from '../js/brand.js';
 
 // The full Chromium (its new headless mode): the headless shell refuses notifications even
 // when they are granted.
@@ -78,6 +79,6 @@ test('a push shows a notification, and every later notice about the session repl
   await settled();
   await expect.poll(shown, { timeout: 15000 }).toHaveLength(3);
   const all = await shown();
-  expect(all.map((n) => n.title)).toContain('Agent Bridge');
+  expect(all.map((n) => n.title)).toContain(BRAND.name);
   expect(all.find((n) => n.tag === 'other').data.url).toBe(scope);
 });

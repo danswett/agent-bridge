@@ -3,6 +3,7 @@
 // on it and the browser's own back goes between them.
 import { test, expect } from '@playwright/test';
 import { go, open } from './nav.mjs';
+import { BRAND } from '../js/brand.js';
 
 const CODEX = '019a1b2c-codex-example';
 const IDLE = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
@@ -33,7 +34,7 @@ for (const width of [900, 1440]) {
       expect(bar.height).toBe(56);
       expect(bar.y).toBe(0);
       await expect(page.locator('.brand')).toBeVisible();
-      await expect(page.locator('.brand-name')).toHaveText('Agent Bridge');
+      await expect(page.locator('.brand-name')).toHaveText(BRAND.name);
       await expect(page.locator('#search')).toBeVisible();
       await expect(page.locator('#online')).toHaveText('2 machines');
       await expect(page.locator('#conn')).toHaveText('Demo');

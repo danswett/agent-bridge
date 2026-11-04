@@ -6,6 +6,9 @@ const PREFIX = 'agent-bridge-app-';
 // update when one takes over, so any change to the app or its relay must change it.
 const VERSION = 'dev';
 const CACHE = `${PREFIX}${VERSION}`;
+// The product's name, for a notification that has no title of its own: written by
+// tools/brand.mjs from js/brand.js, which a classic worker can't import.
+const NAME = 'Agent Bridge';
 const SHELL = [
   './', './index.html', './app.css', './design/tokens.css', './design/sprite.svg',
   './design/fonts/AgentBridgeMono-Regular.woff2', './design/fonts/AgentBridgeMono-Italic.woff2', './design/fonts/AgentBridgeMono-SemiBold.woff2',
@@ -20,7 +23,7 @@ const SHELL = [
   './js/ui/reply-view.js', './js/ui/stop-view.js', './js/ui/session-card.js', './js/ui/views.js', './js/ui/sessions-page.js', './js/ui/needs-you-view.js', './js/ui/shell.js', './fixtures/sessions-list.json',
   './js/attribution.js', './js/ui/delegates-view.js', './js/ui/motion.js',
   './js/usage.js', './js/fleet.js', './js/platform.js', './js/forget.js', './js/update.js', './js/ui/usage-view.js',
-  './js/launch.js', './js/launch-service.js', './js/ui/launch-view.js', './js/transfer.js',
+  './js/launch.js', './js/launch-service.js', './js/ui/launch-view.js', './js/transfer.js', './js/brand.js',
 ];
 
 // GitHub Pages lets a browser keep every file for 10 minutes (max-age=600), and a worker's
@@ -91,7 +94,7 @@ function notice(message) {
     options.renotify = kind !== 'resolved';
   }
   if (kind === 'resolved' || n.silent === true) { options.silent = true; }
-  return { title: text(n.title) ?? 'Agent Bridge', options };
+  return { title: text(n.title) ?? NAME, options };
 }
 
 self.addEventListener('push', (e) => {

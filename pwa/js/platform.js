@@ -1,4 +1,4 @@
-// Agent Bridge PWA: the platform layer (#168, docs/design/ui.md §7, PWA). The PWA follows the
+// The PWA's platform layer (#168, docs/design/ui.md §7, PWA). The PWA follows the
 // Windows design everywhere (#166); this only settles the few details a platform does its own way:
 //   * which shortcut a hint names, ⌘ on Apple's platforms and Ctrl elsewhere;
 //   * whether the page draws under a phone's notch and home indicator (the safe areas), which only

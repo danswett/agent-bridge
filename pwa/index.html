@@ -27,7 +27,7 @@
     <header class="appbar" id="appbar">
       <a class="brand" href="#/sessions" aria-label="Agent Bridge: sessions">
         <svg class="mark" viewBox="0 0 48 48" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-mark"/></svg>
-        <span class="brand-name">Agent Bridge</span>
+        <span class="brand-name" data-brand>Agent Bridge</span>
       </a>
       <div class="search" role="search" hidden>
         <svg class="ab-icon ab-icon-16 search-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-search"/></svg>
@@ -82,7 +82,7 @@
 
       <section id="signin" class="panel page" aria-labelledby="signin-h" hidden>
         <h2 id="signin-h" class="page-title">Sign in</h2>
-        <p>Agent Bridge shows the agent sessions on your machines. Sign in with the GitHub account your machines use.</p>
+        <p><span data-brand>Agent Bridge</span> shows the agent sessions on your machines. Sign in with the GitHub account your machines use.</p>
         <p id="signin-error" class="note warn" role="alert" hidden></p>
         <div class="row">
           <button type="button" id="signin-button" class="button">Sign in with GitHub</button>
@@ -135,7 +135,7 @@
         <section id="machines" class="machines-page" aria-labelledby="machines-h">
           <h2 id="machines-h" class="page-title">Machines</h2>
           <ul id="machine-list" class="machines"></ul>
-          <p id="machines-empty" class="note" hidden>No machines online. Start Agent Bridge on a machine signed in to the same GitHub account.</p>
+          <p id="machines-empty" class="note" hidden>No machines online. Start <span data-brand>Agent Bridge</span> on a machine signed in to the same GitHub account.</p>
         </section>
       </div>
 

@@ -21,6 +21,7 @@ import { TRANSFER } from '../transfer.js';
 import { Capabilities } from '../protocol.js';
 import { AttachmentLimits } from '../attachments.js';
 import { maxPlain } from '../blobs.js';
+import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { SessionOrder, SORTS, SORT_LABELS } from '../session-order.js';
 import { NeedsYouLane } from './needs-you-view.js';
 import { AppBadge } from '../needs-you.js';
@@ -855,7 +856,7 @@ export class SessionsPage {
     const held = !stale ? null : stale.reason === 'offline'
       ? `${name} is offline. Sessions can be started on it once it is back.`
       : stale.reason === 'unsupported'
-        ? `${name} doesn't support Agent Bridge sessions now, so sessions can't be started on it from here.`
+        ? `${name} ${UNSUPPORTED_SESSIONS} now, so sessions can't be started on it from here.`
         : `${name} ${stale.reason === 'confirming' ? 'is back' : 'is reconnecting'}. Sessions can be started on it once it has sent its sessions again.`;
     const base = {
       hostId: id,

@@ -38,6 +38,7 @@ import { DelegateDetail, DelegatesBlock, DelegateStrip } from './delegates-view.
 import { backgroundCounts, delegateEvents, mainVoice } from '../attribution.js';
 import { delegateOf } from '../needs-you.js';
 import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
+import { UNSUPPORTED_SESSIONS } from '../brand.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // A tool call's glyph: running turns, as working does; a finished one is done or failed.
@@ -65,7 +66,7 @@ export function staleNote(stale, machineName, what) {
   if (!stale) { return null; }
   const name = machineName || 'The machine';
   if (stale.reason === 'offline') { return `${name} is offline. This can't be ${what} from here until it is back.`; }
-  if (stale.reason === 'unsupported') { return `${name} doesn't support Agent Bridge sessions now, so this can't be ${what} from here.`; }
+  if (stale.reason === 'unsupported') { return `${name} ${UNSUPPORTED_SESSIONS} now, so this can't be ${what} from here.`; }
   const where = stale.reason === 'confirming' ? 'is back' : 'is reconnecting';
   return `${name} ${where}. This can be ${what} once it has sent its sessions again.`;
 }
