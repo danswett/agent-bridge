@@ -24,6 +24,18 @@ public static class HookCommands
         TextWriter output, TextWriter error, Func<bool> refuseWrite, CancellationToken ct = default)
     {
         var rest = args.Skip(2).ToList();
+        if (args.ElementAtOrDefault(1) == "cleanup")
+        {
+            if (rest.Count != 0 && (rest.Count != 2 || rest[0] != "--profile" || rest[1].StartsWith('-') || !Identity.IsValidProfile(rest[1])))
+            {
+                error.WriteLine("usage: agent-bridge-host hooks cleanup [--profile <name>]");
+                return 2;
+            }
+            if (refuseWrite()) { return 4; }
+            if (!OperatingSystem.IsWindows()) { error.WriteLine("Fresh hook cleanup is Windows-only for now."); return 2; }
+            var cleanupProfile = Path.Combine(profileRoot, rest.Count == 0 ? "default" : rest[1]);
+            return await CleanupAsync(cleanupProfile, homes => CreateSetup(cleanupProfile, homes), output, error, ct);
+        }
         var profile = "default";
         var at = rest.IndexOf("--profile");
         if (at >= 0)
@@ -62,12 +74,54 @@ public static class HookCommands
         {
             ClaudeConfigDirExplicit = claudeConfigDirExplicit,
         };
-        var environment = new Dictionary<string, string> { ["CODEX_HOME"] = agentHomes.Codex };
-        var setup = new StandaloneHooks(folder, agentHomes, Path.Combine(AppContext.BaseDirectory, "agent-bridge-host-hook.exe"),
+        return await RunSetupAsync(CreateSetup(folder, agentHomes), rest.Distinct(), args[1] == "install", dryRun, output, error, ct);
+    }
+
+    static StandaloneHooks CreateSetup(string folder, IntakeState.AgentHomes homes)
+    {
+        if (!OperatingSystem.IsWindows()) { throw new PlatformNotSupportedException("Fresh hook setup is Windows-only for now."); }
+        var environment = new Dictionary<string, string> { ["CODEX_HOME"] = homes.Codex };
+        return new StandaloneHooks(folder, homes, Path.Combine(AppContext.BaseDirectory, "agent-bridge-host-hook.exe"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge"),
             new AgentBridge.Host.Delivery.Windows.AgentHaBridgeProbe().Active, new AgentLocator(),
             new BatchFileRunner(new CommandRunner(environment), environment));
-        return await RunSetupAsync(setup, rest.Distinct(), args[1] == "install", dryRun, output, error, ct);
+    }
+
+    internal static async Task<int> CleanupAsync(string profile, Func<IntakeState.AgentHomes, StandaloneHooks> create,
+        TextWriter output, TextWriter error, CancellationToken ct = default)
+    {
+        try
+        {
+            var (state, problem) = IntakeState.Load(profile);
+            if (problem is not null) { throw new InvalidOperationException(problem); }
+            if (state is null)
+            {
+                output.WriteLine("No standalone hook intake is recorded; no automatic cleanup was attempted. Profile data is retained for repair.");
+                return 0;
+            }
+            if (!state.Standalone)
+            {
+                output.WriteLine("Migrated hooks were left alone; use migration status or rollback. Profile data is retained.");
+                return 0;
+            }
+            if (state.Homes is not { } homes) { throw new InvalidDataException("Standalone hook intake has no saved agent homes; inspect it before cleanup."); }
+            var setup = create(homes);
+            var agents = setup.OwnedAgents();
+            var code = 0;
+            foreach (var agent in agents)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (await RunSetupAsync(setup, [agent], false, false, output, error, ct) != 0) { code = 1; }
+            }
+            output.WriteLine(code == 0 ? "Owned hook cleanup finished. Profile data and private runtime were retained."
+                : "Owned hook cleanup is incomplete. Profile data and failed-agent ownership were retained for repair.");
+            return code;
+        }
+        catch (Exception e) when (ExpectedSetupFailure(e))
+        {
+            error.WriteLine($"Hook cleanup incomplete: {e.Message}");
+            return 1;
+        }
     }
 
     internal static async Task<int> RunSetupAsync(StandaloneHooks setup, IEnumerable<string> agents, bool install,
@@ -82,12 +136,15 @@ public static class HookCommands
             }
             return 0;
         }
-        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException or ArgumentException)
+        catch (Exception e) when (ExpectedSetupFailure(e))
         {
             error.WriteLine($"Hook setup incomplete: {e.Message}");
             return 1;
         }
     }
+
+    static bool ExpectedSetupFailure(Exception e) =>
+        e is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException or ArgumentException;
 
     public static int Status(string profileFolder, string defaultRuntime, TextWriter output, DateTimeOffset now)
     {

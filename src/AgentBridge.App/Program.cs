@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using AgentBridge.Host.Core.Usage;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Velopack;
@@ -144,14 +145,27 @@ static class Lifecycle
         catch (Exception e) { AppLog.Write($"update: the host did not start: {e.Message}"); }
     }
 
-    // Everything the app put outside its folder: the host stopped, its logon task, the app's
-    // Run entry and the toast registration. The host's profile (key, account, config) stays,
+    // Everything the app put outside its folder: owned hooks, the host stopped, its logon task,
+    // the app's Run entry and toast registration. The host's profile (key, account, config) stays,
     // like any app's data, so reinstalling picks up where it was; docs/app-windows.md.
     public static void BeforeUninstall()
     {
         if (Refused("uninstall")) { return; }
         var manager = Manager();
-        try { manager.StopAsync().Wait(TimeSpan.FromSeconds(25)); } catch (Exception e) { AppLog.Write($"uninstall: the host did not stop: {e.Message}"); }
+        // Velopack terminates this callback after 30 seconds; reserve time for registration cleanup.
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+        var stopped = false;
+        try { manager.StopAsync(stop.Token).GetAwaiter().GetResult(); stopped = true; }
+        catch (Exception e) { AppLog.Write($"uninstall: the host did not stop; hooks were left alone: {e.Message}"); }
+        if (stopped)
+        {
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            try { AppLog.Write($"uninstall: {manager.RemoveOwnedHooksAsync(new CommandRunner(), cleanup.Token).GetAwaiter().GetResult()}"); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException or OperationCanceledException)
+            {
+                AppLog.Write($"uninstall: hooks were not fully disconnected: {e.Message}");
+            }
+        }
         try { manager.SetStartAtSignIn(false); } catch (Exception e) { AppLog.Write($"uninstall: the logon task stays: {e.Message}"); }
         try { new RunKey(Paths.Exe).Set(false); } catch (Exception e) { AppLog.Write($"uninstall: the Run entry stays: {e.Message}"); }
         try { ToastActivator.Unregister(); } catch (Exception e) { AppLog.Write($"uninstall: the toast registration stays: {e.Message}"); }

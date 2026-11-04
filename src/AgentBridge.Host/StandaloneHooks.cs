@@ -32,6 +32,23 @@ public sealed class StandaloneHooks(
     };
     string InstructionBackup(string agent) => Path.Combine(HookFolder, "backups", "instructions", $"{agent}.bin");
 
+    internal IReadOnlyList<string> OwnedAgents()
+    {
+        var owned = new List<string>();
+        foreach (var agent in new[] { "copilot", "claude", "codex" })
+        {
+            var path = Path.Combine(Home(agent), OwnerFile);
+            if (!File.Exists(path)) { continue; }
+            var record = Read(path);
+            if ((int?)record["version"] != 1 || (string?)record["profile"] is not { } owner || !Path.IsPathFullyQualified(owner))
+            {
+                throw new InvalidDataException($"{path} has unrecognized ownership; inspect it before cleanup");
+            }
+            if (Same(owner, profile)) { owned.Add(agent); }
+        }
+        return owned;
+    }
+
     string Home(string agent) => agent switch
     {
         "copilot" => homes.Copilot,
