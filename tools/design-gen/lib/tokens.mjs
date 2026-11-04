@@ -286,6 +286,23 @@ export function hyperlinkTokens(tokens) {
 }
 
 // The Windows app's sizes (layout.breakpoints and layout.windows): { name, value, xaml, cs }.
+// The product's name and contact (design/tokens.json brand; docs/design/brand.md, The name): one
+// source for every client's user-facing strings, so a rename is one change here.
+export const BRAND_KEYS = ['name', 'shortName', 'supportEmail'];
+export function brand(tokens) {
+  const b = tokens.brand;
+  if (!b) { throw new Error('design/tokens.json has no brand'); }
+  for (const k of BRAND_KEYS) {
+    if (typeof b[k] !== 'string' || !b[k].trim() || b[k] !== b[k].trim()) { throw new Error(`brand.${k} must be a non-empty string without outer spaces`); }
+    // Each value is written into C#, Swift, XML and JavaScript literals as it is.
+    if (/["'\\<>&\n\r`$]/.test(b[k])) { throw new Error(`brand.${k} holds a character that would need escaping: ${b[k]}`); }
+  }
+  // The longest name a launcher, a PWA's short_name or a home-screen label shows unclipped.
+  if (b.shortName.length > 12) { throw new Error(`brand.shortName is ${b.shortName.length} characters; a home screen shows 12`); }
+  if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(b.supportEmail)) { throw new Error(`brand.supportEmail is not an address: ${b.supportEmail}`); }
+  return Object.fromEntries(BRAND_KEYS.map((k) => [k, b[k]]));
+}
+
 export function layoutSizes(tokens) {
   const out = [];
   for (const [name, v] of Object.entries(tokens.layout.breakpoints)) { out.push({ name, value: v }); }
