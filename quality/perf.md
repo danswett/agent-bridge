@@ -73,7 +73,7 @@ and 31,884 after it, inside the 40 KiB budget.
 | `NoiseTransportBenchmarks` | One transport message encrypted and one decrypted, at each upsert size |
 | `ProtocolBenchmarks` | A `session.upsert` serialized as the host sends it, and parsed as a client reads it |
 | `UpsertBuildBenchmarks` | `SessionSource.Commit`: the get and list forms fitted to the budget, and the JSON compared |
-| `SessionTrackerBenchmarks` | One session's share of a discovery pass when its transcript has not changed |
+| `SessionTrackerBenchmarks` | One session's share of a discovery pass when its transcript has not changed: a look at its size and time, nothing built (#608) |
 | `TranscriptFirstReadBenchmarks` | The first read of a 21 MB Copilot transcript: the last 4 MiB parsed, the rest skimmed |
 | `TranscriptAppendBenchmarks` | One 12 KB turn appended, then read and parsed |
 | `CopilotInputBenchmarks` | The read a reply makes before typing (#599): a 21 MB `events.jsonl` from the start (`FirstRead`, the first reply after a start before the read-ahead), against one read ahead in the background that then reads one appended turn (`ReadAhead`) |
@@ -83,10 +83,15 @@ and 31,884 after it, inside the 40 KiB budget.
 Transcript tailing and upsert building are internal to `AgentBridge.Host.Core`. They are reached
 through an `InternalsVisibleTo` granted to this assembly alone.
 
-The transcript and tracker benchmarks open a real file each time, as the host does. Real-time
-scanning makes those opens far dearer on a developer's Windows machine than on a hosted runner.
-In the first baselines, `SessionTrackerBenchmarks.Unchanged` took 331 µs locally and 49 µs on
+The transcript benchmarks open a real file each time, as the host does. Real-time scanning makes
+those opens far dearer on a developer's Windows machine than on a hosted runner. In the first
+baselines, `SessionTrackerBenchmarks.Unchanged` took 331 µs locally and 49 µs on
 `windows-latest`, so compare those two only against a baseline from the same kind of machine.
+Since #608 that benchmark opens nothing once its transcript is older than two seconds: it asks the
+file's size and time, finds them as they were, and hands back the session built last, so its
+baselines from before then are not comparable. `SourceTests` and `TailTests` assert that a pass
+with nothing changed builds, serialises and opens nothing, which `dotnet test` checks on every
+push.
 
 To run it locally (Release only; BenchmarkDotNet refuses a Debug build), from the repository's
 root, where BenchmarkDotNet looks for the project it builds each benchmark from:

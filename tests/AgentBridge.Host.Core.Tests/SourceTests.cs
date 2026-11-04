@@ -1,4 +1,5 @@
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Discovery;
 using AgentBridge.Protocol;
 using Xunit;
 
@@ -94,6 +95,54 @@ public class SourceTests
         Assert.Equal(revision, source.Revision);
         Assert.Equal(before.UpdatedAt, source.Get(Id)!.UpdatedAt);
         Assert.Equal(Fixture.T0.AddSeconds(4), before.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task A_pass_that_finds_nothing_changed_neither_builds_nor_serialises_any_session_again()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: new SessionDrivers());
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("working on it", 3));
+        await source.RefreshAsync();
+        var (builds, commits, before) = (source.Builds, source.Commits, source.Get(Id));
+
+        await source.RefreshAsync();
+        f.Time.Advance(TimeSpan.FromSeconds(1));
+        await source.RefreshAsync();
+
+        Assert.Equal((builds, commits), (source.Builds, source.Commits));
+        Assert.Same(before, source.Get(Id));
+
+        Fixture.Append(events, Copilot.Assistant("done", 4));
+        await source.RefreshAsync();
+        Assert.Equal((builds + 1, commits + 1), (source.Builds, source.Commits));
+        Assert.NotSame(before, source.Get(Id));
+    }
+
+    [Fact]
+    public void An_unchanged_session_costs_its_pass_a_look_at_its_files_and_nothing_built()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        // Long enough that building the session, which serialises it to compare, allocates far more
+        // than the bound below: the response alone is 32 KB as a string.
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant(new string('x', 16 * 1024), 3));
+        // Written well before it is looked at, as most transcripts are on most passes.
+        File.SetLastWriteTimeUtc(events, DateTime.UtcNow.AddMinutes(-5));
+        var discovered = new DiscoveredSession(Id, AgentKind.Copilot, events, Path.GetDirectoryName(events), 100);
+        var tracker = new SessionTracker(discovered, f.Options(), f.Time);
+        var built = tracker.Update(discovered);
+        tracker.Update(discovered);
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread();
+        var again = tracker.Update(discovered);
+        allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
+
+        Assert.Same(built, again);
+        Assert.Equal(1, tracker.Builds);
+        Assert.InRange(allocated, 0, 4096);
     }
 
     [Fact]

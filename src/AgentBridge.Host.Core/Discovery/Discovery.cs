@@ -236,12 +236,22 @@ internal static class CopilotDiscovery
     {
         try
         {
-            var attributes = File.GetAttributes(path);
+            // Not File.GetAttributes, which says absence by throwing: an agent never installed was
+            // two exceptions a pass, most of the host's 5 a second (#608).
+            if (Attributes(path) is not { } attributes) { return Folder.Absent; }
             if (attributes.HasFlag(FileAttributes.ReparsePoint)) { return Folder.Link; }
             return attributes.HasFlag(FileAttributes.Directory) ? Folder.Present : Folder.Unreadable;
         }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return Folder.Absent; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return Folder.Unreadable; }
+    }
+
+    // What is at a path, or null when nothing is: the OS saying the file or a folder above it is
+    // not there. Anything else it says (denied, unreadable) still throws.
+    internal static FileAttributes? Attributes(string path)
+    {
+        var attributes = new FileInfo(path).Attributes;
+        return (int)attributes == -1 ? null : attributes;
     }
 
     // The subfolders, each with whether it is a link. The attributes come with the listing.

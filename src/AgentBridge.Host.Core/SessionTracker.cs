@@ -24,6 +24,9 @@ internal sealed class SessionTracker
     DateTimeOffset? _lastUpdatedAt;
     IReadOnlyList<Subagent>? _lastSubagents;
     DateTimeOffset _firstSeen;
+    // The last session built, and the nested agents' records it was built with.
+    Session? _built;
+    IReadOnlyList<ClaudeSubagents.Record> _nested = [];
 
     public SessionTracker(DiscoveredSession discovered, SessionSourceOptions options, TimeProvider time)
     {
@@ -43,6 +46,11 @@ internal sealed class SessionTracker
 
     public Session Update(DiscoveredSession discovered)
     {
+        // What Build reads besides the clock it never consults for an unchanged session: the
+        // parsed transcript, its nested agents, discovery's view and the workspace. Every pass
+        // rebuilt and re-serialised every session, changed or not: about 35 MB/min of the host's
+        // allocation (#608).
+        var changed = _built is null || discovered != Discovered;
         Discovered = discovered;
         if (discovered.TranscriptPath is { } path)
         {
@@ -50,20 +58,34 @@ internal sealed class SessionTracker
             {
                 _tail = new TranscriptTail(path, _options);
                 _subagents = null;
+                _nested = [];
                 _parser.Reset();
+                changed = true;
             }
-            _tail.Read(_parser);
+            changed |= _tail.Read(_parser) is TailOutcome.Appended or TailOutcome.Restarted;
             // A nested Claude delegate's start and parent are written only beside the session's
             // transcript; one can exist only once a delegate of the session's does.
             if (_parser is ClaudeParser claude && _state.Background.HasAgents)
             {
                 _subagents ??= new ClaudeSubagents();
-                foreach (var record in _subagents.Read(path)) { claude.Nested(record); }
+                var nested = _subagents.Read(path);
+                foreach (var record in nested) { claude.Nested(record); }
+                if (!nested.SequenceEqual(_nested)) { (_nested, changed) = (nested, true); }
             }
         }
-        if (discovered.StateDirectory is { } dir) { RefreshWorkspace(Path.Combine(dir, "workspace.yaml")); }
-        return Settle(Build());
+        if (discovered.StateDirectory is { } dir)
+        {
+            var workspace = _workspace;
+            RefreshWorkspace(Path.Combine(dir, "workspace.yaml"));
+            changed |= !ReferenceEquals(workspace, _workspace);
+        }
+        if (!changed) { return _built!; }
+        Builds++;
+        return _built = Settle(Build());
     }
+
+    // Tests: how many times the session was built.
+    internal int Builds { get; private set; }
 
     // updatedAt moves only when something a client shows changed. An event can be of a
     // kind that usually matters (a turn starting) and still change nothing (the session

@@ -51,7 +51,12 @@ public sealed class SystemProcessInspector : IProcessInspector
     // each answer is kept against pid and start time: a pid alone is reused, and a
     // recycled one would otherwise keep answering with the dead process's session.
     readonly Dictionary<(int, long), string?> _commandLines = [];
+    // When each was last listed, by Environment.TickCount64.
+    readonly Dictionary<(int, long), long> _listed = [];
     readonly Lock _gate = new();
+    // How long a command line is kept once no scan lists its process: any agent's scan, so one
+    // agent's entries outlive another's scans, and a process listed again is read from here.
+    static readonly long ForgetAfter = (long)TimeSpan.FromMinutes(5).TotalMilliseconds;
 
     public IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent) => Scan(agent).Processes;
 
@@ -99,15 +104,17 @@ public sealed class SystemProcessInspector : IProcessInspector
 
         var (observation, kept) = Classify(agent, name, listing, listed, OperatingSystem.IsWindows(),
             id => OperatingSystem.IsWindows() && ProcessOwnership.AnotherUsers(id));
-        var live = kept.Select(p => (p.Id, p.StartedAt?.UtcTicks ?? 0)).ToHashSet();
+        var now = Environment.TickCount64;
         lock (_gate)
         {
-            // Forget processes that have gone, so a host up for days does not keep one
-            // entry per session it ever saw. Another agent's entries are kept while their
-            // process still runs.
-            foreach (var key in _commandLines.Keys.Where(k => !live.Contains(k) && !IsRunning(k.Item1)).ToList())
+            foreach (var p in kept) { _listed[(p.Id, p.StartedAt?.UtcTicks ?? 0)] = now; }
+            // Forget processes no scan has listed for a while, so a host up for days does not keep
+            // one entry per session it ever saw. Not by asking the OS whether each still runs: a
+            // gone pid answered with an exception, every pass (#608).
+            foreach (var key in _commandLines.Keys.Where(k => !_listed.TryGetValue(k, out var at) || now - at >= ForgetAfter).ToList())
             {
                 _commandLines.Remove(key);
+                _listed.Remove(key);
             }
         }
         return observation;
@@ -270,12 +277,6 @@ public sealed class SystemProcessInspector : IProcessInspector
         var parts = program.Replace('\\', '/').ToLowerInvariant().Split('/');
         if (parts.Length < 3 || parts[^1] is not ("codex" or "codex.exe" or "codex.cmd")) { return false; }
         return parts[^2] == "shims" || (parts[^2] == "bin" && parts[^3] is "volta" or ".volta");
-    }
-
-    static bool IsRunning(int pid)
-    {
-        try { using var p = Process.GetProcessById(pid); return !p.HasExited; }
-        catch (Exception e) when (e is ArgumentException or InvalidOperationException or Win32Exception) { return false; }
     }
 
     // The agent's own executable, and the runtimes a package install runs it under. Not
