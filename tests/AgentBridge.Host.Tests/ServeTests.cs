@@ -92,7 +92,7 @@ public sealed class ServeTests : IAsyncLifetime
         Assert.Equal(1, hello.GetProperty("protocol").GetInt32());
         Assert.Equal("Test host", hello.GetProperty("machine").GetProperty("name").GetString());
         Assert.Equal("windows", hello.GetProperty("machine").GetProperty("os").GetString());
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch], hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
     }
 
     [Fact]

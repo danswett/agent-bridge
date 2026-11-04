@@ -118,13 +118,16 @@ public sealed class SessionService
         switch (op)
         {
             case Ops.Hello:
-                // Computed for each hello, so it says what is true now: agent-ha-bridge
-                // starting for this user takes sessions.answer and sessions.reply away until
-                // it stops. Now is at most SharedAgentHaBridgeProbe.Keep old: what acts on it
-                // looks again first.
-                using (G5?.Hold())
                 {
-                    return new HelloResult(1, machine with { Sessions = source.Snapshot().Count, ReadOnly = ReadOnly?.Invoke() }, Offered(channel));
+                    // Computed for each hello, so it says what is true now: agent-ha-bridge
+                    // starting for this user takes sessions.answer and sessions.reply away until
+                    // it stops.
+                    var hello = HelloFor(channel);
+                    if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("changes", out var changes) && changes.ValueKind == JsonValueKind.True)
+                    {
+                        WatchHello(channel, hello);
+                    }
+                    return hello;
                 }
             case Ops.SessionAnswer:
                 return await AnswerAsync(channel, data);
@@ -266,9 +269,101 @@ public sealed class SessionService
         return result;
     }
 
+    // Now is at most SharedAgentHaBridgeProbe.Keep old: what acts on it looks again first.
+    HelloResult HelloFor(IProtocolChannel channel)
+    {
+        using (G5?.Hold())
+        {
+            return new(1, machine with { Sessions = source.Snapshot().Count, ReadOnly = ReadOnly?.Invoke() }, Offered(channel));
+        }
+    }
+
+    // ---- hello.changed: what hello would say, told to the channels that asked, when it changes ----
+    //
+    // Apps asked hello again every 10 s on every connection, to see agent-ha-bridge start or stop
+    // (G5) or an update be offered: ~36 hellos a minute at a host from other machines' apps (#640).
+    // Now one host timer looks for them, and a channel hears only of a change.
+
+    // How often the channels that asked are looked at again. As often as apps asked before, so a
+    // change is heard as soon as it was, and a look costs no more than one of their hellos did.
+    public TimeSpan HelloCheck { get; init; } = TimeSpan.FromSeconds(10);
+
+    // What each channel that asked was last told: its readOnly and capabilities.
+    readonly ConcurrentDictionary<IProtocolChannel, HelloWatch> helloWatches = new();
+    readonly Lock helloGate = new();
+    ITimer? helloTimer;
+    int checkingHellos;
+
+    sealed class HelloWatch
+    {
+        public string Said = "";
+    }
+
+    // Only what a client acts on; machine.sessions changes all the time and is not a change here.
+    static string Said(string? readOnly, IEnumerable<string> offered) => (readOnly ?? "") + "\n" + string.Join("\n", offered);
+
+    void WatchHello(IProtocolChannel channel, HelloResult hello)
+    {
+        var watch = helloWatches.GetOrAdd(channel, c =>
+        {
+            _ = c.Closed.ContinueWith(closed => helloWatches.TryRemove(c, out _), TaskScheduler.Default);
+            return new HelloWatch();
+        });
+        lock (watch) { watch.Said = Said(hello.Machine.ReadOnly, hello.Capabilities); }
+        lock (helloGate) { helloTimer ??= Time.CreateTimer(_ => CheckHellos(), null, HelloCheck, HelloCheck); }
+    }
+
+    void CheckHellos()
+    {
+        // A slow look is not run again over itself.
+        if (Interlocked.Exchange(ref checkingHellos, 1) == 1) { return; }
+        try
+        {
+            // One G5 look for every channel at this tick, not one each.
+            using var once = G5?.Hold();
+            foreach (var (channel, watch) in helloWatches)
+            {
+                if (!channel.IsOpen)
+                {
+                    helloWatches.TryRemove(channel, out _);
+                    continue;
+                }
+                // Not HelloFor: a look needs no copy of the session list, only what Said compares.
+                var said = Said(ReadOnly?.Invoke(), Offered(channel));
+                lock (watch)
+                {
+                    if (said == watch.Said) { continue; }
+                    watch.Said = said;
+                }
+                _ = TellAsync(channel);
+            }
+            // Nobody left to tell: the timer goes until a hello asks again.
+            lock (helloGate)
+            {
+                if (helloWatches.IsEmpty && helloTimer is { } timer)
+                {
+                    timer.Dispose();
+                    helloTimer = null;
+                }
+            }
+        }
+        catch (Exception e) when (e is not OutOfMemoryException) { log($"could not look at what hello says: {e.Message}"); }
+        finally { Volatile.Write(ref checkingHellos, 0); }
+    }
+
+    // Only that it changed: the client asks hello again. What a channel's hello says is shaped
+    // after this service, by the caller's role (RemoteAuthorization) and kind (LocalApi), so the
+    // result built here is not what that channel may be told.
+    async Task TellAsync(IProtocolChannel channel)
+    {
+        try { await channel.SendEventAsync(Events.HelloChanged, new { }); }
+        // The channel has gone: Closed removes its watch.
+        catch (Exception e) when (e is IOException or ObjectDisposedException or InvalidOperationException or OperationCanceledException) { }
+    }
+
     List<string> Offered(IProtocolChannel channel)
     {
-        List<string> offered = [Capabilities.SessionsRead, Capabilities.SessionsPatch];
+        List<string> offered = [Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged];
         if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }
         if (answers?.ApprovesPermissions == true) { offered.Add(Capabilities.SessionsApprove); }
         if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }
