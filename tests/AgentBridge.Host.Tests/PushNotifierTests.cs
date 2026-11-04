@@ -64,7 +64,7 @@ public sealed class PushNotifierTests : IDisposable
 
     PushPeer Peer(string device, string account = Account, bool inAccount = true) => new(device, device == Phone ? "iPhone" : "Laptop", account, inAccount);
 
-    object? Subscribe(string device, string? endpoint = null, PushPeer? peer = null)
+    object? Subscribe(string device, string? endpoint = null, PushPeer? peer = null, string? name = null)
     {
         if (!browsers.TryGetValue(device, out var b)) { browsers[device] = b = (P256KeyPair.Generate(), System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)); }
         var data = JsonSerializer.SerializeToElement(new
@@ -72,7 +72,7 @@ public sealed class PushNotifierTests : IDisposable
             endpoint = endpoint ?? $"https://web.push.apple.com/{device}",
             keys = new { p256dh = B64Url.Encode(b.Key.Public), auth = B64Url.Encode(b.Auth) },
             app = "https://danswett.github.io/agent-bridge/app/",
-            device = device == Phone ? "iPhone" : "Laptop",
+            device = name ?? (device == Phone ? "iPhone" : "Laptop"),
         });
         return notifier.Handle(peer ?? Peer(device), Ops.PushSubscribe, data);
     }
@@ -760,6 +760,20 @@ public sealed class PushNotifierTests : IDisposable
         // The same browser endpoint registered by a new device key (the app was reinstalled).
         Subscribe(Laptop, endpoint: "https://web.push.apple.com/renewed");
         Assert.Equal(Laptop, Assert.Single(store.All).Device);
+    }
+
+    // The rebrand (#538) changes the name a device registers with ("iPhone · Agent Bridge" becomes
+    // "iPhone · Slipgates") on every installed app's next registration: it must stay the same
+    // device with its one subscription, not a second one or a new device to approve.
+    [Fact]
+    public void A_device_registering_again_under_a_new_name_keeps_its_one_subscription_with_the_new_name()
+    {
+        Start();
+        Subscribe(Phone, name: "iPhone · Agent Bridge");
+        var before = Assert.Single(store.All);
+        Subscribe(Phone, name: "iPhone · Slipgates");
+        var after = Assert.Single(store.All);
+        Assert.Equal((Phone, before.Endpoint, before.P256dh, "iPhone · Slipgates"), (after.Device, after.Endpoint, after.P256dh, after.Name));
     }
 
     RemoteAuthorization Enforce(P256KeyPair host, P256KeyPair person)

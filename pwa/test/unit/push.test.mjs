@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PushRegistrar, base64UrlToBytes, closeNotices, closeStaleNotices, fetchVapidKey, noticeTag, pushSupport } from '../../js/push.js';
 import { SessionsStore } from '../../js/sessions-store.js';
+import { deviceName } from '../../js/identity.js';
+import { BRAND } from '../../js/brand.js';
 
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1';
 const IPAD_AS_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15';
@@ -313,4 +315,24 @@ test('a machine\'s question notifications stay when its list stops being current
   const lookup = async () => { store.clear(); current = false; return shown; };
   await closeStaleNotices({ getNotifications: lookup }, 'm1', store, () => current);
   assert.equal(shown[0].closed, false);
+});
+
+test('an app updated to the new name keeps notifications on and its browser subscription, and registers the same endpoint under the new device name', async () => {
+  const win = browser({ ua: IPHONE, standalone: true, permission: 'granted' });
+  const pm = pushManager();
+  const store = storage();
+  const app = (device) => new PushRegistrar({
+    win, storage: store, registration: async () => ({ pushManager: pm }), fetchKey: async () => base64UrlToBytes(KEY),
+    appUrl: 'https://danswett.github.io/agent-bridge/app/', device,
+  });
+  // Before the update, under the old name.
+  await app('iPhone · Agent Bridge').enable();
+  // After it: the same browser, storage and subscription, with the name the app now gives.
+  const updated = app(deviceName(IPHONE));
+  assert.equal(updated.enabled, true, 'still on, without asking again');
+  const host = client();
+  assert.equal(await updated.register(host, host.capabilities), true);
+  assert.equal(pm.subscribed.length, 1, 'no second browser subscription');
+  assert.deepEqual(host.requests.map((q) => [q.op, q.data.endpoint, q.data.device]),
+    [['push.subscribe', 'https://web.push.apple.com/sub-1', `iPhone · ${BRAND.name}`]]);
 });
