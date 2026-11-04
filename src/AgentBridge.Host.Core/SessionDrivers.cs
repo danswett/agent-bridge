@@ -107,6 +107,9 @@ public sealed partial class SessionDriver
     // that starts with them is the agent's. A prompt the person typed while it was on its way, read
     // in the same refresh, is then theirs rather than taken for the agent's.
     string? expected;
+    // An arm whose words are still to come (a press of Send, before the box is read): until they
+    // are known, no prompt is taken for the agent's, so one the person typed meanwhile stays theirs.
+    bool wordsToCome;
     // The transcript's prompt count at the last look: more than one new prompt in one read, and which
     // of them an arm was for cannot be told, so none is taken for the agent's.
     int? lastPrompts;
@@ -114,9 +117,12 @@ public sealed partial class SessionDriver
     // is for that turn alone. The opening turn may be here already (the session registered before
     // its launch was reported), so it is looked for as well as waited for; the turn after it is
     // whoever's it is. Without a prompt there is no opening turn, and the arm waits for the first,
-    // as a press's does.
+    // as a press's does. A resume already shows a prompt from before the launch, possibly the
+    // person's in the very words the launch sends: the one shown when the arm was set is never the
+    // launch's, and the arm waits for the next.
     string? openingPrompt;
     bool openingResumed;
+    string? openingSeen;
     long generation;
 
     internal SessionDriver(SessionDrivers owner, string id)
@@ -153,20 +159,24 @@ public sealed partial class SessionDriver
         get { lock (gate) { return agentPrompt is not null && agentPrompt == lastMessage; } }
     }
 
-    // A reply or a press of Send: shown at once, and armed for the prompt it is.
-    public void ArmDriver(string by, DateTimeOffset now, string? agentPrincipal = null) => Apply(by, now, agentPrincipal, null, false, null);
+    // A reply or a press of Send: shown at once, and armed for the prompt it is. With its words,
+    // where they are known, in the same step: a refresh between the two would find the arm with
+    // nothing to compare against. wordsToCome: they will be known later (Expect).
+    public void ArmDriver(string by, DateTimeOffset now, string? agentPrincipal = null, string? words = null, bool wordsToCome = false) =>
+        Apply(by, now, agentPrincipal, null, false, words, wordsToCome, null);
 
     // The whole launch, opening turn included, before anyone hears of it: a source told first
-    // would observe an opening turn already here without spending the arm on it.
+    // would observe an opening turn already here without spending the arm on it. Its words are
+    // what any prompt must be to be the launch's, the opening turn or the next.
     public void ArmLaunch(DateTimeOffset at, string? prompt, bool resumed, string? agentPrincipal = null) =>
-        Apply(SessionDrivers.Agent, at, agentPrincipal, prompt is { Length: > 0 } ? Collapse(prompt) : null, resumed, null);
+        Apply(SessionDrivers.Agent, at, agentPrincipal, prompt is { Length: > 0 } ? Collapse(prompt) : null, resumed, prompt, false, null);
 
     // An answer continues the turn it was asked in: that turn is the answerer's from now on, and
     // nothing is left armed, so the next prompt is whoever's it is. An arm left for the next prompt
     // would wear the agent's edge onto the person's own prompt typed at the machine.
-    public void Answered(string by, string? agentPrincipal = null) => Apply(by, null, agentPrincipal, null, false, null);
+    public void Answered(string by, string? agentPrincipal = null) => Apply(by, null, agentPrincipal, null, false, null, false, null);
 
-    internal void ApplyIf(string by, DateTimeOffset? pending, long generation) => Apply(by, pending, null, null, false, generation);
+    internal void ApplyIf(string by, DateTimeOffset? pending, long generation) => Apply(by, pending, null, null, false, null, false, generation);
 
     // The words the reply armed for is being sent with, once they are known (a press of Send arms
     // before the box is read). For the arm pending now; a later arm forgets them.
@@ -174,23 +184,25 @@ public sealed partial class SessionDriver
     {
         lock (gate)
         {
-            if (pendingAt is not null && Collapse(text) is { Length: > 0 } said) { expected = said; }
+            if ((pendingAt is not null || wordsToCome) && Collapse(text) is { Length: > 0 } said) { (expected, wordsToCome) = (said, false); }
         }
     }
 
-    void Apply(string by, DateTimeOffset? pending, string? agentPrincipal, string? opening, bool resumed, long? onlyAt)
+    void Apply(string by, DateTimeOffset? pending, string? agentPrincipal, string? opening, bool resumed, string? words, bool toCome, long? onlyAt)
     {
         bool changed;
         lock (gate)
         {
             if (onlyAt is { } g && generation != g) { return; }
             var before = ShownLocked();
-            expected = null;
+            expected = words is null ? null : Collapse(words) is { Length: > 0 } said ? said : null;
+            wordsToCome = toCome && expected is null;
             driver = by;
             principal = by == SessionDrivers.Agent ? agentPrincipal : null;
             pendingAt = pending;
             openingPrompt = opening;
             openingResumed = resumed;
+            openingSeen = resumed ? lastMessage : null;
             generation++;
             changed = before != ShownLocked();
         }
@@ -198,9 +210,9 @@ public sealed partial class SessionDriver
     }
 
     // The driver and its arm as they are, to be put back when an arm turns out to be for nothing.
-    public readonly record struct Saved(string Driver, string? Principal, DateTimeOffset? Pending, string? Expected = null);
+    public readonly record struct Saved(string Driver, string? Principal, DateTimeOffset? Pending, string? Expected = null, bool WordsToCome = false);
 
-    public Saved Save() { lock (gate) { return new Saved(driver, principal, pendingAt, expected); } }
+    public Saved Save() { lock (gate) { return new Saved(driver, principal, pendingAt, expected, wordsToCome); } }
 
     public void Restore(Saved saved)
     {
@@ -208,7 +220,7 @@ public sealed partial class SessionDriver
         lock (gate)
         {
             var before = ShownLocked();
-            (driver, principal, pendingAt, expected) = (saved.Driver, saved.Principal, saved.Pending, saved.Expected);
+            (driver, principal, pendingAt, expected, wordsToCome) = (saved.Driver, saved.Principal, saved.Pending, saved.Expected, saved.WordsToCome);
             generation++;
             changed = before != ShownLocked();
         }
@@ -255,7 +267,7 @@ public sealed partial class SessionDriver
                 awaitingAgentPrompt = driver == SessionDrivers.Agent;
                 pendingAt = null;
             }
-            else if (openingPrompt is { } opening)
+            else if (openingPrompt is { } opening && !(openingResumed && openingSeen is not null && Prompt(full, prompt) == openingSeen))
             {
                 var message = full.Activity.UserMessage is { } m ? Collapse(m) : "";
                 var head = opening[..Math.Min(80, opening.Length)];
@@ -313,7 +325,7 @@ public sealed partial class SessionDriver
     }
 
     // Whether the prompt shown is the one the arm expected, when it knows what to expect.
-    bool Sent(Session full) => expected is null || Matches(expected, full.Activity.UserMessage);
+    bool Sent(Session full) => expected is null ? !wordsToCome : Matches(expected, full.Activity.UserMessage);
 
     // Whether a prompt shown is these words: exactly, or after the attachments delivery puts before
     // them ("@<path>" mentions, Codex's "[Image #n]" placeholders, which it runs together). Or,

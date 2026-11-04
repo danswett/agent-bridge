@@ -319,8 +319,7 @@ public sealed partial class HaConnector
         // same publish again rather than finding it used with nothing done.
         if (usable)
         {
-            p.ArmDriver(attributes && Str(a, "driver") == "agent" ? "agent" : "human", time.GetUtcNow());
-            p.Drive.Expect(text);
+            p.ArmDriver(attributes && Str(a, "driver") == "agent" ? "agent" : "human", time.GetUtcNow(), words: text);
         }
         if (!usable || images.Count + files.Count != requested)
         {
@@ -382,7 +381,7 @@ public sealed partial class HaConnector
         var first = press.Value != p.Reply.PendingPress;
         // The arm as it was before this press, which arming for it replaces.
         var before = p.Drive.Save();
-        if (first) { p.ArmDriver(DriverOf(press.Snapshot?.UserId), now, PrincipalOf(press.Snapshot?.UserId)); }
+        if (first) { p.ArmDriver(DriverOf(press.Snapshot?.UserId), now, PrincipalOf(press.Snapshot?.UserId), wordsToCome: true); }
         var box = await ObserveAsync(SessionEntities.Reply(p.Node), ct);
         if (box.Kind == "unknown" && box.Snapshot is null) { return; }
         // The tap on Send is what commits the box, so the press usually arrives first: give its
@@ -430,8 +429,8 @@ public sealed partial class HaConnector
         var text = box.Value;
         // A press that waited for its words is armed again now: something else (an agent's
         // publish, say) may have armed the next turn meanwhile, and these words are the press's.
-        if (!first) { p.ArmDriver(DriverOf(press.Snapshot?.UserId), now, PrincipalOf(press.Snapshot?.UserId)); }
-        if (text is { } words) { p.Drive.Expect(words); }
+        if (!first) { p.ArmDriver(DriverOf(press.Snapshot?.UserId), now, PrincipalOf(press.Snapshot?.UserId), words: text); }
+        else if (text is { } words) { p.Drive.Expect(words); }
         await TransientAsync(p, "Sending...", [], ct);
         p.Reply.HandledPress = press.Value;
         p.Reply.PendingPress = null;

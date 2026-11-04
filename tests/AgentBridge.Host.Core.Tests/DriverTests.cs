@@ -465,6 +465,60 @@ public class DriverTests
         Assert.False(d.PromptIsAgents);
     }
 
+    // A press of Send arms before the box is read: a prompt read before its words are known is not
+    // taken for the agent's. Words known at the arm are part of it from the start.
+    [Fact]
+    public void A_prompt_read_before_an_agents_reply_words_are_known_stays_the_persons()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        d.Observe(At(1, SessionStatus.Idle, "go"), Fixture.T0, drivers.Arm);
+        d.ArmDriver(SessionDrivers.Agent, Fixture.T0, Principal, wordsToCome: true);
+
+        d.Observe(At(1, SessionStatus.Working, "mine, typed meanwhile"), Fixture.T0, drivers.Arm);
+        d.Expect("the agent's words");
+        Assert.False(d.PromptIsAgents);
+
+        var e = new SessionDrivers().For(Id);
+        e.Observe(At(1, SessionStatus.Idle, "go"), Fixture.T0, drivers.Arm);
+        e.ArmDriver(SessionDrivers.Agent, Fixture.T0, Principal, words: "the agent's words");
+        e.Observe(At(1, SessionStatus.Working, "mine, typed meanwhile"), Fixture.T0, drivers.Arm);
+        Assert.False(e.PromptIsAgents);
+    }
+
+    // A launch into a session already seen: the turn after it is the launch's only in its words.
+    [Fact]
+    public void A_prompt_after_a_launch_into_a_session_already_seen_is_the_launchs_only_in_its_words()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        d.Observe(At(1, SessionStatus.Idle, "go"), Fixture.T0, drivers.Arm);
+        d.ArmLaunch(Fixture.T0, "Fix the build", resumed: true, Principal);
+
+        d.Observe(At(1, SessionStatus.Working, "something else"), Fixture.T0, drivers.Arm);
+
+        Assert.False(d.PromptIsAgents);
+    }
+
+    // A resume in the very words of the person's last prompt: that prompt, already shown, stays
+    // theirs, and the arm waits for the launch's own.
+    [Fact]
+    public void A_resume_in_the_words_of_the_persons_last_prompt_leaves_it_theirs_and_takes_the_next()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        var persons = At(1, SessionStatus.Idle, "Fix the build");
+        d.Observe(persons, Fixture.T0, drivers.Arm, "k1\nFix the build", 1);
+        d.ArmLaunch(Fixture.T0, "Fix the build", resumed: true, Principal);
+
+        d.Observe(persons, Fixture.T0, drivers.Arm, "k1\nFix the build", 1);
+        Assert.False(d.PromptIsAgents);
+        Assert.NotNull(d.PendingAt);
+
+        d.Observe(At(1, SessionStatus.Working, "Fix the build"), Fixture.T0, drivers.Arm, "k2\nFix the build", 2);
+        Assert.True(d.PromptIsAgents);
+    }
+
     [Fact]
     public async Task A_persons_prompt_an_agent_then_answered_a_question_in_stays_the_persons()
     {
