@@ -72,32 +72,43 @@ static class MergeRuleCommand
               Markdown table to FILE. A dry run (no --post) changes nothing.
         """;
 
-    const string PullRequestFields = """
+    // A head's checks cost most of the query, so the list of open pull requests reads without them,
+    // and a pull request is read again with them only when its other facts don't already fail it.
+    // That keeps a run within GITHUB_TOKEN's GraphQL budget however often it's triggered. Both
+    // connections report their totals, so a list cut short fails rather than passes.
+    const string ChecksFields = """
+            checkSuites(last: 80) { totalCount nodes {
+              app { slug }
+              workflowRun { databaseId event workflow { name } }
+              status conclusion
+              checkRuns(last: 60) { totalCount nodes { databaseId name status conclusion } }
+            } }
+        """;
+
+    static string Fragment(bool checks) => """
         fragment pr on PullRequest {
           number state isDraft baseRefName headRefOid changedFiles
-          labels(first: 50) { nodes { name } }
+          labels(first: 100) { totalCount nodes { name } }
           files(first: 100) { pageInfo { hasNextPage } nodes { path changeType } }
           reviews(last: 100) { nodes { author { __typename login } state commit { oid } } }
           commits(last: 1) { nodes { commit {
             oid
             status { contexts { context state description createdAt creator { login } } }
-            checkSuites(last: 50) { nodes {
-              app { slug }
-              workflowRun { databaseId event workflow { name } }
-              status conclusion
-              checkRuns(last: 60) { nodes { databaseId name status conclusion } }
-            } }
+        """ + (checks ? ChecksFields : "") + """
+
           } } }
         }
         """;
 
-    static readonly string OneQuery = PullRequestFields + """
+    static string OneQuery(bool checks) => Fragment(checks) + """
+
         query($owner: String!, $name: String!, $number: Int!) {
           repository(owner: $owner, name: $name) { pullRequest(number: $number) { ...pr } }
         }
         """;
 
-    static readonly string OpenQuery = PullRequestFields + """
+    static readonly string OpenQuery = Fragment(checks: false) + """
+
         query($owner: String!, $name: String!, $base: String!, $cursor: String) {
           repository(owner: $owner, name: $name) {
             pullRequests(states: OPEN, baseRefName: $base, first: 25, after: $cursor, orderBy: { field: CREATED_AT, direction: ASC }) {
@@ -128,7 +139,7 @@ static class MergeRuleCommand
         {
             if (!int.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out var n))
                 throw new ArgumentException($"--pr {number} is not a pull request number.");
-            var one = FetchOne(github, config, slug, n);
+            var one = FetchOne(github, config, slug, n, checks: false);
             if (MergeRule.Evaluate(config, one) is null)
             {
                 output.WriteLine($"#{one.Number}: not judged ({one.State.ToLowerInvariant()}, into {one.BaseRef}).");
@@ -143,6 +154,7 @@ static class MergeRuleCommand
             if (options.TryGetValue("sha", out var sha))
                 prs = prs.Where(p => SameSha(p.HeadSha, sha)).ToList();
         }
+        prs = prs.Select(p => WithChecks(github, config, slug, p)).ToList();
 
         var rows = new List<string>();
         var failedPosts = 0;
@@ -159,7 +171,8 @@ static class MergeRuleCommand
                 // have landed since. So read each pull request again just before posting, rather
                 // than overwrite a newer verdict with a stale one. One that has moved to another
                 // head is that head's business: its push starts a run of its own.
-                members = members.Select(p => FetchOne(github, config, slug, p.Number)).Where(p => SameSha(p.HeadSha, head.Key)).ToList();
+                members = members.Select(p => WithChecks(github, config, slug, FetchOne(github, config, slug, p.Number, checks: false)))
+                    .Where(p => SameSha(p.HeadSha, head.Key)).ToList();
                 judged = Judge(config, members);
                 if (judged.Count == 0)
                     continue;
@@ -231,15 +244,22 @@ static class MergeRuleCommand
         && current.Creator == MergeRule.Poster
         && current.State == verdict.State && current.Description == verdict.Description;
 
-    static PullRequestFacts FetchOne(IGitHub github, MergeRuleConfig config, string slug, int number)
+    static PullRequestFacts FetchOne(IGitHub github, MergeRuleConfig config, string slug, int number, bool checks)
     {
         var (owner, name) = Split(slug);
-        using var doc = github.GraphQL(OneQuery, new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["number"] = number });
+        using var doc = github.GraphQL(OneQuery(checks), new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["number"] = number });
         var node = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest");
         if (node.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException($"{slug} has no pull request #{number}.");
         return Complete(github, config, slug, ParseFacts(node, config));
     }
+
+    /// <summary>
+    /// The pull request read without its checks, unless its other facts don't already fail it:
+    /// then read again with them, since only failure is decided without them.
+    /// </summary>
+    static PullRequestFacts WithChecks(IGitHub github, MergeRuleConfig config, string slug, PullRequestFacts light) =>
+        MergeRule.Evaluate(config, light) is { State: "failure" } ? light : FetchOne(github, config, slug, light.Number, checks: true);
 
     static List<PullRequestFacts> FetchOpen(IGitHub github, MergeRuleConfig config, string slug)
     {
@@ -336,6 +356,7 @@ static class MergeRuleCommand
         var statuses = new List<StatusFact>();
         var checks = new List<CheckFact>();
         RunFact? run = null, codeScanning = null;
+        var checksRead = false;
         var commits = pr.GetProperty("commits").GetProperty("nodes").EnumerateArray().ToList();
         // The last commit is the head, unless the head moved between GraphQL's reads; then judge
         // nothing on it rather than another commit's statuses and checks.
@@ -350,7 +371,10 @@ static class MergeRuleCommand
                         Login(s.GetProperty("creator")),
                         DateTimeOffset.Parse(s.GetProperty("createdAt").GetString()!, CultureInfo.InvariantCulture)))
                     .ToList();
-            (run, codeScanning, checks) = ReadChecks(commit.GetProperty("checkSuites").GetProperty("nodes"), config);
+            // Read without its checks (the open list), a pull request is judged on its other facts only.
+            checksRead = commit.TryGetProperty("checkSuites", out var suites);
+            if (checksRead)
+                (run, codeScanning, checks) = ReadChecks(suites, config);
             // Every other status counts like a check; merge-rule is this verdict, and the receipt
             // is judged on its own terms above.
             checks.AddRange(statuses
@@ -358,20 +382,21 @@ static class MergeRuleCommand
                 .Select(s => new CheckFact(s.Context, s.State switch { "success" => "success", "pending" or "expected" => "pending", _ => "failure" }, s.State)));
         }
 
+        var labels = pr.GetProperty("labels").GetProperty("nodes").EnumerateArray().Select(l => l.GetProperty("name").GetString() ?? "").ToList();
         var facts = new PullRequestFacts(
             pr.GetProperty("number").GetInt32(),
             pr.GetProperty("state").GetString() ?? "",
             pr.GetProperty("isDraft").GetBoolean(),
             pr.GetProperty("baseRefName").GetString() ?? "",
             head,
-            pr.GetProperty("labels").GetProperty("nodes").EnumerateArray().Select(l => l.GetProperty("name").GetString() ?? "").ToList(),
+            labels,
             files,
             FilesComplete: files.Count >= changed,
             reviews,
             statuses,
             run,
             codeScanning)
-        { Checks = checks };
+        { Checks = checks, ChecksRead = checksRead, LabelsComplete = !Truncated(pr.GetProperty("labels"), labels.Count) };
         return (facts, needsRest, changed);
     }
 
@@ -382,8 +407,9 @@ static class MergeRuleCommand
     /// rule's own workflows are left out (they're running while it judges), and CodeQL's workflow
     /// and code scanning's check are read apart, for their own messages.
     /// </summary>
-    static (RunFact? CodeQlRun, RunFact? CodeQlCheck, List<CheckFact> Checks) ReadChecks(JsonElement suites, MergeRuleConfig config)
+    static (RunFact? CodeQlRun, RunFact? CodeQlCheck, List<CheckFact> Checks) ReadChecks(JsonElement connection, MergeRuleConfig config)
     {
+        var suites = connection.GetProperty("nodes");
         RunFact? codeqlRun = null, codeqlCheck = null;
         long codeqlRunId = -1, codeqlCheckId = -1;
         var latestRun = new Dictionary<string, (long Id, JsonElement Suite)>(StringComparer.Ordinal);
@@ -412,6 +438,8 @@ static class MergeRuleCommand
                     latestRun[workflow] = (id, suite);
                 continue;
             }
+            if (Truncated(suite.GetProperty("checkRuns"), suite.GetProperty("checkRuns").GetProperty("nodes").GetArrayLength()))
+                otherApps[slug + "/"] = (long.MaxValue, new CheckFact(slug, "failure", "more checks than the rule reads"));
             foreach (var cr in suite.GetProperty("checkRuns").GetProperty("nodes").EnumerateArray())
             {
                 var id = cr.GetProperty("databaseId").GetInt64();
@@ -433,9 +461,20 @@ static class MergeRuleCommand
             }
         }
         var checks = new List<CheckFact>();
+        if (Truncated(connection, suites.GetArrayLength()))
+            checks.Add(new CheckFact("the head's checks", "failure", "more than the rule reads"));
         foreach (var (_, suite) in latestRun.Values)
         {
+            var workflow = suite.GetProperty("workflowRun").GetProperty("workflow").GetProperty("name").GetString() ?? "";
+            var status = suite.GetProperty("status").GetString();
+            var conclusion = suite.GetProperty("conclusion").GetString();
             var runs = suite.GetProperty("checkRuns").GetProperty("nodes").EnumerateArray().ToList();
+            if (Truncated(suite.GetProperty("checkRuns"), runs.Count))
+                checks.Add(new CheckFact(workflow, "failure", "more jobs than the rule reads"));
+            // A run still going is pending even when every job so far passed: a later job (one
+            // that needs the others) hasn't started yet.
+            if (status != "COMPLETED")
+                checks.Add(new CheckFact(workflow, "pending", status?.ToLowerInvariant()));
             if (runs.Count > 0)
             {
                 checks.AddRange(runs
@@ -443,20 +482,19 @@ static class MergeRuleCommand
                     .Select(g => Classify(g.Key, g.MaxBy(cr => cr.GetProperty("databaseId").GetInt64()))));
                 continue;
             }
-            // A run with no jobs yet is still to come; one that ended before any job (a workflow
-            // file that doesn't parse: startup_failure) failed. Not action_required: a run waiting
-            // for approval, as the review relay's do when Copilot's review starts them.
-            var workflow = suite.GetProperty("workflowRun").GetProperty("workflow").GetProperty("name").GetString() ?? "";
-            var status = suite.GetProperty("status").GetString();
-            var conclusion = suite.GetProperty("conclusion").GetString();
-            if (status != "COMPLETED")
-                checks.Add(new CheckFact(workflow, "pending", status?.ToLowerInvariant()));
-            else if (conclusion is "STARTUP_FAILURE" or "FAILURE" or "TIMED_OUT" or "CANCELLED")
+            // A run that ended before any job (a workflow file that doesn't parse:
+            // startup_failure) failed. Not action_required: a run waiting for approval, as the
+            // review relay's do when Copilot's review starts them.
+            if (status == "COMPLETED" && conclusion is "STARTUP_FAILURE" or "FAILURE" or "TIMED_OUT" or "CANCELLED")
                 checks.Add(new CheckFact(workflow, "failure", conclusion.ToLowerInvariant()));
         }
         checks.AddRange(otherApps.Values.Select(v => v.Check));
         return (codeqlRun, codeqlCheck, checks);
     }
+
+    // A connection cut short (more nodes than the query asked for) could hide a failure.
+    static bool Truncated(JsonElement connection, int read) =>
+        connection.TryGetProperty("totalCount", out var total) && total.GetInt32() > read;
 
     // GitHub's own rule: success, skipped and neutral pass; anything still to finish is pending;
     // every other end (failure, cancelled, timed out, action required, stale...) fails.

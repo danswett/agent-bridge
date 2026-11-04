@@ -74,6 +74,8 @@ sensitive_paths:
   - src/AgentBridge.Host/CallerGuard.cs
   - src/AgentBridge.Host/LocalApi.cs
   - src/AgentBridge.Host/SessionService.cs
+  - src/AgentBridge.Host/SessionTransfers.cs
+  - src/AgentBridge.Host/Program.cs # builds the remote-authorization policy
   - src/AgentBridge.Host.Delivery/**
   - tools/AgentBridge.RelaySmoke/**
   - pwa/js/host-client.js

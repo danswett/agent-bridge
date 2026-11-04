@@ -88,6 +88,12 @@ sealed record PullRequestFacts(
 {
     /// <summary>Every other check run and status on the head (MergeRuleCommand.ReadChecks says which count).</summary>
     public IReadOnlyList<CheckFact> Checks { get; init; } = [];
+
+    /// <summary>False when read without the head's checks, which can then only fail it, never pass it.</summary>
+    public bool ChecksRead { get; init; } = true;
+
+    /// <summary>False when the pull request has more labels than were read: a hold could be among the rest.</summary>
+    public bool LabelsComplete { get; init; } = true;
 }
 
 /// <summary>The `merge-rule` status to post: success, pending or failure, and why.</summary>
@@ -130,6 +136,8 @@ static class MergeRule
             failures.Add("draft: mark it ready for review");
         foreach (var label in pr.Labels.Where(l => config.HoldLabels.Contains(l, StringComparer.OrdinalIgnoreCase)))
             failures.Add($"held by the label '{label}'");
+        if (!pr.LabelsComplete)
+            failures.Add("it has more labels than the rule reads, so a hold label could be hidden");
 
         var copilot = pr.Reviews.Any(r => r.IsBot
             && string.Equals(r.Author, config.CopilotReviewer, StringComparison.Ordinal)
@@ -156,9 +164,16 @@ static class MergeRule
             failures.Add($"needs an independent review of {sha}: {what}");
         }
 
+        // Read without its checks, a pull request is judged on the rest alone, which can fail it
+        // but never pass it: the caller reads the checks whenever this isn't already a failure.
+        if (!pr.ChecksRead)
+        {
+            if (failures.Count == 0)
+                pending.Add($"its checks on {sha} aren't read yet");
+        }
         // Pending, since CodeQL starts with the push; but a pull request retargeted onto main gets
         // no run until a push or a reopen (codeql.yml's types), so the description says so.
-        if (pr.CodeQlRun is null)
+        else if (pr.CodeQlRun is null)
             pending.Add($"no {config.Codeql.Workflow} run on {sha} yet (after a retarget, push or reopen)");
         else if (pr.CodeQlRun.Status != "COMPLETED")
             pending.Add($"{config.Codeql.Workflow} is running on {sha}");

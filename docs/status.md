@@ -413,6 +413,11 @@ agent-ha-bridge releases from this work:
   them from agent sessions); production relay deploys (a required reviewer); Azure
   changes (the owner's personal Visual Studio Enterprise subscription, never a work
   account or the trial subscription).
+- **Merge rule enforcement (#452, #524): pending apply.** The `merge-rule` workflow and main's
+  ruleset (`quality/ruleset-main.json`) are in the repository, but the ruleset, auto-merge and
+  branch deletion on merge aren't switched on yet. Until the coordinator applies them (the commands
+  and the rollback are in #524), merge by hand under AGENTS.md's rule, and treat `merge-rule`'s
+  status as advice. Once they're applied, change this line to say so, with the date.
 
 ## 9. Decision log (after design.md §10)
 
