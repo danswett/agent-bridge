@@ -1,11 +1,12 @@
-# Proposal #592: reorder by lifting the card while the others make room
+# #592: reorder by lifting the card while the others make room
 
-> **Proposal, awaiting the owner's decisions.** Not spec. [ui.md](../ui.md) is unchanged and
-> still wins wherever this page and it disagree. If the owner approves the decisions in §14, the
-> text in §13 goes into ui.md, and the PWA (#593), Windows (#594) and native (#595) work
-> follows.
+> **Decided (owner, 2026-11-04).** The owner approved the recommended option for all seven
+> decisions in §14 (D1–D7), recorded on #592 and #605. §13's text is now in
+> [ui.md](../ui.md) (§5.3 Lift and Reorder, §6.1 Moving, §9), and the `lift` motion token is
+> in `design/tokens.json`. ui.md is the spec and wins wherever this page and it disagree. The
+> PWA (#593), Windows (#594) and native (#595) work follows.
 
-*Written as a draft for the owner by the design track.* Issues:
+*Written for the owner by the design track, and decided on 2026-11-04.* Issues:
 [#592](https://github.com/danswett/agent-bridge/issues/592) (the interaction),
 [#593](https://github.com/danswett/agent-bridge/issues/593) (PWA touch),
 [#594](https://github.com/danswett/agent-bridge/issues/594) (Windows) and
@@ -247,9 +248,16 @@ so it does nothing and announces "Top of Pinned." or "End of Sessions.".
 - **Hit targets:** the grip's hit area is the full card height and 24 px wide. The card is
   ≥ 44 px tall on touch.
 
-## 11. Proposed tokens
+## 11. Tokens
 
-These go into `design/tokens.json` and the generator only if approved:
+Decided: only `motion.catalogue.lift` is a token, because both clients time the lift from
+the generated motion (`--ab-motion-lift-*` in the PWA, `AbMotionLift*` on Windows). The
+other values stay in ui.md's text. The long press, its slop and the haptic are each
+platform's own, so the native clients read them from the system. The PWA keeps them as
+constants beside its long-press menu's. The lift scale, the tint (a mix of two existing
+tokens) and the drag shadow are used by the PWA and Windows lifts alone. Each can become a
+token in #593 or #594 if both clients come to read it. The table below is the original
+proposal, kept for the record:
 
 | Token | Value | Use |
 |---|---|---|
@@ -313,7 +321,7 @@ Screenshots of the prototype mid-drag:
 Events state machine on the list: idle, then pending (the hold), then lifted, then settling.
 
 - **Neighbours:** a `transform: translateY()` per card with `transition: transform
-  var(--motion-reorder)`. The DOM order changes only on drop, in one `#moved` call that
+  var(--ab-motion-reorder-duration)` and `--ab-motion-reorder-ease`. The DOM order changes only on drop, in one `#moved` call that
   replaces today's FLIP.
 - **The lifted card:** `position: fixed` (or a transform layer above the list) with
   `will-change: transform`, moved in `pointermove` by `translate3d`, with no transition.
@@ -365,7 +373,11 @@ live, or an offset animation per item if the model waits for the drop. Add
 `HapticFeedbackType.LongPress` at the lift and `semantics { customActions = … }`. Auto-scroll
 with `LazyListState.scrollBy` per frame.
 
-## 13. Proposed ui.md text
+## 13. The ui.md text
+
+The text as proposed. ui.md now carries it, expanded: the lift is its own catalogue row,
+because each `motion.catalogue` token has one, and the touch, edge and cancel rules are
+spelled out under Moving. Where the two differ, ui.md wins.
 
 **§5.3, principle 4**, amended:
 
@@ -400,12 +412,12 @@ with `LazyListState.scrollBy` per frame.
 **§9, Keyboard**, add after "Alt+↑/↓ reorders (#164)": "with the same make-room motion as a
 drag (§5.3), announcing the new position".
 
-## 14. Decisions for the owner
+## 14. Decisions
 
-Each has the recommended option first.
+Decided (owner, 2026-11-04): the recommended option, listed first, for every decision.
 
 **D1. Lift strength.**
-1. **Scale 1.02 with the 16 dp drag shadow and a 5% tint (recommended).** It reads as raised
+1. **Scale 1.02 with the 16 dp drag shadow and a 5% tint (recommended; decided).** It reads as raised
    on a phone and a desktop without covering the rows around it. Fluent's flyout height.
 2. Scale 1.03 with the same shadow. More dramatic; the card overlaps its neighbours by 1–2 px
    at phone widths.
@@ -413,39 +425,39 @@ Each has the recommended option first.
    shadow, so the lift is easy to miss.
 
 **D2. Long-press duration.**
-1. **The platform's own: iOS 500 ms, Android 400 ms; the PWA matches the device (recommended).**
+1. **The platform's own: iOS 500 ms, Android 400 ms; the PWA matches the device (recommended; decided).**
    It feels the same as every other long press on that phone.
 2. A flat 500 ms everywhere. Simpler; slightly sluggish on Android.
 3. A flat 400 ms. Snappier; risks lifting during a slow scroll start on iOS.
 
 **D3. What lifts on touch.**
-1. **A long press anywhere on the card, or a short hold on the grip (recommended).** The whole
+1. **A long press anywhere on the card, or a short hold on the grip (recommended; decided).** The whole
    card is the target, as in iOS and Android lists. The grip is a faster, scroll-free handle.
 2. The grip only. No conflict with the long-press menu, but a 24 px target is easy to miss,
    and the menu then needs its own long press anyway.
 
 **D4. Haptic.**
-1. **One light tick at the lift only (recommended).** It confirms the hold without buzzing
+1. **One light tick at the lift only (recommended; decided).** It confirms the hold without buzzing
    during the drag.
 2. A tick at the lift and a lighter one each time the gap moves (iOS's picker feel). Busy on
    long moves.
 3. None.
 
 **D5. The grip on touch.**
-1. **Visible on every card in `text3`, and tapping it shows the hint (recommended).** Moving is
+1. **Visible on every card in `text3`, and tapping it shows the hint (recommended; decided).** Moving is
    discoverable, and the grip doubles as a fast handle (D3).
 2. Hidden on touch; shown only while a card is lifted. A cleaner row; moving is undiscoverable
    except by the menu.
 
 **D6. Neighbours with reduced motion.**
 1. **They jump; reduced motion animates nothing in a reorder except the card following the
-   pointer (recommended).** That matches §5.3's Reorder row today ("Instant") and the Sheet's
+   pointer (recommended; decided).** That matches §5.3's Reorder row today ("Instant") and the Sheet's
    rule.
 2. They cross-fade into place (`crossFade`, 83 ms). Softer, but a fade of a moving list is
    still motion, and it costs a second copy of each card.
 
 **D7. Drop settle duration.**
-1. **`reorder` (167 ms on Windows and the PWA, 250 ms Apple, 200 ms Android) (recommended).**
+1. **`reorder` (167 ms on Windows and the PWA, 250 ms Apple, 200 ms Android) (recommended; decided).**
    The same token as the neighbours, so the card and the gap arrive together.
 2. `emphasis` (250 ms Windows and PWA). Heavier and more deliberate; a long drop can feel
    sluggish.
@@ -453,8 +465,8 @@ Each has the recommended option first.
 
 ## 15. Every board
 
-Each board is drawn in dark and light. All are labelled "Proposal #592 · awaits owner
-decision".
+Each board is drawn in dark and light. All are labelled "#592 · Decided (owner,
+2026-11-04)".
 
 | Board | Dark | Light |
 |---|---|---|
@@ -471,10 +483,9 @@ To render them again, from `tools/design-mockups`:
 node render.js ../../design/canvas ../../docs/design/proposals/592-reorder Proposal-592-
 ```
 
-## 16. If approved
+## 16. What follows
 
-1. **ui.md:** move §13's text into ui.md, and add `lift` and `shadow.drag` to `tokens.json`
-   with the generator's outputs and tests (`tools/design-gen`).
+1. **ui.md and tokens:** done on #605.
 2. **#593, the PWA:** the Pointer Events reorder (§12.1). That fixes touch.
 3. **#594, Windows:** the Composition reorder (§12.1). That retires the ghost and the caption.
 4. **#595, Apple and Android:** the native lists' drag, matched to §3–§10 when those clients

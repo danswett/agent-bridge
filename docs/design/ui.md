@@ -377,9 +377,13 @@ not the PWA.
    moves.
 4. **Rows never move on their own** (§1, principle 2). Only the thing that changed
    animates. A row arriving fades in where it lands; its neighbours take their new places
-   at once rather than sliding, so the list never looks as if it reordered itself.
+   at once rather than sliding, so the list never looks as if it reordered itself. The one
+   exception is a person moving a row (Reorder): the rows it passes ease aside to make room,
+   because the person's hand is moving them.
 5. **Short and calm.** About 100–300 ms (83–250 on Windows and in the PWA), and nothing
-   but the glyphs longer than 300 ms. Entering decelerates. Leaving accelerates and is
+   but the glyphs longer than 300 ms. The one other is a session card's sink while a touch
+   holds it to move it (Lift), which lasts as long as the platform's long press because it
+   shows the hold's progress. Entering decelerates. Leaving accelerates and is
    quicker. A move on screen eases at both ends. Nothing overshoots or bounces.
 6. **Native where it exists.** Each platform's own vocabulary:
    - Windows: Fluent's theme transitions, connected animation, and the WinUI controls'
@@ -422,17 +426,18 @@ easing in, its duration out, and how far it travels.
 | Pane and inspector | Wide widths: the delegate inspector, Details | The header's inspector toggle; Details; choosing a delegate | The pane's content slides 12 in from the trailing edge and fades in. The columns take their new widths at once, so text reflows once and not on every frame | `pane`: standard, decelerate; fast out; small | Windows: the tokens on the pane's content. PWA: a transition on transform and opacity. macOS: `.inspector` | Cross-fade |
 | Tab switch | Conversation / Delegates / Tools; machine tabs; the phone's bottom bar | Choosing a tab | The indicator moves to the new tab, as Selection does. The new content fades in without sliding (Fluent's top-level fade) | `tab`: standard, decelerate | Windows: `SelectorBar`'s and `NavigationView`'s own indicators. Apple: `TabView`. Android: `NavigationBar` | Instant |
 | Disclosure | Show reasoning, Show prompt, Tool history, the finished delegates, the Ended group, the machine list | Opening or closing it | The chevron turns, and the content fades in and settles 4 down. Its space opens at once: nothing below it slides. Closing turns the chevron back and closes the space at once | `disclosure`: standard, decelerate; fast out; nudge | Windows: `Expander`'s own motion where it is one. PWA: the tokens on the chevron and the content | Instant |
-| Arriving and leaving | A session row (also as Needs you shows or hides it), a delegate in the strip | A host adds or removes it; a question is asked or answered; Needs you is turned on or off | The item fades in where it lands. Leaving, its space closes at once and it fades out where it was. Neighbours never slide | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` replaced by this fade, because `AddDeleteThemeTransition` and `RepositionThemeTransition` slide the neighbours. PWA: the tokens on the row; a copy of a leaving row, which nothing can find or tap, fades where it was. Until #253 reaches the PWA, its Needs you entries and an approval's command appear at once and never fade or move: only an entry's mark fades in. Apple: `.transition(.opacity)`. Android: `animateItem` with no placement spec | Cross-fade |
+| Arriving and leaving | A session row (also as Needs you shows or hides it), a delegate in the strip | A host adds or removes it; a question is asked or answered; Needs you is turned on or off | The item fades in where it lands. Leaving, its space closes at once and it fades out where it was. Neighbours never slide (only a person moving a row parts them: Reorder) | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` replaced by this fade, because `AddDeleteThemeTransition` and `RepositionThemeTransition` slide the neighbours. PWA: the tokens on the row; a copy of a leaving row, which nothing can find or tap, fades where it was. Until #253 reaches the PWA, its Needs you entries and an approval's command appear at once and never fade or move: only an entry's mark fades in. Apple: `.transition(.opacity)`. Android: `animateItem` with no placement spec | Cross-fade |
 | Status glyph | A row, the session header, the delegate strip | The state changes, such as working → idle | The old glyph cross-fades into the new one, with its colour. The words change at once. The arc and the orbit turning are §2.1's, not this | `glyph`: fast, standard | The same on every platform: opacity on the two glyphs | Instant |
 | Activity dot | A row's trailing edge (§6.1) | The session updates while its row isn't open; the row is opened | The 6 px dot fades in, and later fades out. It never pulses, grows or repeats. The title's weight changes at once | `activityDot`: standard, decelerate; fast out | The same on every platform | Instant |
 | Selection | The list's 3×16 Bridge pill; the rail's pill | Choosing a row or a destination | The pill slides from the old row to the new one when both are on screen, and fades in when the old one isn't. The row's fill changes at once | `selection`: standard, standard | Windows: `NavigationView`'s own pill on the rail, and the same motion on the list. Apple: the system's selection | Instant |
-| Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
+| Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales, except a session card sinking while a touch holds it to move it (Lift) | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
 | Send and Answer | The reply box; a question card | Send, Answer, Approve once, Deny | Your message shows at once as your bubble, rising 12 as it fades in. An answer's outcome fades in on the card. While the request is in flight, the button shows the platform's progress ring, which stops with the request. Nothing waits for the motion to finish | `acknowledge`: standard, decelerate; small | Windows: `ProgressRing`. PWA: the answer's ring. Apple: `ProgressView`. Android: `CircularProgressIndicator` | Cross-fade; the ring is still |
 | Toast and banner | In-app toasts; banners such as a host going offline | The event it reports | It slides 12 in from its edge and fades in, then leaves the same way, quicker | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens. PWA: the tokens on the banner coming in; a leaving one's space closes at once, and a copy of it, which nothing can find or tap, goes back the way it came. System notifications are each OS's own | Cross-fade |
 | Sheet | The delegate sheet on iOS (§6.3), and any phone sheet | Opening a delegate; dragging between detents; dismissing | The sheet rises from the bottom edge and the scrim fades in. While dragged it follows the finger with no easing, and on release it settles at the nearest detent | `sheet`: emphasis, decelerate; standard out | iOS: `.sheet` with `.presentationDetents([.medium, .large])` and the system's spring. Android: `ModalBottomSheet`. PWA: the tokens on transform | Cross-fade at the detent. A drag still follows the finger |
 | Menu and flyout | The row menu, Sort, the overflow menu, flyouts | A click, a long press, Shift+F10 or the menu key | It fades in and settles 4 from its anchor. Choosing an item acts at once, and the menu fades out | `menu`: fast, decelerate; fast out; nudge | Windows: `MenuFlyout`'s own. PWA: the tokens, on a popover where supported. Apple and Android: the system menus | Instant |
 | Scroll to a question | The open session's conversation, and the list when a notification opens a session | A question arrives while the person is at the end of the conversation; a toast, the tray, the menu bar, a waiting row or (in the PWA, until #253 reaches it) a Needs you entry opens a session | The view scrolls smoothly to the question or the row. It never scrolls a conversation the person has scrolled back through (a response growing below on its own doesn't count: the reader is still at its end), is touching, or has the pointer over, nor one in a page or app in the background. For 500 ms after a question appears in a conversation on screen (arriving, shown as its session opens, shown again as its tab, the Sessions page or the app comes back (the window taking the focus back included, visible all along or not), moved as the inspector is shown or hidden or the window crosses a layout width, moved where it is by anything above it changing height (the title wrapping, a tool line, the response, the reasoning or your message, a kept draft dismissed or an answer's receipt going), by the conversation being pulled back as it gets shorter, or sideways as the window is narrowed or widened, or becoming answerable as its machine's hold lifts or its machine starts taking answers), or is scrolled into view (a notification's answer focused included), a click or tap on its choices, Approve once, Deny or Send is ignored, so a click already on its way to what was there can't answer it. Needs you's Approve once, Deny and Resend wait the same way after the lane changes (an entry arriving, going or moving, and its answers moved by an entry above growing as its answer goes, by anything above the lane changing height, a banner or the app bar appearing included, or by the list being pulled back as rows below get shorter or go while it is scrolled to its end; an answer's status appearing below the last answers, or the list scrolling, moves nothing and doesn't restart it) or comes back on screen, and while a session opened from it scrolls the list to its row. A smooth scroll to it counts from where it comes to rest; a scroll the person makes after that doesn't restart the wait, unless something above the answers changes height in the same moment, which counts as a move (the scroll and the move can't be told apart). A key acts at once | `scroll`: emphasis, standard | Windows: `StartBringIntoView` with `AnimationDesired`. PWA: `scrollIntoView` with smooth behaviour, at the browser's pace. Apple: `ScrollViewReader`. Android: `animateScrollToItem` | Instant: a jump |
-| Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle | By key or menu, the moved row slides to its new place, and the row it passed takes its own new place at once. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place. No other row moves | `reorder`: standard, standard | Windows: no `ReorderThemeTransition`, which slides the neighbours. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
+| Reorder | The session list (#164, #592) | Dragging a lifted card (Lift); Alt+↑/↓; Move up or Move down; a screen reader's Move up and Move down | In a drag the card follows the pointer 1:1, with no easing, from where it was picked up; in one column it moves only up and down. The cards it passes ease one slot aside (a card and the gap between cards), so a gap opens where it will land. The gap is the landing place: there's no insertion line. Crossing into the other group moves the header between them one slot, turns the target group's header Bridge with "· drop to pin" or "· drop to unpin", and puts a Pin or Unpin chip in place of the card's age. Near the list's top or bottom edge the list scrolls (§6.1). On release the card settles from where the pointer left it into the gap and lowers (Lift); the order changes at release, so a press during the settle acts on the card in its new place. Escape, a release more than 32 outside the list, or the system taking the pointer settles it back where it came from, with "Cancel" in place of its age while it is outside. By key, menu or action, the moved card and the card it passes trade places together. Nothing else moves: the list's own updates are drawn after the drop | `reorder`: standard, standard | Windows: pointer capture, and Composition `Translation` (never `Visual.Offset`) with a `Vector3KeyFrameAnimation` per card it passes; not OLE drag (`CanDrag`, `DragUIOverride` and its caption) and not `ReorderThemeTransition`. PWA: Pointer Events, with transforms on the tokens. Apple: `List` with `.onMove`. Android: `detectDragGesturesAfterLongPress`, with `animateItem` on the cards it passes | Instant: the gap, the cards it passes, the drop and the cancel jump. The card still follows the pointer, which is the person's own movement |
+| Lift | A session card being moved (#592) | A long press on touch (§6.1); a press on the grip; a drag of more than 4 by a mouse or pen | The card rises above the list: it grows to 1.02 about its centre, takes the drag shadow (dark: `0 8 16` black at 0.28 with `0 0 2` at 0.24; light: 0.14 and 0.12; Fluent's 16), turns `card` mixed with 5% Bridge (4% in light), gains a 1 px `stroke2` edge, and its corner goes from 4 to 8 (`radius.card`). Its grip shows in `text`, and a selected card keeps its pill. It draws above every row and header and below the bar, menus and toasts. While a touch holds it, before it rises, it sinks to 0.985 linearly over the hold, so the hold shows its progress. It lowers as Reorder settles it | `lift`: fast, decelerate | Windows: Composition `Scale` and `Translation` on the card's container, with a `ThemeShadow` at 16. PWA: the tokens on transform, box-shadow and background. Apple: the system list's own lift. Android: `graphicsLayer` scale and `shadowElevation` | Instant, with no sink, growth, shadow or tint: a 2 px Bridge outline marks the lifted card |
 
 **Not in the design:**
 - **Loops** other than the two glyphs and an in-flight progress ring: no pulsing dot, badge
@@ -478,7 +483,8 @@ scroll to) are App.Core's, tested on every platform; the durations, curves and d
 read from the generated `AbMotion*` resources.
 
 The clients implement this after U5 and U6 (#232, phase 2). Each tests that reduced motion
-makes every change instant or a cross-fade, that no motion runs longer than its token, and
+makes every change instant or a cross-fade, that no motion runs longer than its token (but
+the Lift's sink, which runs for the long press), and
 that a control can be used while it moves.
 
 ## 6. Surfaces
@@ -528,10 +534,38 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
   app's folds). Never sent to a host: it isn't protocol.
 - **New sessions** go to the top of Sessions once, then stay put. A machine's first list is
   placed together, newest first, once the machine has sent all of it.
-- **Moving** is the person's only: Alt+↑/↓ on a row; a drag by the handle that shows on hover
-  (mouse or pen); or the row menu, opened by a long press on touch, a right-click, or
-  Shift+F10 / the menu key. Its items are Move up, Move down and Pin (or Unpin). Moves stay
-  within the row's group; a row dragged into the other group is pinned or unpinned.
+- **Moving** is the person's only (#592; the motion is §5.3's Lift and Reorder):
+  - **Touch:** a long press anywhere on a card lifts it: 500 ms on iOS and 400 ms on Android
+    (each platform's own; the PWA takes its device's, and 500 elsewhere), or a 150 ms hold or
+    a 4 move on its grip, which never scrolls. A finger that moves 10 before the card lifts
+    scrolls instead, and nothing lifts. The lift gives one light haptic tick, and none after.
+    A long press released without moving opens the row's menu. The card suppresses the
+    system's own long press: no callout, loupe, link preview or text selection. The grip shows
+    on every card in `text3`, and tapping it says "Press and hold a session to move it. Or use
+    Move up and Move down in its menu."
+  - **Mouse or pen:** the grip, which shows on hover, lifts the card at once; the card itself
+    lifts once it has moved 4 with the button down. A click still opens the session, and a
+    right-click its menu.
+  - **Keys and the menu:** Alt+↑/↓ on a row, or the row menu (a long press released without
+    moving, a right-click, or Shift+F10 / the menu key), whose items are Move up, Move down
+    and Pin (or Unpin). These move one place and stay within the row's group: at its end they
+    move nothing and say "Top of Pinned." or "End of Sessions.". The moved row keeps focus and
+    is scrolled into view.
+  - **Groups:** a card dragged across a group's header is pinned or unpinned at the place it
+    is dropped, and the header and the card's chip say which before the drop (§5.3). Headers
+    never lift. While the last pinned card is held outside Pinned, Pinned shows "Drop here to
+    keep it pinned". With nothing pinned there is no Pinned to drag into; Pin is in the menu.
+  - **Edges:** while a card is held within 10% of the list's height of its top or bottom
+    (40–80), the list scrolls at 1000 × (depth ÷ zone)² per second, faster the nearer the
+    edge, and at full speed past it. It starts only once the card has moved 4 since it
+    lifted, and stops at once on leaving the zone.
+  - **Cancel:** Escape, a release more than 32 outside the list, the system taking the
+    pointer, a second finger, the window losing focus, or the sort leaving Your order puts the
+    card back where it came from. If a host removes the held session, the drag ends and the
+    card fades out where it is (Arriving and leaving).
+  - **Two columns,** if a wide list ever flows into them: the order reads left to right, then
+    down, within each group; headers span the width, and the cards between the old and new
+    place move one place along that order.
 - **Pins:** a pinned row goes to the foot of Pinned, and an unpinned one to the top of
   Sessions.
 - **Sort menu:** "Your order" (the default), "Most recent" and "Machine" (by machine name,
@@ -1253,8 +1287,24 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   spaces one. A name of "x, idle, DEV-VM2" reads "Delegate x idle DEV-VM2 asks", never as
   facts of its own; what is drawn keeps them.
 - **Reduced motion** stops all glyph animation, and turns every other motion into an
-  instant change or a short cross-fade (§5.3). Nothing relies on motion alone.
-- **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
+  instant change or a short cross-fade (§5.3). Nothing relies on motion alone. What follows
+  a finger or pointer (a dragged card, a sheet) still follows it.
+- **Moving a session (#592):**
+  - Each step is announced politely: on lift, "Picked up *title*, position *N* of *M* in
+    *group*."; while held, when its place changes and at most every 500 ms, "Position *N* of
+    *M*." or "Pinned, position *N* of *M*. Drops as pinned."; on drop, "Moved to position *N*
+    of *M* in *group*.", "Pinned. Position *N* of *M* in Pinned." or "Unpinned. …"; on
+    cancel, "Cancelled. Back at position *N* of *M*.". Windows raises them with
+    `RaiseNotificationEvent` (MostRecent), Apple with `AccessibilityNotification.Announcement`,
+    Android and the PWA with a polite live region.
+  - VoiceOver and TalkBack users move with the card's actions, Move up, Move down and Pin (or
+    Unpin) (`accessibilityAction(named:)`, Compose `customActions`), announced the same way.
+  - In high contrast the lifted card has a 2 px Highlight outline instead of a shadow or
+    tint, the gap a 1 px dashed GrayText outline, and the target header and the chip
+    Highlight.
+  - The grip's hit area is the card's full height and 24 wide.
+- **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164) with a drag's motion
+  (§5.3, Reorder) and says the new place, Shift+F10 or the
   menu key opens a row's menu, and Ctrl/⌘+K focuses search. The shortcut is named where
   search is (the Windows search box's tooltip, on hover or when Tab reaches it) and nowhere
   else: no shortcut hint opens because the window was activated, a click landed or Ctrl+K was
