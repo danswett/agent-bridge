@@ -685,6 +685,73 @@ public class DiscoveryTests
     }
 
     [Fact]
+    public void VS_Codes_copilot_shim_is_left_out_when_the_real_cli_it_started_is_listed()
+    {
+        // DEV-VM2's processes (#615): Agency runs Copilot through VS Code's shim, which starts the
+        // real CLI with the same arguments. The CLI holds the session's lock; the shim held
+        // discovery for two minutes on every launch and every restart.
+        var t = DateTimeOffset.Parse("2026-11-03T21:08:13.123Z", System.Globalization.CultureInfo.InvariantCulture);
+        const string Shim = @"""C:\Program Files\Microsoft VS Code\bin\copilot-shim\copilot.exe""";
+        const string Cli = @"""C:\Users\u\AppData\Local\GitHubCopilotCLI\copilot.exe""";
+        static string Args(int n) => $@" --log-dir C:\Users\u\AppData\Local\agency\logs\session_{n}";
+        var listing = new SystemProcessInspector.ListedProcess[]
+        {
+            new("copilot", 17444, t, Shim + Args(1), Parent: 19304), // its parent is agency.exe
+            new("copilot", 2076, t.AddMilliseconds(18), Cli + Args(1), Parent: 17444),
+            new("copilot", 37460, t.AddHours(3), Shim + Args(2), Parent: 54020),
+            new("copilot", 25204, t.AddHours(3).AddMilliseconds(17), Cli + Args(2), Parent: 37460),
+            new("copilot", 56232, t.AddHours(9), Shim + Args(3), Parent: 35068),
+            new("copilot", 57740, t.AddHours(9).AddMilliseconds(19), Cli + Args(3), Parent: 56232),
+            new("copilot", 32264, t.AddHours(9).AddMinutes(4), Shim + Args(4), Parent: 25968),
+            new("copilot", 30240, t.AddHours(9).AddMinutes(4).AddMilliseconds(20), Cli + Args(4), Parent: 32264),
+        };
+
+        var (observation, kept) = SystemProcessInspector.Classify(AgentKind.Copilot, "copilot", listing, listed: true, windows: true, _ => false);
+
+        Assert.Equal([2076, 25204, 57740, 30240], observation.Processes.Select(p => p.Id));
+        Assert.True(observation.Known);
+        Assert.Equal(listing.Select(p => p.Id), kept.Select(p => p.Id));
+    }
+
+    [Fact]
+    public void A_copilot_that_is_not_its_childs_launcher_stays_counted()
+    {
+        var t = DateTimeOffset.Parse("2026-11-03T21:08:13.123Z", System.Globalization.CultureInfo.InvariantCulture);
+        const string Shim = @"""C:\Program Files\Microsoft VS Code\bin\copilot-shim\copilot.exe""";
+        const string Cli = @"""C:\Users\u\AppData\Local\GitHubCopilotCLI\copilot.exe""";
+        const string Args = @" --log-dir C:\Users\u\AppData\Local\agency\logs\session_1";
+        var listing = new SystemProcessInspector.ListedProcess[]
+        {
+            new("copilot", 100, t, Shim + Args, Parent: 1), // its CLI has gone, or not started yet
+            new("copilot", 200, t, Shim + Args, Parent: 1),
+            new("copilot", 201, t.AddMilliseconds(18), Cli + " --resume", Parent: 200), // a CLI started for something else
+            new("copilot", 300, t.AddMinutes(1), Shim + Args, Parent: 1), // took the id of 301's launcher, which has gone
+            new("copilot", 301, t, Cli + Args, Parent: 300),
+            new("copilot", 400, null, Shim + Args, Parent: 1), // no start time to tell
+            new("copilot", 401, t, Cli + Args, Parent: 400),
+            // a real CLI that starts another with the same arguments: either may hold a session
+            new("copilot", 500, t, Cli + Args, Parent: 1),
+            new("copilot", 501, t.AddMilliseconds(18), Cli + Args, Parent: 500),
+            new("copilot", 510, t, Cli, Parent: 1),
+            new("copilot", 511, t.AddMilliseconds(18), Cli, Parent: 510),
+            new("copilot", 600, t, "copilot" + Args, Parent: 1), // started by bare name: nothing says it is the shim
+            new("copilot", 601, t.AddMilliseconds(18), Cli + Args, Parent: 600),
+        };
+
+        var (observation, _) = SystemProcessInspector.Classify(AgentKind.Copilot, "copilot", listing, listed: true, windows: true, _ => false);
+
+        Assert.Equal([100, 200, 201, 300, 301, 400, 401, 500, 501, 510, 511, 600, 601], observation.Processes.Select(p => p.Id));
+
+        var codex = new SystemProcessInspector.ListedProcess[]
+        {
+            new("codex", 700, t, @"C:\a\copilot-shim\codex.exe --cd x"),
+            new("codex", 701, t.AddMilliseconds(18), @"C:\b\codex.exe --cd x", Parent: 700),
+        };
+        Assert.Equal([700, 701], SystemProcessInspector.Classify(AgentKind.Codex, "codex", codex, listed: true, windows: true, _ => false)
+            .Observation.Processes.Select(p => p.Id));
+    }
+
+    [Fact]
     public void A_loader_run_through_npms_bin_link_is_recognised_by_what_the_link_points_at()
     {
         var links = new Dictionary<string, string>
