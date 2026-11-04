@@ -203,4 +203,15 @@ public sealed class PromptOriginTests
         m.Observe(Prompt(UserMessageFrom.Schedule, "4", status: SessionStatus.Working, turns: 4, since: Since.AddMinutes(5)));
         Assert.Equal(new PromptMemory.Seen(true, Since.AddMinutes(5), true), m.Observe(Prompt(UserMessageFrom.Schedule, "4", turns: 5)));
     }
+
+    [Fact]
+    public void A_turn_no_prompt_started_begun_with_the_idle_before_it_missed_does_not_date_the_repeat_before_it()
+    {
+        var m = new PromptMemory();
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4", turns: 3));
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4", status: SessionStatus.Working, turns: 3, since: Since.AddMinutes(1)));
+        // Claude's turn for a delegate's notice: the count rises as it runs, but it was no prompt's.
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4", status: SessionStatus.Working, turns: 4, since: Since.AddMinutes(5)));
+        Assert.Equal(new PromptMemory.Seen(true, Since.AddMinutes(1), true), m.Observe(Prompt(UserMessageFrom.Schedule, "4", turns: 4)));
+    }
 }

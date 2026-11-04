@@ -100,13 +100,13 @@ public sealed class PromptMemory
     bool repeat;
     bool settled;
     DateTimeOffset? at;
-    // The most turns seen finished, while idle; whether the session ran when last seen; and when the
-    // turn seen running began, until a turn's end is accounted for.
+    // The most turns seen finished, while idle; whether the session ran when last seen; the turn
+    // count last seen, in any state; and the turns seen beginning, each with the count it ran at,
+    // until a turn's end is accounted for.
     int? idle;
     bool wasRunning;
-    // The turn count last seen, in any state.
     int? lastCount;
-    DateTimeOffset? ran;
+    readonly List<(int? Count, DateTimeOffset At)> starts = [];
     readonly Dictionary<string, string> bySchedule = [];
 
     public readonly record struct Seen(bool Repeat, DateTimeOffset? At, bool Fresh);
@@ -118,10 +118,16 @@ public sealed class PromptMemory
         var text = a.UserMessage;
         var running = s.Status is SessionStatus.Working or SessionStatus.Waiting;
         int? count = a.TurnCount is >= 0 and int c ? c : null;
-        // From when it began, not from a question answered or a resume within it; a count that
-        // rose while it ran is a later turn begun, its idle between missed here.
+        // A turn begins when the session starts running, not at a question answered or a resume
+        // within it; and when the count rises while it runs, its idle between missed here. That
+        // later turn can be a prompt's or one no prompt started (Claude's for a notice), which only
+        // the count at its end tells apart.
         var later = wasRunning && count > lastCount;
-        if (running && (!wasRunning || later)) { ran = s.StatusSince; }
+        if (running && (!wasRunning || later))
+        {
+            if (starts.Count == 16) { starts.RemoveAt(0); }
+            starts.Add((count, s.StatusSince));
+        }
         wasRunning = running;
         if (count is not null) { lastCount = count; }
         // A host that omits the words (SessionBudget can) says nothing of which prompt this is: the
@@ -135,8 +141,10 @@ public sealed class PromptMemory
             if (idle is { } before) { more = Math.Max(0, t - before); }
             idle = Math.Max(idle ?? -1, t);
         }
-        var began = ran;
-        if (turns is not null) { ran = null; }
+        // The latest prompt's turn ran one short of every prompt counted at its end; a turn seen at
+        // any other count wasn't its, and with none, its start wasn't seen.
+        DateTimeOffset? began = turns is { } done && starts.FindLast(x => x.Count == done - 1) is { Count: not null } match ? match.At : null;
+        if (turns is not null) { starts.Clear(); }
         DateTimeOffset? when;
         bool nowSettled;
         var key = (from, a.UserMessageLabel, text);
