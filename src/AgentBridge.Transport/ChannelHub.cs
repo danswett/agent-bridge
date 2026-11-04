@@ -47,7 +47,8 @@ public sealed class ChannelHub
     {
         this.relay = relay;
         this.key = key;
-        intro = JsonSerializer.SerializeToUtf8Bytes(new { name, kind });
+        // deflate: this hub inflates messages (MessageDeflate), so its peers may send them deflated.
+        intro = JsonSerializer.SerializeToUtf8Bytes(new { name, kind, deflate = true });
         PeerAllowed = peerAllowed;
         relay.OnData = OnDataAsync;
         relay.PresenceChanged += DropAbsent;
@@ -215,7 +216,7 @@ public sealed class ChannelHub
                     break;
                 case ChannelKind.Transport when ch is { Handshake.IsComplete: true }:
                     RequirePeer(ch);
-                    var message = JsonDocument.Parse(ch.Handshake.Receive!.DecryptWithAd([], body)).RootElement;
+                    var message = JsonDocument.Parse(MessageDeflate.Unpack(ch.Handshake.Receive!.DecryptWithAd([], body), SecureChannel.MaxMessageBytes)).RootElement;
                     // A response has re, an event ev, a request op. Anything else is a frame
                     // from a newer peer this one does not know, and is ignored.
                     if (message.TryGetProperty("re", out _)) { ch.Complete(message); }
@@ -247,6 +248,7 @@ public sealed class ChannelHub
         var j = JsonDocument.Parse(payload).RootElement;
         ch.PeerName = j.GetProperty("name").GetString() ?? "";
         ch.PeerKind = j.GetProperty("kind").GetString() ?? "";
+        ch.PeerInflates = j.TryGetProperty("deflate", out var z) && z.ValueKind == JsonValueKind.True;
         RequirePeer(ch);
     }
 
