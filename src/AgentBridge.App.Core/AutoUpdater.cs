@@ -200,7 +200,7 @@ public sealed class AutoUpdater
                 Unavailable = installed is null ? NotInstalled : null,
                 Available = available,
                 Notes = available is not null ? updater.PendingNotes : null,
-                CheckedAt = updater.CheckedAt,
+                CheckedAt = updater.FoundAsOf,
                 Phase = waiting ? UpdatePhase.Waiting : now,
                 Progress = now == UpdatePhase.Downloading ? updater.Progress : null,
                 Waiting = waiting ? WaitingFor() : null,

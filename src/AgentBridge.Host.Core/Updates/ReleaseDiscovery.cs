@@ -50,6 +50,15 @@ public sealed class ReleaseDiscovery : IDisposable
     // The state as last read or written, for when the folder cannot be: this process's checks
     // stay bounded even then.
     State memory = new();
+    // Whether memory holds a write the file didn't take, and which file it was laid over (its
+    // Saved stamp when read): kept over that file, but not over one another process has written
+    // since. Compared by identity, not by time, as a clock put back makes every new stamp older.
+    bool unsaved;
+    DateTimeOffset? underneath;
+
+    // How the lock file is opened; a test stands in for a disk that fails.
+    internal Func<string, FileStream> OpenLock { get; set; } =
+        path => new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
 
     // folder: the app's data folder, which the app and every profile's host share.
     public ReleaseDiscovery(string folder, HttpMessageHandler? handler = null, TimeProvider? time = null, Func<double>? random = null)
@@ -77,6 +86,10 @@ public sealed class ReleaseDiscovery : IDisposable
 
     string StatePath => Path.Combine(folder, FileName);
     string LockPath => Path.Combine(folder, "release-discovery.lock");
+
+    // When GitHub last answered, as of the last list this process was given: a list from the
+    // shared file may be older than the check that read it.
+    public DateTimeOffset? FetchedAt => memory.FetchedAt;
 
     // The release list's JSON: GitHub's, or the last one it gave while that is fresh. When there
     // is neither, throws a ReleaseDiscoveryException (or, cancelled, OperationCanceledException),
@@ -242,8 +255,11 @@ public sealed class ReleaseDiscovery : IDisposable
         var waited = System.Diagnostics.Stopwatch.StartNew();
         while (true)
         {
-            try { return new FileStream(LockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            try { return OpenLock(LockPath); }
             catch (UnauthorizedAccessException) { return null; }
+            // Only another process holding it is worth waiting for. Any other failure (a disk
+            // error, a path that can't be made) won't pass by waiting: this process's turn alone.
+            catch (IOException e) when (!Contended(e)) { return null; }
             catch (IOException) when (waited.Elapsed < LockWait) { await Task.Delay(100, cancellationToken); }
             catch (IOException)
             {
@@ -252,15 +268,24 @@ public sealed class ReleaseDiscovery : IDisposable
         }
     }
 
-    // The newer of the file and what this process last wrote: a write that failed (a full disk, a
-    // file another process holds) must not have its backoff undone by the older file next time.
+    // A sharing or lock violation on Windows; elsewhere the lock .NET takes for FileShare.None
+    // fails with EWOULDBLOCK, which it reports as the errno (11 on Linux, 35 on macOS and BSD).
+    internal static bool Contended(IOException e) => OperatingSystem.IsWindows()
+        ? (e.HResult & 0xFFFF) is 32 or 33
+        : e.HResult is 11 or 35;
+
+    // The file, unless this process's last write didn't take and the file is still the one it
+    // was laid over: then what this process holds is newer, and the older file must not undo its
+    // backoff (a full disk, a file another process holds).
     State Read()
     {
         try
         {
             if (!File.Exists(StatePath)) { return memory; }
             var disk = JsonSerializer.Deserialize(File.ReadAllText(StatePath), ReleaseDiscoveryJson.Default.State) ?? new State();
-            return memory = memory.Saved > disk.Saved ? memory : disk;
+            if (unsaved && disk.Saved == underneath) { return memory; }
+            (unsaved, underneath) = (false, disk.Saved);
+            return memory = disk;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return memory; }
     }
@@ -273,8 +298,9 @@ public sealed class ReleaseDiscovery : IDisposable
             var temp = StatePath + ".tmp";
             File.WriteAllText(temp, JsonSerializer.Serialize(state, ReleaseDiscoveryJson.Default.State));
             File.Move(temp, StatePath, overwrite: true);
+            (unsaved, underneath) = (false, state.Saved);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { unsaved = true; }
     }
 
     public void Dispose()

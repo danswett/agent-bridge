@@ -11,6 +11,9 @@ public interface IUpdater
     // Null when this copy was not installed by Velopack (a build folder): no updates then.
     string? InstalledVersion { get; }
     Task<string?> CheckAsync();
+    // When the feed itself was last asked, where a check may be answered from the machine's
+    // shared copy of it (#530): null when every check asks the feed.
+    DateTimeOffset? DiscoveredAt => null;
     // The release notes of the release the last check found, when it has any.
     string? PendingNotes => null;
     Task DownloadAsync(Action<int> progress);

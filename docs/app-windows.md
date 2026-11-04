@@ -280,6 +280,8 @@ into one folder with one version. An app update is a host update, so they never 
   no request, saying when it will next try and when the last good check was (in Pacific, marked
   PT, since the words also reach other devices and Home Assistant). Settings shows that
   as the update status rather than as an error, and a failure is never reported as "up to date".
+  What the account's other devices are told the app last checked (`UpdateState.CheckedAt`) is
+  when GitHub last answered, not when the shared copy was read.
   No static feed is published (no Pages copy of `releases.<channel>.json`, and every release is a
   pre-release, so `releases/latest/download` finds nothing), so the API list stays the source.
 * **One channel per architecture** (#222, `build/app-channels.ps1`). x64 is in Velopack's default

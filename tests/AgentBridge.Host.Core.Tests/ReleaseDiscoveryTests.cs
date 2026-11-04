@@ -144,6 +144,39 @@ public sealed class ReleaseDiscoveryTests : IDisposable
     }
 
     [Fact]
+    public async Task A_lock_file_that_fails_for_any_reason_but_another_holder_is_not_waited_on()
+    {
+        using var discovery = Discovery();
+        // A disk error (CRC), not a sharing violation: waiting won't make it pass.
+        discovery.OpenLock = _ => throw new IOException("Data error (cyclic redundancy check).", unchecked((int)0x80070017));
+        github.Answer = _ => Ok(Releases, "\"v1\"");
+        var took = System.Diagnostics.Stopwatch.StartNew();
+
+        Assert.Equal(Releases, await discovery.ReleasesAsync(Url, CancellationToken.None));
+        Assert.True(took.Elapsed < TimeSpan.FromSeconds(10), $"took {took.Elapsed}");
+        Assert.Single(github.Requests);
+    }
+
+    [Fact]
+    public async Task A_backoff_that_could_not_be_saved_over_a_file_from_a_clock_since_put_back_still_holds_checks()
+    {
+        // The file, written while the clock was a day ahead, and so stamped later than anything now.
+        using (var ahead = new ReleaseDiscovery(folder, github, new FakeTimeProvider(Now.AddDays(1)), random: () => 0))
+        {
+            github.Answer = _ => Ok(Releases, "\"v1\"");
+            await ahead.ReleasesAsync(Url, CancellationToken.None);
+        }
+        using var discovery = Discovery();
+        Directory.CreateDirectory(Path.Combine(folder, ReleaseDiscovery.FileName + ".tmp"));
+        github.Answer = _ => new HttpResponseMessage(HttpStatusCode.TooManyRequests) { Headers = { RetryAfter = new(TimeSpan.FromMinutes(30)) } };
+
+        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
+        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
+
+        Assert.Equal(2, github.Requests.Count);
+    }
+
+    [Fact]
     public async Task A_wait_written_under_a_clock_since_put_back_does_not_hold_checks_for_the_difference()
     {
         // The same folder, written while the clock was a day ahead.

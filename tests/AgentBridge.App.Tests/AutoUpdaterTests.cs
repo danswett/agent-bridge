@@ -49,6 +49,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         // Held until released, as a check that takes its time.
         public TaskCompletionSource? CheckGate;
         public string? InstalledVersion { get; set; } = "0.1.0";
+        public DateTimeOffset? DiscoveredAt { get; set; }
         public string? PendingNotes => Found is null ? null : $"What {Found} changes";
         public async Task<string?> CheckAsync()
         {
@@ -1023,6 +1024,22 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.False(state.Automatic);
         Assert.Null(state.Request);
         Assert.False(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_check_answered_from_the_machines_shared_copy_tells_the_devices_when_GitHub_was_asked_not_when_it_was_read()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        var asked = time.GetUtcNow() - TimeSpan.FromMinutes(8);
+        updater.DiscoveredAt = asked;
+        await StartAsync();
+
+        await AskedAsync(UpdateAskKind.Check);
+        await auto.TickAsync();
+
+        Assert.Equal(1, updater.Checks);
+        Assert.Equal(("0.2.0", asked), (auto.State.Available, auto.State.CheckedAt));
     }
 
     [Fact]

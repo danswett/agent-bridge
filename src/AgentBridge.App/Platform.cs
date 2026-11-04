@@ -48,6 +48,9 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
 
     public static string FeedFile => Path.Combine(Paths.AppData, "feed.txt");
 
+    // A feed.txt source is read whole at every check; only GitHub's list is shared and may be older.
+    public DateTimeOffset? DiscoveredAt => source is { } key && key.StartsWith('|') ? discovery.FetchedAt : null;
+
     public string? InstalledVersion
     {
         get
