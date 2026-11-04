@@ -30,7 +30,7 @@ public sealed class QuestionView : StackPanel
     readonly TextBlock head;
 
     // Who asks, again: a delegate's name can arrive after its question (S1's subagents list).
-    public string Heading { set => head.Text = value; }
+    public string Heading { get => head.Text; set => head.Text = value; }
 
     public QuestionView(QuestionViewModel vm, Action<bool> editing, string? heading = null)
     {

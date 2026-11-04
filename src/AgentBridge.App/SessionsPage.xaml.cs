@@ -27,9 +27,13 @@ public sealed partial class SessionsPage : UserControl
         ListPane.SizeChanged += OnListPaneSized;
         MoreMachines.SizeChanged += OnTabSized;
         SizeChanged += (_, _) => Measure();
-        Loaded += (_, _) => { Measure(); SyncList(); Ready(); if (!LaneItems.IsHitTestVisible) { GuardLane(); } };
+        // Needs you's answers moved where they are (#491): held again, and a pointer's press on one
+        // reads where they are first (LanePointerLets).
+        laneAnswers = new AnswerWatch(LaneItems, null, GuardLane);
+        LaneItems.AddHandler(PointerPressedEvent, new PointerEventHandler(OnLanePressed), true);
+        Loaded += (_, _) => { Measure(); SyncList(); Ready(); laneAnswers.Start(); if (!LaneItems.IsHitTestVisible) { GuardLane(); } };
         // A lane held as the page went keeps no timer running; it is held afresh as the page comes back.
-        Unloaded += (_, _) => laneTimer?.Stop();
+        Unloaded += (_, _) => { laneTimer?.Stop(); laneAnswers.Stop(); };
         // The list shown for the first time (one column, after a session opened at start).
         List.SizeChanged += (_, _) => Ready();
         List.Loaded += (_, _) => WatchListScroll();
@@ -590,7 +594,34 @@ public sealed partial class SessionsPage : UserControl
     // list comes back (App.Core's AnswerGuard): the lane is out of hit testing meanwhile, while
     // keyboard focus and keys work as ever.
     readonly AnswerGuard laneGuard = new();
+    readonly AnswerWatch laneAnswers;
     Microsoft.UI.Dispatching.DispatcherQueueTimer? laneTimer;
+
+    // A pointer pressed in the lane: on an answer (Approve once, Deny, Send again, an entry's link),
+    // let through only if the lane's answers are where they were and the wait has run out; dropped,
+    // the button lets the pointer go, so no click follows.
+    void OnLanePressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject source || LanePointerLets(source)) { return; }
+        (laneAnswers.AnswerAt(source) as UIElement)?.ReleasePointerCaptures();
+    }
+
+    // As the question's (SessionView.PointerLets): read where the answers are first, and drop the
+    // press if they moved since the last read, if they can't be read, or while the wait runs.
+    internal bool LanePointerLets(DependencyObject target)
+    {
+        if (laneAnswers.AnswerAt(target) is null) { return true; }
+        try { laneAnswers.Check(); }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            AppLog.Write($"Needs you: where its answers are can't be read as a pointer pressed one ({e.GetType().Name})");
+            GuardLane();
+            return false;
+        }
+        if (laneGuard.Accepts(pointer: true, DateTimeOffset.UtcNow)) { return true; }
+        GuardLane();
+        return false;
+    }
 
     // Each step of the list's own scroll, while the lane is held, holds it until the list is still.
     ScrollViewer? listScroll;

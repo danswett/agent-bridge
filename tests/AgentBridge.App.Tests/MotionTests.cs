@@ -200,4 +200,103 @@ public sealed class MotionTests
         follow.Released(1);
         Assert.True(follow.Follows);
     }
+
+    // Answers moved where they are (#491): one look of two answers (Approve once over Deny) in a
+    // conversation scrolled to `offset` of `scrollable`, its viewport at (200, 100) in a 1440×900
+    // window, the question 160 tall at y 8 in what it scrolls.
+    static AnswerLook Look(double dx = 0, double dy = 0, double offset = 300, double scrollable = 300, bool person = false,
+        double top = 100, double window = 900, double question = 160, double extent = 1000, double questionY = 8, int answers = 2) =>
+        new([.. new[] { (240.0 + dx, 150.0 + dy), (240.0 + dx, 190.0 + dy) }.Take(answers)],
+            [new ScrollerLook(200, top, 0, offset, 0, scrollable, 900, 700, 900, extent, person)],
+            1440, window, new LookBox(24, questionY, 852, question));
+
+    static AnswerMoves From(AnswerLook first)
+    {
+        var moves = new AnswerMoves();
+        Assert.False(moves.Read(first));
+        return moves;
+    }
+
+    [Fact]
+    public void Answers_that_move_more_than_a_pixel_down_or_across_are_held_again_and_a_pixel_is_not()
+    {
+        var moves = From(Look());
+        Assert.False(moves.Read(Look(dy: 1)));
+        Assert.True(moves.Read(Look(dy: 2.5)));
+        // A window narrowed within one layout moves a centred conversation sideways.
+        Assert.True(moves.Read(Look(dx: -8, dy: 2.5)));
+        Assert.False(moves.Read(Look(dx: -8, dy: 2.5)));
+        // One more answer shown, or one fewer, is a move too.
+        Assert.True(moves.Read(Look(dx: -8, dy: 2.5, answers: 1)));
+        // Forgotten (another question drawn): the next look is where they are, not a move.
+        moves.Forget();
+        Assert.False(moves.Read(Look(dy: 400)));
+    }
+
+    [Fact]
+    public void Only_a_scroll_the_person_makes_is_taken_off_where_the_answers_were()
+    {
+        // The person scrolls the conversation 120 back: the answers go down with it, under no pointer.
+        var moves = From(Look());
+        Assert.False(moves.Read(Look(dy: 120, offset: 180, person: true)));
+
+        // The app scrolling the same way (a question or a row brought into view), or anything else
+        // that isn't the person: a move.
+        moves = From(Look());
+        Assert.True(moves.Read(Look(dy: 120, offset: 180)));
+    }
+
+    [Fact]
+    public void A_scroll_and_a_move_in_the_same_look_still_find_the_move()
+    {
+        // The person scrolls 120 back as the strip appears above the conversation and pushes it 60 down.
+        var moves = From(Look());
+        Assert.True(moves.Read(Look(dy: 180, offset: 180, person: true, top: 160)));
+    }
+
+    [Fact]
+    public void A_scroller_pulled_back_to_its_end_is_never_taken_off_even_as_the_person_scrolls()
+    {
+        // Rows below shrink at the list's end: it is pulled back from 300 to 200, and the answers
+        // slide 100 down under a still pointer, in the middle of the person's own scrolling.
+        var moves = From(Look());
+        Assert.True(moves.Read(Look(dy: 100, offset: 200, scrollable: 200, person: true, extent: 900)));
+
+        // The new size laid out first, still scrolled past it, then pulled back in a later look.
+        moves = From(Look());
+        Assert.False(moves.Read(Look(scrollable: 200, person: true, extent: 900)));
+        Assert.True(moves.Read(Look(dy: 100, offset: 200, scrollable: 200, person: true, extent: 900)));
+
+        // Pulled back to 0 as it stops overflowing.
+        moves = From(Look(offset: 50, scrollable: 50, extent: 750));
+        Assert.True(moves.Read(Look(dy: 50, offset: 0, scrollable: 0, person: true, extent: 700)));
+
+        // The person scrolling to the end is no clamp.
+        moves = From(Look(offset: 100));
+        Assert.False(moves.Read(Look(dy: -200, offset: 300, person: true)));
+    }
+
+    [Fact]
+    public void The_persons_own_question_growing_as_they_type_is_theirs_only_when_nothing_else_changed()
+    {
+        // Other's box opens: the question grows 40, what scrolls grows 40, Send is 40 lower and a
+        // box is added. Theirs, when they did it; a move when they didn't.
+        var grown = Look(question: 200, extent: 1040) with { Answers = [(240, 150), (240, 230), (240, 270)] };
+        Assert.False(From(Look()).Read(grown, own: true));
+        Assert.True(From(Look()).Read(grown, own: false));
+
+        // Anything else in the same look is a move whatever they are doing: the window resized, the
+        // conversation's viewport moved (the strip, a banner), the title wrapping above the question
+        // in what scrolls, or what scrolls growing by more than the question did (a response).
+        Assert.True(From(Look()).Read(grown with { WindowHeight = 880 }, own: true));
+        Assert.True(From(Look()).Read(Look(dy: 60, top: 160, question: 200, extent: 1040), own: true));
+        Assert.True(From(Look()).Read(Look(dy: 20, question: 200, extent: 1060, questionY: 28), own: true));
+        Assert.True(From(Look()).Read(Look(dy: 40, question: 200, extent: 1100), own: true));
+
+        // Their question shrinking at the end (an error going) pulls the conversation back: theirs.
+        Assert.False(From(Look()).Read(Look(dy: 30, offset: 270, scrollable: 270, question: 130, extent: 970), own: true));
+
+        // Their question resized nothing: an answer moved anyway is a move.
+        Assert.True(From(Look()).Read(Look(dy: 30), own: true));
+    }
 }
