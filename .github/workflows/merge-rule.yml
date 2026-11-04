@@ -2,10 +2,10 @@ name: Merge rule
 
 # Posts the commit status `merge-rule` on each open pull request into main (AGENTS.md, "Pull
 # requests"; quality/README.md §4.9). Main's ruleset requires it beside quality-gate, so with
-# auto-merge on, GitHub merges a pull request only when this says success: not a draft, no hold
-# label, a Copilot review of the exact head, CodeQL green, every other check and status on the head
-# passed, and, when the change touches a sensitive path, an independent review's receipt on the
-# exact head.
+# auto-merge on, GitHub merges a pull request only when this says success: main's CI green (or the
+# pull request labelled fixes-main), not a draft, no hold label, a Copilot review of the exact
+# head, CodeQL green, every other check and status on the head passed, and, when the change
+# touches a sensitive path, an independent review's receipt on the exact head.
 #
 # The pull request under judgement must not be able to loosen its own gate (#487, Finding 1). So
 # every trigger here runs main's copy of this workflow, the job checks out main and builds main's
@@ -20,7 +20,8 @@ name: Merge rule
 #    or a rerun on an already-green head turns the verdict pending at once (Perf, dispatched by
 #    hand, is required by nothing else); finished, so a late red flips it. A test keeps the list
 #    complete. That includes the review relay in merge-rule-review.yml: pull_request_review runs
-#    the pull request's copy of a workflow, which mustn't post statuses.
+#    the pull request's copy of a workflow, which mustn't post statuses. And CI's push run on main
+#    finishing, so every verdict follows main going red or green again (main_green).
 #  - check_suite: a check from an app other than GitHub Actions finished (code
 #    scanning's CodeQL). Actions' own suites start no check_suite workflow, hence workflow_run.
 #  - schedule and workflow_dispatch: a backstop for anything the events missed. That includes
@@ -53,10 +54,13 @@ jobs:
   # pass, so a job of that name would be one more thing for each pull request to wait on.
   evaluate:
     # Main's own runs and check suites (pushes, the weekly CodeQL, a dispatch on main) start no
-    # evaluation: no pull request's head is on main. Every other completion does, whatever its
+    # evaluation: no pull request's head is on main. But a push run of CI finishing on main does:
+    # main going red fails every pull request (but a fixes-main one), and going green again frees
+    # them (quality/merge-rule.yml, main_green). Every other completion does too, whatever its
     # event: Perf dispatched on a pull request's branch counts toward the verdict too.
     if: >-
-      (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch != 'main' || github.event.workflow_run.head_repository.full_name != github.repository)
+      (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch != 'main' || github.event.workflow_run.head_repository.full_name != github.repository
+      || (github.event.workflow_run.name == 'CI' && github.event.workflow_run.event == 'push' && github.event.action == 'completed'))
       && (github.event_name != 'check_suite' || github.event.check_suite.head_branch != 'main')
       && (github.event_name != 'status' || github.event.context != 'merge-rule')
     runs-on: ubuntu-latest
