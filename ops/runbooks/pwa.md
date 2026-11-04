@@ -8,7 +8,9 @@ sign in or act, while hosts and the Windows app are fine.
 `pages.yml` builds and deploys to GitHub Pages on every push to `main` touching `pwa/` (and the
 spikes' web pages), **without waiting for main CI** (REL-4, #582, changes that). The service
 worker is stamped with a hash of the served files (pwa/tools/build-site.mjs), so installed PWAs
-take a new deploy, or a rolled-back one, on their next navigation.
+install a new deploy, or a rolled-back one, on their next start or return to the front, and
+offer Reload. Until then they run the release they have from the worker's cache, without
+asking the network (#609).
 
 ## Mitigate
 
@@ -18,8 +20,9 @@ take a new deploy, or a rolled-back one, on their next navigation.
    `gh workflow run pages.yml -R danswett/agent-bridge --ref <branch at the last good commit>`.
    The `github-pages` environment usually accepts only `main`, so expect this to be refused
    unless that rule has changed. Don't relax the rule in an incident without the owner.
-3. **On a phone, after the fix is deployed:** close and reopen the PWA. If it still shows the
-   bad build, pull to refresh once. The service worker updates on navigation.
+3. **On a phone, after the fix is deployed:** close and reopen the PWA, and press Reload when
+   it offers it. If it still shows the bad build, pull to refresh once. The service worker
+   checks for a new release on each start.
 
 ## Confirm
 

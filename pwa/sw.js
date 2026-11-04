@@ -1,5 +1,15 @@
-// Network first, so a new version takes effect on the next load, with the cached shell as
-// the offline fallback. Nothing from the relay is ever cached.
+// One cache per release, filled whole when the release's worker installs and served from then
+// on without asking the network (#609). A warm start used to revalidate every file with the
+// server first (network first, cache: 'no-cache'): 61 requests answered 304 before the first
+// session showed, 3.4 s on a phone. Nothing from the relay is ever cached.
+//
+// A release changes only as a whole. Its worker is new whenever anything served changes (sw.js
+// carries a hash of the rest), the browser checks for one on each start and the app on each
+// return to the front (main.js), and the new worker fills its own cache before it takes over;
+// the app then offers Reload. So an open app runs one release's files throughout, never old
+// modules under a new main.js: usage (#26) was missing on an iPhone when they mixed. The app's
+// scripts are bundled under names that carry their content's hash (tools/build-site.mjs), so a
+// page never asks for one of another release's by mistake either.
 const PREFIX = 'agent-bridge-app-';
 // A hash of every file the site serves, written by tools/build-site.mjs. The browser only
 // installs a new worker when this file's bytes change, and the app only announces an
@@ -9,51 +19,84 @@ const CACHE = `${PREFIX}${VERSION}`;
 // The product's name, for a notification that has no title of its own: written by
 // tools/brand.mjs from js/brand.js, which a classic worker can't import.
 const NAME = 'Agent Bridge';
+// The app's bundle: its entry and every chunk it imports, written by tools/build-site.mjs. The
+// demo's own chunk is left out, as only the demo asks for it.
+const BUNDLE = [];
 const SHELL = [
   './', './index.html', './app.css', './design/tokens.css', './design/sprite.svg',
   './design/fonts/AgentBridgeMono-Regular.woff2', './design/fonts/AgentBridgeMono-Italic.woff2', './design/fonts/AgentBridgeMono-SemiBold.woff2',
   './design/fonts/AgentBridgeMono-SemiBoldItalic.woff2', './design/fonts/AgentBridgeMono-Bold.woff2', './design/fonts/AgentBridgeMono-BoldItalic.woff2',
-  './config.js', './manifest.webmanifest', './icon.svg', './icons/icon-192.png', './icons/icon-512.png',
+  './manifest.webmanifest', './icon.svg', './icons/icon-192.png', './icons/icon-512.png',
   './icons/maskable-192.png', './icons/maskable-512.png', './icons/apple-touch-icon.png',
-  './js/main.js', './js/bytes.js', './js/noise-p256.js', './js/identity.js', './js/signin.js',
-  './js/relay.js', './js/channels.js', './js/backoff.js', './js/connection.js', './js/protocol.js', './js/host-client.js',
-  './js/host-session.js', './js/sessions-store.js', './js/session-order.js', './js/needs-you.js', './js/markdown.js', './js/hidden-text.js', './js/demo.js', './js/push.js',
-  './js/answers.js', './js/answer-service.js', './js/replies.js', './js/reply-service.js', './js/attachments.js', './js/blobs.js', './js/stop-service.js',
-  './js/ui/dom.js', './js/ui/glyph.js', './js/status.js', './js/ui/time.js', './js/ui/meta.js', './js/ui/row-menu.js', './js/ui/question-view.js',
-  './js/ui/reply-view.js', './js/ui/stop-view.js', './js/ui/session-card.js', './js/ui/views.js', './js/ui/sessions-page.js', './js/ui/needs-you-view.js', './js/ui/shell.js', './fixtures/sessions-list.json',
-  './js/attribution.js', './js/ui/delegates-view.js', './js/ui/motion.js',
-  './js/usage.js', './js/fleet.js', './js/platform.js', './js/forget.js', './js/update.js', './js/ui/usage-view.js',
-  './js/launch.js', './js/launch-service.js', './js/ui/launch-view.js', './js/transfer.js', './js/brand.js',
+  './fixtures/sessions-list.json',
+  ...BUNDLE,
 ];
 
 // GitHub Pages lets a browser keep every file for 10 minutes (max-age=600), and a worker's
-// fetch goes through that cache like any other. A phone opened just after a deploy ran the
-// old code, or old modules under a new main.js: usage (#26) was missing on an iPhone for
-// that reason. So the shell is filled straight from the network, and every later fetch asks
-// the server whether its copy is still current (a conditional request, nearly free when it is).
+// fetch goes through that cache like any other: a phone opened just after a deploy installed
+// the new worker with the old files. So the shell is filled straight from the network.
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))));
+  // A release only partly kept is no release: gone, so it is never taken for the one before.
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))))
+    .catch(async (err) => { await caches.delete(CACHE); throw err; }));
   self.skipWaiting();
 });
 
+// The release before this one is kept until the next takes over: a page still open on it when
+// this worker took over (before the person pressed Reload) can still be given its own files.
+// Older ones go. Only this app's: other apps on the same origin (the /s4/ spike) keep theirs.
 self.addEventListener('activate', (e) => {
-  // Only this app's old caches: other apps on the same origin (the /s4/ spike) keep theirs.
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k.startsWith(PREFIX) && k !== CACHE).map((k) => caches.delete(k)))));
+  e.waitUntil(caches.keys().then((keys) => {
+    const ours = keys.filter((k) => k.startsWith(PREFIX) && k !== CACHE);
+    return Promise.all(ours.slice(0, -1).map((k) => caches.delete(k)));
+  }));
   self.clients.claim();
 });
+
+const inShell = (url) => SHELL.some((u) => new URL(u, self.registration.scope).href === url);
+
+// A file kept by the release before this one: a page still open on it asks for its own files,
+// which may be gone from the server. Never refreshed, as a release's files never change.
+async function earlier(request) {
+  for (const k of (await caches.keys()).filter((n) => n.startsWith(PREFIX) && n !== CACHE).reverse()) {
+    const hit = await (await caches.open(k)).match(request);
+    if (hit) { return hit; }
+  }
+  return undefined;
+}
+
+// By URL rather than the request itself: a navigation request can't be given a cache mode.
+const network = (request) => fetch(request.url, { cache: 'no-cache', credentials: 'same-origin' });
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin || !url.href.startsWith(self.registration.scope) || url.pathname.includes('/v1/')) { return; }
-  // By URL rather than the request itself: a navigation request can't be given a cache mode.
-  e.respondWith(fetch(e.request.url, { cache: 'no-cache', credentials: 'same-origin' })
-    .then((r) => {
-      if (r.ok) { const copy = r.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); }
+  e.respondWith((async () => {
+    const own = await caches.open(CACHE);
+    // A navigation is the app's page, whatever its query says (?demo=1, ?host=…).
+    if (e.request.mode === 'navigate') {
+      return (await own.match(self.registration.scope)) ?? network(e.request).catch(() => Response.error());
+    }
+    const hit = await own.match(e.request);
+    // The release's own files never change: served as they are, with nothing asked of the network.
+    if (hit && inShell(url.href.split('#')[0])) { return hit; }
+    if (!hit) {
+      const old = await earlier(e.request);
+      if (old) { return old; }
+    }
+    // Anything else (the demo's chunk, a file of the app's source layout) is
+    // stale-while-revalidate: what is kept now, and the network's copy kept for next time.
+    const fresh = network(e.request).then((r) => {
+      if (r.ok) { const copy = r.clone(); e.waitUntil(own.put(e.request, copy)); }
       return r;
-    })
-    .catch(() => caches.match(e.request, { ignoreSearch: true })));
+    });
+    if (hit) {
+      e.waitUntil(fresh.catch(() => {}));
+      return hit;
+    }
+    return fresh.catch(async () => (await caches.match(e.request, { ignoreSearch: true })) ?? Response.error());
+  })());
 });
-
 // ---- notifications (docs/protocol/v1-sessions.md, Notifications) ----
 // A push is a notice a machine encrypted to this browser (RFC 8291); the browser has
 // decrypted it. It is a Declarative Web Push message, which Safari 18.4+ shows without

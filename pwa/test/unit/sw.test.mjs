@@ -102,8 +102,9 @@ test('an empty, unreadable or odd push still shows a notification, as iOS requir
   }
 });
 
-// A worker whose fetch and cache are recorded, for the caching tests.
-function cachingWorker() {
+// A worker whose fetches are recorded, over caches held in memory: { name: { url: body } }, in
+// the order the browser made them (caches.keys() keeps it).
+function cachingWorker(stored = {}) {
   const handlers = {};
   const fetched = [];
   const added = [];
@@ -113,13 +114,41 @@ function cachingWorker() {
     addEventListener: (type, fn) => { handlers[type] = fn; },
     skipWaiting() {},
   };
-  const cache = { addAll: async (reqs) => { added.push(...reqs); }, put: async () => {} };
-  const caches = { open: async () => cache, keys: async () => [], match: async () => undefined };
-  const fetchStub = async (input, init) => { fetched.push({ input, init }); return { ok: true, clone() { return this; } }; };
+  const store = new Map(Object.entries(stored).map(([name, files]) => [name, new Map(Object.entries(files).map(([u, body]) => [u, { ok: true, body }]))]));
+  const key = (r) => new URL(typeof r === 'string' ? r : r.url, scope).href;
+  const bare = (u) => u.split('?')[0];
+  const open = (name) => {
+    if (!store.has(name)) { store.set(name, new Map()); }
+    const files = store.get(name);
+    return {
+      addAll: async (reqs) => { added.push(...reqs); for (const r of reqs) { files.set(key(r), { ok: true, body: 'network' }); } },
+      put: async (r, res) => { files.set(key(r), res); },
+      match: async (r) => files.get(key(r)),
+    };
+  };
+  const caches = {
+    open: async (name) => open(name),
+    keys: async () => [...store.keys()],
+    delete: async (name) => store.delete(name),
+    match: async (r, { ignoreSearch } = {}) => [...store.values()].map((f) => [...f].find(([u]) => (ignoreSearch ? bare(u) === bare(key(r)) : u === key(r)))?.[1]).find(Boolean),
+  };
+  const fetchStub = async (input, init) => { fetched.push({ input, init }); return { ok: true, body: 'network', clone() { return { ok: true, body: 'network' }; } }; };
   class Request { constructor(url, init) { Object.assign(this, { url, ...init }); } }
   vm.runInNewContext(readFileSync(path.join(pwa, 'sw.js'), 'utf8'), { self, location: new URL(scope), URL, caches, fetch: fetchStub, Request });
-  return { handlers, fetched, added };
+  // Fires a fetch for the URL; resolves to what the page was given, once the worker is done.
+  const get = async (url, mode = 'cors') => {
+    let responded;
+    const extended = [];
+    handlers.fetch({ request: { method: 'GET', url, mode }, respondWith: (p) => { responded = p; }, waitUntil: (p) => { extended.push(p); } });
+    const res = await responded;
+    while (extended.length) { await extended.shift(); }
+    return res;
+  };
+  const kept = (name) => Object.fromEntries([...(store.get(name) ?? [])].map(([u, r]) => [u, r.body]));
+  return { handlers, fetched, added, get, kept, names: () => [...store.keys()] };
 }
+
+const CURRENT = 'agent-bridge-app-dev';
 
 test('installing fills the shell from the network, never from a browser copy that may predate the deploy', async () => {
   const sw = cachingWorker();
@@ -130,14 +159,35 @@ test('installing fills the shell from the network, never from a browser copy tha
   assert.ok(sw.added.every((r) => r.cache === 'reload'), 'every shell file bypasses the HTTP cache');
 });
 
-test('every app file is checked with the server on each load, so a deploy shows on the next open', async () => {
-  const sw = cachingWorker();
-  let responded;
-  sw.handlers.fetch({ request: { method: 'GET', url: `${scope}js/main.js` }, respondWith: (p) => { responded = p; } });
-  await responded;
-  assert.deepEqual(plain(sw.fetched), [{ input: `${scope}js/main.js`, init: { cache: 'no-cache', credentials: 'same-origin' } }]);
+test('a release\'s own files come from its cache, with nothing asked of the network, so a warm start waits on nothing', async () => {
+  const sw = cachingWorker({ [CURRENT]: { [`${scope}app.css`]: 'kept', [scope]: 'page' } });
+  assert.equal((await sw.get(`${scope}app.css`)).body, 'kept');
+  // The page, at whatever address the app was opened.
+  assert.equal((await sw.get(`${scope}?demo=1&host=${MACHINE}`, 'navigate')).body, 'page');
+  assert.deepEqual(sw.fetched, []);
 });
 
+test('a file that is not the release\'s own is served as kept, and fetched again for next time', async () => {
+  const sw = cachingWorker({ [CURRENT]: { [`${scope}js/ui/glyph.js`]: 'kept' } });
+  assert.equal((await sw.get(`${scope}js/ui/glyph.js`)).body, 'kept');
+  assert.deepEqual(plain(sw.fetched), [{ input: `${scope}js/ui/glyph.js`, init: { cache: 'no-cache', credentials: 'same-origin' } }]);
+  assert.equal(sw.kept(CURRENT)[`${scope}js/ui/glyph.js`], 'network');
+});
+
+test('a page still open on the release before is given that release\'s files, never another\'s', async () => {
+  const old = 'agent-bridge-app-0123456789abcdef';
+  const sw = cachingWorker({ [old]: { [`${scope}bundle/demo-OLD.js`]: 'old chunk' }, [CURRENT]: {} });
+  assert.equal((await sw.get(`${scope}bundle/demo-OLD.js`)).body, 'old chunk');
+  assert.deepEqual(sw.fetched, []);
+});
+
+test('a new release keeps the one before it for pages still open on it, and drops older ones, never another app\'s', async () => {
+  const sw = cachingWorker({ 'agent-bridge-app-a': {}, 's4-shell': {}, 'agent-bridge-app-b': {}, [CURRENT]: {} });
+  let done;
+  sw.handlers.activate({ waitUntil: (p) => { done = p; } });
+  await done;
+  assert.deepEqual(sw.names(), ['s4-shell', 'agent-bridge-app-b', CURRENT]);
+});
 function tapped(data) {
   return { notification: { data, closed: false, close() { this.closed = true; } } };
 }

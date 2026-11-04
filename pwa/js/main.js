@@ -20,7 +20,7 @@
 //                    the machine each is for
 //   platform.js      the platform layer (#168): shortcut hints, safe areas, the edge swipe back,
 //                    and which system face the page is in, for inline mono's x-height
-//   demo.js          ?demo=1: simulated machines (?machines=2 or 3), no relay
+//   demo.js          ?demo=1: simulated machines (?machines=2 or 3), no relay; loaded only then
 //   brand.js         the product's name, for every place the app shows it
 import { RELAY } from '../config.js';
 import { BRAND, NOTIFICATIONS_BLOCKED } from './brand.js';
@@ -42,7 +42,6 @@ import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UpdateControl } from './update.js';
 import { UsageView } from './ui/usage-view.js';
 import { reveal, watchDisclosures, watchPresses } from './ui/motion.js';
-import { DemoBlobStore, DemoConnection, DemoHost, demoDelegating, demoMachines, demoTransfers, demoTrust, runScript } from './demo.js';
 import { RelayBlobs } from './blobs.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
 
@@ -219,6 +218,8 @@ const demoStorage = {
 };
 
 async function startDemo() {
+  // Only the demo loads its pretend hosts: the live app never fetches or parses them (#609).
+  const { DemoBlobStore, DemoConnection, DemoHost, demoDelegating, demoMachines, demoTransfers, demoTrust, runScript } = await import('./demo.js');
   $('demo-banner').hidden = false;
   $('demo-settings').hidden = false;
   shell.setSignedIn(true);
