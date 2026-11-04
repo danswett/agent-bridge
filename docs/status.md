@@ -186,8 +186,12 @@ The following handoff/resumption notes are **historical, 2026-11-02**; use canon
 issues and PRs for current heads, owners and gates:
 
 **Current-run verification (#384, partial #231):** the local-App backend now provides
-explicitly consented new-session tests, shared by the forthcoming Settings controls and
-guided flow. It requires the exact launch request/session binding, a new process, the main
+explicitly consented new-session tests, shared by permanent Windows Settings controls and
+the forthcoming guided flow. Settings loads the host's offered launch choices, requires
+explicit agent/workspace picks, names the exact folder/profile and paid usage in a
+cancel-default confirmation, and follows host reports across reconnects. Confirmation is
+bound to the same host run and revalidated folder/profile; stopping observation never
+claims to close the test session. Verification requires the exact launch request/session binding, a new process, the main
 provider's unique reply and a fresh hook naming that same session/process. Trust and
 sign-in remain the person's actions in the session window. Timeouts/cancellation do not
 close sessions or count as success, and results are current-host-run-only and invalidated
@@ -195,7 +199,7 @@ for configuration/process changes or expiration, including retries of retained r
 are no longer the latest for their agent. Verification refuses configured extra arguments
 instead of allowing them to override its standard-permissions consent. Temporary discovery
 holds after launch keep the same test observing within its timeout. The guided shell,
-controls, installer integration and disposable end-to-end acceptance remain incomplete; this is not dogfood
+installer integration and disposable end-to-end acceptance remain incomplete; this is not dogfood
 readiness. HA onboarding is excluded. See [the pipe contract](protocol/local-pipe.md#current-run-verification).
 
 **First-run foundation (#384, partial #231):** a shared local-host agent readiness
