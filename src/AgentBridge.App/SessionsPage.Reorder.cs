@@ -678,10 +678,15 @@ public sealed partial class SessionsPage
         // Away from the list: back where it came from.
         if (d.Away) { Cancel(say: true); return; }
         // A touch held still and let go: the row's menu, where the finger is, and the card goes back.
+        // The row showing the session after the cancel, which drew what was held back meanwhile: the one
+        // it was lifted in may show another session now.
         if (d.ByHold && !d.Moved)
         {
             Cancel(say: false);
-            d.Row.OpenMenuAt(List.TransformToVisual(d.Row).TransformPoint(d.At));
+            if (List.ContainerFromItem(d.Card) is ListViewItem { ContentTemplateRoot: SessionRow row } && row.Card == d.Card)
+            {
+                row.OpenMenuAt(List.TransformToVisual(row).TransformPoint(d.At));
+            }
             return;
         }
         Land(d);
