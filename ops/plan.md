@@ -120,7 +120,8 @@ Design §5.10 already allows both labels.
 The relay logs JSON lines with no identities (a random tag per socket), and Container Apps
 ships them to Log Analytics.
 
-The risk is the **0.1 GB/day cap**. Once it's reached, ingestion stops until midnight UTC,
+The risk is the **0.1 GB/day cap**. Once it's reached, ingestion stops until the workspace's
+daily reset hour,
 which is exactly when a reconnect storm is producing the volume, so the logs and every
 log-based alert go blind together. Three changes cover it:
 - alert at 80% of the cap, and when collection stops;

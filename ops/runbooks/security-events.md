@@ -26,7 +26,7 @@ changes production is the **owner's**.
 | `token-key` | Anyone can mint account tokens for any account | **Rotate now** (docs/relay-deploy.md "Key rotation", token key). Every device signs in again. The roster starts empty |
 | `vapid-key` | Anyone can send pushes to subscribed browsers | Rotate (same section, VAPID). Each PWA re-enables notifications |
 | An account token | That account's devices can be impersonated until it expires (about 30 days) | There's no per-token revocation at `lean`. Rotate `token-key` if the account matters, and record the decision |
-| A device's private key | That device can be impersonated | Forget the device from the owner's app or PWA, and re-pair it |
+| A device's private key | That device can be impersonated, by anyone who also has a valid account token for it. "Forget" only removes an offline roster entry: it neither blocks the key from reconnecting nor revokes trust that peers have placed in it | **Owner, at the machine:** give the device a new identity (sign it in again, so a new key is made, or reinstall its profile). On every host that pins it as a trusted peer (#402's opt-in pins, host config), remove the old key. There's **no per-device revocation at the relay** at `lean` (device approval, #55, is future work). So if the old key and a token could both be in someone else's hands, rotate `token-key` too: that signs every device out, and only devices that sign in again come back |
 | A GitHub OAuth app secret | Token revocation could be abused | Regenerate it in the GitHub App settings and update the vault |
 
 Rotate by the documented procedure only. It never puts key material on a command line, in a

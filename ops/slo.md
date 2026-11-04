@@ -32,12 +32,18 @@ S2 and real reports cover that.
 
 ## Error-budget policy
 
+The baseline is the nightly train (plan §6.0):
+- the relay reaches production as last night's cut, after its PPE soak and the owner's approval;
+- clients reach Beta after ring 3.
+
+A lower budget tightens that train; it never loosens it.
+
 | Budget left (28 days) | What changes |
 |---|---|
-| > 50% | Normal. Relay deploys as often as merges; Windows releases promote after the standard bake |
-| 25–50% | Relay deploys need a passing staging bake (as now) **and** the owner checks the last deploy's bake before approving the next. Windows bake doubles (8 h) |
-| < 25% | Fixes and reliability work only, for the relay and the host's connection path. Every relay change gets an independent review (as AGENTS.md already requires for the relay) |
-| Spent | Freeze relay feature deploys until the budget recovers above 25%, or the owner accepts the risk in #568 with a reason |
+| > 50% | Normal: the nightly train as in plan §6.0. Hotfix dispatches allowed, with a stated reason |
+| 25–50% | A relay cut needs **two** nights on PPE (about 48 h) before it's offered to production, and the owner checks the last production bake before approving the next. Beta promotion is unchanged (ring 3 still gates it) |
+| < 25% | Production gets only cuts whose changes are fixes or reliability work for the relay and the host's connection path. Beta promotion pauses for client changes that touch the connection path, unless the owner promotes one by hand |
+| Spent | No relay feature cut goes to production until the budget recovers above 25%, or the owner accepts the risk in #568 with a reason. Hotfixes for the incident that spent it are still allowed |
 
 Any one incident that spends more than 20% of a budget gets a post-incident review
 ([incidents.md](incidents.md)), whatever its severity.

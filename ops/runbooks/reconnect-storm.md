@@ -37,7 +37,7 @@ read a refusal spike from a client's log on a machine you own:
 |---|---|---|
 | 4001 | Tokens refused: a key rotated, or tokens expired (they last 30 days) | Expected after a rotation. Otherwise check that `token-key` in the vault didn't change ([security-events](security-events.md)) |
 | 4000 or 403, with no change of ours | A misconfigured client or a scan | The relay already refuses them. Watch CPU and the log cap |
-| 4029 (too many devices) | An account at its 32-device cap: devices never forgotten, or a client making a new device key on every start | Forget the account's stale devices from the owner's machine list. A client minting keys is a bug: halt its release |
+| 4029 (too many devices) | An account with 32 devices **connected at once**. The cap counts live sockets (`RelayHub`), not remembered machines, so forgetting offline machines frees nothing | Close redundant live clients: duplicate host profiles, old PWA installs and browser tabs left open, VMs cloned with the same profile. A client opening a new device key on every start is a bug: halt its release |
 
 Storms also fill the log cap. If A-LOGCAP fires too, see [log-cap](log-cap.md).
 

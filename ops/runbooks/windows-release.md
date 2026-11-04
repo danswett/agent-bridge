@@ -33,8 +33,9 @@ build is stopped by not promoting it past Dev, and machines on Beta never see it
    agent sessions):
    - if the host still runs and reaches the relay, wait for the reverted release (step 2):
      it's a higher version, and installs normally;
-   - if it doesn't, install the last good release by hand from its GitHub release page
-     (`Setup.exe` for the machine's architecture).
+   - if it doesn't, wait for step 2's release (the revert or fix, a **higher** version), then
+     install that release by hand from its GitHub release page (`Setup.exe` for the machine's
+     architecture). Don't install an older release: that's a downgrade.
 4. **Machines not yet updated:** to hold one back, turn off **Install updates automatically**
    in the app's Settings.
 

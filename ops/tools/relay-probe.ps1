@@ -60,6 +60,9 @@ $targets = [ordered]@{
     production = @{
         Url = 'https://relay.bad-duck.com'
         CnameTarget = 'agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io'
+        # The environment's domain-verification id (public: docs/relay-deploy.md "Custom domain").
+        # Any TXT isn't enough: a stale id from another environment also blocks renewal.
+        AsuidValue = '9E5A7D37AE5B378B92399BA82D0EEEF5F4674EE876FF3BF49EB6BB4B53A20E60'
         Timeout = 15
     }
     staging = @{
@@ -113,7 +116,12 @@ function Get-Header($headers, [string] $name) {
 function Test-Certificate([string] $name, [uri] $base) {
     $tcp = [Net.Sockets.TcpClient]::new()
     try {
-        if (-not $tcp.ConnectAsync($base.Host, 443).Wait([TimeSpan]::FromSeconds(10))) { throw 'connect timed out' }
+        # The URL's own port, so the certificate checked is the one the HTTP checks talked to.
+        if (-not $tcp.ConnectAsync($base.Host, $base.Port).Wait([TimeSpan]::FromSeconds(10))) { throw 'connect timed out' }
+        # Without these, a peer that accepts TCP and then stalls the handshake would hang the
+        # probe, losing every result gathered so far.
+        $tcp.ReceiveTimeout = 10000
+        $tcp.SendTimeout = 10000
         # Accept whatever is presented and report the policy errors, so an expired or
         # mismatched certificate is described rather than ending the probe.
         $script:sslErrors = [Net.Security.SslPolicyErrors]::None
@@ -141,7 +149,7 @@ function Resolve-Doh([string] $qname, [string] $type) {
     if ($r.PSObject.Properties['Answer']) { @($r.Answer) } else { @() }
 }
 
-function Test-Dns([string] $name, [uri] $base, [string] $expectedTarget) {
+function Test-Dns([string] $name, [uri] $base, [string] $expectedTarget, [string] $expectedAsuid) {
     try {
         $cname = Resolve-Doh $base.Host 'CNAME' | Where-Object type -EQ 5 | Select-Object -First 1
         if (-not $cname) {
@@ -154,9 +162,10 @@ function Test-Dns([string] $name, [uri] $base, [string] $expectedTarget) {
         }
         else { Add-Result $name 'dns cname' 'PASS' 'CNAME to the production app (DNS only)' }
 
-        $txt = Resolve-Doh "asuid.$($base.Host)" 'TXT' | Where-Object type -EQ 16
-        if ($txt) { Add-Result $name 'dns asuid txt' 'PASS' 'present (domain verification for renewal)' }
-        else { Add-Result $name 'dns asuid txt' 'FAIL' "asuid.$($base.Host) TXT missing; certificate renewal will fail" }
+        $txt = @(Resolve-Doh "asuid.$($base.Host)" 'TXT' | Where-Object type -EQ 16 | ForEach-Object { $_.data.Trim('"', ' ') })
+        if (-not $txt) { Add-Result $name 'dns asuid txt' 'FAIL' "asuid.$($base.Host) TXT missing; certificate renewal will fail" }
+        elseif ($txt -contains $expectedAsuid) { Add-Result $name 'dns asuid txt' 'PASS' 'matches the environment''s verification id' }
+        else { Add-Result $name 'dns asuid txt' 'FAIL' "asuid.$($base.Host) TXT doesn't match the environment's verification id (stale or another environment's); renewal will fail" }
     }
     catch { Add-Result $name 'dns' 'WARN' "DNS-over-HTTPS lookup failed: $($_.Exception.Message)" }
 }
@@ -171,17 +180,27 @@ foreach ($entry in $selected.GetEnumerator()) {
         Add-Result $name 'healthz' 'FAIL' $(if ($h.Error) { $h.Error } else { "HTTP $($h.Status) in $($h.Ms) ms" })
     }
     else {
-        $body = $h.Body | ConvertFrom-Json
-        $version = if ($body.PSObject.Properties['version']) { [string]$body.version } else { '' }
-        $latency = if ($h.Ms -gt $latencyWarnMs -and $name -ne 'staging') { 'WARN' } else { 'PASS' }
-        if ($body.ok -ne $true) { Add-Result $name 'healthz' 'FAIL' "ok=$($body.ok)" }
-        else { Add-Result $name 'healthz' $latency "ok in $($h.Ms) ms; $($body.online) online" }
-
-        $short = if ($version.Length -ge 7) { $version.Substring(0, 7) } else { $version }
-        if ($ExpectVersion -and -not $version.StartsWith($ExpectVersion, [StringComparison]::OrdinalIgnoreCase)) {
-            Add-Result $name 'version' 'FAIL' "serving $(if ($short) { $short } else { 'no version' }), expected $ExpectVersion"
+        # A 200 that isn't the expected JSON is a failure to report, not a reason to stop: the
+        # remaining checks and targets still run.
+        try {
+            $body = $h.Body | ConvertFrom-Json
+            $version = if ($body.PSObject.Properties['version']) { [string]$body.version } else { '' }
+            $ok = $body.PSObject.Properties['ok'] -and $body.ok -eq $true
+            $online = if ($body.PSObject.Properties['online']) { $body.online } else { '?' }
         }
-        else { Add-Result $name 'version' 'PASS' $(if ($short) { "serving $short" } else { 'no version reported (spike build?)' }) }
+        catch { $body = $null }
+        if ($null -eq $body) { Add-Result $name 'healthz' 'FAIL' "HTTP 200 but not the expected JSON (first 80 chars: $($h.Body.Substring(0, [math]::Min(80, $h.Body.Length))))" }
+        else {
+            $latency = if ($h.Ms -gt $latencyWarnMs -and $name -ne 'staging') { 'WARN' } else { 'PASS' }
+            if (-not $ok) { Add-Result $name 'healthz' 'FAIL' 'answered, but ok is not true' }
+            else { Add-Result $name 'healthz' $latency "ok in $($h.Ms) ms; $online online" }
+
+            $short = if ($version.Length -ge 7) { $version.Substring(0, 7) } else { $version }
+            if ($ExpectVersion -and -not $version.StartsWith($ExpectVersion, [StringComparison]::OrdinalIgnoreCase)) {
+                Add-Result $name 'version' 'FAIL' "serving $(if ($short) { $short } else { 'no version' }), expected $ExpectVersion"
+            }
+            else { Add-Result $name 'version' 'PASS' $(if ($short) { "serving $short" } else { 'no version reported (spike build?)' }) }
+        }
     }
 
     $r = Invoke-Probe "$($t.Url)/readyz" $t.Timeout
@@ -193,7 +212,11 @@ foreach ($entry in $selected.GetEnumerator()) {
     }
 
     $k = Invoke-Probe "$($t.Url)/v1/push/key" $t.Timeout
-    $keyLength = if ($k.Status -eq 200) { [string](($k.Body | ConvertFrom-Json).key) | ForEach-Object Length } else { 0 }
+    $keyLength = 0
+    if ($k.Status -eq 200) {
+        try { $j = $k.Body | ConvertFrom-Json; if ($j.PSObject.Properties['key']) { $keyLength = ([string]$j.key).Length } }
+        catch { $keyLength = 0 }
+    }
     if ($keyLength -eq 87) { Add-Result $name 'push key' 'PASS' 'VAPID public key served (87 chars)' }
     else { Add-Result $name 'push key' 'FAIL' "HTTP $($k.Status), key length $keyLength; push subscriptions can't be made" }
 
@@ -204,8 +227,9 @@ foreach ($entry in $selected.GetEnumerator()) {
     if ($c.Status -in 200, 204 -and $allow -eq $pwaOrigin) { Add-Result $name 'cors (pwa origin)' 'PASS' "preflight allows $pwaOrigin" }
     else { Add-Result $name 'cors (pwa origin)' 'FAIL' "preflight HTTP $($c.Status), allow-origin '$allow': the PWA can't sign in" }
 
-    Test-Certificate $name $base
-    if ($t.ContainsKey('CnameTarget')) { Test-Dns $name $base $t.CnameTarget }
+    if ($base.Scheme -eq 'https') { Test-Certificate $name $base }
+    else { Add-Result $name 'tls certificate' 'WARN' "not checked: $($base.Scheme), not https" }
+    if ($t.ContainsKey('CnameTarget')) { Test-Dns $name $base $t.CnameTarget $t.AsuidValue }
 }
 
 $at = Format-Pacific ([DateTimeOffset]::UtcNow)
