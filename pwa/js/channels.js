@@ -94,6 +94,10 @@ export class Channel {
     if (this.closed) { return Promise.reject(new Error('the channel is closed')); }
     const p = this.#sendChain.then(async () => {
       const plain = utf8.encode(JSON.stringify(message));
+      // Refused here, before a nonce is spent, as the host's channel does: its JSON must fit one
+      // transport message deflated or not, and a host refuses one that inflates past that, which
+      // would end the channel. Before deflate it was larger than a relay frame may be.
+      if (plain.length > MAX_MESSAGE) { throw new Error(`a ${plain.length}-byte message does not fit one channel message (at most ${MAX_MESSAGE} bytes)`); }
       this.frame(KIND.transport, await this.hs.send.encryptWithAd(EMPTY, this.peerInflates ? await pack(plain) : plain));
     });
     this.#sendChain = p.catch(() => {});

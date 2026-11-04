@@ -88,6 +88,18 @@ async function pair({ hostInflates }) {
   return { set, host, settled: () => toHost };
 }
 
+test('a message too large to send as JSON is refused before it is sent, though it would deflate to fit, and the channel goes on', async () => {
+  const { set, host, settled } = await pair({ hostInflates: true });
+  const ch = await set.open(host.id);
+
+  await assert.rejects(ch.send({ id: 1, op: 'echo', data: { text: 'a'.repeat(70000) } }), /does not fit/);
+  await ch.send({ id: 2, op: 'echo', data: {} });
+  await settled();
+
+  assert.equal(host.received.length, 1);
+  assert.deepEqual(JSON.parse(fromUtf8.decode(await unpack(host.received[0]))), { id: 2, op: 'echo', data: {} });
+});
+
 for (const hostInflates of [true, false]) {
   test(`a large message goes ${hostInflates ? 'deflated to a host that said it inflates' : 'as JSON to a host that did not say it inflates'}`, async () => {
     const { set, host, settled } = await pair({ hostInflates });
