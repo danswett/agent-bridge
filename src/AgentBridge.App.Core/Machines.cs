@@ -692,10 +692,10 @@ public sealed class RelayFleetLink : IFleetLink
             // A host too old to name its run in hello is known by nothing better than this channel:
             // the relay's presence can arrive out of order, so when it joined could name the run
             // before a restart, and a lost launch would go to the new one too.
-            // HostConnection's hello goes first, as LocalClient.HelloAsync sends it (data {}): a host
-            // that takes it early answers it in the handshake (#603). Asked any other way, it is
-            // sent once open as before.
-            return new RelayClientChannel(c.Hub, await c.Hub.OpenAsync(hostId, TimeSpan.FromSeconds(15), new EarlyRequest(Ops.Hello, new { })).WaitAsync(ct));
+            // HostConnection's hello goes first, exactly as it sends it (asking for hello.changed): a
+            // host that takes it early answers it in the handshake (#603). Asked any other way, it
+            // is sent once open as before.
+            return new RelayClientChannel(c.Hub, await c.Hub.OpenAsync(hostId, TimeSpan.FromSeconds(15), new EarlyRequest(Ops.Hello, new { changes = true })).WaitAsync(ct));
         }
         // Whatever ends a handshake (ChannelHub.EndsChannel: a malformed introduction too) is the
         // machine not answering for now; the connection loop tries again rather than stopping.

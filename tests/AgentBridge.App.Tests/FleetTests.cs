@@ -1732,9 +1732,9 @@ public sealed class RelayFleetLinkTests
         link.Start();
         await Wait.UntilAsync(() => link.Hosts.Any(h => h.Id == host.Id), "the other machine in presence", Patience);
 
-        await using (var first = await link.OpenAsync(host.Id, default)) { Assert.Equal(host.Id, (await first.HelloAsync()).Machine.Id); }
+        await using (var first = await link.OpenAsync(host.Id, default)) { Assert.Equal(host.Id, (await first.HelloAsync(changes: true)).Machine.Id); }
         await using var second = await link.OpenAsync(host.Id, default);
-        var hello = await second.HelloAsync();
+        var hello = await second.HelloAsync(changes: true);
 
         Assert.Equal("Build server", hello.Machine.Name);
         Assert.Equal(new[] { true, false }, hellos);

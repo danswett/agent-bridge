@@ -340,7 +340,9 @@ public sealed class SessionService
             using var once = G5?.Hold();
             foreach (var (channel, watch) in helloWatches)
             {
-                if (!channel.IsOpen)
+                // Closed, not "not open": a hello answered in an IK handshake (#603) watches a
+                // channel that opens a moment after.
+                if (channel.Closed.IsCompleted)
                 {
                     helloWatches.TryRemove(channel, out _);
                     continue;
