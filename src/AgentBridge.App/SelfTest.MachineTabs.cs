@@ -95,6 +95,18 @@ static partial class SelfTest
             var lines = menu?.Items.OfType<MenuFlyoutItem>().Select(i => i.Text).ToList() ?? [];
             check(listed && lines.SequenceEqual(page.MachinesUnderMore.Select(c => c.Label)) && lines.Contains("Lab bench 2 · 0 sessions · View only"),
                 $"lists each machine under More with its state ({string.Join(" | ", lines)})");
+            // A machine under More going offline while the menu is open (#368 review): its line and
+            // tooltip say so then, not once the menu opens again. Label's setter is the view model's,
+            // which a stand-in with no host behind it never calls.
+            var away = extra[1];
+            var awayWas = away.Label;
+            var label = typeof(MachineChoice).GetProperty(nameof(MachineChoice.Label))!;
+            label.SetValue(away, "DSWETT-ARM8 · offline");
+            var awayLine = menu?.Items.OfType<MenuFlyoutItem>().FirstOrDefault(i => i.Tag == away);
+            var awaySaid = awayLine is { Text: "DSWETT-ARM8 · offline" } && ToolTipService.GetToolTip(awayLine) as string == "DSWETT-ARM8 · offline";
+            check(page.MachinesUnderMore.Contains(away) && menu?.IsOpen == true && awaySaid,
+                $"says a machine under More has gone offline while its menu is open (\"{awayLine?.Text}\", tooltip \"{(awayLine is null ? null : ToolTipService.GetToolTip(awayLine))}\")");
+            label.SetValue(away, awayWas);
             if (VisualTreeHelper.GetOpenPopupsForXamlRoot(window.RootElement.XamlRoot).FirstOrDefault()?.Child is { } presenter)
             {
                 await Picture(presenter, Path.ChangeExtension(outFile, ".machine-more.png"));

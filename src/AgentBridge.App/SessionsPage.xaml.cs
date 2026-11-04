@@ -382,6 +382,9 @@ public sealed partial class SessionsPage : UserControl
     {
         if (sender is not MachineChoice choice || !tabs.TryGetValue(choice, out var item)) { return; }
         NameTab(item, choice);
+        // Its line under More, open while the machine goes offline or its sessions change, says so as
+        // its tab does; it was written only as the menu opened (#368 review).
+        foreach (var line in MoreMachinesMenu.Items.OfType<MenuFlyoutItem>().Where(i => i.Tag == choice)) { NameLine(line, choice); }
         // A longer or shorter name may change what fits.
         if (e.PropertyName is nameof(MachineChoice.Short) or "" or null) { QueueArrange(); }
     }
@@ -522,11 +525,17 @@ public sealed partial class SessionsPage : UserControl
         MoreMachinesMenu.Items.Clear();
         foreach (var choice in overflow)
         {
-            var item = new MenuFlyoutItem { Text = choice.Label, Tag = choice };
-            ToolTipService.SetToolTip(item, choice.Label);
+            var item = new MenuFlyoutItem { Tag = choice };
+            NameLine(item, choice);
             item.Click += (_, _) => ChooseFromMore(choice);
             MoreMachinesMenu.Items.Add(item);
         }
+    }
+
+    static void NameLine(MenuFlyoutItem line, MachineChoice choice)
+    {
+        line.Text = choice.Label;
+        ToolTipService.SetToolTip(line, choice.Label);
     }
 
     // A machine chosen under More is a tab chosen like any other: its rows fade in, without sliding
