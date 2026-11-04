@@ -29,7 +29,7 @@ param appInsightsName string
 @description('Monthly budget for the resource group, in the billing currency (USD).')
 param budgetAmount int
 
-@description('First day of the budget\'s first month, yyyy-MM-dd. Fixed: a budget\'s start date can\'t be moved later.')
+@description('First day of the budget\'s first month, yyyy-MM-dd: the existing budget\'s, or the first of the current month (infra/deploy.ps1). Empty: no budget.')
 param budgetStartDate string
 
 param tags object
@@ -235,7 +235,7 @@ resource appAlerts 'Microsoft.Insights/metricAlerts@2018-03-01' = [for a in metr
 
 // A-BUDGET. The credit running out disables the subscription and stops the relay, so cost is an
 // availability risk here (ops/runbooks/cost.md). Covers everything in the resource group.
-resource budget 'Microsoft.Consumption/budgets@2023-11-01' = {
+resource budget 'Microsoft.Consumption/budgets@2023-11-01' = if (!empty(budgetStartDate)) {
   name: 'budget-agent-bridge-relay'
   properties: {
     category: 'Cost'

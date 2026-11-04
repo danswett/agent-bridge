@@ -275,9 +275,14 @@ address alerts go to; later runs reuse the one in the action group:
 ```
 
 Without an address, `deploy.ps1 -Production` says monitoring was skipped and changes nothing
-else. Cost: about $6.50 a month for the availability test ($0.0005 a run, 3 locations every 10
-min); alert rules and the action group's emails cost cents. Availability results go into the
-workspace, a few MB a day against its 0.1 GB daily cap.
+else. `-WhatIf` previews with the placeholder `alerts@example.invalid` in place of the real
+address. What-if prints each resource's predicted properties, and the address isn't a property
+Azure masks, so a preview never shows it; expect it to show a change to the address that the
+real run won't make. The budget's start date can't change once the budget exists, and must be
+in the current month when it's created, so `deploy.ps1` passes the existing budget's date, or
+the first of this month. Cost: about $6.50 a month for the availability test ($0.0005 a run, 3
+locations every 10 min); alert rules and the action group's emails cost cents. Availability
+results go into the workspace, a few MB a day against its 0.1 GB daily cap.
 
 ## History
 

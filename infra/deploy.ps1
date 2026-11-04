@@ -43,7 +43,8 @@ param(
     # registry has to receive an image before the apps can start.
     [switch]$BaseOnly,
     # Where production alerts are emailed (modules/monitoring.bicep). Needed once: later runs
-    # reuse the address already in the action group. Never committed, never printed.
+    # reuse the address already in the action group. Never committed or written out; -WhatIf
+    # previews with a placeholder, because what-if would print it.
     [string]$AlertEmail,
     [switch]$WhatIf
 )
@@ -128,6 +129,17 @@ $env:RELAY_ALERT_EMAIL = if ($AlertEmail) { $AlertEmail } else {
 if ($Production -and -not $env:RELAY_ALERT_EMAIL) {
     Write-Host 'monitoring: no alert address yet, so production alerts, the availability test and the budget are skipped; pass -AlertEmail once'
 }
+# what-if prints each resource's predicted properties, and only masks those Azure marks secret: an
+# email receiver's address isn't one. So a preview runs with a placeholder, and shows a change to
+# the address that a real deploy won't make.
+if ($WhatIf -and $env:RELAY_ALERT_EMAIL) { $env:RELAY_ALERT_EMAIL = 'alerts@example.invalid' }
+
+# A budget's start date must fall in the current month when it's created, and can never change
+# afterwards. So it's the existing budget's date, or else the first of this month (UTC).
+$existingStart = try {
+    az consumption budget list --subscription $Subscription -g $ResourceGroup --query "[?name=='budget-agent-bridge-relay'] | [0].timePeriod.startDate" -o tsv
+} catch { Write-Host "budget: couldn't list existing budgets ($($_.Exception.Message)); assuming none"; $null }
+$env:RELAY_BUDGET_START = if ($existingStart) { ([datetime]$existingStart).ToUniversalTime().ToString('yyyy-MM-dd') } else { [datetime]::UtcNow.ToString('yyyy-MM-01') }
 foreach ($kind in 'staging', 'production') {
     $var = "RELAY_$($kind.ToUpperInvariant())_DEPLOYER"
     if (-not (Get-Item "env:$var" -ErrorAction SilentlyContinue)) {

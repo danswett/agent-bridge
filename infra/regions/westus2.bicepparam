@@ -58,4 +58,5 @@ param operatorPrincipalId = readEnvironmentVariable('RELAY_OPERATOR', '')
 param alertEmail = readEnvironmentVariable('RELAY_ALERT_EMAIL', '')
 param appInsightsName = 'appi-agent-bridge-relay-wus2'
 param budgetAmount = 40
-param budgetStartDate = '2026-11-01'
+// deploy.ps1 sets it: the existing budget's start date, or the first of the current month.
+param budgetStartDate = readEnvironmentVariable('RELAY_BUDGET_START', '')

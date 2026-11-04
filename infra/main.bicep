@@ -79,8 +79,8 @@ param appInsightsName string = ''
 @description('Monthly budget for the resource group, in USD (owner, #568).')
 param budgetAmount int = 40
 
-@description('First day of the budget\'s first month (yyyy-MM-dd). A budget\'s start date can\'t be moved later, so it stays fixed.')
-param budgetStartDate string = '2026-11-01'
+@description('First day of the budget\'s first month (yyyy-MM-dd). It must be in the current month when the budget is created and can\'t change later, so infra/deploy.ps1 passes the existing budget\'s date or the first of this month. Empty: no budget.')
+param budgetStartDate string = ''
 
 var tags = {
   'agent-bridge-stamp': 'relay'
