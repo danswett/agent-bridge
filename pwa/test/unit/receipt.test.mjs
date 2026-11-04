@@ -207,30 +207,31 @@ test('an outcome still waiting out the one-second limit when its view is drawn a
   assert.deepEqual([...first.said, ...said], ['Answer sent', 'Answer delivered']);
 });
 
-test('a view that is not drawn leaves the announcement to one that is, rather than saying it where nobody hears', (t) => {
-  const first = setup(t);
-  first.show({ stage: 'received' });
+test('of two views of a request the one on screen says it, and a line moved on to the next request never says the last one\'s', (t) => {
+  const { tick } = setup(t);
   const said = [];
-  const request = `r${n}`;
-  const hidden = new ReceiptClock({
-    describe: (e, { stalled }) => describeInFlight('reply', e, { machineName: 'ULTRA', stalled }),
+  const view = (name, heard) => new ReceiptClock({
+    describe: (e, { stalled }) => (e.state === 'done' ? outcome('reply') : describeInFlight('reply', e, { machineName: 'ULTRA', stalled })),
     draw: () => {},
-    say: (text) => said.push(`hidden: ${text}`),
-    heard: () => false,
+    say: (text) => said.push(`${name}: ${text}`),
+    heard: () => heard,
   });
-  first.clock.destroy();
-  hidden.show({ request, state: 'sending', stage: 'received', attempts: 1, reason: null, progress: null });
-  first.tick(ReceiptTiming.quietMs);
-  assert.deepEqual(said, []);
-  const shown = new ReceiptClock({
-    describe: (e, { stalled }) => describeInFlight('reply', e, { machineName: 'ULTRA', stalled }),
-    draw: () => {},
-    say: (text) => said.push(`shown: ${text}`),
-  });
-  shown.show({ request, state: 'sending', stage: 'received', attempts: 1, reason: null, progress: null });
-  assert.deepEqual(said, ['shown: Reply sent']);
+  // A session's card while another is open, and Needs you.
+  const card = view('card', false);
+  const lane = view('lane', true);
+  const first = { request: `v${++n}`, state: 'sending', stage: 'received', attempts: 1, reason: null, progress: null };
+  card.show(first);
+  lane.show(first);
+  tick(ReceiptTiming.quietMs);
+  assert.deepEqual(said, ['lane: Reply sent']);
+  // Delivered inside the second, and the lane moves on to the next reply before it is said: it
+  // goes to the page's own line (none here), never onto the lane now showing the next reply.
+  lane.show({ ...first, state: 'done', outcome: 'delivered' });
+  lane.show({ request: `v${++n}`, state: 'sending', stage: null, attempts: 1, reason: null, progress: null });
+  card.destroy();
+  tick(ReceiptTiming.announceGapMs);
+  assert.deepEqual(said, ['lane: Reply sent']);
 });
-
 test('an answer never says Up next', () => {
   assert.equal(describeInFlight('answer', { state: 'sending', stage: 'queued' }).text, 'Passed to the agent');
 });

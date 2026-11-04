@@ -257,8 +257,10 @@ goes when *machine* is back", with its ring still. The thresholds are `ReceiptTi
 reader hears each change once, prefixed "Reply" or "Answer", at most one a second (the later of
 two), never "Sending…", always the outcome; that is kept by request, so the form, Needs you and
 the card's receipt after the question has gone share one timing and say each change once
-between them, said in a view that is on screen (a session's card while another is open leaves
-it to Needs you, or to itself once opened). From Send the line keeps the room the longest outcome needs (two lines in a box
+between them, said in a view of the request that is on screen, or else on the page's own live
+line (a session's card while another is open, a receipt gone with its question, a reply box
+moved on to the next reply), never lost and never on a line showing another request. From
+Send the line keeps the room the longest outcome needs (two lines in a box
 under 640 px wide, one above), so no stage moves the box. If the response is
 lost (a timeout, the channel or relay dropping) it is resent with the same `request` on
 the next channel to that machine, so the host returns the first outcome and never types it
