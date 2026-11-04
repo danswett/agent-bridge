@@ -524,9 +524,19 @@ public sealed partial class SessionsPage : UserControl
         {
             var item = new MenuFlyoutItem { Text = choice.Label, Tag = choice };
             ToolTipService.SetToolTip(item, choice.Label);
-            item.Click += (_, _) => { if (viewModel is not null) { viewModel.SelectedMachine = choice; } };
+            item.Click += (_, _) => ChooseFromMore(choice);
             MoreMachinesMenu.Items.Add(item);
         }
+    }
+
+    // A machine chosen under More is a tab chosen like any other: its rows fade in, without sliding
+    // (ui.md §5.3, Tab switch), as OnMachineTab has them. The bar's own selection follows later
+    // (SyncMachineTab), while syncing, so OnMachineTab doesn't see it.
+    void ChooseFromMore(MachineChoice choice)
+    {
+        if (viewModel is null || viewModel.SelectedMachine == choice) { return; }
+        viewModel.SelectedMachine = choice;
+        if (viewModel.SelectedMachine == choice && ready && List.ItemsPanelRoot is { } panel) { Motion.Enter(panel, "Tab"); }
     }
 
     // --- The sort menu: Your order, Most recent, Machine (#164), the one in force checked. ---
