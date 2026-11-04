@@ -301,17 +301,18 @@ so there are two ways to make that true.
 
 | | (a) **Host signing key** (recommended) | (b) **Designated-verifier MAC** (`CommandMac`, as transfers use) |
 |---|---|---|
-| Primitive | A P-256 ECDSA key `sign`, created beside the host's `dh` key (TPM via NCrypt where it supports ECDSA P-256, else DPAPI or Keychain), listed in the host's roster `add` entry | HKDF from static-static ECDH between the two hosts' `dh` keys, then HMAC (v1-transfer.md:87-104), with a new salt `"agent-bridge agent command v1"` |
+| Primitive | A P-256 ECDSA key `hostSign`, created beside the host's `dh` key (TPM via NCrypt where it supports ECDSA P-256, else DPAPI or Keychain), listed in the host's roster `add` entry | HKDF from static-static ECDH between the two hosts' `dh` keys, then HMAC (v1-transfer.md:87-104), with a new salt `"agent-bridge agent command v1"` |
 | Who can verify | Anyone holding the roster: the target host, the person's app reviewing the audit log, a downstream hop, a federated peer (§7) | Only the target host |
 | Audit | Envelopes are evidence that any rostered device can re-verify later | The target's log is its own word |
 | Chains (§5.4) | Hop *k* can carry hop *k−1*'s envelope, and the next host can check it | Each hop must trust the previous host's account of the chain |
-| Change to #391 | An amendment: a host's `add` entry carries `sign` and `signAlg` (`presence: none`). #391 §3.1 says hosts "never sign" roster entries, and they still never do: framing domain separation (`F("agent-bridge agent command v1", …)`, never `"… roster entry v1"`) means the key's signatures can't be read as roster entries or person commands, and the verifiers of those already require a person kind | None |
+| Change to #391 | **A roster protocol version 2** (§8.10, V1-V3). #391 v1 has no host signing key: `sign` is "absent for a host", strict parsing refuses one on a host's `add`, and any `v` but 1 is refused (#391 at `e00c4709`, L136, L221-223). v2 adds a host `hostSign` key with its own framing label and self-binding. It can never count as an entry signer, cosigner or person-command signer. #391 §3.1's "hosts never sign" roster entries still holds | None to the roster format. It still needs a new op class (§8.10, V3) |
 | Cost | One ECDSA signature per command (about 1-3 ms on a TPM) | One ECDH per peer, cacheable |
 
-**Recommended: (a)**, decided before #391's R1 is built so that the host entry format includes it
-once. Under (b) everything in this note still works for a single account, with a weaker audit
-and chain story (§5.4 then rests on the previous host's word, which is #391's position for any
-compromised host anyway).
+**Recommended: (a)**, which needs #391's roster v2 (§8.10). That must be decided before #391's R1
+is built, so the host entry format changes once. Under (b), everything in this note still works
+for a single account with no roster format change, but with a weaker audit and chain story (§5.4
+then rests on the previous host's word, which is #391's position for any compromised host anyway).
+Under both, the *op class* change (V3) and the freshness and probation gates (V5) are needed.
 
 ### 4.3 Canonical encoding and what is signed
 
@@ -323,7 +324,7 @@ over framed bytes. It is sent as:
 { "body": "eyJ2IjoxLC…", "sig": "MEUCIQ…" }
 ```
 
-`sig` is the issuing host's `sign` signature over `F("agent-bridge agent command v1", bodyBytes)`:
+`sig` is the issuing host's `hostSign` signature over `F("agent-bridge agent command v1", bodyBytes)`:
 strict minimal DER, low-S, `p256-sha256-der`, as #391 specifies for roster entries. Under option
 (b), it is `mac`, the HMAC over the same framed bytes.
 
@@ -334,10 +335,12 @@ strict minimal DER, low-S, `p256-sha256-der`, as #391 specifies for roster entri
   "v": 1,
   "request": "0b7e3c1d-5f2a-4c6e-8d9b-1a2b3c4d5e6f",
   "account": "<issuing host's account id>",
+  "generation": "<issuer's roster generation>",
   "heads": ["<roster entry hash>", "…"],
   "principal": {
     "kind": "agent",
     "machine": "<issuing host device id>",
+    "add": "<entry hash of the issuing host's add>",
     "session": "<agent session id>",
     "instance": "<12-byte base64url>",
     "credential": "<16-byte base64url>",
@@ -369,8 +372,9 @@ strict minimal DER, low-S, `p256-sha256-der`, as #391 specifies for roster entri
 | `v` | 1. Anything else is refused |
 | `request` | A UUID, fresh per command. It is also the **nonce** (§4.4). A resend of the same command reuses it with identical bytes |
 | `account` | The issuer's account. In v1 it must equal the target host's own account (§7.9) |
+| `generation` | The issuer's roster generation (#391 §3.2). A command from another generation (a reset roster) is refused |
 | `heads` | The issuer's current roster heads, as #391 person commands carry them (#391 §7.2) |
-| `principal` | §3.1. `machine` must be the channel peer that delivered it: a host never relays another host's envelope as its own (§4.6) |
+| `principal` | §3.1, plus `add`: the hash of the issuing host's add entry. Principals are keyed by **account + generation + add hash**, because device ids aren't namespaced across accounts and a copy shares its original's id (§8.10, V3, V7). `machine` must be the channel peer that delivered it: a host never relays another host's envelope as its own (§4.6) |
 | `chain` | §5.4. `via` is at most `maxDepth` entries, most recent last. Under (a), each entry may also carry the previous hop's envelope hash, and the target may fetch and check it |
 | `action` | `sessions.list`, `session.get`, `session.read` (§4.7), `session.reply`, `launch.options`, `session.launch`, `launch.result`. **Nothing else verifies.** In particular `session.answer`, `launch.trust.answer`, `session.stop`, `session.transfer`, `attachment.*`, `update.*`, `push.*` and `host.*` are not in the action set, so the envelope cannot express them |
 | `target` | `account` and `machine` must be the target host's own. `session` is required for `session.get`, `session.read` and `session.reply`. `instance` is required for `session.reply` and optional for reads (§4.5). Absent for `sessions.list`, `launch.options` and `session.launch` |
@@ -384,11 +388,14 @@ The owner's tuple maps as: `agent` → `principal.agent`/`launcher`; `session` �
 
 ### 4.4 Replay protection and clock skew
 
-* **Single use.** The target keeps a **durable** replay record keyed by
-  `(principal.machine, request)`. It uses #391 R6's store, which replaces `CommandMemory`
-  (`SignedCommands.cs:79-101`, in memory). The record is written and flushed **before** the action
-  executes; an action whose record can't be written doesn't run. It is kept until `expiresAt` +
-  skew by the host's persisted wall-clock high-water mark (#391 §7.2).
+* **Single use.** The target keeps a **durable** replay record keyed by the issuer's **add hash**
+  and `request` (§8.10, V3). It uses #391 §7.2's store (R6), which replaces `CommandMemory`
+  (`SignedCommands.cs:79-101`, in memory), with the same rules (§8.10, V6):
+  * the record is written and flushed **before** the action executes, and an action whose record
+    can't be written doesn't run;
+  * it is kept until `expiresAt` + skew, judged by the host's persisted wall-clock high-water mark;
+  * the persisted floor of the highest `issuedAt` ever accepted, and the local reset rule, apply
+    as written there.
 * **Idempotent resend.** A command whose `(machine, request)` is known and whose body bytes are
   identical gets the remembered outcome back, and nothing is typed or launched again. That is
   exactly `session.reply`'s and `session.launch`'s `request` semantics today (v1-sessions.md:329;
@@ -444,10 +451,11 @@ may not reach.
 * **Capability.** `agent.command` in `hello` (host-to-host channels only), and only while the host
   is in roster `enforce` mode. A host without it is never sent one. A client channel (`app`,
   `pwa`, `phone`) never gets it.
-* **Who carries.** `principal.machine` must equal the channel peer's device id. Hosts never relay
-  other hosts' envelopes, so a channel peer can only speak for its own sessions, and the relay
-  can't splice an envelope into another channel (the Noise prologue binds both ids,
-  design.md:452-454).
+* **Who carries.** `principal.machine` must equal the channel peer's device id, and the
+  channel's Noise static key must be the `dh` of the **same active add entry** whose `hostSign`
+  key verifies the envelope (§8.10, V4). Hosts never relay other hosts' envelopes, so a channel
+  peer can only speak for its own sessions, and the relay can't splice an envelope into another
+  channel (the Noise prologue binds both ids, design.md:452-454).
 * **Sizes.** The envelope is at most 2 KiB, and the whole message stays under v1's 48 KiB.
   Attachments are out of scope for v1.
 * **Rate.** The relay's per-connection frame rate (`RelayHub.cs:286-290`) is unchanged. The
@@ -458,14 +466,17 @@ may not reach.
 Host T acts on an `agent.command` only if every check passes, in this order (cheap and
 non-disclosing first). Each refusal is audited with its reason:
 
-1. **Channel.** The peer is an active `host` in T's roster, and T is fresh (#391 §6.3, §7.1). A
-   stale host serves nothing here.
+1. **Channel.** The peer's static key is the `dh` of an **active, non-probationary `host` add
+   entry** in T's roster, by bound kind and add hash, never by bare device id (§8.10, V3, V5).
+   T is fresh under #391 §6.3 **and** under the tighter agent-command freshness gate (§8.10, V5).
+   A host stale on either serves no agent commands.
 2. **Parse.** Strict I-JSON, exact field set, `v` 1, sizes within bounds.
 3. **Carrier.** `principal.machine` == the channel peer, `principal.kind` == `agent`.
 4. **Account.** `account` == `target.account` == T's account. In v1 anything else is
    `federation-unsupported` (§7.9).
-5. **Signature.** Under (a), `sig` verifies under the peer's roster `sign` key with the agent
-   framing label. Under (b), the MAC verifies under the pairwise key.
+5. **Signature.** Under (a), `sig` verifies under the `hostSign` key of the **same add entry**
+   whose `dh` is the channel's static key, with the agent framing label (§8.10, V1, V4). Under
+   (b), the MAC verifies under the pairwise key.
 6. **Roster lag.** T holds every head in `heads`, syncing from the peer first (`roster.sync`) if
    not (#391 §3.6). If T's state, after the sync, has the issuer removed, T refuses. If the
    *issuer* is behind T (it lacks a removal T holds), that doesn't matter: T decides on its own
@@ -484,8 +495,10 @@ non-disclosing first). Each refusal is audited with its reason:
 
 **Revocation at the target.**
 * A **removed host**: T closes its channels the moment it applies the removal (#391 §3.7), and
-  step 6 refuses envelopes signed before T learned of it once T has synced. The residual is #391
-  §6.3's: within a relay-maintained partition, a removed host can keep being served there.
+  step 6 refuses envelopes signed before T learned of it once T has synced. #391 §6.3's freshness
+  bounds a withholding relay to 24 h, and nothing bounds it inside a relay-maintained partition.
+  For agent commands, the tighter gate of §8.10 V5 narrows the first to 1 h. The partition
+  residual remains, and is stated in §10.1.
 * A **revoked credential** is local to the issuer. T can't see it, and needs not to: the issuer
   refuses to sign for it. A compromised issuer host can sign for any of its sessions, or invent
   one. That is the "compromised machine" row of §10, and the target's policy (which origin
@@ -545,7 +558,7 @@ meant as off is never read as on (host-config.md:139-141).
 | `outbound.allowAgentLaunchedToLaunch` | bool | Whether a session an agent launched may itself launch (fan-out, §5.4) |
 | `inbound.*.read`, `.reply` | `any` \| `agent-launched` \| `none` | Which sessions on this machine an agent may read or reply to: any live session; only sessions an agent launched (via the bridge); none |
 | `inbound.*.launch` | `false`, or `{ workspaces: "approved" \| [labels], permissions: "ask", agents: "any" \| [ids] }` | Where an agent may launch. **`permissions` can only be `ask`.** `allowAll` is not expressible for an agent: it stays a person's decision, and design.md §5.6 already requires a confirmation for it even from a phone |
-| `inbound.remote.fromMachines` | `any` \| `[device id]` | Which of the account's machines may send. `any` means any active rostered host |
+| `inbound.remote.fromMachines` | `any` \| `[add hash]` | Which of the account's machines may send. `any` means any active, non-probationary rostered host. A list names **add entries**, which the app picks by machine name, never bare device ids. A machine that is re-enrolled or displaced has a new add hash, so it drops out until the owner re-selects it (§8.10, V3, V4) |
 | `inbound.exclude` | session ids and workspace labels | Never reachable by any agent, local or remote. A person can mark a private session or workspace this way |
 | `limits.*` | integers | §5.4, §5.5 |
 | `label` | `prefix` \| `none` | Whether delivered text carries the provenance prefix (§6.4). `prefix` is forced for cross-account |
@@ -794,7 +807,7 @@ command–style signed object:
   (#391 §3.7). A higher `version` replaces a lower one.
 
 **Peer host statements.** Each side publishes to the other, signed by its `linkKey`, the
-**hosts it exposes to this link**: `{link, version, hosts: [{id, dh, sign, name}], expiresAt}`.
+**hosts it exposes to this link**: `{link, version, hosts: [{id, add, dh, hostSign, name}], expiresAt}`.
 * It **minimizes disclosure.** B sees only the machines A chose to expose, with their names, not
   A's roster, devices, kinds or platforms.
 * It is **self-contained to verify.** A's statement verifies under A's `linkKey`, pinned by the link
@@ -818,7 +831,7 @@ command–style signed object:
   across accounts, with nothing else changed.
 
 **The envelope across accounts.** It is §4.3's, with `account` = A, `target.account` = B, and
-the signature under the A host's `sign` key, which B checks against **A's host statement**, not
+the signature under the A host's `hostSign` key, which B checks against **A's host statement**, not
 A's roster. Option 4.2(b) (MAC) also works, from the `dh` key in the statement, but 4.2(a) is
 what lets B's audit prove to B's person what A's host sent.
 
@@ -847,7 +860,7 @@ the other side says. B can expose read to A without A letting any of A's session
 1. **Channel.** The peer is a guest connection whose static key is a host listed in a **live,
    unexpired** link's peer host statement, and T is listed in this side's own expose statement.
 2. **Account.** `account` is the link's peer account, and `target.account` is T's.
-3. **Signature** under the listed host's `sign` key.
+3. **Signature** under the listed host's `hostSign` key, on a guest channel whose static key is that host's listed `dh` (§8.10, V4). Principals are keyed by A's account, generation and add hash, and the full key (V7).
 4. **Freshness of the peer.** T needs a peer host statement version no older than **24 h**
    (re-signed by the peer's link key, or attested by **another** of the peer's listed hosts, the
    same "another device" rule as #391 §6.3). Otherwise the link is stale: reads only, or nothing
@@ -1112,7 +1125,7 @@ way to establish a link.**
 Nothing in §4's envelope or §7.5's verification changes, except that two checks are added. The
 chain B's host walks for an agent command from A's host:
 
-1. Envelope `sig` → A host's `sign` key, listed in **A's peer host statement**, signed by A's
+1. Envelope `sig` → A host's `hostSign` key, listed in **A's peer host statement**, signed by A's
    `linkKey` (§7.3).
 2. A's `linkKey` → **A's repo descriptor**, whose T2 proof verifies under an SSH signing key that
    GitHub lists for `github.userId` (checked by B's app at acceptance and each renewal, and
@@ -1210,8 +1223,8 @@ without it.
 
 | Foundation | Agents use it for | Connectors use it for | Cross-account peers use it for | Owner | #55? | Now |
 |---|---|---|---|---|---|---|
-| **Device and roster trust** | Verifying the issuing host's `sign` key, and its revocation (§4.7 steps 1, 5, 6) | Production trust anchor for the connector key (§8.7, Q16 (a)) | Each side's own hosts: a link is recorded against the own roster (§7.3) | #55 | **Is** #55 | #391 review and decisions |
-| **Principal and key-purpose separation** | `"agent-bridge agent command v1"` and the `sign` key's purposes (§4.2, §8.5) | Connector key purposes: Noise, admission proof, claim proof (#394) | `"agent-bridge link v1"`, link keys | Shared registry, kept by #55 (§8.5) | No (a document and vectors) | Yes: the label registry and negative vectors |
+| **Device and roster trust** | Verifying the issuing host's `hostSign` key, its add entry, probation and revocation (§4.7 steps 1, 5, 6). Needs **roster v2** (§8.10, V1-V5, V7) | Production trust anchor for the connector key (§8.7, Q16 (a)) | Each side's own hosts: a link is recorded against the own roster (§7.3) | #55 | **Is** #55, plus v2 (§8.10) | #391 review and decisions. **#391 is not ready** (sixth review: F1-F3 being fixed; owner decisions open) |
+| **Principal and key-purpose separation** | `"agent-bridge agent command v1"` and the host `hostSign` key's purposes (§4.2, §8.5, §8.10 V1-V2) | Connector key purposes: Noise, admission proof, claim proof (#394) | `"agent-bridge link v1"`, link keys | Shared registry, kept by #55 (§8.5) | No (a document and vectors) | Yes: the label registry and negative vectors |
 | **Owner-controlled issuance** | Launch or adoption at the machine (§3.2, §3.5) | Full-key approval at the selected host (#394 steps 1-3) | Link code plus a presence-signed statement on each side | Per kind: #519, #388, #519 | Agents' local issuance: no. Connector production: §8.7. Links: yes (person commands) | Agent issuance: AP1. Connector: disposable hosts only (#407) |
 | **Narrowly scoped host policy**, at one entry point | `agents` policy (§5) | `connector` grant: exact allowlist (§8.6) | `links[].expose` (§7.4) | One host authorization module, extending #407's `RemoteAuthorization`: device kinds #55, connector grants #388, agent policy #519 | The module: no (#407 exists). Its roster-backed lookup: yes | Yes, behind #407's floor on disposable hosts |
 | **Expiry and renewal** | Credential ≤ process, ≤ 7 days | Grant expiry at the host. Access credential ≤ 15 min, renewal by proving the key, no widening (#394) | Link 30 days, statements 24 h freshness | Per kind | No | Design and tests |
@@ -1241,7 +1254,8 @@ exactly one purpose, and each verifier checks it.
 | **Guest link credential** (§7.3) | Admission of listed peer host keys, routed only to the link's hosts | Same framework as the connector credential. A guest has no account on the target relay |
 | `AGENT_BRIDGE_TOKEN` (`abat1_…`) | Local pipe only, one session | Never sent to any relay or channel. Structurally invalid as an account token (`Tokens.cs:33-36`). Useless from another session (§3.4) |
 | `F("agent-bridge roster entry v1" / "roster cosign v1" / "person command v1" / "presence v1" / "roster head v1", …)` | #391 | — |
-| `F("agent-bridge agent command v1", body)`, host `sign` key | Agent envelopes (§4.3) | A roster entry or person command: a different label, and those verifiers require a person kind (#391 §3.2, §7.2) |
+| `F("agent-bridge agent command v1", body)`, host `hostSign` key (roster v2, §8.10) | Agent envelopes (§4.3) | A roster entry or person command: a different label, and those verifiers require a person kind (#391 §3.2, §7.2) |
+| `F("agent-bridge host key binding v1", account, generation, dh)`, by `hostSign` | The `hostSignProof` in a v2 host add (§8.10, V1) | Anything else. It proves possession of `hostSign`, not of `dh`, which is why carrier binding (V4) is also required |
 | `F("agent-bridge session instance v1", …)` | A hash, not a signature (§3.1) | — |
 | `F("agent-bridge link v1", …)`, per-link key | Link codes and peer host statements (§7.3) | Anything in the peer's own roster |
 | `"agent-bridge command v1"` (`CommandMac` salt) | Person transfer and folder-trust MACs, retired by #391 R6 | Agent commands use their own salt under Q1 (b) |
@@ -1272,7 +1286,8 @@ each verifier refuses the others' bytes.
 ### 8.7 Dependencies: what needs #55/#391, and what doesn't
 
 **Agents** (owner decision 4, unchanged): local agent messaging (AP1-AP3) needs nothing from #55.
-Cross-machine messaging (AP5) needs #391 R1, R3 and R6, and hosts in `enforce`. There is **no**
+Cross-machine messaging (AP5) needs #391 R1, R3 and R6, hosts in `enforce`, and the roster v2
+changes of §8.10. Under Q1 (a) that is V1-V6; under Q1 (b), V3, V5 and V6. There is **no**
 interim signed-in-device or trusted-peer route (Q11).
 
 **Connectors.** Host-side enforcement of the read-only grant needs no roster: #407's
@@ -1285,7 +1300,7 @@ person (#394, "Scope and trust boundary"). Two routes:
 
 | | (a) **Roster anchor** (recommended for production) | (b) **Local pins only**: #407's floor as the production anchor |
 |---|---|---|
-| What | The connector is enrolled in the #55 roster as a new kind, `connector` (an amendment to #391's kind set, like the host `sign` key), approved by a presence-proven person's device. The **per-host grant** stays a local record at the selected host, so the roster says *what* the key is, and the host says *what it may read here* | The owner pins the connector's full key as `service` at the selected host, *and* pins every person's device and host at every account-reachable host, which all run in `permissions.trustedPeers` enforcing mode |
+| What | The connector is enrolled in the #55 roster as a new kind, `connector` (a roster v2 change, like the host `hostSign` key, §8.10), approved by a presence-proven person's device. The **per-host grant** stays a local record at the selected host, so the roster says *what* the key is, and the host says *what it may read here* | The owner pins the connector's full key as `service` at the selected host, *and* pins every person's device and host at every account-reachable host, which all run in `permissions.trustedPeers` enforcing mode |
 | Mixed-fleet gate | Met by #391's cutover (R8): every host enforces the roster | Met only by manually pinning everything everywhere, verified over authenticated channels (#394) |
 | Revocation reach | Account-wide, announced on every device (#391 §6) | Per host, by hand |
 | Status | Needs #391 R1 + R3 + R8, and the `connector` kind | A **proposed architecture decision**, not an authorized exception. #407 is approved only for disposable-host evaluation (host-config.md:145-148) |
@@ -1332,7 +1347,7 @@ purpose, decommissioning or re-keying older relay deployments that share the acc
 | Piece | Shared or separate | Proposed owner |
 |---|---|---|
 | Signed roster, device kinds, freshness, durable replay store (R6), account-token binding (#391 §7.6), the mixed-fleet cutover (R8) | Shared | **#55** (PR #391) |
-| Amendments to #391 for the other kinds: host `sign` key (Q1), `connector` kind (Q16) | Shared, requested by #519 and #388 | **#55**, decided before R1 is built |
+| **Roster v2** for the other kinds (§8.10): host `hostSign` and its binding proof (V1), key-purpose rules (V2), the host-signed agent op class (V3), displacement and probation state exposed to policy (V4, V5), and the `connector` kind (Q16). The cross-account path (V7 (B)) only if chosen | Shared, requested by #519 and #388 | **#55**, decided before R1 is built. #391 is not ready |
 | Signing-label registry and negative vectors (§8.5) | Shared | **#55**, kept with #391's framing |
 | One host authorization module (principal resolution, grants, per-op allowlist, nested principals), extending #407 | Shared | **#55** for device kinds. **#388** adds connector grants, **#519** the agent policy and link scopes |
 | Relay credential framework: purposes, key domains, encoding, old-validator rejection, revocation across deployments | Shared | **#388** (first consumer, and #394 specifies it), reviewed by #55. #519 adds the guest purpose |
@@ -1340,6 +1355,53 @@ purpose, decommissioning or re-keying older relay deployments that share the acc
 | **The connector API as product** (§9): `connector-api.md`, profiles and versioning, schemas, vectors, conformance suite, reference SDKs, host contract tests | Separate from agents. Product, not Home Assistant | **#388**, as the API's owner, with D's #534 as its start (Q29). The Home Assistant connector is its first consumer, in agent-bridge-home-assistant#2 |
 | Agent credentials, `agent.hello`, adoption, envelope, chains and budgets, prefix, `driverFrom`, MCP (#45), links and federation | Separate | **#519** (with #45 for the MCP server) |
 | Attribution taxonomy: `driver` and `driverFrom.kind` (`agent`; later `automation` for connector writes; `external`) | Shared vocabulary | **#519**, with #388 adding `automation` if write grants are ever approved |
+
+### 8.10 Required changes to #55's design: a roster v2
+
+These come from the **sixth independent review of #391** (`docs/design/device-approval.md` at
+`e00c4709`, relayed by the coordinator at 17:45 PT). Each item is either a prerequisite #519
+takes from #391 as written, or a change #519 **requires** of #391's design: a **roster v2**.
+
+**#391 is not ready.** Its review findings F1-F3 are being fixed, and its owner decisions (#391
+§11) are open. Nothing here assumes the changes are accepted. They are requests to #391's owner,
+to be decided before #391's R1 is built, so the format changes once.
+
+| # | Finding (#391 at `e00c4709`) | Required change to #55 (roster v2) | What #519 does with it | Needed by |
+|---|---|---|---|---|
+| **V1** | **Hosts have no signing key.** `sign` is "absent for a host" (L136), strict parsing refuses it on a host's add (L221-223), and `v` other than 1 is refused. The `dh` key can't make third-party-verifiable signatures | **Entry `v: 2`** for host adds: `hostSign` (P-256 ECDSA, `hostSignAlg: p256-sha256-der`) and `hostSignProof`, a signature by `hostSign` over `F("agent-bridge host key binding v1", account, generation, dh)`. The proof shows possession of the key and binds it to that `dh`. The enrollment transcript (#391 §4.2) covers `hostSign`, so the approver saw the joining host present it. A v1 verifier refuses a v2 entry, so v2 is switched on per roster, **one way, by a person's device, after every rostered verifier advertises v2 support** (the same pattern as #391's relay mode). It is never inferred | Q1 (a): envelopes signed with `hostSign` under `F("agent-bridge agent command v1", …)` (§4.2-§4.3) | AP4, AP5, federation. **Not** under Q1 (b) |
+| **V2** | **Key-purpose separation** | Verifiers never accept a `hostSign` signature as an entry `sig`, a `cosig` or a person-command signature. Those resolve the signer's **`sign`** field, which a host doesn't have, and require a person kind. Both new labels go in the registry (§8.5), with negative vectors: a `hostSign` signature over entry or person-command bytes, under every label, is refused | It makes "never approvals or folder trust" **structural**: those need person commands (#391 §7.2), and a host key can never make one | With V1 |
+| **V3** | **No op class for host-signed session operations.** #391 §7.1 gives session ops only to person kinds, and hosts only host-to-host ops (L1335-1336) | A new row in #391 §7.1, **"host-signed agent operations"**: `agent.command` on a host-to-host channel. The carrier is an **active, non-probationary host add entry, by bound kind and add hash**. The inner op is from the agent action set (§4.3) and is evaluated by the target's agent policy. Policy keys on the signer's **add entry and bound kind, never the bare device id** | §4.7 step 1; `fromMachines` as add hashes (§5.1); replay and audit keyed by add hash (§4.4, §5.6) | AP5 (under both Q1 options) |
+| **V4** | **Displacement substitutes descriptors.** A hostile approver senior to a host can displace its enrollment with its own descriptor (#391 §3.3, L221-256). With host signing keys, that becomes attributable impersonation of a named machine, visible only in the announcement | #391 exposes in its computed state which host adds **displaced** another (and which were displaced), for policy consumers | **(i) Carrier binding:** an envelope is accepted only on a Noise channel whose static key is the `dh` of the same add whose `hostSign` verifies it (§4.6). A copy shares the victim's `dh` *public* key, but its maker lacks the private key, so it can't deliver anything. Displacement becomes denial of service against the genuine host (its key no longer matches the winning add), not impersonation. **(ii)** A **displacing add is probationary** for agent commands whatever its age (V5), until a person confirms it at a target. **(iii)** Policy keyed by add hash drops a re-enrolled machine from `fromMachines` lists. **(iv)** Chain evidence (§5.4) signed by a displacing add is treated as unverified. **(v)** The app says so: "Agent messages from *DESK* paused: *DESK* was re-enrolled by *Kitchen laptop*". Residual: an approver that also holds the machine's `dh` private key has compromised that machine already (§10.1) | AP5 |
+| **V5** | **Revocation latency.** Freshness against a withholding relay can lag up to 24 h, and is unbounded inside a partition (#391 §6.3). A removed host could keep sending agent messages meanwhile. A new host acts at once | #391 exposes per-add **probation** state (72 h by the verifier's persisted monotonic clock, #391 §3.4) for host adds as well, as a policy input | **A #519 freshness gate:** a target accepts agent commands only with a head attestation from an active device other than the issuer within **1 h** (Q31). Usage peers every 5 minutes and the local app make that normal. Otherwise it refuses with `stale`. **Probation:** a host add in probation, or a displacing one (V4), may not send cross-machine agent commands. The owner can allow one sooner only **at the target machine** ("Allow agents from *DESK* now", #67-guarded, Q32), because #391's `confirm` is offered only after 72 h. **Partition:** unbounded, stated in §10.1. The per-machine emergency switch `agents.enabled: false` stops agent messaging locally at once | AP5 |
+| **V6** | **Replay** | None: reuse #391 §7.2's durable replay store and its floor | §4.4: written and flushed before execution, the high-water mark, the highest-`issuedAt` floor and the reset rule, keyed by add hash and `request` | AP5 (R6) |
+| **V7** | **Cross-account.** Entries bind `account` and `generation`. A host trusts only a roster it was enrolled into, and `roster.sync` and the relay serve only the same account's approved devices. So a foreign host can't fetch, verify or stay fresh on another account's roster | Depends on the model (below). Under **(A)**: none. Under **(B)**: a pinned foreign genesis fingerprint, a read-only foreign-roster path, cross-account head attestation and revocation propagation | Principals keyed by **account + generation + add hash** (and the full `hostSign` key) everywhere, since device ids aren't namespaced and copies share ids (§4.3) | F1-F6 |
+
+**V7, the two cross-account verification models.**
+
+| | **(A) Statement-based** (§7.3, recommended) | **(B) Foreign roster** (the review's path) |
+|---|---|---|
+| How B verifies A's hosts | A's **peer host statement** lists the exposed hosts by full `dh` and `hostSign` key (with their add hashes), signed by A's per-link key. That key is pinned by the link code (§7.3) or by repo discovery's GitHub-key proof (§7.11.3). A's own client checks the statement against A's roster before signing it | B pins A's **genesis fingerprint**, exchanged out of band (it fits repo discovery, §7.11: the descriptor already carries `genesis` and `generation`, under the T2 proof). It then fetches and verifies A's roster through a new **read-only foreign-roster path** |
+| Revocation propagation | A's client re-signs the statement on any removal or displacement (automatically, with presence). B requires a statement or another A host's attestation within 24 h (§7.5) | A's removals reach B through roster sync. That needs cross-account head attestation and freshness |
+| Disclosure to B | Only the exposed hosts | A's whole roster: every device, name, kind and platform |
+| Change to #391 | None beyond V1 | Serving `roster.sync` and relay storage across accounts, foreign freshness, and #391's acceptance rule (quarantine, seniority) run over a foreign roster |
+| Weakness | The per-link key, and A's client staying online to re-sign | Disclosure, and #391's complexity duplicated across accounts |
+
+**Recommended: (A)**, with B recording A's `genesis` and `generation` from the descriptor. A
+reset of A's roster then invalidates the link, which needs re-linking. (B) is a fallback if the
+owner wants roster-level verification of the other side (Q30).
+
+**What proceeds without roster v2:**
+* AP1-AP3: local agents.
+* The envelope's spec and negative vectors (AP4 as design), and the policy, chains, attribution
+  and audit.
+* The connector API's C1 (§9.7).
+* Federation and repo-discovery design.
+* Under **Q1 (b)** (designated-verifier MAC), even cross-machine single-account agent messaging
+  needs only V3, V5 and V6, with no format change. V4 is moot there, because a copy can't make
+  the MAC without the `dh` private key. That is the fallback if v2 slips.
+
+**What waits for it:** host-signed envelopes (Q1 (a)), third-party-verifiable audit and chains,
+and federation's host keys in peer statements.
 
 ---
 
@@ -1620,8 +1682,10 @@ In addition to design.md §5.1 (:348-361) and #391 §2.
 | **Another session's agent** on the same machine stealing a token (from the environment of a process it can read, or a transcript that printed it) | Same OS user | Use it: the ancestry check refuses a token presented from another session, and the token dies with its process (§3.4) | On macOS and Linux, before peer-pid tracing, present it while `AGENT_BRIDGE_SESSION` is spoofed: the same-user residual of local-pipe.md:121 |
 | **A manually started session** | No credential | Act as an agent anywhere (decision 3) | Read locally, as today (local-pipe.md:95) |
 | **Same-user malware** | Reads keys, environments and stores | | Everything the user can, as today (§1.3). The audit log and signatures make its agent-attributed acts visible, not impossible |
-| **A compromised host** | Holds its `dh` and `sign` keys | Act as another machine's agents (it can't sign as their hosts). Pass person-only checks (#391 §7.2). Reach a machine whose policy excludes it (`fromMachines`) | Sign as any principal *on itself*, invent sessions, and lie about chains under 4.2(b). Bounded by targets' per-origin rates and policy, and visible in their audit. Removed via #391 |
-| **A removed host** | Keys still held | Be accepted by any host that has applied the removal | The partition residual of #391 §6.3 |
+| **A compromised host** | Holds its `dh` and `hostSign` keys | Act as another machine's agents (it can't sign as their hosts). Pass person-only checks (#391 §7.2). Reach a machine whose policy excludes it (`fromMachines`) | Sign as any principal *on itself*, invent sessions, and lie about chains under 4.2(b). Bounded by targets' per-origin rates and policy, and visible in their audit. Removed via #391 |
+| **A removed host** | Keys still held | Be accepted by any host that has applied the removal, or by a target without a head attestation from another device in the last hour (§8.10, V5) | Inside a relay-maintained partition, unbounded (#391 §6.3). Shown as machines that never confirm the removal |
+| **A hostile approver senior to a host** (#391 §3.3) | Impersonate that machine's agents. A displacing copy lacks the machine's `dh` private key, so it can't carry envelopes (§8.10, V4) | Deny service to the genuine machine, and be announced |
+| **A newly enrolled host** | Send cross-machine agent commands during its 72 h probation, unless a person allows it at the target (§8.10, V5) | Act locally |
 | **The relay** | Untrusted | Read, forge, replay or splice envelopes (Noise, signature, durable replay, channel-peer = signer) | Deny or delay service, observe host-to-host sizes and timing |
 | **Clock faults** | A host's clock is wrong | Make a used command run again (durable record, high-water mark) | Make commands fail with `clock` until fixed |
 | **Agent loops** | Two well-meaning agents ping-pong | Run unattended past 20 messages or 60 minutes per person-started conversation | Use up to those budgets |
@@ -1654,8 +1718,8 @@ In addition:
 
 | Dependency | Needed for | Why |
 |---|---|---|
-| **#55 / PR #391** signed roster: R1 library, R3 host gate and freshness, R6 durable replay | Anything cross-machine (decision 4) | Verifying the issuing host, revocation, freshness, durable single use |
-| **#391 amendment: host `sign` key** (Q1 (a)) | Cross-machine under (a) | To be decided before R1 is built |
+| **#55 / PR #391** signed roster: R1 library, R3 host gate and freshness, R6 durable replay. **Not ready**: the sixth review's F1-F3 are being fixed, and owner decisions are open | Anything cross-machine (decision 4) | Verifying the issuing host, revocation, freshness, durable single use |
+| **Roster v2** (§8.10): V1-V2 and V4 under Q1 (a); V3, V5 and V6 under either option; V7 per Q30 | Cross-machine agents, federation | To be decided before R1 is built |
 | **#489 / PR #501** `userMessageFrom` | Attribution of delivered prompts | The field and its parser rules; this design supplies the verified source |
 | **#45** MCP server | Agent-facing tools | The consumer of the pipe ops. Not a blocker for the local slice, which can be exercised from `agent-bridge-host agent …` |
 | **#46 / #134** driver | Done for the machinery (`SessionDrivers`) | Reused unchanged |
@@ -1671,7 +1735,7 @@ Each slice is one PR, security-reviewed independently before merge.
 | **AP1** | **Smallest first slice: local agent principals.** Credential issued at launch (`AGENT_BRIDGE_TOKEN`, hashed store with process binding), `agent.hello` with ancestry binding, the `agents` policy (`enabled`, `issue`, `inbound.local`, `exclude`, `limits`), local `session.reply` / `session.launch` / reads as an agent connection, chains, budgets and rates for local targets, audit log, `driverPrincipal = agent:<machine>/<session>`, `driverFrom`, prefix, `userMessageFrom = agent` from the verified source, and `agent-bridge-host agent list|read|reply|launch` for tests. Federation stub fields (§7.9). Tests: a token from another session is refused; a manual session gets nothing; an agent can't answer an approval or folder trust; depth and budget refuse; the person's reply resets; a resumed session's old token is dead | #501 merged | **No** (decision 4 holds) |
 | AP2 | #45's MCP server on AP1 (stdio), with the old tool names and outcomes | AP1 | No |
 | AP3 | Adoption on Windows: app action, CLI, `agent.credential` | AP1 | No |
-| AP4 | Envelope library: encoding, signing (a) or MAC (b), strict parser, shared positive and negative vectors | #391 R1 (+ host `sign` if (a)) | Library only |
+| AP4 | Envelope library: encoding, signing (a) or MAC (b), strict parser, shared positive and negative vectors | #391 R1 (+ roster v2 V1-V2 if (a), §8.10) | Library only |
 | AP5 | Cross-machine: `agent.command` host-to-host, verification §4.7, `inbound.remote`, `outbound`, durable replay via R6, `instance` on `Session`, `agent.outcome`, `session.read` wait | AP4, #391 R3 + R6, hosts in `enforce` | **Yes** |
 | AP6 | Clients: "from *X* on *Y*" in the app and PWA (extending #503/#504), Settings for the policy, the Agent activity view | AP1 (local), AP5 (remote) | n/a |
 | AP7 | Re-enable `inbound.remote` defaults per machine during the owner's cutover (#391 R8) | AP5, R8 | Yes, live |
@@ -1696,10 +1760,12 @@ the others.
 
 Each has a recommendation. None is decided by this note.
 
-1. **Q1. What "signs with its device key" means.** (a) Hosts get a P-256 ECDSA `sign` key in their
-   roster entry, used only under the agent-command framing label. (b) A designated-verifier MAC
-   from the existing ECDH key, as transfers use. **Recommended: (a)**, which gives verifiable
-   audit, verifiable chains and clean federation. It must be decided before #391 R1 is built.
+1. **Q1. What "signs with its device key" means.** (a) Hosts get a P-256 ECDSA `hostSign` key
+   through a **roster v2** (§8.10, V1-V2), used only under the agent-command framing label.
+   (b) A designated-verifier MAC from the existing ECDH key, as transfers use, with no roster
+   format change. **Recommended: (a)**, which gives verifiable audit, verifiable chains and clean
+   federation. It must be decided before #391 R1 is built. If v2 slips, (b) lets single-account
+   cross-machine messaging proceed with only V3, V5 and V6.
 2. **Q2. Default remote policy when AP5 ships.** (a) Read and reply to any session, launch `ask`
    in approved workspaces, from any of the account's hosts. (b) Read only. (c) Everything off
    until set per machine. **Recommended: (a)**, matching decision 2, with `allowAll` never
@@ -1808,3 +1874,21 @@ The connector API (§9):
     "headless identity" to "connector API (product)", building on D's #534. Alternatively, a new
     issue that #388 and agent-bridge-home-assistant#2 depend on. Either way, Home Assistant
     specifics stay in the Home Assistant connector repository.
+
+The roster v2 requirements (§8.10), from the sixth independent review of #391:
+
+30. **Q30. How a target verifies another account's hosts.** (A) Peer host statements signed by
+    a per-link key, which is pinned by the link code or the GitHub-key proof. (B) A pinned foreign
+    genesis, plus a read-only foreign-roster path in #391. **Recommended: (A)**, recording the
+    peer's `genesis` and `generation` so a reset invalidates the link. (B) discloses the whole
+    roster and duplicates #391's acceptance rule across accounts.
+31. **Q31. The freshness window for accepting agent commands.** **Recommended: 1 hour**: a head
+    attestation from an active device other than the issuer, against #391's general 24 h.
+    Refuse with `stale` otherwise. Usage peers every 5 minutes make this normal. The partition
+    residual is stated, not solved.
+32. **Q32. Probation for agent messaging.** **Recommended:** a host add in its 72 h probation, or
+    one that displaced another, sends no cross-machine agent commands. A person can allow it
+    sooner **at each target machine** only, because #391's `confirm` is offered after 72 h.
+33. **Q33. Roster v2 activation.** **Recommended:** a one-way, per-roster switch by a person's
+    device, offered only after every rostered verifier advertises v2 support, never inferred.
+    Hosts keep v1 behaviour (no host-signed agent commands) until then.
