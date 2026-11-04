@@ -25,6 +25,10 @@ internal sealed record HistoryBudgets
 internal sealed record HistorySeed(IReadOnlyDictionary<string, string?> Delegates, IReadOnlyDictionary<string, string> Calls)
 {
     public IReadOnlySet<string> AgentTurns { get; init; } = new HashSet<string>();
+
+    // Who made the delegates' calls the session keeps (BackgroundWork.CallOwners): a permission
+    // prompt or a nested start naming a call made on an older page is still that delegate's.
+    public IReadOnlyDictionary<string, string> CallOwners { get; init; } = new Dictionary<string, string>();
 }
 
 // One request's read of a session's transcript (docs/protocol/v1-history.md): backwards from the
@@ -52,7 +56,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return HistoryResult.NotAvailable(NotRead); }
         using (handle)
         {
-            try { return new Pass(this, handle, sessionId, dialect, new HistoryContext(seed.Delegates, seed.Calls, remoteApproval), seed.AgentTurns).Page(before, limit); }
+            try { return new Pass(this, handle, sessionId, dialect, new HistoryContext(seed.Delegates, seed.Calls, remoteApproval, seed.CallOwners), seed.AgentTurns).Page(before, limit); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return HistoryResult.NotAvailable(NotRead); }
         }
     }
@@ -72,6 +76,8 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         // the whole request, so no step of it reads past what the request may.
         long scanned;
         long parsed;
+        // Lines Back has parsed looking for turns' starts.
+        int examined;
 
         public HistoryResult Page(string? before, int limit)
         {
@@ -339,7 +345,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
 
         // One line found going back, [start, end) with its newline, which carries a turn's marks:
         // a turn's start, or not. False, adding nothing, when parsing it would spend more than the
-        // request may (PageBytes; the first is always read).
+        // request may (PageBytes; the first line examined is always read).
         bool Examine(long start, long end, ReadOnlySpan<byte> chunk, long chunkAt, List<Start> starts)
         {
             var content = ContentLength(start, end);
@@ -351,10 +357,14 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 // a turn that can't be read, as there.
                 var head = Head(start, content, chunk, chunkAt);
                 if (!dialect.MayStart(head)) { return true; }
-                starts.Add(new Start(start, end, TurnIds.RawOfLong(head, content), null, null));
+                starts.Add(new Start(start, end, TurnIds.RawOfLong(head, content, start), null, null));
                 return true;
             }
-            if (starts.Count > 0 && parsed + content > b.PageBytes) { return false; }
+            // Every line parsed is charged, a turn's start or not: a record carrying a turn's mark in
+            // its text is parsed to learn it is not one, and charging only after the first prompt
+            // let those cost without bound (found in review of #292). The first is always read, so a
+            // page can always make progress past one line up to MaxLineBytes.
+            if (examined++ > 0 && parsed + content > b.PageBytes) { return false; }
             parsed += content;
             var line = new byte[content];
             ReadAt(line, start);
@@ -403,7 +413,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             {
                 var head = new byte[headLength];
                 ReadAt(head, start);
-                return TurnIds.RawOfLong(head, content);
+                return TurnIds.RawOfLong(head, content, start);
             }
             var line = new byte[Math.Max(0, content)];
             ReadAt(line, start);

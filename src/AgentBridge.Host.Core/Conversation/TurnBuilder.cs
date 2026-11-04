@@ -40,17 +40,50 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
     public void Response(string text, DateTimeOffset at, string? message = null)
     {
         // One message written in pieces (Claude's blocks, several entries sharing a message id) is
-        // one response.
-        if (message is not null && _parts.Count > 0 && _parts[^1] is { Kind: HistoryPartKind.Response } last && _lastMessage == message)
+        // one response, gathered here and cut to its cap as it grows: copying the whole of it for
+        // every piece was quadratic in a record of many small blocks (found in review of #292).
+        if (message is not null && _message is not null && _parts.Count - 1 == _messagePart && _lastMessage == message)
         {
-            _parts[^1] = last with { Text = last.Text + "\n\n" + text };
+            _message.Append("\n\n").Append(text);
+            Bound();
             return;
         }
+        Flush();
         Add(Blank(HistoryPartKind.Response, at) with { Text = text });
         _lastMessage = message;
+        if (message is not null)
+        {
+            _message = new System.Text.StringBuilder(text);
+            _messagePart = _parts.Count - 1;
+            Bound();
+        }
     }
 
     string? _lastMessage;
+    System.Text.StringBuilder? _message;
+    int _messagePart = -1;
+    bool _messageCut;
+
+    // Only the response's end is sent (HistoryLimits.Response bytes, so at most that many chars):
+    // once twice that is held, the start goes, and each char is copied a bounded number of times.
+    void Bound()
+    {
+        var keep = HistoryLimits.Response;
+        if (_message!.Length <= 2 * keep) { return; }
+        var from = _message.Length - keep;
+        // Never split a surrogate pair.
+        if (char.IsLowSurrogate(_message[from])) { from--; }
+        _message.Remove(0, from);
+        _messageCut = true;
+    }
+
+    // The gathered message into its part, cut flag and all.
+    void Flush()
+    {
+        if (_message is null) { return; }
+        _parts[_messagePart] = _parts[_messagePart] with { Text = _message.ToString(), Truncated = _messageCut ? true : null };
+        (_message, _messagePart, _messageCut) = (null, -1, false);
+    }
 
     public void Reasoning(string text, DateTimeOffset at) => Add(Blank(HistoryPartKind.Reasoning, at) with { Text = text });
 
@@ -139,6 +172,7 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
     public HistoryTurn Build(bool latest)
     {
         if (Unreadable) { return new HistoryTurn { Id = Id, At = At, Unreadable = true }; }
+        Flush();
         if (!latest) { Abandoned(null); }
         var parts = new List<HistoryPart>(_parts.Count);
         foreach (var p in _parts)
@@ -156,7 +190,8 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
         more += Cap(parts, HistoryPartKind.Question, HistoryLimits.QuestionsPerTurn);
         more += Cap(parts, HistoryPartKind.Response, HistoryLimits.TextsPerTurn);
         more += Cap(parts, HistoryPartKind.Reasoning, HistoryLimits.TextsPerTurn);
-        var truncated = Truncated || more > 0 || parts.Any(p => p.Truncated == true) || Prompt?.Truncated == true;
+        // A question cut to fit (QuestionMapper) is as much a cut as a cut part (found in review of #292).
+        var truncated = Truncated || more > 0 || parts.Any(p => p.Truncated == true || p.Question?.Truncated == true) || Prompt?.Truncated == true;
         var turn = new HistoryTurn
         {
             Id = Id,
@@ -171,7 +206,7 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
     }
 
     static HistoryPart Cut(HistoryPart p, (string? Text, bool Truncated) cut) =>
-        p with { Text = cut.Text, Truncated = cut.Truncated ? true : null };
+        p with { Text = cut.Text, Truncated = cut.Truncated || p.Truncated == true ? true : null };
 
     // Keeps the latest `cap` parts of a kind, and says how many it left out.
     static int Cap(List<HistoryPart> parts, HistoryPartKind kind, int cap)

@@ -86,6 +86,9 @@ internal sealed class BackgroundWork
     // line, so a parser can tell whether an event changed what is shown.
     public int Version { get; private set; }
 
+    // Moves when who made a call may have changed (CallOwners), which no client sees.
+    public int CallsVersion { get; private set; }
+
     // Every id held, for checking that a long session cannot grow it without bound.
     internal int Tracked => _agents.Count + _agentByCall.Count + _calls.Count + _shells.Count + _callAgents.Count;
 
@@ -108,6 +111,7 @@ internal sealed class BackgroundWork
         var args = arguments is { ValueKind: JsonValueKind.Object } a ? a : default;
         if (_calls.Count >= KeepCalls) { _calls.Remove(_calls.Keys.First()); }
         // Cut as it is kept: the skim takes these too, and a prompt can be huge.
+        CallsVersion++;
         _calls[callId] = new TaskCall(Limits.KeepStart(Text.NonBlank(Json.Str(args, "description")), 4 * Limits.SubagentName),
             Limits.KeepStart(Text.NonBlank(Json.Str(args, "prompt")), Limits.SubagentTask), Limits.KeepStart(starter, Limits.SubagentName));
     }
@@ -137,6 +141,7 @@ internal sealed class BackgroundWork
             // One agent id started under ever new call ids would otherwise grow this for good.
             if (!_agentByCall.ContainsKey(callId) && _agentByCall.Count >= 2 * Keep) { _agentByCall.Remove(_agentByCall.Keys.First()); }
             _agentByCall[callId] = key;
+            CallsVersion++;
         }
         if (!_agents.TryGetValue(key, out var agent)) { agent = Add(key); }
         var call = callId is not null && _calls.Remove(callId, out var c) ? c : null;
@@ -426,7 +431,11 @@ internal sealed class BackgroundWork
     {
         if (callId is null) { return; }
         if (!_callAgents.ContainsKey(callId) && _callAgents.Count >= KeepCalls) { _callAgents.Remove(_callOrder.Dequeue()); }
-        if (_callAgents.TryAdd(callId, agentId)) { _callOrder.Enqueue(callId); }
+        if (_callAgents.TryAdd(callId, agentId))
+        {
+            _callOrder.Enqueue(callId);
+            CallsVersion++;
+        }
     }
 
     public string? CallAgent(string? callId) => callId is not null && _callAgents.TryGetValue(callId, out var agent) ? agent : null;
@@ -585,6 +594,24 @@ internal sealed class BackgroundWork
             if (_agents.TryGetValue(key, out var a) && a.Parent is null) { calls[call] = a.Id; }
         }
         return (names, calls);
+    }
+
+    // Who made the delegates' calls the session still keeps: each delegate's own tool calls
+    // (RememberCall) and the task calls a delegate made, by call id. History seeds its reading with
+    // them, so a turn whose permission prompt or nested start names a call made in an earlier turn
+    // reads the same whether that turn is on its page or not (found in review of #292).
+    public Dictionary<string, string> CallOwners()
+    {
+        var owners = new Dictionary<string, string>(_callAgents, StringComparer.Ordinal);
+        foreach (var (call, task) in _calls)
+        {
+            if (task.Parent is { } starter) { owners.TryAdd(call, starter); }
+        }
+        foreach (var (call, key) in _agentByCall)
+        {
+            if (_agents.TryGetValue(key, out var a) && a.Parent is { } parent) { owners.TryAdd(call, parent); }
+        }
+        return owners;
     }
 
     // session.get { id, agent }: the entry with its own words and tools.

@@ -500,6 +500,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     var arguments = Json.Get(data, "arguments");
                     var agent = sub ? Json.Str(e, "agentId") : null;
                     S.Tools.Start(id, name, ToolSummary.From(arguments), Now(at), agent);
+                    // Remembered as the skim remembers it, for history's seed (CallOwners): the
+                    // tool history keeps it too, but only for so long.
+                    if (agent is not null) { S.Background.RememberCall(id, agent); }
                     // A sub-agent's ask_user is its question (status rule 2). Copilot gives its
                     // sub-agents no ask_user: none of 33,966 sub-agent tool calls in two months
                     // of transcripts was one. Read the same way should a later one.

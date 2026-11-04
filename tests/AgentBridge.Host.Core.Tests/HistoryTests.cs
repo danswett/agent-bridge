@@ -599,7 +599,124 @@ public class HistoryTests
         Assert.Equal(Enumerable.Range(0, 6).Select(i => "p" + i), seen);
     }
 
+    // Found in review of #292: who made a delegate's call was known only from the page's own
+    // records, so its permission prompt in the next turn lost whose it was when read alone.
+    [Fact]
+    public async Task A_delegates_permission_prompt_names_the_delegate_when_its_call_is_on_an_older_page()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+            Copilot.User("go", 1),
+            Copilot.ToolStart("t1", "task", new { description = "Helper", prompt = "help" }, 2),
+            Copilot.SubagentStarted("t1", "agent-1", 2),
+            Copilot.ToolStart("c7", "powershell", new { command = "git push" }, 3, agentId: "agent-1"),
+            Copilot.User("meanwhile", 4),
+            Copilot.Permission("req7", "c7", Copilot.Prompts["commands"], 5));
+
+        var alone = (await s.Page(limit: 1)).Turns!.Single();
+        var together = (await s.Page(limit: 2)).Turns![1];
+        Assert.Equal("agent-1", alone.Parts.Single(p => p.Kind == HistoryPartKind.Question).Question!.Agent);
+        Assert.Equal(JsonSerializer.Serialize(together, ProtocolJson.Options), JsonSerializer.Serialize(alone, ProtocolJson.Options));
+    }
+
+    // Found in review of #292 (Codex): a delegate's task call on an older page, and the start it
+    // made on this one, which names no parent: read alone, the start was taken for the main agent's.
+    [Fact]
+    public async Task A_delegate_started_by_another_delegates_call_on_an_older_page_is_never_the_main_agents()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+            Copilot.User("go", 1),
+            Copilot.ToolStart("t1", "task", new { description = "Lead", prompt = "lead" }, 2),
+            Copilot.SubagentStarted("t1", "agent-1", 2),
+            Copilot.ToolStart("t2", "task", new { description = "Follow", prompt = "follow" }, 3, agentId: "agent-1"),
+            Copilot.User("next", 4),
+            Copilot.SubagentStarted("t2", "agent-2", 5),
+            Copilot.Event("subagent.completed", new { toolCallId = "t2" }, 6));
+
+        var alone = (await s.Page(limit: 1)).Turns!.Single();
+        Assert.DoesNotContain(alone.Parts, p => p.Delegate is not null);
+        var together = (await s.Page(limit: 2)).Turns![1];
+        Assert.Equal(JsonSerializer.Serialize(together, ProtocolJson.Options), JsonSerializer.Serialize(alone, ProtocolJson.Options));
+    }
+
+    // Found in review of #292: lines carrying a turn's mark that start no turn were parsed free
+    // until the first prompt was found.
+    [Fact]
+    public async Task Lines_parsed_looking_for_a_prompt_are_charged_to_the_page_even_before_one_is_found()
+    {
+        await using var s = new Copilot_(options: With(new HistoryBudgets { PageBytes = 10_000 }));
+        await s.After([Copilot.User("one", 1), .. Enumerable.Range(0, 6).Select(i => Copilot.User($"d{i} " + new string('d', 4000), 2 + i, agentId: "agent-1"))]);
+
+        var page = await s.Page();
+        Assert.Empty(page.Turns!);
+        Assert.True(page.Start!.Limited);
+        Assert.True(page.Partial);
+    }
+
+    [Fact]
+    public async Task A_question_cut_to_its_cap_makes_its_turn_truncated_and_its_page_partial()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+            Copilot.User("ask", 1),
+            Copilot.ToolStart("q1", "ask_user", new { message = new string('m', Limits.QuestionMessage + 100) }, 2));
+
+        var page = await s.Page();
+        var turn = page.Turns!.Single();
+        Assert.True(turn.Parts.Single(p => p.Kind == HistoryPartKind.Question).Question!.Truncated);
+        Assert.Equal((true, true), (turn.Truncated, page.Partial));
+    }
+
+    // Found in review of #292: two prompts too long to read, the same in their first 4 KiB and
+    // their length, were one turn id, so a client merging by id drew one of them.
+    [Fact]
+    public async Task Two_prompts_too_long_to_read_that_start_alike_are_two_turns()
+    {
+        await using var s = new Copilot_(options: With(maxLineBytes: 2048));
+        static string Long(int n) => new JsonObject
+        {
+            ["type"] = "user.message",
+            ["data"] = new JsonObject { ["content"] = new string('h', 5000), ["attachments"] = new JsonArray() },
+            ["id"] = $"long-{n}",
+            ["timestamp"] = Copilot.At(n),
+        }.ToJsonString();
+        await s.After(Copilot.User("one", 1), Long(2), Long(3));
+
+        var turns = (await s.Page()).Turns!;
+        Assert.Equal(3, turns.Count);
+        Assert.True(turns[1].Unreadable == true && turns[2].Unreadable == true);
+        Assert.NotEqual(turns[1].Id, turns[2].Id);
+        Assert.Equal(turns.Select(t => t.Id), (await s.Page()).Turns!.Select(t => t.Id));
+    }
+
     // ---- Claude and Codex ----
+
+    // Found in review of #292: each block of one message copied the whole response so far, so a
+    // message of many small blocks cost the square of its length to read.
+    [Fact]
+    public async Task A_claude_message_of_many_blocks_is_gathered_in_bounded_work_and_keeps_its_end()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        const int blocks = 3000;
+        Fixture.Append(transcript, [Claude.User("write a lot", 1), .. Enumerable.Range(0, blocks).Select(i => Claude.AssistantMessage("msg_1", 2, null, Claude.Text($"block {i:D4} " + new string('b', 200))))]);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        var allocated = GC.GetTotalAllocatedBytes(precise: true);
+        var page = await source.HistoryAsync(Id, null, 20);
+        allocated = GC.GetTotalAllocatedBytes(precise: true) - allocated;
+
+        var response = page.Turns!.Single().Parts.Single(p => p.Kind == HistoryPartKind.Response);
+        Assert.EndsWith($"block {blocks - 1:D4} " + new string('b', 200), response.Text);
+        Assert.True(response.Truncated);
+        Assert.True(Encoding.UTF8.GetByteCount(response.Text!) <= HistoryLimits.Response);
+        // Copying the whole response for every block allocates over a gigabyte here.
+        Assert.True(allocated < 256L * 1024 * 1024, $"reading the message allocated {allocated:N0} bytes");
+    }
 
     [Fact]
     public async Task A_claude_turn_holds_its_thinking_replies_tools_answered_question_and_delegates()

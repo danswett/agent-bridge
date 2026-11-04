@@ -100,11 +100,12 @@ internal sealed class SessionTracker
             RefreshWorkspace(Path.Combine(dir, "workspace.yaml"));
             changed |= !ReferenceEquals(workspace, _workspace);
         }
-        if (_state.Background.Version != _delegatesVersion)
+        if (_state.Background.Version != _delegatesVersion || _state.Background.CallsVersion != _callsVersion)
         {
             var (names, calls) = _state.Background.MainAgents();
-            MainDelegates = new Conversation.HistorySeed(names, calls);
+            MainDelegates = new Conversation.HistorySeed(names, calls) { CallOwners = _state.Background.CallOwners() };
             _delegatesVersion = _state.Background.Version;
+            _callsVersion = _state.Background.CallsVersion;
         }
         // Not responding (#800) comes from the clock and from the delegates' own transcripts, which
         // nothing above looks at: a hung session is exactly one whose transcript stops changing, so
@@ -152,6 +153,7 @@ internal sealed class SessionTracker
     // replaced whole, never changed in place.
     public Conversation.HistorySeed MainDelegates { get; private set; } = new(new Dictionary<string, string?>(), new Dictionary<string, string>());
     int _delegatesVersion = -1;
+    int _callsVersion = -1;
 
     // updatedAt moves only when something a client shows changed. An event can be of a
     // kind that usually matters (a turn starting) and still change nothing (the session

@@ -21,15 +21,19 @@ internal static class TurnIds
         return hash[..Bytes].ToArray();
     }
 
-    // A record too long to read whole (an unreadable turn's): its start and its length, which no
-    // other record of the transcript shares.
-    public static byte[] RawOfLong(ReadOnlySpan<byte> head, long length)
+    // A record too long to read whole (an unreadable turn's): its start, its length and where it
+    // starts in the transcript. Two such records may share their first 4 KiB and their length
+    // (one long prompt sent twice), never their offset; and a transcript is only ever appended to,
+    // so the offset is as stable as the record (found in review of #292).
+    public static byte[] RawOfLong(ReadOnlySpan<byte> head, long length, long offset)
     {
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         sha.AppendData(head);
-        Span<byte> len = stackalloc byte[8];
-        System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(len, length);
-        sha.AppendData(len);
+        Span<byte> number = stackalloc byte[8];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(number, length);
+        sha.AppendData(number);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(number, offset);
+        sha.AppendData(number);
         return sha.GetHashAndReset()[..Bytes];
     }
 

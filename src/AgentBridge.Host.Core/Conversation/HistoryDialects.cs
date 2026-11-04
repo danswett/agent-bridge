@@ -8,7 +8,7 @@ namespace AgentBridge.Host.Core.Conversation;
 // What one read of a session's history knows beyond the turn it is building: the delegates it has
 // seen start and what each is called, the main agent's task calls, whose tool calls are whose. One
 // per request; turns are built oldest first, so a start is known before its report.
-internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed, IReadOnlyDictionary<string, string> calls, bool remoteApproval)
+internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed, IReadOnlyDictionary<string, string> calls, bool remoteApproval, IReadOnlyDictionary<string, string>? owners = null)
 {
     // The main agent's own delegates, by id, with their names: those this read saw start, and those
     // the session lists now (its subagents with no parent), whose starts may be on an older page.
@@ -17,9 +17,9 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     readonly Dictionary<string, string?> _tasks = new(StringComparer.Ordinal);
     // Who made a call (a delegate's own calls), and which delegate a task call started: two maps,
     // since a nested delegate's task call is made by one delegate and starts another. The session
-    // knows the second for its own delegates, so an unstamped end names the same delegate whatever
-    // page its start is on.
-    readonly Dictionary<string, string> _callAgent = new(StringComparer.Ordinal);
+    // knows both, so an unstamped end, permission prompt or nested start names the same delegate
+    // whatever page its call is on (found in review of #292).
+    readonly Dictionary<string, string> _callAgent = new(owners ?? new Dictionary<string, string>(), StringComparer.Ordinal);
     readonly Dictionary<string, string> _callDelegate = new(calls, StringComparer.Ordinal);
     readonly Dictionary<string, string> _permissions = new(StringComparer.Ordinal);
     const int Keep = 4096;

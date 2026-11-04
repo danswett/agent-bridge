@@ -248,8 +248,8 @@ page, `start.limited` and `partial`). Going back it searches every line whole fo
 turn's record carries (`"user.message"` for Copilot, `"user"` and no tool-result block, `"type":"tool_result"`, for Claude,
 `"user_message"` or `"UserMessage"` for Codex: only ever JSON tokens, never text inside a string)
 and parses as JSON only the lines that carry them, wherever in the line the writer put them. It
-parses at most 32 MiB per request: what it reads of the transcript's first records (the start's time, and whether the oldest turn found is the first) and the prompts it finds count first, and it stops adding older
-turns there, at least one. It parses at most 8 MiB of any one turn (a longer turn is read from
+parses at most 32 MiB per request: what it reads of the transcript's first records (the start's time, and whether the oldest turn found is the first) and every line it parses looking for prompts, whether or not it starts a turn, count first, and it stops adding older
+turns there, at least one. If it runs out before finding any prompt (after the first line it examines, which is always read), the page has no turns, `start.limited` and `partial`. It parses at most 8 MiB of any one turn (a longer turn is read from
 its prompt and its **last** 8 MiB, `truncated` set, and what it skipped counted in neither
 `parts` nor `partsMore`). A turn whose prompt is more than 256 MiB before the cursor ends the
 history there, with `start.limited`. A transcript line longer than 32 MiB is not read, as the tail
