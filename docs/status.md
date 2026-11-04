@@ -199,6 +199,11 @@ retirement lane with their own acceptance criteria. #238 needs its own security 
 product live checks, not a shadow PASS. #45 uses the product's native agent identity, not HA
 credentials. The VM safety and finish rules below apply to this lane only.
 
+This scoping does **not** authorize stopping another session's VM, interfering with the soak,
+starting paid resources without authority, skipping a required product test, removing installed
+compatibility or making a live cutover. #238's live checks run on its final head, with the owner's
+consent where needed, on a slot agreed with VM-M's owner or another already-authorized test slot.
+
 The gate is coverage-based (design §10, Stage 4). Since DEV-VM1 migrated (11-02 14:16 PT) and
 its shadow host was uninstalled (14:50), **VM-M's scripted soak is the only comparator.** Check it
 from the operator's machine:
