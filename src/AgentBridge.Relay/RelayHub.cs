@@ -354,10 +354,23 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     static Task SendJsonAsync(WebSocket ws, object message, CancellationToken ct) =>
         ws.SendAsync(JsonSerializer.SerializeToUtf8Bytes(message), WebSocketMessageType.Text, true, ct);
 
-    Task RefuseAsync(WebSocket ws, int code, string reason)
+    async Task RefuseAsync(WebSocket ws, int code, string reason)
     {
         metrics.Refused(code);
-        return CloseAsync(ws, code, reason);
+        await CloseAsync(ws, code, reason);
+        // A device answering an early challenge sends its proof with its hello, so it is still
+        // sending when its hello is refused; returning now would reset the socket and discard the
+        // close frame before it reads why (4001, which stops a host retrying). As CloseAndDrainAsync.
+        var buffer = new byte[Wire.MaxControl];
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try
+        {
+            while (ws.State == WebSocketState.CloseSent)
+            {
+                if ((await ws.ReceiveAsync(buffer, cts.Token)).MessageType == WebSocketMessageType.Close) { break; }
+            }
+        }
+        catch (Exception e) when (e is WebSocketException or OperationCanceledException) { }
     }
 
     static async Task CloseAsync(WebSocket ws, int code, string reason)
