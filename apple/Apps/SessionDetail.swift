@@ -8,6 +8,8 @@ struct SessionDetail<InspectorControls: View>: View {
     var readOnlyReason: String?
     var machineName: String?
     var canAnswer = false
+    var awaitingResponse = false
+    var historyConnectionID: UUID?
     var onLoadHistory: (@MainActor (String) async throws -> JSONValue)?
     var onLoadDelegate: (@MainActor (String, String) async throws -> JSONValue)?
     var onAskMainToStop: (@MainActor (String) -> Void)?
@@ -64,9 +66,15 @@ struct SessionDetail<InspectorControls: View>: View {
                 if let message = session.activity?["userMessage"]?.string, !message.isEmpty {
                     Section("You") { Text(message) }
                 }
-                if session.response?.isEmpty == false || session.responseTruncated {
+                if awaitingResponse || session.response?.isEmpty == false || session.responseTruncated {
                     Section("\(session.agent.capitalized) response") {
+                        if awaitingResponse {
+                            HostWorkingIndicator()
+                        }
                         if let response = session.response, !response.isEmpty {
+                            if awaitingResponse {
+                                Text("Previous response").font(.caption).foregroundStyle(.secondary)
+                            }
                             BridgeMarkdown(response)
                         }
                         if session.responseTruncated {
@@ -138,7 +146,9 @@ struct SessionDetail<InspectorControls: View>: View {
                     Section {
                         DisclosureGroup("Tool history", isExpanded: $historyExpanded) {
                             if historyExpanded {
-                                SessionHistoryView(sessionID: session.id, updatedAt: session.updatedAt, onLoad: onLoadHistory) {
+                                SessionHistoryView(sessionID: session.id, updatedAt: session.updatedAt,
+                                                   connectionID: historyConnectionID, onLoad: onLoadHistory)
+                                {
                                     fullSession = $0
                                 }
                                 .id(session.id)

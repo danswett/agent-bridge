@@ -41,6 +41,9 @@ struct MachinesView: View {
             List {
                 Section {
                     Text(store.connectionStatus).foregroundStyle(.secondary)
+                    if !store.isSample, !store.isFixture, store.connectionPresentation.remote != store.connectionStatus {
+                        Text(store.connectionPresentation.remote).foregroundStyle(.secondary)
+                    }
                     if store.cachedUsage != nil {
                         Button("Usage Across Machines", systemImage: "chart.bar") { showingAccountUsage = true }
                     }

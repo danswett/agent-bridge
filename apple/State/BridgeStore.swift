@@ -25,6 +25,8 @@ final class BridgeStore {
     private(set) var hosts: [HostStore] = []
     private(set) var roster: [RelayMachine] = []
     private(set) var remoteStatus = "Not signed in"
+    private(set) var isRelayConnected = false
+    private(set) var rosterReceivedAt: Date?
     private(set) var account: RelayAccount?
     private(set) var signInCode: RelayDeviceCode?
     private(set) var signInStatus: String?
@@ -38,7 +40,7 @@ final class BridgeStore {
     @ObservationIgnored private let usageCache = BridgeUsageCache()
     @ObservationIgnored private lazy var usageLifecycle = BridgeUsageLifecycle(cache: usageCache)
     @ObservationIgnored private var cacheSession: BridgeUsageCacheSession?
-    @ObservationIgnored private var hasRosterSnapshot = false
+    private var hasRosterSnapshot = false
     @ObservationIgnored private var usageRoster = Set<String>()
     @ObservationIgnored private var usageRosterRevision = 0
     @ObservationIgnored private var pendingSelection: (machine: String, session: String)?
@@ -123,11 +125,18 @@ final class BridgeStore {
         if isSample {
             return "Sample sessions · not connected"
         }
-        let connected = canonicalHosts.filter(\.isLive).count
-        if connected > 0 {
-            return "\(connected) \(connected == 1 ? "machine" : "machines") connected · \(entries.count) sessions"
-        }
-        return hosts.first?.status ?? remoteStatus
+        return connectionPresentation.summary
+    }
+
+    var connectionPresentation: BridgeConnectionPresentation {
+        BridgeConnectionPresentation(
+            connectedMachines: canonicalHosts.filter(\.isLive).count, sessions: entries.count,
+            signedIn: account != nil, signingIn: isSigningIn, signInStatus: signInStatus,
+            relayStatus: remoteStatus, relayConnected: isRelayConnected,
+            receivedRoster: hasRosterSnapshot, knownRemoteHosts: roster.count,
+            onlineRemoteHosts: roster.filter(\.online).count,
+            localStatus: hosts.first(where: \.isLocal).map { "Profile \(profile) · \($0.status)" }
+        )
     }
 
     private var preferenceScope: String {
@@ -245,6 +254,9 @@ final class BridgeStore {
     }
 
     func disconnect() {
+        isRelayConnected = false
+        hasRosterSnapshot = false
+        rosterReceivedAt = nil
         generation = UUID()
         relayTask?.cancel()
         relayTask = nil
@@ -368,6 +380,9 @@ final class BridgeStore {
             var delay = 1
             while !Task.isCancelled, token == generation {
                 do {
+                    isRelayConnected = false
+                    hasRosterSnapshot = false
+                    rosterReceivedAt = nil
                     let identity: NoiseKeyPair
                     if let bytes = try BridgeKeychain.load("identity:\(address):\(account.accountId)") {
                         identity = try NoiseKeyPair(rawRepresentation: bytes)
@@ -383,6 +398,7 @@ final class BridgeStore {
                     try Task.checkCancellation()
                     guard token == generation else { await connection.disconnect(); return }
                     delay = 1
+                    isRelayConnected = true
                     remoteStatus = "Signed in as \(account.login)"
                     for try await event in events {
                         guard token == generation else { await connection.disconnect(); return }
@@ -398,6 +414,9 @@ final class BridgeStore {
                         await old.disconnect()
                     }
                     guard token == generation else { return }
+                    isRelayConnected = false
+                    hasRosterSnapshot = false
+                    rosterReceivedAt = nil
                     relay = nil
                     hosts.filter { !$0.isLocal }.forEach { $0.stop() }
                     remoteStatus = "\(error.localizedDescription) Reconnecting…"
@@ -411,6 +430,7 @@ final class BridgeStore {
     private func applyPresence(_ machines: [RelayMachine], connection: RelayBridge) {
         roster = machines
         hasRosterSnapshot = true
+        rosterReceivedAt = Date()
         pruneCachedRoster()
         for host in hosts {
             if let usage = host.usage {

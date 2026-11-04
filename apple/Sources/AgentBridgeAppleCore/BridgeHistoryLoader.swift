@@ -27,6 +27,7 @@ public final class BridgeHistoryLoader {
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var sessionID: String?
     @ObservationIgnored private var active = false
+    @ObservationIgnored private var connectionID: UUID?
 
     public init(subject: Subject = .session) {
         self.subject = subject
@@ -35,6 +36,7 @@ public final class BridgeHistoryLoader {
     public func activate(sessionID: String) {
         generation = UUID()
         active = true
+        connectionID = nil
         if self.sessionID != sessionID {
             value = nil; error = nil; loadedAt = nil; hasLoaded = false; isMissing = false
         }
@@ -45,6 +47,16 @@ public final class BridgeHistoryLoader {
         active = false
         generation = UUID()
         pending = nil
+        connectionID = nil
+    }
+
+    public func connectionChanged(_ id: UUID?, load: @escaping @MainActor (String) async throws -> JSONValue) {
+        guard connectionID != id else { return }
+        connectionID = id
+        generation = UUID()
+        pending = nil
+        guard active, id != nil else { return }
+        refresh(load: load)
     }
 
     public func refresh(load: @escaping @MainActor (String) async throws -> JSONValue) {

@@ -58,6 +58,7 @@ final class HostStore: Identifiable {
     private(set) var isLive = false
     private(set) var isConnecting = false
     private(set) var status = "Not connected"
+    private(set) var awaitingResponses: Set<String> = []
     private(set) var discoveryHold: String?
     private(set) var connectionID = UUID() {
         // The host stages files for one connection. Hidden sessions keep their text drafts.
@@ -86,6 +87,7 @@ final class HostStore: Identifiable {
     /// One receipt per session, like the retained mutation slot. A view reopening or a
     /// duplicate receipt must not erase a newly composed draft with the same text.
     @ObservationIgnored private var cleanedReplyRequests: [String: UUID] = [:]
+    @ObservationIgnored private var responseProgress: [String: ResponseProgress] = [:]
 
     init(id: String, name: String, isLocal: Bool, provider: @escaping @Sendable () async throws -> HostTransport) {
         self.id = id
@@ -125,6 +127,10 @@ final class HostStore: Identifiable {
 
     var isRunning: Bool {
         task != nil
+    }
+
+    func isAwaitingResponse(for sessionID: String) -> Bool {
+        isLive && awaitingResponses.contains(sessionID)
     }
 
     func reconnect(provider: @escaping @Sendable () async throws -> HostTransport) {
@@ -307,6 +313,12 @@ final class HostStore: Identifiable {
                 }
                 try Task.checkCancellation()
                 guard token == generation else { await current.close(); return }
+                if hello?["machine"]?["instance"]?.string == nil
+                    || hello?["machine"]?["instance"] != greeting["machine"]?["instance"]
+                {
+                    responseProgress = [:]
+                    awaitingResponses = []
+                }
                 hello = greeting
                 name = greeting["machine"]?["name"]?.string ?? name
                 var state = SessionStore()
@@ -369,6 +381,7 @@ final class HostStore: Identifiable {
                             sessions = latest
                         }
                         if previous != latest || initialSnapshot {
+                            updateResponseProgress(latest)
                             onSessionsChanged?(previous, latest, initialSnapshot)
                         }
                         initialSnapshot = false
@@ -395,6 +408,15 @@ final class HostStore: Identifiable {
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
             delay = min(delay * 2, 15)
         }
+    }
+
+    private func updateResponseProgress(_ latest: [BridgeSession]) {
+        let ids = Set(latest.map(\.id))
+        responseProgress = responseProgress.filter { ids.contains($0.key) }
+        for session in latest {
+            responseProgress[session.id, default: ResponseProgress()].receive(session)
+        }
+        awaitingResponses = Set(responseProgress.compactMap { $0.value.awaitingResponse ? $0.key : nil })
     }
 
     private func subscribe(_ state: inout SessionStore, transport: HostTransport, generation token: UUID) async throws {

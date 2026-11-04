@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 swift test
+bash scripts/test-mac-attachment-menu.sh
 swiftformat . --lint --swiftversion 6.0 --exclude .build,AgentBridgeApple.xcodeproj
 xcodegen generate
 xcodebuild -quiet -project AgentBridgeApple.xcodeproj -scheme AgentBridgeMac \

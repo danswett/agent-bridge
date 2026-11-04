@@ -8,14 +8,17 @@ import UniformTypeIdentifiers
 #endif
 
 @MainActor
-struct AttachmentComposer: View {
+struct AttachmentComposer<Footer: View>: View {
     let store: BridgeStore
     let host: HostStore
     @Binding var attachments: [(UUID, String)]
     var disabled = false
+    var compact = false
     var onBusy: (Bool) -> Void = { _ in }
+    @ViewBuilder var footer: () -> Footer
     @State private var uploader = BridgeAttachmentUploader()
     @State private var importing = false
+    @State private var choosingPhoto = false
     @State private var photo: PhotosPickerItem?
     @State private var work: Task<Void, Never>?
     @State private var busy = false
@@ -24,6 +27,93 @@ struct AttachmentComposer: View {
     @State private var error: String?
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            attachmentList
+            progress
+            if compact {
+                HStack(spacing: 10) {
+                    attachmentMenu
+                    footer()
+                }
+            } else {
+                if host.can("sessions.attach") {
+                    HStack {
+                        Button("Attach File", systemImage: "paperclip") { importing = true }
+                        PhotosPicker(selection: $photo, matching: .images) { Label("Photo", systemImage: "photo") }
+                        #if os(macOS)
+                            Button("Paste Image", systemImage: "clipboard") { pasteImage() }
+                        #endif
+                    }
+                    .disabled(attachmentsUnavailable)
+                    Text(attachmentHint)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            errorMessage
+        }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.item]) { result in
+            switch result {
+            case let .success(url): start { ImportedAttachment(url: url, temporaryDirectory: nil) }
+            case let .failure(failure): error = failure.localizedDescription
+            }
+        }
+        .photosPicker(isPresented: $choosingPhoto, selection: $photo, matching: .images)
+        .onChange(of: photo) {
+            guard let photo else { return }
+            self.photo = nil
+            start {
+                guard let image = try await photo.loadTransferable(type: ImportedPhoto.self) else { throw BridgeOperationError("The photo could not be imported.") }
+                return ImportedAttachment(url: image.url, temporaryDirectory: image.directory)
+            }
+        }
+        .onChange(of: host.connectionID) {
+            work?.cancel()
+            attachments = []
+        }
+        .onDisappear { work?.cancel() }
+    }
+
+    private var attachmentHint: String {
+        "Up to 10 files. Images are reduced when needed to fit this connection."
+    }
+
+    private var attachmentsUnavailable: Bool {
+        disabled || busy || !host.can("sessions.attach") || attachments.count >= 10
+    }
+
+    private var attachmentMenu: some View {
+        #if os(macOS)
+            MacAttachmentMenu(
+                disabled: attachmentsUnavailable, hint: attachmentHint,
+                help: host.can("sessions.attach") ? attachmentHint : "This machine does not currently offer attachments.",
+                attachFile: { importing = true },
+                choosePhoto: { choosingPhoto = true },
+                pastePhoto: { pasteImage() }
+            )
+            .frame(width: 36, height: 36)
+        #else
+            Menu {
+                Button("Attach File…", systemImage: "paperclip") { importing = true }
+                Button("Choose Photo…", systemImage: "photo") { choosingPhoto = true }
+                Divider()
+                Text(attachmentHint)
+            } label: {
+                Label("Add attachment", systemImage: "plus")
+                    .labelStyle(.iconOnly)
+                    .font(.title2)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(.rect)
+            }
+            .menuIndicator(.hidden)
+            .tint(.primary)
+            .fixedSize()
+            .disabled(attachmentsUnavailable)
+            .help(host.can("sessions.attach") ? attachmentHint : "This machine does not currently offer attachments.")
+            .accessibilityIdentifier("composer-attachment-menu")
+        #endif
+    }
+
+    private var attachmentList: some View {
         ForEach(attachments, id: \.0) { attachment in
             HStack {
                 Label(attachment.1, systemImage: "paperclip")
@@ -35,6 +125,9 @@ struct AttachmentComposer: View {
                     .disabled(disabled || busy)
             }
         }
+    }
+
+    @ViewBuilder private var progress: some View {
         if busy {
             if let fraction {
                 ProgressView(message, value: fraction)
@@ -42,41 +135,12 @@ struct AttachmentComposer: View {
                 ProgressView(message)
             }
         }
-        if host.can("sessions.attach") {
-            HStack {
-                Button("Attach File", systemImage: "paperclip") { importing = true }
-                PhotosPicker(selection: $photo, matching: .images) { Label("Photo", systemImage: "photo") }
-                #if os(macOS)
-                    Button("Paste Image", systemImage: "clipboard") { pasteImage() }
-                #endif
-            }
-            .disabled(disabled || busy || !host.isLive || attachments.count >= 10)
-            Text("Up to 10 files. Images are reduced when needed to fit this connection.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
+    }
+
+    @ViewBuilder private var errorMessage: some View {
         if let error {
             Text(error).font(.caption).foregroundStyle(.red)
         }
-        Color.clear.frame(height: 0)
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.item]) { result in
-                switch result {
-                case let .success(url): start { ImportedAttachment(url: url, temporaryDirectory: nil) }
-                case let .failure(failure): error = failure.localizedDescription
-                }
-            }
-            .onChange(of: photo) {
-                guard let photo else { return }
-                self.photo = nil
-                start {
-                    guard let image = try await photo.loadTransferable(type: ImportedPhoto.self) else { throw BridgeOperationError("The photo could not be imported.") }
-                    return ImportedAttachment(url: image.url, temporaryDirectory: image.directory)
-                }
-            }
-            .onChange(of: host.connectionID) {
-                work?.cancel()
-                attachments = []
-            }
-            .onDisappear { work?.cancel() }
     }
 
     private func endpoint(connection: UUID) -> BridgeAttachmentUploadEndpoint {
@@ -153,6 +217,15 @@ struct AttachmentComposer: View {
             } catch { self.error = error.localizedDescription }
         }
     #endif
+}
+
+extension AttachmentComposer where Footer == EmptyView {
+    init(store: BridgeStore, host: HostStore, attachments: Binding<[(UUID, String)]>,
+         disabled: Bool = false, onBusy: @escaping (Bool) -> Void = { _ in })
+    {
+        self.init(store: store, host: host, attachments: attachments, disabled: disabled,
+                  compact: false, onBusy: onBusy, footer: { EmptyView() })
+    }
 }
 
 /// Pasteboard access stays on the UI actor; writing up to 100 MiB must not.
