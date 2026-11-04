@@ -100,7 +100,9 @@ test('Passed to an idle agent with nothing after it for 10 s says not picked up 
 test('a wait says why: the first copy still being delivered, no answer yet, or no machine to send to', (t) => {
   const { show, shown, tick } = setup(t);
   show({ stage: 'typed' });
-  tick(ReceiptTiming.quietMs + ReceiptTiming.dwellMs);
+  // Each tick ends where a timer is due: a mocked tick runs what falls due at the time it ends.
+  tick(ReceiptTiming.quietMs);
+  tick(ReceiptTiming.dwellMs);
   show({ state: 'waiting', reason: 'still being delivered' });
   assert.equal(shown(), 'Passed to the agent · still being delivered');
   tick(ReceiptTiming.dwellMs);
@@ -109,6 +111,26 @@ test('a wait says why: the first copy still being delivered, no answer yet, or n
   tick(ReceiptTiming.dwellMs);
   show({ state: 'waiting', reason: 'not connected' });
   assert.equal(shown(), 'Waiting for ULTRA · it goes when ULTRA is back');
+});
+
+test('a resend that meets the first copy in flight keeps saying still being delivered, and says so once, as it goes again and again', (t) => {
+  const { show, shown, drawn, said, tick } = setup(t);
+  show({ stage: 'received' });
+  tick(ReceiptTiming.quietMs);
+  tick(ReceiptTiming.sentStallMs);
+  show({ state: 'waiting', reason: 'still being delivered' });
+  assert.equal(shown(), 'Sent · still being delivered');
+  for (let i = 0; i < 3; i++) {
+    tick(3000);
+    show({ state: 'sending', reason: null, attempts: 2 + i });
+    tick(100);
+    show({ state: 'waiting', reason: 'still being delivered' });
+  }
+  tick(ReceiptTiming.announceGapMs);
+  assert.equal(shown(), 'Sent · still being delivered');
+  assert.equal(drawn.filter((d) => d === 'Sent · still waiting on ULTRA').length, 1);
+  assert.equal(said.filter((s) => s === 'Reply still being delivered').length, 1);
+  assert.equal(said.at(-1), 'Reply still being delivered');
 });
 
 test('a machine without progress shows Sending…, Still sending… after 3 s, and a resend reads Still sending…, never Sending again…', (t) => {
