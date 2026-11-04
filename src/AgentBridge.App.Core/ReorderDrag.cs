@@ -194,6 +194,9 @@ public static class ReorderWords
 
     public static string Cancelled((int Position, int Of) at) => $"Cancelled. Back at position {at.Position} of {at.Of}.";
 
+    // The held session ended, which ends its move (#594; the wording is with the VP).
+    public static string Ended(string title) => $"{title} ended. Move cancelled.";
+
     // Alt+Up or Alt+Down at its group's end moves nothing.
     public static string End(bool up, bool pinned) => up ? $"Top of {Group(pinned)}." : $"End of {Group(pinned)}.";
 

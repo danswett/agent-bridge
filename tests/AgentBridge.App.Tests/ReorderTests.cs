@@ -124,6 +124,7 @@ public sealed class ReorderTests
         Assert.Equal("Moved to position 5 of 12 in Sessions.", ReorderWords.Dropped((5, 12), crossed: false, pinned: false));
         Assert.Equal("Pinned. Position 3 of 3 in Pinned.", ReorderWords.Dropped((3, 3), crossed: true, pinned: true));
         Assert.Equal("Cancelled. Back at position 3 of 12.", ReorderWords.Cancelled((3, 12)));
+        Assert.Equal("Fix the build ended. Move cancelled.", ReorderWords.Ended("Fix the build"));
         Assert.Equal("Top of Pinned.", ReorderWords.End(up: true, pinned: true));
         Assert.Equal("End of Sessions.", ReorderWords.End(up: false, pinned: false));
         Assert.Equal("Drop here to keep it pinned", ReorderWords.Keep(pinned: true));

@@ -844,6 +844,8 @@ public sealed partial class SessionsPage
         drag = null;
         reorderedUntil = DateTime.UtcNow.AddSeconds(1);
         StopHolding();
+        // Said in place of anything still waiting to be said, while its row is still there to say it.
+        d.Row.Say(ReorderWords.Ended(d.Card.Title));
         Reset(d.Items.Values);
         HideLayer();
         var visual = Visual(d.Item);
