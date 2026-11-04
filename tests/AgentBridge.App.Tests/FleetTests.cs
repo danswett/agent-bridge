@@ -44,9 +44,12 @@ public sealed class FleetTests : IAsyncLifetime
         link.Endpoints["remote-id"] = remoteHost.Endpoint;
         local = localHost.Connect(ui);
         main = new MainViewModel(Build(Machine.LocalKey, local), new UsageViewModel(clock, new UsageCache(cacheFile, clock)));
-        fleet = new Fleet(link, main, ui, h => Build(h.Id, new HostConnection(ct => link.OpenAsync(h.Id, ct), ui) { RetryDelay = TimeSpan.FromMilliseconds(100) }), clock);
+        fleet = new Fleet(link, main, ui, h => Build(h.Id, new HostConnection(ct => link.OpenAsync(h.Id, ct), ui) { RetryDelay = TimeSpan.FromMilliseconds(100), RefusedRetryDelay = refusedRetryDelay }), clock);
         return Task.CompletedTask;
     }
+
+    // How long the other machines wait after a refusal; set before they are listed.
+    TimeSpan? refusedRetryDelay;
 
     Machine Build(string key, HostConnection host)
     {
@@ -124,6 +127,43 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.StartsWith("Build server · Copilot", Card("there")!.Meta);
         Assert.StartsWith("Test PC · Copilot", Card("here")!.Meta);
         Assert.Equal(1, main.Waiting);
+    }
+
+    // As agent-executor's host answers a device it has not approved: hello, offering nothing, and
+    // a refusal of the sessions the app asks for next. Asked again every 5 s for hours (#602).
+    async Task RefusedAsync()
+    {
+        const string notApproved = "This device is not an explicitly approved operator; approve its public device ID locally.";
+        remoteHost.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "linux", "0.1.0", ReadOnly: notApproved), []));
+        remoteHost.On(Ops.SessionsSubscribe, _ => throw new InvalidOperationException(notApproved));
+        refusedRetryDelay = TimeSpan.FromMinutes(5);
+        await Wait.UntilAsync(() => local.State == LinkState.Connected, "this machine's host");
+        link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        await Wait.UntilAsync(() => TestUi.Read(() => main.MachineOf("remote-id"))?.Host.State == LinkState.Refused, "the refusal");
+        // Several times the ordinary retry delay (100 ms here), which asked again each time before.
+        await Task.Delay(TimeSpan.FromMilliseconds(600));
+        Assert.Single(remoteHost.Sent(Ops.Hello));
+    }
+
+    [Fact]
+    public async Task A_machine_whose_host_refused_this_device_is_asked_again_at_once_when_the_accounts_machines_change()
+    {
+        await RefusedAsync();
+
+        link.Known = [new KnownMachine("laptop-id", "Laptop", "host", Make.T0)];
+        link.Raise();
+
+        await Wait.UntilAsync(() => remoteHost.Sent(Ops.Hello).Count == 2, "the host asked again");
+    }
+
+    [Fact]
+    public async Task A_machine_whose_host_refused_this_device_is_asked_again_at_once_when_it_is_opened()
+    {
+        await RefusedAsync();
+
+        ui.Post(() => main.SelectedMachine = main.Machines.Single(m => m.Key == "remote-id"));
+
+        await Wait.UntilAsync(() => remoteHost.Sent(Ops.Hello).Count == 2, "the host asked again");
     }
 
     [Fact]

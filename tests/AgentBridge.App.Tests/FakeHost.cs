@@ -94,7 +94,8 @@ sealed class FakeHost : IAsyncDisposable
     {
         Received.Enqueue((op, data.ValueKind == JsonValueKind.Undefined ? default : data.Clone()));
         Channels.Add(ch);
-        if (op == Ops.SessionsSubscribe)
+        // Answered as a host does, unless the test answers it itself (a host that refuses it).
+        if (op == Ops.SessionsSubscribe && !ops.ContainsKey(op))
         {
             var n = Interlocked.Increment(ref subscribes);
             OnSubscribe?.Invoke(n);

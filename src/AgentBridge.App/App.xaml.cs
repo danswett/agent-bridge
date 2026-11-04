@@ -152,7 +152,7 @@ public partial class App : Application
         // demo's is a second pretend host). Remote folds are not kept across restarts.
         IFleetLink? link = null;
         Machine Remote(FleetHost h) =>
-            Build(h.Id, new HostConnection(ct => link!.OpenAsync(h.Id, ct), ui, AppLog.Write) { RetryDelay = TimeSpan.FromSeconds(options.Demo ? 0.5 : 5) }, new FoldStore(null), () => null, link!.Blobs);
+            Build(h.Id, new HostConnection(ct => link!.OpenAsync(h.Id, ct), ui, AppLog.Write) { RetryDelay = TimeSpan.FromSeconds(options.Demo ? 0.5 : 5), RefusedRetryDelay = Fleet.RefusedRetryDelay }, new FoldStore(null), () => null, link!.Blobs);
         if (options.Demo)
         {
             remoteDemo = DemoHost.Start(version, remote: true);

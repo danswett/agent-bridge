@@ -77,6 +77,8 @@ public sealed class Machine : IAsyncDisposable
     {
         if (OfflineSince is null) { return; }
         OfflineSince = null;
+        // A host that refused this device may have been changed while it was away (#602).
+        Host.RetryNow();
         if (Host.Sessions.Snapshots < confirmFrom) { Host.Resync(); }
     }
 
@@ -175,6 +177,11 @@ public sealed class Fleet : IAsyncDisposable
     // The PWA keeps one as long (pwa/js/host-session.js).
     public static readonly TimeSpan OfflineKeep = TimeSpan.FromMinutes(15);
 
+    // How long a machine whose host refused this device waits before asking again, unless the
+    // account's machines change, it comes back online or it is opened first (#602): what refused
+    // it changes only at that machine, and asking every 5 s cost a channel handshake each time.
+    public static readonly TimeSpan RefusedRetryDelay = TimeSpan.FromMinutes(5);
+
     readonly IFleetLink link;
     readonly MainViewModel main;
     readonly IUiDispatcher ui;
@@ -185,6 +192,8 @@ public sealed class Fleet : IAsyncDisposable
     // The offline list last read from a relay with a roster, for this account: a machine gone from
     // the next one without coming online was forgotten.
     IReadOnlyList<KnownMachine>? lastOffline;
+    // The account's hosts, online and offline, as last read: a change asks refused hosts again.
+    string? lastRoster;
     int account;
 
     public Fleet(IFleetLink link, MainViewModel main, IUiDispatcher ui, Func<FleetHost, Machine> create, TimeProvider? time = null)
@@ -258,7 +267,7 @@ public sealed class Fleet : IAsyncDisposable
         if (disposed || main.LocalMachineId is not { } me || link.State != FleetState.Connected) { return null; }
         if (loopback is not null && loopbackFor == me) { return loopback; }
         DropLoopback();
-        var conn = new HostConnection(ct => link.OpenAsync(me, ct), ui) { Subscribes = false, RetryDelay = TimeSpan.FromSeconds(5) };
+        var conn = new HostConnection(ct => link.OpenAsync(me, ct), ui) { Subscribes = false, RetryDelay = TimeSpan.FromSeconds(5), RefusedRetryDelay = RefusedRetryDelay };
         conn.Changed += () => LoopbackChanged?.Invoke();
         loopback = new Machine(Machine.LocalKey, conn, new CardContext { Deliveries = new Deliveries(conn, ui), Folds = new FoldStore(null), Capabilities = () => conn.Capabilities, Host = conn });
         loopbackFor = me;
@@ -298,6 +307,16 @@ public sealed class Fleet : IAsyncDisposable
         if (link.Account != now || link.State != state) { return; }
         var presence = string.Join(',', present.Select(h => h.Id).Order(StringComparer.Ordinal));
         if (presence != Presence) { Presence = presence; PresenceChanged?.Invoke(); }
+        // The account's machines changed (one came or went, was added or forgotten): a host that
+        // refused this device is asked again now rather than minutes from now, since what refused
+        // it may have changed with them (#602). Hosts only, so a phone coming and going wakes none.
+        var roster = presence + "|" + string.Join(',', (offline ?? []).Select(k => k.Id).Order(StringComparer.Ordinal));
+        if (roster != lastRoster)
+        {
+            lastRoster = roster;
+            foreach (var m in machines.Values) { m.Host.RetryNow(); }
+            loopback?.Host.RetryNow();
+        }
         // Another account's machines all go before this one's are listed: a device id in both would
         // otherwise stay as it was, listed for the last account, with what it reported for that one.
         var switched = now != account;

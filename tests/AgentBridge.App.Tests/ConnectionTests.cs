@@ -564,6 +564,78 @@ public sealed class ConnectionTests : IAsyncLifetime
             why: () => $"stop asked {stopping:HH:mm:ss.fff}, done {stopped:HH:mm:ss.fff}; {Seen()}");
     }
 
+    // As agent-executor's host answers a device it has not approved: hello, offering nothing, and
+    // a refusal of the sessions asked for next. Asked again every 5 s for hours, each time logged (#602).
+    const string NotApproved = "This device is not an explicitly approved operator; approve its public device ID locally.";
+
+    [Fact]
+    public async Task A_host_that_refuses_this_device_is_asked_again_only_minutes_later_and_logged_once()
+    {
+        await using var refusing = new FakeHost();
+        refusing.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("pool-id", "Pool", "linux", "0.1.0", ReadOnly: NotApproved), []));
+        refusing.On(Ops.SessionsSubscribe, _ => throw new InvalidOperationException(NotApproved));
+        refusing.Start();
+        var clock = new FakeTimeProvider(Make.T0);
+        var logged = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        await using var conn = new HostConnection(ct => LocalClient.ConnectAsync(refusing.Endpoint, TimeSpan.FromSeconds(1), ct), new LockedDispatcher(), logged.Enqueue)
+        {
+            RetryDelay = TimeSpan.FromMilliseconds(100),
+            RefusedRetryDelay = TimeSpan.FromMinutes(5),
+            Time = clock,
+        };
+        conn.Start();
+        await Wait.UntilAsync(() => conn.State == LinkState.Refused, "the refusal");
+        Assert.Equal(NotApproved, conn.StateDetail);
+
+        // Nothing more is asked until the long delay has passed. Advanced a step at a time, since the
+        // wait's timer starts only once the refused channel has closed.
+        await Wait.UntilAsync(() =>
+        {
+            if (refusing.Sent(Ops.Hello).Count >= 2) { return true; }
+            clock.Advance(TimeSpan.FromSeconds(30));
+            return false;
+        }, "the second attempt");
+        Assert.True(clock.GetUtcNow() - Make.T0 >= TimeSpan.FromMinutes(5), $"asked again after {clock.GetUtcNow() - Make.T0}");
+        // A third attempt begins only after the second's refusal was taken in (and logged, or not).
+        await Wait.UntilAsync(() =>
+        {
+            if (refusing.Sent(Ops.Hello).Count >= 3) { return true; }
+            clock.Advance(TimeSpan.FromMinutes(5));
+            return false;
+        }, "the third attempt");
+        Assert.Single(logged, l => l.Contains(NotApproved));
+        Assert.DoesNotContain(logged, l => l.StartsWith("host connection failed"));
+    }
+
+    [Fact]
+    public async Task A_host_that_offers_its_sessions_but_fails_to_subscribe_is_still_asked_again_after_the_short_delay()
+    {
+        // Not a refusal: a host that lets this device read its sessions and fails for now (its
+        // subscription slots full) is asked again as before, each failure logged.
+        await using var busy = new FakeHost();
+        busy.On(Ops.SessionsSubscribe, _ => throw new InvalidOperationException("The bounded subscription slots are occupied."));
+        busy.Start();
+        var clock = new FakeTimeProvider(Make.T0);
+        var logged = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        await using var conn = new HostConnection(ct => LocalClient.ConnectAsync(busy.Endpoint, TimeSpan.FromSeconds(1), ct), new LockedDispatcher(), logged.Enqueue)
+        {
+            RetryDelay = TimeSpan.FromMilliseconds(100),
+            RefusedRetryDelay = TimeSpan.FromMinutes(5),
+            Time = clock,
+        };
+        conn.Start();
+
+        await Wait.UntilAsync(() =>
+        {
+            if (busy.Sent(Ops.SessionsSubscribe).Count >= 3) { return true; }
+            clock.Advance(TimeSpan.FromMilliseconds(100));
+            return false;
+        }, "three attempts");
+        Assert.True(clock.GetUtcNow() - Make.T0 < TimeSpan.FromMinutes(1), $"{clock.GetUtcNow() - Make.T0} passed");
+        Assert.True(logged.Count(l => l.StartsWith("host connection failed")) >= 2);
+        Assert.NotEqual(LinkState.Refused, conn.State);
+    }
+
     [Fact]
     public async Task An_answer_lost_to_a_host_restart_is_sent_again_with_the_same_request()
     {
