@@ -1,19 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { brotliDecompressSync } from 'node:zlib';
 import { repoRoot } from '../generate.mjs';
-import { loadTokens, fontXHeight, inlineMono, inlineMonoSizes, monoFont } from '../lib/tokens.mjs';
+import { loadTokens, fontXHeight, inlineMono, inlineMonoSizes, monoFont, sansFont } from '../lib/tokens.mjs';
 import { platformSelector, tokensCss } from '../lib/emit-pwa.mjs';
 import { designXaml } from '../lib/emit-xaml.mjs';
 
-// Inline mono beside the system face (docs/design/ui.md §4.2, #215): the x-heights the tokens
+// Inline mono beside the text face (docs/design/ui.md §4.2, #215): the x-heights the tokens
 // record are the fonts' own, and every client scales mono by them.
 const tokens = loadTokens(path.join(repoRoot, 'design'));
 const ratioOf = (f) => f.xHeight / f.unitsPerEm;
 
-test('Agent Bridge Mono\'s x-height in tokens.json is the bundled font\'s own, measured from every face\'s file', () => {
+test('Slipgates Mono\'s x-height in tokens.json is the bundled font\'s own, measured from every face\'s file', () => {
   const font = monoFont(tokens);
   for (const face of font.faces) {
     const measured = fontXHeight(readFileSync(path.join(repoRoot, font.dir, 'ttf', `${face.file}.ttf`)));
@@ -63,10 +63,10 @@ const advances = (file) => {
   return { average: os2.readInt16BE(2), widest: hhea.readUInt16BE(10) };
 };
 
-test('every bundled face of Agent Bridge Mono, TTF and WOFF2, is the build plan\'s normal 600-unit width, not the condensed 560 (#295)', () => {
+test('every bundled face of Slipgates Mono, TTF and WOFF2, is the build plan\'s normal 600-unit width, not the condensed 560 (#295)', () => {
   const font = monoFont(tokens);
   const plan = readFileSync(path.join(repoRoot, font.dir, 'private-build-plans.toml'), 'utf8');
-  const shape = /\[buildPlans\.AgentBridgeMono\.widths\.Normal\]\s+shape = (\d+)/.exec(plan);
+  const shape = /\[buildPlans\.SlipgatesMono\.widths\.Normal\]\s+shape = (\d+)/.exec(plan);
   assert.ok(shape, 'could not read widths.Normal.shape from private-build-plans.toml');
   const width = Number(shape[1]);
   // The owner's decision on #295: Cascadia Mono's and Consolas' proportions, one face everywhere.
@@ -78,13 +78,19 @@ test('every bundled face of Agent Bridge Mono, TTF and WOFF2, is the build plan\
   }
 });
 
-// The text faces aren't ours to bundle, so each is measured where it is installed: Segoe UI
-// Variable on any Windows machine (CI's Windows runner among them).
-const SEGOE = 'C:\\Windows\\Fonts\\SegUIVar.ttf';
-test('the Windows text face\'s x-height is Segoe UI Variable\'s, measured from the installed font', { skip: !existsSync(SEGOE) && 'Segoe UI Variable is not installed here' }, () => {
-  const measured = fontXHeight(readFileSync(SEGOE));
-  const recorded = tokens.type.inlineMono.text.windows;
-  assert.equal(ratioOf(measured), ratioOf(recorded));
+// The text face is Slipgates Sans on every platform (#544), so each platform's recorded x-height
+// is the bundled font's own: measured from its upright and italic files and its collection.
+test('every platform\'s text x-height is Slipgates Sans\', measured from the bundled files', () => {
+  const font = sansFont(tokens);
+  const files = [...font.variableFiles.map((v) => `ttf/${v.file}.ttf`), font.collection];
+  for (const file of files) {
+    const measured = fontXHeight(readFileSync(path.join(repoRoot, font.dir, file)));
+    for (const platform of ['windows', 'apple', 'android']) {
+      const recorded = tokens.type.inlineMono.text[platform];
+      assert.equal(recorded.face, font.family, platform);
+      assert.deepEqual({ xHeight: measured.xHeight, unitsPerEm: measured.unitsPerEm }, { xHeight: recorded.xHeight, unitsPerEm: recorded.unitsPerEm }, `${platform}: ${file}`);
+    }
+  }
 });
 
 test('inline mono at each platform\'s scale has that platform\'s text x-height, and is never made larger than the text', () => {
@@ -114,7 +120,7 @@ test('Apple\'s face is set on every platform the page names as Apple\'s: a Mac, 
   assert.ok(!css.includes('data-platform="apple"'));
 });
 
-test('the app gets inline mono\'s size for each Windows ramp role: the role\'s size at Segoe\'s scale, never under 11 px', () => {
+test('the app gets inline mono\'s size for each Windows ramp role: the role\'s size at the text face\'s scale, never under 11 px', () => {
   const xaml = designXaml(tokens, [], []);
   const scale = inlineMono(tokens).platforms.find((p) => p.name === 'windows').scale;
   const sizes = inlineMonoSizes(tokens);
@@ -124,6 +130,6 @@ test('the app gets inline mono\'s size for each Windows ramp role: the role\'s s
     assert.ok(xaml.includes(`<x:Double x:Key="${s.xaml}">${s.value}</x:Double>`), s.xaml);
   }
   assert.ok(xaml.includes(`<x:Double x:Key="AbInlineMonoScale">${scale}</x:Double>`));
-  // The meta role is 12 px: at Segoe's scale, still 11 px or more.
+  // The meta role is 12 px: at the text face's scale, still 11 px or more.
   assert.ok(sizes.every((s) => s.value >= 11));
 });

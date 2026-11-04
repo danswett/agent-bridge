@@ -3,45 +3,75 @@
    CI fails when this file is stale against design/.
    Colour roles and surfaces: docs/design/ui.md §3. Secondary text is text2/text3, never a grey. */
 
-/* Agent Bridge Mono: SIL Open Font License 1.1, in fonts/OFL.txt. */
+/* Slipgates Sans: SIL Open Font License 1.1, in fonts/SlipgatesSans-OFL.txt. */
 @font-face {
-  font-family: "Agent Bridge Mono";
-  src: url("fonts/AgentBridgeMono-Regular.woff2") format("woff2");
+  font-family: "Slipgates Sans";
+  src: url("fonts/SlipgatesSans.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Slipgates Sans";
+  src: url("fonts/SlipgatesSans-Italic.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: italic;
+  font-display: swap;
+}
+
+/* Slipgates Mono: SIL Open Font License 1.1, in fonts/SlipgatesMono-OFL.txt. */
+@font-face {
+  font-family: "Slipgates Mono";
+  src: url("fonts/SlipgatesMono-Regular.woff2") format("woff2");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: "Agent Bridge Mono";
-  src: url("fonts/AgentBridgeMono-SemiBold.woff2") format("woff2");
+  font-family: "Slipgates Mono";
+  src: url("fonts/SlipgatesMono-Italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Slipgates Mono";
+  src: url("fonts/SlipgatesMono-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Slipgates Mono";
+  src: url("fonts/SlipgatesMono-MediumItalic.woff2") format("woff2");
+  font-weight: 500;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Slipgates Mono";
+  src: url("fonts/SlipgatesMono-SemiBold.woff2") format("woff2");
   font-weight: 600;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: "Agent Bridge Mono";
-  src: url("fonts/AgentBridgeMono-Bold.woff2") format("woff2");
+  font-family: "Slipgates Mono";
+  src: url("fonts/SlipgatesMono-SemiBoldItalic.woff2") format("woff2");
+  font-weight: 600;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Slipgates Mono";
+  src: url("fonts/SlipgatesMono-Bold.woff2") format("woff2");
   font-weight: 700;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: "Agent Bridge Mono";
-  src: url("fonts/AgentBridgeMono-Italic.woff2") format("woff2");
-  font-weight: 400;
-  font-style: italic;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Agent Bridge Mono";
-  src: url("fonts/AgentBridgeMono-SemiBoldItalic.woff2") format("woff2");
-  font-weight: 600;
-  font-style: italic;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Agent Bridge Mono";
-  src: url("fonts/AgentBridgeMono-BoldItalic.woff2") format("woff2");
+  font-family: "Slipgates Mono";
+  src: url("fonts/SlipgatesMono-BoldItalic.woff2") format("woff2");
   font-weight: 700;
   font-style: italic;
   font-display: swap;
@@ -84,11 +114,19 @@
   /* An icon's stroke on its 20 grid: 1.7 at 16 px or below, 1.4 at 24 px or above. */
   --ab-icon-stroke: 1.5;
 
-  --ab-font-mono: "Agent Bridge Mono", "Cascadia Mono", "SF Mono", "Roboto Mono", ui-monospace, monospace;
+  --ab-font-sans: "Slipgates Sans", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Roboto", sans-serif;
+  --ab-font-mono: "Slipgates Mono", "Cascadia Mono", "SF Mono", "Roboto Mono", ui-monospace, monospace;
+  /* No synthesized styles (docs/design/ui.md §4.2): every weight and style used is a real face
+     above, and a face the browser lacks is never faked from another. */
+  font-synthesis: none;
+  /* Tracking (docs/design/ui.md §4.3): letter-spacing for the title role and the wordmark only;
+     body text stays untracked. */
+  --ab-tracking-title: 0.02em;
+  --ab-tracking-wordmark: 0.02em;
   /* Inline mono (docs/design/ui.md §4.2): the text face's x-height ratio, for font-size-adjust,
-     and the scale mono takes where a browser has no font-size-adjust. Windows' Segoe UI Variable,
+     and the scale mono takes where a browser has no font-size-adjust. Windows' text face,
      unless the page names its platform on <html data-platform>. */
-  --ab-inline-mono-x: 0.5; --ab-inline-mono-scale: 0.9615;
+  --ab-inline-mono-x: 0.5459; --ab-inline-mono-scale: 1.0498;
   --ab-radius-control: 4px;
   --ab-radius-card: 8px;
   --ab-radius-pill: 999px;
@@ -202,10 +240,10 @@
   }
 }
 
-/* Inline mono beside each platform's system face (tokens.json type.inlineMono), on the platforms
+/* Inline mono beside each platform's text face (tokens.json type.inlineMono), on the platforms
    whose face it is (pwa/js/platform.js names them on <html data-platform>). */
-:root[data-platform="macos"], :root[data-platform="ios"], :root[data-platform="ipados"] { --ab-inline-mono-x: 0.5078; --ab-inline-mono-scale: 0.9766; }
-:root[data-platform="android"] { --ab-inline-mono-x: 0.5137; --ab-inline-mono-scale: 0.9878; }
+:root[data-platform="macos"], :root[data-platform="ios"], :root[data-platform="ipados"] { --ab-inline-mono-x: 0.5459; --ab-inline-mono-scale: 1.0498; }
+:root[data-platform="android"] { --ab-inline-mono-x: 0.5459; --ab-inline-mono-scale: 1.0498; }
 
 /* High contrast: every role and surface is a system colour (tokens.json hc). */
 @media (forced-colors: active) {

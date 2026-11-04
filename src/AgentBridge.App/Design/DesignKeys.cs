@@ -127,6 +127,7 @@ static class DesignKeys
         "AbIconUsage",
     ];
 
+    public const string SansFontFamily = "SansFontFamily";
     public const string MonoFontFamily = "MonoFontFamily";
 
     // Inline mono's scale and its size for each ramp role (docs/design/ui.md §4.2).
@@ -223,16 +224,49 @@ static class DesignKeys
         "AbMotionReorderReduced",
     ];
 
-    // The bundled monospace and its licence, as the app's folder holds them
+    // The bundled fonts and their licences, as the app's folder holds them
     // (AgentBridge.App.csproj copies them from design/fonts).
     public static readonly string[] FontFiles =
     [
-        "Assets/Fonts/AgentBridgeMono-Regular.ttf",
-        "Assets/Fonts/AgentBridgeMono-SemiBold.ttf",
-        "Assets/Fonts/AgentBridgeMono-Bold.ttf",
-        "Assets/Fonts/AgentBridgeMono-Italic.ttf",
-        "Assets/Fonts/AgentBridgeMono-SemiBoldItalic.ttf",
-        "Assets/Fonts/AgentBridgeMono-BoldItalic.ttf",
-        "Assets/Fonts/OFL.txt",
+        "Assets/Fonts/SlipgatesSans.ttc",
+        "Assets/Fonts/SlipgatesSans-OFL.txt",
+        "Assets/Fonts/SlipgatesMono.ttc",
+        "Assets/Fonts/SlipgatesMono-OFL.txt",
+    ];
+    // The bundled families, each one collection of real faces (docs/design/ui.md §4.2): the
+    // self-test asks DirectWrite for every weight and style in each and fails on a simulated one.
+    public static readonly (string Family, string File)[] FontCollections =
+    [
+        ("Slipgates Sans", "Assets/Fonts/SlipgatesSans.ttc"),
+        ("Slipgates Mono", "Assets/Fonts/SlipgatesMono.ttc"),
+    ];
+
+    public static readonly (int Weight, bool Italic)[] FontFaces =
+    [
+        (400, false),
+        (400, true),
+        (500, false),
+        (500, true),
+        (600, false),
+        (600, true),
+        (700, false),
+        (700, true),
+    ];
+
+    // Slipgates Sans' probe and its advance in each face, in units of its em: XAML's text in that
+    // weight and style must be as wide, which a faked bold or italic of another face isn't.
+    public const string SansProbe = "Hamburgefonstiv 0123456789";
+    public const int SansUnitsPerEm = 2048;
+
+    public static readonly (int Weight, bool Italic, int Advance)[] SansProbeAdvances =
+    [
+        (400, false, 29312),
+        (400, true, 29410),
+        (500, false, 29742),
+        (500, true, 29845),
+        (600, false, 30162),
+        (600, true, 30276),
+        (700, false, 30590),
+        (700, true, 30709),
     ];
 }

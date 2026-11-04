@@ -90,6 +90,7 @@ static partial class SelfTest
             Check(navIcons.Count >= 3 && navIcons.All(i => Find<Microsoft.UI.Xaml.Shapes.Path>(i).FirstOrDefault()?.Stroke is SolidColorBrush { Color.A: > 0 }),
                 $"draws the navigation's design icons in a visible colour ({navIcons.Count} found)");
             CheckDesign(window, Check);
+        CheckFonts(window, Check);
             await CheckInlineMono(window, Check);
             await CheckCodeBlocks(window, Check, outFile);
             await CheckUnparsableMarkdown(window, Check);
@@ -1037,7 +1038,7 @@ static partial class SelfTest
                 : [.. Design.DesignKeys.Brushes];
             check(missing.Count == 0, $"defines every design brush in {theme}{(missing.Count > 0 ? $": missing {string.Join(", ", missing)}" : "")}");
         }
-        check(Application.Current.Resources.TryGetValue("MonoFontFamily", out var mono) && mono is FontFamily, "has the design's monospace stack");
+        check(Application.Current.Resources.TryGetValue("MonoFontFamily", out var mono) && mono is FontFamily && Application.Current.Resources.TryGetValue("SansFontFamily", out var sans) && sans is FontFamily, "has the design's sans and monospace stacks");
         List<string> wrongAccent = [.. Design.DesignKeys.AccentColors.Where(a => !(Application.Current.Resources.TryGetValue(a.Key, out var c) && c is Windows.UI.Color colour && colour.ToString() == $"#FF{a.Color.TrimStart('#')}")).Select(a => a.Key)];
         check(wrongAccent.Count == 0, $"sets WinUI's accent palette to Bridge{(wrongAccent.Count > 0 ? $": not {string.Join(", ", wrongAccent)}" : "")}");
         List<string> missingType = [.. Design.DesignKeys.TypeStyles.Where(k => !(Application.Current.Resources.TryGetValue(k, out var s) && s is Style { TargetType.Name: "TextBlock" }))];
@@ -1047,8 +1048,10 @@ static partial class SelfTest
         // checks name whatever the design calls the font rather than a copy of its name.
         var bundled = (mono as FontFamily)?.Source.Split(',')[0].Trim() ?? "";
         var family = bundled[(bundled.IndexOf('#') + 1)..];
+        var sansBundled = (Application.Current.Resources.TryGetValue("SansFontFamily", out var sansStack) ? (sansStack as FontFamily)?.Source.Split(',')[0].Trim() : null) ?? "";
+        var sansFamily = sansBundled[(sansBundled.IndexOf('#') + 1)..];
         List<string> missingFonts = [.. Design.DesignKeys.FontFiles.Where(f => !File.Exists(Path.Combine(AppContext.BaseDirectory, f)))];
-        check(missingFonts.Count == 0, $"bundles {family} and its licence{(missingFonts.Count > 0 ? $": missing {string.Join(", ", missingFonts)}" : "")}");
+        check(missingFonts.Count == 0, $"bundles {sansFamily}, {family} and their licences{(missingFonts.Count > 0 ? $": missing {string.Join(", ", missingFonts)}" : "")}");
 
         // The bundled font itself, with no fallback after it: in a monospace ten i are as wide as
         // ten M. Were the file not found, the name would fall through to Segoe UI, where they aren't.

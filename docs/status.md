@@ -240,7 +240,7 @@ took over from f7ba0bcc when DEV-VM1 began migrating. Quality now owns all merge
 - [design/subagents.md](design/subagents.md): the sub-agent model and protocol (#84);
 - [design/ui-plan.md](design/ui-plan.md): the slices, their order and how to do one;
 - [/design](../design/README.md): `tokens.json`, the status glyphs, the icons and the
-  Agent Bridge Mono font;
+  Slipgates Sans and Slipgates Mono fonts;
 - [design/mockups](design/mockups/README.md): every design-canvas board rendered as an
   image, for reference only (ui.md stays the spec). The source is in `/design/canvas` and
   the renderer in `tools/design-mockups`.
@@ -262,7 +262,8 @@ took over from f7ba0bcc when DEV-VM1 began migrating. Quality now owns all merge
 | U10 | #253 | One row, one question: Needs you becomes a filter, the question lives only in the conversation, and an approval's notification only opens it. Signed off 2026-11-02 (option A, every recommended answer) | Spec: #302 (ui.md, subagents.md §7, ui-plan.md, boards). Next, three slices, each with a security review: U10a PWA, U10b Windows app (its toasts already done in #377), U10c Apple in #260 (@welshofer) |
 | | #167 | App icon (#167's last deliverable) | **Done**: #278. Windows and the PWA are generated from `tokens.json` `appIcon`. The SVG sources for macOS, iOS and Android are in `design/app-icon`, and their catalogs come with P5 and P8. Three proportions not on the design board need the owner's eye (#170) |
 | | #231 | Settings: each agent's state and "Set up" (UI half) | Not started; waits for the backend half (track A) |
-| | #181 | Monospace: **Agent Bridge Mono** (our OFL build of Iosevka, `design/fonts/agent-bridge-mono`), decided 2026-11-01 | Bundled in both clients (U3). Rebuilt at a normal 600 width for #295 |
+| | #181 | Monospace: **Slipgates Mono** (was Agent Bridge Mono; our OFL build of Iosevka, `design/fonts/slipgates-mono`), decided 2026-11-01 | Bundled in both clients (U3). Rebuilt at a normal 600 width for #295, and with Medium and Vietnamese for #544 |
+| | #544 | Text face: **Slipgates Sans** (our tuned OFL Inter, `design/fonts/slipgates-sans`), decided 2026-11-03 | Generated into the PWA, Windows, Apple and Android outputs (#557). Device checks to follow |
 | | #183 | Light-theme `needs` glyph and `text3` fail contrast | Fixed in #188 |
 | | #240 | The app crashed when high contrast was turned on or off | Fixed in #243. Setting `AppWindow.TitleBar.PreferredTheme` made WinAppSDK repaint the caption buttons off the UI thread. #248 fixed the self-test flake that followed |
 
@@ -461,3 +462,5 @@ agent-ha-bridge releases from this work:
 | 11-02 | A delegate's name is untrusted text. The clients clean it, cap its length, show "Main agent" as `Delegate "Main agent"`, keep a fixed Delegate label in the inspector, and name the delegate by id in the stop pre-fill (ui.md §6.3, §8; subagents.md §6) |
 | 11-02 | Monospace width (#295): Agent Bridge Mono's 560 width looked condensed beside the system face, so it is rebuilt at a normal 600 (IoskeleyMono's own, close to Cascadia Mono and Consolas) and is the one face in the app, the PWA and the Apple clients (#260) |
 | 11-02 | Attention (#253), signed off with option A and every recommended answer:<br>• Needs you is a filter of the rows, in their own order, starting off at each launch.<br>• A row says only its status.<br>• The question is drawn and answered only in the conversation. Approve once escapes characters not drawn where they run, and stays offered.<br>• Approving on a phone takes two taps.<br>• An approval's notification only opens its question; other questions keep their buttons.<br>• The macOS menu bar extra names the waiting sessions.<br>Spec in #302; reasoning in docs/design/proposals/253-attention.md |
+| 11-03 | Type (#544, #557), every recommendation approved: **Slipgates Sans** (option B, a tuned Inter) is the text face on every platform, with hinted statics in one collection on Windows and the variable pair elsewhere; the monospace is **Slipgates Mono**, with Medium 500 and Vietnamese added; no client may synthesize a weight or style (ui.md §4.2); real italic on Windows; the reading measure about 8% wider (770 px). The interim Inter Tight wordmark (#558) moves to Slipgates Sans |
+| 11-03 | Type width (#544 §11): Slipgates Sans was asked whether it reads condensed, and is tuned rather than replaced: the text cut (opsz 14) at every size on every platform, +2% tracking on the Title role and the wordmark only (`type.tracking`; body text untracked), and the wordmark in Slipgates Sans SemiBold |

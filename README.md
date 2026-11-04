@@ -83,6 +83,6 @@ receive the Corresponding Source of your version. For a commercial license on ot
 
 Versions up to and including commit
 [`05ee682`](https://github.com/danswett/agent-bridge/commit/05ee6828022d1cef73b48d5e323fa405c494568a)
-were released under the MIT License, and stay available under it. Agent Bridge Mono, in
-`design/fonts/agent-bridge-mono/`, is licensed separately under the SIL Open Font License 1.1
+were released under the MIT License, and stay available under it. Slipgates Mono, in
+`design/fonts/slipgates-mono/`, is licensed separately under the SIL Open Font License 1.1
 (see its README), not this project's AGPL.

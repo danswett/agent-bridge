@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #544: custom face under Android font scale</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Italic.woff2) format('woff2');font-weight:400;font-style:italic}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Medium.woff2) format('woff2');font-weight:500;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-MediumItalic.woff2) format('woff2');font-weight:500;font-style:italic}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-SemiBold.woff2) format('woff2');font-weight:600;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-SemiBoldItalic.woff2) format('woff2');font-weight:600;font-style:italic}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Bold.woff2) format('woff2');font-weight:700;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-BoldItalic.woff2) format('woff2');font-weight:700;font-style:italic}
+@font-face{font-family:'Slipgates Sans B';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB[opsz,wght].woff2) format('woff2');font-weight:100 900;font-style:normal}
+@font-face{font-family:'Slipgates Sans B';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB-Italic[opsz,wght].woff2) format('woff2');font-weight:100 900;font-style:italic}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-Italic.woff2) format('woff2');font-weight:400;font-style:italic}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-SemiBold.woff2) format('woff2');font-weight:600;font-style:normal}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-SemiBoldItalic.woff2) format('woff2');font-weight:600;font-style:italic}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-Bold.woff2) format('woff2');font-weight:700;font-style:normal}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-BoldItalic.woff2) format('woff2');font-weight:700;font-style:italic}
+@font-face{font-family:'Control A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Control B';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Segoe Text';src:local('Segoe UI Variable Text');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Segoe Text';src:local('Segoe UI Variable Text Semibold');font-weight:600;font-style:normal}
+@font-face{font-family:'Proposal Segoe Text';src:local('Segoe UI Variable Text Bold');font-weight:700;font-style:normal}
+@font-face{font-family:'Proposal Segoe Display';src:local('Segoe UI Variable Display');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Segoe Display';src:local('Segoe UI Variable Display Semibold');font-weight:600;font-style:normal}
+@font-face{font-family:'Proposal Segoe Display';src:local('Segoe UI Variable Display Bold');font-weight:700;font-style:normal}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/544-custom-sans.md). The proposal's faces load from
+     docs/design/proposals/544-custom-sans/fonts; Segoe UI Variable is the rendering machine's own. -->
+<div style="width: 896px; height: 1007px; box-sizing: border-box; padding: 24px 24px 0; background: #16181A; display: flex; gap: 24px">
+  <div style="width: 412px"><div style="height: 44px; font-family: 'Proposal Segoe Text', sans-serif; font-size: 14px; line-height: 18px; color: #FFFFFF"><b>Android · font scale 100%</b><br><span style="opacity: 0.7">B in res/font: Body Large 16 sp</span></div><div style="width: 412px; height: 915px; border-radius: 28px; overflow: hidden; box-shadow: 0 0 0 1px rgba(128,128,128,0.35)"><dc-import name="Proposal-544-App" platform="android" face="b" theme="dark" scale="" label="" w="412" h="915" hint-size="412px,915px"></dc-import></div></div>
+  <div style="width: 412px"><div style="height: 44px; font-family: 'Proposal Segoe Text', sans-serif; font-size: 14px; line-height: 18px; color: #FFFFFF"><b>Android · font scale 200% (nonlinear)</b><br><span style="opacity: 0.7">Body Large 16 → 28 dp, Title Large 22 → 35 dp</span></div><div style="width: 412px; height: 915px; border-radius: 28px; overflow: hidden; box-shadow: 0 0 0 1px rgba(128,128,128,0.35)"><dc-import name="Proposal-544-App" platform="android" face="b" theme="dark" scale="a200" label="" w="412" h="915" hint-size="412px,915px"></dc-import></div></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":896,"height":1007}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

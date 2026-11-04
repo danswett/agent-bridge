@@ -1,0 +1,179 @@
+{
+ "shots": [
+  {
+   "file": "desktop-before-dark.png",
+   "used": {
+    "row": "Segoe UI (SegoeUI)",
+    "title": "Segoe UI Semibold (SegoeUI-Semibold)"
+   }
+  },
+  {
+   "file": "desktop-after-dark.png",
+   "used": {
+    "row": "Slipgates Sans (SlipgatesSans-Thin)",
+    "title": "Slipgates Sans (SlipgatesSans-Thin)"
+   }
+  },
+  {
+   "file": "desktop-before-light-150.png",
+   "used": {
+    "row": "Segoe UI (SegoeUI)",
+    "title": "Segoe UI Semibold (SegoeUI-Semibold)"
+   }
+  },
+  {
+   "file": "desktop-after-light-150.png",
+   "used": {
+    "row": "Slipgates Sans (SlipgatesSans-Thin)",
+    "title": "Slipgates Sans (SlipgatesSans-Thin)"
+   }
+  },
+  {
+   "file": "phone-before-list.png",
+   "used": {
+    "row": "Roboto (Roboto-Thin)"
+   }
+  },
+  {
+   "file": "phone-after-list.png",
+   "used": {
+    "row": "Slipgates Sans (SlipgatesSans-Thin)"
+   }
+  },
+  {
+   "file": "phone-before-view.png",
+   "used": {
+    "row": "",
+    "title": "Roboto (Roboto-Thin)"
+   }
+  },
+  {
+   "file": "phone-after-view.png",
+   "used": {
+    "row": "",
+    "title": "Slipgates Sans (SlipgatesSans-Thin)"
+   }
+  },
+  {
+   "file": "alt-b-now.png",
+   "used": {
+    "row": "Slipgates Sans (SlipgatesSans-Thin)",
+    "title": "Slipgates Sans (SlipgatesSans-Thin)"
+   }
+  },
+  {
+   "file": "alt-b-tracked.png",
+   "used": {
+    "row": "Slipgates Sans (SlipgatesSans-Thin)",
+    "title": "Slipgates Sans (SlipgatesSans-Thin)"
+   }
+  },
+  {
+   "file": "alt-b-auto-opsz.png",
+   "used": {
+    "row": "Slipgates Sans (SlipgatesSans-Thin)",
+    "title": "Slipgates Sans (SlipgatesSans-Thin)"
+   }
+  },
+  {
+   "file": "alt-plex.png",
+   "used": {
+    "row": "IBM Plex Sans (IBMPlexSansRoman-Thin)",
+    "title": "IBM Plex Sans (IBMPlexSansRoman-Thin)"
+   }
+  },
+  {
+   "file": "alt-noto.png",
+   "used": {
+    "row": "Noto Sans (NotoSans-Thin)",
+    "title": "Noto Sans (NotoSans-Thin)"
+   }
+  },
+  {
+   "file": "alt-segoe.png",
+   "used": {
+    "row": "Segoe UI (SegoeUI)",
+    "title": "Segoe UI Semibold (SegoeUI-Semibold)"
+   }
+  }
+ ],
+ "lengths": [
+  {
+   "face": "Segoe UI (system-ui in Chromium on Windows: the PWA today)",
+   "paraPx": 1333,
+   "charsPer770": 121,
+   "titlePx": 243,
+   "largeTitlePx": 413
+  },
+  {
+   "face": "Segoe UI Variable Text (the Windows app today)",
+   "paraPx": 1329,
+   "charsPer770": 121,
+   "titlePx": 243,
+   "largeTitlePx": 411
+  },
+  {
+   "face": "Roboto (system-ui on Android)",
+   "paraPx": 1330,
+   "charsPer770": 121,
+   "titlePx": 243,
+   "largeTitlePx": 412
+  },
+  {
+   "face": "Slipgates Sans B, as shipped (text cut, opsz 14)",
+   "paraPx": 1424,
+   "charsPer770": 113,
+   "titlePx": 262,
+   "largeTitlePx": 445
+  },
+  {
+   "face": "B, tracked (+1% text, +2% titles)",
+   "paraPx": 1455,
+   "charsPer770": 111,
+   "titlePx": 272,
+   "largeTitlePx": 463
+  },
+  {
+   "face": "B, opsz auto (Apple/Android variable TTF)",
+   "paraPx": 1417,
+   "charsPer770": 114,
+   "titlePx": 256,
+   "largeTitlePx": 416
+  },
+  {
+   "face": "B, text cut forced (opsz 14 at every size)",
+   "paraPx": 1424,
+   "charsPer770": 113,
+   "titlePx": 262,
+   "largeTitlePx": 445
+  },
+  {
+   "face": "IBM Plex Sans",
+   "paraPx": 1352,
+   "charsPer770": 119,
+   "titlePx": 252,
+   "largeTitlePx": 429
+  },
+  {
+   "face": "Noto Sans",
+   "paraPx": 1421,
+   "charsPer770": 113,
+   "titlePx": 266,
+   "largeTitlePx": 453
+  },
+  {
+   "face": "Atkinson Hyperlegible Next",
+   "paraPx": 1332,
+   "charsPer770": 121,
+   "titlePx": 250,
+   "largeTitlePx": 425
+  },
+  {
+   "face": "Inter Tight (interim wordmark, #558)",
+   "paraPx": 1279,
+   "charsPer770": 126,
+   "titlePx": 242,
+   "largeTitlePx": 412
+  }
+ ]
+}

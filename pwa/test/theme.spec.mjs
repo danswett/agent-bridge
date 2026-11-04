@@ -151,21 +151,43 @@ test('the generated sprite draws the needs glyph in its role colour with its ink
   expect(at.outside).toBe(rgb(surface.light.card));
 });
 
-test('code is set in Agent Bridge Mono, loaded from the site under the CSP, with the fallback stack behind it', async ({ page }) => {
+test('code is set in Slipgates Mono, loaded from the site under the CSP, with the fallback stack behind it', async ({ page }) => {
   const fonts = [];
   page.on('response', (r) => { if (r.url().includes('/design/fonts/')) { fonts.push(`${r.status()} ${r.url().split('/').pop()}`); } });
   await openDemo(page);
   // The Claude session's reply has code in it.
   const code = (await open(page, CLAUDE)).locator('.md code').first();
   await expect(code).toBeVisible();
-  expect(await code.evaluate((e) => getComputedStyle(e).fontFamily)).toMatch(/^"?Agent Bridge Mono"?, "?Cascadia Mono"?, "?SF Mono"?, "?Roboto Mono"?, ui-monospace, monospace$/);
+  expect(await code.evaluate((e) => getComputedStyle(e).fontFamily)).toMatch(/^"?Slipgates Mono"?, "?Cascadia Mono"?, "?SF Mono"?, "?Roboto Mono"?, ui-monospace, monospace$/);
   const loaded = await page.evaluate(async () => {
-    const faces = await document.fonts.load('400 13px "Agent Bridge Mono"');
-    await document.fonts.load('italic 600 13px "Agent Bridge Mono"');
-    return { regular: faces.length, status: [...document.fonts].filter((f) => f.family.replace(/"/g, '') === 'Agent Bridge Mono' && f.status === 'loaded').map((f) => `${f.weight} ${f.style}`).sort() };
+    const faces = await document.fonts.load('400 13px "Slipgates Mono"');
+    await document.fonts.load('italic 600 13px "Slipgates Mono"');
+    return { regular: faces.length, status: [...document.fonts].filter((f) => f.family.replace(/"/g, '') === 'Slipgates Mono' && f.status === 'loaded').map((f) => `${f.weight} ${f.style}`).sort() };
   });
   expect(loaded.regular).toBeGreaterThan(0);
   expect(loaded.status).toEqual(expect.arrayContaining(['400 normal', '600 italic']));
-  expect(fonts).toEqual(expect.arrayContaining(['200 AgentBridgeMono-Regular.woff2', '200 AgentBridgeMono-SemiBoldItalic.woff2']));
+  expect(fonts).toEqual(expect.arrayContaining(['200 SlipgatesMono-Regular.woff2', '200 SlipgatesMono-SemiBoldItalic.woff2']));
+  expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
+});
+
+test('text is set in Slipgates Sans from the site, with every weight and the italic real and synthesis off', async ({ page }) => {
+  const fonts = [];
+  page.on('response', (r) => { if (r.url().includes('/design/fonts/')) { fonts.push(`${r.status()} ${r.url().split('/').pop()}`); } });
+  await openDemo(page);
+  const body = await page.evaluate(() => ({ family: getComputedStyle(document.body).fontFamily, synthesis: getComputedStyle(document.documentElement).fontSynthesis }));
+  expect(body.family).toMatch(/^"?Slipgates Sans"?, /);
+  expect(body.synthesis).toBe('none');
+  // The variable pair covers each weight the ramps use, upright and italic: no face is missing
+  // for the browser to fake (ui.md §4.2).
+  const loaded = await page.evaluate(async () => {
+    const counts = [];
+    for (const weight of [400, 500, 600, 700]) {
+      for (const style of ['normal', 'italic']) { counts.push((await document.fonts.load(`${style} ${weight} 15px "Slipgates Sans"`)).length); }
+    }
+    return { counts, faces: [...document.fonts].filter((f) => f.family.replace(/"/g, '') === 'Slipgates Sans' && f.status === 'loaded').map((f) => `${f.weight} ${f.style}`).sort() };
+  });
+  expect(loaded.counts.every((n) => n === 1)).toBe(true);
+  expect(loaded.faces).toEqual(['400 700 italic', '400 700 normal']);
+  expect(fonts).toEqual(expect.arrayContaining(['200 SlipgatesSans.woff2', '200 SlipgatesSans-Italic.woff2']));
   expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
 });

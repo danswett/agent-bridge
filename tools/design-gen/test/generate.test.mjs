@@ -115,29 +115,77 @@ test('the sprite has a symbol for every glyph and icon, and each moving part on 
   assert.match(needs, /var\(--ab-glyph-ink\)/);
 });
 
-test('the PWA gets an @font-face with font-display swap for every face of the monospace, then the fallback stack', () => {
+test('the PWA gets an @font-face with font-display swap for every face of both families, synthesis off, then the fallback stacks', () => {
   const css = read(repoRoot, 'pwa/design/tokens.css');
   const faces = [...css.matchAll(/@font-face \{([^}]*)\}/g)].map((m) => m[1]);
-  assert.equal(faces.length, 6, 'regular, semibold and bold, each with an italic');
+  assert.equal(faces.length, 10, 'the sans\' variable pair, and the mono\'s four weights, each with an italic');
   for (const f of faces) {
-    assert.match(f, /font-family: "Agent Bridge Mono";/);
+    assert.match(f, /font-family: "Slipgates (Sans|Mono)";/);
     assert.match(f, /font-display: swap;/);
   }
-  assert.ok(faces.some((f) => /SemiBoldItalic\.woff2/.test(f) && /font-weight: 600;/.test(f) && /font-style: italic;/.test(f)));
-  assert.match(css, /--ab-font-mono: "Agent Bridge Mono", "Cascadia Mono", "SF Mono", "Roboto Mono", ui-monospace, monospace;/);
+  const sans = faces.filter((f) => /Slipgates Sans/.test(f));
+  assert.deepEqual(sans.map((f) => /font-style: (\w+);/.exec(f)[1]), ['normal', 'italic']);
+  for (const f of sans) { assert.match(f, /font-weight: 400 700;/, 'the variable files cover every weight the ramps use'); }
+  assert.ok(faces.some((f) => /SlipgatesMono-MediumItalic\.woff2/.test(f) && /font-weight: 500;/.test(f) && /font-style: italic;/.test(f)));
+  assert.match(css, /--ab-font-sans: "Slipgates Sans", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Roboto", sans-serif;/);
+  assert.match(css, /--ab-font-mono: "Slipgates Mono", "Cascadia Mono", "SF Mono", "Roboto Mono", ui-monospace, monospace;/);
+  assert.match(css, /:root \{[^}]*font-synthesis: none;/, 'no browser fakes a weight or italic (ui.md §4.2)');
 });
 
-test('the app\'s MonoFontFamily is the bundled TTF, then the fallback stack, and DesignKeys lists the files to bundle', () => {
-  assert.match(read(repoRoot, XAML), /<FontFamily x:Key="MonoFontFamily">ms-appx:\/\/\/Assets\/Fonts\/AgentBridgeMono-Regular\.ttf#Agent Bridge Mono, Cascadia Mono, SF Mono, Roboto Mono, Consolas<\/FontFamily>/);
-  const files = listed('FontFiles');
-  assert.deepEqual(files.filter((f) => f.endsWith('.ttf')).length, 6);
-  assert.ok(files.includes('Assets/Fonts/OFL.txt'));
+test('the app names each family by its collection of real faces, sets the sans on all text, and DesignKeys lists the files and faces to check', () => {
+  const source = read(repoRoot, XAML);
+  assert.match(source, /<FontFamily x:Key="MonoFontFamily">ms-appx:\/\/\/Assets\/Fonts\/SlipgatesMono\.ttc#Slipgates Mono, Cascadia Mono, SF Mono, Roboto Mono, Consolas<\/FontFamily>/);
+  const sans = 'ms-appx:///Assets/Fonts/SlipgatesSans.ttc#Slipgates Sans, Segoe UI Variable Text, Segoe UI, Roboto';
+  assert.ok(source.includes(`<FontFamily x:Key="SansFontFamily">${sans}</FontFamily>`));
+  assert.ok(source.includes(`<FontFamily x:Key="ContentControlThemeFontFamily">${sans}</FontFamily>`), 'controls take the sans too');
+  for (const target of ['TextBlock', 'RichTextBlock']) {
+    const implicit = xaml.children.find((c) => c.tag === 'Style' && c.attrs.TargetType === target && !c.attrs['x:Key']);
+    assert.equal(implicit?.children[0].attrs.Value, sans, target);
+  }
+  assert.deepEqual(listed('FontFiles'), ['Assets/Fonts/SlipgatesSans.ttc', 'Assets/Fonts/SlipgatesSans-OFL.txt', 'Assets/Fonts/SlipgatesMono.ttc', 'Assets/Fonts/SlipgatesMono-OFL.txt']);
+  assert.equal([...keysCs.matchAll(/^\s+\((\d{3}), (true|false)\),$/gm)].length, 8, 'every weight the ramps use, upright and italic');
+  assert.equal([...keysCs.matchAll(/^\s+\((\d{3}), (true|false), (\d+)\),$/gm)].length, 8, 'a probe advance for each sans face');
 });
 
 test('a face the tokens promise but design/fonts lacks is refused', () => {
   const root = copy('nofont');
-  rmSync(path.join(root, 'design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-BoldItalic.woff2'));
-  assert.throws(() => generate(root), /lacks woff2\/AgentBridgeMono-BoldItalic\.woff2/);
+  rmSync(path.join(root, 'design/fonts/slipgates-mono/woff2/SlipgatesMono-BoldItalic.woff2'));
+  assert.throws(() => generate(root), /lacks woff2\/SlipgatesMono-BoldItalic\.woff2/);
+});
+
+test('a weight the ramps use that a bundled family has no real face for is refused, not left to be faked', () => {
+  const root = copy('nosynth');
+  const tokens = JSON.parse(read(root, 'design/tokens.json'));
+  tokens.type.weights.push('heavy');
+  writeFileSync(path.join(root, 'design/tokens.json'), JSON.stringify(tokens));
+  assert.throws(() => generate(root), /type\.sans lacks 800 normal, 800 italic, which the ramps use: a platform would synthesize it/);
+});
+
+test('a family whose faces.json or collection disagrees with the tokens is refused', () => {
+  const root = copy('badmanifest');
+  const file = path.join(root, 'design/fonts/slipgates-sans/faces.json');
+  const manifest = JSON.parse(readFileSync(file, 'utf8'));
+  manifest.faces = manifest.faces.filter((f) => !(f.weight === 500 && f.style === 'italic'));
+  writeFileSync(file, JSON.stringify(manifest));
+  assert.throws(() => generate(root), /faces\.json has faces/);
+});
+
+test('Apple and Android get every real face by name: PostScript names and Info.plist keys, and a font-family XML', () => {
+  const out = generate();
+  const swift = out['design/apple/SlipgatesFonts.swift'];
+  for (const name of ['"SlipgatesSans"', '"SlipgatesSansItalic-SemiBold"', '"SlipgatesMono-MediumItalic"']) { assert.ok(swift.includes(name), name); }
+  assert.match(swift, /UIFontMetrics\(forTextStyle: textStyle\)\.scaledFont/);
+  const plist = out['design/apple/SlipgatesFonts.plist'];
+  assert.match(plist, /<key>UIAppFonts<\/key>/);
+  assert.match(plist, /<key>ATSApplicationFontsPath<\/key>\s*<string>Fonts<\/string>/);
+  assert.equal([...plist.matchAll(/<string>Fonts\/[\w-]+\.ttf<\/string>/g)].length, 10);
+  for (const [family, n] of [['slipgates_sans', 8], ['slipgates_mono', 8]]) {
+    const x = out[`design/android/font/${family}.xml`];
+    const fonts = [...x.matchAll(/<font android:font="@font\/(\w+)" android:fontWeight="(\d+)" android:fontStyle="(\w+)"/g)];
+    assert.equal(fonts.length, n, family);
+    for (const [, res] of fonts) { assert.ok(Buffer.isBuffer(out[`design/android/font/${res}.ttf`]), res); }
+  }
+  assert.match(out['design/android/font/slipgates_sans.xml'], /android:fontWeight="600" android:fontStyle="italic" android:fontVariationSettings="'wght' 600"/);
 });
 
 test('a mitred corner bevels in XAML where SVG bevels it, rather than at WinUI\'s limit of 10', () => {
@@ -186,24 +234,61 @@ test('a shade other than the palette\'s, or light2 and dark1 set apart from the 
   }
 });
 
-test('the Windows type ramp is a TextBlock style per role: its size, line height and tabular figures, the title in Display and code in the mono', () => {
-  const styles = Object.fromEntries(xaml.children.filter((c) => c.tag === 'Style' && c.attrs.TargetType === 'TextBlock')
+test('the Windows type ramp is a TextBlock style per role: its size, line height and tabular figures, Slipgates Sans, and code in the mono', () => {
+  const styles = Object.fromEntries(xaml.children.filter((c) => c.tag === 'Style' && c.attrs.TargetType === 'TextBlock' && c.attrs['x:Key'])
     .map((s) => [s.attrs['x:Key'], Object.fromEntries(s.children.map((x) => [x.attrs.Property, x.attrs.Value]))]));
   assert.deepEqual(Object.keys(styles), listed('TypeStyles'));
   assert.deepEqual(Object.keys(styles), ['AbTypeTitle', 'AbTypeRow', 'AbTypeReading', 'AbTypeMeta', 'AbTypeSectionHeader', 'AbTypeCode']);
   assert.equal(styles.AbTypeTitle.FontSize, '20');
   assert.equal(styles.AbTypeTitle.LineHeight, '28');
   assert.equal(styles.AbTypeTitle.FontWeight, 'SemiBold');
-  assert.match(styles.AbTypeTitle.FontFamily, /^Segoe UI Variable Display, /);
   assert.equal(styles.AbTypeReading.FontSize, '15');
   assert.equal(styles.AbTypeReading.LineHeight, '24');
   assert.equal(styles.AbTypeSectionHeader.FontWeight, 'SemiBold');
   assert.equal(styles.AbTypeRow.FontWeight, undefined, 'regular: semibold means unread activity');
-  assert.match(styles.AbTypeCode.FontFamily, /#Agent Bridge Mono, /);
-  for (const s of Object.values(styles)) {
+  for (const [key, s] of Object.entries(styles)) {
+    assert.match(s.FontFamily, key === 'AbTypeCode' ? /SlipgatesMono\.ttc#Slipgates Mono, / : /SlipgatesSans\.ttc#Slipgates Sans, /, key);
     assert.equal(s['Typography.NumeralAlignment'], 'Tabular');
     assert.equal(s.LineStackingStrategy, 'BlockLineHeight');
-    assert.equal(s.CharacterSpacing, undefined, 'no tracking added to Segoe UI');
+    assert.equal(s.CharacterSpacing, key === 'AbTypeTitle' ? '20' : undefined, `${key}: only the title is tracked, +2%`);
+  }
+});
+
+test('tracking reaches every client for the title and the wordmark: CSS, WinUI, Apple and Android', () => {
+  const out = generate();
+  const css = out['pwa/design/tokens.css'];
+  assert.match(css, /--ab-tracking-title: 0\.02em;/);
+  assert.match(css, /--ab-tracking-wordmark: 0\.02em;/);
+  assert.match(out['design/apple/SlipgatesFonts.swift'], /public static let title: CGFloat = 0\.02\n\s*public static let wordmark: CGFloat = 0\.02/);
+  const android = out['design/android/values/slipgates_type.xml'];
+  assert.match(android, /<item name="slipgates_tracking_title" format="float" type="dimen">0\.02<\/item>/);
+  assert.match(android, /<item name="slipgates_tracking_wordmark" format="float" type="dimen">0\.02<\/item>/);
+});
+
+test('tracking body text is refused, so the reading measure holds', () => {
+  for (const role of ['reading', 'row', 'meta', 'code']) {
+    const root = copy(`track-${role}`);
+    const tokens = JSON.parse(read(root, 'design/tokens.json'));
+    tokens.type.tracking[role] = 0.01;
+    writeFileSync(path.join(root, 'design/tokens.json'), JSON.stringify(tokens));
+    assert.throws(() => generate(root), /body text stays untracked/, role);
+  }
+});
+
+// The text cut everywhere (#544 §11): with an opsz axis, CoreText and Android choose Inter's
+// narrower display cut for large titles by themselves.
+test('the Apple and Android variable files carry weight as their only axis: optical size is pinned at the text cut', () => {
+  const out = generate();
+  for (const res of ['slipgates_sans_upright', 'slipgates_sans_italic']) {
+    const b = out[`design/android/font/${res}.ttf`];
+    let fvar;
+    for (let i = 0, n = b.readUInt16BE(4); i < n; i++) {
+      if (b.toString('latin1', 12 + i * 16, 16 + i * 16) === 'fvar') { fvar = b.readUInt32BE(20 + i * 16); }
+    }
+    assert.ok(fvar !== undefined, `${res} is variable`);
+    const axes = b.readUInt16BE(fvar + 4) === 16 ? b.readUInt16BE(fvar + 8) : -1;
+    const tags = Array.from({ length: axes }, (_, i) => b.toString('latin1', fvar + 16 + i * 20, fvar + 20 + i * 20));
+    assert.deepEqual(tags, ['wght'], res);
   }
 });
 

@@ -1,0 +1,99 @@
+# Output of: dotnet run dwrite-check.cs -- <dir>/*.ttf   (Windows 11, DirectWrite isolated factory, custom font set)
+# a-regular-only is the control: the same check with only the Regular file must report simulations.
+
+## a
+files: SlipgatesSansA-Bold.ttf, SlipgatesSansA-BoldItalic.ttf, SlipgatesSansA-Italic.ttf, SlipgatesSansA-Medium.ttf, SlipgatesSansA-MediumItalic.ttf, SlipgatesSansA-Regular.ttf, SlipgatesSansA-SemiBold.ttf, SlipgatesSansA-SemiBoldItalic.ttf
+family "Slipgates Sans A": 12 faces
+  asked 400 upright -> "Regular" 400 upright; simulations: none (real face)
+  asked 500 upright -> "Medium" 500 upright; simulations: none (real face)
+  asked 600 upright -> "Semibold" 600 upright; simulations: none (real face)
+  asked 700 upright -> "Bold" 700 upright; simulations: none (real face)
+  asked 400 italic  -> "Italic" 400 italic; simulations: none (real face)
+  asked 500 italic  -> "Medium Italic" 500 italic; simulations: none (real face)
+  asked 600 italic  -> "Semibold Italic" 600 italic; simulations: none (real face)
+  asked 700 italic  -> "Bold Italic" 700 italic; simulations: none (real face)
+synthesized matches: 0
+
+## a-regular-only
+files: SlipgatesSansA-Regular.ttf
+family "Slipgates Sans A": 4 faces
+  asked 400 upright -> "Regular" 400 upright; simulations: none (real face)
+  asked 500 upright -> "Regular" 400 upright; simulations: none (real face)
+  asked 600 upright -> "Bold" 700 upright; simulations: BOLD (SYNTHESIZED)
+  asked 700 upright -> "Bold" 700 upright; simulations: BOLD (SYNTHESIZED)
+  asked 400 italic  -> "Oblique" 400 oblique; simulations: OBLIQUE (SYNTHESIZED)
+  asked 500 italic  -> "Oblique" 400 oblique; simulations: OBLIQUE (SYNTHESIZED)
+  asked 600 italic  -> "Bold Oblique" 700 oblique; simulations: BOLD+OBLIQUE (SYNTHESIZED)
+  asked 700 italic  -> "Bold Oblique" 700 oblique; simulations: BOLD+OBLIQUE (SYNTHESIZED)
+synthesized matches: 6
+
+## b
+files: SlipgatesSansB-Bold.ttf, SlipgatesSansB-BoldItalic.ttf, SlipgatesSansB-Italic.ttf, SlipgatesSansB-Medium.ttf, SlipgatesSansB-MediumItalic.ttf, SlipgatesSansB-Regular.ttf, SlipgatesSansB-SemiBold.ttf, SlipgatesSansB-SemiBoldItalic.ttf
+family "Slipgates Sans B": 12 faces
+  asked 400 upright -> "Regular" 400 upright; simulations: none (real face)
+  asked 500 upright -> "Medium" 500 upright; simulations: none (real face)
+  asked 600 upright -> "SemiBold" 600 upright; simulations: none (real face)
+  asked 700 upright -> "Bold" 700 upright; simulations: none (real face)
+  asked 400 italic  -> "Italic" 400 italic; simulations: none (real face)
+  asked 500 italic  -> "Medium Italic" 500 italic; simulations: none (real face)
+  asked 600 italic  -> "SemiBold Italic" 600 italic; simulations: none (real face)
+  asked 700 italic  -> "Bold Italic" 700 italic; simulations: none (real face)
+synthesized matches: 0
+
+## b-variable
+files: SlipgatesSansB-Italic[opsz,wght].ttf, SlipgatesSansB[opsz,wght].ttf
+family "Slipgates Sans B": 27 faces
+  asked 400 upright -> "Regular" 400 upright; simulations: none (real face)
+  asked 500 upright -> "Medium" 500 upright; simulations: none (real face)
+  asked 600 upright -> "SemiBold" 600 upright; simulations: none (real face)
+  asked 700 upright -> "Bold" 700 upright; simulations: none (real face)
+  asked 400 italic  -> "Italic" 400 italic; simulations: none (real face)
+  asked 500 italic  -> "Medium Italic" 500 italic; simulations: none (real face)
+  asked 600 italic  -> "SemiBold Italic" 600 italic; simulations: none (real face)
+  asked 700 italic  -> "Bold Italic" 700 italic; simulations: none (real face)
+synthesized matches: 0
+
+## mono
+files: SlipgatesMono-Bold.ttf, SlipgatesMono-BoldItalic.ttf, SlipgatesMono-Italic.ttf, SlipgatesMono-Regular.ttf, SlipgatesMono-SemiBold.ttf, SlipgatesMono-SemiBoldItalic.ttf
+family "Slipgates Mono": 9 faces
+  asked 400 upright -> "Regular" 400 upright; simulations: none (real face)
+  asked 500 upright -> "Semibold" 600 upright; simulations: none (real face)
+  asked 600 upright -> "Semibold" 600 upright; simulations: none (real face)
+  asked 700 upright -> "Bold" 700 upright; simulations: none (real face)
+  asked 400 italic  -> "Italic" 400 italic; simulations: none (real face)
+  asked 500 italic  -> "Semibold Italic" 600 italic; simulations: none (real face)
+  asked 600 italic  -> "Semibold Italic" 600 italic; simulations: none (real face)
+  asked 700 italic  -> "Bold Italic" 700 italic; simulations: none (real face)
+synthesized matches: 0
+
+## segoe (Windows 11's SegUIVar.ttf, today's system face; not in the repo)
+files: SegUIVar.ttf
+family "Segoe UI Variable Small": 10 faces
+  asked 400 upright -> "Regular" 400 upright; simulations: none (real face)
+  asked 500 upright -> "Semibold" 600 upright; simulations: none (real face)
+  asked 600 upright -> "Semibold" 600 upright; simulations: none (real face)
+  asked 700 upright -> "Bold" 700 upright; simulations: none (real face)
+  asked 400 italic  -> "Oblique" 400 oblique; simulations: OBLIQUE (SYNTHESIZED)
+  asked 500 italic  -> "Semibold Oblique" 600 oblique; simulations: OBLIQUE (SYNTHESIZED)
+  asked 600 italic  -> "Semibold Oblique" 600 oblique; simulations: OBLIQUE (SYNTHESIZED)
+  asked 700 italic  -> "Bold Oblique" 700 oblique; simulations: OBLIQUE (SYNTHESIZED)
+family "Segoe UI Variable Text": 10 faces
+  asked 400 upright -> "Regular" 400 upright; simulations: none (real face)
+  asked 500 upright -> "Semibold" 600 upright; simulations: none (real face)
+  asked 600 upright -> "Semibold" 600 upright; simulations: none (real face)
+  asked 700 upright -> "Bold" 700 upright; simulations: none (real face)
+  asked 400 italic  -> "Oblique" 400 oblique; simulations: OBLIQUE (SYNTHESIZED)
+  asked 500 italic  -> "Semibold Oblique" 600 oblique; simulations: OBLIQUE (SYNTHESIZED)
+  asked 600 italic  -> "Semibold Oblique" 600 oblique; simulations: OBLIQUE (SYNTHESIZED)
+  asked 700 italic  -> "Bold Oblique" 700 oblique; simulations: OBLIQUE (SYNTHESIZED)
+family "Segoe UI Variable Display": 10 faces
+  asked 400 upright -> "Regular" 400 upright; simulations: none (real face)
+  asked 500 upright -> "Semibold" 600 upright; simulations: none (real face)
+  asked 600 upright -> "Semibold" 600 upright; simulations: none (real face)
+  asked 700 upright -> "Bold" 700 upright; simulations: none (real face)
+  asked 400 italic  -> "Oblique" 400 oblique; simulations: OBLIQUE (SYNTHESIZED)
+  asked 500 italic  -> "Semibold Oblique" 600 oblique; simulations: OBLIQUE (SYNTHESIZED)
+  asked 600 italic  -> "Semibold Oblique" 600 oblique; simulations: OBLIQUE (SYNTHESIZED)
+  asked 700 italic  -> "Bold Oblique" 700 oblique; simulations: OBLIQUE (SYNTHESIZED)
+synthesized matches: 12
+

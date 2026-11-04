@@ -1,0 +1,72 @@
+{
+  "family": "Slipgates Mono",
+  "unitsPerEm": 1000,
+  "probe": "Hamburgefonstiv 0123456789",
+  "collection": "ttc/SlipgatesMono.ttc",
+  "faces": [
+    {
+      "weight": 400,
+      "style": "normal",
+      "postscript": "SlipgatesMono-Regular",
+      "file": "ttf/SlipgatesMono-Regular.ttf",
+      "index": 0,
+      "probe": 15600
+    },
+    {
+      "weight": 400,
+      "style": "italic",
+      "postscript": "SlipgatesMono-Italic",
+      "file": "ttf/SlipgatesMono-Italic.ttf",
+      "index": 1,
+      "probe": 15600
+    },
+    {
+      "weight": 500,
+      "style": "normal",
+      "postscript": "SlipgatesMono-Medium",
+      "file": "ttf/SlipgatesMono-Medium.ttf",
+      "index": 2,
+      "probe": 15600
+    },
+    {
+      "weight": 500,
+      "style": "italic",
+      "postscript": "SlipgatesMono-MediumItalic",
+      "file": "ttf/SlipgatesMono-MediumItalic.ttf",
+      "index": 3,
+      "probe": 15600
+    },
+    {
+      "weight": 600,
+      "style": "normal",
+      "postscript": "SlipgatesMono-SemiBold",
+      "file": "ttf/SlipgatesMono-SemiBold.ttf",
+      "index": 4,
+      "probe": 15600
+    },
+    {
+      "weight": 600,
+      "style": "italic",
+      "postscript": "SlipgatesMono-SemiBoldItalic",
+      "file": "ttf/SlipgatesMono-SemiBoldItalic.ttf",
+      "index": 5,
+      "probe": 15600
+    },
+    {
+      "weight": 700,
+      "style": "normal",
+      "postscript": "SlipgatesMono-Bold",
+      "file": "ttf/SlipgatesMono-Bold.ttf",
+      "index": 6,
+      "probe": 15600
+    },
+    {
+      "weight": 700,
+      "style": "italic",
+      "postscript": "SlipgatesMono-BoldItalic",
+      "file": "ttf/SlipgatesMono-BoldItalic.ttf",
+      "index": 7,
+      "probe": 15600
+    }
+  ]
+}

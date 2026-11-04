@@ -106,7 +106,7 @@ test('where a browser has no font-size-adjust, a folder-trust question\'s paths 
   }
 });
 
-test('inline mono is set in Agent Bridge Mono at the weight of the text around it, with no spacing of its own', async ({ page }) => {
+test('inline mono is set in Slipgates Mono at the weight of the text around it, with no spacing of its own', async ({ page }) => {
   await openDemo(page);
   await open(page, CLAUDE);
   await expect(page.locator(TOOL_NAME)).toHaveText('Bash');
@@ -116,7 +116,7 @@ test('inline mono is set in Agent Bridge Mono at the weight of the text around i
       const around = getComputedStyle(el.parentElement);
       return { family: own.fontFamily, weight: own.fontWeight, around: around.fontWeight, spacing: own.letterSpacing, padding: own.paddingLeft };
     });
-    expect(style.family, selector).toMatch(/^"Agent Bridge Mono"/);
+    expect(style.family, selector).toMatch(/^"Slipgates Mono"/);
     expect(style.weight, selector).toBe(style.around);
     expect(style.spacing, selector).toBe('normal');
     expect(style.padding, selector).toBe('0px');
@@ -131,7 +131,7 @@ test('the separator before a folder is in the text face, not the folder\'s mono'
     .map((e) => ({ family: getComputedStyle(e).fontFamily, content: e.textContent })));
   expect(separator.content.trim()).toBe('·');
   expect(separator.family).toBe(text.family);
-  expect(separator.family).not.toMatch(/Agent Bridge Mono/);
+  expect(separator.family).not.toMatch(/Slipgates Mono/);
 });
 test('inline mono leaves the type ramp\'s lines alone: the tool line and Tools keep the meta line height, and a tool\'s name in Tools its row\'s weight', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -144,4 +144,22 @@ test('inline mono leaves the type ramp\'s lines alone: the tool line and Tools k
   expect(await v.locator('.tools-panel li.tool').first().evaluate(line)).toBe(meta);
   const [name, row] = await v.locator('.tools-panel li.tool .tool-name').first().evaluate((el) => [getComputedStyle(el).fontWeight, getComputedStyle(el.closest('.tool')).fontWeight]);
   expect(name).toBe(row);
+});
+
+// Tracking (docs/design/ui.md §4.3, #544 §11): +2% on the title and the wordmark, so Slipgates
+// Sans SemiBold doesn't read condensed there; body text and rows stay untracked, so the reading
+// measure holds.
+test('a session\'s title and the wordmark are tracked +2%, and the conversation and the rows are not', async ({ page }) => {
+  await openDemo(page);
+  const spacing = (selector) => page.locator(selector).first().evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { em: s.letterSpacing === 'normal' ? 0 : parseFloat(s.letterSpacing) / parseFloat(s.fontSize), weight: s.fontWeight };
+  });
+  for (const selector of ['.brand']) { expect((await spacing(selector)).em, selector).toBeCloseTo(0.02, 4); }
+  for (const selector of ['.row-title']) { expect((await spacing(selector)).em, selector).toBe(0); }
+  await open(page, CLAUDE);
+  const title = await spacing(`.session-view[data-id="${CLAUDE}"] .session-title`);
+  expect(title.em).toBeCloseTo(0.02, 4);
+  expect(title.weight).toBe('600');
+  expect((await spacing(`.session-view[data-id="${CLAUDE}"] .stream`)).em).toBe(0);
 });

@@ -10,7 +10,8 @@ choice is [docs/design/ui.md](../docs/design/ui.md), and the order of work is
 | `glyphs/*.svg` | The status glyphs, on a 16 grid |
 | `icons/*.svg` | The icon set, on a 20 grid, with a 1.5 stroke and round ends. `mark.svg` is the app mark, on a 48 grid |
 | `app-icon/*.svg` | **Generated.** The app icon in each platform's container, from `tokens.json` `appIcon` and `icons/mark.svg` ([App icon](#app-icon)) |
-| `fonts/agent-bridge-mono/` | Agent Bridge Mono, the monospace: build plan, build script, TTF and WOFF2, and its specimen. **Licensed separately under SIL OFL 1.1**, not this project's AGPL (see its README) |
+| `fonts/slipgates-sans/` | Slipgates Sans, the text face (#544): a tuned Inter, its build script, the variable TTF and WOFF2 pair, the hinted statics in one collection, and `faces.json`. **Licensed separately under SIL OFL 1.1**, not this project's AGPL (see its README) |
+| `fonts/slipgates-mono/` | Slipgates Mono, the monospace: build plan, build script, TTF, WOFF2 and a collection, `faces.json`, and its specimen. **Licensed separately under SIL OFL 1.1**, not this project's AGPL (see its README) |
 | `preview.png` | The glyphs, icons and colour roles rendered in dark and light. Regenerate it whenever a glyph, icon or role changes |
 | `canvas/` | The design canvas boards' source, rendered to [docs/design/mockups](../docs/design/mockups/README.md) by [tools/design-mockups](../tools/design-mockups/README.md) |
 
@@ -18,7 +19,9 @@ choice is [docs/design/ui.md](../docs/design/ui.md), and the order of work is
 
 `tools/design-gen` reads this folder and writes every client's copy. Each generated file says
 so in its header. CI fails when one is stale, and its tests hold every theme to the contrast
-rules in `tokens.json` (`color.contrast`).
+rules in `tokens.json` (`color.contrast`). It refuses to generate when a bundled font lacks a real
+face for a weight or style the ramps use (`type.weights` × `type.styles`), since a platform would
+synthesize it (ui.md §4.2).
 
 ```
 node tools/design-gen/generate.mjs               # after changing anything here; commit the result
@@ -29,12 +32,14 @@ node tools/design-gen/preview.mjs                # preview.png (needs pwa's npm 
 
 | Client | File | What it holds |
 |---|---|---|
-| PWA | `pwa/design/tokens.css` | `@font-face` for each face of Agent Bridge Mono (`font-display: swap`), and `--ab-*` custom properties: roles and surfaces in light, dark (`prefers-color-scheme`) and high contrast (`forced-colors`), the mono stack, inline mono's ratio and scale per platform (`html[data-platform]`), radii, spacing, and motion (`--ab-motion-*`, with a `prefers-reduced-motion` block). `pwa/tools/build-site.mjs` copies the WOFF2s and `OFL.txt` into the site's `design/fonts/` |
+| PWA | `pwa/design/tokens.css` | `@font-face` for Slipgates Sans (the variable pair, `font-weight: 400 700`, upright and italic) and each face of Slipgates Mono (`font-display: swap`), `font-synthesis: none`, and `--ab-*` custom properties: roles and surfaces in light, dark (`prefers-color-scheme`) and high contrast (`forced-colors`), the sans and mono stacks, the title's and wordmark's tracking (`--ab-tracking-*`), inline mono's ratio and scale per platform (`html[data-platform]`), radii, spacing, and motion (`--ab-motion-*`, with a `prefers-reduced-motion` block). `pwa/tools/build-site.mjs` copies the WOFF2s and each font's licence into the site's `design/fonts/` |
 | PWA | `pwa/design/sprite.svg` | A `<symbol>` per glyph (`glyph-<name>`) and icon (`icon-<name>`). A glyph with a moving part also has `glyph-<name>--still` and `glyph-<name>--spin` or `--orbit`, so a client can turn that part alone |
 | PWA | `pwa/index.html`, `pwa/manifest.webmanifest` | Only the `theme-color` and manifest colours, from the shell |
-| Windows | `src/AgentBridge.App/Design/DesignResources.xaml` | `ThemeDictionaries` (Light, Dark, HighContrast) of `Ab*` brushes, and the hyperlink brushes WinUI reads (`color.accent.hyperlink`); WinUI's accent palette, `SystemAccentColor` and its Light1–3/Dark1–3 shades, as Bridge (`color.accent.windows`), so accent buttons, the selection pill, checked controls, focused fields and links take Bridge rather than the Windows accent; `MonoFontFamily` (the bundled TTF, then the fallback stack), inline mono's scale and its size per ramp role (`AbInlineMono*`), radii, spacing and the layout sizes (`AbLayout*`, from `layout`); motion (`AbMotion*`, outside the theme dictionaries); a `TextBlock` style per role of the Windows type ramp (`AbType<Role>`, from `type.roles.windows`); a `ContentControl` style per glyph (`AbGlyph<Name>`) and icon (`AbIcon<Name>`) |
+| Windows | `src/AgentBridge.App/Design/DesignResources.xaml` | `ThemeDictionaries` (Light, Dark, HighContrast) of `Ab*` brushes, and the hyperlink brushes WinUI reads (`color.accent.hyperlink`); WinUI's accent palette, `SystemAccentColor` and its Light1–3/Dark1–3 shades, as Bridge (`color.accent.windows`), so accent buttons, the selection pill, checked controls, focused fields and links take Bridge rather than the Windows accent; `SansFontFamily`, `ContentControlThemeFontFamily` and `MonoFontFamily` (each bundled collection, then the fallback stack), inline mono's scale and its size per ramp role (`AbInlineMono*`), radii, spacing and the layout sizes (`AbLayout*`, from `layout`); motion (`AbMotion*`, outside the theme dictionaries); a `TextBlock` style per role of the Windows type ramp (`AbType<Role>`, from `type.roles.windows`, with `CharacterSpacing` from `type.tracking` on the title); a `ContentControl` style per glyph (`AbGlyph<Name>`) and icon (`AbIcon<Name>`) |
 | Windows | `src/AgentBridge.App.Core/DesignLayout.cs` | The layout sizes and breakpoints as constants, for the app's view models, which decide the panes by width and run on Linux CI |
-| Windows | `src/AgentBridge.App/Design/DesignKeys.cs` | Those keys, the accent palette's colours and the font files the app bundles, for the app's self-test |
+| Windows | `src/AgentBridge.App/Design/DesignKeys.cs` | Those keys, the accent palette's colours, the font files the app bundles and every real face in them, with the sans' probe advances, for the app's self-test |
+| Apple | `design/apple/SlipgatesFonts.plist`, `SlipgatesFonts.swift` | Every font file to register (`UIAppFonts`; `ATSApplicationFontsPath` on macOS) and each real face's PostScript name by weight and style, so Apple clients never ask for a bold or italic the family lacks; and `SlipgatesFont.Tracking`, the title's and wordmark's tracking in em |
+| Android | `design/android/font/` | Each font file under its resource name, and `slipgates_sans.xml` and `slipgates_mono.xml`: a font family with a `<font>` for every weight and style, to copy into `res/font`; and `design/android/values/slipgates_type.xml`, the title's and wordmark's `letterSpacing` in em |
 | Design | `design/app-icon/*.svg` | The app icon in each platform's container ([App icon](#app-icon)) |
 | PWA | `pwa/icon.svg`, `pwa/icons/*.png` | The app icon: the favicon and the manifest's `any` icons, its maskable icons, and the `apple-touch-icon` |
 | Windows | `src/AgentBridge.App/Assets/AgentBridge.ico`, `AgentBridge.png` | The app icon: the exe's, the window's, the tray's and the installer's, and the toast logo |

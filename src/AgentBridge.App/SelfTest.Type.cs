@@ -8,8 +8,8 @@ using Microsoft.UI.Xaml.Media.Imaging;
 namespace AgentBridge.App;
 
 // Inline mono (ui.md §4.2, #215): mono on a line of text has the text face's x-height. Measured in
-// ink, not taken from the tokens: "x" drawn in Segoe UI Variable at each ramp role and in Agent
-// Bridge Mono at that role's generated inline size, the rows each fills counted.
+// ink, not taken from the tokens: "x" drawn in Slipgates Sans at each ramp role and in Slipgates
+// Mono at that role's generated inline size, the rows each fills counted.
 static partial class SelfTest
 {
     static async Task CheckInlineMono(MainWindow window, Action<bool, string> check)

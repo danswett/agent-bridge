@@ -1,0 +1,62 @@
+<!doctype html>
+<!-- The source of specimen.png: open it beside woff2/ and capture the whole page, 1000 CSS px wide, at 2× (see README.md). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Slipgates Mono</title>
+<style>
+  @font-face { font-family: "Slipgates Mono"; src: url("woff2/SlipgatesMono-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; }
+  @font-face { font-family: "Slipgates Mono"; src: url("woff2/SlipgatesMono-Italic.woff2") format("woff2"); font-weight: 400; font-style: italic; }
+  @font-face { font-family: "Slipgates Mono"; src: url("woff2/SlipgatesMono-Medium.woff2") format("woff2"); font-weight: 500; font-style: normal; }
+  @font-face { font-family: "Slipgates Mono"; src: url("woff2/SlipgatesMono-MediumItalic.woff2") format("woff2"); font-weight: 500; font-style: italic; }
+  @font-face { font-family: "Slipgates Mono"; src: url("woff2/SlipgatesMono-SemiBold.woff2") format("woff2"); font-weight: 600; font-style: normal; }
+  @font-face { font-family: "Slipgates Mono"; src: url("woff2/SlipgatesMono-SemiBoldItalic.woff2") format("woff2"); font-weight: 600; font-style: italic; }
+  @font-face { font-family: "Slipgates Mono"; src: url("woff2/SlipgatesMono-Bold.woff2") format("woff2"); font-weight: 700; font-style: normal; }
+  @font-face { font-family: "Slipgates Mono"; src: url("woff2/SlipgatesMono-BoldItalic.woff2") format("woff2"); font-weight: 700; font-style: italic; }
+  @font-face { font-family: "Slipgates Sans"; src: url("../slipgates-sans/woff2/SlipgatesSans.woff2") format("woff2"); font-weight: 100 900; font-style: normal; }
+  html { background: #17191D; font-synthesis: none; }
+  body { margin: 0; width: 1000px; display: flex; align-items: flex-start; padding: 28px 22px; box-sizing: border-box; }
+  .panel { flex: 1; padding: 22px 21px; font-family: "Slipgates Mono", monospace; }
+  .dark { background: #202327; color: #E8EAED; --text2: #9AA0A8; --code: #191B1F; --line: transparent; }
+  .light { background: #F9F9F9; color: #1A1A1A; --text2: #616161; --code: #FFFFFF; --line: #E5E5E5; }
+  h1 { margin: 0; font-size: 30px; font-weight: 600; line-height: 1.2; }
+  .caption { font-family: "Slipgates Sans", sans-serif; font-size: 10px; color: var(--text2); margin: 2px 0 18px; }
+  .confusables { font-size: 17px; line-height: 26px; margin-bottom: 20px; overflow-wrap: anywhere; }
+  .styles { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 0; font-size: 11px; line-height: 17px; margin-bottom: 18px; }
+  .rows { font-size: 8px; line-height: 16.5px; }
+  .rows div { display: flex; justify-content: space-between; }
+  .rows .meta { color: var(--text2); }
+  pre { font: 8.4px/14px "Slipgates Mono", monospace; background: var(--code); border: 1px solid var(--line); border-radius: 4px; padding: 10px 11px; margin: 10px 0 14px; white-space: pre; overflow: hidden; }
+  .symbols { font-size: 10px; }
+  b { font-weight: 600; }
+</style>
+</head>
+<body>
+  <section class="panel dark"></section>
+  <section class="panel light"></section>
+  <template id="specimen">
+    <h1>Slipgates Mono</h1>
+    <div class="caption">Iosevka 34.9.1 · IoskeleyMono configuration · tailed l · 600 width · 400–700, italics · OFL 1.1</div>
+    <div class="confusables">0O o 1lI| i! rn m 5S 2Z 8B {}[]() &lt;&gt; =&gt; != ~</div>
+    <div class="styles">
+      <span>Regular agent-3a91</span><i>Italic agent-3a91</i>
+      <span style="font-weight: 500">Medium agent-3a91</span><i style="font-weight: 500">Medium Italic agent-3a91</i>
+      <b>Semi Bold agent-3a91</b><b><i>Semi Bold Italic agent-3a91</i></b>
+      <strong style="font-weight: 700">Bold agent-3a91</strong><strong style="font-weight: 700"><i>Bold Italic agent-3a91</i></strong>
+    </div>
+    <div class="rows">
+      <div><span>✓ dotnet test --filter RestartAfterResume</span><span class="meta">4:02</span></div>
+      <div><span><b>task</b> Bisect RestartAfterResume</span><span class="meta">3:10</span></div>
+      <div class="meta">5e59309 · ~/src/slipgates</div>
+    </div>
+<pre>// Status precedence, first match wins (ui.md §2.2)
+if (session.Question is { } q) return Status.Waiting;      // rule 1
+if (Json.Str(e, "agentId") is { Length: &gt; 0 } id)
+    work.AgentActive(id, at);   // 0x1F == 31  l1I|  O0o</pre>
+    <div class="symbols">⠋⠙⠹⠸ ⌘ ⌥ ⏎ → ⇒ ┌─┬─┐ ▉▓▒░ ● ◆ ✓ ✗ αβγ ЖЯ é ñ ß € ở ữ ặ ỹ đ</div>
+  </template>
+  <script>
+    for (const panel of document.querySelectorAll('.panel')) { panel.append(document.getElementById('specimen').content.cloneNode(true)); }
+  </script>
+</body>
+</html>

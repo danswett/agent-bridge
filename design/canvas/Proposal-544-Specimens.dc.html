@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #544: specimens beside the mono</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Italic.woff2) format('woff2');font-weight:400;font-style:italic}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Medium.woff2) format('woff2');font-weight:500;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-MediumItalic.woff2) format('woff2');font-weight:500;font-style:italic}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-SemiBold.woff2) format('woff2');font-weight:600;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-SemiBoldItalic.woff2) format('woff2');font-weight:600;font-style:italic}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Bold.woff2) format('woff2');font-weight:700;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-BoldItalic.woff2) format('woff2');font-weight:700;font-style:italic}
+@font-face{font-family:'Slipgates Sans B';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB[opsz,wght].woff2) format('woff2');font-weight:100 900;font-style:normal}
+@font-face{font-family:'Slipgates Sans B';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB-Italic[opsz,wght].woff2) format('woff2');font-weight:100 900;font-style:italic}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-Italic.woff2) format('woff2');font-weight:400;font-style:italic}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-SemiBold.woff2) format('woff2');font-weight:600;font-style:normal}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-SemiBoldItalic.woff2) format('woff2');font-weight:600;font-style:italic}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-Bold.woff2) format('woff2');font-weight:700;font-style:normal}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-BoldItalic.woff2) format('woff2');font-weight:700;font-style:italic}
+@font-face{font-family:'Control A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Control B';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Segoe Text';src:local('Segoe UI Variable Text');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Segoe Text';src:local('Segoe UI Variable Text Semibold');font-weight:600;font-style:normal}
+@font-face{font-family:'Proposal Segoe Text';src:local('Segoe UI Variable Text Bold');font-weight:700;font-style:normal}
+@font-face{font-family:'Proposal Segoe Display';src:local('Segoe UI Variable Display');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Segoe Display';src:local('Segoe UI Variable Display Semibold');font-weight:600;font-style:normal}
+@font-face{font-family:'Proposal Segoe Display';src:local('Segoe UI Variable Display Bold');font-weight:700;font-style:normal}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/544-custom-sans.md). The proposal's faces load from
+     docs/design/proposals/544-custom-sans/fonts; Segoe UI Variable is the rendering machine's own. -->
+<div style="width: 1440px; height: 1500px; box-sizing: border-box; padding: 32px 40px; background: {{t.layer}}; color: {{t.text}}; font-family: 'Proposal Segoe Text', sans-serif">
+  <div style="font-size: 13px; line-height: 18px; color: {{t.text2}}">Proposal #544 · not approved · each option set beside Slipgates Mono, the face it pairs with</div>
+  <sc-for list="{{rows}}" as="o">
+  <section style="margin-top: 24px; padding-top: 18px; border-top: 1px solid {{t.stroke2}}; display: grid; grid-template-columns: 1fr 1fr; column-gap: 48px">
+    <div style="grid-column: 1 / 3; display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px"><span style="font-size: 13px; font-weight: 600; color: {{t.accentText}}">{{o.key}}</span><span style="font-size: 13px; color: {{t.text2}}">{{o.caption}}</span></div>
+    <sc-for list="{{o.cols}}" as="c">
+    <div style="font-synthesis: {{c.synth}}"><div style="font-family: {{c.text}}">
+      <div style="font-family: {{c.display}}; font-size: 40px; line-height: 48px; font-weight: 600; letter-spacing: {{c.track}}">{{c.title}}</div>
+      <div style="font-size: 20px; line-height: 28px; margin-top: 6px">Sphinx of black quartz, judge my vow.</div>
+      <div style="font-size: 20px; line-height: 28px">Il1| O0o rn m cl d 3 4 6 9 &#123;&#125; [] () “” ‘’ — –</div>
+      <div style="font-size: 20px; line-height: 28px">0123456789 · 12:41 · 0.1.691 · 98% · €14 · <span style="font-variant-numeric: tabular-nums">1111 / 8888</span></div>
+      <div style="font-size: 15px; line-height: 24px; margin-top: 8px; max-width: 600px">{{c.para1}}<code style="font-family: 'Proposal Mono'; font-size: {{c.mono}}px; padding: 0 3px; border-radius: 3px; background: {{t.codeBg}}">LaunchView.xaml.cs</code>{{c.para2}}<em>{{c.em}}</em>{{c.para3}}<strong>{{c.strong}}</strong>.</div>
+      <div style="font-size: 15px; line-height: 24px; margin-top: 8px; display: flex; flex-wrap: wrap; column-gap: 14px; color: {{t.text2}}"><span style="font-weight: 400">Regular</span><span style="font-weight: 500">{{c.w500}}</span><span style="font-weight: 600">SemiBold</span><span style="font-weight: 700">Bold</span><span style="font-style: italic">{{c.it400}}</span><span style="font-style: italic; font-weight: 600">{{c.it600}}</span><span style="font-style: italic; font-weight: 700">{{c.it700}}</span></div>
+          </div></div>
+    </sc-for>
+  </section>
+  </sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1500},"theme":{"type":"string","default":"light"}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const F = {
+      segoe: { name: 'Segoe UI Variable', note: 'today: Windows and the desktop PWA', text: "'Proposal Segoe Text', 'Segoe UI Variable Text', sans-serif", display: "'Proposal Segoe Display', 'Segoe UI Variable Display', sans-serif", ms: 0.962, synth: 'auto' },
+      sf: { name: 'SF Pro (stand-in: Inter)', note: 'today: macOS and iOS. SF Pro cannot be rendered here', text: "'SF Pro Text', sans-serif", display: "'SF Pro Display', sans-serif", ms: 0.977, synth: 'auto' },
+      roboto: { name: 'Roboto Flex', note: 'today: Android', text: "'Roboto Flex', sans-serif", display: "'Roboto Flex', sans-serif", ms: 0.988, synth: 'auto' },
+      a: { name: 'Slipgates Sans A', note: 'option A: the mono\'s own skeleton', text: "'Slipgates Sans A'", display: "'Slipgates Sans A'", ms: 1.0, synth: 'none' },
+      b: { name: 'Slipgates Sans B', note: 'option B: Inter, tuned to the mono', text: "'Slipgates Sans B'", display: "'Slipgates Sans B'", ms: 1.05, synth: 'none' },
+      mono: { name: 'Slipgates Mono', note: 'the bundled monospace', text: "'Proposal Mono'", display: "'Proposal Mono'", ms: 1.0, synth: 'none' }
+    };
+    const TH = {
+      dark: { shell: '#202326', layer: '#272A2E', card: '#2F3338', stroke: 'rgba(255,255,255,0.07)', stroke2: 'rgba(255,255,255,0.12)', sel: 'rgba(255,255,255,0.06)',
+        text: '#FFFFFF', text2: 'rgba(255,255,255,0.72)', accent: '#2DD4BF', accentText: '#5EE6D3', onAccent: '#062621', amber: '#FFB224', amberText: '#FFD27A', amberFill: 'rgba(255,178,36,0.1)', violetText: '#C4B5FD', codeBg: 'rgba(255,255,255,0.07)', mark: '#F472B6' },
+      light: { shell: '#EEF0F2', layer: '#F9F9F9', card: '#FFFFFF', stroke: 'rgba(0,0,0,0.07)', stroke2: 'rgba(0,0,0,0.12)', sel: 'rgba(0,0,0,0.05)',
+        text: '#1A1A1A', text2: 'rgba(0,0,0,0.62)', accent: '#0B7A6E', accentText: '#0B7A6E', onAccent: '#FFFFFF', amber: '#B87700', amberText: '#7A4600', amberFill: '#FFF2D6', violetText: '#5B3CC4', codeBg: 'rgba(0,0,0,0.05)', mark: '#C2185B' }
+    };
+    const t = TH[this.props.theme === 'dark' ? 'dark' : 'light'];
+    const col = (k, o = {}) => ({ ...F[k], title: o.title || F[k].name, track: o.track || 'normal', mono: (15 * (o.ms || F[k].ms)).toFixed(2),
+      para1: 'I’ll change ', para2: ' so the trust-wait banner clears ', em: 'as soon as', para3: ' the folder is trusted, then run the tests on ', strong: 'devbox',
+      w500: k === 'segoe' ? 'Medium (no 500 face)' : k === 'mono' ? 'Medium (no 500 face)' : 'Medium',
+      it700: k === 'segoe' ? 'Bold Italic (synthesized)' : 'Bold Italic',
+      it400: k === 'segoe' ? 'Italic (synthesized)' : 'Italic',
+      it600: k === 'segoe' ? 'SemiBold Italic (synthesized)' : 'SemiBold Italic', ...o.extra });
+    const mono = col('mono');
+    // C: the brand face for display only; the body stays on the system face.
+    const c = { ...col('segoe'), display: F.a.display, title: 'Slipgates', track: '0', mono: (15 * F.segoe.ms).toFixed(2) };
+    return { t, rows: [
+      { key: 'Today', caption: 'Segoe UI Variable (Windows 11, real) beside the mono. Segoe has no italic face, so every italic is a synthesized oblique', cols: [col('segoe'), mono] },
+      { key: 'A · Slipgates Sans A', caption: 'Iosevka quasi-proportional, built from the mono\'s own variants: same x-height (0.520), same strokes, width 540', cols: [col('a'), mono] },
+      { key: 'B · Slipgates Sans B', caption: 'Inter 4.1, alternates frozen to echo the mono: tailed l, open 4 6 9, flat-top 3, square dots', cols: [col('b'), mono] },
+      { key: 'C · brand face only', caption: 'Option A for the wordmark and headings; body and dense UI stay on the system face (Segoe here)', cols: [c, mono] }
+    ] };
+  }
+}
+</script>
+</body>
+</html>

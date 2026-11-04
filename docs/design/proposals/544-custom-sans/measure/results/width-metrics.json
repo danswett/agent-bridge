@@ -1,0 +1,123 @@
+[
+ {
+  "face": "Segoe UI (the PWA today on Windows: Chromium's system-ui)",
+  "avg_em": 0.493,
+  "x_em": 0.5,
+  "width_x": 0.987,
+  "o_x": 0.984,
+  "semibold_avg_em": 0.512,
+  "semibold_width_x": 1.025,
+  "vietnamese": "104/104",
+  "tone_marks": "5/5"
+ },
+ {
+  "face": "Segoe UI Variable Text (the Windows app today)",
+  "avg_em": 0.493,
+  "x_em": 0.5,
+  "width_x": 0.987,
+  "o_x": 0.984,
+  "semibold_avg_em": 0.512,
+  "semibold_width_x": 1.025,
+  "vietnamese": "104/104",
+  "tone_marks": "5/5"
+ },
+ {
+  "face": "Roboto (the PWA today on Android)",
+  "avg_em": 0.499,
+  "x_em": 0.528,
+  "width_x": 0.945,
+  "o_x": 0.91,
+  "semibold_avg_em": 0.506,
+  "semibold_width_x": 0.957,
+  "vietnamese": "104/104",
+  "tone_marks": "5/5"
+ },
+ {
+  "face": "Slipgates Sans B, text cut (opsz 14): what ships on Windows and the web",
+  "avg_em": 0.538,
+  "x_em": 0.546,
+  "width_x": 0.985,
+  "o_x": 0.912,
+  "semibold_avg_em": 0.556,
+  "semibold_width_x": 1.018,
+  "vietnamese": "104/104",
+  "tone_marks": "5/5"
+ },
+ {
+  "face": "B at opsz 20 (Apple/Android variable TTF, a 20 pt title)",
+  "avg_em": 0.522,
+  "x_em": 0.536,
+  "width_x": 0.974,
+  "o_x": 0.917,
+  "semibold_avg_em": 0.543,
+  "semibold_width_x": 1.013,
+  "vietnamese": "104/104",
+  "tone_marks": "5/5"
+ },
+ {
+  "face": "B at opsz 32 (the display cut, a 34 pt Large Title)",
+  "avg_em": 0.491,
+  "x_em": 0.516,
+  "width_x": 0.951,
+  "o_x": 0.928,
+  "semibold_avg_em": 0.518,
+  "semibold_width_x": 1.004,
+  "vietnamese": "104/104",
+  "tone_marks": "5/5"
+ },
+ {
+  "face": "Inter Tight (the interim wordmark and brand-board headings, #558)",
+  "avg_em": 0.486,
+  "x_em": 0.546,
+  "width_x": 0.89,
+  "o_x": 0.907,
+  "semibold_avg_em": 0.515,
+  "semibold_width_x": 0.944,
+  "vietnamese": "104/104",
+  "tone_marks": "4/5"
+ },
+ {
+  "face": "IBM Plex Sans",
+  "avg_em": 0.505,
+  "x_em": 0.516,
+  "width_x": 0.979,
+  "o_x": 0.903,
+  "semibold_avg_em": 0.528,
+  "semibold_width_x": 1.011,
+  "vietnamese": "104/104",
+  "tone_marks": "5/5"
+ },
+ {
+  "face": "Noto Sans",
+  "avg_em": 0.53,
+  "x_em": 0.536,
+  "width_x": 0.989,
+  "o_x": 0.925,
+  "semibold_avg_em": 0.554,
+  "semibold_width_x": 1.022,
+  "vietnamese": "104/104",
+  "tone_marks": "5/5"
+ },
+ {
+  "face": "Atkinson Hyperlegible Next",
+  "avg_em": 0.487,
+  "x_em": 0.496,
+  "width_x": 0.981,
+  "o_x": 0.96,
+  "semibold_avg_em": 0.514,
+  "semibold_width_x": 1.036,
+  "vietnamese": "12/104",
+  "tone_marks": "3/5"
+ },
+ {
+  "face": "Verdana (a wide reference)",
+  "avg_em": 0.562,
+  "x_em": 0.545,
+  "width_x": 1.03,
+  "o_x": 0.923,
+  "semibold_avg_em": 0.637,
+  "semibold_width_x": 1.162,
+  "vietnamese": "104/104",
+  "tone_marks": "5/5"
+ }
+]

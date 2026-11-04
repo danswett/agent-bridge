@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #544: real faces versus synthesized</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Italic.woff2) format('woff2');font-weight:400;font-style:italic}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Medium.woff2) format('woff2');font-weight:500;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-MediumItalic.woff2) format('woff2');font-weight:500;font-style:italic}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-SemiBold.woff2) format('woff2');font-weight:600;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-SemiBoldItalic.woff2) format('woff2');font-weight:600;font-style:italic}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Bold.woff2) format('woff2');font-weight:700;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-BoldItalic.woff2) format('woff2');font-weight:700;font-style:italic}
+@font-face{font-family:'Slipgates Sans B';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB[opsz,wght].woff2) format('woff2');font-weight:100 900;font-style:normal}
+@font-face{font-family:'Slipgates Sans B';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB-Italic[opsz,wght].woff2) format('woff2');font-weight:100 900;font-style:italic}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-Italic.woff2) format('woff2');font-weight:400;font-style:italic}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-SemiBold.woff2) format('woff2');font-weight:600;font-style:normal}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-SemiBoldItalic.woff2) format('woff2');font-weight:600;font-style:italic}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-Bold.woff2) format('woff2');font-weight:700;font-style:normal}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/slipgates-mono/woff2/SlipgatesMono-BoldItalic.woff2) format('woff2');font-weight:700;font-style:italic}
+@font-face{font-family:'Control A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Control B';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Segoe Text';src:local('Segoe UI Variable Text');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Segoe Text';src:local('Segoe UI Variable Text Semibold');font-weight:600;font-style:normal}
+@font-face{font-family:'Proposal Segoe Text';src:local('Segoe UI Variable Text Bold');font-weight:700;font-style:normal}
+@font-face{font-family:'Proposal Segoe Display';src:local('Segoe UI Variable Display');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Segoe Display';src:local('Segoe UI Variable Display Semibold');font-weight:600;font-style:normal}
+@font-face{font-family:'Proposal Segoe Display';src:local('Segoe UI Variable Display Bold');font-weight:700;font-style:normal}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/544-custom-sans.md). The proposal's faces load from
+     docs/design/proposals/544-custom-sans/fonts; Segoe UI Variable is the rendering machine's own. -->
+<div style="width: 1440px; height: 1110px; box-sizing: border-box; padding: 28px 40px; background: {{t.layer}}; color: {{t.text}}; font-family: 'Proposal Segoe Text', sans-serif">
+  <div style="font-size: 13px; line-height: 18px; color: {{t.text2}}">Proposal #544 · not approved · each row draws the same words at 32 px three ways: the real face (teal); the browser’s synthesis from a Regular-only family (magenta); and the two overlaid. Where they differ, the colours separate.</div>
+  <sc-for list="{{rows}}" as="r">
+  <div style="display: flex; align-items: center; gap: 24px; padding: 10px 0; border-top: 1px solid {{t.stroke}}; margin-top: 6px">
+    <div style="width: 260px; flex: none; font-size: 13px; line-height: 18px"><b>{{r.name}}</b><br><span style="color: {{t.text2}}">{{r.note}}</span></div>
+    <div style="flex: 1; font-size: 32px; line-height: 40px; white-space: nowrap">
+      <div style="display: flex; gap: 16px; align-items: baseline"><span style="width: 110px; font-size: 12px; color: {{t.text2}}">real face</span><span style="font-family: {{r.real}}; font-weight: {{r.w}}; font-style: {{r.rs}}; color: rgb(11,122,110)">{{r.text}}</span></div>
+      <div style="display: flex; gap: 16px; align-items: baseline"><span style="width: 110px; font-size: 12px; color: {{t.text2}}">synthesized</span><span style="font-family: {{r.fake}}; font-weight: {{r.w}}; font-style: {{r.s}}; color: rgb(194,24,91)">{{r.text}}</span></div>
+      <div style="display: flex; gap: 16px; align-items: baseline"><span style="width: 110px; font-size: 12px; color: {{t.text2}}">overlaid</span><span style="position: relative; display: inline-block"><span style="font-family: {{r.real}}; font-weight: {{r.w}}; font-style: {{r.rs}}; color: rgba(11,122,110,0.85)">{{r.text}}</span><span style="position: absolute; left: 0; top: 0; font-family: {{r.fake}}; font-weight: {{r.w}}; font-style: {{r.s}}; color: rgba(194,24,91,0.6); mix-blend-mode: multiply">{{r.text}}</span></span></div>
+    </div>
+  </div>
+  </sc-for>
+  <div style="margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; column-gap: 40px; font-size: 13px; line-height: 20px">
+    <div><b>Measured: DirectWrite (Windows, IDWriteFontFamily::GetFirstMatchingFont)</b><br>
+      Slipgates Sans A, 8 statics: 0 synthesized of 8 asks<br>
+      Slipgates Sans B, 8 statics and the variable pair: 0 synthesized<br>
+      Slipgates Mono: 0 synthesized; 500 resolves to SemiBold<br>
+      Control, A Regular only: 6 synthesized (bold and oblique)<br>
+      <span style="color: {{t.amberText}}">Segoe UI Variable today: every italic ask is a synthesized oblique (12 of 12)</span></div>
+    <div><b>Measured: CSS (headless Chromium, font-synthesis: none)</b><br>
+      A, B statics, B variable: every weight and style matches the real face pixel for pixel and to 0.01 px of advance<br>
+      Mono: real at 400, 600, 700 and italic; 500 falls back to Regular, not synthesized<br>
+      Control with font-synthesis: auto: 600, 700 and italic are synthesized<br>
+      Scripts and full tables: measure/ and measure/results/</div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1110}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const TH = {
+      dark: { shell: '#202326', layer: '#272A2E', card: '#2F3338', stroke: 'rgba(255,255,255,0.07)', stroke2: 'rgba(255,255,255,0.12)', sel: 'rgba(255,255,255,0.06)',
+        text: '#FFFFFF', text2: 'rgba(255,255,255,0.72)', accent: '#2DD4BF', accentText: '#5EE6D3', onAccent: '#062621', amber: '#FFB224', amberText: '#FFD27A', amberFill: 'rgba(255,178,36,0.1)', violetText: '#C4B5FD', codeBg: 'rgba(255,255,255,0.07)', mark: '#F472B6' },
+      light: { shell: '#EEF0F2', layer: '#F9F9F9', card: '#FFFFFF', stroke: 'rgba(0,0,0,0.07)', stroke2: 'rgba(0,0,0,0.12)', sel: 'rgba(0,0,0,0.05)',
+        text: '#1A1A1A', text2: 'rgba(0,0,0,0.62)', accent: '#0B7A6E', accentText: '#0B7A6E', onAccent: '#FFFFFF', amber: '#B87700', amberText: '#7A4600', amberFill: '#FFF2D6', violetText: '#5B3CC4', codeBg: 'rgba(0,0,0,0.05)', mark: '#C2185B' }
+    };
+    const t = TH.light;
+    const SR = [
+      { name: 'A · Bold 700', note: 'real Bold vs faux bold from Regular', real: "'Slipgates Sans A'", fake: "'Control A'", w: 700, s: 'normal', text: 'Needs you · trust-wait 3469' },
+      { name: 'A · Italic 400', note: 'true italic vs faux oblique', real: "'Slipgates Sans A'", fake: "'Control A'", w: 400, s: 'italic', text: 'as soon as the folder is trusted' },
+      { name: 'B · SemiBold 600', note: 'real SemiBold vs faux bold', real: "'Slipgates Sans B'", fake: "'Control B'", w: 600, s: 'normal', text: 'Needs you · trust-wait 3469' },
+      { name: 'B · Bold Italic 700', note: 'real Bold Italic vs faux bold + oblique', real: "'Slipgates Sans B'", fake: "'Control B'", w: 700, s: 'italic', text: 'as soon as the folder is trusted' },
+      { name: 'Segoe UI Variable · Italic', note: 'today: no italic face exists; upright (teal) vs what every platform draws (magenta)', real: "'Proposal Segoe Text'", fake: "'Proposal Segoe Text'", w: 400, s: 'italic', rs: 'normal', text: 'as soon as the folder is trusted' }
+      ];
+      return { t, rows: SR.map(r => ({ rs: r.s, ...r })) };
+  }
+}
+</script>
+</body>
+</html>

@@ -9,8 +9,26 @@ const fs = require('fs'), path = require('path');
 const { chromium } = require('playwright');
 const [projectDir, outDir, only] = process.argv.slice(2);
 const index = JSON.parse(fs.readFileSync(path.join(projectDir, 'canvas.json'), 'utf8'));
-const files = {};
-for (const f of fs.readdirSync(projectDir)) if (f.endsWith('.dc.html')) files[f] = fs.readFileSync(path.join(projectDir, f), 'utf8');
+const sources = {};
+for (const f of fs.readdirSync(projectDir)) if (f.endsWith('.dc.html')) sources[f] = fs.readFileSync(path.join(projectDir, f), 'utf8');
+// A board's helmet may load a font file by a path relative to the canvas folder
+// (src: url(../../docs/....woff2)); the page is built from strings, so such URLs are inlined,
+// only for the board being rendered and the boards it imports.
+const fontUrl = /url\((['"]?)((?:\.\.?\/)[^'")]+\.(woff2|ttf|otf))\1\)/g;
+const mime = { woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf', png: 'image/png' };
+// And an <img> by a relative path (src="../../docs/....png"): a proposal board can lay out
+// screenshots of the real app beside its measurements.
+const imgUrl = /\bsrc=(["'])((?:\.\.?\/)[^"']+\.(png))\1/g;
+const inlined = {};
+const inline = f => inlined[f] ??= sources[f].replace(fontUrl, (_, q, rel, ext) =>
+  `url(data:${mime[ext]};base64,${fs.readFileSync(path.join(projectDir, rel)).toString('base64')})`)
+  .replace(imgUrl, (_, q, rel, ext) => `src=${q}data:${mime[ext]};base64,${fs.readFileSync(path.join(projectDir, rel)).toString('base64')}${q}`);
+function filesFor(file, out = {}) {
+  if (out[file] || !sources[file]) return out;
+  out[file] = inline(file);
+  for (const [, name] of sources[file].matchAll(/<dc-import\b[^>]*\bname="([^"]+)"/g)) filesFor(name.endsWith('.dc.html') ? name : name + '.dc.html', out);
+  return out;
+}
 
 const nm = p => path.join(__dirname, 'node_modules', p);
 // @font-face can't redefine generic families, so system-ui, sans-serif and -apple-system
@@ -31,8 +49,8 @@ const fontCss = [
   ...['Segoe UI Variable Text', 'Segoe UI Variable Display', 'Segoe UI', 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', 'Google Sans', STAND_IN].map(f => font(f, inter)),
   font('Roboto Flex', '@fontsource-variable/roboto-flex/files/roboto-flex-latin-full-normal.woff2'),
   font('Roboto', '@fontsource-variable/roboto-flex/files/roboto-flex-latin-full-normal.woff2'),
-  // The real monospace, from the repository (design/fonts/agent-bridge-mono).
-  ...[['Regular', 400, 'normal'], ['SemiBold', 600, 'normal'], ['Bold', 700, 'normal'], ['Italic', 400, 'italic']].map(([n, w, st]) => `@font-face{font-family:'Agent Bridge Mono';src:url(data:font/woff2;base64,${fs.readFileSync(path.join(__dirname, '../../design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-' + n + '.woff2')).toString('base64')}) format('woff2');font-weight:${w};font-style:${st}}`),
+  // The real monospace, from the repository (design/fonts/slipgates-mono).
+  ...[['Regular', 400, 'normal'], ['SemiBold', 600, 'normal'], ['Bold', 700, 'normal'], ['Italic', 400, 'italic']].map(([n, w, st]) => `@font-face{font-family:'Slipgates Mono';src:url(data:font/woff2;base64,${fs.readFileSync(path.join(__dirname, '../../design/fonts/slipgates-mono/woff2/SlipgatesMono-' + n + '.woff2')).toString('base64')}) format('woff2');font-weight:${w};font-style:${st}}`),
   ...['Cascadia Mono', 'SF Mono', 'Roboto Mono'].map(f => `@font-face{font-family:'${f}';src:url(data:font/woff2;base64,${fs.readFileSync(nm('@fontsource/cascadia-mono/files/cascadia-mono-latin-400-normal.woff2')).toString('base64')}) format('woff2');font-weight:400}@font-face{font-family:'${f}';src:url(data:font/woff2;base64,${fs.readFileSync(nm('@fontsource/cascadia-mono/files/cascadia-mono-latin-600-normal.woff2')).toString('base64')}) format('woff2');font-weight:600}`)
 ].join('\n');
 
@@ -122,7 +140,7 @@ async function renderBoard(page, file, w, h) {
     const wrap = document.createElement('div'); wrap.id = 'board'; wrap.style.display = 'inline-block';
     wrap.appendChild(root); document.body.appendChild(wrap);
     return true;
-  }, { files, file, fontCss, standInSrc: standIn.toString() });
+  }, { files: filesFor(file), file, fontCss, standInSrc: standIn.toString() });
 }
 
 (async () => {
@@ -133,13 +151,14 @@ async function renderBoard(page, file, w, h) {
     if (skip.has(file) || (only ? !file.startsWith(only) : file.startsWith('Proposal-'))) continue;
     const b = index.boards[file];
     const phone = b.w < 500;
-    const page = await browser.newPage({ viewport: { width: b.w, height: b.h }, deviceScaleFactor: phone ? 2 : 1 });
+    const dpr = b.dpr || (phone ? 2 : 1);
+    const page = await browser.newPage({ viewport: { width: b.w, height: b.h }, deviceScaleFactor: dpr });
     await page.setContent('<!doctype html><html><head></head><body></body></html>');
     await renderBoard(page, file, b.w, b.h);
     await page.evaluate(() => document.fonts.ready);
     const out = path.join(outDir, file.replace('.dc.html', '').toLowerCase() + '.png');
     await page.screenshot({ path: out, clip: { x: 0, y: 0, width: b.w, height: b.h } });
-    console.log('wrote', path.basename(out), `${b.w}x${b.h}${phone ? '@2x' : ''}`);
+    console.log('wrote', path.basename(out), `${b.w}x${b.h}${dpr !== 1 ? `@${dpr}x` : ''}`);
     await page.close();
   }
   await browser.close();

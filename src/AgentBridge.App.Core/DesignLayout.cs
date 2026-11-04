@@ -21,6 +21,6 @@ public static class DesignLayout
     public const double SessionMin = 440;
     public const double Divider = 8;
     public const double DividerLine = 3;
-    public const double ReadingMax = 712;
+    public const double ReadingMax = 770;
     public const double MachineTab = 128;
 }
