@@ -1,19 +1,21 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime;
+using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Diagnostics.Runtime;
 
 // What held the App tests when several of them stopped looking for seconds at once (#660, after
 // #465 and #511). Their timeouts said only how long the longest gap between looks was and how
 // many pool threads there were afterwards, which could not tell a frozen process (a GC, the
 // runtime suspended, the OS not running it) from a starved pool or a blocked UI thread. A thread
-// of its own looks ten times a second at every Wait.UntilAsync in progress. When one has not
-// looked for Gap while this thread itself ran on time, it writes down the process's managed
-// stacks (Windows, read from a snapshot of the process) with what the runtime counted meanwhile;
-// when this thread was itself held, only what was counted, since nothing could be read during it.
-// A wait that then times out says what was written down since it began. Nothing else is said,
-// and the tests run as before.
+// of its own wakes ten times a second and looks at every Wait.UntilAsync in progress. When one
+// has not looked for Gap while this thread itself woke on time, it writes down the process's
+// managed stacks (Windows, read from a snapshot of the process) with what the runtime counted
+// meanwhile; when this thread itself woke late, only what was counted, since nothing could be
+// read while it was held. A wait that times out says how this thread fared while it waited, and
+// what was written down meanwhile. Nothing else is said, and the tests run as before.
 static class StallWatch
 {
     static readonly TimeSpan Gap = TimeSpan.FromSeconds(3);
@@ -24,15 +26,21 @@ static class StallWatch
     // together, and one reading shows them all.
     static readonly TimeSpan Between = TimeSpan.FromSeconds(10);
     const int MaxStacks = 3;
-    const int MaxNotes = 20;
+    // The latest notes are kept: at the start of a run, when every class starts its host, the
+    // watch woke late often enough that the first twenty were gone before the waits that timed
+    // out had begun.
+    const int MaxNotes = 30;
     const int MaxFrames = 24;
+    // How late each wake was, for about the last two minutes.
+    const int Wakes = 1200;
 
     static readonly Stopwatch clock = Stopwatch.StartNew();
     static readonly ConcurrentDictionary<Look, byte> looks = new();
     static readonly ConcurrentQueue<(long At, string Text)> notes = new();
+    static readonly (long At, long Late)[] wakes = new (long, long)[Wakes];
+    static long woken;
     static int started;
     static int stacksRead;
-    static int notesKept;
     static long probeQueuedAt = -1;
     static long timerFiredAt;
     static Timer? timer;
@@ -59,11 +67,28 @@ static class StallWatch
 
     public static void End(Look look) => looks.TryRemove(look, out _);
 
-    // What was written down while this wait was in progress, for its timeout's message.
+    // For a wait's timeout: how the watch fared while it waited, and what was written down.
     public static string Since(Look look)
     {
-        var said = notes.Where(n => n.At >= look.Began).Select(n => n.Text).ToList();
-        return said.Count == 0 ? "" : "\n" + string.Join("\n", said);
+        if (Volatile.Read(ref started) == 0) { return ""; }
+        var now = Now;
+        long count = 0, latest = -1, latestAt = -1, lastWake = -1;
+        lock (wakes)
+        {
+            for (var i = Math.Max(0, woken - Wakes); i < woken; i++)
+            {
+                var (at, late) = wakes[i % Wakes];
+                if (at < look.Began) { continue; }
+                count++;
+                if (late > latest) { (latest, latestAt) = (late, at); }
+            }
+            if (woken > 0) { lastWake = now - wakes[(woken - 1) % Wakes].At; }
+        }
+        var text = new StringBuilder($"\n[stall watch +{now} ms] while this waited ({now - look.Began} ms) the watch woke {count} times, ")
+            .Append(count == 0 ? "" : $"at most {latest} ms late (at +{latestAt} ms), ")
+            .Append($"and last {lastWake} ms ago");
+        foreach (var (_, said) in notes.Where(n => n.At >= look.Began)) { text.Append('\n').Append(said); }
+        return text.ToString();
     }
 
     public static void Start()
@@ -106,6 +131,7 @@ static class StallWatch
             {
                 var now = Now;
                 var late = now - slept - (long)Tick.TotalMilliseconds;
+                lock (wakes) { wakes[woken % Wakes] = (now, late); woken++; }
                 var counts = Counts.Take();
                 var before = history.Count > 0 ? history.Peek() : counts;
                 var previous = history.Count > 0 ? history.Last() : counts;
@@ -131,7 +157,7 @@ static class StallWatch
                 lastStacks = now;
                 var probe = Volatile.Read(ref probeQueuedAt);
                 var text = new StringBuilder();
-                text.Append($"[stall watch +{now} ms] {stalled.Count} of {looks.Count} waits have not looked for {Gap.TotalSeconds:0} s while the watch ran on time; ")
+                text.Append($"[stall watch +{now} ms] {stalled.Count} of {looks.Count} waits have not looked for {Gap.TotalSeconds:0} s while the watch woke on time; ")
                     .Append($"a pool item queued {(probe < 0 ? "has run" : $"{now - probe} ms ago has not run")}; ")
                     .Append($"the last timer fired {now - Volatile.Read(ref timerFiredAt)} ms ago; ")
                     .AppendLine(counts.Since(before));
@@ -148,8 +174,8 @@ static class StallWatch
 
     static void Note(long at, string text)
     {
-        if (Interlocked.Increment(ref notesKept) > MaxNotes) { return; }
         notes.Enqueue((at, text));
+        while (notes.Count > MaxNotes) { notes.TryDequeue(out _); }
     }
 
     // Every managed thread's stack, read from a snapshot of this process (PssCaptureSnapshot), so
@@ -159,7 +185,10 @@ static class StallWatch
         if (!OperatingSystem.IsWindows()) { return "  (stacks are read on Windows only)\n"; }
         var took = Stopwatch.StartNew();
         using var target = DataTarget.CreateSnapshotAndAttach(Environment.ProcessId);
-        using var runtime = target.ClrVersions[0].CreateRuntime();
+        // This process's own runtime's DAC, which ClrMD did not find by itself on the Arm runner.
+        var dac = Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "mscordaccore.dll");
+        var clr = target.ClrVersions[0];
+        using var runtime = File.Exists(dac) ? clr.CreateRuntime(dac) : clr.CreateRuntime();
         var same = new Dictionary<string, List<string>>();
         foreach (var thread in runtime.Threads)
         {
@@ -184,7 +213,7 @@ static class StallWatch
     // little and made a report several times longer.
     static string Short(string signature)
     {
-        var s = System.Text.RegularExpressions.Regex.Replace(signature, @"\[\[.*?\]\]", "");
+        var s = Regex.Replace(signature, @"\[\[.*?\]\]", "");
         var open = s.IndexOf('(');
         return open > 0 ? s[..open] : s;
     }
