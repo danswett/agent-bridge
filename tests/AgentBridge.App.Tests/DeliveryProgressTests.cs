@@ -76,7 +76,7 @@ public sealed class DeliveryProgressTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_reply_typed_into_a_working_session_is_Queued_and_a_stage_behind_it_changes_nothing()
+    public async Task A_reply_typed_into_a_working_session_is_Queued_and_a_stage_behind_it_changes_nothing_not_even_its_timing_marks()
     {
         await StartAsync(progress: true);
         host.OnAsync(Ops.SessionReply, _ =>
@@ -95,6 +95,9 @@ public sealed class DeliveryProgressTests : IAsyncLifetime
 
         lock (stages) { Assert.Equal(new string?[] { null, Deliveries.Queued }, stages); }
         Assert.Equal("Queued. The session is working, and takes it at its next step.", QuestionViewModel.StageText(Deliveries.Queued));
+        // Marked only as the stage moved on: the earlier stage replayed after it adds nothing.
+        await Wait.UntilAsync(() => Logged(entry.Request) is not null, "the timing line");
+        Assert.Matches(new Regex($@"^reply {entry.Request[..8]} delivered: sent \d+ ms, queued \d+ ms, result \d+ ms$"), Logged(entry.Request)!);
     }
 
     [Fact]

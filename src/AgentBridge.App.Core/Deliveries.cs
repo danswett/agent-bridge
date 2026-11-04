@@ -335,9 +335,16 @@ public sealed class Deliveries
         };
         if (stage is null) { return; }
         bool Current(Delivery e) => e.Request == request && e.State == DeliveryState.Sending && e.Attempts == attempt;
-        if (Get(key) is not { } now || !Current(now)) { return; }
-        Mark(request, stage);
-        Update(key, e => Current(e) && stage != e.Stage && Rank(stage) >= Rank(e.Stage) ? e with { Stage = stage } : e);
+        var moved = false;
+        Update(key, e =>
+        {
+            if (!Current(e) || stage == e.Stage || Rank(stage) < Rank(e.Stage)) { return e; }
+            moved = true;
+            return e with { Stage = stage };
+        });
+        // Marked only when the stage moves on: a repeat replaying the stages so far, or a host
+        // saying the same again, adds nothing to the timing line.
+        if (moved) { Mark(request, stage); }
     }
 
     // A timing mark for an answer or a reply on its way, in ms since the tap. A second of the same
