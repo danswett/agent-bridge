@@ -426,6 +426,15 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.False(settings.Busy);
     }
 
+    // Holds what is posted to it until released, then runs it on the test's UI thread.
+    sealed class HeldContext : SynchronizationContext
+    {
+        readonly System.Collections.Concurrent.ConcurrentQueue<(SendOrPostCallback Run, object? State)> queue = new();
+        public bool Waiting => !queue.IsEmpty;
+        public override void Post(SendOrPostCallback d, object? state) => queue.Enqueue((d, state));
+        public void Release() { while (queue.TryDequeue(out var item)) { TestUi.ForTest.Invoke(() => item.Run(item.State)); } }
+    }
+
     static AgentReadiness Agent(string id, string label, ReadinessState hooks, ReadinessState installation = ReadinessState.Working) =>
         new(id, label, "fixture-home", $"{id}.exe", "1.2.3",
             new(installation, "Executable found."), new(ReadinessState.Working, "Version 1.2.3"), new(hooks, "Fixture hooks."),
@@ -525,7 +534,53 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_setup_that_never_answers_says_so_on_its_row()
+    public async Task A_setup_the_host_never_answers_says_on_its_row_that_hooks_may_have_changed()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = new(DateTimeOffset.UtcNow, [Agent("copilot", "Copilot CLI", ReadinessState.NeedsAction)]) });
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
+        var never = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(HostOps.AgentsSetup, _ => never.Task);
+        settings.SetupTimeout = TimeSpan.FromMilliseconds(200);
+
+        await settings.SetUpAgentAsync("copilot");
+
+        Assert.Contains("took too long, and some hooks may have changed", settings.Agents.Single().Status);
+        Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
+    }
+
+    [Fact]
+    public async Task A_setup_still_running_when_its_host_goes_says_nothing_on_the_host_that_comes_back()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = new(DateTimeOffset.UtcNow, [Agent("copilot", "Copilot CLI", ReadinessState.NeedsAction)]) });
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var never = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(HostOps.AgentsSetup, _ => { started.TrySetResult(); return never.Task; });
+
+        // The setup's own continuation is held until the host has gone and come back, so its
+        // failure lands after the app saw the host go, whichever thread would have been first.
+        var held = new HeldContext();
+        var ui = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(held);
+        Task pending;
+        try { pending = settings.SetUpAgentAsync("copilot"); }
+        finally { SynchronizationContext.SetSynchronizationContext(ui); }
+        await started.Task;
+        Assert.Equal("Setting up…", settings.Agents.Single().Status);
+        await host.StopAsync();
+        await Wait.UntilAsync(() => !settings.HostRunning, "the host gone");
+        host.Start();
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "the restarted host's agents");
+        await Wait.UntilAsync(() => held.Waiting, "the old setup's failure");
+        while (!pending.IsCompleted) { held.Release(); await Task.Delay(10); }
+        await pending;
+
+        Assert.Equal("", settings.Agents.Single().Status);
+        Assert.Equal(Tone.None, settings.Agents.Single().StatusTone);
+    }
+
+    [Fact]
+    public async Task A_setup_the_host_refuses_says_why_on_its_row()
     {
         await ConnectedWith(FakeHost.StatusOf() with { Agents = new(DateTimeOffset.UtcNow, [Agent("copilot", "Copilot CLI", ReadinessState.NeedsAction)]) });
         await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");

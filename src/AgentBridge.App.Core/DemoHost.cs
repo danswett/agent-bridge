@@ -249,7 +249,7 @@ public sealed partial class DemoHost : IAsyncDisposable
             case HostOps.AgentsRefresh when !remote:
                 return Done(Agents());
             case HostOps.AgentsSetup when !remote:
-                return Done(SetUp(data.Deserialize<AgentSetupRequest>(ProtocolJson.Options)!));
+                return SetUpAsync(data.Deserialize<AgentSetupRequest>(ProtocolJson.Options)!);
             case LaunchProtocol.Options:
                 lock (gate) { return Done(LaunchChoices()); }
             case LaunchProtocol.Launch:
@@ -731,6 +731,13 @@ public sealed partial class DemoHost : IAsyncDisposable
             Agent("claude", "Claude Code", "2.1.4", new(ReadinessState.Failed, "The hook ownership record is not recognized. Inspect it before repairing setup.")),
             Agent("codex", "Codex", "0.48.0", new(ReadinessState.Working, "Registered and owned by this profile.")),
         ]);
+    }
+
+    // As long as a real setup takes to write, so its row says "Setting up…" before its result.
+    static async Task<object?> SetUpAsync(AgentSetupRequest r)
+    {
+        await Task.Delay(TimeSpan.FromMilliseconds(600));
+        return SetUp(r);
     }
 
     static AgentSetupResult SetUp(AgentSetupRequest r) => r switch

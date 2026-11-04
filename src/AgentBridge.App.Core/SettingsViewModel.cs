@@ -54,6 +54,9 @@ public sealed class SettingsViewModel : Observable
     HostStatus? installStatusSeen;
     // Each row's last setup note, by agent: rows are rebuilt from every status, the notes are not.
     readonly Dictionary<string, AgentSetupNote> agentNotes = new(StringComparer.Ordinal);
+    // Counts the times the host was seen gone: a setup that ends after its host went (#705 review)
+    // says nothing on the rows of the host that came back.
+    int hostsGone;
 
     public SettingsViewModel(HostConnection host, HostManager manager, IUpdater updater, IAppAtSignIn appAtSignIn, Func<AppPreferences> prefs, Action<AppPreferences> savePrefs, string appVersion, string defaultRelay)
     {
@@ -412,7 +415,7 @@ public sealed class SettingsViewModel : Observable
     {
         // A setup's result is about the host that ran it: a host gone (stopped, restarted as it said
         // to) takes the rows' notes with it.
-        if (!HostRunning) { agentNotes.Clear(); }
+        if (!HostRunning) { agentNotes.Clear(); hostsGone++; }
         if (!installRequestPending && HostRunning && Status is { } status && !ReferenceEquals(status, installStatusSeen))
         {
             installStatusSeen = status;
@@ -477,19 +480,22 @@ public sealed class SettingsViewModel : Observable
             throw new InvalidOperationException($"Agent setup is unavailable: {Status.ReadOnly ?? Status.AgentHaBridge}");
         }
         var verb = Agents.FirstOrDefault(a => a.Id == agent)?.SetUpVerb;
+        var gone = hostsGone;
         Note(agent, new(remove ? "Removing…" : verb == "Repair" ? "Repairing…" : "Setting up…", Tone.Progress));
         AgentSetupResult result;
         try
         {
             result = await host.CallAsync<AgentSetupResult>(HostOps.AgentsSetup,
-                new AgentSetupRequest(agent, remove ? "remove" : "install"), TimeSpan.FromMinutes(4));
+                new AgentSetupRequest(agent, remove ? "remove" : "install"), SetupTimeout);
         }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
-            Note(agent, new(e is OperationCanceledException ? "It took too long; check again before trying again." : e.Message, Tone.Bad));
+            // A host that never answers may have changed some of the hooks: the pipe's timeout is a
+            // TimeoutException, a cancellation an OperationCanceledException (#705 review).
+            if (gone == hostsGone) { Note(agent, new(e is TimeoutException or OperationCanceledException ? "It took too long, and some hooks may have changed. Check again before trying again." : e.Message, Tone.Bad)); }
             throw;
         }
-        Note(agent, new(result.Detail, result.Completed ? Tone.Ok : Tone.Bad));
+        if (gone == hostsGone) { Note(agent, new(result.Detail, result.Completed ? Tone.Ok : Tone.Bad)); }
         await host.RefreshStatusAsync();
         if (!result.Completed) { throw new InvalidOperationException(result.Detail); }
         if (host.Can(HostOps.AgentReadinessCapability))
@@ -544,6 +550,9 @@ public sealed class SettingsViewModel : Observable
         if (!AgentInstallInProgress) { return; }
         await host.CallAsync(HostOps.AgentsInstallCancel);
     });
+
+    // How long a setup may take at the host before its row says it took too long (tests shorten it).
+    internal TimeSpan SetupTimeout { get; set; } = TimeSpan.FromMinutes(4);
 
     void Note(string agent, AgentSetupNote note)
     {

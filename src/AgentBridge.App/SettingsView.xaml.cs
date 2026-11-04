@@ -93,8 +93,12 @@ public sealed partial class SettingsView : UserControl
             && (FrameworkElementAutomationPeer.FromElement(status) ?? FrameworkElementAutomationPeer.CreatePeerForElement(status)) is { } peer)
         {
             peer.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+            Announced.Add((id, status.Text));
         }
     });
+
+    // What was raised for Narrator, by agent, for the self-test to see.
+    internal List<(string Id, string Text)> Announced { get; } = [];
 
     internal ItemsControl AgentRows => AgentList;
 
