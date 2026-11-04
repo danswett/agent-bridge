@@ -138,7 +138,11 @@ public sealed class LaunchPieceTests : IDisposable
         var pidFile = Out("concurrent.pid");
         var shim = Out("concurrent.cmd");
         File.WriteAllText(shim, $"@\"{Echo}\" --probe-child \"{pidFile}\" close\r\n");
-        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        // Every bound below only stops a real hang. What is tested is when the reader sees the end
+        // of the pipe: at once, while the child still runs, unless the child holds a copy of the
+        // writer, which it would until it ended. A two-second bound on that end failed on a
+        // loaded Windows runner (#553).
+        using var stop = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         using var entered = new ManualResetEventSlim();
         using var window = AgentBridge.Host.Core.Processes.ProcessLaunch.HoldInheritableHandles();
         using var pipe = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
@@ -149,31 +153,49 @@ public sealed class LaunchPieceTests : IDisposable
         var pending = Task.Run(() =>
         {
             entered.Set();
-            return runner.RunAsync(batch ? shim : Echo, batch ? [] : ["--probe-child", pidFile, "close"], TimeSpan.FromSeconds(15), stop.Token);
+            return runner.RunAsync(batch ? shim : Echo, batch ? [] : ["--probe-child", pidFile, "close"], TimeSpan.FromMinutes(2), stop.Token);
         });
         Process? child = null;
         try
         {
-            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(30)));
             // Give the competing launch a chance to inherit the writer if it ignores the gate.
             var beforeRelease = DateTime.UtcNow.AddMilliseconds(500);
             while (!File.Exists(pidFile) && DateTime.UtcNow < beforeRelease) { Thread.Sleep(10); }
             pipe.DisposeLocalCopyOfClientHandle();
             window.Dispose();
-            var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (!File.Exists(pidFile) && DateTime.UtcNow < deadline) { await Task.Delay(10); }
-            Assert.True(File.Exists(pidFile));
-            child = Process.GetProcessById(int.Parse(File.ReadAllText(pidFile)));
+            child = await FixtureChild(pidFile, TimeSpan.FromSeconds(30));
             Assert.False(child.HasExited);
-            Assert.Equal("", await reader.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.Equal("", await reader.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(30)));
+            Assert.False(child.HasExited, "The pipe ended only when the competing launch's child did: it held the writer.");
         }
         finally
         {
             window.Dispose();
             stop.Cancel();
-            try { await pending.WaitAsync(TimeSpan.FromSeconds(2)); }
+            try { await pending.WaitAsync(TimeSpan.FromSeconds(30)); }
             catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
-            child?.Dispose();
+            if (child is not null)
+            {
+                if (!child.HasExited) { child.Kill(); await child.WaitForExitAsync(); }
+                child.Dispose();
+            }
+        }
+    }
+
+    // The fixture's child writes its pid to a file it then renames into place. Reading it the
+    // moment it appears can still meet the rename's handle (or a scanner's) and fail as in use,
+    // so it is read until it can be.
+    static async Task<Process> FixtureChild(string pidFile, TimeSpan within)
+    {
+        var deadline = DateTime.UtcNow + within;
+        while (true)
+        {
+            string problem;
+            try { return Process.GetProcessById(int.Parse(File.ReadAllText(pidFile))); }
+            catch (IOException e) { problem = e.Message; }
+            Assert.True(DateTime.UtcNow < deadline, $"The fixture descendant did not start: {problem}");
+            await Task.Delay(10);
         }
     }
 
@@ -185,22 +207,24 @@ public sealed class LaunchPieceTests : IDisposable
         var release = Out("release.txt");
         File.WriteAllText(intermediate, $"@start \"\" /b \"{Echo}\" --probe-child \"{pidFile}\" {(closeOutput ? "close" : "keep")}\r\n");
         File.WriteAllText(shim, $"@echo off\r\nstart \"\" /b cmd.exe /d /c \"\"{intermediate}\"\"\r\n:wait\r\nif not exist \"{release}\" goto wait\r\necho fixture 1.2.3\r\n");
-        // The safety deadline must leave room for process startup and the ten-second probe
-        // timeout; loaded ARM runners can spend more than two seconds creating the fixture.
-        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        // In the timeout variant, the probe's own ten-second timeout is what is tested; the bounds
+        // around it only stop a real hang. Fifteen seconds after the descendant started was not enough on loaded Windows
+        // runners (#553): the probe returned more than five seconds after its timeout was due.
+        // The descendant outlives every bound, so it can only have gone if the probe ended it.
+        using var stop = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         var runner = new VersionCommandRunner();
-        var pending = runner.RunAsync(shim, ["--version"], TimeSpan.FromSeconds(10), stop.Token);
+        // Only the timeout variant is meant to reach the probe's timeout. The others end when
+        // released, so a long one keeps a slow start from turning them into timeouts.
+        var timedOut = !closeOutput && !cancel;
+        var pending = runner.RunAsync(shim, ["--version"], timedOut ? TimeSpan.FromSeconds(10) : TimeSpan.FromMinutes(1), stop.Token);
         Process? child = null;
         try
         {
-            var deadline = DateTime.UtcNow.AddSeconds(8);
-            while (!File.Exists(pidFile) && DateTime.UtcNow < deadline) { await Task.Delay(10); }
-            Assert.True(File.Exists(pidFile), "The fixture descendant did not start.");
-            child = Process.GetProcessById(int.Parse(File.ReadAllText(pidFile)));
+            child = await FixtureChild(pidFile, TimeSpan.FromSeconds(timedOut ? 10 : 30));
             File.WriteAllText(release, "continue");
             if (cancel) { stop.CancelAfter(TimeSpan.FromMilliseconds(100)); }
             AgentBridge.Host.Core.Usage.CommandResult? result = null;
-            var failure = await Record.ExceptionAsync(async () => result = await pending.WaitAsync(TimeSpan.FromSeconds(15)));
+            var failure = await Record.ExceptionAsync(async () => result = await pending.WaitAsync(TimeSpan.FromSeconds(60)));
             Assert.True(child.HasExited, "The version probe left its fixture descendant running.");
             if (cancel) { Assert.IsAssignableFrom<OperationCanceledException>(failure); }
             else
@@ -219,7 +243,7 @@ public sealed class LaunchPieceTests : IDisposable
                 if (!child.HasExited) { child.Kill(); await child.WaitForExitAsync(); }
                 child.Dispose();
             }
-            try { await pending.WaitAsync(TimeSpan.FromSeconds(2)); }
+            try { await pending.WaitAsync(TimeSpan.FromSeconds(30)); }
             catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
         }
     }

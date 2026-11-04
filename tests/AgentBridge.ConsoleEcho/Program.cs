@@ -29,7 +29,9 @@ internal static unsafe partial class Program
             }
             File.WriteAllText(pidFile + ".tmp", Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
             File.Move(pidFile + ".tmp", pidFile);
-            Thread.Sleep(TimeSpan.FromSeconds(30));
+            // Outlives every wait in the tests that start it (they end it themselves), so that it
+            // can only have gone because what they test ended it, never because time ran out.
+            Thread.Sleep(TimeSpan.FromMinutes(5));
             return 0;
         }
         if (args.Length >= 2 && args[0] == "--args")
