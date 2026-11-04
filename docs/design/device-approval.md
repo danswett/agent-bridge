@@ -182,7 +182,13 @@ must be I-JSON (RFC 7493): valid UTF-8, no duplicate member names, no lone surro
 names and enumerated values are case-sensitive. Each object has exactly the fields the table
 allows: an unknown or missing field refuses the entry. `seq` is an integer in `[0, 2^31)`,
 written without a fraction, exponent or sign. Ids are exactly 32 lowercase hex characters, and
-binary fields are base64url without padding that decode to exactly the stated lengths.
+binary fields are base64url without padding that decode to exactly the stated lengths. An entry
+as sent (body, signatures and assertions) is at most **48 KiB**, and a larger one is invalid on
+every path: relay append, gossip, enrollment and `roster.submit` (§7.1). Otherwise a signer could
+pad an entry with legal JSON whitespace past the submission limit while it still fits a channel
+frame, and an entry every host accepts by gossip could not be delivered by `roster.submit` as
+part of a removal's proof. A `remove` keeping 512 adds, with both signers' assertions, is under
+40 KiB.
 
 **Entry hash and identity.** The entry hash is `SHA-256(bodyBytes)` over the decoded bytes,
 written as base64url without padding wherever it appears (`prev`, pins, `rosterHead`, logs). An
@@ -234,7 +240,18 @@ history state. It is valid only if:
   cycle such as A's add displacing B's, B's displacing C's and C's displacing A's) the id is
   **conflicted**: inactive in every state that holds the set, whichever arrived first, and so with
   no lineage or signing key there. For two adds this is the pairwise rule: the one that may
-  displace the other and cannot be displaced wins. Subordination is structural: it depends only on which adds are
+  displace the other and cannot be displaced wins.
+  **A kept add does not displace.** An add that an applying removal of `t` keeps may not displace
+  an add of the same id made outside `t`'s subtree: keeping it spared it from the removal, and
+  gives it no precedence. Otherwise G, removing H on a branch from before A's add of X, could keep
+  H's copy of X, which that history shows as X's only add, and the copy would go on displacing
+  the genuine X once the branches join. With the rule the two conflict: X is inactive, never
+  active under H's keys, and is enrolled again with a new key. The rule only takes displacing
+  power away from kept adds. An outside add still wins only if its signer may displace every
+  other add's device, so it can now win only against a kept add whose device its signer is senior
+  to and could have removed, and a void outside add, such as one a removed device signs on an old
+  head, is in no conflict set at all. Keep sets themselves never change.
+  Apart from that rule, subordination is structural: it depends only on which adds are
   ancestors of which, never on removals. So a device H that adds the public key of a device A it is
   not senior to, on a branch where A is absent (A and H added by G on concurrent branches, say),
   achieves nothing: G is senior to H's copy and H is not senior to A, so H's add is subordinate
@@ -310,15 +327,12 @@ history state. It is valid only if:
     must not be a **copy** (an add of an id that has another add in the removal's parents'
     history), and no add between it and `t` in its approval lineage may be one: otherwise unticking a device that a
     displaced device enrolled would keep, through its approvers, the copy that displaced it and
-    the thief's device that made the copy. The removal's parents' history cannot show a copy made
-    on a concurrent branch, so a kept add also **stops being kept** in any state that holds
-    another add of its id signed by a device outside the target's subtree, and so does every kept
-    add with it in its lineage: the removal then takes them. Otherwise G, removing H on a branch
-    from before A's add of X, could keep H's copy of X, and the copy would go on displacing the
-    genuine X once the branches join. Only an add outside the subtree counts, so a copy that the
-    target or its subtree makes of a kept device on an old branch, which is void anyway, cannot
-    take the kept device away. Both conditions depend only on which entries are held, never on
-    their order, and once true they stay true.
+    the thief's device that made the copy. A keep set is exactly what the removal's signers
+    signed, for validity, revocation and precedence alike; nothing later changes it. A copy made on
+    a branch the removal's parents cannot see is dealt with where ids conflict instead (§3.3,
+    "A kept add does not displace"). The previous revision un-kept such an add when another add of
+    its id appeared, and that let a thief revoke an honest kept signer, and so revive its own
+    grants, by supplying a copy of the signer's key.
   * The removal **revokes** the target's add and every add of the subtree that is an ancestor of
     the removal and is not kept. The subtree's adds that are not its ancestors (concurrent with it,
     on a quarantined branch, or newer than its parent) are not named and need not be: they are
@@ -906,7 +920,8 @@ entries:
      states, on approval subtrees and on raw chains, never on subordination or conflicts.
   2. Conflict sets: for each id, the adds neither void nor revoked after step 1, formed for every
      id at once.
-  3. Winners: each set's winner, if any, from ancestry alone, for every id at once.
+  3. Winners: each set's winner, if any, from ancestry and from which adds step 1's removals
+     keep (§3.3, "A kept add does not displace"), for every id at once.
   4. Subordinate adds are void, and so is everything they added and every grant signed by those
      devices, transitively. This never feeds back into steps 2 and 3: an add that step 4 voids may
      still have made another id conflicted.
@@ -1348,16 +1363,22 @@ signing client, initiator and cosigner alike, before its own signature:
   hex characters of its id, its approver and when it was added;
 * in the cosigner picker, lists and recommends devices outside the target's subtree first, and
   devices in it last, with a warning;
-* treats as **in question** every kept device and every signer in the target's approval subtree,
-  and marks most strongly those the target added after this device's own enrollment, the window
-  in which a thief could have made them;
-* refuses to sign while any device is in question, unless the person, for each one, chooses "I
-  have *Dan's iPad* with me" and confirms it a second time; it offers instead to start the
-  removal from this device, with a cosigner outside the subtree where there is one.
+* asks the person when they last had the target ("When did you last have *Old laptop*?"). The
+  answer stays on this client; neither client takes it from the other, since one of them may be
+  the thief's;
+* treats as **in question** every signer in the target's approval subtree, and every kept device
+  that this client first accepted after that time (or, if the person does not know, after this
+  client's own enrollment): the window in which a thief could have made them. Each needs the
+  person to choose "Keep *Dan's iPad*: I added it myself", with its approver and when this client
+  first saw it, and to confirm that a second time. Every other kept device in the subtree needs a
+  single acknowledgement, shown in one list;
+* refuses to sign until each of those is given. The cosigner's client offers instead to start
+  the removal from itself with its own keep list; the initiator's offers to pick a cosigner
+  outside the subtree where there is one.
 
-That makes the usual recovery, by two devices the lost device approved, take those
-confirmations too: the price of making a thief's device visible on whichever client the person
-holds. A device kept despite them is removed afterwards like any other, by a device senior to it or two
+So the usual recovery, by two devices the lost device approved, asks for the two signers twice
+on each client and for the older kept devices once, in a list. Confirmations asked this often
+invite agreeing by habit; that is disclosed in decision 9 rather than prevented. A device kept despite them is removed afterwards like any other, by a device senior to it or two
 confirmed devices with disjoint lineages (§3.4). Both signers must be confirmed (§3.4); an
 unconfirmed device does not offer or accept a cosignature. An honest client does not offer to remove the last person's device; if
 concurrent removals leave none anyway, only a reset continues (§3.5).
@@ -1533,9 +1554,8 @@ holds. Since a channel frame carries at most 65,519 bytes of plaintext (`SecureC
 submission is sent in **parts**, each one frame, carrying a submission id, its index and the
 total. The host stages the parts and checks the submission only when all have arrived, as one
 unit, so evidence still arrives together with its removal; it keeps at most one staged submission
-per key, discards one left incomplete for 60 seconds, and refuses one over **8 MiB** in total or
-holding an entry over **48 KiB** as sent (a `remove` keeping 512 adds, with both signers'
-assertions, is under 40 KiB). It is bounded **per key**: one submission a minute from each key, so a flood from the
+per key, discards one left incomplete for 60 seconds, and refuses one over **8 MiB** in total.
+No valid entry exceeds 48 KiB (§3.2), so every entry a host could accept by any path fits. It is bounded **per key**: one submission a minute from each key, so a flood from the
 relay's own keys cannot crowd out an honest peer's, and at most 256 entries per submission besides
 one removal's evidence. A submission may carry a complete removal proof: the removal, its missing
 ancestors that are not evidence (at most 256), and the evidence §3.3 admits for it (at most 256
@@ -2023,7 +2043,9 @@ Each slice adds its own. Together they cover:
     target's subtree that it does not keep; a self-removal with a non-empty `keep` or a
     `cosigner`; a cosigned removal whose signers fail the
     cosign test, even for a target junior to `by` (there are no cosigned removals of rank 1); a
-    `targets` or `voidGrants` member (not part of v1): refused.
+    `targets` or `voidGrants` member (not part of v1); an entry over 48 KiB as sent, such as one
+    padded with JSON whitespace, at the relay, by gossip, at enrollment and through
+    `roster.submit` alike: refused.
 * Caps and budgets: a roster at its 4,096-entry limit (filled with renames by one device) still
   accepts a removal of that device. The ninth rename of one device, a signer's 65th add, merge or
   removal, and the 513th add of a generation are refused, counted across every branch and
@@ -2117,8 +2139,10 @@ Each slice adds its own. Together they cover:
   The active set is {G, E1, E2, C2}, in every delivery order.
 * **A thief-initiated recovery.** J, made and confirmed by stolen S and named "Dan's iPad", builds
   a removal of S keeping J and Y, which J added, and asks C2 to cosign. C2's client shows the
-  keep list with each device's approver and when it was added, warns that the initiator and both
-  kept devices are in S's subtree, and refuses unless the person overrides it twice. Cosigned
+  keep list with each device's approver and when C2 first saw it, and asks when the person last
+  had S. J, a signer from S's subtree, and Y, which C2 first saw after that time, each need a
+  double confirmation; E, which S approved and C2 saw before that time, if kept too, needs one
+  acknowledgement in the list. C2 refuses to sign until all are given. Cosigned
   anyway, the removal is valid, ranks 2 and keeps J and Y; the person then removes J, with C1 and
   C2 cosigning, which takes Y.
 * **A copy cannot be kept through its subtree.** S approves J and E1 on concurrent branches, and
@@ -2133,9 +2157,23 @@ Each slice adds its own. Together they cover:
 * **A copy kept on a branch that cannot see the original.** G adds H, then A; A enrolls X; on a
   branch from before A's add, H signs a copy of X's key. G removes H on that branch keeping the
   copy, which its history shows as X's only add, so the removal is valid. Once the branches join,
-  the state holds A's add of X, signed outside H's subtree, so the copy stops being kept and is
-  taken: X is active under A's genuine add, in every delivery order. A copy of a kept device made
-  by H's own subtree on an old branch leaves the kept device kept.
+  the kept copy may not displace A's add, made outside H's subtree, and A may not displace the
+  copy, so X is conflicted: inactive, never active under H's keys, announced, and enrolled again
+  with a new key. The keep set and everything the removal revokes are unchanged, in every
+  delivery order.
+* **A copy cannot un-keep a signer.** G approves C2, S and then P; P approves C1; S is stolen.
+  C1 and C2 remove P keeping C1 (R), then remove S keeping nothing (M). On a saved branch from R
+  that leaves out M, S adds Y; S also supplies W, a copy of C1's key on a parent from before P's
+  add, with an adopting merge. W is S's grant concurrent with M and void, so it is in no conflict
+  set; R still keeps C1, revokes no signer of M, and shields nothing. Y is void and the active set
+  is {G, C1, C2}. Under the previous revision's late un-keeping, W made R revoke C1 and shield Y:
+  {G, C2, Y}.
+* **A removed device's copy reaches nothing.** A device removed by M0, outside S's subtree, signs
+  an add of E's key on an old head, where E is kept by the person's removal M of S, and adopts it
+  with its own merge. The add is the removed device's grant, void if concurrent with M0 and taken
+  by M0 if an ancestor of it, so it is in no conflict set either way: E, M's signers and what they
+  enrolled after M stay active, and M keeps
+  exactly what it signed.
 * **The person picks the thief as cosigner.** The person starts removing S on C1 and is offered
   cosigners: C2, outside S's subtree, first and recommended; J, made and confirmed by S and named
   "Dan's iPad", last, with a warning. Picking J puts J in the keep list on C1's screen with S as
@@ -2575,8 +2613,10 @@ Each slice adds its own. Together they cover:
      signed, so a removal signed by a device the stolen device made (built by it, or with it
      picked as the cosigner) and keeping that device keeps it. Both signing clients therefore show
      the whole keep list, kept signers included, recommend cosigners outside the stolen device's
-     subtree, and refuse to sign until the person confirms, twice, each kept or signing device
-     from that subtree (§6.1); a device kept despite that can be removed like any other. Two cases do
+     subtree, and refuse to sign until the person confirms, twice, each signer from that subtree
+     and each kept device it added after the person says they last had it, and acknowledges the
+     older kept devices once (§6.1). Confirmations asked this often invite agreeing by habit,
+     which no client rule removes; a device kept despite them can be removed like any other. Two cases do
      lose honest work, and are stated here rather than closed. When the recovery is signed by one
      senior device (rank 1), a confirmed pair the stolen device made can still, once, revoke a
      device junior to the stolen device that did not sign the recovery, and what that device did
