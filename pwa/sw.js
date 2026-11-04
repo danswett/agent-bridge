@@ -36,23 +36,42 @@ const SHELL = [
 // fetch goes through that cache like any other: a phone opened just after a deploy installed
 // the new worker with the old files. So the shell is filled straight from the network.
 self.addEventListener('install', (e) => {
-  // A release only partly kept is no release: gone, so it is never taken for the one before.
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))))
-    .catch(async (err) => { await caches.delete(CACHE); throw err; }));
+  e.waitUntil((async () => {
+    // A worker that changed only itself, or a rollback, finds its release already kept, and
+    // a failed install must leave that as it was for the worker still in control. A release
+    // this install only partly kept is no release: gone, so it is never kept as the one before.
+    const kept = await caches.has(CACHE);
+    try {
+      await (await caches.open(CACHE)).addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })));
+    } catch (err) {
+      if (!kept) { await caches.delete(CACHE); }
+      throw err;
+    }
+  })());
   self.skipWaiting();
 });
+
+// Which releases were in control, the latest and the one before it, recorded by each as it
+// takes over. Cache order can't say: a rollback takes an older release's cache again.
+const RELEASES = 'agent-bridge-app';
+const RECORD = './releases.json';
 
 // The release before this one is kept until the next takes over: a page still open on it when
 // this worker took over (before the person pressed Reload) can still be given its own files.
 // Older ones go. Only this app's: other apps on the same origin (the /s4/ spike) keep theirs.
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((keys) => {
-    const ours = keys.filter((k) => k.startsWith(PREFIX) && k !== CACHE);
-    return Promise.all(ours.slice(0, -1).map((k) => caches.delete(k)));
-  }));
+  e.waitUntil((async () => {
+    const record = await caches.open(RELEASES);
+    const was = await (await record.match(RECORD))?.json().catch(() => null) ?? null;
+    const others = (await caches.keys()).filter((k) => k.startsWith(PREFIX) && k !== CACHE);
+    // A worker that changed only itself keeps its release, and so the one before it too. With
+    // no record (the first release to keep one), the last kept is taken for the one before.
+    const before = was?.active === CACHE ? was.before : (was?.active ?? others.at(-1));
+    await Promise.all(others.filter((k) => k !== before).map((k) => caches.delete(k)));
+    await record.put(RECORD, new Response(JSON.stringify({ active: CACHE, before: before ?? null })));
+  })());
   self.clients.claim();
 });
-
 const inShell = (url) => SHELL.some((u) => new URL(u, self.registration.scope).href === url);
 
 // A file kept by the release before this one: a page still open on it asks for its own files,
