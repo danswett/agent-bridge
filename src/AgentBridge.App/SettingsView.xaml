@@ -84,6 +84,7 @@
                                         <Button
                                             Content="Install CLI"
                                             Tag="{x:Bind Id}"
+                                            Visibility="{x:Bind local:Ui.Show(ShowInstall)}"
                                             IsEnabled="{x:Bind CanInstall}"
                                             Click="OnInstallAgent"
                                             AutomationProperties.Name="{x:Bind InstallName}"

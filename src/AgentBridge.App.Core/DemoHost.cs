@@ -715,8 +715,9 @@ public sealed partial class DemoHost : IAsyncDisposable
     };
 
     // Settings › Agents on this machine (#678): one agent per hook state, so the page shows each
-    // verb: Copilot CLI to set up, Claude Code to repair, and Codex working, with none. The demo
-    // writes nothing: a setup only answers, Claude Code's repair failing so its row shows a failure.
+    // verb: Copilot CLI to set up, Claude Code to repair, and Codex set up but not tested yet, as a
+    // healthy agent reads on a real host (Unknown with this profile's owned record), with none. The
+    // demo writes nothing: a setup only answers, Claude Code's repair failing so its row shows a failure.
     static AgentReadinessReport Agents()
     {
         static AgentReadiness Agent(string id, string label, string version, ReadinessCheck hooks) => new(id, label, $"C:\\Users\\demo\\.{id}", $"C:\\Program Files\\{label}\\{id}.exe", version,
@@ -729,7 +730,7 @@ public sealed partial class DemoHost : IAsyncDisposable
         [
             Agent("copilot", "Copilot CLI", "1.0.105", new(ReadinessState.NeedsAction, "Hook intake is off for this profile. Explicit setup or migration is required.")),
             Agent("claude", "Claude Code", "2.1.4", new(ReadinessState.Failed, "The hook ownership record is not recognized. Inspect it before repairing setup.")),
-            Agent("codex", "Codex", "0.48.0", new(ReadinessState.Working, "Registered and owned by this profile.")),
+            Agent("codex", "Codex", "0.48.0", new(ReadinessState.Unknown, "An owned setup record exists; registration and activation still need verification.")),
         ]);
     }
 

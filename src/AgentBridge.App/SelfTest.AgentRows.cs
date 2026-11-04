@@ -10,7 +10,7 @@ namespace AgentBridge.App;
 
 // Settings › Agents on this machine (#678): each row's buttons are named for its agent and have ids
 // of their own, a row shows one verb for its hooks' state (the demo's Copilot CLI to set up, Claude
-// Code to repair, Codex working, with none), and a setup's result is said on its own row, as a
+// Code to repair, Codex set up but not tested yet, as a healthy agent reads on a real host, with none), and a setup's result is said on its own row, as a
 // polite live region, a failure in Danger. Narrator's names for the rows' buttons are kept in the
 // result as the list it reads.
 static partial class SelfTest
@@ -39,8 +39,12 @@ static partial class SelfTest
             $"names each agent row's buttons for its agent, with ids of their own ({string.Join(" | ", names)})");
         var verbs = shown.Where(b => b.Id.StartsWith("SetUpAgent_", StringComparison.Ordinal)).Select(b => $"{b.Id}: {b.Button.Content}").ToList();
         var codexVerb = Buttons(rows).FirstOrDefault(b => b.Id == "SetUpAgent_codex").Button;
-        check(verbs.SequenceEqual(["SetUpAgent_copilot: Set up", "SetUpAgent_claude: Repair"]) && codexVerb is null or { Visibility: Visibility.Collapsed },
-            $"shows one verb for each agent's hooks, and none for working ones ({string.Join(", ", verbs)}; Codex's {(codexVerb is null ? "absent" : codexVerb.Visibility.ToString())})");
+        // Codex is set up and the host can't test it yet (#705 review): nothing to do, so no verb, and
+        // "Not tested yet" where a result would be.
+        var untested = view.AgentStatusOf("codex");
+        check(verbs.SequenceEqual(["SetUpAgent_copilot: Set up", "SetUpAgent_claude: Repair"]) && codexVerb is null or { Visibility: Visibility.Collapsed }
+            && untested is { Text: "Not tested yet", Visibility: Visibility.Visible },
+            $"shows one verb for each agent's hooks, and none for one set up and not tested yet ({string.Join(", ", verbs)}; Codex's {(codexVerb is null ? "absent" : codexVerb.Visibility.ToString())}, \"{untested?.Text}\")");
 
         // A setup that works and a repair that fails, as a person makes them: the row's button, then
         // the confirmation, named for the agent with Cancel the default. Each is said on its own row
@@ -68,9 +72,10 @@ static partial class SelfTest
         check(done is { Visibility: Visibility.Visible, Text.Length: > 0 } && AutomationProperties.GetLiveSetting(done) == AutomationLiveSetting.Polite && OnItsRow("copilot")
             && failed is { Visibility: Visibility.Visible } && AutomationProperties.GetLiveSetting(failed) == AutomationLiveSetting.Polite && OnItsRow("claude")
             && Colour(failed) == (Ui.Brush("AbDangerText") as SolidColorBrush)?.Color && Colour(done) != Colour(failed)
-            && quiet is null or { Visibility: Visibility.Collapsed },
-            $"says each setup's result on its own row as a polite live region, a failure in Danger (Copilot CLI: \"{done?.Text}\"; Claude Code: \"{failed?.Text}\"; Codex: {(quiet is null ? "none" : quiet.Visibility.ToString())})");
-        rows.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false, VerticalAlignmentRatio = 0 });
+            && quiet is { Text: "Not tested yet" },
+            $"says each setup's result on its own row as a polite live region, a failure in Danger (Copilot CLI: \"{done?.Text}\"; Claude Code: \"{failed?.Text}\"; Codex: \"{quiet?.Text}\")");
+        // The rows' foot at the window's: the last row's "Not tested yet" in the pictures too.
+        rows.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false, VerticalAlignmentRatio = 1 });
         var themed = new List<string>();
         foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
         {
@@ -85,7 +90,8 @@ static partial class SelfTest
         // A fresh check takes the rows' results and the failed repair's page-wide error, as it would
         // for a person, so the pages drawn after are as before.
         await settings.CheckAgentsAsync();
-        check(!settings.HasError && settings.Agents.All(a => a.Status.Length == 0), $"clears each row's result with a fresh check ({settings.Error})");
+        string[] after = [.. settings.Agents.Select(a => $"{a.Id}: {a.Status}")];
+        check(!settings.HasError && after.SequenceEqual(["copilot: ", "claude: ", "codex: Not tested yet"]), $"clears each row's result with a fresh check ({string.Join(" | ", after)}{settings.Error})");
         await Task.Delay(300);
     }
 
@@ -121,7 +127,7 @@ static partial class SelfTest
             await settings.SetUpAgentAsync("claude");
         }
         await Task.Delay(300);
-        window.SettingsPage.AgentRows.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false, VerticalAlignmentRatio = 0 });
+        window.SettingsPage.AgentRows.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false, VerticalAlignmentRatio = 1 });
         await Task.Delay(400);
         await Picture(window.RootElement, Path.ChangeExtension(outFile, $".settings-agents.{theme}.png"));
         if (main.Settings is { } after) { await after.CheckAgentsAsync(); }
@@ -129,5 +135,5 @@ static partial class SelfTest
 
     static IEnumerable<(string Id, string Name, Button Button)> Buttons(ItemsControl rows) => Find<Button>(rows)
         .Select(b => (Id: AutomationProperties.GetAutomationId(b), Name: FrameworkElementAutomationPeer.CreatePeerForElement(b)?.GetName() ?? "", Button: b))
-        .Where(b => b.Id.StartsWith("SetUpAgent_", StringComparison.Ordinal) || b.Id.StartsWith("RemoveAgent_", StringComparison.Ordinal));
+        .Where(b => b.Id.StartsWith("SetUpAgent_", StringComparison.Ordinal) || b.Id.StartsWith("RemoveAgent_", StringComparison.Ordinal) || b.Id.StartsWith("InstallAgent_", StringComparison.Ordinal));
 }

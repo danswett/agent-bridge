@@ -435,9 +435,9 @@ public sealed class SettingsTests : IAsyncLifetime
         public void Release() { while (queue.TryDequeue(out var item)) { TestUi.ForTest.Invoke(() => item.Run(item.State)); } }
     }
 
-    static AgentReadiness Agent(string id, string label, ReadinessState hooks, ReadinessState installation = ReadinessState.Working) =>
+    static AgentReadiness Agent(string id, string label, ReadinessState hooks, ReadinessState installation = ReadinessState.Working, string hooksDetail = "Fixture hooks.") =>
         new(id, label, "fixture-home", $"{id}.exe", "1.2.3",
-            new(installation, "Executable found."), new(ReadinessState.Working, "Version 1.2.3"), new(hooks, "Fixture hooks."),
+            new(installation, "Executable found."), new(ReadinessState.Working, "Version 1.2.3"), new(hooks, hooksDetail),
             new(ReadinessState.Unknown, "Sign-in has not been verified."), new(ReadinessState.Unknown, "Trust has not been verified."));
 
     [Fact]
@@ -455,20 +455,65 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal(["SetUpAgent_copilot", "RemoveAgent_copilot", "AgentStatus_copilot", "SetUpAgent_claude", "RemoveAgent_claude", "AgentStatus_claude"], ids);
     }
 
+    // The host's own words for its hooks states (AgentReadinessService.Hooks).
+    const string NoRecordIntakeOff = "Hook intake is off for this profile. Explicit setup or migration is required.";
+    const string RecordIntakeOff = "An owned setup record exists, but this profile's hook intake is off.";
+    const string NoRecordIntakeOn = "Intake is enabled; this agent's registration and ownership have not been verified.";
+    const string RecordIntakeOn = "An owned setup record exists; registration and activation still need verification.";
+    const string UnknownRecord = "The hook ownership record is not recognized. Inspect it before repairing setup.";
+
     [Theory]
-    [InlineData(ReadinessState.Missing, "Set up")]
-    [InlineData(ReadinessState.NeedsAction, "Set up")]
-    [InlineData(ReadinessState.Failed, "Repair")]
-    [InlineData(ReadinessState.Unknown, "Repair")]
-    [InlineData(ReadinessState.Working, null)]
-    [InlineData(ReadinessState.Blocked, null)]
-    public void An_agent_row_offers_one_verb_for_its_hooks_state_and_none_once_they_work(ReadinessState hooks, string? verb)
+    [InlineData(ReadinessState.Missing, "Fixture hooks.", "Set up")]
+    [InlineData(ReadinessState.NeedsAction, NoRecordIntakeOff, "Set up")]
+    [InlineData(ReadinessState.NeedsAction, RecordIntakeOff, "Set up")]
+    [InlineData(ReadinessState.Unknown, NoRecordIntakeOn, "Set up")]
+    [InlineData(ReadinessState.Failed, UnknownRecord, "Repair")]
+    [InlineData(ReadinessState.Working, "Fixture hooks.", null)]
+    [InlineData(ReadinessState.Blocked, "Another bridge profile owns this agent's hook setup. Do not overwrite its registrations.", null)]
+    public void An_agent_row_offers_one_verb_for_its_hooks_state_and_none_once_they_work(ReadinessState hooks, string detail, string? verb)
     {
-        var row = new AgentReadinessRow(Agent("copilot", "Copilot CLI", hooks), canManage: true);
+        var row = new AgentReadinessRow(Agent("copilot", "Copilot CLI", hooks, hooksDetail: detail), canManage: true);
 
         Assert.Equal(verb, row.SetUpVerb);
         Assert.Equal(verb is not null, row.ShowSetUp);
         Assert.Equal(verb is not null, row.CanSetUp);
+    }
+
+    [Fact]
+    public void Only_a_missing_CLI_offers_install_named_for_its_agent()
+    {
+        var missing = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.NeedsAction, installation: ReadinessState.Missing), canInstall: true);
+        var installed = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.NeedsAction), canInstall: true);
+
+        Assert.True(missing.ShowInstall);
+        Assert.True(missing.CanInstall);
+        Assert.Equal("Install CLI for Codex", missing.InstallName);
+        Assert.Equal("InstallAgent_codex", missing.InstallId);
+        Assert.False(installed.ShowInstall);
+        Assert.False(installed.CanInstall);
+    }
+
+    [Fact]
+    public void A_set_up_agent_the_host_cannot_test_yet_offers_no_verb_and_says_it_is_not_tested_yet()
+    {
+        var row = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn), canManage: true);
+
+        Assert.Null(row.SetUpVerb);
+        Assert.False(row.ShowSetUp);
+        Assert.False(row.CanSetUp);
+        Assert.Equal("Not tested yet", row.Status);
+        Assert.Equal(Tone.None, row.StatusTone);
+    }
+
+    [Fact]
+    public void Only_broken_hooks_offer_repair_whatever_the_host_says_of_them()
+    {
+        var repair = (from state in Enum.GetValues<ReadinessState>()
+                      from detail in new[] { NoRecordIntakeOff, RecordIntakeOff, NoRecordIntakeOn, RecordIntakeOn, UnknownRecord }
+                      where new AgentReadinessRow(Agent("copilot", "Copilot CLI", state, hooksDetail: detail), canManage: true).SetUpVerb == "Repair"
+                      select state).Distinct();
+
+        Assert.Equal([ReadinessState.Failed], repair);
     }
 
     [Fact]
