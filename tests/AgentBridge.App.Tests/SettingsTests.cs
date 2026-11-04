@@ -555,6 +555,7 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.True(reopened.AgentInstallInProgress);
         Assert.Contains("another window", reopened.AgentInstallStatus);
         Assert.False(reopened.CanInstallAgents);
+        Assert.False(reopened.CanSignInAgents);
         host.On(HostOps.AgentsInstallCancel, _ => new { cancellationRequested = true });
         await reopened.CancelAgentInstallAsync();
         Assert.Single(host.Sent(HostOps.AgentsInstallCancel));
