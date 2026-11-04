@@ -142,4 +142,65 @@ public sealed class DeliveryProgressTests : IAsyncLifetime
         Assert.Equal(Limits.AnswerRequest - 8, JsonSerializer.SerializeToUtf8Bytes(sent.Deserialize<AnswerRequest>(ProtocolJson.Options), ProtocolJson.Options).Length);
         Assert.False(sent.TryGetProperty("progress", out _));
     }
+
+    [Fact]
+    public async Task A_host_s_outcome_or_timing_name_with_a_line_break_cannot_forge_a_line_in_the_app_s_log()
+    {
+        await StartAsync(progress: true);
+        host.OnAsync(Ops.SessionReply, _ => Task.FromResult<object?>(new Dictionary<string, object>
+        {
+            ["outcome"] = "delivered\nFORGED LOG ENTRY",
+            ["timings"] = new Dictionary<string, object> { ["typed\nFORGED LOG ENTRY"] = 5, ["typed"] = 7, ["bogus"] = 9 },
+        }));
+
+        var entry = deliveries.Submit("reply|s1", Ops.SessionReply, r => new ReplyRequest { Id = "s1", Request = r, Text = "go on" }, _ => false, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Done, "an outcome");
+        await Wait.UntilAsync(() => Logged(entry.Request) is not null, "the timing line");
+
+        // Only what the protocol names: an outcome it doesn't is "other", and only its timings' names.
+        Assert.Matches(new Regex($@"^reply {entry.Request[..8]} other: sent \d+ ms, result \d+ ms; host: typed 7 ms$"), Logged(entry.Request)!);
+        lock (log) { Assert.DoesNotContain(log, l => l.Contains("FORGED", StringComparison.Ordinal) || l.Contains('\n')); }
+    }
+
+    [Fact]
+    public async Task Frames_alternating_between_typed_and_up_next_add_one_mark_not_one_each()
+    {
+        await StartAsync(progress: true);
+        host.OnAsync(Ops.SessionReply, _ =>
+        {
+            var served = ServedRequest.Current!;
+            served.Progress(new DeliveryProgress(DeliveryProgress.Typed, Working: false));
+            served.Progress(new DeliveryProgress(DeliveryProgress.Typed, Working: true));
+            served.Progress(new DeliveryProgress(DeliveryProgress.Typed, Working: false));
+            served.Progress(new DeliveryProgress(DeliveryProgress.Typed, Working: true));
+            return Task.FromResult<object?>(new ReplyResult(AnswerOutcome.Delivered));
+        });
+
+        var entry = deliveries.Submit("reply|s1", Ops.SessionReply, r => new ReplyRequest { Id = "s1", Request = r, Text = "and add a test" }, _ => false, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Done, "an outcome");
+        await Wait.UntilAsync(() => Logged(entry.Request) is not null, "the timing line");
+
+        lock (stages) { Assert.Equal(new string?[] { null, DeliveryProgress.Typed }, stages); }
+        Assert.Matches(new Regex($@"^reply {entry.Request[..8]} delivered: sent \d+ ms, typed \d+ ms, result \d+ ms$"), Logged(entry.Request)!);
+    }
+
+    [Fact]
+    public async Task A_reply_given_while_the_host_is_away_is_marked_sent_once_when_it_goes_not_at_each_refused_try()
+    {
+        host.Capabilities.Add(Capabilities.SessionsProgress);
+        host.Sessions.Add(Make.Session("s1"));
+        host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Delivered));
+        // Not running yet: each try is refused before anything is sent.
+        connection = host.Connect(log: line => { lock (log) { log.Add(line); } });
+        deliveries = new Deliveries(connection, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+
+        var entry = deliveries.Submit("reply|s1", Ops.SessionReply, r => new ReplyRequest { Id = "s1", Request = r, Text = "when you can" }, _ => false, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Waiting, "waiting for the host");
+        await Task.Delay(300);
+        host.Start();
+        await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Done, "an outcome");
+        await Wait.UntilAsync(() => Logged(entry.Request) is not null, "the timing line");
+
+        Assert.Matches(new Regex($@"^reply {entry.Request[..8]} delivered: sent \d+ ms, result \d+ ms$"), Logged(entry.Request)!);
+    }
 }

@@ -212,9 +212,11 @@ public sealed class Deliveries
                 if (kind is not null && host.Can(Capabilities.SessionsProgress)) { request = AskProgress(request); }
                 var attempt = attempts;
                 Action<JsonElement>? heard = kind is null ? null : p => Heard(entry.Key, entry.Request, attempt, p);
-                Mark(entry.Request, "sent");
                 var call = host.CallAsync(op, request, entry.Timeout, knownHost: !entry.ReplayAfterRestart,
                     onlyTo: entry.ReplayAfterRestart ? null : sentTo, out var to, bound?.Token ?? default, heard);
+                // Marked once it has gone: a call refused before sending (not connected, still
+                // connecting) is no send, and while the host is away it is refused every couple of seconds.
+                Mark(entry.Request, "sent");
                 if (to != sentTo) { sentTo = to; Update(entry.Key, e => e with { SentTo = to }); }
                 if (to is not null && firstSent is null)
                 {
@@ -298,8 +300,9 @@ public sealed class Deliveries
             entries[key] = next;
             done = next.State == DeliveryState.Done && e.State != DeliveryState.Done;
         }
-        if (done) { Finished(next); }
+        // Shown first: the log line is a diagnostic, and nothing it does may hold up the page.
         Publish(next);
+        if (done) { Finished(next); }
     }
 
     static string? KindOf(string op) => op == Ops.SessionReply ? "reply" : op == Ops.SessionAnswer ? "answer" : null;
@@ -338,7 +341,8 @@ public sealed class Deliveries
         var moved = false;
         Update(key, e =>
         {
-            if (!Current(e) || stage == e.Stage || Rank(stage) < Rank(e.Stage)) { return e; }
+            // Only forward: typed and queued share a rank, so frames alternating between them move nothing.
+            if (!Current(e) || Rank(stage) <= Rank(e.Stage)) { return e; }
             moved = true;
             return e with { Stage = stage };
         });
@@ -359,6 +363,12 @@ public sealed class Deliveries
         }
     }
 
+    // What the log line may say a host sent: the outcomes and timings the protocol names. Anything
+    // else is the host's own text, and a host's text in a log line could carry a line break and
+    // forge a line of its own ("typed\nFORGED"), so it is never written as it came.
+    static readonly HashSet<string> LoggedOutcomes = [.. Enum.GetNames<AnswerOutcome>().Select(n => n.ToLowerInvariant())];
+    static readonly string[] LoggedTimings = ["typed", "recorded", "confirmed"];
+
     // An answer's or a reply's outcome: its marks and the host's timings (the result's, ms since the
     // host received it), as one line in the app's log, named by the request's first 8 hex digits
     // as the host's own log names it.
@@ -370,13 +380,17 @@ public sealed class Deliveries
             if (!marks.Remove(done.Request, out run)) { return; }
         }
         var at = run.At.Select(m => $"{m.What} {m.Ms} ms").Append($"result {(long)time.GetElapsedTime(run.Start).TotalMilliseconds} ms");
-        var line = $"{run.Kind} {done.Request[..Math.Min(8, done.Request.Length)]} {done.Outcome}: {string.Join(", ", at)}";
+        var outcome = done.Outcome is { } o && LoggedOutcomes.Contains(o) ? o : "other";
+        var line = $"{run.Kind} {done.Request[..Math.Min(8, done.Request.Length)]} {outcome}: {string.Join(", ", at)}";
         if (done.Result.ValueKind == JsonValueKind.Object && done.Result.TryGetProperty("timings", out var timings) && timings.ValueKind == JsonValueKind.Object)
         {
-            var stages = timings.EnumerateObject().Where(p => p.Value.ValueKind == JsonValueKind.Number && p.Value.TryGetInt64(out var ms) && ms >= 0).Select(p => $"{p.Name} {p.Value.GetInt64()} ms").ToList();
+            var stages = LoggedTimings
+                .Where(n => timings.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var ms) && ms >= 0)
+                .Select(n => $"{n} {timings.GetProperty(n).GetInt64()} ms").ToList();
             if (stages.Count > 0) { line += $"; host: {string.Join(", ", stages)}"; }
         }
-        host.Log(line);
+        try { host.Log(line); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ObjectDisposedException) { }
     }
 
     void Publish(Delivery entry) => ui.Post(() => Changed?.Invoke(entry));
