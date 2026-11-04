@@ -60,8 +60,11 @@ Working-directory format markers are escaped. Literal reply text travels through
 stdin into a randomly named buffer on the private tmux server, then is pasted as
 raw input; it never appears in a process's command-line arguments. Bracketed paste
 is deliberately disabled: its framing changes checkbox and approval-key semantics.
-The buffer is deleted after delivery or failure. Pane identity and held screen rows
-are checked again after loading, immediately before pasting. Enter, Up, Down and
+After delivery or failure, cleanup retries deletion and verifies that the named
+buffer is absent; if that cannot be confirmed, a content-free diagnostic is logged.
+Pane identity, held screen rows and live authorization are checked again after
+loading, immediately before pasting. Authorization is also rechecked before each
+separate key, including after an Enter delay. Enter, Up, Down and
 Escape are deliberate separate keys. Unknown control sequences are
 refused before any key. `KeyPlan.Proceed` and visible-row expectations remain in
 force. A lost command response, cancellation after dispatch, or failure after any

@@ -156,6 +156,32 @@ public sealed class ManagedTmuxTests
     }
 
     [Fact]
+    public async Task A_policy_revoked_after_text_delivery_prevents_enter_and_reports_interruption()
+    {
+        var (backend, commands, _, _) = StartedBackend();
+        var revoked = false;
+        commands.OnCall = args => { if (args[0] == "paste-buffer") { revoked = true; } return null; };
+        var plan = new KeyPlan([new("hello", true, 10, 0)]) { Proceed = () => revoked ? "read-only now" : null };
+        Assert.Equal(InjectionStatus.Interrupted, (await backend.InjectAsync(300, plan)).Status);
+        Assert.Equal("paste-buffer", Assert.Single(commands.Writes)[0]);
+    }
+
+    [Theory]
+    [InlineData("capture-pane")]
+    [InlineData("load-buffer")]
+    public async Task A_policy_revoked_during_preparation_prevents_all_input(string revokeAt)
+    {
+        var (backend, commands, _, _) = StartedBackend();
+        var revoked = false;
+        commands.OnCall = args => { if (args[0] == revokeAt) { revoked = true; } return null; };
+        var plan = new KeyPlan([new("y", true, 0, 0, [new(0, "Question")])])
+        { Proceed = () => revoked ? "read-only now" : null };
+        Assert.Equal(InjectionStatus.NothingTyped, (await backend.InjectAsync(300, plan)).Status);
+        Assert.Empty(commands.Writes);
+        Assert.Contains(commands.Calls, c => c[0] == "delete-buffer");
+    }
+
+    [Fact]
     public async Task Literal_text_and_navigation_are_separate_and_later_controls_refuse_the_whole_plan()
     {
         var (backend, commands, _, _) = StartedBackend();

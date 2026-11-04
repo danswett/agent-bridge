@@ -178,6 +178,7 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
     public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
     {
         var possible = false;
+        string? guardRefusal = null;
         await typing.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -201,13 +202,13 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
                 var first = true;
                 foreach (var (text, literal) in Keys(send.Text))
                 {
-                    if (!await Send(text, literal, first ? send.Expect : null).ConfigureAwait(false)) { return Result("tmux did not confirm the key delivery; check the session before retrying"); }
+                    if (!await Send(text, literal, first ? send.Expect : null).ConfigureAwait(false)) { return Result(guardRefusal ?? "tmux did not confirm the key delivery; check the session before retrying"); }
                     first = false;
                 }
                 if (send.Enter)
                 {
                     await Task.Delay(send.EnterDelayMs, cancellationToken).ConfigureAwait(false);
-                    if (!await Send("Enter", false, first ? send.Expect : null).ConfigureAwait(false)) { return Result("tmux did not confirm Enter; check the session before retrying"); }
+                    if (!await Send("Enter", false, first ? send.Expect : null).ConfigureAwait(false)) { return Result(guardRefusal ?? "tmux did not confirm Enter; check the session before retrying"); }
                 }
                 await Task.Delay(send.PauseAfterMs, cancellationToken).ConfigureAwait(false);
             }
@@ -238,6 +239,9 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
                     }
                     cancellationToken.ThrowIfCancellationRequested();
                     if (!StillTarget(entry, target)) { return false; }
+                    // Capture, buffer loading and inter-key delays yield to policy changes.
+                    // Recheck live authorization at every actual input boundary.
+                    if (plan.Proceed?.Invoke() is { } refusal) { guardRefusal = refusal; return false; }
                     IReadOnlyList<string> args = buffer is not null
                         ? ["paste-buffer", "-d", "-b", buffer, "-t", entry.Session.PaneId]
                         : ["send-keys", "-t", entry.Session.PaneId, "--", text];
