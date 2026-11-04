@@ -159,6 +159,8 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `host.agents.setup` | `{ "agent": "copilot" \| "agency" \| "claude" \| "codex", "action": "install" \| "remove" }` | `{ "completed": bool, "detail": string, "restartRequired": bool }`. Advertised as `host.agents.setup` only to the local App on Windows when available. `install` also repairs; Agency shares Copilot hooks. Uses the owned standalone backend, refuses read-only/legacy/migrated/foreign configuration, and serializes operations with a three-minute deadline and host-shutdown cancellation. Unknown agents/actions are rejected without writes. Expected setup failures return `completed: false` with explicit incomplete-work details, not readiness. Cancellation and unexpected failures are protocol errors. Never restarts, accepts trust, installs a CLI, or signs in |
 | `host.agents.install` | `{ "agent": "copilot" \| "claude" \| "codex", "acceptAgreements": true }` | `AgentInstallResult`: `{ "completed": bool, "detail": string, "executable"?: string }`. Windows local App only, advertised as `host.agents.install`; fresh caller classification is required. Uses fixed WinGet package IDs/sources, explicit source/package/runtime consent, a ten-minute deadline and host-shutdown cancellation. Reuses existing executables without upgrades; missing configured paths and read-only/ownership/legacy conflicts are refused. Checks fresh executable discovery before success, never implies sign-in or readiness, never returns installer output. Settings allows eleven minutes for the operation plus a separate one-minute readiness refresh |
 | `host.agents.install.cancel` | none | `{ "cancellationRequested": bool }`. Same App-only authorization; requests cancellation without ending serialization until the installer has stopped. Cancellation/deadline returns `completed: false`; external installers may already have changed the machine, so no rollback or automatic uninstall is promised. Shutdown cancellation is a protocol error |
+| `host.agents.verify` | `{ "request": UUID, "agent": "copilot" \| "agency" \| "claude" \| "codex", "workspace": approved label, "confirmed": true, "profile"?: Agency profile }` | Starts a new explicitly consented test and returns `AgentVerificationReport` immediately; subsequent progress is in `host.status`. Advertised as `host.agents.verify` to the Windows local App only. Requires current launch configuration, active intake and complete discovery. Repeating the same UUID and selections returns the same run (retained for 25 minutes); a different selection needs a new UUID. One test runs at a time |
+| `host.agents.verify.cancel` | `{ "request": UUID }` | Stops observation and returns its report. Does not undo a committed launch, close any session, or answer trust/sign-in questions |
 | `host.signIn` | `{ "relay"?: "https://…" }` | `SignInStatus`: GitHub's device flow started through that relay (or the profile's), with `userCode` and `verificationUri` once GitHub gives them. The host finishes on its own and starts using the relay; progress arrives as `host.status` events |
 | `host.signIn.cancel` | none | `SignInStatus` as it is; the flow then ends, reported by a `host.status` event |
 | `host.settings` | `{ "remoteApproval"?: bool, "remoteFolderTrust"?: bool, "remoteFolderTrustDevices"?: [device id], "remoteFolderTrustDevicesWas"?: [device id], "devBoxKeepAwake"?: bool, "name"?: string }` (`remoteFolderTrust`, `remoteFolderTrustDevices`, which replaces the whole list, and `devBoxKeepAwake` (`devBox.keepAwake`, on a Dev Box) apply at once; the rest at the next start). A `devBoxKeepAwake` change is refused, leaving the file as it was, when the saved `config.json` would not read back with it (another setting the host rejects reads as keep-awake off). `remoteFolderTrustDevicesWas` is the list the new one was made from. If the saved list differs (as a set), because another app or a person's terminal changed it in the meantime, nothing in the request is changed and `conflict` is true. A device revoked elsewhere is therefore never approved again from a list read before. On a conflict, read the list again and make the change from that | `{ "settings": HostSettingsView, "restartRequired": bool, "conflict"?: bool }`. Written to the profile's `config.json`; read when the host starts. `name: ""` removes the name |
@@ -188,9 +190,47 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `devBox` | The Dev Box keep-awake ([host-config.md](../host-config.md#dev-box-keep-awake)), present only when this machine is a Microsoft Dev Box (the Dev Box agent is installed, its settings usable or not): `{ keepAwake, intervalMinutes, last?: { at, outcome, detail, alarming }, nextAt?, problem? }`. `keepAwake` is whether passes run now; `outcome` is `skipped`, `delayed`, `safe`, `no-action`, `blocked`, `failed`, `stood-back`, `busy` or `not-a-devbox`; `alarming` (`failed`, `blocked`, or `stood-back` with the scheduler unreadable) says the Dev Box may hibernate. `nextAt` while on. `problem`: why the agent's settings could not be used, so it cannot be kept awake |
 | `agents` | Optional `AgentReadinessReport`: separate evidence for each launcher's installation, version, hooks, CLI sign-in and activation. Absent on older hosts and until the first scan finishes |
 | `agentInstallation` | Optional `{ agent, inProgress, detail, blocked }`: host-authoritative current or last installation state, recovered on reconnect or by another Settings window. No installer output. A lost request reply does not cancel the operation. WinGet's job cleanup is awaited before admission of another installer and during shutdown/replacement; unconfirmed cleanup sets `blocked` and refuses further installs in this host. Windows deployment services outside the job may already have made partial changes; check installation activity before restarting and retrying |
+| `agentVerifications` | Optional current-host-run reports, latest per selected launcher (at most four). Never loaded from disk; absent on older/unsupported hosts |
 
 Unknown fields are ignored, and unknown enum values read as the first value listed, as in
 the rest of the protocol.
+
+### Current-run verification
+
+The shared Settings/first-run backend opens the normal visible launcher with the explicitly
+selected agent and approved workspace, standard `ask` permissions, no resume/transfer, and a
+fixed harmless prompt asking for a unique reply without tools, file access or delegation.
+The App must explain and obtain consent before sending `confirmed: true`: this opens a real
+provider session, may consume paid usage, and may first ask the person to sign in or trust
+the folder. Verification never answers those questions or changes permissions.
+
+Each report contains `request`, `agent`, `workspace`, optional `profile`, `state`, `detail`,
+`startedAt`, `checkedAt`, and separate `{ state, detail }` checks named `launch`, `discovery`,
+`provider` and `hooks`. Optional `session`, `discoveredAt`, `providerObservedAt` and
+`hookReceivedAt` identify the correlated evidence. States are `unknown`, `running`,
+`verified`, `needsAction`, `blocked`, `cancelled`, `failed`; unknown values read as
+`unknown`, never verified.
+
+Only the launcher's exact request/session binding counts, including registration after its
+initial `unconfirmed` answer. Arbitrary new-looking sessions cannot satisfy the test.
+Discovery must identify a process started in this run; sessions present before the request
+cannot count. The main agent must answer this run's unique prompt, not echo it or borrow a
+delegate's response. A hook must name the same session and agent, have fresh receipt/handling
+times, and identify that process in its owner or ancestry. Old spool backlog, heartbeat,
+installation markers, login exit codes and unrelated traffic cannot satisfy these checks.
+
+The test observes for at most eight minutes. Missing/unknown evidence, held discovery,
+read-only/legacy state, changed launch configuration or hook setup, cancellation and shutdown
+never become success. Stopping observation does not stop or undo the normal launch;
+its window may still appear and the person closes it if unwanted. Errors and timeouts explain
+this explicitly. Hook subscriptions are released when observation ends.
+
+A verified result applies only to that selected agent/profile/workspace on this host run,
+not relay connectivity, every configured agent, or a separately proven account entitlement.
+Before using it as a finish gate, read fresh `host.status`. Changed setup/configuration,
+incomplete discovery, a changed/missing session process or ten-minute-old evidence projects
+`needsAction`. Restart discards every result. This backend alone does not provide the guided
+first-run shell, Settings controls or disposable clean-machine acceptance.
 
 ### Agent readiness evidence
 

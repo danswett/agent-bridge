@@ -52,7 +52,7 @@ public sealed class HookIntakeOptions
 // while agent-ha-bridge's daemon runs (G5): the daemon keeps its own heartbeat and consumes the
 // spool itself, and two consumers would handle each event twice. Every read is of a copy in
 // memory, through a handle that lets a concurrent deleter delete.
-public sealed class HookIntake : IAsyncDisposable
+public sealed class HookIntake : IHookNotices, IAsyncDisposable
 {
     readonly HookIntakeOptions _options;
     readonly IProcessInspector _processes;

@@ -2,6 +2,12 @@ using System.Text.Json;
 
 namespace AgentBridge.Host.Core.Intake;
 
+public interface IHookNotices
+{
+    System.Threading.Channels.ChannelReader<HookNotice> Subscribe();
+    void Unsubscribe(System.Threading.Channels.ChannelReader<HookNotice> reader);
+}
+
 // One hook event the host has taken from the spool and acted on, for whatever else in the
 // host wants to know of it the moment it happens: the Home Assistant connector, which on a
 // migrated machine publishes what agent-ha-bridge's hooks used to (docs/ha-connector.md), and
