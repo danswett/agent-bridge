@@ -229,6 +229,7 @@ export class SessionsPage {
       shows: (hostId) => hosts.shows(hostId),
       settled: (hostId) => hosts.link(hostId)?.client?.synced !== false,
       stale: (hostId) => hosts.staleOf(hostId),
+      heading: () => $('sessions-h'),
     });
     this.view.onRender = (n) => { this.#drawCount(n); this.#settleSelection(); this.#delegateStep(); };
     this.view.onSelect = (card) => this.#choose(card);

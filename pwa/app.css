@@ -1220,7 +1220,7 @@ summary {
   font: inherit; font-size: .88rem; color: var(--ab-text2); background: none; border: 0; cursor: pointer;
 }
 .end-button .icon { width: 16px; height: 16px; --ab-icon-stroke: 1.7; }
-.end-button:disabled { opacity: .55; cursor: default; }
+.end-button:disabled, .end-button[aria-disabled="true"] { opacity: .55; cursor: default; }
 .end-session[data-stop="confirm"] .end-button { color: var(--ab-danger-text); font-weight: 600; }
 .end-session .stop-status { margin: 0 0 6px; }
 .end-session .resend { margin-bottom: 6px; }
