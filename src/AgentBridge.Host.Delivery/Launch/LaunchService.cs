@@ -18,6 +18,9 @@ public interface ISessionLauncher
 
     Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default);
 
+    Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot guarantee standard permissions for verification."));
+
     // Also raised when registration succeeds after the initial answer was unconfirmed.
     event Action<Guid, string>? RequestRegistered { add { } remove { } }
 
@@ -539,6 +542,18 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     public bool Running(string id) => source.Get(id) is not null || Starting(id);
 
     // ---- session.launch ----
+
+    public Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default)
+    {
+        if (Launchers.Find(request.Agent) is not { } agent) { return Task.FromResult(Refused("Choose an explicit agent for verification.")); }
+        // Extra arguments are provider-defined, including aliases and config overrides. Do
+        // not claim standard permissions by attempting an incomplete bypass-flag denylist.
+        if (Config.Agent(agent.Id).ExtraArgs.Count > 0)
+        {
+            return Task.FromResult(Refused($"Verification cannot guarantee standard permissions with configured launch.agents.{agent.Id}.extraArgs. Remove those extra arguments at the machine before testing; nothing was started."));
+        }
+        return LaunchAsync(request with { Permissions = LaunchProtocol.Ask }, peer, cancellationToken);
+    }
 
     public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default)
     {
