@@ -189,6 +189,7 @@ public sealed class SettingsTests : IAsyncLifetime
     public async Task Settings_setup_is_explicit_reports_restart_and_never_claims_fresh_session_readiness()
     {
         await ConnectedWith(FakeHost.StatusOf() with { Agents = Readiness("1.2.3") });
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
         Assert.True(settings.Agents.Single().CanSetUp);
         host.On(HostOps.AgentsSetup, data =>
         {

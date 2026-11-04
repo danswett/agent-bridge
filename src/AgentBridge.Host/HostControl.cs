@@ -173,7 +173,7 @@ public sealed class HostControl
             case HostOps.Subscribe:
                 return Subscribe(channel);
             case HostOps.AgentsRefresh when options.Agents is not null:
-                return await options.Agents.RefreshAsync();
+                return await options.Agents.RefreshAsync(fresh: true);
             case HostOps.AgentsSetup when options.AgentSetup is not null:
                 return await options.AgentSetup.ApplyAsync(Read<AgentSetupRequest>(data)
                     ?? throw new ArgumentException("Agent setup needs an agent and an action."));

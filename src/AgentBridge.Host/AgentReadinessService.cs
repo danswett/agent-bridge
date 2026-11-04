@@ -77,15 +77,16 @@ public sealed class AgentReadinessService(
         finally { intake.Unsubscribe(notices); }
     }
 
-    public async Task<AgentReadinessReport> RefreshAsync(CancellationToken ct = default)
+    public async Task<AgentReadinessReport> RefreshAsync(CancellationToken ct = default, bool fresh = false)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop.Token, ct);
         var before = Interlocked.Read(ref revision);
         await scan.WaitAsync(lifetime.Token);
         try
         {
-            // Overlapping checks share the scan that just finished instead of running the CLIs twice.
-            if (Interlocked.Read(ref revision) != before && Snapshot is { } checkedAlready) { return checkedAlready; }
+            // Background checks may coalesce; an explicit check must observe mutations made
+            // after an in-flight scan loaded intake and ownership.
+            if (!fresh && Interlocked.Read(ref revision) != before && Snapshot is { } checkedAlready) { return checkedAlready; }
             var (state, problem) = IntakeState.Load(profile);
             var rows = new List<AgentReadiness>();
             foreach (var launcher in Launchers.All)
