@@ -673,7 +673,7 @@ window.addEventListener('pointermove', (e) => {
     const d = Math.hypot(g.x - g.sx, g.y - g.sy);
     if (g.type === 'touch') {
       if (g.onGrip && !sorted && d > MOUSE_SLOP) lift();
-      else if (d > TOUCH_SLOP) abort();          // the finger moved first: let the list scroll
+      else if (d > TOUCH_SLOP) { abort(); rehit = null; } // the finger moved first: let the list scroll; no click follows
     } else if (d > MOUSE_SLOP) {
       if (sorted) abort(); else lift();
     }
@@ -723,7 +723,13 @@ document.addEventListener('touchmove', (e) => {
 document.addEventListener('touchend', (e) => { if (g && g.viaTouch && g.phase === 'lifted' && ownTouch(e.changedTouches)) drop(false); });
 document.addEventListener('touchcancel', (e) => { if (g && g.viaTouch && g.phase === 'lifted' && ownTouch(e.changedTouches)) drop(true); });
 document.addEventListener('contextmenu', (e) => {
-  const li = e.target.closest && e.target.closest('.slot');
+  // A right press during the settle was resolved against the committed layout, like a click:
+  // the menu belongs to the card now in that place, not the one still sliding under the pointer.
+  // Only a menu on the list itself: a hit left by a press that scrolled instead must not open
+  // a card's menu for a right-click elsewhere on the page.
+  const hit = rehit && content.contains(e.target) ? rehit : null;
+  rehit = null;
+  const li = hit ? hit.li : e.target.closest && e.target.closest('.slot');
   if (g || (li && (e.pointerType === 'touch' || matchMedia('(pointer: coarse)').matches))) { e.preventDefault(); return; }
   if (li) { e.preventDefault(); openMenu(li.dataset.key, e.clientX, e.clientY); }
 });
@@ -948,7 +954,9 @@ function cancelDrag(silent) {
   if (!g) return;
   if (g.phase === 'settling') { settleNow(); return; }
   if (g.phase === 'pending') { abort(); return; }
-  if (g.phase === 'lifted') { drop(true); if (silent) clearTimeout(sayTimer); }
+  // A silent cancel comes from a resize or a Columns change, whose relayout follows at once and
+  // would redraw the still-fixed card in list coordinates mid-settle, so the settle ends here.
+  if (g.phase === 'lifted') { drop(true); if (silent) { settleNow(); clearTimeout(sayTimer); } }
 }
 // Before a key or menu changes the order, any gesture ends: a held card is put back (announced
 // as a cancel) and its settle finished, so its drop can't rebuild the order from a stale snapshot.
@@ -972,6 +980,8 @@ new ResizeObserver(() => {
 // ---- Keyboard and menu ----------------------------------------------------------------
 function move(key, delta) {
   quiesce();
+  // A session that ended during the drag was drawn until the drop; quiescing removed it.
+  if (!items[key]) return;
   if (sorted) { showToast('Switch to Your order to move sessions.'); return; }
   const gs = headersShown ? groupsNow() : [{ id: 'sessions', keys: order.slice() }];
   const grp = gs.find((x) => x.keys.includes(key));
@@ -1000,6 +1010,7 @@ function reveal(key) {
 }
 function togglePin(key) {
   quiesce();
+  if (!items[key]) return;
   const s = items[key];
   s.pinned = !s.pinned;
   order = order.filter((k) => k !== key);
