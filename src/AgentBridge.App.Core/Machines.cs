@@ -464,8 +464,6 @@ public sealed class LocalAccountWatch
 // the host's identity. It serves nothing; it only opens channels, as the PWA does.
 public sealed class RelayFleetLink : IFleetLink
 {
-    static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(30);
-
     readonly Func<CancellationToken, Task<RelayAccount?>> account;
     readonly P256KeyPair key;
     readonly string name;
@@ -555,7 +553,7 @@ public sealed class RelayFleetLink : IFleetLink
 
     async Task RunAsync(CancellationToken ct)
     {
-        var backoff = TimeSpan.FromSeconds(1);
+        var backoff = new ReconnectBackoff();
         while (!ct.IsCancellationRequested)
         {
             if (!claim())
@@ -589,6 +587,8 @@ public sealed class RelayFleetLink : IFleetLink
             tried = a;
             var switched = false;
             var replaced = false;
+            int? endedWith = null;
+            string? endedWhy = null;
             try
             {
                 Set(FleetState.Connecting, null);
@@ -598,9 +598,10 @@ public sealed class RelayFleetLink : IFleetLink
                 current = new Current(relay, hub, a.AccountId);
                 Set(FleetState.Connected, $"as {relay.Login}");
                 log($"connected to the relay as {relay.Login} ({Wire.DeviceId(key.Public)[..8]})");
-                backoff = TimeSpan.FromSeconds(1);
+                backoff.Reset();
                 switched = await HoldAsync(relay, a, ct);
-                replaced = !switched && (int?)relay.CloseStatus == CloseCodes.Replaced;
+                (endedWith, endedWhy) = ((int?)relay.CloseStatus, relay.CloseReason);
+                replaced = !switched && endedWith == CloseCodes.Replaced;
                 log(switched ? "this machine's host is on another account or relay now: following it" : $"the relay connection ended: {(int?)relay.CloseStatus} {relay.CloseReason}");
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
@@ -615,6 +616,8 @@ public sealed class RelayFleetLink : IFleetLink
             }
             catch (Exception e) when (e is not OutOfMemoryException)
             {
+                // A relay restarting before ready (1012) still spreads this retry, as after one.
+                if (e is RelayRefusedException refused) { (endedWith, endedWhy) = (refused.Code, refused.Reason); }
                 log($"the relay connection failed: {e.Message}");
                 Set(FleetState.Connecting, e.Message);
             }
@@ -636,8 +639,7 @@ public sealed class RelayFleetLink : IFleetLink
                 catch (OperationCanceledException) { break; }
                 continue;
             }
-            await WaitAsync(backoff, ct);
-            backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, MaxBackoff.Ticks));
+            await WaitAsync(backoff.Next(endedWith, endedWhy), ct);
         }
     }
 

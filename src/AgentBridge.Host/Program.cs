@@ -557,7 +557,7 @@ async Task<int> ServeAsync(HostHandover handover)
     }
     Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");
 
-    var backoff = TimeSpan.FromSeconds(1);
+    var backoff = new ReconnectBackoff();
     var reconnects = 0;
     var since = Stopwatch.StartNew();
     while (!stop.IsCancellationRequested)
@@ -577,6 +577,8 @@ async Task<int> ServeAsync(HostHandover handover)
         }
         using var current = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
         connection = current;
+        int? endedWith = null;
+        string? endedWhy = null;
         try
         {
             control.SetRelay(RelayState.Connecting, reconnects > 0 ? $"reconnecting (attempt {reconnects})" : null);
@@ -597,9 +599,10 @@ async Task<int> ServeAsync(HostHandover handover)
             updates.Attach(relay);
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
-            backoff = TimeSpan.FromSeconds(1);
+            backoff.Reset();
             since.Restart();
             await relay.Completion.WaitAsync(current.Token);
+            (endedWith, endedWhy) = ((int?)relay.CloseStatus, relay.CloseReason);
             Log($"connection ended after {since.Elapsed.TotalMinutes:F1} min: {(int?)relay.CloseStatus} {relay.CloseReason}");
             if ((int?)relay.CloseStatus == CloseCodes.Replaced)
             {
@@ -628,6 +631,8 @@ async Task<int> ServeAsync(HostHandover handover)
         // that got this far took the host down for good, minutes after a relay deploy (#40).
         catch (Exception e)
         {
+            // A relay restarting before ready (1012) still spreads this retry, as after one.
+            if (e is RelayRefusedException refused) { (endedWith, endedWhy) = (refused.Code, refused.Reason); }
             Log($"connection failed: {e.GetType().Name}: {e.Message}");
             control.SetRelay(RelayState.Connecting, $"connection failed: {e.Message}");
         }
@@ -643,9 +648,8 @@ async Task<int> ServeAsync(HostHandover handover)
         }
         reconnects++;
         // A sign-in during the wait goes straight to connecting.
-        try { await wake.WaitAsync(backoff, stop.Token); }
+        try { await wake.WaitAsync(backoff.Next(endedWith, endedWhy), stop.Token); }
         catch (OperationCanceledException) { break; }
-        backoff = TimeSpan.FromSeconds(Math.Min(30, backoff.TotalSeconds * 2));
     }
     Log("stopped");
     return 0;
