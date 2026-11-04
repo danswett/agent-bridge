@@ -92,7 +92,7 @@ test('a signed-in phone sees a machine\'s live sessions over an end-to-end chann
   // Every relay socket goes through the test, so it can drop them the way a phone does
   // when it locks.
   const sockets = [];
-  await context.routeWebSocket(/\/v1\/ws$/, (ws) => { ws.connectToServer(); sockets.push(ws); });
+  await context.routeWebSocket(/\/v1\/ws(\?|$)/, (ws) => { ws.connectToServer(); sockets.push(ws); });
 
   await signIn(page);
   await expect(page.locator('#machine-tabs [data-device-name="fixture-host"]')).toBeVisible();
@@ -138,7 +138,7 @@ test('a signed-in phone sees a machine\'s live sessions over an end-to-end chann
 
 test('a machine from before the sessions protocol is reported, ?host= opens a machine directly, and a refused sign-in leaves nothing behind', async ({ page, context }) => {
   const sockets = [];
-  await context.routeWebSocket(/\/v1\/ws$/, (ws) => { ws.connectToServer(); sockets.push(ws); });
+  await context.routeWebSocket(/\/v1\/ws(\?|$)/, (ws) => { ws.connectToServer(); sockets.push(ws); });
   await signIn(page);
   await page.click('#machine-tabs [data-device-name="demo-host"]');
   await expect(page.locator('#host-state')).toContainText(`${UNSUPPORTED_SESSIONS} yet`, { timeout: 30000 });
@@ -186,7 +186,7 @@ test('with every machine shown, a machine\'s sessions come over its own channel,
 
 test('a phone answers a question through the relay, and an answer in flight when the socket drops is resent and typed once', async ({ page, context }) => {
   const sockets = [];
-  await context.routeWebSocket(/\/v1\/ws$/, (ws) => { ws.connectToServer(); sockets.push(ws); });
+  await context.routeWebSocket(/\/v1\/ws(\?|$)/, (ws) => { ws.connectToServer(); sockets.push(ws); });
   const ask = (id, question) => {
     const t = new Date().toISOString();
     return host.upsert({
@@ -239,7 +239,7 @@ test('a phone answers a question through the relay, and an answer in flight when
 
 test('a phone replies to a session through the relay, and a reply in flight when the socket drops is resent and typed once', async ({ page, context }) => {
   const sockets = [];
-  await context.routeWebSocket(/\/v1\/ws$/, (ws) => { ws.connectToServer(); sockets.push(ws); });
+  await context.routeWebSocket(/\/v1\/ws(\?|$)/, (ws) => { ws.connectToServer(); sockets.push(ws); });
   const t = new Date().toISOString();
   await host.upsert({ id: 'reply-1', agent: 'copilot', title: 'Takes replies', status: 'idle', statusSince: t, updatedAt: t, activity: { response: 'Done.' } });
   const sentFor = (id) => host.replies.filter((r) => r.id === id);

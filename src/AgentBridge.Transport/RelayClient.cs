@@ -170,18 +170,21 @@ public sealed class RelayClient : IAsyncDisposable
         RelayClient c;
         try
         {
-            await ws.ConnectAsync(SocketUri(relay), ct);
+            // admit=1 asks for the challenge with the opening (#603): it is then already here when
+            // the hello has gone, and the proof follows at once. A relay from before it sends the
+            // challenge after the hello, as always.
+            await ws.ConnectAsync(new UriBuilder(SocketUri(relay)) { Query = "admit=1" }.Uri, ct);
             c = new RelayClient(ws, Wire.DeviceId(key.Public), relay);
             await c.SendTextAsync(new { t = "hello", token, pub = Wire.Hex(key.Public), name, kind }, ct);
             var challenge = await c.ReceiveControlAsync("challenge", ct);
             var eph = Wire.Unhex(challenge.GetProperty("eph").GetString()!);
             var nonce = Wire.Unhex(challenge.GetProperty("nonce").GetString()!);
-            var account = challenge.GetProperty("account").GetString()!;
-            var mac = Wire.ProofMac(key.Dh(eph), nonce, account);
+            var early = challenge.TryGetProperty("early", out var e) && e.ValueKind == JsonValueKind.True;
+            var mac = early ? Wire.EarlyProofMac(key.Dh(eph), nonce) : Wire.ProofMac(key.Dh(eph), nonce, challenge.GetProperty("account").GetString()!);
             await c.SendTextAsync(new { t = "proof", mac = Wire.Hex(mac) }, ct);
             var ready = await c.ReceiveControlAsync("ready", ct);
             if (ready.GetProperty("device").GetString() != c.DeviceId) { throw new CryptographicException("relay assigned a different device id"); }
-            c.AccountId = account;
+            c.AccountId = early ? ready.GetProperty("account").GetString()! : challenge.GetProperty("account").GetString()!;
             c.Login = ready.GetProperty("login").GetString() ?? "";
             // Absent from a relay without a blob store, and from one that predates it.
             if (ready.TryGetProperty("blobs", out var blobs) && blobs.ValueKind == JsonValueKind.Object && blobs.TryGetProperty("max", out var max) && max.TryGetInt64(out var m)) { c.BlobMaxBytes = Math.Max(0, m); }
