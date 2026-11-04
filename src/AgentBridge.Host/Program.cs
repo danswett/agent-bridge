@@ -340,7 +340,15 @@ async Task<int> ServeAsync(HostHandover handover)
     var drivers = new SessionDrivers();
     // One source for the life of the process: reconnecting to the relay neither rescans the
     // machine nor loses a change, and every new channel subscribes to the same state.
-    await using var source = new SessionSource(options, drivers: drivers);
+    // One process inspector for discovery and delivery: discovery's first pass, at start, is then
+    // the scan a first reply would have paid for (137 ms cold, 6 ms warm, measured in #599), and
+    // its command lines are already known.
+    var processes = new SystemProcessInspector();
+    await using var source = new SessionSource(options, processes, drivers: drivers);
+    // Writes to transcripts as the source's watcher hears them, so a delivery confirms as soon as
+    // the agent records what it typed rather than at its next poll.
+    var writes = new TranscriptWrites();
+    source.TranscriptWritten += writes.Written;
     await source.StartAsync(stop.Token);
     // Files over 256 KiB come from the relay's blob store, through whichever connection is up.
     using var relayBlobs = new RelayBlobs();
@@ -353,7 +361,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // types, stops or launches still looks afresh, immediately before it acts.
     var haProbe = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : null;
     var g5 = new SharedAgentHaBridgeProbe((IAgentHaBridgeProbe?)haProbe ?? new NoAgentHaBridge());
-    var (answers, replies, attachments, stops) = Typists(source, g5, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled);
+    var (answers, replies, attachments, stops) = Typists(source, g5, processes, writes, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled);
     using var attachmentsLifetime = attachments;
     // Notifications: the account's phones hear of questions and finished turns even with the
     // app closed. Subscriptions live in the profile's own folder, for this account only. None at
@@ -787,7 +795,7 @@ static string OsName() =>
 // session at once. Files sent with replies are staged in the profile's own folder, private
 // to this user (docs/host-replies.md), and the prompts already
 // answered are recorded there too, so none is typed into twice.
-(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, IAgentHaBridgeProbe g5, string staging, string attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled)
+(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, IAgentHaBridgeProbe g5, IProcessInspector processes, TranscriptWrites writes, string staging, string attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled)
 {
     if (!OperatingSystem.IsWindows())
     {
@@ -797,7 +805,6 @@ static string OsName() =>
     var probe = new ReadOnlyGate(g5, ReadOnlyReason());
     var injector = new WorkerInjector();
     var guard = new TargetGuard();
-    var processes = new SystemProcessInspector();
     var gate = new DeliveryGate();
     if (!File.Exists(Path.Combine(AppContext.BaseDirectory, WorkerInjector.FileName))) { Log($"{WorkerInjector.FileName} is missing beside the host; answers and replies will be refused"); }
     Log(probe.Active() is { } active ? $"answering, replying and ending sessions are off for now: {active}" : "answering, replying and ending sessions are on");
@@ -805,8 +812,8 @@ static string OsName() =>
     Log($"approving Copilot permission prompts from other devices is {(settings.RemoteApproval ? "on" : "off")} (permissions.remoteApproval)");
     var attachments = new AttachmentStore(new AttachmentOptions { StagingRoot = staging }, Log, blobs: blobs);
     return (
-        new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval, CodexApprovalsUnsettled = codexUnsettled }, Log, gate),
-        new ReplyService(source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome }, Log, gate, attachments),
+        new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval, CodexApprovalsUnsettled = codexUnsettled, Writes = writes }, Log, gate),
+        new ReplyService(source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome, Writes = writes }, Log, gate, attachments),
         attachments,
         new StopService(source, processes, probe, injector, new WindowsProcessControl(), new StopOptions { CopilotHome = options.CopilotHome }, Log, gate));
 }

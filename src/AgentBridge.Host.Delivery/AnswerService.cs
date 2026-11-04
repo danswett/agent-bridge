@@ -61,6 +61,9 @@ public sealed class AnswerOptions
     public bool CopilotRemoteApproval { get; init; } = true;
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
+
+    // As ReplyOptions.Writes: confirmation looks again as soon as the transcript is written to.
+    public TranscriptWrites? Writes { get; init; }
 }
 
 // Answers a pending question by typing into the session's own prompt, once, and says what
@@ -234,6 +237,8 @@ public sealed class AnswerService : ISessionAnswerer
         while (true)
         {
             var elapsed = options.Time.GetElapsedTime(started);
+            // Taken before the look, so a record written between the look and the wait wakes it.
+            using var written = options.Writes?.Next(transcript);
             var state = CopilotTranscript.Since(transcript, toolCallId, from);
             if (state.Answer is { } record)
             {
@@ -256,7 +261,7 @@ public sealed class AnswerService : ISessionAnswerer
             {
                 return Unconfirmed($"the session did not record an answer within {options.ConfirmTimeout.TotalSeconds:0} seconds; check at the machine");
             }
-            await Task.Delay(options.PollInterval, options.Time);
+            await TranscriptWrites.WaitAsync(written, options.PollInterval, options.Time);
         }
     }
 
@@ -336,6 +341,7 @@ public sealed class AnswerService : ISessionAnswerer
         var started = options.Time.GetTimestamp();
         while (true)
         {
+            using var written = options.Writes?.Next(transcript);
             var result = CopilotPermissionTranscript.Since(transcript, requestId, from);
             if (result.Kind is { } kind)
             {
@@ -347,7 +353,7 @@ public sealed class AnswerService : ISessionAnswerer
                 // Copilot writes a few milliseconds later; until then, look again.
                 if (!approve && kind == "cancelled" && options.Time.GetElapsedTime(started) < options.ConfirmTimeout)
                 {
-                    await Task.Delay(options.PollInterval, options.Time);
+                    await TranscriptWrites.WaitAsync(written, options.PollInterval, options.Time);
                     continue;
                 }
                 return Unconfirmed($"Copilot recorded the request as {(kind.Length == 0 ? "answered" : kind)}{(result.Feedback ? " with a message" : "")}, not {(approve ? "approved" : "denied")}; check at the machine");
@@ -357,7 +363,7 @@ public sealed class AnswerService : ISessionAnswerer
             {
                 return Unconfirmed($"the session did not record an answer within {options.ConfirmTimeout.TotalSeconds:0} seconds; check at the machine");
             }
-            await Task.Delay(options.PollInterval, options.Time);
+            await TranscriptWrites.WaitAsync(written, options.PollInterval, options.Time);
         }
     }
 
@@ -419,6 +425,7 @@ public sealed class AnswerService : ISessionAnswerer
         while (true)
         {
             var elapsed = options.Time.GetElapsedTime(started);
+            using var written = options.Writes?.Next(transcript);
             var state = ClaudeTranscript.Since(transcript, toolUseId, from);
             if (state.Answer is { } record)
             {
@@ -435,7 +442,7 @@ public sealed class AnswerService : ISessionAnswerer
                 reviewed = true;
                 await SubmitReviewAsync(sessionId, pid, transcript, toolUseId, from, timeline);
             }
-            await Task.Delay(options.PollInterval, options.Time);
+            await TranscriptWrites.WaitAsync(written, options.PollInterval, options.Time);
         }
     }
 

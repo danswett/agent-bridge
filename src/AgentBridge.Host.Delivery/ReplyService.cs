@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Delivery.Copilot;
@@ -54,6 +55,15 @@ public sealed class ReplyOptions
     public TimeSpan RememberFor { get; init; } = TimeSpan.FromMinutes(15);
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
+
+    // Writes to transcripts as the session source's watcher hears them: confirmation looks again
+    // at once rather than at its next poll. Null: polling alone, as before.
+    public TranscriptWrites? Writes { get; init; }
+
+    // Whether each live Copilot session's transcript is read in the background as it is found and
+    // as it grows, so a reply reads only what was added since. The first reply after a start read
+    // the whole events.jsonl before typing, 0.3 to 0.6 s for 96 to 169 MB, measured (#599).
+    public bool PreRead { get; init; } = true;
 }
 
 // Types a reply into a session's own input, once, and says what happened. The rules are
@@ -85,8 +95,13 @@ public sealed class ReplyService : ISessionReplier
     // replies of the same words are two prompts, and each confirms one.
     readonly ConcurrentDictionary<(string Transcript, long Offset), DateTimeOffset> claimed = new();
     // What each session's transcript says is asking, kept between replies so it is read from
-    // the start once and then only as it grows. One small entry per session replied to.
+    // the start once and then only as it grows. One small entry per live Copilot session with
+    // PreRead (dropped when it goes), or per session replied to without.
     readonly ConcurrentDictionary<string, CopilotInput> inputs = new(StringComparer.Ordinal);
+    // Sessions waiting for a background read, read one at a time so a start with many large
+    // transcripts does not read them all at once.
+    readonly Channel<string> preReads = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
+    readonly ConcurrentDictionary<string, byte> preReading = new(StringComparer.Ordinal);
     readonly AttachmentStore? attachments;
 
     public ReplyService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
@@ -103,7 +118,75 @@ public sealed class ReplyService : ISessionReplier
         this.gate = gate ?? new DeliveryGate();
         this.attachments = attachments;
         requests = new OutcomeMemory<ReplyResult>(options.Time, options.RememberFor);
+        if (options.PreRead && options.PlatformSupported)
+        {
+            source.Changed += OnSessionChanged;
+            // Writes that change nothing shown (hook and model records) send no upsert.
+            if (options.Writes is { } writes) { writes.Heard += OnTranscriptWritten; }
+            _ = Task.Run(PreReadAsync);
+            // Found before this service was made: the source has already said so.
+            foreach (var s in source.Snapshot()) { QueuePreRead(s); }
+        }
     }
+
+    string CopilotTranscript(string sessionId) => Path.Combine(options.CopilotHome, "session-state", sessionId, "events.jsonl");
+
+    void OnSessionChanged(object? sender, SessionChange change)
+    {
+        if (change.Kind == SessionChangeKind.Removed)
+        {
+            if (Guid.TryParseExact(change.Id, "D", out _)) { inputs.TryRemove(CopilotTranscript(change.Id), out _); }
+            return;
+        }
+        if (change.Session is { } session) { QueuePreRead(session); }
+    }
+
+    // Only a Copilot transcript, <CopilotHome>/session-state/<id>/events.jsonl; whether its
+    // session is live is asked when it is read.
+    void OnTranscriptWritten(string path)
+    {
+        try
+        {
+            if (!string.Equals(Path.GetFileName(path), "events.jsonl", StringComparison.OrdinalIgnoreCase)) { return; }
+            var id = Path.GetFileName(Path.GetDirectoryName(path));
+            if (id is null || !Guid.TryParseExact(id, "D", out _)) { return; }
+            if (!string.Equals(Path.GetFullPath(path), Path.GetFullPath(CopilotTranscript(id)),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) { return; }
+            QueuePreRead(id);
+        }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { }
+    }
+
+    void QueuePreRead(Session session)
+    {
+        if (session.Agent != AgentKind.Copilot || !Guid.TryParseExact(session.Id, "D", out _)) { return; }
+        QueuePreRead(session.Id);
+    }
+
+    void QueuePreRead(string id)
+    {
+        if (preReading.TryAdd(id, 0)) { preReads.Writer.TryWrite(id); }
+    }
+
+    // Catches each session's CopilotInput up with its transcript off the typing path: the read a
+    // reply makes before typing then covers only what was written since.
+    async Task PreReadAsync()
+    {
+        await foreach (var id in preReads.Reader.ReadAllAsync().ConfigureAwait(false))
+        {
+            preReading.TryRemove(id, out _);
+            // Gone meanwhile: nothing is kept for it.
+            if (source.Get(id) is not { Agent: AgentKind.Copilot }) { continue; }
+            var path = CopilotTranscript(id);
+            try { inputs.GetOrAdd(path, p => new CopilotInput(p)).Read(); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            // Removed while it was read: its removal may have come before the input was added.
+            finally { if (source.Get(id) is null) { inputs.TryRemove(path, out _); } }
+        }
+    }
+
+    // Tests: what is kept of a session's transcript.
+    internal CopilotInput? InputOf(string sessionId) => inputs.GetValueOrDefault(CopilotTranscript(sessionId));
 
     public bool Available => options.PlatformSupported && probe.Recent() is null;
 
@@ -421,8 +504,9 @@ public sealed class ReplyService : ISessionReplier
             var started = options.Time.GetTimestamp();
             while (options.Time.GetElapsedTime(started) < options.SubmitAfter)
             {
+                using var written = options.Writes?.Next(transcript);
                 if (Prompts(agent, transcript, from).Prompts.Any(plan.Says)) { return; }
-                await Task.Delay(options.PollInterval, options.Time);
+                await TranscriptWrites.WaitAsync(written, options.PollInterval, options.Time);
             }
             if (pressed >= options.ExtraEnters) { return; }
             if (options.Time.GetElapsedTime(began) >= options.SubmitPatience)
@@ -482,6 +566,8 @@ public sealed class ReplyService : ISessionReplier
         long? mine = null;
         while (true)
         {
+            // Taken before the look, so a record written between the look and the wait wakes it.
+            using var written = options.Writes?.Next(transcript);
             var since = Prompts(agent, transcript, from);
             foreach (var prompt in since.Prompts)
             {
@@ -509,7 +595,7 @@ public sealed class ReplyService : ISessionReplier
                     ? $"{name} recorded a different message, not this reply; check at the machine"
                     : $"{name} did not record the reply within {options.ConfirmTimeout.TotalSeconds:0} seconds; check at the machine");
             }
-            await Task.Delay(options.PollInterval, options.Time);
+            await TranscriptWrites.WaitAsync(written, options.PollInterval, options.Time);
         }
     }
 
@@ -544,6 +630,7 @@ public sealed class ReplyService : ISessionReplier
         var other = false;
         while (true)
         {
+            using var written = options.Writes?.Next(transcript);
             var since = CopilotPrompts.Since(transcript, from);
             foreach (var prompt in since.Prompts)
             {
@@ -564,7 +651,7 @@ public sealed class ReplyService : ISessionReplier
                     ? "the session recorded a different message, not this reply; check at the machine"
                     : $"the session did not record the reply within {options.ConfirmTimeout.TotalSeconds:0} seconds; check at the machine");
             }
-            await Task.Delay(options.PollInterval, options.Time);
+            await TranscriptWrites.WaitAsync(written, options.PollInterval, options.Time);
         }
     }
 

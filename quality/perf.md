@@ -76,6 +76,7 @@ and 31,884 after it, inside the 40 KiB budget.
 | `SessionTrackerBenchmarks` | One session's share of a discovery pass when its transcript has not changed |
 | `TranscriptFirstReadBenchmarks` | The first read of a 21 MB Copilot transcript: the last 4 MiB parsed, the rest skimmed |
 | `TranscriptAppendBenchmarks` | One 12 KB turn appended, then read and parsed |
+| `CopilotInputBenchmarks` | The read a reply makes before typing (#599): a 21 MB `events.jsonl` from the start (`FirstRead`, the first reply after a start before the read-ahead), against one read ahead in the background that then reads one appended turn (`ReadAhead`) |
 | `SessionOrderBenchmarks` | The app arranging 300 sessions over three machines, in each sort |
 | `MarkdownBenchmarks` | A reply rendered to the app's Markdown model, at 1.5 KB and at the 16 KiB cut |
 

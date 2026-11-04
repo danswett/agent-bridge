@@ -237,7 +237,9 @@ In order, for every answer:
    console input) is `refused`, and releases the claim. Anything after its first write that
    is not a clean finish (the worker died, hung, or the console closed) is `unconfirmed`,
    never retried, and the claim stands.
-8. Up to 15 s, the transcript after the point read in step 5 is watched for that call. For
+8. Up to 15 s, the transcript after the point read in step 5 is watched for that call, looked
+   at again as soon as the file watcher hears it written and every 250 ms whatever it hears,
+   as for replies. For
    Copilot, `delivered` only when the session recorded the answer typed: the structured
    `human_response.recorded` content field by field (choices by value, words with
    whitespace runs collapsed, lists as sets), or, for free text only, the rendered

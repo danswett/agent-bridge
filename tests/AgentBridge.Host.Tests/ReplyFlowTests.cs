@@ -483,6 +483,106 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.InRange(at, before, DateTimeOffset.UtcNow);
     }
 
+    // ---- the fast path (#599) ----
+
+    [Fact]
+    public async Task A_reply_to_a_session_found_with_a_long_transcript_reads_only_what_was_written_after_it_was_read_ahead()
+    {
+        // About 2 MB of history from before the host took the session.
+        Fixture.Append(events, [.. Enumerable.Range(0, 2000).Select(_ => Copilot.Assistant(new string('x', 1000), second))]);
+        await source.RefreshAsync();
+        var replier = Replier();
+        Serve(Answerer(), replier);
+        var length = new FileInfo(events).Length;
+        await Wait.UntilAsync(() => replier.InputOf(Id)?.BytesRead == length, "the transcript to be read ahead", Patience);
+        var ch = await OpenAsync();
+
+        Assert.Equal("delivered", (await ReplyAsync(ch, "after the history")).Outcome);
+
+        // Only the prompt and what came with it, never the history again.
+        Assert.InRange(replier.InputOf(Id)!.BytesRead, length, length + 16 * 1024);
+    }
+
+    [Fact]
+    public async Task A_write_that_changes_nothing_shown_is_still_read_ahead_once_it_is_heard()
+    {
+        var writes = new TranscriptWrites();
+        var replier = new ReplyService(source, f.Processes, probe, new NoGuard(), injector, new ReplyOptions
+        {
+            CopilotHome = f.CopilotHome,
+            PlatformSupported = true,
+            Writes = writes,
+        }, gate: gate);
+        await Wait.UntilAsync(() => replier.InputOf(Id)?.BytesRead == new FileInfo(events).Length, "the transcript to be read ahead", Patience);
+
+        // No refresh, so no upsert: as for hook and model records, which change nothing shown.
+        Fixture.Append(events, [.. Enumerable.Range(0, 100).Select(_ => Copilot.Assistant(new string('x', 1000), second))]);
+        writes.Written(events);
+
+        var length = new FileInfo(events).Length;
+        await Wait.UntilAsync(() => replier.InputOf(Id)?.BytesRead == length, "the write to be read ahead", Patience);
+    }
+
+    // Long enough that only a write can wake a confirmation within the client's 15 s.
+    static readonly TimeSpan SlowPoll = TimeSpan.FromSeconds(30);
+
+    [Fact]
+    public async Task A_record_written_while_a_reply_waits_confirms_it_at_once_rather_than_at_the_next_poll()
+    {
+        var writes = new TranscriptWrites();
+        Serve(Answerer(), new ReplyService(source, f.Processes, probe, new NoGuard(), injector, new ReplyOptions
+        {
+            CopilotHome = f.CopilotHome,
+            PlatformSupported = true,
+            ConfirmTimeout = TimeSpan.FromSeconds(60),
+            PollInterval = SlowPoll,
+            Writes = writes,
+        }, gate: gate));
+        // Recorded a moment after the keys, as Copilot records a prompt: after the first look.
+        injector.OnInject = plan => _ = Task.Delay(300).ContinueWith(_ =>
+        {
+            Fixture.Append(events, Now(Prompt(plan.Sends[0].Text)));
+            writes.Written(events);
+        }, TaskScheduler.Default);
+        var ch = await OpenAsync();
+
+        var (_, result) = await HearAsync(ch, Ops.SessionReply, new { id = Id, request = Guid.NewGuid().ToString(), text = "wake up", progress = true });
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        var timings = result.GetProperty("timings");
+        Assert.InRange(timings.GetProperty("confirmed").GetInt64() - timings.GetProperty("typed").GetInt64(), 0, 5_000);
+    }
+
+    [Fact]
+    public async Task An_answer_recorded_while_the_host_waits_is_confirmed_at_once_rather_than_at_the_next_poll()
+    {
+        Fixture.Append(events, Ask("q1", second++));
+        await source.RefreshAsync();
+        var writes = new TranscriptWrites();
+        Serve(new AnswerService(source, f.Processes, probe, new NoGuard(), injector, new AnswerOptions
+        {
+            CopilotHome = f.CopilotHome,
+            PlatformSupported = true,
+            ConfirmTimeout = TimeSpan.FromSeconds(60),
+            PollInterval = SlowPoll,
+            Writes = writes,
+        }, gate: gate), Replier());
+        injector.OnInject = plan => _ = Task.Delay(300).ContinueWith(_ =>
+        {
+            Fixture.Append(events, Now(Copilot.Event("human_response.recorded",
+                new { toolCallId = "q1", requestId = "r", actor = "human_response", response = new { responseKind = "ask_user", content = new { pick = "b" } } }, second++)),
+                Copilot.ToolDone("q1", second++));
+            writes.Written(events);
+        }, TaskScheduler.Default);
+        var ch = await OpenAsync();
+
+        var (_, result) = await HearAsync(ch, Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), fields = new { pick = "b" }, progress = true });
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        var timings = result.GetProperty("timings");
+        Assert.InRange(timings.GetProperty("confirmed").GetInt64() - timings.GetProperty("typed").GetInt64(), 0, 5_000);
+    }
+
     [Fact]
     public async Task A_prompt_that_is_not_the_reply_or_none_at_all_is_unconfirmed_never_delivered()
     {

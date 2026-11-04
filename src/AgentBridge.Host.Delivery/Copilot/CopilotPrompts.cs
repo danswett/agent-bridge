@@ -45,10 +45,14 @@ public sealed class CopilotInput(string path)
             {
                 return new CopilotInputState(false, true, scannedTo);
             }
+            BytesRead += to - scannedTo;
             scannedTo = to;
             return new CopilotInputState(true, asks.Count > 0 || permissions.Count > 0, scannedTo);
         }
     }
+
+    // Every byte read so far, for tests: a reply to a session read ahead reads only what came after.
+    internal long BytesRead { get; private set; }
 
     void Line(ReadOnlySpan<byte> bytes, long start)
     {

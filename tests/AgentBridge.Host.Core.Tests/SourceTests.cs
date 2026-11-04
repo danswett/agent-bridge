@@ -323,6 +323,45 @@ public class SourceTests
     }
 
     [Fact]
+    public async Task The_watcher_says_which_transcript_was_written_so_a_delivery_waiting_on_it_looks_again_at_once()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        Fixture.Append(events, Copilot.User("go", 1));
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = new SessionSource(f.Options(watch: true), f.Processes);
+        var writes = new TranscriptWrites();
+        source.TranscriptWritten += writes.Written;
+        await source.StartAsync();
+        using var next = writes.Next(events);
+        Assert.False(next.Written.IsCompleted);
+
+        Fixture.Append(events, Copilot.Assistant("written", 2));
+
+        await next.Written.WaitAsync(TimeSpan.FromSeconds(20));
+    }
+
+    [Fact]
+    public void A_transcript_is_kept_only_while_a_delivery_waits_on_it_and_waiters_on_it_share_one_signal()
+    {
+        var writes = new TranscriptWrites();
+        var path = Path.Combine(Path.GetTempPath(), "events.jsonl");
+        var first = writes.Next(path);
+        var second = writes.Next(path);
+        Assert.Same(first.Written, second.Written);
+
+        first.Dispose();
+        Assert.Equal(1, writes.Waited);
+        second.Dispose();
+        Assert.Equal(0, writes.Waited);
+
+        using var third = writes.Next(path);
+        writes.Written(path);
+        Assert.True(third.Written.IsCompleted);
+        Assert.Equal(0, writes.Waited);
+    }
+
+    [Fact]
     public async Task A_Changed_handler_that_throws_does_not_stop_the_handlers_after_it()
     {
         using var f = new Fixture();
