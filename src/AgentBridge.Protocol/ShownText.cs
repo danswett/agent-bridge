@@ -137,10 +137,14 @@ public static partial class ShownText
     [GeneratedRegex(@"\\u(?:(?<hex>[0-9A-Fa-f]{4})|\{(?<hex>[0-9A-Fa-f]{1,6})\})")]
     private static partial Regex Escape();
 
-    static bool Hidden(Rune r) => r.Value is 0x2028 or 0x2029 || Ignorable(r.Value) || Rune.GetUnicodeCategory(r) switch
+    // As the clients' HiddenText and hidden-text.js (#546): every space but U+0020, and the braille
+    // blank U+2800, draw blank while a shell takes them as part of a word, so `true\u00A0#; curl … | sh`
+    // read as a comment.
+    static bool Hidden(Rune r) => r.Value is 0x2028 or 0x2029 or 0x2800 || Ignorable(r.Value) || Rune.GetUnicodeCategory(r) switch
     {
         UnicodeCategory.Format or UnicodeCategory.PrivateUse or UnicodeCategory.OtherNotAssigned or UnicodeCategory.Surrogate => true,
         UnicodeCategory.Control => r.Value is not ('\n' or '\t'),
+        UnicodeCategory.SpaceSeparator => r.Value != ' ',
         _ => false,
     };
 

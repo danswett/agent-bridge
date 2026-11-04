@@ -553,15 +553,17 @@ the owner's "escape and allow" rule (#253, decision 3). The digest stays over th
 over whether the prompt is answered at the machine at all), so a prompt holding a real U+202E and
 one holding the six characters `\u202E` never share an id. These rules hold for every agent's
 `approval`, and a client escapes an older host's approval that still carries such a character.
-Home Assistant's card, which draws an approval as Markdown, answers one with a character
-reference such as `&#x202E;` that its renderer would decode to such a character (with or without a
-semicolon, with any number of leading zeros, or an HTML5 name such as `&ZeroWidthSpace;`) in the
-terminal, shown as its source ([ha-connector.md](../ha-connector.md)); the Windows app's card,
-which draws an approval exactly as written (#323), holds it at the machine too. The Needs you lane
+Every card draws an approval as its source: the PWA's and the Windows app's exactly as written
+(#429, #323), Home Assistant's in one code block nothing in it can close
+([ha-connector.md](../ha-connector.md)). Home Assistant's and the app's cards still answer in the
+terminal one with a character reference such as `&#x202E;` that a Markdown renderer would decode
+to such a character (with or without a semicolon, with any number of leading zeros, or an HTML5
+name such as `&ZeroWidthSpace;`). The Needs you lane
 never offers one inline, its escapes included, and a card says what its escapes stand for
 ("Contains hidden characters", "Contains right-to-left text") above it. Those two cards also hold
 at the machine an approval Markdown would not draw as written (the agent's own words closing the
-command's fence, a link, an image or HTML, or text after a block; `ApprovalShape`). These rules cover characters only, not Markdown:
+command's fence, a link, an image or HTML, text after a block, or a line in a block shaped as a
+fence; `ApprovalShape`). These rules cover characters only, not Markdown:
 whether an approval's prose can be drawn as Markdown (a link or image hiding what runs) is #212
 for Copilot's intention and #209 for a Codex approval's command, which until then is sent as
 Markdown prose (`Needs approval: <command>`).

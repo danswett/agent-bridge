@@ -91,7 +91,7 @@ public static partial class HaDecision
         // which is the card's own. Who asks leads the card's Markdown as literal text, so it cannot
         // open a fence or a link around the prompt.
         var asks = $"{HaPayloads.NeutraliseTemplates(MarkdownLiteral(Titled(question, session)))} asks:\n\n";
-        var held = Misleads(question, session) ? Misleading : Unshaped(question);
+        var held = Misleads(question, session) ? Misleading : Unshaped(question) ?? TooLongToShow(question, asks.Length);
         return Plan(question with { Message = asks + Shown(question, held, asks.Length) }, session.Agent, held) with { Agent = agent, AgentName = name, Asker = asker };
     }
 
@@ -125,7 +125,7 @@ public static partial class HaDecision
     // The host's question as the card should show it.
     public static DecisionPlan Plan(Question question, AgentKind agent)
     {
-        var held = Misleads(question) ? Misleading : Unshaped(question);
+        var held = Misleads(question) ? Misleading : Unshaped(question) ?? TooLongToShow(question, 0);
         return Plan(question with { Message = Shown(question, held, 0) }, agent, held);
     }
 
@@ -133,15 +133,26 @@ public static partial class HaDecision
     // somewhere other than where it runs, right-to-left letters that reorder it, or a character
     // reference a renderer would decode to either, is answered at the machine (#220). The host
     // sends hidden characters and right-to-left letters escaped, offering Approve once for them
-    // (#253, decision 3), so from it this is a reference, which this card's Markdown would decode;
-    // the card holds to its rule whatever it is given.
+    // (#253, decision 3), so from it this is a reference, which Markdown would decode. The card shows
+    // every approval as its source, where none is decoded, and holds to its rule all the same.
     static bool Misleads(Question question) => question.Kind == QuestionKind.Approval && ShownText.Misleads(question.Message);
 
-    // This card draws an approval as Markdown, and the agent's own words in it, before a host escapes
-    // them (#212), can close the command's fence early or show a link's words where `curl ... | sh`
-    // runs: one that would not be drawn as written (ApprovalShape) is answered in the terminal too.
+    // Drawn as Markdown, the agent's own words, before a host escapes them (#212), could close the
+    // command's fence early or show a link's words where `curl ... | sh` runs. The card shows every
+    // approval as its source (Shown), and still answers one Markdown would not draw as written
+    // (ApprovalShape) in the terminal, as the app's card does.
     static string? Unshaped(Question question) =>
         question.Kind == QuestionKind.Approval && !ApprovalShape.DrawsAsWritten(ShownText.Reveal(question.Message, rightToLeft: true)) ? NotAsWritten : null;
+
+    // An approval is never cut on the card (Approve would allow what was not shown): one whose source,
+    // fenced, with its notes and who asks, does not fit is answered in the terminal, cut there.
+    static string? TooLongToShow(Question question, int leading)
+    {
+        if (question.Kind != QuestionKind.Approval) { return null; }
+        var text = ShownText.Reveal(question.Message, rightToLeft: true);
+        var fence = FenceFor(text);
+        return leading + Notes(question).Length + text.Length + 2 * (fence.Length + 1) > QuestionMaxChars ? TooLong : null;
+    }
 
     // What an approval's escapes stand for, in words above it (ui.md §6.4): Approve once is offered
     // for it, and an escape can be read past while its character still acts (PowerShell ends a `#`
@@ -149,15 +160,23 @@ public static partial class HaDecision
     static string Notes(Question question) =>
         question.Kind == QuestionKind.Approval && ShownText.Notes(question.Message) is { Count: > 0 } notes ? $"_{string.Join(" · ", notes)}_\n\n" : "";
 
-    // And a held one is shown as its source, those characters as visible escapes, in a code block whose
-    // fence nothing in it can close: nothing in a block is decoded or drawn as Markdown, so a
-    // reference is shown as written wherever it stood, without the card having to know what
-    // Markdown would make of the text around it. Cut, if it must be, before it is fenced, to leave
-    // room for what leads it (a delegate's name) and the notes after it.
+    // And every approval is shown as its source, as the PWA's and the app's cards draw it, those
+    // characters as visible escapes, in a code block whose fence nothing in it can close: nothing in a
+    // block is decoded or drawn as Markdown. Drawn as Markdown, the agent's own words could still
+    // reshape it however the shape check reads it: an intention ending in `~~~` opened a block that
+    // swallowed the host's fence, so the command's backtick lines became markers, never drawn, and
+    // bash ran them as command substitutions (#220). A held one is cut, if it must be, before it is
+    // fenced, to leave room for what leads it (a delegate's name), the notes and the terminal note.
     static string Shown(Question question, string? held, int leading)
     {
+        if (question.Kind != QuestionKind.Approval) { return question.Message; }
         var notes = Notes(question);
-        if (held is null) { return question.Kind == QuestionKind.Approval ? notes + ShownText.Reveal(question.Message, rightToLeft: true) : question.Message; }
+        if (held is null)
+        {
+            var whole = ShownText.Reveal(question.Message, rightToLeft: true);
+            var f = FenceFor(whole);
+            return $"{notes}{f}\n{whole}\n{f}";
+        }
         var room = QuestionMaxChars - leading - notes.Length - TerminalNote(held).Length - TruncatedNote.Length;
         var text = ShownText.Reveal(question.Message, rightToLeft: true);
         var cut = false;

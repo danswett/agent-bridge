@@ -2,9 +2,10 @@ using System.Text.RegularExpressions;
 
 namespace AgentBridge.Protocol;
 
-// Whether an approval's message would be drawn as written by a card that draws it as Markdown (the
-// Windows app's, until #323 draws one exactly as written; Home Assistant's). Approve once allows what
-// runs, so a card holds at the machine any approval this says no to, and shows it as its source.
+// Whether an approval's message would be drawn as written by a renderer that reads it as Markdown.
+// Every card now draws an approval as its source (the PWA's since #429, the Windows app's since #323,
+// Home Assistant's since #220), so this is defence in depth: a card still holds at the machine any
+// approval this says no to.
 //
 // The shape a host writes: a header, the agent's words, and the command and its arguments each in a
 // fenced block. The agent's words are the model's own and can be anything (#212 escapes them): a line
@@ -15,7 +16,10 @@ namespace AgentBridge.Protocol;
 //     most, naming no language but json or diff, and closes at the first line that can close it,
 //     which must exist; a line in it that starts with such a run but has anything but spaces after
 //     it is refused, since renderers disagree on it (Markdig closes on a tab or a no-break space
-//     after the run, marked, Home Assistant's, does not);
+//     after the run, marked, Home Assistant's, does not); and so is any other line in it shaped as
+//     a fence (three or more backticks or tildes, indented three spaces at most): an intention
+//     ending in `~~~` opened a block that swallowed the host's fence, so the command's own
+//     backtick lines became markers, never drawn, and bash ran them as command substitutions;
 //   - nothing but blank lines follows the first block: a host writes the agent's words, then the
 //     command (or a tool, then its arguments) in blocks. A fence the agent's words open and a line
 //     of the command closes would leave the rest of the command outside any block, drawn as
@@ -53,7 +57,12 @@ public static partial class ApprovalShape
             for (var j = i + 1; j < lines.Length && end < 0; j++)
             {
                 var run = lines[j].TrimStart(' ');
-                if (lines[j].Length - run.Length > 3 || !run.StartsWith(fence, StringComparison.Ordinal)) { continue; }
+                if (lines[j].Length - run.Length > 3) { continue; }
+                if (!run.StartsWith(fence, StringComparison.Ordinal))
+                {
+                    if (FenceShaped().IsMatch(lines[j])) { return false; }
+                    continue;
+                }
                 // Spaces only after the run close the block; anything else is refused (above).
                 if (run.TrimStart(fence[0]).TrimEnd(' ').Length > 0) { return false; }
                 end = j;
@@ -79,6 +88,9 @@ public static partial class ApprovalShape
 
     [GeneratedRegex(@"^ {0,3}(?<fence>`{3,}|~{3,})(?<info>.*)$")]
     private static partial Regex FenceLine();
+
+    [GeneratedRegex(@"^ {0,3}(?:`{3}|~{3})")]
+    private static partial Regex FenceShaped();
 
     // A backslash and the character it escapes, which CommonMark draws as that character.
     [GeneratedRegex(@"\\.")]

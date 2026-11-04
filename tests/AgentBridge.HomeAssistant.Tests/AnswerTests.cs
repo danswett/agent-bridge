@@ -346,6 +346,28 @@ public sealed class AnswerTests : IDisposable
         Assert.Equal("deny", request.Fields!["decision"].GetString());
     }
 
+    // An intention ending in `~~~` opened a block that swallowed the host's fence, so the command's
+    // backtick lines were markers the card never drew, and bash ran them as command substitutions
+    // (#220): the card publishes the approval as its source, and does not arm it.
+    [Fact]
+    public async Task An_approval_whose_intention_opens_a_tilde_fence_is_published_as_its_source_and_not_armed()
+    {
+        const string message = "Allow **shell**?\n\nCheck the toolchain.\n\n~~~\n\n````\n~~~\n```\necho rm -rf ~\n```\n```\nnode --version\n````";
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with
+        {
+            Question = new Question
+            {
+                Id = "p1", Kind = QuestionKind.Approval, Message = message, AskedAt = FakeSessions.T0,
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
+            },
+        });
+        await using var c = Connector();
+        await Pass(c);
+        var attributes = Attributes(SessionEntities.Decision(Node));
+        Assert.False(attributes.TryGetProperty("answer_on_tap", out var tap) && tap.GetBoolean());
+        Assert.StartsWith($"~~~~\n{message}\n~~~~\n", attributes.GetProperty("question").GetString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_delegates_permission_prompt_is_armed_and_answered_on_the_card_as_the_sessions_own_said_to_be_the_delegates()
     {
@@ -362,7 +384,7 @@ public sealed class AnswerTests : IDisposable
         await using var c = Connector();
         await Pass(c);
         var attributes = Attributes(SessionEntities.Decision(Node));
-        Assert.Equal("Delegate Run full test suite asks:\n\nAllow dotnet test?", attributes.GetProperty("question").GetString());
+        Assert.Equal("Delegate Run full test suite asks:\n\n```\nAllow dotnet test?\n```", attributes.GetProperty("question").GetString());
         Assert.Equal(("agent-3a91", "Run full test suite"), (attributes.GetProperty("agent").GetString(), attributes.GetProperty("agent_name").GetString()));
         Assert.True(attributes.GetProperty("answer_on_tap").GetBoolean());
 
