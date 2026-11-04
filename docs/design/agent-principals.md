@@ -150,8 +150,8 @@ bytes.
 
 **Display string.** `driverPrincipal` becomes `agent:<machine>/<session>`, at most 75 ASCII bytes
 (6 + 32 + 1 + 36), which fits v1-sessions.md:733's 128-byte limit. It is an identifier. What a
-person reads ("from *Fix the flaky test* on *DSWETT-HOME*") is built from structured fields
-(§6.1).
+person reads ("from copilot on *DSWETT-HOME*") is built from verified structured fields
+(§6.1, §6.3).
 
 ### 3.2 Who gets one (decision 3)
 
@@ -217,10 +217,25 @@ The host accepts it only if all of these hold:
    `credential presented from outside its session`. That is the realistic theft: one agent reading
    another session's environment, or a transcript that printed it, then using the token from a
    detached helper.
+
+   **This check is a safety rail, not a security boundary.** It stops the accidental and the
+   casual cases: a token pasted into another session, a helper that didn't try. It doesn't stop
+   a same-user process that tries, because Windows lets one:
+   * **spoof its parent:** `CreateProcess` with `PROC_THREAD_ATTRIBUTE_PARENT_PROCESS` names any
+     process the user can open as the parent, so a new process can appear inside the session's
+     ancestry, and it inherits that parent's Job too;
+   * **join the Job:** a process that can open or duplicate a handle to the session's Job object
+     (same user, default DACL) can `AssignProcessToJobObject` itself, or a child.
+
+   So the boundary for same-user code is the one §1.3 and local-pipe.md:121-130 already draw: it can do what
+   the user can. The rail's value is attribution and audit, and turning a token leak into
+   something that needs deliberate tooling. The host could harden it (a Job with a restrictive
+   DACL, a launch under a per-session restricted token), but v1 doesn't claim it.
 3. **The session's process is still the bound one** (id and start time), so a recycled pid can't
    inherit it.
 
-**The residual: subprocess inheritance.** Every process the agent runs inherits the token and is
+**The residuals.** Parent-PID spoofing and Job joining, above. And **subprocess inheritance**:
+every process the agent runs inherits the token and is
 inside the session's ancestry and Job: a build script, a test runner, an `npm install` hook. Any of
 them can act as the agent, within the agent's scope. That is inherent to giving a session a
 credential, and it is why scope, budgets and the §5.3 exclusions matter more than the token.
@@ -266,7 +281,9 @@ out of the session is useless once the process ends, and unusable from another s
   full** (step 2 above) proves the caller descends from the adopted session's bound process. An
   adopted session has no host-made Job object, so ancestry is the only proof. The environment
   variable never counts, and a partial read refuses. The token goes to that caller and nowhere
-  else. **Windows only** until step 2's peer identification lands on macOS and Linux.
+  else. As in step 2, this is a safety rail: a same-user process that spoofs its parent into the
+  adopted session's tree gets the token. **Windows only** until step 2's peer identification
+  lands on macOS and Linux.
 * **Scope.** The policy's default for adopted sessions, which the person can narrow in the
   adoption dialog.
 * **Why not adopt automatically.** A manually started session may be one the person is using for
@@ -378,7 +395,9 @@ strict minimal DER, low-S, `p256-sha256-der`, as #391 specifies for roster entri
     "account": "<target account id>",
     "machine": "<target host device id>",
     "session": "<target session id>",
-    "instance": "<12-byte base64url>"
+    "instance": "<12-byte base64url>",
+    "link": "<federation link id; absent within one account>",
+    "repo": "<GitHub repository id of a repo-scoped link; absent otherwise>"
   },
   "dataSha256": "<base64url SHA-256 of the op's data bytes as sent>",
   "issuedAt": 1793300042,
@@ -396,7 +415,7 @@ strict minimal DER, low-S, `p256-sha256-der`, as #391 specifies for roster entri
 | `principal` | §3.1, plus `add`: the hash of the issuing host's add entry. Principals are keyed by **account + generation + add hash**, because device ids aren't namespaced across accounts and a copy shares its original's id (§8.10, V3, V7). `machine` must be the channel peer that delivered it: a host never relays another host's envelope as its own (§4.6) |
 | `chain` | §5.4. `via` is at most `maxDepth` entries, most recent last. Under (a), each entry may also carry the previous hop's envelope hash, and the target may fetch and check it |
 | `action` | `sessions.list`, `session.get`, `session.read` (§4.7), `session.reply`, `launch.options`, `session.launch`, `launch.result`. **Nothing else verifies.** In particular `session.answer`, `launch.trust.answer`, `session.stop`, `session.transfer`, `attachment.*`, `update.*`, `push.*` and `host.*` are not in the action set, so the envelope cannot express them |
-| `target` | `account` and `machine` must be the target host's own. `session` is required for `session.get`, `session.read` and `session.reply`. `instance` is required for `session.reply` and optional for reads (§4.5). Absent for `sessions.list`, `launch.options` and `session.launch` |
+| `target` | `account` and `machine` must be the target host's own. `session` is required for `session.get`, `session.read` and `session.reply`. `instance` is required for `session.reply` and optional for reads (§4.5). Absent for `sessions.list`, `launch.options` and `session.launch`. `link` and `repo` are absent within one account. Across accounts `link` is required, and `repo` is required for a repo-scoped link: both must equal the link the channel was admitted under (§7.3, "Link context binding"), so a relay can't make a command run under another link's scope |
 | `dataSha256` | Binds the op's `data` (the reply text, the launch settings and prompt) to the signature: the SHA-256 of the exact bytes of the inner op's `data` JSON, which travel base64url-encoded beside the envelope (§4.6), so neither host re-serializes anything. Beside, not inside, so the envelope stays under 2 KiB and the 16 KiB reply and 20 KiB launch limits (v1-sessions.md:330; v1-launch.md:105-115) are unchanged |
 | `issuedAt`, `expiresAt` | Unix seconds. Lifetime at most **120 s**. Long enough for a relay round trip and a reply's delivery check, and short enough that a captured envelope is useless soon after |
 
@@ -464,7 +483,7 @@ may not reach.
 
   The inner `data` is the exact UTF-8 bytes of the inner op's request `data` (here
   `{"id":"…","text":"…"}` for `session.reply`), base64url without padding. Base64 adds a third
-  to a 16 KiB reply, which still fits v1's 48 KiB message. The result is the inner op's result, unchanged (`delivered`, `unconfirmed`, `busy`, `refused`,
+  to a 16 KiB reply, which still fits v1's 48 KiB message. The result is the inner op's result, unchanged (`delivered`, `unconfirmed`, `busy`, `notIdle` (§5.2), `refused`,
   `stale`, …; a launch's `started`, …). A refusal is `{ ok: false, error }` with a reason in
   words, which the issuing host passes back to the agent.
 * **Capability.** `agent.command` in `hello` (host-to-host channels only), and only while the host
@@ -546,11 +565,11 @@ meant as off is never read as on (host-config.md:139-141).
     "allowAgentLaunchedToLaunch": false
   },
   "inbound": {
-    "local":  { "read": "any", "reply": "known", "launch": { "workspaces": "approved", "permissions": "ask", "agents": ["<default>"], "profiles": ["<default>"] } },
+    "local":  { "read": "any", "reply": "forced-ask", "launch": { "workspaces": "approved", "permissions": "ask", "agents": ["<default>"], "profiles": ["<default>"] } },
     "remote": {
       "fromMachines": "any",
       "read": "any",
-      "reply": "known",
+      "reply": "forced-ask",
       "launch": { "workspaces": "approved", "permissions": "ask", "agents": ["<default>"], "profiles": ["<default>"] }
     },
     "exclude": { "sessions": [], "workspaces": [] }
@@ -575,7 +594,8 @@ meant as off is never read as on (host-config.md:139-141).
 | `issue.launched`, `issue.adopted` | `none` \| `read` \| `read+reply` \| `read+reply+launch` | The scope a credential gets at issue (§3.3) |
 | `outbound.remote` | bool | Whether this machine's agents may reach other machines at all |
 | `outbound.allowAgentLaunchedToLaunch` | bool | Whether a session an agent launched may itself launch (fan-out, §5.4) |
-| `inbound.*.read`, `.reply` | `any` \| `known` \| `agent-launched` \| `none` | Which sessions on this machine an agent may read or reply to. `any` is any live session. `known` is only sessions the host launched or adopted. `agent-launched` is only sessions an agent launched through the bridge. `none` is none. **Defaults: `read: any`, `reply: known`** (Q37). Whatever the value, §5.3's exclusions apply: never an allow-all session or one whose permission mode is unknown, and never a working one |
+| `inbound.*.read` | `any` \| `agent-launched` \| `none` | Which sessions on this machine an agent may read. `any` is any live session. `agent-launched` is only sessions an agent launched through the bridge. `none` is none. **Default: `any`** |
+| `inbound.*.reply` | `forced-ask` \| `agent-launched` \| `none` | Which sessions an agent may reply to. `forced-ask` is every session the host launched in forced-ask mode with no grant or mode change since (§5.3), which is the widest possible value. `agent-launched` is the subset an agent launched. `none` is none. **Default: `forced-ask`** (Q37). Adopted and manually started sessions are never reply targets, because their mode is unknown (§5.3) |
 | `inbound.*.launch` | `false`, or `{ workspaces: "approved" \| [labels], permissions: "ask", agents: [ids], profiles: [names] }` | Where an agent may launch. **`permissions` can only be `ask`**, and the launch request must say so explicitly (§5.2). `allowAll` is not expressible for an agent: it stays a person's decision, and design.md §5.6 already requires a confirmation for it even from a phone. `agents` and `profiles` are **allowlists**, empty by default except the machine's default agent and profile, each checked not to grant allow-all (§5.2) |
 | `inbound.remote.fromMachines` | `any` \| `[add hash]` | Which of the account's machines may send. `any` means any active, non-probationary rostered host. A list names **add entries**, which the app picks by machine name, never bare device ids. A machine that is re-enrolled or displaced has a new add hash, so it drops out until the owner re-selects it (§8.10, V3, V4) |
 | `inbound.exclude` | session ids and workspace labels | Never reachable by any agent, local or remote. A person can mark a private session or workspace this way |
@@ -585,7 +605,7 @@ meant as off is never read as on (host-config.md:139-141).
 
 **Defaults** (Q2, Q37). Decision 2 is "any session on the owner's account, subject to a
 per-machine policy". So the defaults let any session be **read** from the owner's other machines,
-and let **replies** go to sessions the host launched or adopted, always subject to §5.3. Launch is
+and let **replies** go to sessions the host launched in forced-ask mode (§5.3). Launch is
 allowed in approved workspaces with an explicit `ask` only. The policy is the only way to narrow
 it, and the app shows it as plain choices ("Agents on your other machines can: read ✓, reply to
 sessions started by Agent Bridge ✓, launch in approved folders ✓"). Until a host is in roster
@@ -615,21 +635,51 @@ permission, and can retry. So, for every reply whose principal is an agent (and 
 connector `act` profile, Q26):
 
 1. **Idle only.** It is delivered only while the target is `idle` with no turn running
-   (`status: idle`, no `activity.background`, no question). A target that is working gets
-   `busy`. It isn't queued in v1 (Q35), so the agent retries after the turn ends, within its rate
-   limits.
-2. **A screen guard on the words and on the Enter.** Each `KeySend`, the burst *and* the separate
-   Enter, carries `Expect`: the input-box rows as read on screen immediately before
-   (`KeySend.Expect`, `src/AgentBridge.Host.Delivery/KeyPlan.cs:20`, as Claude's and Codex's
-   first send already do, host-replies.md:108-110). If the rows differ when the key goes, nothing
-   is typed, or the Enter isn't pressed, and the outcome is `unconfirmed` (never retried). This is
-   required for **every agent kind, including Copilot**, which has no screen guard for replies
-   today. An agent whose input box can't be read positively on screen gets `refused`.
-3. **Escaping.** A leading option key (a digit, `y`, `n`, or any character the agent's prompts
-   bind to an option) is typed after a leading space. `@path` mentions, which Copilot and Claude
-   read as files to attach (host-replies.md:69, :146), are typed with the `@` escaped. That way the
-   words can't select an option or attach a file the sender didn't send as an attachment.
-4. **The same gap was found in answers.** PR #510 (#467)'s security reviews found the transcript
+   (`status: idle`, no `activity.background`, no question). That is re-checked immediately before
+   the Enter (step 3). A target that isn't idle gets `refused` with `code: "notIdle"`, and nothing
+   is typed.
+   * `busy` isn't used for this, because it means "an answer or another reply is being typed"
+     (v1-sessions.md:454).
+   * `code` is an **additive field** on reply results, a protocol change to v1-sessions.md's
+     outcome table. A client that doesn't know a code shows `refused` with its `reason`.
+   * Nothing is queued in v1 (Q35). The agent retries after the turn ends, within its rate limits.
+   * **Claude:** its permission prompts and `AskUserQuestion` aren't in the transcript until
+     they're answered (v1-sessions.md:1021). So for Claude the transcript can't show a prompt is
+     pending, and **its safety rests on the screen guard** below. The same holds for any agent
+     whose pending prompts the host can only see on screen.
+2. **An empty, normal-mode composer.** Before typing, one screen read must positively show the
+   input box **empty** and in **normal prompt mode**. Otherwise the reply is refused, and nothing
+   is typed. Refused cases include:
+   * a box holding any draft: the person's half-typed words, or a suggestion;
+   * Copilot's shell mode (`!`), any other mode marker, or a mode indicator the host can't read.
+
+   This stops an agent's words being **appended** to a draft such as `! echo `, where `; <cmd>`
+   and Enter would run a command.
+3. **A screen guard on the words and on the Enter.**
+   * Each `KeySend`, the burst *and* the separate Enter, carries `Expect`: the input-box rows as
+     read on screen immediately before (`KeySend.Expect`, `src/AgentBridge.Host.Delivery/KeyPlan.cs:20`,
+     as Claude's and Codex's first send already do, host-replies.md:108-110).
+   * **Before the Enter**, the host reads the screen again. It requires the **complete composer
+     to equal exactly the authorized message**: prefix and words, nothing before or after, normal
+     mode, the session still idle. Only then does the Enter go, held to those rows.
+   * If anything differs, the Enter isn't pressed, the host clears what it typed if it can, and
+     the outcome is `unconfirmed` (never retried).
+   * This is required for **every agent kind, including Copilot**, which has no screen guard for
+     replies today. An **input-box reader for Copilot** is an AP1 deliverable, since host-replies.md
+     describes none (host-replies.md:19-23). An agent whose input box can't be read positively
+     gets `refused`.
+4. **Escaping.**
+   * A leading option key (a digit, `y`, `n`, or any character the agent's prompts bind to an
+     option) is typed after a leading space. With the provenance prefix on, the message starts
+     with `[` anyway.
+   * A mention can't be quoted (host-replies.md:73). So a **token-initial `@`** (at the start, or
+     after whitespace) in an agent's words is typed as **U+FF20 FULLWIDTH COMMERCIAL AT** (`＠`),
+     which reads as an at sign but isn't a mention.
+   * AP1 vectors prove that per agent and version. Where that isn't proven, a reply with a
+     token-initial `@` is refused.
+   * That way the words can't select an option or attach a file the sender didn't send as an
+     attachment (host-replies.md:69, :146).
+5. **The same gap was found in answers.** PR #510 (#467)'s security reviews found the transcript
    check running before the `WorkerInjector.One` semaphore, the worker start and `EnterDelayMs`,
    with sends that don't set `KeySend.Expect`. Agent replies must not repeat it: the guard is
    checked *at* the write, not before the queue.
@@ -638,12 +688,12 @@ connector `act` profile, Q26):
 * `permissions` must be present and exactly `ask`. **A launch or resume without it is refused**,
   never filled from the machine's `defaults.permissions`, which may be `allowAll`
   (v1-launch.md:101).
-* `agent` and `profile` must be on `inbound.*.launch`'s allowlists. The host checks that the
-  command line it builds has no allow-all flag (`--allow-all`, `--allow-all-tools`,
-  `--dangerously-skip-permissions`, `--ask-for-approval never`, `--yolo` and equivalents). It
-  also checks that the chosen Agency profile, custom agent or model settings, where the host can
-  read them, don't grant allow-all. If it can't tell, it refuses (Q36).
-* A **resume** is refused if the session was last run allow-all.
+* **Every agent launch is a forced-ask launch** (§5.3): the host *sets* the mode, rather than
+  checking for flags it doesn't want.
+* `agent` and `profile` must be on `inbound.*.launch`'s allowlists. A profile, custom agent or
+  `launch.agents.<id>.extraArgs` (host-config.md:95) that can't be shown to keep forced-ask is
+  refused (Q36).
+* A **resume** is a forced-ask launch too, and is refused if forced-ask can't be applied to it.
 * `transfer` is refused: on the pipe for agent connections, and absent from the action set.
 * AP1 tests each of these (§11.2).
 
@@ -651,18 +701,67 @@ connector `act` profile, Q26):
 
 These are hard-coded rules, not policy settings, and no grant, link or profile overrides them.
 
-* **An allow-all session is never a reply target** for any agent or connector principal, local,
-  remote or cross-account (Q34). That covers sessions running Copilot `--allow-all` (or with
-  allow-all switched on in-session), Claude `--dangerously-skip-permissions` or bypass mode, and
-  Codex `--ask-for-approval never`. Typed words there run with no permission prompt at all, so a
-  reply would be unattended execution on the owner's machine.
-  * **Unknown is allow-all.** The host decides from its own launch record, the process's command
-    line, and any in-session switch the agent records. It re-checks immediately before delivery.
-    A session whose mode it can't positively establish as `ask` is treated as allow-all.
-  * Allow-all sessions are **excluded from every `expose` set** (§7.4) and every connector scope
-    (§9.3).
-  * They may still be **read** within the read policy (Q34).
-* A session that is **working** or asking anything: replies are `busy` (§5.2).
+**"Allow-all" means any configuration in which typed words can make a side-effecting tool run
+without a fresh, per-action prompt.** Side-effecting means running a command, writing or editing
+a file, fetching from the network, or calling an MCP tool that isn't read-only. Reading files the
+agent may already read by default is not counted; that exposure is stated in §7.8. The host
+**cannot infer** "not allow-all" from what it sees: modes and grants come from too many places.
+
+| Source | Examples |
+|---|---|
+| Launch flags | Copilot `--allow-all`, `--allow-all-tools`, `--allow-all-paths`, `--allow-all-urls`, `--allow-tool`, `--yolo`; Claude `--dangerously-skip-permissions`, `--permission-mode bypassPermissions` or `acceptEdits`, `--allowedTools`; Codex `--ask-for-approval never`, `--dangerously-bypass-approvals-and-sandbox` |
+| Machine config | `launch.agents.<id>.extraArgs` (host-config.md:95) and Agency profiles |
+| Agent config | Codex `approval_policy = "never"` in `~/.codex/config.toml` or a profile. Claude `permissions.defaultMode: bypassPermissions` or `acceptEdits`, or `permissions.allow` rules such as `Bash(*)`, in user, **project** (`.claude/settings.json`, committed to the repository, so a collaborator can add it) or local settings. Copilot's saved default mode and allowed tools |
+| Environment | The agent inherits the host's environment (host-launch.md:68, :95). Variables such as `CODEX_HOME` or `CLAUDE_CONFIG_DIR` move the config |
+| Modes | Copilot's assisted or autopilot modes. Claude's Shift+Tab cycle |
+| In-session grants | Copilot's "Yes, and don't ask again" and "remember these paths" (host-answers.md:85-88). Claude's "don't ask again" rules, persisted to settings files |
+| Runtime switches | `/allow-all`, `/yolo`, `/permissions`. **No agent is shown to record a mode change in its transcript** (v1-sessions.md:1020-1022) |
+
+So the rule is positive, not negative:
+
+* **A session is a reply target only if both hold:**
+  1. **The host launched it in forced-ask mode.** The host doesn't merely check flags; it forces
+     the mode at launch:
+     * **Copilot:** an **allowlist** of the flags the host passes (session id, model, effort,
+       context, the prompt, and the CLI's explicit interactive mode where it has one). Nothing
+       else is passed, and `extraArgs` aren't applied to a forced-ask launch. A saved default
+       mode or allowed-tools setting the command line can't override makes forced-ask
+       unavailable, and the launch is refused.
+     * **Claude:** `--permission-mode default`, with `--setting-sources` limited so that project
+       and local settings don't load. `--settings` gives a host-written file holding
+       `permissions: { defaultMode: "default", allow: [], disableBypassPermissionsMode: "disable" }`.
+       Settings the host can't exclude (managed policy) are read, and any allow rule or mode in
+       them makes forced-ask unavailable.
+     * **Codex:** an explicit `-a untrusted` (or `-c approval_policy="untrusted"`) and
+       `-s workspace-write`, with no `--profile`, and `-c` overrides for every
+       permission-relevant key.
+     * **All:** a **scrubbed environment**: the host's environment minus each agent's
+       config-relocating and permission variables, plus `AGENT_BRIDGE_*`.
+  2. **The host has seen no in-session grant or mode change since.** Before every delivery, the
+     host checks three things:
+     * **Prompts it didn't answer once-only:** any permission prompt in the session that the
+       host didn't answer itself with a plain, once-only choice (remote approval never picks a
+       persistent one, v1-sessions.md "Copilot permission prompts") counts as a possible grant.
+     * **Settings files:** the agent's settings files have not changed since launch.
+     * **The on-screen mode indicator**, read in the same screen read as the composer guard
+       (§5.2 step 2), still shows the forced mode.
+* **Anything else is "unknown" and refused:**
+  * any session the host didn't launch, including adopted and manually started ones;
+  * any session where one of those checks fails or can't be made;
+  * every session of an agent, or agent version, for which **AP1's vectors** don't show the
+    host can see that agent's mode changes.
+  * Agents that don't record or display mode changes stay unknown.
+* **The person's own grants make a session unreachable by agents.** "Don't ask again" at the
+  machine, or `/allow-all`, takes the session out of reach until it is relaunched (Q44). That is
+  deliberate.
+* Allow-all and unknown sessions are **excluded from every `expose` set** (§7.4) and every
+  connector scope (§9.3). They may still be **read** within the read policy (Q34).
+* AP1 ships **mode forcing at launch** and **vectors for every row of the table above**: each one
+  must make the session unknown, or be prevented by forcing (§11.2).
+
+The other hard-coded exclusions:
+* A session that is **working** or asking anything: replies are `refused` with
+  `code: "notIdle"` (§5.2).
 * A session that is **excluded** (`inbound.exclude`).
 * The **sender itself** (no self-reply loop through the bridge).
 * A session **elevated** or another user's (existing delivery refusals, design.md:498-501).
@@ -741,7 +840,8 @@ refusals before signing.
 * **Credential events.** Issue, adoption, rejection (wrong session, wrong process), revocation and
   its cause.
 * **Shown.** The app gets an "Agent activity" view per machine (later slice) that filters the log:
-  "*Fix the flaky test* on *DESK* replied to *Release notes* here, 14:05 PT".
+  "copilot on *DESK* (their session "Fix the flaky test") replied to *Release notes* here,
+  14:05 PT". The sender's title is quoted and secondary, as in §6.2.
 * **Verifiable.** Under 4.2(a), the person's app can re-verify any inbound entry against the
   roster.
 
@@ -757,7 +857,7 @@ refusals before signing.
 | `driverPrincipal` | `Session` | `agent:<machine>/<session>` (§3.1), replacing `homeassistant:<id>` for native agents. HA-connector presses keep theirs |
 | `driverFrom` (new) | `Session` | `{ account?, login?, repo?, machine, machineName, session, title?, agent, federated?, depth }`: who drives, for display. `machineName` is the **target host's** view of the sender's roster name (signed by a person's device, #391 §3.2), never a name the envelope carries. `title` is the sender's session title as the envelope's issuer gave it (cut to 120 bytes, hidden characters made visible as `NeedsYou.Reveal` does). `account`, `login` and `repo` (the link's repository, §7.11) only when it is another account's (§7) |
 | `activity.userMessageFrom` | `Activity` | `agent` (PR #501), set **only** from a verified agent command or a local agent connection, never from anything the sender's text contains (the #501 security review's requirement) |
-| `activity.userMessageLabel` | `Activity` | `"<title> · <machineName>"`, cut to 64 bytes. Clients show it as "Sent by *Fix the flaky test* on *DESK*" |
+| `activity.userMessageLabel` | `Activity` | Built **only from verified fields** (§6.3): `"<agent> on <machineName>"`, for example `"copilot on DESK"`; across accounts `"<agent> on <link name> · @<T2 login>"`. Cut to 64 bytes. Clients show it as "Sent by copilot on *DESK*". The sender's `title` is never in the label: older clients that show only the label must not show an unverified title as the sender |
 
 Older clients read `driver` and `driverPrincipal` as today and ignore `driverFrom`. The
 `homeassistant:` principal, `SessionDrivers`' arm window (600 s) and take-back rules are reused
@@ -768,10 +868,12 @@ unchanged. Only the principal and its source change.
 * **The edge.** The violet `driven-badge` diamond and agent colour (ui.md:54, rule 7 at :79),
   exactly as for any agent-driven session, now set from `principal.kind == agent`, which is exact
   (design.md:503-506).
-* **The words.** "Driven by an agent" becomes "Driven by *Fix the flaky test* on *DESK*". The
-  conversation shows the agent's prompt as #489 specifies (left-aligned, collapsed, diamond label),
-  labelled "Sent by *Fix the flaky test* on *DESK*". Tapping the label opens the sending session
-  when it's visible to this device.
+* **The words.** "Driven by an agent" becomes "Driven by an agent on *DESK*", from verified fields
+  only (§6.3). The conversation shows the agent's prompt as #489 specifies (left-aligned,
+  collapsed, diamond label), labelled "Sent by copilot on *DESK*". The sender's title appears only
+  as a secondary line, quoted and marked as theirs: *Their session: "Fix the flaky test"*. Tapping
+  the label opens the sending session when it's visible to this device, where its title is shown
+  from this account's own state.
 * **Cross-account** (§7). Never the same look as the owner's own agents: the label adds the other
   person, "Sent by an agent on *alex-mbp* · **@alex**", with the login verified by T2 and the
   machine name set locally at link time or taken from the peer statement and marked as theirs
@@ -880,6 +982,8 @@ command–style signed object:
   "relay": "https://relay.example",
   "genesis": "<A's roster genesis entry hash>", "generation": "<A's generation>",
   "linkKey": "<P-256 ECDSA public key, SEC1, base64url>",
+  "revokers": ["<P-256 public keys that may only revoke this link>"],
+  "repo": "<GitHub repository id, for a repo-scoped link>",
   "expiresAt": 1795900000
 }
 ```
@@ -891,6 +995,11 @@ command–style signed object:
   B never needs to understand A's roster rules. A's own hosts accept it because A's person's
   device signed a `link.create` person command naming it (#391 §7.2 machinery, presence
   required).
+* `revokers` are keys pinned at link time that may **only** sign this link's tombstone (below):
+  the `sign` keys of A's other presence-capable person devices, and optionally an offline
+  recovery key. The link code covers them, so they are as pinned as `linkKey` itself.
+* `repo` is the immutable numeric repository id (not the name), for a repo-scoped link (§7.11).
+  It is part of the link's identity, bound into every channel and command (below).
 * **Exchange.** Descriptors travel over any channel (a chat, an email, a QR code in a video
   call). They aren't secret.
 * **Link code.** Both apps show `code = first 64 bits of SHA-256(F("agent-bridge link v1",
@@ -903,46 +1012,84 @@ command–style signed object:
   local, authoritative grant (§7.4). Hosts store it beside the roster and apply it the same way
   (#391 §3.7). A higher `version` replaces a lower one.
 
-**Peer host statements.** Each side publishes to the other, signed by its `linkKey`, the
-**hosts it exposes to this link**: `{link, version, hosts: [{id, add, dh, hostSign, name}], expiresAt}`.
+**Peer host statements.** Each side publishes to the other the **hosts it exposes to this link**:
+`{link, repo, version, hosts: [{id, add, dh, hostSign, name}], issuedAt, expiresAt}`, signed by its
+`linkKey` **and co-signed by at least one host it lists** (that host's `hostSign`, under its own
+domain label `F("agent-bridge link-attest v1")`, §8.10 V2).
 * It **minimizes disclosure.** B sees only the machines A chose to expose, not A's roster,
   devices, kinds or platforms. The listed `name` is A's claim, shown as A's label for that
   machine, never as verified identity (§6.3).
 * It is **self-contained to verify.** A's statement verifies under A's `linkKey`, pinned by the link
-  code or by repo discovery's T2 proof. B's hosts don't need A's roster.
-* A's own hosts check, before signing for the link, that the statement agrees with A's roster
-  (every listed host is active), so A's person can't be tricked into exposing a removed machine.
+  code or by repo discovery's T2 proof, and under the `hostSign` of a host B has already
+  confirmed for this link. B's hosts don't need A's roster.
+* **The co-signature is what a removed custodian can't produce.** A's host co-signs a statement
+  only if, in A's roster as that host currently holds it: the device whose `link.create` command
+  named this `linkKey` is still **active**, every listed host is active, and no tombstone for the
+  link is known. So when A removes the custodian device, A's hosts stop co-signing, and a thief
+  holding the stolen `linkKey` can no longer renew the 24 h freshness (§7.5 step 4). The link
+  lapses within 24 h even if no tombstone ever reaches B. Only a thief who also holds a listed A
+  host's `hostSign` gets past this, and that host's co-signature is then the only one left: the
+  tombstone below, which any other listed A host or a revoker can sign, ends it.
+* **Co-signing grants nothing else.** A `hostSign` link attestation is never an entry signer, a
+  cosigner or a person command in either roster (§8.10 V2), can't add a host (only B's person
+  can, below), and can't rotate `linkKey`.
 * **A host that is new to the link needs B's person to confirm it.** A statement version that adds
   a host B hasn't accepted before is held. B's app asks "@alex wants to add *alex-desktop* to the
-  danswett/agent-bridge link. Allow its agents?", and B's person confirms with presence. Removals
-  and key changes that only narrow apply at once. So a stolen `linkKey` can't quietly add an
-  attacker's host.
+  danswett/agent-bridge link. Allow its agents?", and B's person confirms with presence.
+  **Any key change for a listed host**, `dh` or `hostSign`, is treated the same way: as a new host
+  that needs that confirmation. Only removing a host applies at once. So a stolen `linkKey` can't
+  quietly add an attacker's host or swap a listed host's keys for its own.
+
+**Link context binding.** With two links between the same pair of hosts (two repositories, say),
+a relay could otherwise deliver a command on the channel admitted for one link and have it run
+under the other link's expose set. So the link id and, for a repo-scoped link, the immutable `repo`
+id are bound three times:
+* into the **guest channel**: the Noise prologue of a guest channel includes `link` and `repo`
+  beside both device ids (design.md:452-454), so a handshake under the wrong link fails;
+* into **every signed command**: `target.link` and `target.repo` (§4.3);
+* into **every statement**: `link` and `repo` are signed fields.
+
+Both hosts check that all three agree, and with the link record each holds. A mismatch is
+`refused` and audited as `link-mismatch`. Neither host ever infers the link from the peer pair.
 
 **Link-key custody, rotation and revocation** (Q39).
 * **Custody.** `linkKey` is created on the presence-proven person's device that makes the link,
   in the same tier as its roster `sign` key: the Secure Enclave on iPhone, iPad and Touch-ID Macs;
   the TPM on Windows after #391's R4; a non-extractable WebCrypto key for a PWA. It signs only
   with presence. A device that can't hold it at that tier can't make links.
-* **Rotation by A's roster.** A's person rotates it from any presence-proven device of A. The new
-  descriptor's `linkKey` is endorsed by a statement signed by the **old** key *and* by a person
-  command (#391 §7.2). If the old key is lost, it is a re-link with the link code or T2.
-* **A link tombstone, signed by either side.** `{link, tombstone: true, at}`, signed by either
-  side's `linkKey` **or** by any presence-proven person's device of that side. The device's
-  `sign` key travels in the tombstone with its roster proof for the issuing side's own hosts. The
-  peer accepts a tombstone signed by the peer's pinned `linkKey`. Both sides' hosts honour a
-  tombstone **at once and permanently** for that link id, and it is delivered over the guest
-  channel and the relay registration.
-* **Removing the custodian device revokes the link.** When the device that holds `linkKey` is
-  removed from A's roster (#391 §6), A's hosts treat every link that device's key signs for as
-  revoked, and A's client sends a tombstone signed by another presence-proven device of A. B's
-  hosts honour it at once. If A's client can't reach B, B's 24 h statement freshness ends it
-  anyway (§7.5 step 4).
+* **Revocation authority, pinned at acceptance.** B honours a tombstone for the link signed by
+  **any** of: A's pinned `linkKey`; the `hostSign` of any host B has confirmed for this link
+  (under a tombstone domain label); or a pinned `revokers` key from A's descriptor. All of these
+  were fixed by the link code or B's confirmation, so B can verify each one without A's roster.
+  The mirror holds for A. A revocation key can only end the link: a tombstone is the one thing
+  it signs that B accepts.
+* **A link tombstone ends it permanently.** `{link, repo, tombstone: true, at}`. Both sides' hosts
+  honour it **at once and permanently** for that link id. After a tombstone nothing about that link
+  is renewed, rotated or re-listed, by `linkKey` or anything else; reconnecting is a new link,
+  with a new id and a new link code or T2 proof.
+* **Tombstone delivery doesn't depend on RB.** It is a small signed blob, so it travels by every
+  path that exists:
+  * any A host's guest channel to B's hosts;
+  * the repo directory (§7.11.2), as a tombstone entry B's app checks on its daily re-check;
+  * out of band: A's app shows it as a QR code and a copyable text block, which B's person pastes
+    into B's app ("@alex revoked this link");
+  * B's own relay registration, when RB is honest.
 
+  If none of these reach B, the missing co-signature still ends the link within 24 h (above).
+* **Removing the custodian device revokes the link.** When the device that holds `linkKey` is
+  removed from A's roster (#391 §6), A's hosts treat every link that key signs for as revoked,
+  stop co-signing, and **each sends a tombstone signed by its own `hostSign`**, which B verifies
+  against the pinned host list. A's client also sends one signed by a `revokers` key when it can.
+* **Rotation needs both people.** A's person rotates `linkKey` from a presence-proven device of A.
+  The new key is endorsed by a statement signed by the old key, co-signed by a listed A host
+  (which checks a person command for it, #391 §7.2), **and confirmed by B's person with
+  presence** ("@alex's link key changed. Accept?"). Until then B keeps the old key. If the old key
+  is lost, or a tombstone exists, it is a re-link.
 **Guest admission (relay change).** RB gains one admission kind:
 
 * B's person's device registers the link with RB: `{link, guests: [A host dh keys], reach:
   [B host ids], expiresAt}`, on its admitted socket.
-* An A host connects to RB with `hello { kind: "guest", link, pub }`, then the usual
+* An A host connects to RB with `hello { kind: "guest", link, repo, pub }`, then the usual
   proof-of-possession challenge (`RelayHub.AdmitAsync`, `:160-185`). It needs no token and no
   GitHub sign-in on RB.
 * RB admits it only if `pub` is a listed guest key of a live link. It routes data frames only
@@ -981,13 +1128,15 @@ the other side says. B can expose read to A without A letting any of A's session
 §4.7's checks, with these changes:
 
 1. **Channel.** The peer is a guest connection whose static key is a host listed in a **live,
-   unexpired** link's peer host statement, and T is listed in this side's own expose statement.
+   unexpired, untombstoned** link's peer host statement, and T is listed in this side's own expose
+   statement. The channel's bound `link` and `repo` equal the envelope's `target.link` and
+   `target.repo` and the link record's (§7.3, "Link context binding").
 2. **Account.** `account` is the link's peer account, and `target.account` is T's.
 3. **Signature** under the listed host's `hostSign` key, on a guest channel whose static key is that host's listed `dh` (§8.10, V4). Principals are keyed by A's account, generation and add hash, and the full key (V7).
-4. **Freshness of the peer.** T needs a peer host statement version no older than **24 h**
-   (re-signed by the peer's link key, or attested by **another** of the peer's listed hosts, the
-   same "another device" rule as #391 §6.3). Otherwise the link is stale: reads only, or nothing
-   (Q9).
+4. **Freshness of the peer.** T needs a peer host statement whose `issuedAt`, on T's clock, is no
+   older than **24 h**, signed by the peer's `linkKey` **and co-signed by a listed peer host**
+   (§7.3). `linkKey` alone never renews freshness, so a stolen custodian key can't keep a link
+   alive after the peer removes that device. Otherwise the link is stale: nothing flows (Q9).
 5. **Policy:** this side's expose statement (sessions, actions, projection) and the per-link
    rates, **half** the single-account defaults. `maxDepth` across accounts is **2**: an external
    message may reach one shared session, which may not forward it within this account (a
@@ -1016,10 +1165,12 @@ list.
   with no cooperation from the other side or either relay. The other side's hosts stop as soon as
   the tombstone reaches them. Then the relay registration is withdrawn (an honest-relay courtesy).
 * **A stolen or removed person's device of A holding `linkKey`.** Its removal from A's roster
-  revokes every link it holds the key for, and a tombstone follows (§7.3). Until the tombstone or
-  the 24 h statement freshness ends it, a thief holding the key and passing its presence check
-  can re-sign host statements. But any host it *adds* waits for B's person's confirmation (§7.3),
-  so the thief can't introduce a host of its own.
+  revokes every link it holds the key for. A's hosts stop co-signing and each sends a tombstone
+  under its own `hostSign`, which B verifies against the hosts it confirmed (§7.3). Before removal,
+  a thief holding the key and passing its presence check can re-sign statements, but can't add a
+  host, change a listed host's keys or rotate the key without B's person (§7.3). After removal it
+  can't renew freshness, because no A host co-signs, so the link ends within 24 h even if no
+  tombstone arrives.
 * **A host of A removed from A's roster.** A's person's client re-signs the peer host statement
   without it (automatic on removal, presence required) and delivers it over the guest channel. B's
   hosts refuse the removed host from the new version. Until then, step 4's freshness bounds the
@@ -1177,7 +1328,12 @@ SSH-host-key rule.
   anyone whose PR was merged once. A per-repo "contributors" mode for open-source projects is
   possible later (Q22).
 * **Re-checked** at least every 24 h while the app runs, on every suggestion and acceptance, and
-  before any statement version is signed.
+  before any statement version is signed. The **same check re-fetches the peer's GitHub signing
+  keys** (`/users/{login}/ssh_signing_keys` by the pinned user id) and confirms the key behind
+  the peer's T2 proof is still registered. A removed key suspends the link at once, as lost
+  membership does. A changed key is a new identity (§7.11.3). **Residual:** a key the peer
+  removes from GitHub after compromise stays trusted until this side's next check, at most 24 h
+  plus the 72 h host confirmation window, unless the peer also sends a tombstone (§7.3).
 * **Freshness at the hosts.** Hosts don't hold GitHub tokens, so each owner's app sends its hosts
   a **membership confirmation** for each link: `{link, repoId, peerUserId, confirmedAt}`, signed by
   the person's device `sign` key. Confirming only *keeps* authority, so it needs no presence. A
@@ -1212,8 +1368,10 @@ SSH-host-key rule.
     the link covers. The link statement records them by workspace label and path.
     * Scope is **never derived per message** from live git settings: an agent can't widen it by
       editing a remote.
-    * If a pinned workspace's remote changes, or a new workspace's remote starts resolving to the
-      repo, the link's scope is unchanged, and the app asks the person to re-confirm.
+    * If a pinned workspace's remote changes, the link is **suspended** on this side (nothing in
+      or out) until the person re-confirms the mapping with presence. A new workspace whose
+      remote starts resolving to the repo is not added until the person adds it. Scope is never
+      derived per message from live git settings.
   * **expose** only sessions whose working directory is in a pinned workspace, or a worktree the
     host made for one. Never allow-all sessions (§5.3).
   * **reach** from the same set of sessions only, so an agent in another repo can't post to
@@ -1231,7 +1389,7 @@ SSH-host-key rule.
 | Event | Effect | Why |
 |---|---|---|
 | **Repo write access compromised**, or a fork PR's branch read from a local checkout | An attacker rewrites `.agent-bridge/rendezvous` to point at **their** relay. Had apps sent GitHub bearer tokens to the directory, they would have leaked them before any approval. That is why no token is ever sent there (§7.11.2). The pointer is read only from the default branch through the API, and the origin is pinned with the owner's confirmation, so a change is a visible prompt. What remains: an owner who accepts the new origin gives that relay their T2 directory signatures (audience-bound, useless elsewhere) and their descriptor (endpoint and per-repo link key), and the relay learns who opted in. They **can't** create a descriptor for another user | T2 needs that user's registered signing key. Directory signatures are bound to the audience and the repo (§7.11.2) |
-| **An agent edits a workspace's git remote** to widen a link's scope | No effect: the scope is the workspaces pinned at acceptance, and a remote change asks the person to re-confirm | §7.11.5 |
+| **An agent edits a workspace's git remote** to widen a link's scope | No widening: the scope is the workspaces pinned at acceptance. A remote change **suspends** the link until the person re-confirms | §7.11.5 |
 | A compromised maintainer **adds an attacker as a collaborator** | The attacker becomes a *suggestion* | Consent is the gate. The suggestion names the account, and accepting is never automatic. Default scope is the repo only, launch off |
 | **Fork** | No effect | Descriptors and directory entries bind the **immutable repo id**. A fork has a different id, and its owner isn't a collaborator upstream. Renames and transfers keep the id |
 | **A contributor leaves** | Suspended within 24 h (their side's check) and 72 h at the latest (host freshness) | §7.11.4 |
@@ -1291,14 +1449,15 @@ way to establish a link.**
 
 #### 7.11.9 How it fits the roster, principals and envelope
 
-Nothing in §4's envelope or §7.5's verification changes, except that two checks are added. The
-chain B's host walks for an agent command from A's host:
+Nothing in §4's envelope or §7.5's verification changes, except that two checks are added and the
+envelope's `target.repo` and the guest channel's bound `repo` must equal `repo.id` (§7.3, "Link
+context binding"). The chain B's host walks for an agent command from A's host:
 
 1. Envelope `sig` → A host's `hostSign` key, listed in **A's peer host statement**, signed by A's
    `linkKey` (§7.3).
 2. A's `linkKey` → **A's repo descriptor**, whose T2 proof verifies under an SSH signing key that
    GitHub lists for `github.userId` (checked by B's app at acceptance and each renewal, and
-   recorded in B's link statement).
+   recorded in B's link statement), and re-checked daily (§7.11.4).
 3. `envelope.account` == `descriptor.account` == `github.userId` (`RelayApp.cs:199`).
 4. **Membership** fresh: B's own app confirmed A's user still has push access to `repo.id` within
    72 h (§7.11.4).
@@ -1428,6 +1587,8 @@ exactly one purpose, and each verifier checks it.
 | `F("agent-bridge host key binding v1", account, generation, dh)`, by `hostSign` | The `hostSignProof` in a v2 host add (§8.10, V1) | Anything else. It proves possession of `hostSign`, not of `dh`, which is why carrier binding (V4) is also required |
 | `F("agent-bridge session instance v1", …)` | A hash, not a signature (§3.1) | — |
 | `F("agent-bridge link v1", …)`, per-link key | Link codes and peer host statements (§7.3) | Anything in the peer's own roster |
+| `F("agent-bridge link-attest v1", statement)`, host `hostSign` key | A host's co-signature of its side's peer host statement (§7.3) | An entry, cosign or person command, adding a host, or rotating `linkKey`. It only keeps an already-confirmed statement fresh |
+| `F("agent-bridge link tombstone v1", link, repo, at)`, by `linkKey`, a confirmed host's `hostSign` or a pinned `revokers` key | Ending a link permanently (§7.3) | Anything else. A `revokers` key verifies nothing but this |
 | `"agent-bridge command v1"` (`CommandMac` salt) | Person transfer and folder-trust MACs, retired by #391 R6 | Agent commands use their own salt under Q1 (b) |
 | Connector admission and claim proofs | #394 step 4: a separate purpose label binding request id, key, account, host and purpose | Today's `Wire.ProofMac` alone (#394, "Grant and enforcement") |
 
@@ -1551,7 +1712,7 @@ to be decided before #391's R1 is built, so the format changes once.
 | | **(A) Statement-based** (§7.3, recommended) | **(B) Foreign roster** (the review's path) |
 |---|---|---|
 | How B verifies A's hosts | A's **peer host statement** lists the exposed hosts by full `dh` and `hostSign` key (with their add hashes), signed by A's per-link key. That key is pinned by the link code (§7.3) or by repo discovery's GitHub-key proof (§7.11.3). A's own client checks the statement against A's roster before signing it | B pins A's **genesis fingerprint**, exchanged out of band (it fits repo discovery, §7.11: the descriptor already carries `genesis` and `generation`, under the T2 proof). It then fetches and verifies A's roster through a new **read-only foreign-roster path** |
-| Revocation propagation | A's client re-signs the statement on any removal or displacement (automatically, with presence). B requires a statement or another A host's attestation within 24 h (§7.5) | A's removals reach B through roster sync. That needs cross-account head attestation and freshness |
+| Revocation propagation | A's client re-signs the statement on any removal or displacement (automatically, with presence). B requires a statement signed by `linkKey` **and co-signed by a listed A host** within 24 h (§7.5), and honours a tombstone from `linkKey`, any confirmed A host or a pinned revoker at once (§7.3) | A's removals reach B through roster sync. That needs cross-account head attestation and freshness |
 | Disclosure to B | Only the exposed hosts | A's whole roster: every device, name, kind and platform |
 | Change to #391 | None beyond V1 | Serving `roster.sync` and relay storage across accounts, foreign freshness, and #391's acceptance rule (quarantine, seniority) run over a foreign roster |
 | Weakness | The per-link key, and A's client staying online to re-sign | Disclosure, and #391's complexity duplicated across accounts |
@@ -1849,11 +2010,11 @@ In addition to design.md §5.1 (:348-361) and #391 §2.
 | Party | Assumption | Must not be able to | Can (residual) |
 |---|---|---|---|
 | **A prompt-injected agent with tools only** (MCP and file tools in an `ask` session, no unattended shell) | Holds its own credential and follows hostile instructions | Answer an approval or folder trust anywhere. Launch with allow-all, or without an explicit `ask`. Reply into an allow-all, unknown-mode or working session (§5.3). Have its words or Enter land in a prompt that opens mid-delivery (§5.2's guard). Stop, transfer, update, change settings, adopt, or widen its own scope. Reach excluded sessions. Exceed depth, budget or rates. Appear as the person | Read and reply to sessions the policy allows, and launch `ask` sessions in approved workspaces, within budgets. Each act is attributed, audited and shown violet. That is the owner's chosen reach (decision 2) |
-| **A prompt-injected agent with a shell** (it can run commands, after the person approved them or because its own session is allow-all) | All of the above, plus it runs processes as the user | Use another session's token (§3.4 step 2). Make another session's agent act without a reply (§5.3 still applies to targets) | Everything the user can, locally: it is same-user code (§1.3, local-pipe.md:121-130). Through the bridge, only its own scope. Its subprocesses inherit its token (§3.4) |
-| **Another session's agent, or a detached helper**, on the same machine, holding a stolen token (from a readable environment, or a transcript that printed it) | Same OS user | Use it: on Windows the token is accepted only from a process positively inside the bound session's ancestry or Job object, and `AGENT_BRIDGE_SESSION` proves nothing (§3.4). It dies with its process | On macOS and Linux nothing, because there are no agent credentials until peer identification exists (§3.4). On Windows, code that injects into the session's own process tree is same-user malware (below) |
-| **A stolen person's device** (unlocked, with its presence check passable) | Holds `sign`, maybe a `linkKey` | Beyond #391 §2's bounds: add hosts to a federation link without the peer person's confirmation (§7.3) | Until removed: what #391 allows a person's device, including drive sessions (#391 §7.3), and re-sign statements for links it holds the key for. Removal revokes those links and sends tombstones (§7.3, §7.7) |
+| **A prompt-injected agent with a shell** (it can run commands, after the person approved them or because its own session is allow-all) | All of the above, plus it runs processes as the user | Make another session's agent act through the bridge without a reply that passes §5.2 and §5.3 at the target | Everything the user can, locally: it is same-user code (§1.3, local-pipe.md:121-130). That includes using another session's token if it can read it, by spoofing its parent or joining that session's Job (§3.4: the ancestry check is a safety rail, not a boundary). Its subprocesses inherit its token (§3.4) |
+| **Another session's agent, or a detached helper**, on the same machine, holding a stolen token (from a readable environment, or a transcript that printed it) | Same OS user | Use it casually: on Windows the token is accepted only from a process inside the bound session's ancestry or Job object, read in full and failing closed, and `AGENT_BRIDGE_SESSION` proves nothing (§3.4). Outlive the session: the token dies with its process | On macOS and Linux nothing, because there are no agent credentials until peer identification exists (§3.4). On Windows, a helper that deliberately spoofs its parent (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`) or joins the session's Job passes the rail: that is a **safety rail, not a boundary**, and such code is same-user malware (below) |
+| **A stolen person's device** (unlocked, with its presence check passable) | Holds `sign`, maybe a `linkKey` | Beyond #391 §2's bounds: add or re-key hosts on a federation link, or rotate its key, without the peer person's confirmation (§7.3). Renew a link after its removal: the hosts stop co-signing (§7.3) | Until removed: what #391 allows a person's device, including drive sessions (#391 §7.3), and re-sign statements for links it holds the key for. Removal revokes those links, and each host sends a tombstone under its own `hostSign` (§7.3, §7.7) |
 | **A stolen host** (the machine, or its keys) | Holds `dh`, `hostSign` and the account token | Act as another machine. Pass person-only checks. Reach targets whose policy excludes it | Until removed and the removal is fresh at targets (1 h, V5): send agent commands as its own sessions, within targets' policy. Partition residual as for a removed host |
-| **A manually started session** | No credential | Act as an agent anywhere (decision 3). Be a reply target by default (`reply: known`, Q37) | Read locally, as today (local-pipe.md:95) |
+| **A manually started or adopted session** | A manual one has no credential | A manual one: act as an agent anywhere (decision 3). Either: be a reply target, since its mode is unknown (§5.3) | Read locally, as today (local-pipe.md:95) |
 | **Same-user malware** | Reads keys, environments and stores | | Everything the user can, as today (§1.3). The audit log and signatures make its agent-attributed acts visible, not impossible |
 | **A compromised host** | Holds its `dh` and `hostSign` keys | Act as another machine's agents (it can't sign as their hosts). Pass person-only checks (#391 §7.2). Reach a machine whose policy excludes it (`fromMachines`) | Sign as any principal *on itself*, invent sessions, and lie about chains under 4.2(b). Bounded by targets' per-origin rates and policy, and visible in their audit. Removed via #391 |
 | **A removed host** | Keys still held | Be accepted by any host that has applied the removal, or by a target without a head attestation from another device in the last hour (§8.10, V5) | Inside a relay-maintained partition, unbounded (#391 §6.3). Shown as machines that never confirm the removal |
@@ -1870,7 +2031,7 @@ All of 10.1, plus §7.8, and the repository-specific events of §7.11.6. In addi
 
 | Party | Must not be able to | Can (residual) |
 |---|---|---|
-| **A stolen person's device of the peer**, holding the link's `linkKey` | Add a host to the link without this side's person confirming it (§7.3). Survive the peer's removal of the device: the tombstone is honoured at once (§7.3) | Re-sign statements for already-accepted hosts until the tombstone arrives or 24 h statement freshness lapses (§7.5) |
+| **A stolen person's device of the peer**, holding the link's `linkKey` | Add a host, change a listed host's keys, or rotate `linkKey`, without this side's person confirming it (§7.3). Renew freshness after the peer removes the device: renewal needs a listed peer host's co-signature, which the peer's hosts refuse once the custodian is removed (§7.3, §7.5). Outlast a tombstone: one signed by `linkKey`, any confirmed peer host or a pinned revoker is honoured at once and permanently, and can arrive without RB (§7.3) | Before the peer removes the device: re-sign statements for already-confirmed hosts, and remove hosts. After removal: at most the remaining 24 h of the last co-signed statement, unless a tombstone arrives first. If the thief also holds a listed peer host's keys, until a tombstone from another peer host or a revoker arrives |
 | **A collaborator's agent targeting an allow-all session** | Reach it: allow-all sessions are excluded from every `expose` set, without exception (§5.3) | — |
 | **A rewritten `rendezvous` pointer** | Collect GitHub tokens: none are ever sent (§7.11.2). Switch directories silently: the origin is pinned (§7.11.2) | Collect T2 directory signatures and descriptors from owners who accept the new origin (§7.11.6) |
 
@@ -1913,7 +2074,7 @@ Each slice is one PR, security-reviewed independently before merge.
 
 | # | Slice | Depends on | Crosses machines? |
 |---|---|---|---|
-| **AP1** | **Smallest first slice: local agent principals, Windows only** (§3.4). It covers:<br>• credentials issued at launch (`AGENT_BRIDGE_TOKEN`, hashed store with process binding, a Job object per launch);<br>• `agent.hello` with **positively verified ancestry or Job membership, failing closed**, never the environment variable;<br>• the `agents` policy (`enabled`, `issue`, `inbound.local`, `exclude`, `limits`);<br>• local `session.reply`, `session.launch` and reads as an agent connection;<br>• chains, budgets and rates for local targets, and the audit log;<br>• `driverPrincipal = agent:<machine>/<session>`, `driverFrom`, the escaped prefix, and `userMessageFrom = agent` from the verified source;<br>• `agent-bridge-host agent list\|read\|reply\|launch` for tests, and the federation stub fields (§7.9).<br>**Exit criteria, each with a test that fails without it:**<br>• **an allow-all or unknown-mode session is never a reply target** (§5.3), including a session switched to allow-all after launch;<br>• **an agent launch or resume without an explicit `permissions: "ask"` is refused**, as are a non-allowlisted `agent` or `profile`, a resume of an allow-all session, and a `transfer`;<br>• **agent replies are delivered only to idle sessions** (`busy` otherwise), **with `KeySend.Expect` on both the words and the Enter for every agent kind**, Copilot included. A prompt opened between the check and each key types nothing;<br>• leading option keys and `@path` are escaped;<br>• a token from another session or a detached helper is refused, as are `AGENT_BRIDGE_SESSION` alone and a partial ancestry read;<br>• a manual session gets nothing, and isn't a reply target by default;<br>• an agent can't answer an approval or folder trust;<br>• a forged header in a title or body (including confusables) is neutralized;<br>• depth and budget refuse, and the person's reply resets them;<br>• a resumed session's old token is dead | #501 merged | **No** (decision 4 holds) |
+| **AP1** | **Smallest first slice: local agent principals, Windows only** (§3.4). It covers:<br>• credentials issued at launch (`AGENT_BRIDGE_TOKEN`, hashed store with process binding, a Job object per launch);<br>• `agent.hello` with **ancestry or Job membership read in full, failing closed**, never the environment variable. It is a **safety rail, not a boundary**: parent-PID spoofing and Job joining are stated residuals (§3.4);<br>• **mode forcing at launch** for every agent kind (§5.3): the Copilot flag allowlist, Claude's `--permission-mode default` with host-controlled settings sources, Codex's explicit `-a`/`-s`, and a scrubbed environment, with **vectors for every row of §5.3's sources table**;<br>• in-session grant and mode-change **detection**, with any agent whose changes can't be shown observable left `unknown`;<br>• a **Copilot input-box reader** (host-replies.md:19-23 has none today), so the composer can be read before typing and before Enter (§5.2);<br>• the `agents` policy (`enabled`, `issue`, `inbound.local`, `exclude`, `limits`);<br>• local `session.reply`, `session.launch` and reads as an agent connection;<br>• chains, budgets and rates for local targets, and the audit log;<br>• `driverPrincipal = agent:<machine>/<session>`, `driverFrom`, the escaped prefix, and `userMessageFrom = agent` from the verified source;<br>• `agent-bridge-host agent list\|read\|reply\|launch` for tests, and the federation stub fields (§7.9).<br>**Exit criteria, each with a test that fails without it:**<br>• **an allow-all or unknown-mode session is never a reply target** (§5.3), including a session switched to allow-all after launch;<br>• **an agent launch or resume without an explicit `permissions: "ask"` is refused**, as are a non-allowlisted `agent` or `profile`, a resume of an allow-all session, and a `transfer`;<br>• **agent replies are delivered only to idle sessions** (`notIdle` otherwise, re-checked before Enter), **with `KeySend.Expect` on both the words and the Enter for every agent kind**, Copilot included. A prompt opened between the check and each key types nothing;<br>• a **non-empty or shell-mode composer is refused**, and Enter is sent only when the **complete** composer equals the authorized message exactly (§5.2);<br>• a session launched in forced-ask mode becomes `unknown` after an in-session "don't ask again" grant or a runtime mode switch (§5.3, Q44);<br>• leading option keys and `@path` are escaped;<br>• a token from another session or a plain detached helper is refused, as are `AGENT_BRIDGE_SESSION` alone and a partial ancestry read;<br>• a manual or adopted session isn't a reply target, and a manual one gets no credential;<br>• an agent can't answer an approval or folder trust;<br>• a forged header in a title or body (including confusables) is neutralized;<br>• depth and budget refuse, and the person's reply resets them;<br>• a resumed session's old token is dead | #501 merged | **No** (decision 4 holds) |
 | AP2 | #45's MCP server on AP1 (stdio), with the old tool names and outcomes | AP1 | No |
 | AP3 | Adoption on Windows: app action, CLI, `agent.credential` | AP1 | No |
 | AP4 | Envelope library: encoding, signing (a) or MAC (b), strict parser, shared positive and negative vectors | #391 R1 (+ roster v2 V1-V2 if (a), §8.10) | Library only |
@@ -1947,10 +2108,11 @@ Each has a recommendation. None is decided by this note.
    format change. **Recommended: (a)**, which gives verifiable audit, verifiable chains and clean
    federation. It must be decided before #391 R1 is built. If v2 slips, (b) lets single-account
    cross-machine messaging proceed with only V3, V5 and V6.
-2. **Q2. Default remote policy when AP5 ships.** (a) Read and reply to any session, launch `ask`
-   in approved workspaces, from any of the account's hosts. (b) Read only. (c) Everything off
-   until set per machine. **Recommended: (a)**, matching decision 2, with `allowAll` never
-   expressible for agents (design.md §13 item 8).
+2. **Q2. Default remote policy when AP5 ships.** (a) Read any session. Reply to sessions the host
+   launched in forced-ask mode (§5.1 `reply: forced-ask`, §5.3). Launch with an explicit `ask` in
+   approved workspaces. All of it from any of the account's non-probationary hosts. (b) Read only.
+   (c) Everything off until set per machine. **Recommended: (a)**, the widest reach decision 2
+   allows once §5.3 holds. `allowAll` is never expressible for agents (design.md §13 item 8).
 3. **Q3. May agents answer non-approval questions (`ask_user` forms)?** **Recommended: no in
    v1.** Decision 1 lists read, reply and launch. design.md:495's "answer" for local agents should
    be struck when design.md is updated. Revisit with evidence of need.
@@ -2082,7 +2244,9 @@ Decisions the reviews of `f3559996` asked to make explicit:
     an unknown permission mode counts as allow-all. Reading them stays within the read policy. If
     the owner ever wants an exception, it would be a per-session switch set at that machine, for
     same-account local agents only, and it defaults to **no**.
-35. **Q35. Replies into working sessions.** **Recommended:** refused as `busy`, idle only (§5.2).
+35. **Q35. Replies into working sessions.** **Recommended:** refused as `notIdle`, idle only
+    (§5.2), re-checked before Enter. That is a new additive refusal code, since `busy` already
+    means an answer or reply is being typed (v1-sessions.md:454).
     Host-side queuing, delivered at the next idle with the guard re-run, is a later option. It
     isn't in v1, because a queued message can arrive after the context that justified it has
     changed.
@@ -2091,9 +2255,9 @@ Decisions the reviews of `f3559996` asked to make explicit:
     `profile` must be on the policy's allowlists, and any agent, profile or model setting the host
     can't positively show to be non-allow-all is refused (§5.2).
 37. **Q37. Manually started or private sessions as targets.** **Recommended:** readable by default
-    (decision 2), but **reply targets only if the host launched or adopted them** (`reply: known`).
-    `any` is an explicit per-machine choice, still subject to §5.3. `inbound.exclude` marks a
-    private session unreadable too.
+    (decision 2), but **never reply targets**. Only forced-ask launches are reply targets
+    (`reply: forced-ask`, §5.3), so manually started and adopted sessions, whose mode is unknown,
+    can't be. `inbound.exclude` makes a private session unreadable too.
 38. **Q38. GitHub token type, scopes and storage, for repo discovery.** **Recommended:**
     * a **GitHub App user-to-server token** from the Agent Bridge GitHub App, read-only:
       repository metadata, and the collaborators check on repositories the person selects;
@@ -2103,15 +2267,22 @@ Decisions the reviews of `f3559996` asked to make explicit:
     * sent only to GitHub, and to the owner's own sign-in relay during sign-in (§7.11.2).
 39. **Q39. Link-key custody, rotation and revocation.** **Recommended:** §7.3:
     * custody in the presence-proven device's hardware tier, signing with presence;
-    * rotation endorsed by the old key and a person command;
-    * a tombstone either side can sign, honoured at once;
-    * automatic revocation when the custodian device leaves the roster;
-    * new hosts in a peer statement need the other person's confirmation.
+    * statements need `linkKey` **and** a listed host's co-signature, and hosts co-sign only while
+      the custodian device is active in their roster, so a stolen key can't keep a link alive;
+    * a revocation authority pinned at acceptance: `linkKey`, any confirmed peer host's
+      `hostSign`, or a `revokers` key from the descriptor, so the peer can verify a tombstone
+      without the other roster;
+    * a tombstone is permanent, ends the link's id, and travels by the guest channel, the
+      directory and an out-of-band paste as well as RB;
+    * automatic revocation when the custodian device leaves the roster, with a tombstone from
+      each host;
+    * rotation, a new host and **any** key change for a listed host all need the other person's
+      confirmation.
 40. **Q40. A repo link's default scope.** **Recommended:** nothing pre-ticked, matching §7.4's
     "None". The person ticks read and/or reply, and launch separately.
 41. **Q41. The workspace-to-repo binding.** **Recommended:** pinned at acceptance by the person,
-    by workspace label and path, and re-confirmed on any remote change. Never derived per message
-    from live git settings (§7.11.5).
+    by workspace label and path. A remote change suspends the link until the person re-confirms.
+    Never derived per message from live git settings (§7.11.5).
 42. **Q42. `credentialDays` and sub-agents.** **Recommended:** 7 days, then one press at the
     machine to re-adopt. Sub-agents share the parent session's credential, since they are the
     same process tree and the same principal. The audit records the sub-agent where the host can
@@ -2121,3 +2292,11 @@ Decisions the reviews of `f3559996` asked to make explicit:
     it unchanged as the G9 compatibility path until #319 retires it, labelled in `driverFrom` as
     `kind: "homeassistant"`, distinct from native agents. No new feature uses it, and agents are
     pointed at AP1 and AP2 instead.
+44. **Q44. The person's own grants and mode switches make a session unreachable by agents.** With
+    forced-ask launches (§5.3), a "Yes, and don't ask again" the person gives in a session, a
+    persisted Claude allow rule, or a runtime `/allow-all`, `/yolo` or `/permissions` change makes
+    that session `unknown`, so no agent can reply into it again. (a) Accept that. (b) A
+    per-session opt-in ("let agents reply here even though I allowed tools"), presence-confirmed.
+    **Recommended: (a), unreachable**, with no opt-in in v1. The person can see why on the
+    session card ("Agents can't reply here: you allowed tools without asking") and can start a
+    fresh forced-ask session. An opt-in would be an allow-all reply target by another name.
