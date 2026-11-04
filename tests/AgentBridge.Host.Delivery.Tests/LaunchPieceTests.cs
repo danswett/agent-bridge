@@ -133,7 +133,11 @@ public sealed class LaunchPieceTests : IDisposable
     [Trait("Category", "Process")]
     public Task A_batch_command_cannot_inherit_a_probe_writer_from_another_launch() => SharedInheritanceWindow(true);
 
-    async Task SharedInheritanceWindow(bool batch)
+    [WindowsFact]
+    [Trait("Category", "Process")]
+    public Task A_usage_probe_cannot_inherit_a_probe_writer_from_another_launch() => SharedInheritanceWindow(false, usageProbe: true);
+
+    async Task SharedInheritanceWindow(bool batch, bool usageProbe = false)
     {
         var pidFile = Out("concurrent.pid");
         var shim = Out("concurrent.cmd");
@@ -150,11 +154,19 @@ public sealed class LaunchPieceTests : IDisposable
         AgentBridge.Host.Core.Usage.ICommandRunner runner = batch
             ? new BatchFileRunner(new AgentBridge.Host.Core.Usage.CommandRunner())
             : new AgentBridge.Host.Core.Usage.CommandRunner();
-        var pending = Task.Run(() =>
-        {
-            entered.Set();
-            return runner.RunAsync(batch ? shim : Echo, batch ? [] : ["--probe-child", pidFile, "close"], TimeSpan.FromMinutes(2), stop.Token);
-        });
+        AgentBridge.Host.Core.Usage.IProbeProcess? probe = null;
+        var pending = usageProbe
+            ? Task.Run(() =>
+            {
+                entered.Set();
+                probe = new ProbeLauncher().Start(new AgentBridge.Host.Core.Usage.ProbeCommand(Echo, ["--probe-child", pidFile, "close"], Path.GetDirectoryName(pidFile)!,
+                    new Dictionary<string, string?>()));
+            })
+            : Task.Run(() =>
+            {
+                entered.Set();
+                return runner.RunAsync(batch ? shim : Echo, batch ? [] : ["--probe-child", pidFile, "close"], TimeSpan.FromMinutes(2), stop.Token);
+            });
         Process? child = null;
         try
         {
@@ -175,6 +187,7 @@ public sealed class LaunchPieceTests : IDisposable
             stop.Cancel();
             try { await pending.WaitAsync(TimeSpan.FromSeconds(30)); }
             catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+            probe?.Dispose();
             if (child is not null)
             {
                 if (!child.HasExited) { child.Kill(); await child.WaitForExitAsync(); }

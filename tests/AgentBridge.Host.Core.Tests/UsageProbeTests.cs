@@ -159,9 +159,49 @@ public sealed class UsageProbeTests : IDisposable
         var second = (await claude.CollectAsync())!;
         Assert.Null(second.Error);
         Assert.NotEqual(first.AccountKey, second.AccountKey);
+        // Never a sign-out under the first account's key, however often it is looked at.
+        for (var i = 0; i < 3; i++)
+        {
+            time.Advance(TimeSpan.FromMinutes(20));
+            var later = await claude.CollectAsync();
+            Assert.False(later?.Error is not null && later.AccountKey == first.AccountKey);
+        }
+        using (var remembered = JsonDocument.Parse(File.ReadAllText(Seen))) { Assert.Equal(second.AccountKey, remembered.RootElement.GetProperty("accountKey").GetString()); }
 
         ClaudeLoggedOut();
         Assert.Equal(second.AccountKey, (await claude.CollectAsync())!.AccountKey);
+    }
+
+    [Theory]
+    [InlineData("corrupt")]
+    [InlineData("oversized")]
+    public async Task A_remembered_account_that_cannot_be_read_is_as_none_ever_seen(string how)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Seen)!);
+        File.WriteAllText(Seen, how == "corrupt" ? "{\"accountKey\":" : $"{{\"accountKey\":\"k\",\"pad\":\"{new string('x', 5000)}\"}}");
+        Directory.CreateDirectory(Path.GetDirectoryName(AccountPath)!);
+        ClaudeLoggedOut();
+        ClaudeScript();
+
+        Assert.Null(await new ClaudeUsageCollector(Options(), time, Probes(seen: Seen), Log).CollectAsync());
+    }
+
+    [Fact]
+    public async Task A_claude_json_that_cannot_be_read_says_nothing_of_a_sign_out_either_way()
+    {
+        ClaudeSaved(Now.AddMinutes(-1));
+        ClaudeScript();
+        var claude = new ClaudeUsageCollector(Options(), time, Probes(seen: Seen), Log);
+        Assert.Null((await claude.CollectAsync())!.Error);
+
+        // Caught mid-write: not JSON at all.
+        File.WriteAllText(AccountPath, "{\"oauthAccount\":{\"accountUuid\":\"AAAA");
+        Assert.Null(await claude.CollectAsync());
+        Assert.DoesNotContain("signedOutAt\":\"", File.ReadAllText(Seen), StringComparison.Ordinal);
+
+        // Still remembered: a real logout after it is the sign-out.
+        ClaudeLoggedOut();
+        Assert.Equal(ClaudeUsageCollector.SignedOutError, (await claude.CollectAsync())!.Error);
     }
 
     [Fact]

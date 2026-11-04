@@ -44,7 +44,9 @@ public sealed class ProbeLauncher : IProbeLauncher
             else { start.Environment[name] = value; }
         }
         Process process;
-        try { process = Process.Start(start) ?? throw new InvalidOperationException(); }
+        // Through the host's shared gate, as every Windows host start is: a start beside it could
+        // otherwise inherit, and hold open, the pipes of a version check started at the same moment.
+        try { process = AgentBridge.Host.Core.Processes.ProcessLaunch.Start(start) ?? throw new InvalidOperationException(); }
         catch (Exception e) when (e is Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException or PlatformNotSupportedException) { return null; }
         return new Started(process, command.Stdio);
     }
