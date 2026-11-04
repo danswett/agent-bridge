@@ -93,6 +93,10 @@ export class SessionListView {
       menu: (card) => { if (!this.#menu.open) { this.openMenu(card); } },
       hint: () => this.#showHint(),
       header: (id) => this.#head(id, id === 'pinned' ? 'Pinned' : 'Sessions'),
+      // Held, and let go (dropped, put back or abandoned): what holds Needs you's answers from the
+      // pointer meanwhile, and for a moment after (sessions-page.js).
+      lifted: () => this.onMoving?.(true),
+      dropped: () => this.onMoving?.(false),
       say: (text) => this.#say(text),
       drawn: () => { if (this.#waiting) { this.schedule(); } },
     }, { top: '.appbar', bottom: '#nav' });
@@ -293,8 +297,14 @@ export class SessionListView {
 
   // Moves a row and keeps the move in view and in focus.
   #move(card, delta) {
-    // A card held in a drag moves only with the pointer.
-    if (this.filter || this.#reorder.holding) { return false; }
+    if (this.filter) { return false; }
+    // A key or the menu while a card is held (or pressed to be) puts it back first, and then moves
+    // (ui.md §6.1). What the list waited to draw while it was held is drawn first, so the move is
+    // reckoned from the list as it is now, and the pointer's release has no drag left to drop.
+    if (this.#reorder.busy) {
+      this.#reorder.cancel();
+      this.render();
+    }
     const key = this.#keyOf(card);
     if (!this.order.move(key, delta)) {
       // At the end of its group a move moves nothing, and says so (ui.md §6.1).
@@ -303,6 +313,8 @@ export class SessionListView {
       if (at && delta > 0 && at.index === at.n - 1) { this.#say(`End of ${at.name}.`); }
       return false;
     }
+    // Needs you's answers wait a moment after a move, as after a drop (ui.md §6.1, Answers wait).
+    this.onMoving?.(false);
     // Into view before the slide is measured: the slide's first frame puts the row back where it
     // was, and a scroll then would find it already in sight and leave its new place clipped.
     this.#moved(() => { this.render(); card.element.scrollIntoView({ block: 'nearest' }); });

@@ -540,7 +540,9 @@ the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `
   4 px, `pointercancel`, Alt+Down sliding both cards, crossing into Pinned, the placeholders
   ("Drop here to keep it pinned", and "Drop here to unpin" with everything pinned or Sessions'
   last card held), a held session ending (said, and its gap closing), the grip's column in Your
-  order only, a key and a press during a drop's settle acting on the new order, reduced motion
+  order only, a key and a press during a drop's settle acting on the new order, Alt+Down while a
+  card is held putting it back and then moving it, Needs you's answers holding through a lift
+  and for a second after a drop or a move by key (a key answering at once), reduced motion
   (no scale, shadow or easing), and axe with a card lifted in light and dark.
   `test/unit/reorder.test.mjs` covers the long press's timing.
 * `test/motion.spec.mjs`, in demo mode (ui.md §5.3, #232): nothing moving as the app starts; every

@@ -51,6 +51,7 @@ const same = (a, b) => !!a && !!b && a.group === b.group && a.index === b.index;
 //   menu(card): its row menu, for a long press released without moving;
 //   hint(): what a tap on the grip says;
 //   header(group) -> the group's header, for Sessions while everything is pinned and a card is held;
+//   lifted(), dropped(): a card has lifted; it has been let go, put back or abandoned;
 //   say(text): a polite announcement;
 //   drawn(): the list may draw what waited while a card was held.
 // }
@@ -336,6 +337,7 @@ export class Reorder {
     if (!origin) { g.head?.remove(); this.#abort(); return; }
     const top = this.list.getBoundingClientRect().top + m.me.top;
     Object.assign(g, { phase: 'lifted', m, slots, origin, slot: origin, offY: g.y - top, lx: g.x, ly: g.y, armed: false, outside: false, acc: 0, t: 0, width: m.width });
+    this.host.lifted?.();
     const doc = this.doc;
     g.gap = doc.createElement('div');
     g.gap.className = 'drag-gap';
@@ -548,6 +550,7 @@ export class Reorder {
     // own fade would be at its place, which auto-scroll may have taken out of sight).
     if (removed) { leave(g.el, 'listItem'); }
     this.#g = null;
+    this.host.dropped?.();
     // At rest in the layout at once: nothing eases there, everything is slid from where it was seen.
     this.list.classList.remove('reordering');
     for (const b of g.m.L) {

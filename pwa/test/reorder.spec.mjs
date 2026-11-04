@@ -53,6 +53,23 @@ async function openDemo(page, { ua = null, hint = null, query = '', hinted = fal
   if (!sort) { await expect.poll(() => order(page)).toEqual(FIRST); }
 }
 
+// A question in Needs you (Delegating's approval), its Approve once button counted when pressed.
+async function ask(page) {
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 1000).toISOString();
+    const question = {
+      id: 'r1#0123456789abcdef', kind: 'approval', message: 'Allow **shell**?', askedAt: t,
+      fields: [{ name: 'decision', type: 'choice', required: true, options: [{ value: 'approve', label: 'Approve once' }, { value: 'deny', label: 'Deny' }] }],
+    };
+    d.host.upsert({ ...d.host.get('8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35'), status: 'waiting', statusSince: t, updatedAt: t, question });
+  });
+  const approve = page.locator('#needs-you .needs-approve').first();
+  await expect(approve).toBeVisible();
+  await expect(page.locator('#needs-you .needs-you-list[data-arriving]')).toHaveCount(0);
+  return approve;
+}
+
 async function many(page, n = 24) {
   await page.evaluate((n) => {
     const d = window.agentBridgeDemo;
@@ -721,6 +738,50 @@ for (const width of [1440]) {
       await page.evaluate(() => document.documentElement.style.removeProperty('--ab-motion-reorder-duration'));
       await page.waitForTimeout(300);
       expect(await order(page)).toEqual([COPILOT, CLAUDE, DELEGATING, CODEX]);
+    });
+
+    test('Needs you\'s answers take no press while a card is held, nor for a second after it is dropped or moved by key; a key answers at once', async ({ page }) => {
+      await openDemo(page, { query: '&answerDelay=300' });
+      const approve = await ask(page);
+      const answered = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+      const lane = page.locator('#needs-you .needs-you-list');
+      const [x, y] = await grab(page, CLAUDE);
+      await expect(lane).toHaveAttribute('data-arriving', '');
+      // Held for longer than any other wait, it still holds.
+      await page.waitForTimeout(800);
+      await expect(lane).toHaveAttribute('data-arriving', '');
+      await page.mouse.move(x, y + 70, { steps: 4 });
+      await page.mouse.up();
+      await expect.poll(() => order(page)).toEqual([COPILOT, CODEX, CLAUDE, DELEGATING]);
+      // A fresh press straight after the drop is the person's own, but it lands on nothing.
+      await approve.click();
+      expect(await answered()).toBe(0);
+      await page.waitForTimeout(1100);
+      await expect(lane).not.toHaveAttribute('data-arriving', '');
+      // A move by key holds them as long.
+      await card(page, CLAUDE).locator('.row-main').press('Alt+ArrowUp');
+      await expect.poll(() => order(page)).toEqual([COPILOT, CLAUDE, CODEX, DELEGATING]);
+      await approve.click();
+      expect(await answered()).toBe(0);
+      // A key acts at once.
+      await approve.focus();
+      await page.keyboard.press('Enter');
+      await expect.poll(answered).toBe(1);
+    });
+
+    test('Alt+Down while a card is held puts it back and then moves it, and the release drops nothing', async ({ page }) => {
+      await openDemo(page);
+      await card(page, CLAUDE).locator('.row-main').focus();
+      const [x, y] = await grab(page, CLAUDE);
+      await page.mouse.move(x, y + 140, { steps: 6 });
+      await page.keyboard.press('Alt+ArrowDown');
+      await expect(page.locator('.lifted, .drag-gap')).toHaveCount(0);
+      expect(await order(page)).toEqual([COPILOT, CODEX, CLAUDE, DELEGATING]);
+      await expect(said(page)).toHaveText('Moved to position 3 of 4 in Sessions.');
+      await page.mouse.up();
+      await page.waitForTimeout(200);
+      expect(await order(page)).toEqual([COPILOT, CODEX, CLAUDE, DELEGATING]);
+      await expect(view(page, CLAUDE)).toBeHidden();
     });
 
     test('a drag let go over Needs you never presses its answers', async ({ page }) => {

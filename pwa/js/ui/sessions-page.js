@@ -38,15 +38,20 @@ import { QUESTION_ARRIVAL_GUARD_MS, watchMoves } from './session-card.js';
 // sight, smoothly) moves the lane under the pointer too, so each step runs the wait again from
 // there; once it has run out, the person's own scrolling holds nothing back.
 const LANE_ANSWERS = '.needs-approve, .needs-deny, .needs-resend';
+// How long the answers wait after a session card is dropped, put back or abandoned, or moved by
+// key or menu (ui.md §6.1, Answers wait): a press or release meant for the list can't answer.
+export const REORDER_ANSWER_WAIT_MS = 1000;
 function guardLane(list, scroller = null) {
   const now = () => globalThis.performance?.now() ?? Date.now();
   let until = 0;
   let timer = 0;
-  const arm = () => {
-    until = now() + QUESTION_ARRIVAL_GUARD_MS;
+  // While a session card is held to be moved, the answers wait for as long as it is.
+  let held = false;
+  const arm = (ms = QUESTION_ARRIVAL_GUARD_MS) => {
+    until = Math.max(until, now() + ms);
     list.setAttribute('data-arriving', '');
     clearTimeout(timer);
-    timer = setTimeout(() => list.removeAttribute('data-arriving'), QUESTION_ARRIVAL_GUARD_MS);
+    timer = setTimeout(() => { if (!held) { list.removeAttribute('data-arriving'); } }, Math.max(0, until - now()));
   };
   // The entries themselves coming, going or moving; and anything that moves their answers without
   // that (watchMoves, #491): an answer's status appearing or wrapping in an entry above, the note
@@ -59,7 +64,7 @@ function guardLane(list, scroller = null) {
     holder: lane,
     controls: () => [...list.querySelectorAll(LANE_ANSWERS)],
     also: [...list.children],
-    moved: arm,
+    moved: () => arm(),
   });
   const changes = typeof MutationObserver === 'function' ? new MutationObserver((records) => {
     for (const r of records) {
@@ -76,7 +81,7 @@ function guardLane(list, scroller = null) {
     // read that fails can't say the answers stayed put, so that click is dropped too (#642).
     let read = true;
     try { moves.check(); } catch { read = false; }
-    if (read && now() >= until) { return; }
+    if (read && !held && now() >= until) { return; }
     e.preventDefault();
     e.stopImmediatePropagation();
   };
@@ -84,7 +89,15 @@ function guardLane(list, scroller = null) {
   const scrolled = () => { if (now() < until) { arm(); } };
   scroller?.addEventListener('scroll', scrolled, { passive: true });
   return {
-    arm,
+    arm: () => arm(),
+    hold() {
+      held = true;
+      list.setAttribute('data-arriving', '');
+    },
+    release(ms) {
+      held = false;
+      arm(ms);
+    },
     stop() {
       changes?.disconnect();
       moves.stop();
@@ -229,6 +242,9 @@ export class SessionsPage {
       settled: (hostId) => hosts.link(hostId)?.client?.synced !== false,
       stale: (hostId) => hosts.staleOf(hostId),
     });
+    // A card held to be moved holds Needs you's answers from the pointer, and for a moment after it
+    // is let go or moved by key or menu (ui.md §6.1, Answers wait).
+    this.view.onMoving = (holding) => { if (holding) { this.#laneGuard?.hold(); } else { this.#laneGuard?.release(REORDER_ANSWER_WAIT_MS); } };
     this.view.onRender = (n) => { this.#drawCount(n); this.#settleSelection(); this.#delegateStep(); };
     this.view.onSelect = (card) => this.#choose(card);
     this.view.onBack = () => this.#back();
