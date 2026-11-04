@@ -128,12 +128,14 @@ public static class LocalClient
         Received.Read<T>(await channel.CallAsync(op, data, timeout, ct));
 
     // hello, the first request on every connection. A host that refused this process closes
-    // the pipe after saying why; that reason is what the caller gets.
-    public static async Task<HelloResult> HelloAsync(this IClientChannel channel, CancellationToken ct = default)
+    // the pipe after saying why; that reason is what the caller gets. changes: ask the host to
+    // send hello.changed on this channel when what it says changes (Capabilities.HelloChanged);
+    // a host without it ignores the ask.
+    public static async Task<HelloResult> HelloAsync(this IClientChannel channel, CancellationToken ct = default, bool changes = false)
     {
         // Read as any host record is (Received): a machine without a readable id or protocol is
         // refused, any other field it cannot read is absent.
-        try { return await channel.ReadAsync<HelloResult>(Ops.Hello, ct: ct); }
+        try { return await channel.ReadAsync<HelloResult>(Ops.Hello, changes ? new { changes = true } : null, ct: ct); }
         catch (Exception e) when (e is IOException or HostErrorException && Refusal(channel) is { } reason) { throw new LocalRefusedException(reason); }
     }
 

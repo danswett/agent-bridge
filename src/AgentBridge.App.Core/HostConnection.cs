@@ -66,6 +66,9 @@ public sealed class HostConnection : IAsyncDisposable
     public TimeProvider Time { get; init; } = TimeProvider.System;
     // How often an open connection asks the host again what it offers. Tests shorten it.
     public TimeSpan CapabilityRefresh { get; init; } = TimeSpan.FromSeconds(10);
+    // The same, of a host that says when it changes (hello.changed): only in case a change was
+    // missed. Every app asked every 10 s, ~36 hellos a minute at a host from other machines (#640).
+    public TimeSpan ChangesFallback { get; init; } = TimeSpan.FromMinutes(5);
     // Whether it follows the host's sessions and usage. A connection only for sending (this
     // machine's host reached through the relay, for a transfer) does not: the pipe shows them.
     public bool Subscribes { get; init; } = true;
@@ -107,6 +110,11 @@ public sealed class HostConnection : IAsyncDisposable
 
     // The current connection's gap signal, while there is one.
     SemaphoreSlim? resync;
+    // The current connection's hello.changed signal, while there is one.
+    SemaphoreSlim? helloChanged;
+    // Whether the host last said it sends hello.changed: if so, asking every CapabilityRefresh is
+    // not needed.
+    volatile bool announces;
     // The channel whose events are being followed now.
     IClientChannel? pumping;
 
@@ -195,7 +203,7 @@ public sealed class HostConnection : IAsyncDisposable
             try
             {
                 ch = await connect(ct);
-                var hello = await ch.HelloAsync(ct);
+                var hello = await ch.HelloAsync(ct, changes: true);
                 said = hello;
                 // A gap in this connection's events: its own signal, so a wait abandoned when the
                 // connection ends cannot swallow the next connection's.
@@ -203,6 +211,9 @@ public sealed class HostConnection : IAsyncDisposable
                 // SemaphoreSlim whose wait handle was never asked for holds nothing to free.
                 var gaps = new SemaphoreSlim(0);
                 Volatile.Write(ref resync, gaps);
+                var changed = new SemaphoreSlim(0);
+                Volatile.Write(ref helloChanged, changed);
+                announces = Announces(hello);
                 Volatile.Write(ref pumping, ch);
                 var pump = Task.Run(() => PumpAsync(ch, gaps, ct), ct);
                 Volatile.Write(ref current, new Current(ch, null));
@@ -245,15 +256,19 @@ public sealed class HostConnection : IAsyncDisposable
                 log($"connected to the host ({hello.Machine.Name}, {hello.Machine.HostVersion})");
                 // The host's capabilities change without a new connection (agent-ha-bridge
                 // starting or stopping takes answering away or gives it back), and hello is
-                // computed afresh each time, so it is asked again now and then. The gap wait is
-                // kept across turns: a fresh one each time would leave the old one to swallow
-                // the next gap.
+                // computed afresh each time, so it is asked again when the host says it changed
+                // (hello.changed), and now and then besides: every CapabilityRefresh of a host that
+                // doesn't say, every ChangesFallback of one that does. The gap and change waits are
+                // kept across turns: a fresh one each time would leave the old one to swallow the
+                // next signal.
                 Task? again = null;
+                Task? heard = null;
                 while (true)
                 {
                     again ??= gaps.WaitAsync(ct);
-                    var tick = Task.Delay(CapabilityRefresh, ct);
-                    var done = await Task.WhenAny(ch.Closed, again, pump, tick);
+                    heard ??= changed.WaitAsync(ct);
+                    var tick = Task.Delay(announces ? ChangesFallback : CapabilityRefresh, ct);
+                    var done = await Task.WhenAny(ch.Closed, again, pump, tick, heard);
                     // Stopped: every wait above completes at once, cancelled. Without this, a gap
                     // wait that won was taken for a gap, and a connection that follows no sessions
                     // (the relay loopback) recovers by doing nothing, so the loop spun a thread at
@@ -263,6 +278,11 @@ public sealed class HostConnection : IAsyncDisposable
                     {
                         again = null;
                         await RecoverAsync(ch, hello, ct);
+                    }
+                    else if (done == heard)
+                    {
+                        heard = null;
+                        await RefreshAsync(ch, ct);
                     }
                     else if (done == tick) { await RefreshAsync(ch, ct); }
                     else { break; }
@@ -286,6 +306,7 @@ public sealed class HostConnection : IAsyncDisposable
             finally
             {
                 Volatile.Write(ref resync, null);
+                Volatile.Write(ref helloChanged, null);
                 Volatile.Write(ref current, null);
                 if (ch is not null) { await ch.DisposeAsync(); }
                 if (Volatile.Read(ref connected).Task.IsCompleted) { Volatile.Write(ref connected, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)); }
@@ -372,6 +393,13 @@ public sealed class HostConnection : IAsyncDisposable
         ui.Post(() => Sessions.Answered(ch, before, resumed, asked));
     }
 
+    // Whether the host sends hello.changed on this connection (it was asked with every hello), so
+    // asking every CapabilityRefresh is not needed. Not this machine's own host (host.*): a refresh
+    // there also reads host.status, whose agent-ha-bridge note and restart-required change without
+    // hello changing (a host read-only by setting, a config edited by hand), and the pipe is cheap.
+    static bool Announces(HelloResult hello) =>
+        hello.Capabilities.Contains(AgentBridge.Protocol.Capabilities.HelloChanged) && !hello.Capabilities.Contains(HostOps.Capability);
+
     // The account's other machines' readings too, where the host keeps them (usage.shared, #172).
     static UsageRequest UsageAsk(HelloResult hello) => new() { Shared = hello.Capabilities.Contains(UsageProtocol.SharedCapability) };
 
@@ -383,7 +411,8 @@ public sealed class HostConnection : IAsyncDisposable
         if (!Subscribes) { return; }
         // What the host offers now, not at the connection's first hello: updates offered since
         // (agent-ha-bridge stopped there) are read again, and ones withdrawn are not asked for.
-        var hello = await ch.HelloAsync(ct);
+        var hello = await ch.HelloAsync(ct, changes: true);
+        announces = Announces(hello);
         ui.Post(() =>
         {
             if (Hello is not null && !Hello.Capabilities.SequenceEqual(hello.Capabilities)) { Hello = hello; Changed?.Invoke(); }
@@ -415,7 +444,8 @@ public sealed class HostConnection : IAsyncDisposable
     // when asked rather than announcing). Applied only when something changed.
     async Task RefreshAsync(IClientChannel ch, CancellationToken ct)
     {
-        var hello = await ch.HelloAsync(ct);
+        var hello = await ch.HelloAsync(ct, changes: true);
+        announces = Announces(hello);
         HostStatus? status = hello.Capabilities.Contains(HostOps.Capability) ? await ch.CallAsync<HostStatus>(HostOps.Status, ct: ct) : null;
         // Updates offered again (agent-ha-bridge stopped there): followed from now. Subscribing
         // again where they already are changes nothing at the host.
@@ -637,6 +667,11 @@ public sealed class HostConnection : IAsyncDisposable
                     ui.Post(() => { Update = up; Changed?.Invoke(); });
                     break;
                 }
+            // Asked again rather than applied: RefreshAsync reads the status and offered updates
+            // with it, as on a tick. One pending is enough, and only for the channel followed now.
+            case Events.HelloChanged:
+                if (ReferenceEquals(Volatile.Read(ref pumping), ch) && Volatile.Read(ref helloChanged) is { CurrentCount: 0 } signal) { signal.Release(); }
+                break;
             case HostOps.StatusEvent when ev.Data.Deserialize<HostStatus>(ProtocolJson.Options) is { } h:
                 Interlocked.Increment(ref statusEvents);
                 ui.Post(() => { Status = h; Changed?.Invoke(); });

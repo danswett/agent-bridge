@@ -609,6 +609,10 @@ public static class Events
     public const string SessionRemove = "session.remove";
     public const string SessionsSynced = "sessions.synced";
     public const string DiscoveryChanged = "discovery.changed";
+    // That what hello says has changed, sent with {} to a channel whose hello asked for changes,
+    // when its readOnly or capabilities differ from what that channel was last told
+    // (Capabilities.HelloChanged). The client asks hello again.
+    public const string HelloChanged = "hello.changed";
 }
 
 // Splits sessions into list pages that each fit a message. Every session must already
@@ -645,6 +649,10 @@ public static class Capabilities
     // sessions.subscribe takes patch (live changes as session.patch) and since (resuming without
     // a whole snapshot): docs/protocol/v1-sessions.md, Patches and Resuming.
     public const string SessionsPatch = "sessions.patch";
+    // hello takes { "changes": true }: the host then sends hello.changed on that channel whenever
+    // what hello would say to it changes, and a client needs to ask hello again only rarely
+    // (docs/protocol/v1-sessions.md, hello). Apps asked every 10 s, ~36 hellos a minute (#640).
+    public const string HelloChanged = "hello.changed";
     public const string SessionsAnswer = "sessions.answer";
     public const string SessionsReply = "sessions.reply";
     public const string SessionsStop = "sessions.stop";

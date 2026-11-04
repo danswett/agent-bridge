@@ -115,6 +115,55 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         return [.. hello.GetProperty("result").GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()!)];
     }
 
+    // #640: apps asked hello again every 10 s to see agent-ha-bridge start or stop. A client that
+    // asks is told instead, once for each change, and only that client.
+    [Fact]
+    public async Task A_client_that_asked_hears_hello_changed_once_for_each_change_and_one_that_did_not_hears_nothing()
+    {
+        var time = new FakeTimeProvider();
+        served = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), answers: Answerer(), replies: Replier())
+        {
+            Drivers = drivers,
+            Time = time,
+            ReadOnly = () => probe.Active(),
+        };
+        host.Hub.Handler = served.HandleAsync;
+        var ch = await OpenAsync();
+        var other = await client.Hub.OpenAsync(host.Id);
+        static string[] Offered(System.Text.Json.JsonElement hello) => [.. hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()!)];
+
+        var asked = (await ch.RequestAsync(Ops.Hello, new { changes = true })).GetProperty("result");
+        Assert.Contains(Capabilities.HelloChanged, Offered(asked));
+        Assert.Contains(Capabilities.SessionsReply, Offered(asked));
+        await other.RequestAsync(Ops.Hello, new { });
+
+        // Nothing changed: nothing is said.
+        time.Advance(served.HelloCheck);
+        probe.Reason = "agent-ha-bridge is running for this user";
+        time.Advance(served.HelloCheck);
+        var off = await ch.Events.ReadAsync().AsTask().WaitAsync(Patience);
+        Assert.Equal((Events.HelloChanged, 1L), (off.Name, off.Seq));
+        var now = (await ch.RequestAsync(Ops.Hello, new { changes = true })).GetProperty("result");
+        Assert.DoesNotContain(Capabilities.SessionsReply, Offered(now));
+        Assert.Equal(probe.Reason, now.GetProperty("machine").GetProperty("readOnly").GetString());
+
+        // Still running: said once, not at every look.
+        time.Advance(served.HelloCheck);
+        probe.Reason = null;
+        time.Advance(served.HelloCheck);
+        var on = await ch.Events.ReadAsync().AsTask().WaitAsync(Patience);
+        Assert.Equal((Events.HelloChanged, 2L), (on.Name, on.Seq));
+        now = (await ch.RequestAsync(Ops.Hello, new { changes = true })).GetProperty("result");
+        Assert.Contains(Capabilities.SessionsReply, Offered(now));
+        Assert.False(now.GetProperty("machine").TryGetProperty("readOnly", out _));
+
+        // Asked again with nothing changed since: nothing more is said.
+        time.Advance(served.HelloCheck);
+        await Task.Delay(200);
+        Assert.False(ch.Events.TryRead(out _));
+        Assert.False(other.Events.TryRead(out _));
+    }
+
     [Fact]
     public async Task Hello_offers_replying_only_while_agent_ha_bridge_is_not_running_and_only_where_a_replier_can_deliver()
     {
@@ -122,14 +171,14 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Contains(Capabilities.SessionsReply, await CapabilitiesAsync(ch));
 
         probe.Reason = "agent-ha-bridge is running for this user";
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], await CapabilitiesAsync(ch));
         probe.Reason = null;
 
         Serve(null, new UnsupportedPlatformReplier());
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], await CapabilitiesAsync(ch));
         Assert.Equal(("refused", "replying is not supported on this platform yet; reply at the machine"), await ReplyAsync(ch, "hello"));
         Serve(null, Replier(platform: false));
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], await CapabilitiesAsync(ch));
         Assert.Equal("refused", (await ReplyAsync(ch, "hello")).Outcome);
         Serve(null, null);
         Assert.Equal(("refused", "this host does not take replies; reply at the machine"), await ReplyAsync(ch, "hello"));
@@ -579,7 +628,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Contains(Capabilities.SessionsAttach, offered);
 
         probe.Reason = "agent-ha-bridge is running for this user";
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], await CapabilitiesAsync(ch));
         probe.Reason = null;
 
         // Without a store the ops are unknown, as on a host that predates them.

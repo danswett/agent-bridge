@@ -501,6 +501,41 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => watching.Can(Capabilities.SessionsAnswer) && watching.Status?.AgentHaBridge is null, "answering to come back");
     }
 
+    // #640: every app asked every host again every 10 s, ~36 hellos a minute at a host from other
+    // machines. A host that says when hello changes is asked again when it says so.
+    [Fact]
+    public async Task A_host_that_says_when_hello_changes_is_asked_again_when_it_says_so_and_not_every_few_seconds()
+    {
+        // Another machine's host: no host.* ops, which this machine's own host is still asked
+        // for every few seconds.
+        await using var fresh = new FakeHost();
+        fresh.Capabilities.Remove(HostOps.Capability);
+        fresh.Capabilities.Remove(HostOps.AgentReadinessCapability);
+        fresh.Capabilities.Add(Capabilities.HelloChanged);
+        fresh.Start();
+        await using var watching = new HostConnection(ct => LocalClient.ConnectAsync(fresh.Endpoint, TimeSpan.FromSeconds(1), ct), new LockedDispatcher())
+        {
+            RetryDelay = TimeSpan.FromMilliseconds(100),
+            CapabilityRefresh = TimeSpan.FromMilliseconds(100),
+            ChangesFallback = TimeSpan.FromHours(1),
+        };
+        watching.Start();
+        await Wait.UntilAsync(() => watching.State == LinkState.Connected && watching.Can(Capabilities.SessionsAnswer), "the first hello");
+        // Ten refreshes' worth: a host that doesn't say would have been asked again by now.
+        await Task.Delay(1000);
+        var hellos = fresh.Sent(Ops.Hello);
+        Assert.Single(hellos);
+        Assert.True(hellos[0].GetProperty("changes").GetBoolean());
+
+        // agent-ha-bridge started there: the host says so, and is asked what it offers now.
+        var readOnly = new HelloResult(1, new MachineInfo("host-id", "Test PC", "windows", "0.1.0"), [Capabilities.SessionsRead, Capabilities.HelloChanged]);
+        fresh.On(Ops.Hello, _ => readOnly);
+        await fresh.SendAsync(Events.HelloChanged, new { });
+
+        await Wait.UntilAsync(() => !watching.Can(Capabilities.SessionsAnswer), "answering to be taken away");
+        Assert.Equal(2, fresh.Sent(Ops.Hello).Count);
+    }
+
     [Fact]
     public async Task A_host_restarted_with_usage_off_leaves_no_usage_behind()
     {

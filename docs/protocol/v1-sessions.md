@@ -166,7 +166,7 @@ it calls `sessions.subscribe` again.
 
 ### `hello`
 
-Request `data`: `{}`. Result:
+Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says changes (below). Result:
 
 ```json
 {
@@ -177,12 +177,22 @@ Request `data`: `{}`. Result:
 ```
 
 `machine.id` is the host's device id (S4). `os` is `windows`, `macos` or `linux`. `machine` also carries `dev` and `sessions`, for a status line ([v1-usage.md](v1-usage.md#machine-status)), and `readOnly` while the machine takes nothing from other devices: because its config makes it read-only (`delivery.readOnly`, [host-config.md](../host-config.md)), or because agent-ha-bridge runs there for the same user (design G5). It is the reason, in words, which a client shows on the machine's status line and on its read-only questions. Absent otherwise. The `readOnly` agent-ha-bridge gives and the capabilities it takes away (below) come from one look at it, at most 2 s old, shared by hellos in that time (#607). Nothing is acted on from that look: an answer, reply, stop, launch or update looks again immediately before it acts, and is refused with the reason if agent-ha-bridge started meanwhile. `machine.instance`, when present, names this run of the host: it is new each time the host starts and the same on every connection to that run, so a client can tell a reconnect from a restart before sending a request again that only the first run remembers (a reply, an answer or a launch, `session.launch`, whose outcome was lost).
+
+**Changes (`hello.changed`).** What hello says changes without a new connection: agent-ha-bridge starting or stopping (G5) takes answering, replying, stopping and launching away or gives them back, with `readOnly`; `update` comes and goes. A client used to ask hello again every 10 s to see it, on every connection: about 36 hellos a minute at a host from the account's other machines' Windows apps (#640). Of a host that offers `hello.changed`, a client asks `{ "changes": true }` in its hello, and from then on, for as long as that channel is open, the host sends the event
+
+```json
+{"ev": "hello.changed", "seq": 12, "data": {}}
+```
+
+once whenever `machine.readOnly` or `capabilities` would differ from what it last told that channel, and the client asks hello again (with `changes` again, which is what it was last told from then on). The event carries nothing more on purpose: what a channel's hello says depends on who is asking (a pinned peer's role, an agent on the pipe), and only hello itself says it. The host looks every 10 s, as often as clients asked before; other `machine` fields (`sessions`, say) changing alone send nothing. A client that asked still asks hello again now and then (the Windows app: every 5 min of another machine's host; its own host, which it also asks `host.status`, every 10 s over the pipe as before), in case it missed a change; one that did not ask, or a host that does not offer `hello.changed` (which ignores `changes`), is asked as before. Like every event it is numbered in the channel's `seq`. Nothing is acted on from it: every op is checked afresh when it arrives.
+
 `capabilities` lists what this host supports, and a client hides anything missing:
 
 | Capability | Ops |
 |---|---|
 | `sessions.read` | `sessions.list`, `session.get`, `sessions.subscribe` |
 | `sessions.patch` | `sessions.subscribe` takes `patch` and `since`: live changes as `session.patch`, only what changed ([Patches](#patches-sessionpatch)), and a reconnect to the same run of the host sent only the sessions that changed meanwhile ([Resuming](#resuming-without-a-snapshot)). Without it, or without asking, a client gets whole upserts and whole snapshots as before |
+| `hello.changed` | `hello` takes `{ "changes": true }`, and the host then sends `hello.changed` on that channel when its `readOnly` or capabilities change ([Changes](#hello)). Without it, a client asks hello again to see a change |
 | `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
 | `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box |
 | `sessions.attach` | `attachment.start`, `attachment.chunk`, `attachment.discard`, and `attachments` on `session.reply` ([Attachments](#attachments)). Offered only with `sessions.reply`, by a host that can stage files for the agent. Without it a client offers no way to attach |
