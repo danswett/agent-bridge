@@ -63,6 +63,13 @@ after a newer one. So the last `presence` a device has received is the account a
 two in a row are in the order things happened. (Before #151 they could arrive out of order, and an
 older one arriving last listed a machine forgotten a moment earlier until the next change.)
 
+The .NET transport publishes both lists together as `RelayClient.Snapshot`. Readers that
+infer account membership, including host usage sharing and the app's fleet, capture that
+snapshot once rather than read `Presence` and `Known` separately: those reads could straddle
+a reconnect and briefly mistake the returning host for a forgotten one (#206). A captured
+snapshot remains unchanged by later messages. Its `Known` stays null when absent on the
+wire, so an older relay never causes cached usage to be forgotten.
+
 ## `forget` and `forget-result`
 
 ```json

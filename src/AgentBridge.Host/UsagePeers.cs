@@ -204,7 +204,8 @@ public sealed class UsagePeers : IAsyncDisposable
         var report = Read<UsageReport>(await ch.RequestAsync(UsageProtocol.Get, new UsageRequest { Shared = shared }, Wait, cancellationToken));
         // Still a host of the account now: one that left, or connected again as something else,
         // while it was being asked is not believed.
-        if (l.Relay.Presence.FirstOrDefault(p => p.Id == peer.Id) is not { Kind: HostKind } now) { return "left while being asked"; }
+        var snap = l.Relay.Snapshot;
+        if (snap.Presence.FirstOrDefault(p => p.Id == peer.Id) is not { Kind: HostKind } now) { return "left while being asked"; }
         if (Trust?.HasRole(ch, TrustedPeerStore.Host) == false) { return "is no longer a pinned host"; }
         // Nor what it passes on from a machine the account has since forgotten (it may not have
         // heard yet). Machines that are only offline are still the account's.
@@ -213,7 +214,7 @@ public sealed class UsagePeers : IAsyncDisposable
         {
             agents = agents.Where(a => a?.ReadBy is not { } by || by.Id == me || trust.HasRole(by.Id, TrustedPeerStore.Host));
         }
-        if (Members(l.Relay.Snapshot) is { } members) { agents = agents.Where(a => a?.ReadBy is not { } by || members.Contains(by.Id)); }
+        if (Members(snap) is { } members) { agents = agents.Where(a => a?.ReadBy is not { } by || members.Contains(by.Id)); }
         // For the account this connection was signed in as: an answer that arrives after the host
         // signed in to another one is not taken for it.
         var took = store.Take(agents, new UsageReader(peer.Id, now.Name), l.Relay.AccountId is { Length: > 0 } a ? a : null);

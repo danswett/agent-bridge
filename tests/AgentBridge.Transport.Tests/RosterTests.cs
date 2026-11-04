@@ -15,6 +15,22 @@ public class RosterTests
 {
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
 
+    static async Task WhileSamplingAsync(Func<CancellationToken, Task> sample, Func<Task> action)
+    {
+        using var stop = new CancellationTokenSource();
+        var reader = Task.Run(() => sample(stop.Token));
+        Exception? failure = null;
+        try { await action(); }
+        catch (Exception e) { failure = e; throw; }
+        finally
+        {
+            await stop.CancelAsync();
+            try { await reader; }
+            // A sampler failure must not hide the reconnect or wait failure.
+            catch (Exception) when (failure is not null) { }
+        }
+    }
+
     static async Task<KnownMachine> UntilKnownAsync(Device d, string id)
     {
         KnownMachine? hit = null;
@@ -140,35 +156,75 @@ public class RosterTests
         var gone = await relay.ConnectAsync(token, "desk", "host");
         await LeaveAsync(relay, gone, app);
         await UntilKnownAsync(app, gone.Id);
+        var before = app.Relay.Snapshot;
 
         // Read as a usage poll reads it, over and over while the host comes back (#206): each
         // snapshot's two lists are one presence message's, so the host is never in neither.
-        using var stop = new CancellationTokenSource();
         var neither = 0;
         var samples = 0;
         var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var reader = Task.Run(() =>
+        var online = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await WhileSamplingAsync(async stop =>
         {
-            reading.TrySetResult();
             while (!stop.IsCancellationRequested)
             {
                 var snap = app.Relay.Snapshot;
-                if (snap.Presence.All(p => p.Id != gone.Id) && snap.Known?.Any(k => k.Id == gone.Id) != true) { neither++; }
+                if (snap.Presence.Any(p => p.Id == gone.Id)) { online.TrySetResult(); }
+                else if (snap.Known?.Any(k => k.Id == gone.Id) != true) { neither++; }
                 samples++;
+                reading.TrySetResult();
+                await Task.Yield();
             }
+        }, async () =>
+        {
+            await reading.Task.WaitAsync(Patience);
+            await using var again = await relay.ConnectAsync(token, "desk", "host", gone.Key);
+            await app.Relay.WaitForPeerAsync(p => p.Id == gone.Id, Patience);
+            await online.Task.WaitAsync(Patience);
+            var now = app.Relay.Snapshot;
+            Assert.Contains(now.Presence, p => p.Id == gone.Id);
+            Assert.DoesNotContain(now.Known!, k => k.Id == gone.Id);
         });
-        // Reading before the host starts back, so the moment it comes online is among the samples.
-        await reading.Task;
-        await using var again = await relay.ConnectAsync(token, "desk", "host", gone.Key);
-        await app.Relay.WaitForPeerAsync(p => p.Id == gone.Id, Patience);
-        await stop.CancelAsync();
-        await reader;
 
         Assert.True(samples > 0);
         Assert.Equal(0, neither);
-        var now = app.Relay.Snapshot;
-        Assert.Contains(now.Presence, p => p.Id == gone.Id);
-        Assert.DoesNotContain(now.Known!, k => k.Id == gone.Id);
+        Assert.DoesNotContain(before.Presence, p => p.Id == gone.Id);
+        Assert.Contains(before.Known!, k => k.Id == gone.Id);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_failed_reconnect_cancels_and_awaits_the_sampler_without_hiding_its_failure(bool samplerFails)
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failure = new IOException("reconnect failed");
+        var operation = WhileSamplingAsync(async stop =>
+        {
+            using var registration = stop.Register(() => cancelled.TrySetResult());
+            started.TrySetResult();
+            await finish.Task;
+            if (samplerFails) { throw new InvalidOperationException("sampler failed"); }
+        }, async () =>
+        {
+            await started.Task.WaitAsync(Patience);
+            throw failure;
+        });
+
+        try
+        {
+            await cancelled.Task.WaitAsync(Patience);
+            Assert.False(operation.IsCompleted);
+        }
+        finally
+        {
+            finish.TrySetResult();
+            try { await operation; }
+            catch (Exception) { }
+        }
+        Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => operation));
     }
 
     [Fact]

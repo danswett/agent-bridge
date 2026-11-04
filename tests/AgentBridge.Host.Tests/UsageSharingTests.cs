@@ -428,6 +428,23 @@ public sealed class UsageSharingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_relay_without_a_roster_does_not_forget_cached_usage_of_offline_machines()
+    {
+        await using var older = await TestRelay.StartAsync(o => o.Roster.Backend = "off");
+        var device = await older.ConnectAsync(older.TokenFor(1, "octo"), "Desk", "host");
+        await Wait.UntilAsync(() => device.Relay.Snapshot.Presence.Any(p => p.Id == device.Id), "the older relay's presence", Patience);
+        var store = PeerUsage.Load(null, device.Id, device.Relay.AccountId, time);
+        var offline = new UsageReader(Id('a'), "Offline laptop");
+        Assert.Equal(1, store.Take([Claude(12, Now)], offline));
+        await using var peers = new UsagePeers(store, device.Id, time: time);
+        peers.Attach(device.Relay, device.Hub);
+
+        Assert.Null(device.Relay.Snapshot.Known);
+        Assert.Equal(0, await peers.PassAsync());
+        Assert.Equal(offline.Id, Assert.Single(store.Entries).ReadBy!.Id);
+    }
+
+    [Fact]
     public async Task A_reading_taken_by_a_machine_the_account_has_forgotten_is_neither_kept_nor_taken_from_another_host()
     {
         var desk = await HostAsync("Desk", [() => Copilot(40, Now)]);
