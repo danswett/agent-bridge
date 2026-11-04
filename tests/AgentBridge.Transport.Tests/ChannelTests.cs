@@ -85,6 +85,8 @@ public class ChannelTests
             var reply = await ch.RequestAsync("ping");
             Assert.True(reply.GetProperty("ok").GetBoolean(), reply.GetRawText());
             Assert.True(reply.GetProperty("result").GetProperty("at").GetInt64() > 0);
+            // Shaped as any response is, answered in the handshake or not.
+            Assert.Equal(1, reply.GetProperty("re").GetInt64());
             var trips = RoundTrips([.. senders]);
             await app.Hub.CloseAsync(ch);
             return (trips, ch);

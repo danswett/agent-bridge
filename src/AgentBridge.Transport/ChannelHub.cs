@@ -365,11 +365,7 @@ public sealed class ChannelHub
             if (reply.Length + NoiseConst.PubLen + NoiseConst.TagLen > NoiseConst.MaxMessage) { reply = Intro(true); }
             // The opener gave up meanwhile (its Close came while the answer was worked out).
             if (ch.Closed.IsCompleted) { return; }
-            var message = ch.Handshake.WriteMessage(reply);
-            // Open before the reply leaves, so the opener's first request, which only the reply
-            // lets it send, finds it open. A reply that fails to send ends it (Forget below).
-            ch.Ready.TrySetResult();
-            await SendAsync(ch, ChannelKind.IkMsg2, message);
+            await ch.SendReplyAsync(ChannelKind.IkMsg2, () => ch.Handshake.WriteMessage(reply));
             Accepted?.Invoke(ch);
         }
         catch (Exception e)

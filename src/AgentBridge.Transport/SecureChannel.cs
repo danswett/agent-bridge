@@ -104,8 +104,10 @@ public sealed class SecureChannel : IProtocolChannel
         // Any other first request drops that answer, which would be older than what it asks.
         if (Interlocked.Exchange(ref early, null) is { Response: { } answer } asked && asked.Op == op && asked.Data.AsSpan().SequenceEqual(SerializeData(data)))
         {
-            Interlocked.Increment(ref nextRequest);
-            return (answer, -1);
+            // As the response would have been: with its re.
+            var response = new System.Text.Json.Nodes.JsonObject { ["re"] = Interlocked.Increment(ref nextRequest) };
+            foreach (var p in answer.EnumerateObject()) { response[p.Name] = System.Text.Json.Nodes.JsonNode.Parse(p.Value.GetRawText()); }
+            return (JsonSerializer.SerializeToElement(response), -1);
         }
         var id = Interlocked.Increment(ref nextRequest);
         var tcs = new TaskCompletionSource<(JsonElement, long)>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -205,6 +207,29 @@ public sealed class SecureChannel : IProtocolChannel
             hub.Forget(this, gone);
             throw gone;
         }
+    }
+
+    // An IK responder's reply, which makes the transport keys: written and sent under the send
+    // lock, as the relay takes it, so nothing this side sends (an event, hello.changed) can be
+    // encrypted before it or leave ahead of it, which the opener could not read (its first nonce
+    // missed, nothing after would decrypt). Checked as a transport message is: still allowed, not
+    // closed. Open from the moment it is written, so the opener's first request, which only it
+    // lets the opener send, finds the channel open.
+    internal async Task SendReplyAsync(ChannelKind kind, Func<byte[]> write)
+    {
+        await sendLock.WaitAsync();
+        try
+        {
+            await hub.SendAsync(this, kind, () =>
+            {
+                hub.RequirePeer(this);
+                ThrowIfClosed();
+                var message = write();
+                Ready.TrySetResult();
+                return message;
+            }, default);
+        }
+        finally { sendLock.Release(); }
     }
 
     void ThrowIfClosed()
