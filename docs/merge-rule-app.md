@@ -26,6 +26,18 @@ request's workflow can reach the key.
 - Reading pull requests, checks, workflow runs and labels stays with the workflow's own
   read-only `GITHUB_TOKEN`; the App's token is used only to post (`MERGE_RULE_POST_TOKEN`).
 
+## When Actions is down
+
+The App posts `merge-rule` from a workflow, so when GitHub Actions is down (runs queue, or show
+in progress with their jobs done), no verdict is posted and auto-merge stalls. Quality then takes
+over merging automatically with `merge-takeover` ([quality/README.md §4.9](../quality/README.md)).
+When GitHub's status page says Actions isn't operational *and* merge-rule's runs have stalled for
+15 minutes, it adds a temporary pull-request-only admin bypass to ruleset 26510567, keeping a
+backup. It merges only armed, unheld pull requests that pass main's evaluator, with `quality-gate`
+green on the exact head, and posts receipts on #170. When Actions recovers, it removes the bypass
+and verifies the ruleset against `quality/ruleset-main.json`. The App, its key and the ruleset's
+pin on it are untouched throughout.
+
 ## Owner's steps (about 10 minutes, all in the browser)
 
 Create the App:

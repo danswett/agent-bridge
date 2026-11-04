@@ -105,6 +105,8 @@ remain routing references until every active destination is verified.
 - **Quality is the sole merge coordinator**, accepted in
   [the takeover receipt](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6617409924).
   Implementation coordinators, delegates and triage do not merge independently.
+  Each pass of its loop runs `merge-takeover`, which takes over merging while GitHub Actions is
+  down and hands back when it recovers (AGENTS.md rule 4, [quality/README.md §4.9](../quality/README.md)).
 - **A, overall implementation coordinator** (session 50e5b45a, DEV-VM1), retains
   backend implementation, delegates and reviews. Its former merge role ended in
   [the stand-down receipt](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6617290473).

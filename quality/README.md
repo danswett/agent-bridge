@@ -443,6 +443,51 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      coordinator merged by hand, until a GitHub App with only `statuses: write`, whose key only
      `main` can reach (an environment), posted `merge-rule` and the ruleset was pinned to that App
      ([docs/merge-rule-app.md](../docs/merge-rule-app.md)); both hold since 2026-11-04.
+   - **When GitHub Actions is down, Quality takes over merging, and hands back when it recovers**
+     (`agent-bridge-quality merge-takeover`, `MergeTakeoverCommand.cs`). Without Actions, the App
+     can't post `merge-rule`, so auto-merge stalls, as it did from 07:49 PT on 2026-11-04. The
+     Quality session runs one tick of the command on every pass of its loop, from its freshly
+     fetched `origin/main` checkout; like `merge-rule`, it refuses any other checkout unless given
+     `--allow-non-main`. Each tick:
+     - *Observes* two things. One is GitHub's status page (the `Actions` component in
+       `githubstatus.com/api/v2/summary.json`; unreadable counts as unknown). The other is
+       merge-rule's own runs. They have **stalled** when the oldest queued run is 15+ minutes old,
+       or a run has shown in progress for 15+ minutes though every job in it is done. They have
+       **recovered** when a run succeeded in the last 10 minutes and nothing has been queued for 5.
+     - *Enters* only when **both** say Actions is down: the status page isn't `operational`, and
+       merge-rule has stalled. Neither alone is enough, since each has been wrong on its own, and
+       unknown never enters. It *exits* when the status page says `operational` and merge-rule
+       has recovered, on two ticks at least 4 minutes apart. After an exit, it doesn't enter
+       again for 15 minutes unless the stall is already 30 minutes old. A small state file keeps
+       this between ticks (`--state`; by default `%LOCALAPPDATA%\agent-bridge\merge-takeover.json`,
+       or under `$XDG_STATE_HOME` elsewhere).
+     - *On entering*, it first compares the live ruleset (found by `ruleset-main.json`'s name)
+       with [`ruleset-main.json`](ruleset-main.json): target, enforcement, conditions and rules,
+       ignoring server-only fields and the empty or default parameters GitHub fills in. If they
+       differ, or the ruleset already has a bypass actor, it refuses, changes nothing and exits 1.
+       Otherwise it saves a backup beside the state file, PUTs the ruleset with exactly one
+       bypass actor (repository role 5, admin, in `pull_request` mode, so admins can merge a pull
+       request past the rules but not push to main), reads it back to verify, and posts a
+       receipt on #170 with the start time, the evidence and the rules below.
+     - *While in takeover*, it merges at most one pull request a tick, and none outside a
+       takeover. A pull request qualifies only if it is open, not a draft, into main, has
+       auto-merge armed (the session's intent) and no `hold` or `do-not-merge` label, 0 unresolved
+       threads and `MERGEABLE`. It must also pass main's evaluator in process (the verdict
+       `merge-rule --pr <n>` gives, main green and the independent-review receipt included), with
+       `quality-gate` a success on the head the evaluator judged. The `merge-rule` status itself
+       counts neither way, as always. The merge is `gh pr merge <n> --squash --admin
+       --match-head-commit <judged sha>`. Then the next tick judges the rest again on the new main.
+     - *On exiting*, it PUTs the ruleset with no bypass actors and reads it back. It must match
+       `ruleset-main.json` with 0 bypass actors. It then posts "takeover ended" with how long the
+       takeover lasted and what it merged. If the check fails, it exits 1 and asks the owner on
+       #170, and does nothing more until the ruleset is right again. After 12 hours it stays in
+       takeover, but asks the owner once to confirm.
+     - `--dry-run` prints the observation, the decision and what it would do, and writes nothing:
+       no PUT, comment, merge or state.
+     - Its limit: sessions share one GitHub account, so while the bypass is on, any admin session
+       could merge past the ruleset too. That is covered by convention (only Quality merges, and
+       AGENTS.md rule 4 tells sessions to change nothing), and by the takeover being short and
+       receipted at both ends on #170.
 
 Later, once per-test coverage is collected (§5), selection can narrow from projects to
 individual test classes in the slow projects. Project-level selection already captures most

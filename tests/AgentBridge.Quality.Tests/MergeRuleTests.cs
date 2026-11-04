@@ -1022,17 +1022,17 @@ public class MergeRuleTests
             workflow_runs = runs.Select(r => new { id = r.Id, head_sha = $"c{r.Id}".PadRight(40, '0'), status = r.Status, conclusion = r.Conclusion, run_attempt = r.Attempt }),
         });
 
-    static object Suite(string slug, object? run, string status, string? conclusion, params object[] checkRuns) =>
+    internal static object Suite(string slug, object? run, string status, string? conclusion, params object[] checkRuns) =>
         new { app = new { slug }, workflowRun = run, status, conclusion, checkRuns = new { nodes = checkRuns } };
 
     static object TruncatedSuite(string slug, object run, params object[] checkRuns) =>
         new { app = new { slug }, workflowRun = run, status = "COMPLETED", conclusion = "SUCCESS", checkRuns = new { totalCount = 70, nodes = checkRuns } };
 
-    static object Workflow(long id, string name) => new { databaseId = id, @event = "pull_request", workflow = new { name } };
+    internal static object Workflow(long id, string name) => new { databaseId = id, @event = "pull_request", workflow = new { name } };
 
-    static object Job(long id, string name, string status, string? conclusion = null) => new { databaseId = id, name, status, conclusion };
+    internal static object Job(long id, string name, string status, string? conclusion = null) => new { databaseId = id, name, status, conclusion };
 
-    static string GraphQLPullRequest(string head, string? commitOid = null, (string State, string Description)? mergeRule = null, string[]? labels = null, string receiptCreator = "danswett", string mergeRuleCreator = "github-actions", int number = 42, object[]? extraSuites = null, object[]? extraStatuses = null, int? labelsTotal = null, string title = "A change", string reviewBody = GenuineReview)
+    internal static string GraphQLPullRequest(string head, string? commitOid = null, (string State, string Description)? mergeRule = null, string[]? labels = null, string receiptCreator = "danswett", string mergeRuleCreator = "github-actions", int number = 42, object[]? extraSuites = null, object[]? extraStatuses = null, int? labelsTotal = null, string title = "A change", string reviewBody = GenuineReview)
     {
         var statuses = new List<object>
         {
