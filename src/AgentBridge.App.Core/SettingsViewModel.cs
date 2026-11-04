@@ -440,7 +440,8 @@ public sealed class SettingsViewModel : Observable
     public Task CheckAgentsAsync() => RunAsync(async () =>
     {
         if (!HostRunning || !host.Can(HostOps.AgentReadinessCapability)) { throw new InvalidOperationException(AgentsState); }
-        await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromSeconds(20));
+        // A fresh check can wait for one active scan before its own four bounded probes.
+        await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromMinutes(1));
         await host.RefreshStatusAsync();
     });
 
@@ -462,7 +463,7 @@ public sealed class SettingsViewModel : Observable
         if (!result.Completed) { throw new InvalidOperationException(result.Detail); }
         if (host.Can(HostOps.AgentReadinessCapability))
         {
-            await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromSeconds(20));
+            await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromMinutes(1));
             await host.RefreshStatusAsync();
         }
     });

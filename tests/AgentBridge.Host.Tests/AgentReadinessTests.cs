@@ -222,17 +222,20 @@ public sealed class AgentReadinessTests : IDisposable
         var beforeSetup = service.RefreshAsync();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
         Task<AgentReadinessReport> afterSetup;
+        Task<AgentReadinessReport> overlappingCheck;
         try
         {
             new IntakeState(f.Runtime, Path.Combine(f.Root, "bridge"), "test", f.Time.GetUtcNow()) { Homes = Homes }.Save(Profile);
             Directory.CreateDirectory(f.ClaudeHome);
             File.WriteAllText(Path.Combine(f.ClaudeHome, "agent-bridge-owner.json"), JsonSerializer.Serialize(new { version = 1, profile = Profile }));
             afterSetup = service.RefreshAsync(fresh: true);
+            overlappingCheck = service.RefreshAsync(fresh: true);
         }
         finally { release.TrySetResult(new CommandResult(true, false, 0, "1.2.3")); }
-        var reports = await Task.WhenAll(beforeSetup, afterSetup).WaitAsync(TimeSpan.FromSeconds(30));
+        var reports = await Task.WhenAll(beforeSetup, afterSetup, overlappingCheck).WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("owned setup record", Agent(reports[1], "claude").Hooks.Detail);
+        Assert.Contains("owned setup record", Agent(reports[2], "claude").Hooks.Detail);
         Assert.Equal(2, commands.Calls.Count);
     }
 

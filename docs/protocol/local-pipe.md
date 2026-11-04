@@ -210,6 +210,9 @@ executables and hook ownership, but explicitly report version probing unavailabl
 equivalent process isolation is implemented. A failed version probe does not make an
 installed CLI missing. A read-only host (including one beside the
 legacy bridge) runs no version commands and reports hook setup blocked.
+Explicit app checks require a scan that started after the request; queued requests may
+share that scan, but cannot reuse an older in-flight scan after setup changes. Settings
+allows one minute for an active scan plus this fresh scan, including probe cleanup.
 The guard is checked again before each process: if the legacy bridge starts during a
 scan, subsequent commands are blocked. Earlier observations remain evidence from before
 that transition; `readOnlyReason` reports the reason observed at scan completion.
