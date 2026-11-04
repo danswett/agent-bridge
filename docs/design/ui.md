@@ -1206,6 +1206,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
         Deny, each its own press.
   - **One card per question id:** an update to the same question changes its card in place,
     and never adds a second.
+  - **Permissions asked together come one at a time** (#690): Copilot asks one for each of a
+    batch of parallel tool calls. The card shows the earliest, with "1 of *N* permissions
+    waiting" under its header (`question.waiting`), on every surface: the PWA, the Windows app
+    and Home Assistant's card. The next is a new question with its own id once this one is
+    answered, so a second tap or a stale button never answers it.
   - **An approval is drawn as it runs,** since Approve once allows all of it: exactly as
     written, in the code face, never read as Markdown, with its hidden characters,
     right-to-left letters and bare carriage returns escaped and the code notes beside it, and

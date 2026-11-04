@@ -184,10 +184,17 @@ option, so Enter is never pressed and no option is found by position:
 Bound to the request. The question's id is `<requestId>#<digest>`, the digest a hash of
 the message the client was shown. Immediately before typing, the transcript must show
 that `permission.requested` with no `permission.completed` (and no session abort or
-shutdown) after it, reading exactly as shown (`stale` otherwise), and no other permission
-request or `ask_user` waiting, since the screen shows one prompt at a time and could be
-showing the other (`refused`). The transcript is checked so before the screen is read and
-again after, so what the screen showed was this request while it was still waiting. A
+shutdown) after it, reading exactly as shown (`stale` otherwise), and no `ask_user`
+waiting (`refused`). Copilot can have several permission requests waiting at once, one for
+each of a batch of parallel tool calls, and draws one at a time; the session lists the
+earliest, saying how many wait (#690). The screen, not the order asked, says which is
+drawn: the answer is `refused`, naming the other ("the machine is showing a different
+permission (read, request ed05e9d7)"), if any other waiting request's subject is drawn as
+near the options as this one's or nearer, if another cannot be read or has nothing to look
+for on the screen, or if this request is not the earliest still waiting. It is never typed
+for the request on screen instead. The transcript is checked so before the screen is read
+and again after, so what the screen showed was this request while it was still waiting,
+and no request that arrived meanwhile is drawn in its place. A
 request to run outside the sandbox, a kind not listed
 above, or one whose details cannot be read is `answerAtMachine`.
 

@@ -726,10 +726,18 @@ not go on to try something else unattended. The session is then idle, and a repl
 it what to do instead. A deny takes no text, so nothing can be typed into the prompt's
 message box.
 
-Immediately before typing, the host checks the transcript (that request still waiting and
-reading as shown, and no other prompt waiting that the screen could be showing instead),
-then reads the session's screen and finds the option by its label, never by its position,
-under rows showing what the prompt is for, and checks the transcript again. The key goes
+Copilot can have several permission requests waiting at once, one for each of a batch of
+parallel tool calls, and draws one of them at a time. The host lists the earliest still
+waiting, with `waiting` saying how many there are, and the next as a new question once it is
+answered. Immediately before typing, the host checks the transcript (that request still
+waiting and reading as shown, and no `ask_user` waiting beside it), then reads the session's
+screen and finds the option by its label, never by its position, under rows showing what the
+prompt is for, and checks the transcript again. The screen, not the order asked, says which
+request is shown: an answer is `refused`, naming the other ("the machine is showing a
+different permission (read, request ed05e9d7)"), when another waiting request's subject is
+drawn as near the options as this one's or nearer, when another cannot be read or looked for
+on the screen, and when this request is not the earliest still waiting. It is never retargeted
+to the request on screen. The key goes
 only if those rows and the options, and which is highlighted, still read the same at the
 moment it is typed.
 `permissions.remoteApproval` in the host's own settings turns this off on a machine
@@ -1905,6 +1913,7 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `answerAtMachine` | bool? | No host can answer this prompt from another device: a Copilot permission request of a kind no host drives (or any, on a host without `sessions.approve`), a Claude permission prompt, a Codex approval seen only in its rollout or already typed into once. It still has its fields, so a client can say what it asks, but a client shows no controls for it, says to answer it at the machine ("Waiting on you · answer at the machine", ui.md §2.2), and a `session.answer` for it is `refused` |
 | `escaped` | object? | An approval the host showed any character of as an escape: `shown`, `marks` and `approve` ([Escaped approvals](#escaped-approvals)). Approve on it takes the escaped-command confirmation; Deny does not. Absent when nothing was escaped |
 | `agent` | string? | The sub-agent that asked, by its `subagents` id, when it is not the session's own question (`waitingOn` names it too). A Copilot permission prompt is the CLI's one dialog whoever asked, and is answered the same way. A sub-agent's `ask_user` is always `answerAtMachine`: delivery types only into the main agent's, so nothing proves where the keys would land. And while a permission prompt or a sub-agent's question waits beside it, the session's own Copilot `ask_user` is `answerAtMachine` too, since the CLI may be showing the other one; a host also checks the transcript for a pending permission prompt just before typing an answer |
+| `waiting` | int? | How many permission prompts the session has waiting, this one included, when more than one is (#690). Copilot asks one for each of a batch of parallel tool calls and shows them one at a time; the host lists the earliest still waiting, so this is always the first of them. A client says so ("1 of 4 permissions waiting"). The next comes as a new question with its own `id` once this one is answered, so an answer to this one never reaches it. Absent with one |
 
 ### Field
 

@@ -90,7 +90,7 @@ public static partial class HaDecision
         // session reported it (Misleads): neutralising template braces adds a zero-width space,
         // which is the card's own. Who asks leads the card's Markdown as literal text, so it cannot
         // open a fence or a link around the prompt.
-        var asks = $"{HaPayloads.NeutraliseTemplates(MarkdownLiteral(Titled(question, session)))} asks:\n\n";
+        var asks = Queue(question) + $"{HaPayloads.NeutraliseTemplates(MarkdownLiteral(Titled(question, session)))} asks:\n\n";
         var held = Misleads(question, session) ? Misleading : HeldByHost(question) ?? Unshaped(question, session.Agent) ?? TooLongToShow(question, asks.Length);
         return Plan(question with { Message = asks + Shown(question, held, asks.Length) }, session.Agent, held) with { Agent = agent, AgentName = name, Asker = asker };
     }
@@ -125,8 +125,9 @@ public static partial class HaDecision
     // The host's question as the card should show it.
     public static DecisionPlan Plan(Question question, AgentKind agent)
     {
-        var held = Misleads(question) ? Misleading : HeldByHost(question) ?? Unshaped(question, agent) ?? TooLongToShow(question, 0);
-        return Plan(question with { Message = Shown(question, held, 0) }, agent, held);
+        var queue = Queue(question);
+        var held = Misleads(question) ? Misleading : HeldByHost(question) ?? Unshaped(question, agent) ?? TooLongToShow(question, queue.Length);
+        return Plan(question with { Message = queue + Shown(question, held, queue.Length) }, agent, held);
     }
 
     // An approval the host itself holds at the machine, or had to cut, is held here for the same
@@ -174,6 +175,12 @@ public static partial class HaDecision
     // What an approval's escapes stand for, in words above it (ui.md §6.4): Approve once is offered
     // for it, and an escape can be read past while its character still acts (PowerShell ends a `#`
     // comment at a bare CR, shown as \u000D on the comment's line).
+    // Copilot asked several permissions at once and shows them one at a time, this one first
+    // (#690): each is its own question, published and notified under its own id, so a tap meant
+    // for this one never answers the next.
+    static string Queue(Question question) =>
+        question.Kind == QuestionKind.Approval && question.Waiting is > 1 and var n ? $"_1 of {n} permissions waiting_\n\n" : "";
+
     static string Notes(Question question) =>
         question.Kind == QuestionKind.Approval && ShownText.Notes(question.Message) is { Count: > 0 } notes ? $"_{string.Join(" · ", notes)}_\n\n" : "";
 
