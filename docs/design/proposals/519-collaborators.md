@@ -231,9 +231,15 @@ The card is built to look unlike a tool approval:
 - A **From / To** block: *From* ◇ external · an agent on *WS-LAPTOP* (their name) ·
   **@welshofer**, with only the login bold, and their session title quoted and secondary;
   *To* your session, agent, machine and its mode.
-- The **full** message text in the mono face, escaped exactly like approval commands (ui.md
-  §6.4), never Markdown-rendered, in a scrollable box with a visible scrollbar, and
-  *Shown exactly as sent, 294 characters. Not formatted.*
+- The **full** message **exactly as the host will type it** (agent-principals §5.7): one line,
+  the host-built label first (*[Agent Bridge · from an agent on Wes · not typed by your user ·
+  external: @welshofer]*, agent-principals §6.4, where *Wes* is the name you gave the link), then the words with the delivery escapes
+  applied, so a copied marker reads *(Agent Bridge* and a mention's @ reads ＠. The label holds
+  only fields this host established, the link name and the verified login; *WS-LAPTOP* and
+  *@octo-dev*, which @welshofer only reports, stay off it. In
+  the mono face, escaped exactly like approval commands (ui.md §6.4), never Markdown-rendered, in
+  a scrollable box with a visible scrollbar, and *Exactly as it will be typed, label included:
+  421 characters. Not formatted.* The count is of that whole text, not the sender's original.
 - One consequence sentence. Allow-all: *Approving makes this **your** instruction to an
   allow-all session. It can run commands on DESK without asking.* Unknown mode: *Approving
   makes this **your** instruction. Slipgates can't tell whether this session asks before it
@@ -346,7 +352,7 @@ header remain; fills drop. Selected rows use `Highlight` / `HighlightText` as to
   WS-LAPTOP*; the quoted title follows as a description.
 - The external-message approval is announced like any Needs you item, with the title first:
   *Message from an external agent, from @welshofer, held, 52 minutes left.* (from the host's expiry, like the card) The message box is
-  a focusable, scrollable region named *Message text, 294 characters*.
+  a focusable, scrollable region named *Message text as it will be typed, 421 characters*.
 - The revocation notice is announced politely once (*@welshofer's sessions are hidden.
   Revoked by @welshofer.*), not as an alert.
 - The filter sheet and chips are radio groups; the window segments are a radio group named
@@ -444,8 +450,8 @@ and changes them there, not here:
   allow-all opt-ins and warnings; *Workspaces (pinned now)*; *Who can end this link*; *Add a
   device or a recovery key that can end this link*; *Identity*; *Link code (optional, stronger)*; *Link code (required)*; *Accept with Windows
   Hello*.
-- Approval: *Message from an external agent*; *Held · 52 min left*; *Shown exactly as sent,
-  N characters. Not formatted.*; the allow-all and unknown-mode consequence sentences;
+- Approval: *Message from an external agent*; *Held · 52 min left*; *Exactly as it will be
+  typed, label included: N characters. Not formatted.*; the allow-all and unknown-mode consequence sentences;
   *Deny*, *Approve once*, *Allow @{login} here for…*; *Expired · not delivered*; *Stop
   allowing @{login}*.
 - Revocation: every reason line in §3.7; *@{login}'s sessions are hidden*; *This session is

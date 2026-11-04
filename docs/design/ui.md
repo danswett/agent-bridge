@@ -930,9 +930,15 @@ collaborator item that is yours: a pending question on its target session, count
 - a From / To block: *From* "external · an agent on *machine* (their name) · **@login**", their
   session title quoted below, then its retained origins as the sender's report ("@*login* reports external content from
   @*other*", never stated as fact); *To* your session, its agent, machine and mode;
-- the **whole** message in the code face, escaped and never read as Markdown, exactly as an
-  approval's (§6.4), in a scrolling box with a visible scrollbar, under "Shown exactly as sent, N
-  characters. Not formatted.";
+- the **whole** message **exactly as the host will type it** (`agent-principals.md` §5.7): one
+  line, the host-built label first ("[Agent Bridge · from an agent on *link name* · not typed by
+  your user · external: @*login*]", §6.4), then the words with the delivery escapes already
+  applied (a copied marker typed as "(Agent Bridge", a token-initial @ typed as ＠). The label
+  holds only fields this host established: the name you gave the link and the verified login,
+  never the sender's own machine name or an origin it merely reports. It is in the
+  code face, escaped and never read as Markdown, exactly as an approval's (§6.4), in a scrolling
+  box with a visible scrollbar, under "Exactly as it will be typed, label included: N characters.
+  Not formatted.", N counting that whole text;
 - one consequence line: "Approving makes this **your** instruction to an allow-all session. It
   can run commands on *machine* without asking.", or for an unknown mode "Approving makes this
   **your** instruction. Slipgates can't tell whether this session asks before it runs commands on
@@ -1203,7 +1209,7 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
     message's name starts "External agent message from @*login* on *machine*".
   - A held message is announced as Needs you items are, title first ("Message from an external
     agent, from @*login*, held, 52 minutes left", from the host's expiry, as the card shows); its text is a focusable scrolling region named
-    "Message text, N characters".
+    "Message text as it will be typed, N characters".
   - Revocation is announced once, politely ("@*login*'s sessions are hidden. Revoked by
     @*login*."), never as an alert.
   - The person chips and sheet, and the window segments ("Window"), are radio groups.
