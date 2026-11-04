@@ -140,9 +140,11 @@ public sealed class Receipt : IDisposable
 {
     // What a request's receipt has been through, kept apart from any one view model: a question's
     // is made afresh when its machine's capabilities change, and the quiet window, the dwell, the
-    // stalls and what was announced belong to the request: an announcement still waiting out the
-    // rate limit when its view model goes is said by the next one for the request, and the limit
-    // carries over.
+    // stalls and what was announced belong to the request. So does its announcement's timer: one
+    // still waiting out the rate limit when its view model goes is said by another receipt showing
+    // the request (Voices), and never on a line showing another request (a reply box moved on to
+    // the next reply), which would name that line by the last one's outcome. With no receipt of the
+    // request left, it goes unsaid: a live region is an element, and none is showing it.
     sealed class History
     {
         public TimeSpan Start;
@@ -156,6 +158,8 @@ public sealed class Receipt : IDisposable
         public readonly HashSet<string> Said = [];
         public string? Pending;
         public TimeSpan SaidAt = TimeSpan.MinValue;
+        public ITimer? SayTimer;
+        public readonly List<Receipt> Voices = [];
     }
 
     sealed record ShownLine(string Key, TimeSpan At, ReceiptLine Line, bool InFlight);
@@ -173,7 +177,8 @@ public sealed class Receipt : IDisposable
     Delivery? entry;
     ReceiptLine? instead;
     ITimer? timer;
-    ITimer? sayTimer;
+    // The history of the request this receipt shows, whose announcements it may say.
+    History? voiceOf;
     string? drawn;
     bool disposed;
 
@@ -198,7 +203,15 @@ public sealed class Receipt : IDisposable
     {
         disposed = true;
         timer?.Dispose();
-        sayTimer?.Dispose();
+        Voice(null);
+    }
+
+    void Voice(History? h)
+    {
+        if (h == voiceOf) { return; }
+        voiceOf?.Voices.Remove(this);
+        voiceOf = h;
+        h?.Voices.Add(this);
     }
 
     static History HistoryFor(string request, TimeSpan now)
@@ -235,10 +248,11 @@ public sealed class Receipt : IDisposable
         if (disposed) { return; }
         timer?.Dispose();
         timer = null;
-        if (instead is not null) { Put(instead); return; }
-        if (entry is not { } e) { Put(ReceiptLine.None); return; }
+        if (instead is not null) { Voice(null); Put(instead); return; }
+        if (entry is not { } e) { Voice(null); Put(ReceiptLine.None); return; }
         var t = Now();
         var h = HistoryFor(e.Request, t);
+        Voice(h);
         var inFlight = e.State is DeliveryState.Sending or DeliveryState.Waiting;
         if (!inFlight)
         {
@@ -260,14 +274,12 @@ public sealed class Receipt : IDisposable
         if (t < h.Start + ReceiptTiming.Quiet)
         {
             Put(ReceiptLine.Quiet);
-            Announce(h);
             wake = h.Start + ReceiptTiming.Quiet;
         }
         else if (h.Shown is { InFlight: true } s && s.Key != line.Key && t < s.At + ReceiptTiming.Dwell)
         {
             // The state showing hasn't been up long enough to read: it stays, then the furthest reached.
             Put(s.Line);
-            Announce(h);
             wake = wake is { } w && w < s.At + ReceiptTiming.Dwell ? w : s.At + ReceiptTiming.Dwell;
         }
         else
@@ -305,18 +317,18 @@ public sealed class Receipt : IDisposable
         if (h.Pending is null) { return; }
         var wait = h.SaidAt == TimeSpan.MinValue ? TimeSpan.Zero : h.SaidAt + ReceiptTiming.AnnounceGap - Now();
         if (wait <= TimeSpan.Zero) { Flush(h); }
-        else { sayTimer ??= time.CreateTimer(_ => ui.Post(() => Flush(h)), null, wait, Timeout.InfiniteTimeSpan); }
+        else { h.SayTimer ??= time.CreateTimer(_ => ui.Post(() => Flush(h)), null, wait, Timeout.InfiniteTimeSpan); }
     }
 
-    // Marked said only once it is: a view model gone before its turn leaves it to the next.
+    // The request's timer, not this receipt's: said by whichever receipt shows the request then.
     void Flush(History h)
     {
-        sayTimer?.Dispose();
-        sayTimer = null;
-        if (disposed || h.Pending is not { } text) { return; }
+        h.SayTimer?.Dispose();
+        h.SayTimer = null;
+        if (h.Pending is not { } text) { return; }
         h.Pending = null;
         h.Said.Add(text);
         h.SaidAt = Now();
-        announce(text);
+        if (h.Voices.Count > 0) { h.Voices[^1].announce(text); }
     }
 }

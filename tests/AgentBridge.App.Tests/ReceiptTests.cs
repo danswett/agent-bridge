@@ -218,6 +218,22 @@ public sealed class ReceiptTests
     }
 
     [Fact]
+    public void A_reply_box_moved_on_to_the_next_reply_never_says_the_last_ones_outcome_on_its_line()
+    {
+        using var r = NewReceipt();
+        Show(r, e => e with { Stage = DeliveryProgress.Received });
+        Tick(400);
+        Assert.Equal(["Reply sent"], said);
+        // Delivered inside the second, and the next reply sent before it is said: the line now
+        // shows the next one, and naming it "Reply delivered" would say it had got there.
+        Show(r, e => e with { State = DeliveryState.Done, Outcome = "delivered" });
+        entry = new Delivery { Key = "reply|s1", Request = Guid.NewGuid().ToString(), State = DeliveryState.Sending, Attempts = 1 };
+        Show(r);
+        Tick(1000);
+        Assert.Equal(["Reply sent"], said);
+    }
+
+    [Fact]
     public void An_answer_never_says_Up_next()
     {
         Assert.Equal("Passed to the agent", ReceiptWords.InFlight(true, entry with { Stage = Deliveries.Queued }, null, false).Whole);
