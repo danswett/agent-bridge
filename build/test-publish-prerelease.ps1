@@ -873,7 +873,9 @@ Check 'The Artifact Signing metadata names the account and profile, the Azure CL
         try { New-AppSigningMetadata -Path (Join-Path $scratch 'bad.json') -Endpoint $bad[0] -Account $bad[1] -CertificateProfile $bad[2] } catch { $threw = $true }
         Assert $threw "taken: $($bad -join ', ')"
     }
-} { Remove-Item $scratch -Recurse -Force }
+}
+
+if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
 if (Test-Path $fixtures) { Remove-Item $fixtures -Recurse -Force }
 Remove-Item Env:GH_TOKEN
 if ($failures) { Write-Output "$failures failed"; exit 1 }
