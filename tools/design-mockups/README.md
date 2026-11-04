@@ -25,6 +25,8 @@ machines:
   otherwise change line wrapping. The canvas source keeps its stacks;
 - Roboto Flex for Roboto;
 - Cascadia Mono for the fallback monospace faces. Slipgates Mono itself is real, loaded from `design/fonts/slipgates-mono`.
+- Inter Tight is real too (`@fontsource-variable/inter-tight`): it is the interim wordmark face
+  in docs/design/brand.md, so the lockup boards show true letterforms.
 
 So the images are right about layout, colour, sizes and spacing, but not about the exact
 letterforms. Every OS now uses the same fonts, but rasterization still differs slightly, so
@@ -46,6 +48,18 @@ leaves them out. Render one proposal's boards beside its page by naming their pr
 ```
 node render.js ../../design/canvas ../../docs/design/proposals/253-attention Proposal-253-
 ```
+
+Proposal #536 (the Slipgates brand) renders the same way, then tiles its boards into a contact
+sheet:
+
+```
+node render.js ../../design/canvas ../../docs/design/proposals/536-slipgates-brand Proposal-536-
+node contact-sheet.js ../../docs/design/proposals/536-slipgates-brand proposal-536-
+```
+
+`contact-sheet.js <dir> <prefix> [out.png] [columns]` tiles every `<prefix>*.png` in a folder,
+sorted by name, into `contact-sheet.png` beside them. It uses the same Playwright and Inter as
+the renderer, so it runs offline too.
 
 ## Motion preview
 

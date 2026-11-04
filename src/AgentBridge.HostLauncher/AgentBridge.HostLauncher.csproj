@@ -22,6 +22,8 @@
     <Compile Include="..\AgentBridge.Transport\ProfileFolders.cs" Link="ProfileFolders.cs" />
     <!-- And the product's name, for what its log tells the person to do. -->
     <Compile Include="..\AgentBridge.Protocol\Product.cs" Link="Product.cs" />
+    <!-- And the generated brand constants (design/tokens.json) that Product reads from once #537 adopts them. -->
+    <Compile Include="..\AgentBridge.Protocol\DesignBrand.cs" Link="DesignBrand.cs" />
   </ItemGroup>
 
 </Project>
