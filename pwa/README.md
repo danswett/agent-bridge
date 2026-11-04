@@ -187,7 +187,7 @@ sessions and never moves their rows. An entry leaves when its question does.
   final). A longer approval (an edit's diff, a long command), one with a table, one not shaped
   as a host writes a permission (a fence in its words, words after its command or its opening
   fence, a link, whose words hide where it goes, or a character drawn other than where it runs,
-  such as a bidi control, a zero-width space or a variation selector, or right-to-left letters, which reorder what is
+  such as a bidi control, a zero-width space, a variation selector or a blank-looking space (U+00A0, U+2800, #546), or right-to-left letters, which reorder what is
   drawn around them; a hidden character the entry's line shows as an escape like `\u202E`), or one from Codex (whose command can reach the machine cut short)
   opens its session instead.
 * **A form**, or a question this machine won't take from the phone, opens its session (the
@@ -415,7 +415,8 @@ back to a hidden text area and `execCommand('copy')` where that API is missing o
 
 What is drawn is what runs (#415, ui.md §6.4, the app's #296): every code block and code span
 reads strictly left to right (`dir="ltr"`, `unicode-bidi: isolate`), with bidi controls,
-zero-width, format and other default-ignorable characters, and right-to-left letters drawn as
+zero-width, format and other default-ignorable characters, what draws blank but runs as part of
+a word (every space but U+0020, and U+2800; #546), and right-to-left letters drawn as
 `\uXXXX` escapes (`js/hidden-text.js`, the Needs you lane's rule). Copy takes the escapes as
 drawn. A block says what its escapes stand for, beside Copy: "Contains hidden characters",
 "Contains right-to-left text", or both. A bare carriage return (not one of a CRLF), NEL and the

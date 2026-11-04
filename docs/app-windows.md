@@ -140,7 +140,7 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
   table, code wrapped, shaped as a host writes it: prose, then at most one fenced block ending
   it, its fence naming no language but json or diff, no link, whose words hide where it goes, and no
   character drawn other than where it runs, such as a bidi control, a zero-width space, a
-  variation selector or a right-to-left letter; a hidden character
+  variation selector, a right-to-left letter or a blank-looking space (U+00A0, U+2800, #546); a hidden character
   the entry's line shows as an escape like `\u202E`) since Approve once allows all of it; a
   longer approval, a Codex one, a
   form and anything this app can't answer open the session in the session pane, its row selected; a prompt marked

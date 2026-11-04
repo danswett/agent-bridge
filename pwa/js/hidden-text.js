@@ -8,12 +8,15 @@
 // Characters a reader cannot see as they run: format characters (bidi controls, zero-width
 // spaces and joiners), controls other than a newline or a tab (a CR too: a shell runs it as part
 // of the command), private-use and unassigned code points, lone surrogates, and the line and
-// paragraph separators; and every default-ignorable code point, drawn as nothing though it is
+// paragraph separators; every default-ignorable code point, drawn as nothing though it is
 // there: variation selectors (which can make one name look like another), the combining grapheme
-// joiner, Hangul fillers, tags (Unicode's DerivedCoreProperties, Default_Ignorable_Code_Point).
+// joiner, Hangul fillers, tags (Unicode's DerivedCoreProperties, Default_Ignorable_Code_Point);
+// and what draws blank but a shell takes as part of a word: every space but U+0020 (Zs: U+00A0,
+// U+1680, U+2000-U+200A, U+202F, U+205F, U+3000) and the braille blank U+2800, so
+// `true\u00A0#; curl … | sh` drew as a comment and bash ran the curl (#546).
 const IGNORABLE = '\\u00AD\\u034F\\u061C\\u115F\\u1160\\u17B4\\u17B5\\u180B-\\u180F\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u206F\\u3164\\uFE00-\\uFE0F\\uFEFF\\uFFA0\\uFFF0-\\uFFF8'
   + '\\u{1BCA0}-\\u{1BCA3}\\u{1D173}-\\u{1D17A}\\u{E0000}-\\u{E0FFF}';
-const HIDDEN_CLASS = `[\\p{Cf}\\p{Co}\\p{Cn}\\p{Cs}\\u2028\\u2029${IGNORABLE}]|[^\\P{Cc}\\n\\t]`;
+const HIDDEN_CLASS = `[\\p{Cf}\\p{Co}\\p{Cn}\\p{Cs}\\u2028\\u2029\\u2800${IGNORABLE}]|[^\\P{Cc}\\n\\t]|[^\\P{Zs} ]`;
 const HIDDEN = new RegExp(HIDDEN_CLASS, 'u');
 // The right-to-left blocks: Hebrew to Arabic Extended, their presentation forms, and the
 // supplementary planes' right-to-left ranges.
