@@ -209,29 +209,27 @@ public readonly record struct LookBox(double X, double Y, double Width, double H
 // holding them (the same ones from one look to the next), the window's size, and, for the session
 // view's question, the question's own box in what the innermost scroller scrolls.
 public sealed record AnswerLook(
-    IReadOnlyList<(double X, double Y)> Answers, IReadOnlyList<ScrollerLook> Scrollers, double WindowWidth, double WindowHeight, LookBox? Question = null);
+    IReadOnlyList<(double X, double Y)> Answers, IReadOnlyList<ScrollerLook> Scrollers, double WindowWidth, double WindowHeight, LookBox? Question = null, int Drawn = 0);
 
 // How long the person's own act in their question holds what it lays out as theirs (#491; see
 // AnswerMoves.Theirs). Not a count of frames, and not a fixed moment from the act: the first layout
 // pass of a control shown for the first time (Other's box) can come most of a second after the act
 // on a busy machine, and its later passes a frame or more apart. So the act holds for up to First
 // until the question first lays itself out, then for Then after each pass that does; a move that
-// isn't theirs ends it. The app drawing in the question itself (who asks) holds nothing for Then.
+// isn't theirs ends it, whether or not it held for that read. The app drawing in the question itself
+// (who asks) is never theirs: see AnswerLook.Drawn.
 public sealed class OwnAct
 {
     public static readonly TimeSpan First = TimeSpan.FromSeconds(2);
     public static readonly TimeSpan Then = TimeSpan.FromMilliseconds(300);
 
     DateTimeOffset until = DateTimeOffset.MinValue;
-    DateTimeOffset drawnUntil = DateTimeOffset.MinValue;
 
     public void Acted(DateTimeOffset now) => until = now + First;
 
-    public void Drawn(DateTimeOffset now) => drawnUntil = now + Then;
+    public bool Holds(DateTimeOffset now) => now < until;
 
-    public bool Holds(DateTimeOffset now) => now < until && now >= drawnUntil;
-
-    // After a read made while it held: theirs, the question laid itself out; found, something else moved.
+    // After a read: theirs, the question laid itself out; found, something else moved.
     public void Read(DateTimeOffset now, bool theirs, bool found)
     {
         if (theirs) { until = now + Then; }
@@ -272,8 +270,12 @@ public sealed class AnswerMoves
         if (before is null)
         {
             at = [.. now.Answers];
+            drawing = false;
             return false;
         }
+        // The app drew in the question (who asks): the next move is the app's, however late its
+        // layout pass comes, and whatever reads come between.
+        drawing |= now.Drawn != before.Drawn;
         var (dx, dy) = Scrolled(before, now);
         var moved = now.Answers.Count != at.Length;
         for (var i = 0; i < at.Length && !moved; i++)
@@ -284,8 +286,21 @@ public sealed class AnswerMoves
         }
         if (!moved) { return false; }
         at = [.. now.Answers];
-        Took = own && Theirs(before, now);
+        Took = own && !drawing && Theirs(before, now);
+        drawing = false;
         return !Took;
+    }
+
+    bool drawing;
+
+    // A read with the person's act (OwnAct) at the time: it exempts their own question laying itself
+    // out while it holds, and any move that isn't theirs ends it, exempt or not (a move found while
+    // the app draws who asks, or by the click-time check).
+    public bool Read(AnswerLook now, OwnAct act, DateTimeOffset time, bool exempt)
+    {
+        var found = Read(now, own: exempt && act.Holds(time));
+        act.Read(time, Took, found);
+        return found;
     }
 
     // The last look's move was the person's own question laying itself out (own, and Theirs).
@@ -296,6 +311,7 @@ public sealed class AnswerMoves
     {
         was = null;
         at = [];
+        drawing = false;
     }
 
     // How far the person's own scrolling moved what the scrollers hold since the last look; nothing

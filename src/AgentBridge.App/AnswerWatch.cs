@@ -72,9 +72,11 @@ sealed class AnswerWatch
     bool told;
     AnswerLook? last;
 
-    // The app drew something in the question itself (who asks, its heading): whatever moves in the
-    // moment it is drawn in counts, whatever the person is doing.
-    public void NotOwn() => act.Drawn(DateTimeOffset.UtcNow);
+    // The app drew something in the question itself (who asks, its heading): the move its layout
+    // pass brings counts, whatever the person is doing and however late that pass comes.
+    public void NotOwn() => drawn++;
+
+    int drawn;
 
     // Rows of the list holding the answers came, went or moved: the list may keep the rows in sight
     // in place by scrolling (ListView's KeepItemsInView), which moves Needs you above them. For a
@@ -135,11 +137,11 @@ sealed class AnswerWatch
                 [.. chain.Select(Look)],
                 root.Size.Width,
                 root.Size.Height,
-                QuestionBox(chain.FirstOrDefault()));
+                QuestionBox(chain.FirstOrDefault()),
+                drawn);
             var now = DateTimeOffset.UtcNow;
             var own = exempt && !checking && act.Holds(now);
-            var found = moves.Read(look, own);
-            if (own) { act.Read(now, moves.Took, found); }
+            var found = moves.Read(look, act, now, exempt && !checking);
             if (found && !told && now < ownAt + OwnAct.First)
             {
                 told = true;

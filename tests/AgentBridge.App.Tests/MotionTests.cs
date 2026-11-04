@@ -331,12 +331,45 @@ public sealed class MotionTests
         act.Acted(t0);
         act.Read(t0 + TimeSpan.FromMilliseconds(50), theirs: false, found: true);
         Assert.False(act.Holds(t0 + TimeSpan.FromMilliseconds(50)));
+    }
 
-        // The app drawing in the question holds nothing for a moment, whatever the person does.
+    [Fact]
+    public void A_move_that_isnt_the_persons_ends_their_act_even_when_it_was_read_with_nothing_exempt()
+    {
+        // The click-time check, or a read while the app draws who asks, reads with nothing exempt:
+        // the move it finds still ends the person's act, so their question growing next is a move.
+        var t0 = DateTimeOffset.UnixEpoch;
+        var act = new OwnAct();
         act.Acted(t0);
-        act.Drawn(t0);
-        Assert.False(act.Holds(t0 + OwnAct.Then - TimeSpan.FromMilliseconds(1)));
-        Assert.True(act.Holds(t0 + OwnAct.Then));
+        var moves = From(Look());
+        Assert.True(moves.Read(Look(dy: 40, top: 140), act, t0 + TimeSpan.FromMilliseconds(50), exempt: false));
+        Assert.False(act.Holds(t0 + TimeSpan.FromMilliseconds(60)));
+        var grown = Look(dy: 40, top: 140, question: 200, extent: 1040) with { Answers = [(240, 190), (240, 270), (240, 310)] };
+        Assert.True(moves.Read(grown, act, t0 + TimeSpan.FromMilliseconds(70), exempt: true));
+    }
+
+    [Fact]
+    public void Who_asks_drawn_by_the_app_is_a_move_however_late_its_layout_pass_comes()
+    {
+        // The person acted; the app then redraws who asks (a long name wrapping), and the pass that
+        // lays it out comes long after, with only the question grown. Never theirs.
+        var t0 = DateTimeOffset.UnixEpoch;
+        var act = new OwnAct();
+        act.Acted(t0);
+        var grown = Look(question: 200, extent: 1040) with { Answers = [(240, 150), (240, 230), (240, 270)], Drawn = 1 };
+        var moves = From(Look());
+        Assert.True(moves.Read(grown, act, t0 + TimeSpan.FromMilliseconds(900), exempt: true));
+
+        // A read between, with nothing laid out yet (a scroll), doesn't use the redraw up.
+        act.Acted(t0);
+        moves = From(Look());
+        Assert.False(moves.Read(Look() with { Drawn = 1 }, act, t0 + TimeSpan.FromMilliseconds(100), exempt: true));
+        Assert.True(moves.Read(grown, act, t0 + TimeSpan.FromMilliseconds(900), exempt: true));
+
+        // Once that move is found, the person's own next layout is theirs again.
+        act.Acted(t0 + TimeSpan.FromSeconds(1));
+        var again = grown with { Question = new LookBox(24, 8, 852, 240), Answers = [(240, 150), (240, 270), (240, 310)], Scrollers = [grown.Scrollers[0] with { ExtentHeight = 1080 }], Drawn = 1 };
+        Assert.False(moves.Read(again, act, t0 + TimeSpan.FromMilliseconds(1100), exempt: true));
     }
 
     [Fact]
