@@ -44,6 +44,8 @@
                 <SolidColorBrush x:Key="AbText2" Color="#9E000000" />
                 <SolidColorBrush x:Key="AbText3" Color="#94000000" />
                 <SolidColorBrush x:Key="AbShadow" Color="#2E000000" />
+                <SolidColorBrush x:Key="AbDragShadow" Color="#24000000" />
+                <SolidColorBrush x:Key="AbDragShadowEdge" Color="#1F000000" />
                 <SolidColorBrush x:Key="AbLink" Color="#0B7A6E" />
                 <SolidColorBrush x:Key="SystemControlHyperlinkTextBrush" Color="#0B7A6E" />
                 <SolidColorBrush x:Key="HyperlinkButtonForeground" Color="#0B7A6E" />
@@ -83,6 +85,8 @@
                 <SolidColorBrush x:Key="AbText2" Color="#B8FFFFFF" />
                 <SolidColorBrush x:Key="AbText3" Color="#8AFFFFFF" />
                 <SolidColorBrush x:Key="AbShadow" Color="#2E000000" />
+                <SolidColorBrush x:Key="AbDragShadow" Color="#47000000" />
+                <SolidColorBrush x:Key="AbDragShadowEdge" Color="#3D000000" />
                 <SolidColorBrush x:Key="AbLink" Color="#2DD4BF" />
                 <SolidColorBrush x:Key="SystemControlHyperlinkTextBrush" Color="#2DD4BF" />
                 <SolidColorBrush x:Key="HyperlinkButtonForeground" Color="#2DD4BF" />
@@ -122,6 +126,8 @@
                 <SolidColorBrush x:Key="AbText2" Color="{ThemeResource SystemColorWindowTextColor}" />
                 <SolidColorBrush x:Key="AbText3" Color="{ThemeResource SystemColorWindowTextColor}" />
                 <SolidColorBrush x:Key="AbShadow" Color="{ThemeResource SystemColorWindowTextColor}" />
+                <SolidColorBrush x:Key="AbDragShadow" Color="{ThemeResource SystemColorWindowTextColor}" />
+                <SolidColorBrush x:Key="AbDragShadowEdge" Color="{ThemeResource SystemColorWindowTextColor}" />
                 <SolidColorBrush x:Key="AbLink" Color="{ThemeResource SystemColorHotlightColor}" />
                 <SolidColorBrush x:Key="SystemControlHyperlinkTextBrush" Color="{ThemeResource SystemColorHotlightColor}" />
                 <SolidColorBrush x:Key="HyperlinkButtonForeground" Color="{ThemeResource SystemColorHotlightColor}" />
@@ -322,6 +328,9 @@
     <x:String x:Key="AbMotionReorderDuration">00:00:00.167</x:String>
     <x:String x:Key="AbMotionReorderEase">0.33,0,0.67,1</x:String>
     <x:String x:Key="AbMotionReorderReduced">Instant</x:String>
+    <x:String x:Key="AbMotionLiftDuration">00:00:00.083</x:String>
+    <x:String x:Key="AbMotionLiftEase">0,0,0,1</x:String>
+    <x:String x:Key="AbMotionLiftReduced">Instant</x:String>
 
     <Style x:Key="AbGlyphDelegating" TargetType="ContentControl">
         <Setter Property="Width" Value="16" />

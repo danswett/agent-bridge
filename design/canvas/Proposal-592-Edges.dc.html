@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #592: Auto-scroll, two columns and cancelling</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/592-reorder.md). Each frame is a Proposal-592-Frame. -->
+<div style="width: 2000px; height: 880px; box-sizing: border-box; padding: 32px; background: {{t.bg}}; color: {{t.text}}; font-family: 'Segoe UI Variable Text', system-ui, -apple-system, Roboto, sans-serif; overflow: hidden">
+  <div style="display: flex; align-items: center; gap: 12px">
+    <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.bridge}}; background: {{t.tag}}">#592 · Decided (owner, 2026-11-04)</span>
+    <span style="font-size: 12px; color: {{t.text2}}">{{t.name}}</span>
+  </div>
+  <h1 style="margin: 10px 0 2px; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 22px; line-height: 28px; font-weight: 600">Auto-scroll, two columns and cancelling</h1>
+  <p style="margin: 0 0 28px; font-size: 13px; line-height: 18px; color: {{t.text2}}">The list scrolls under a card held near its edge, the same make-room motion works in a grid, and a drop outside the list puts the card back.</p>
+  <div style="display: flex; gap: 28px; align-items: flex-start">
+    <sc-for list="{{frames}}" as="fr">
+      <dc-import name="Proposal-592-Frame" theme="{{theme}}" f="{{fr}}" hint-size="300px,760px"></dc-import>
+    </sc-for>
+
+
+    <div style="width: 360px; flex: none; display: flex; flex-direction: column; gap: 14px">
+      <div style="width: 360px; height: 600px; box-sizing: border-box; padding: 20px; border-radius: 8px; border: 1px solid {{t.stroke}}">
+        <div style="font-size: 14px; line-height: 20px; font-weight: 600">Auto-scroll speed</div>
+        <div style="margin-top: 4px; font-size: 12px; line-height: 16px; color: {{t.text2}}">v = 1000 px/s × (depth into the zone ÷ zone)²</div>
+        <svg viewBox="0 0 320 300" width="300" height="281" style="margin-top: 16px; display: block">
+          <path d="M40 20V260H310" stroke="{{t.text3}}" stroke-width="1" fill="none"/>
+          <path d="M40 140H310M40 200H310M175 20V260" stroke="{{t.stroke}}" stroke-width="1" fill="none"/>
+          <path d="{{chart}}" stroke="{{t.bridge}}" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+          <text x="34" y="24" text-anchor="end" font-size="11" fill="{{t.text2}}">1000</text>
+          <text x="34" y="144" text-anchor="end" font-size="11" fill="{{t.text2}}">500</text>
+          <text x="34" y="204" text-anchor="end" font-size="11" fill="{{t.text2}}">250</text>
+          <text x="34" y="264" text-anchor="end" font-size="11" fill="{{t.text2}}">0</text>
+          <text x="40" y="280" text-anchor="middle" font-size="11" fill="{{t.text2}}">zone edge</text>
+          <text x="175" y="280" text-anchor="middle" font-size="11" fill="{{t.text2}}">halfway</text>
+          <text x="310" y="280" text-anchor="end" font-size="11" fill="{{t.text2}}">list edge</text>
+          <text x="175" y="298" text-anchor="middle" font-size="11" fill="{{t.text3}}">depth into the zone →</text>
+          <text x="48" y="34" font-size="11" fill="{{t.text3}}">px/s</text>
+        </svg>
+        <div style="margin-top: 20px; font-size: 12px; line-height: 18px; color: {{t.text2}}">
+          <div><b style="color: {{t.text}}">Zone</b> 10% of the list’s height, at least 40 px and at most 80 px, at the top and the bottom.</div>
+          <div style="margin-top: 8px"><b style="color: {{t.text}}">Curve</b> quadratic: a quarter of the speed halfway in, so a card held just inside the zone creeps and one held at the edge races.</div>
+          <div style="margin-top: 8px"><b style="color: {{t.text}}">Arming</b> only after the card has moved 4 px since the lift, so lifting a card that already sits in the zone doesn’t scroll.</div>
+          <div style="margin-top: 8px"><b style="color: {{t.text}}">Pointer outside</b> the list (above or below) scrolls at full speed.</div>
+        </div>
+      </div>
+      <div class="p592-cap"><b style="display: block; font-size: 14px; line-height: 20px">4 · The speed curve</b><p style="margin: 4px 0 0; font-size: 12px; line-height: 16px; color: {{t.text2}}">Frame by frame, not by timer: each frame scrolls v × the frame’s time, and fractions carry over.</p></div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":2000,"height":880}}'>
+const THEMES = {
+  dark: { bg: '#1B1E21', text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', text3: 'rgba(255,255,255,.54)', bridge: '#2DD4BF', tag: 'rgba(45,212,191,.14)', stroke: 'rgba(255,255,255,.12)', name: 'Dark' },
+  light: { bg: '#E6E9EC', text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', text3: 'rgba(0,0,0,.58)', bridge: '#0B7A6E', tag: 'rgba(11,122,110,.12)', stroke: 'rgba(0,0,0,.12)', name: 'Light' },
+};
+// Slots: { h } a group header, { r } a session row, { gap } the landing gap, { ph } an empty-group placeholder.
+// trace: n draws a dashed outline where a neighbour was n slots further on, before it eased.
+const P = { h: 'Pinned' }, S = { h: 'Sessions' };
+const rows = (ids, extra) => ids.split('').map(r => Object.assign({ r }, (extra || {})[r] || {}));
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const pts = [];
+    for (let d = 0; d <= 64; d += 2) { const v = 1000 * Math.pow(d / 64, 2); pts.push((d ? 'L' : 'M') + (40 + d / 64 * 270).toFixed(1) + ' ' + (260 - v / 1000 * 240).toFixed(1)); }
+    const frames = [
+      { grip: 'all', label: '1 · Auto-scroll near the edge', scroll: 128, slots: [P, ...rows('ab'), S, ...rows('defghi'), { gap: true }, ...rows('jk')], lift: { r: 'c', at: 10, dy: 22, sel: true }, ptr: { at: 10, dx: 196, dy: 50, ring: 1 }, zone: 52, zoneText: 'auto-scroll zone',
+        notes: ['Held in the zone, the list scrolls under the card, and the cards it passes keep making room. Leaving the zone stops the scroll at once.'] },
+      { kind: 'desktop', grip: 'hover', cols: 2, w: 720, h: 560, listW: 600, label: '2 · Two columns on a wide window', slots: [P, ...rows('ab'), S, ...rows('def', { d: { trace: 1 }, e: { trace: 1 }, f: { trace: 1 } }), { gap: true }, ...rows('ghij')], lift: { r: 'c', at: 7, dx: -24, dy: -12, sel: true }, ptr: { kind: 'mouse', at: 7, dx: -12, dy: 14 },
+        notes: ['If the list ever flows into columns (#592 asks for room for it), order reads left to right, then down. Cards ease along that order, wrapping from the end of one line to the start of the next; the gap is still one card and the motion is still reorder.'] },
+      { kind: 'desktop', grip: 'hover', overflow: true, w: 440, h: 560, label: '3 · Outside the list: cancel', slots: [P, ...rows('ab'), S, { gap: true }, ...rows('defgh')], lift: { r: 'c', at: 4, dx: 56, dy: 96, sel: true, chip: 'Cancel' }, ptr: { kind: 'mouse', at: 4, dx: 380, dy: 120 },
+        notes: ['More than 32 px outside the list, the gap goes back to where the card came from and a Cancel chip shows. Releasing there, Escape, or pointercancel puts it back with reorder: “Cancelled. Back at position 1 of 10.”'] },
+    ];
+    return { t: THEMES[theme], theme, frames, chart: pts.join('') };
+  }
+}
+</script>
+</body>
+</html>

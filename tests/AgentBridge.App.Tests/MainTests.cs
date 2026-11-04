@@ -120,13 +120,70 @@ public sealed class MainTests : IAsyncLifetime
             return true;
         });
 
-        // A drag of the top card onto the foot of the other.
-        ui.Post(() => Assert.True(old.Row!.Drop(asking.Row!.Key, after: true)));
+        // A drag of the top card to the foot of the list.
+        ui.Post(() => Assert.True(asking.Row!.MoveTo(pinned: false, index: 1)));
         Assert.Equal(["old", "asking"], Order());
         // The dragged card takes focus, as after a keyboard move.
         Assert.True(TestUi.Read(() => asking.WantsRowFocus));
         // Its row, not the session: that focus is for a session opened to be answered.
         Assert.False(TestUi.Read(() => asking.WantsFocus));
+    }
+
+    [Fact]
+    public async Task While_a_card_is_held_a_session_arriving_or_ending_reaches_the_list_only_once_it_is_let_go_and_its_own_ending_is_said()
+    {
+        await SnapshotAsync();
+        var gone = new List<string>();
+        ui.Post(() => main.HeldGone += c => gone.Add(c.Id));
+        ui.Post(() => main.Held = Card("old"));
+
+        // A drag in progress measured the list as it was: nothing appears or goes under it.
+        await host.SendAsync(Events.SessionUpsert, Make.Session("third", updated: Make.T0.AddMinutes(2)));
+        await Wait.UntilAsync(() => main.AllCards.Any(c => c.Id == "third"), "the new session");
+        await host.SendAsync(Events.SessionRemove, new SessionRemoved("asking"));
+        await Wait.UntilAsync(() => main.AllCards.All(c => c.Id != "asking"), "the ended session");
+        Assert.Equal(["asking", "old"], Order());
+        Assert.Empty(TestUi.Read(() => gone.ToList()));
+
+        // Its own session ending is said, so the drag can end.
+        await host.SendAsync(Events.SessionRemove, new SessionRemoved("old"));
+        await Wait.UntilAsync(() => TestUi.Read(() => gone.Contains("old")), "the held session's end");
+        Assert.Equal(["asking", "old"], Order());
+
+        ui.Post(() => main.Held = null);
+        Assert.Equal(["third"], Order());
+    }
+
+    [Fact]
+    public async Task The_last_session_ending_while_its_card_is_held_shows_the_empty_list_once_it_is_let_go()
+    {
+        await SnapshotAsync();
+        ui.Post(() => main.Held = Card("old"));
+        await host.SendAsync(Events.SessionRemove, new SessionRemoved("asking"));
+        await host.SendAsync(Events.SessionRemove, new SessionRemoved("old"));
+        await Wait.UntilAsync(() => !main.AllCards.Any(), "both ended");
+        Assert.False(TestUi.Read(() => main.Empty));
+
+        var told = new List<string?>();
+        ui.Post(() => main.PropertyChanged += (_, e) => told.Add(e.PropertyName));
+        ui.Post(() => main.Held = null);
+        Assert.True(TestUi.Read(() => main.Empty));
+        Assert.Contains(nameof(MainViewModel.Empty), TestUi.Read(() => told.ToList()));
+    }
+
+    [Fact]
+    public async Task A_card_is_movable_by_drag_only_in_your_order_and_its_row_is_told_as_the_sort_changes()
+    {
+        await SnapshotAsync();
+        var old = Card("old");
+        Assert.True(TestUi.Read(() => old.Movable));
+        var told = 0;
+        ui.Post(() => old.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(SessionCardViewModel.Movable)) { told++; } });
+        ui.Post(() => main.SortIndex = (int)SessionSort.Recent);
+        Assert.False(TestUi.Read(() => old.Movable));
+        ui.Post(() => main.SortIndex = (int)SessionSort.Yours);
+        Assert.True(TestUi.Read(() => old.Movable));
+        Assert.Equal(2, TestUi.Read(() => told));
     }
 
     [Fact]

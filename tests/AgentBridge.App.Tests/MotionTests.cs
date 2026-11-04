@@ -24,7 +24,7 @@ public sealed class MotionTests
     [Fact]
     public void Every_entry_runs_for_its_generated_token_and_none_runs_past_300_ms()
     {
-        Assert.Equal(15, MotionCatalogue.Names.Count);
+        Assert.Equal(16, MotionCatalogue.Names.Count);
         foreach (var name in MotionCatalogue.Names)
         {
             var entry = Catalogue[name];

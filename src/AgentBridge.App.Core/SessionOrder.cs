@@ -82,6 +82,9 @@ public sealed class SessionOrder
 
     public static string KeyOf(string machine, string session) => $"{machine}\n{session}";
 
+    // Where the order is kept, if anywhere.
+    public string? Saved => path;
+
     // Whether the order can be kept. When it can't, the list is Most recent.
     public bool Usable { get; private set; }
 
@@ -220,6 +223,35 @@ public sealed class SessionOrder
         Insert(key, target, after);
         return true;
     }
+
+    // A drag's drop (#592): the row goes to `index` among the other rows shown in the group it is
+    // dropped in, which pins or unpins it there, as one change. Rows its machine hasn't finished
+    // sending have no place yet, and sit above the rest: a drop among them lands just below them.
+    // `drawn`: the group's other rows as the person saw them while dragging, which the index counts
+    // in; sessions that arrived or ended meanwhile don't move where it lands, which is beside the
+    // nearest of them still in the group.
+    public bool MoveTo(string key, bool pinned, int index, IReadOnlyList<string>? drawn = null)
+    {
+        if (Sort != SessionSort.Yours || GroupOf(key) is null || pending.Contains(key)) { return false; }
+        var group = pinned ? shownPinned : shownSessions;
+        var others = (drawn ?? group).Where(k => k != key).ToList();
+        var at = Math.Clamp(index, 0, others.Count);
+        bool Placed(string k) => !pending.Contains(k) && group.Contains(k, StringComparer.Ordinal);
+        var before = others.Skip(at).FirstOrDefault(Placed);
+        var after = others.Take(at).LastOrDefault(Placed);
+        if (before is not null) { Insert(key, before, after: false); }
+        else if (after is not null) { Insert(key, after, after: true); }
+        else
+        {
+            Drop(key);
+            if (pinned) { state.Pinned.Add(key); } else { state.Order.Insert(0, key); }
+            Save();
+        }
+        return true;
+    }
+
+    // A row its machine hasn't finished sending: it can't be moved, nor anything put among such rows.
+    public bool IsFixed(string key) => pending.Contains(key);
 
     void Insert(string key, string target, bool after)
     {

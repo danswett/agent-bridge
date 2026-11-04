@@ -211,6 +211,10 @@ public sealed partial class SessionCardViewModel : Observable
     public string? GroupHeader { get => groupHeader; internal set { if (Set(ref groupHeader, value)) { Raise(nameof(HasGroupHeader)); } } }
     public bool HasGroupHeader => groupHeader is not null;
     public bool Pinned { get => pinned; internal set => Set(ref pinned, value); }
+    // Whether a drag can move it now (Your order, and its machine has sent its whole list): its row's
+    // grip takes a touch only then, and lets the list scroll otherwise.
+    bool movable;
+    public bool Movable { get => movable; internal set => Set(ref movable, value); }
     public bool Unread
     {
         get => unread;

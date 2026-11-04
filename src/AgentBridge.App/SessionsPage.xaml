@@ -168,6 +168,46 @@
                     Visibility="{x:Bind local:Ui.Show(ViewModel.Empty), Mode=OneWay, FallbackValue=Collapsed}" />
             </StackPanel>
 
+            <!-- What a drag draws behind the cards (#592, SessionsPage.Reorder), in the list's own
+                 coordinates: the gap where the held card will land, the slot a group it left empty keeps,
+                 and the group headers where they are to be, the target one in Bridge. Only drawn, behind
+                 the list, whose rows are transparent where nothing is; never hit or read. -->
+            <Canvas
+                x:Name="ReorderLayer"
+                Grid.Row="3"
+                IsHitTestVisible="False"
+                AutomationProperties.AccessibilityView="Raw">
+                <!-- The layer is always laid out, so where the list's panel is in it is known the moment a
+                     card lifts; only its content shows and hides. -->
+                <Canvas x:Name="ReorderContent" Visibility="Collapsed">
+                    <Grid x:Name="ReorderGap">
+                        <Border x:Name="ReorderGapFill" Background="{ThemeResource AbSubtle}" BorderBrush="{ThemeResource AbStroke}" BorderThickness="1" CornerRadius="{StaticResource AbRadiusCard}" />
+                        <Rectangle x:Name="ReorderGapDashes" RadiusX="8" RadiusY="8" StrokeThickness="1" StrokeDashArray="4,3" Visibility="Collapsed" />
+                    </Grid>
+                    <Grid x:Name="ReorderKeep" Visibility="Collapsed">
+                        <Rectangle x:Name="ReorderKeepDashes" RadiusX="8" RadiusY="8" StrokeThickness="1" StrokeDashArray="4,3" Stroke="{ThemeResource AbStroke2}" />
+                        <TextBlock
+                            x:Name="ReorderKeepText"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Style="{StaticResource AbTypeMeta}"
+                            Foreground="{ThemeResource AbText2}" />
+                    </Grid>
+                    <TextBlock x:Name="PinnedHeading" Style="{StaticResource AbTypeSectionHeader}" Foreground="{ThemeResource AbText2}" />
+                    <TextBlock x:Name="PinnedHeadingCue" Style="{StaticResource AbTypeSectionHeader}" Foreground="{ThemeResource AbBridge}" Visibility="Collapsed" />
+                    <TextBlock x:Name="SessionsHeading" Style="{StaticResource AbTypeSectionHeader}" Foreground="{ThemeResource AbText2}" />
+                    <TextBlock x:Name="SessionsHeadingCue" Style="{StaticResource AbTypeSectionHeader}" Foreground="{ThemeResource AbBridge}" Visibility="Collapsed" />
+                </Canvas>
+            </Canvas>
+            <!-- A tap on a grip on touch (ui.md §6.1, Moving): how to move a session. -->
+            <TeachingTip
+                x:Name="GripHint"
+                Grid.Row="3"
+                IsLightDismissEnabled="True"
+                PreferredPlacement="Right"
+                AutomationProperties.AutomationId="GripHint"
+                Subtitle="Press and hold a session to move it. Or use Move up and Move down in its menu." />
+
             <ListView
                 x:Name="List"
                 Grid.Row="3"
@@ -196,7 +236,7 @@
                 <ListView.Header>
                     <!-- Needs you · N (§6.1, #165), the list's first section: moved here from the Sessions page's
                          cards as it was, its approval logic untouched (NeedsYou.cs); the grid only spaces it. -->
-                    <Grid Padding="12,0,12,8">
+                    <Grid x:Name="ListHeader" Padding="12,0,12,8">
                         <!-- Needs you · N (#165): every pending question on every machine, oldest first. It
                              refers to the cards below and never moves them. -->
                         <Border

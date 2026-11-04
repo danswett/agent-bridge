@@ -7,16 +7,14 @@
     <!-- One row of the session list (docs/design/ui.md §6.1): the glyph aligned with line 1; the
          title, semibold only for unread activity, with the 6 px Bridge dot or the age trailing; and
          line 2, at most two facts on one line, so no separator ever starts a line (#214). Its menu
-         (right-click, press and hold, Shift+F10), Alt+Up/Down and a drag by the grip that shows on
-         hover move and pin it (#164). -->
+         (right-click, press and hold, Shift+F10), Alt+Up/Down and a drag (#592: the card lifts, by
+         its grip or a press and drag, SessionsPage.Reorder) move and pin it (#164). -->
     <Grid
         x:Name="RowRoot"
         Padding="8,10,12,10"
         ColumnSpacing="12"
         Background="Transparent"
-        AllowDrop="True"
-        DragOver="OnDragOver"
-        Drop="OnDrop"
+        ContextRequested="OnContextRequested"
         PointerEntered="OnPointerEntered"
         PointerExited="OnPointerExited">
         <VisualStateManager.VisualStateGroups>
@@ -46,6 +44,53 @@
                     </VisualState.Setters>
                 </VisualState>
             </VisualStateGroup>
+            <!-- The grip (#592): on hover in text2 as before, on every card in text3 once touch is
+                 used, and in text while the card is held. -->
+            <VisualStateGroup x:Name="Grips">
+                <VisualState x:Name="GripHidden" />
+                <VisualState x:Name="GripHover">
+                    <VisualState.Setters>
+                        <Setter Target="Grip.Opacity" Value="1" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="GripTouch">
+                    <VisualState.Setters>
+                        <Setter Target="Grip.Opacity" Value="1" />
+                        <Setter Target="Grip.Foreground" Value="{ThemeResource AbText3}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="GripHeld">
+                    <VisualState.Setters>
+                        <Setter Target="Grip.Opacity" Value="1" />
+                        <Setter Target="Grip.Foreground" Value="{ThemeResource AbText}" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+            <!-- The held card's chip, in place of its age: Pin or Unpin in bridge-on on a Bridge fill (Bridge
+                 on a 14% fill, as #592 drew it, is under 4.5:1 in light, as the PWA found), or a neutral Cancel. -->
+            <VisualStateGroup x:Name="Chips">
+                <VisualState x:Name="ChipNone" />
+                <VisualState x:Name="ChipBridge">
+                    <VisualState.Setters>
+                        <Setter Target="Chip.Visibility" Value="Visible" />
+                        <Setter Target="ChipFill.Background" Value="{ThemeResource AbBridge}" />
+                        <Setter Target="ChipText.Foreground" Value="{ThemeResource AbBridgeOn}" />
+                        <Setter Target="Age.Opacity" Value="0" />
+                        <Setter Target="UnreadDot.Opacity" Value="0" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="ChipCancel">
+                    <VisualState.Setters>
+                        <Setter Target="Chip.Visibility" Value="Visible" />
+                        <Setter Target="ChipFill.Background" Value="{ThemeResource AbSubtle}" />
+                        <Setter Target="ChipText.Foreground" Value="{ThemeResource AbText2}" />
+                        <Setter Target="ChipIcon.Foreground" Value="{ThemeResource AbText2}" />
+                        <Setter Target="ChipIcon.Visibility" Value="Visible" />
+                        <Setter Target="Age.Opacity" Value="0" />
+                        <Setter Target="UnreadDot.Opacity" Value="0" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
         </VisualStateManager.VisualStateGroups>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -57,17 +102,60 @@
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
-        <Grid.ContextFlyout>
+        <!-- Opened by OnContextRequested rather than as the grid's ContextFlyout: a touch held on the
+             card lifts it (#592), and its menu opens only if it is let go without moving. -->
+        <Grid.Resources>
             <MenuFlyout x:Name="RowMenu" Opening="OnRowMenuOpening">
                 <MenuFlyoutItem x:Name="MoveUpItem" Text="Move up" Click="OnMoveUp" AutomationProperties.AutomationId="MoveUp" />
                 <MenuFlyoutItem x:Name="MoveDownItem" Text="Move down" Click="OnMoveDown" AutomationProperties.AutomationId="MoveDown" />
                 <MenuFlyoutItem x:Name="PinItem" Text="Pin" Click="OnPin" AutomationProperties.AutomationId="Pin" />
             </MenuFlyout>
-        </Grid.ContextFlyout>
+        </Grid.Resources>
+
+        <!-- The lifted card (ui.md §5.3, Lift): drawn only while it is held or settling, behind the
+             row's content, over the card's own rows and not its group header, out to the list item's
+             edges. Its shadow is the composition's (SessionRow.Lift); its fill is card with a Bridge
+             tint over it, a selected card keeping its selected fill and pill. -->
+        <Grid
+            x:Name="LiftLook"
+            Grid.Row="1"
+            Grid.RowSpan="2"
+            Grid.ColumnSpan="3"
+            Margin="-12,-8,-12,-8"
+            IsHitTestVisible="False"
+            AutomationProperties.AccessibilityView="Raw"
+            Visibility="Collapsed">
+            <Border x:Name="LiftShadow" />
+            <Border
+                x:Name="LiftPlate"
+                Background="{ThemeResource AbCard}"
+                BorderBrush="{ThemeResource AbStroke2}"
+                BorderThickness="1"
+                CornerRadius="{StaticResource AbRadiusCard}">
+                <Grid>
+                    <Border x:Name="LiftTint" Background="{ThemeResource AbBridge}" CornerRadius="{StaticResource AbRadiusCard}" Opacity="0.05" />
+                    <Border x:Name="LiftSelected" Background="{ThemeResource AbSelected}" CornerRadius="{StaticResource AbRadiusCard}" Visibility="Collapsed" />
+                    <Border
+                        x:Name="LiftPill"
+                        Width="3"
+                        Height="16"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Center"
+                        CornerRadius="1.5"
+                        Background="{ThemeResource AbBridge}"
+                        Visibility="Collapsed" />
+                    <!-- Reduced motion and high contrast: a 2 px Bridge (Highlight) outline instead of the
+                         shadow and tint. -->
+                    <Border x:Name="LiftOutline" BorderBrush="{ThemeResource AbBridge}" BorderThickness="2" CornerRadius="{StaticResource AbRadiusCard}" Visibility="Collapsed" />
+                </Grid>
+            </Border>
+        </Grid>
 
         <!-- "Pinned" and "Sessions" over each group, once anything is pinned (#164). Here, not in the
-             list's item template: a template's x:Bind kept listening to a card after its control went. -->
+             list's item template: a template's x:Bind kept listening to a card after its control went.
+             While a card is held, the list draws them where they are to be (SessionsPage.Reorder). -->
         <TextBlock
+            x:Name="GroupHeading"
             Grid.ColumnSpan="3"
             Margin="0,4,0,10"
             Style="{StaticResource AbTypeSectionHeader}"
@@ -121,12 +209,31 @@
                 AutomationProperties.AccessibilityView="Raw"
                 Visibility="Collapsed" />
             <TextBlock
+                x:Name="Age"
                 Style="{StaticResource AbTypeMeta}"
                 LineHeight="20"
                 Foreground="{ThemeResource AbText2}"
                 AutomationProperties.AutomationId="Age"
                 Text="{x:Bind Card.AgeText, Mode=OneWay}"
                 Visibility="{x:Bind local:Ui.Show(Card.ShowAge), Mode=OneWay}" />
+            <!-- While held, over the age and the dot: Pin or Unpin across the other group's header, in
+                 bridge-on on a Bridge fill, or a neutral Cancel outside the list. -->
+            <Border
+                x:Name="Chip"
+                Padding="6,0,6,0"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Center"
+                CornerRadius="{StaticResource AbRadiusControl}"
+                AutomationProperties.AccessibilityView="Raw"
+                Visibility="Collapsed">
+                <Grid>
+                    <Border x:Name="ChipFill" Margin="-6,0,-6,0" CornerRadius="{StaticResource AbRadiusControl}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <FontIcon x:Name="ChipIcon" Glyph="&#xE711;" FontSize="10" VerticalAlignment="Center" Visibility="Collapsed" />
+                        <TextBlock x:Name="ChipText" Style="{StaticResource AbTypeMeta}" LineHeight="20" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Grid>
+            </Border>
         </Grid>
 
         <!-- Line 2: what the session does, in its tone, then where. One line, cut at the end. -->
@@ -142,24 +249,33 @@
             <Run x:Name="StatusWords" Text="{x:Bind Card.RowStatus, Mode=OneWay}" /><Run Text="{x:Bind local:SessionRow.Separator(Card.RowPlace), Mode=OneWay}" /><Run Text="{x:Bind Card.RowPlace, Mode=OneWay}" />
         </TextBlock>
 
-        <!-- A grip to drag the row to another place, shown while the pointer is over it, in Your
-             order (#164). A mouse affordance: the keyboard and touch have Alt+Up/Down and the menu. -->
-        <FontIcon
-            x:Name="Grip"
+        <!-- The grip, in Your order (#164, #592): pressed with a mouse or pen it lifts the card at
+             once; a touch lifts it after a short hold or a small move, and a tap says how to move a
+             session. Shown while the pointer is over the row, on every card once touch is used (in
+             text3), and in text while held. Its hit area is the card's full height and 24 wide, over
+             the gutter. It never scrolls the list (its manipulation is its own), so a touch on it is
+             the card's alone. -->
+        <Border
+            x:Name="GripArea"
             Grid.Row="1"
             Grid.RowSpan="2"
-            Margin="-10,0,0,0"
-            Glyph="&#xE784;"
-            FontSize="12"
-            Width="12"
+            Width="24"
+            Margin="-16,-10,0,-10"
             HorizontalAlignment="Left"
-            VerticalAlignment="Center"
-            Opacity="0"
-            CanDrag="True"
-            DragStarting="OnGripDragStarting"
-            DropCompleted="OnGripDropCompleted"
-            Foreground="{ThemeResource AbText2}"
-            ToolTipService.ToolTip="Drag to move"
-            AutomationProperties.AccessibilityView="Raw" />
+            Background="Transparent"
+            ManipulationMode="TranslateY"
+            PointerPressed="OnGripPressed"
+            AutomationProperties.AccessibilityView="Raw">
+            <FontIcon
+                x:Name="Grip"
+                Glyph="&#xE784;"
+                FontSize="12"
+                Width="12"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Opacity="0"
+                Foreground="{ThemeResource AbText2}"
+                ToolTipService.ToolTip="Drag to move" />
+        </Border>
     </Grid>
 </UserControl>

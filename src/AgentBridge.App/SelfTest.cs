@@ -261,6 +261,7 @@ static partial class SelfTest
 
             await CheckPanes(window, main, Check, outFile);
             await CheckDividers(window, main, Check, outFile);
+            await CheckReorder(window, main, Check, outFile, result);
             await CheckMachineTabs(window, main, Check, outFile);
             await CheckDelegates(window, main, Check, outFile);
 
@@ -936,6 +937,7 @@ static partial class SelfTest
             var systemCaptions = await Until(() => window.AppWindow.TitleBar.ButtonForegroundColor is null, TimeSpan.FromSeconds(10));
             check(systemCaptions, $"leaves the caption buttons in the system's colours in high contrast ({window.AppWindow.TitleBar.ButtonForegroundColor?.ToString() ?? "system"})");
             window.ShowPage("sessions");
+            await CheckReorderInHighContrast(window, check, outFile);
         }
         finally
         {
