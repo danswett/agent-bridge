@@ -155,6 +155,23 @@ public sealed class MainTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_last_session_ending_while_its_card_is_held_shows_the_empty_list_once_it_is_let_go()
+    {
+        await SnapshotAsync();
+        ui.Post(() => main.Held = Card("old"));
+        await host.SendAsync(Events.SessionRemove, new SessionRemoved("asking"));
+        await host.SendAsync(Events.SessionRemove, new SessionRemoved("old"));
+        await Wait.UntilAsync(() => !main.AllCards.Any(), "both ended");
+        Assert.False(TestUi.Read(() => main.Empty));
+
+        var told = new List<string?>();
+        ui.Post(() => main.PropertyChanged += (_, e) => told.Add(e.PropertyName));
+        ui.Post(() => main.Held = null);
+        Assert.True(TestUi.Read(() => main.Empty));
+        Assert.Contains(nameof(MainViewModel.Empty), TestUi.Read(() => told.ToList()));
+    }
+
+    [Fact]
     public async Task A_row_not_open_gets_the_new_activity_dot_when_its_session_updates_and_opening_it_clears_the_dot()
     {
         await SnapshotAsync();

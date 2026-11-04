@@ -643,43 +643,99 @@ public sealed partial class SessionsPage
     {
         var target = d.Target;
         var crossed = d.Model.Crosses(target);
-        var at = d.Model.Place(target);
+        var drawn = d.Model.Place(target);
         var from = d.ItemTop + d.Translation + d.Header;
         var scale = d.Scale;
+        var gliding = Gliding(d);
         End(d);
         var moving = target != d.Model.Origin;
-        // Focus stays with the session: the dropped card asks for it, as after Alt+Up/Down.
         // Placed among the cards as drawn: sessions that arrived or ended while it was held, which the
         // list draws only now, don't shift where it lands.
-        if (!moving || d.Card.Row?.MoveTo(target.Pinned, target.Index, d.Model.Group(target.Pinned)) != true)
-        {
-            d.Card.WantsRowFocus = true;
-            Settle(d, d.Item, from, scale, reset: d.Items.Values);
-        }
-        else
-        {
-            var others = d.Items.Values.ToList();
-            var settled = false;
-            Motion.AfterLayout(List, d.Card, container =>
-            {
-                settled = true;
-                Settle(d, container, from, scale, reset: others.Append(d.Item).Where(i => i != container));
-            });
-            // Not drawn after the move (scrolled away): nothing to settle, everything put right.
-            var fallback = DispatcherQueue.CreateTimer();
-            fallback.IsRepeating = false;
-            fallback.Interval = TimeSpan.FromMilliseconds(300);
-            fallback.Tick += (t, _) =>
-            {
-                t.Stop();
-                if (!settled) { Reset(others.Append(d.Item)); HideLayer(); }
-            };
-            fallback.Start();
-        }
+        var moved = moving && d.Card.Row?.MoveTo(target.Pinned, target.Index, d.Model.Group(target.Pinned)) == true;
+        // Focus stays with the session: the dropped card asks for it, as after Alt+Up/Down.
+        if (!moved) { d.Card.WantsRowFocus = true; }
+        SettleWhereDrawn(d, from, scale, gliding, afterLayout: moved);
         FocusSession(d.Card, 10);
         reorderedUntil = DateTime.UtcNow.AddSeconds(1);
         GuardLane();
-        d.Row.Say(ReorderWords.Dropped(at, crossed, target.Pinned));
+        d.Row.Say(ReorderWords.Dropped(PlaceNow(d, drawn), crossed, target.Pinned));
+    }
+
+    // Its place said as the list now has it, with the sessions held back while it was held drawn.
+    (int Position, int Of) PlaceNow(Drag d, (int Position, int Of) drawn)
+    {
+        var group = viewModel?.Sessions.Where(c => c.Pinned == d.Card.Pinned).ToList();
+        var at = group?.IndexOf(d.Card) ?? -1;
+        return at < 0 ? drawn : (at + 1, group!.Count);
+    }
+
+    // The held card settles in the item showing its session once the list has drawn what changed as it
+    // was let go (its move, the sessions held back meanwhile), which may be another item than it was
+    // lifted in; every item the drag moved is put right, and the other cards' glides go on from where
+    // they are drawn in whichever items now show them.
+    void SettleWhereDrawn(Drag d, double from, float scale, Dictionary<SessionCardViewModel, double> gliding, bool afterLayout)
+    {
+        var items = d.Items.Values.Append(d.Item).ToList();
+        void Here(FrameworkElement container)
+        {
+            Settle(d, container, from, scale, reset: items.Where(i => i != container));
+            Resume(gliding);
+        }
+        void Gone()
+        {
+            Reset(items);
+            HideLayer();
+            Resume(gliding);
+        }
+        if (!afterLayout)
+        {
+            List.UpdateLayout();
+            if (List.ContainerFromItem(d.Card) is ListViewItem container) { Here(container); } else { Gone(); }
+            return;
+        }
+        var settled = false;
+        Motion.AfterLayout(List, d.Card, container =>
+        {
+            settled = true;
+            Here(container);
+        });
+        // Not drawn after the move (scrolled away): nothing to settle, everything put right.
+        var fallback = DispatcherQueue.CreateTimer();
+        fallback.IsRepeating = false;
+        fallback.Interval = TimeSpan.FromMilliseconds(300);
+        fallback.Tick += (t, _) =>
+        {
+            t.Stop();
+            if (!settled) { Gone(); }
+        };
+        fallback.Start();
+    }
+
+    // How far each other card is drawn from where it is going, by session.
+    Dictionary<SessionCardViewModel, double> Gliding(Drag d)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var left = new Dictionary<SessionCardViewModel, double>();
+        foreach (var (key, item) in d.Items)
+        {
+            if (glides.TryGetValue(item, out var g) && d.Cards.TryGetValue(key, out var card) && Math.Abs(g.Now(now) - g.To) >= 0.5) { left[card] = g.Now(now) - g.To; }
+        }
+        return left;
+    }
+
+    // Those cards go on to their places from where they were drawn, rather than jumping there.
+    void Resume(Dictionary<SessionCardViewModel, double> left)
+    {
+        var step = Motion.Catalogue.Enter("Reorder", Motion.Enabled);
+        if (!step.Runs) { return; }
+        var now = Stopwatch.GetTimestamp();
+        foreach (var (card, offset) in left)
+        {
+            if (List.ContainerFromItem(card) is not ListViewItem item || settling.ContainsKey(item)) { continue; }
+            Motion.Track(item);
+            Animate(Visual(item), "Translation", new Vector3(0, (float)offset, 0), Vector3.Zero, step);
+            glides[item] = new GlideState(offset, 0, now, step.Duration, step.Ease);
+        }
     }
 
     // Keyboard focus with the dropped session (as after Alt+Up/Down, #410, #506): its list item once the
@@ -717,11 +773,12 @@ public sealed partial class SessionsPage
         var scale = d.Scale;
         d.Away = false;
         Arrange(d, d.Model.Origin, instant: false);
+        var gliding = Gliding(d);
         End(d);
-        Settle(d, d.Item, from, scale, reset: []);
+        SettleWhereDrawn(d, from, scale, gliding, afterLayout: false);
         reorderedUntil = DateTime.UtcNow.AddSeconds(1);
         GuardLane();
-        if (say) { d.Row.Say(ReorderWords.Cancelled(d.Model.Place(d.Model.Origin))); }
+        if (say) { d.Row.Say(ReorderWords.Cancelled(PlaceNow(d, d.Model.Place(d.Model.Origin)))); }
     }
 
     // The held session ended (its host removed it): the drag ends, the cards close up at once, and
@@ -838,8 +895,13 @@ public sealed partial class SessionsPage
     // the gap is gone, the card filling it.
     void ShowSettlingHeading(ListViewItem item, SessionRow row, double header, UIElement panel)
     {
-        foreach (var e in new UIElement[] { PinnedHeading, PinnedHeadingCue, SessionsHeading, SessionsHeadingCue, ReorderGap, ReorderKeep }) { e.Visibility = Visibility.Collapsed; }
-        if (header <= 0) { return; }
+        foreach (var e in new UIElement[] { PinnedHeadingCue, SessionsHeadingCue, ReorderGap, ReorderKeep }) { e.Visibility = Visibility.Collapsed; }
+        // The rows' own headings stay hidden until the card is down: the layer's stay, where the list
+        // now has them (gliding there still, after a cancel), for the groups the list now has.
+        var pinned = viewModel?.Sessions.Any(c => c.Pinned) == true;
+        PinnedHeading.Visibility = pinned ? Visibility.Visible : Visibility.Collapsed;
+        SessionsHeading.Visibility = pinned && viewModel?.Sessions.Any(c => !c.Pinned) == true ? Visibility.Visible : Visibility.Collapsed;
+        if (header <= 0) { ReorderContent.Visibility = Visibility.Visible; PlaceLayer(); return; }
         var heading = row.Card?.Pinned == true ? PinnedHeading : SessionsHeading;
         heading.Visibility = Visibility.Visible;
         var o = row.HeadingOffset(item);

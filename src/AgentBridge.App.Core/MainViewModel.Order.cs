@@ -80,6 +80,8 @@ public sealed partial class MainViewModel
             {
                 heldChanges = false;
                 Rearrange();
+                // The last session may have ended while held: told when the list has let it go.
+                Raise(nameof(Empty));
             }
         }
     }
