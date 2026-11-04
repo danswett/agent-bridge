@@ -34,9 +34,14 @@ There's nothing to fix on our side. The job is to avoid adding load, and to reco
 
 1. **Stop pushing.** Every push queues CI for every session, so a backlog only grows. Tell the
    running agent sessions to hold their pushes.
-2. **Hold anything about to merge** whose head hasn't been fully checked:
-   `gh pr edit <n> --repo danswett/agent-bridge --add-label hold`. Auto-merge could otherwise
-   fire on a status posted before the outage.
+2. **Hold anything about to merge** whose head hasn't been fully checked. Turn auto-merge off
+   first, then add the label:
+   `gh pr merge <n> --repo danswett/agent-bridge --disable-auto`, then
+   `gh pr edit <n> --repo danswett/agent-bridge --add-label hold`.
+   The label alone isn't enough here: the ruleset reads the posted `merge-rule` status, not
+   the label, and only the Actions-hosted `merge-rule` workflow turns a label into a failing
+   status. While Actions is down that workflow sits queued, so an earlier green status would
+   still let auto-merge fire. Note each PR you disarm, with its head sha.
 3. **Relay emergencies don't wait for Actions.** If production needs a change, the owner runs
    `infra/deploy.ps1 -Production -ProductionImage <approved image@sha256 digest> -ProductionVersion <its sha>` from a workstation ([relay-bad-deploy](relay-bad-deploy.md),
    docs/relay-deploy.md). **Owner.**
@@ -59,7 +64,12 @@ There's nothing to fix on our side. The job is to avoid adding load, and to reco
    `gh run rerun <id> --failed`.
 3. A CodeQL run that ended `skipped` fails `merge-rule` closed; run it again with
    `gh workflow run codeql.yml --ref <branch>` (AGENTS.md rule 4).
-4. Remove the `hold` labels you added, once each head's checks are green again.
+4. For each PR you held: once its head's other checks are green again (CI, CodeQL and the
+   re-runs; `merge-rule` stays red while `hold` is on, by design), remove the `hold` label,
+   then re-arm auto-merge pinned to that head:
+   `gh pr merge <n> --repo danswett/agent-bridge --auto --squash --match-head-commit <sha>`.
+   Re-arming before the fresh `merge-rule` posts is safe: the ruleset still waits for it to pass
+   on that head. If the head moved since you held it, leave re-arming to the PR's session.
 5. Check that main's last CI run passed. A red main blocks every merge and the Windows release.
 
 ## If A-GHA-SILENT fires

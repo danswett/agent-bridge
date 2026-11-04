@@ -308,14 +308,21 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
           runAfter: { components: ['Succeeded'] }
           inputs: { variables: [{ name: 'queued', type: 'array', value: [] }] }
         }
+        // True only once the runs answer held a workflow_runs list. A 200 without one (null or
+        // missing) is unreadable, not an empty, healthy queue.
+        runsRead: {
+          type: 'InitializeVariable'
+          runAfter: { queued: ['Succeeded'] }
+          inputs: { variables: [{ name: 'runsRead', type: 'boolean', value: false }] }
+        }
         status: {
           type: 'Http'
-          runAfter: { queued: ['Succeeded'] }
+          runAfter: { runsRead: ['Succeeded'] }
           inputs: { method: 'GET', uri: 'https://www.githubstatus.com/api/v2/summary.json', retryPolicy: { type: 'fixed', count: 1, interval: 'PT20S' } }
         }
         runs: {
           type: 'Http'
-          runAfter: { queued: ['Succeeded'] }
+          runAfter: { runsRead: ['Succeeded'] }
           inputs: {
             method: 'GET'
             uri: 'https://api.github.com/repos/@{parameters(\'repository\')}/actions/runs?status=queued&per_page=100&created=%3C@{formatDateTime(addMinutes(utcNow(), mul(-1, parameters(\'stallMinutes\'))), \'yyyy-MM-ddTHH:mm:ssZ\')}'
@@ -348,6 +355,11 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
               type: 'SetVariable'
               runAfter: {}
               inputs: { name: 'queued', value: '@coalesce(body(\'runs\')?[\'workflow_runs\'], json(\'[]\'))' }
+            }
+            markRunsRead: {
+              type: 'SetVariable'
+              runAfter: { keepQueued: ['Succeeded'] }
+              inputs: { name: 'runsRead', value: '@not(equals(body(\'runs\')?[\'workflow_runs\'], null))' }
             }
           }
           else: { actions: {} }
@@ -412,7 +424,7 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
                     duration: '00:00:01'
                     runLocation: 'azure-logic-app'
                     success: '@and(equals(length(coalesce(body(\'degraded\'), json(\'[]\'))), 0), equals(length(coalesce(body(\'stalled\'), json(\'[]\'))), 0))'
-                    message: '@{concat(\'status page: \', if(not(equals(outputs(\'status\')?[\'statusCode\'], 200)), \'unreachable\', if(and(equals(actions(\'statusAnswered\')?[\'status\'], \'Succeeded\'), equals(actions(\'degraded\')?[\'status\'], \'Succeeded\'), equals(length(coalesce(body(\'known\'), json(\'[]\'))), 2)), if(equals(length(coalesce(body(\'degradedNames\'), json(\'[]\'))), 0), \'Actions and Pages operational\', join(coalesce(body(\'degradedNames\'), json(\'[]\')), \', \')), \'unreadable\')), \'; runs queued over \', string(parameters(\'stallMinutes\')), \' min: \', if(not(equals(outputs(\'runs\')?[\'statusCode\'], 200)), concat(\'unknown (API \', string(outputs(\'runs\')?[\'statusCode\']), \')\'), if(and(equals(actions(\'runsAnswered\')?[\'status\'], \'Succeeded\'), equals(actions(\'stalled\')?[\'status\'], \'Succeeded\')), string(length(coalesce(body(\'stalled\'), json(\'[]\')))), \'unreadable\')))}'
+                    message: '@{concat(\'status page: \', if(not(equals(outputs(\'status\')?[\'statusCode\'], 200)), \'unreachable\', if(and(equals(actions(\'statusAnswered\')?[\'status\'], \'Succeeded\'), equals(actions(\'degraded\')?[\'status\'], \'Succeeded\'), equals(length(coalesce(body(\'known\'), json(\'[]\'))), 2)), if(equals(length(coalesce(body(\'degradedNames\'), json(\'[]\'))), 0), \'Actions and Pages operational\', join(coalesce(body(\'degradedNames\'), json(\'[]\')), \', \')), \'unreadable\')), \'; runs queued over \', string(parameters(\'stallMinutes\')), \' min: \', if(not(equals(outputs(\'runs\')?[\'statusCode\'], 200)), concat(\'unknown (API \', string(outputs(\'runs\')?[\'statusCode\']), \')\'), if(and(variables(\'runsRead\'), equals(actions(\'stalled\')?[\'status\'], \'Succeeded\')), string(length(coalesce(body(\'stalled\'), json(\'[]\')))), \'unreadable\')))}'
                   }
                 }
               }
