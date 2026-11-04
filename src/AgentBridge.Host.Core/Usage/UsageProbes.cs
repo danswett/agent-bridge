@@ -29,6 +29,12 @@ public sealed class UsageProbes
 
     public const string FolderName = "usage-probe";
 
+    // Where the host keeps, in its own profile, the last Claude account it saw signed in here (the
+    // reading's account key, a digest, and when it was found gone). `claude auth logout` removes the
+    // account from .claude.json as well as the credential, which left the host showing nothing at
+    // all rather than the sign-out (#238, live check 2). Null: nothing remembered.
+    public string? ClaudeAccountSeen { get; init; }
+
     // Codex's managed daemon, over its control socket.
     public ICodexDaemon Daemon { get; init; } = new CodexDaemonSocket();
 

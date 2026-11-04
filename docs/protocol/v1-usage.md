@@ -237,7 +237,16 @@ refresh and locking, and runs no model turn.
   holds only for the account it was asked about: another signed in since is shown by its own
   reading until the next hourly check. A probe is decided again once auth status has answered,
   from the saved reading and account as they are then. The probe's exit code cannot say this: it exits 0 with the
-  last bars after a sign-out.
+  last bars after a sign-out. `claude auth logout` (Claude Code 2.1.317) also removes
+  `oauthAccount` and `cachedUsageUtilization` from `.claude.json`, so a host remembers, in its
+  profile (`<profile>/usage-claude-account.json`), the account key of the last account it saw signed
+  in there (the digest above, nothing else) and when it found it gone. A `.claude.json` that reads
+  well and names no account is then that sign-out failure under the remembered key, timed when it
+  was first found, kept across host restarts, with neither auth status nor a probe run, until an
+  account appears again: the same one clears it, and another replaces the remembered key with no
+  sign-out shown for the first. A machine where no account was ever seen shows no Claude row (as
+  does the one-shot `usage` command, which remembers nothing), and a file that cannot be read says
+  nothing either way.
 * **Codex.** The route follows what Codex runs here:
   * no Codex process: a standalone `codex app-server` over stdio (JSON lines, `CODEX_HOME` set,
     made absolute without resolving its `..` off Windows, which the system takes after any link

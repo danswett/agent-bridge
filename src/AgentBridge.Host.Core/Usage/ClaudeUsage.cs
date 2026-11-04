@@ -55,6 +55,12 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
     // A probe or auth status finished since the last read, so the file is worth reading now.
     bool finished;
     DateTimeOffset? nextDue;
+    // The last account seen signed in here, and when it was found gone (UsageProbes.ClaudeAccountSeen),
+    // as loaded from and saved to the host's profile; seenText is what the file last held.
+    bool seenLoaded;
+    string? seenKey;
+    DateTimeOffset? goneAt;
+    string? seenText;
 
     public AgentKind Agent => AgentKind.Claude;
 
@@ -85,8 +91,15 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
     {
         var now = clock.GetUtcNow();
         var saved = Read(options.ClaudeAccountPath, options.MaxStateBytes);
-        // Never signed in to claude.ai here: nothing to show, and nothing to ask Claude Code.
-        if (saved.Account is null) { return Task.FromResult<AgentUsage?>(null); }
+        if (saved.Account is null)
+        {
+            // No account in .claude.json. claude auth logout removes it there as well as the
+            // credential: an account this host saw here has signed out, and says so until the next
+            // sign-in (#238, live check 2). One never seen here was never signed in: nothing to show.
+            // Either way nothing is asked of Claude Code: auth status needs an account to be about.
+            return Task.FromResult(saved.NoAccount ? Gone(now) : null);
+        }
+        Seen(saved.Key);
         lock (gate) { finished = false; }
         if (probes is not null) { Consider(saved.Reading?.MeasuredAt, saved.Key, now); }
         Auth known;
@@ -106,6 +119,76 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
             return Task.FromResult<AgentUsage?>(UsageRead.Failure(AgentKind.Claude, SignedOutError, outAt ?? now, accountKey: saved.Key, plan: named ?? reading?.Plan));
         }
         return Task.FromResult(reading);
+    }
+
+    // The signed-out failure for the account last seen here, timed when it was first found gone, or
+    // null when none was ever seen (or there is nowhere to remember one).
+    AgentUsage? Gone(DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            LoadSeen();
+            if (seenKey is null) { return null; }
+            if (goneAt is null)
+            {
+                goneAt = now;
+                SaveSeen();
+                say("usage: Claude Code's account has gone from this machine (signed out); it is not asked for its allowance until it signs in again");
+            }
+            return UsageRead.Failure(AgentKind.Claude, SignedOutError, goneAt.Value, accountKey: seenKey);
+        }
+    }
+
+    // An account signed in: remembered, replacing any other, and no longer signed out.
+    void Seen(string? key)
+    {
+        lock (gate)
+        {
+            if (probes?.ClaudeAccountSeen is null) { return; }
+            LoadSeen();
+            if (seenKey == key && goneAt is null) { return; }
+            if (goneAt is not null && seenKey == key) { say("usage: Claude Code is signed in again"); }
+            (seenKey, goneAt) = (key, null);
+            SaveSeen();
+        }
+    }
+
+    // Under gate. A file that cannot be read or makes no sense remembers nothing: a machine is then
+    // as one never signed in, until it next sees an account.
+    void LoadSeen()
+    {
+        if (seenLoaded) { return; }
+        seenLoaded = true;
+        if (probes?.ClaudeAccountSeen is not { } path) { return; }
+        using var document = UsageRead.Json(path, 4096);
+        if (document is null || document.RootElement.ValueKind != JsonValueKind.Object) { return; }
+        seenKey = UsageRead.String(document.RootElement, "accountKey") is { Length: > 0 and <= 128 } key ? key : null;
+        goneAt = seenKey is null ? null : UsageRead.Instant(document.RootElement, "signedOutAt");
+        seenText = SeenJson(seenKey, goneAt);
+    }
+
+    static string SeenJson(string? key, DateTimeOffset? gone) =>
+        JsonSerializer.Serialize(new Dictionary<string, string?> { ["accountKey"] = key, ["signedOutAt"] = gone?.ToString("O", System.Globalization.CultureInfo.InvariantCulture) });
+
+    // Under gate. Written whole and moved into place; a write that fails is kept in memory and tried
+    // again at the next change.
+    void SaveSeen()
+    {
+        if (probes?.ClaudeAccountSeen is not { } path) { return; }
+        var text = SeenJson(seenKey, goneAt);
+        if (text == seenText) { return; }
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+            var temp = path + ".tmp";
+            File.WriteAllText(temp, text);
+            File.Move(temp, path, overwrite: true);
+            seenText = text;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            say($"usage: the Claude account last seen here could not be remembered: {e.GetType().Name}");
+        }
     }
 
     // Whether to ask Claude Code now: auth status at most hourly, and only when a probe would
@@ -365,12 +448,18 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
     // its allowance when that reading is the same account's. A reading saved for another account
     // (Claude Code drops it on a switch, but a file caught mid-switch could hold one) is not shown
     // under this one.
-    internal sealed record Saved(string? Account, string? Key, AgentUsage? Reading);
+    // NoAccount: the file was read and names no account at all (as claude auth logout leaves it),
+    // not one that could not be read, or whose account could not be made out, which say nothing.
+    internal sealed record Saved(string? Account, string? Key, AgentUsage? Reading, bool NoAccount = false);
 
     internal static Saved Read(string? path, long maxBytes)
     {
         using var document = UsageRead.Json(path, maxBytes);
-        if (document is null || UsageRead.Property(document.RootElement, "oauthAccount") is not { } account) { return new(null, null, null); }
+        if (document is null || document.RootElement.ValueKind != JsonValueKind.Object) { return new(null, null, null); }
+        if (UsageRead.Property(document.RootElement, "oauthAccount") is not { } account)
+        {
+            return new(null, null, null, NoAccount: true);
+        }
         if (UsageRead.String(account, "accountUuid") is not { } uuid || string.IsNullOrWhiteSpace(uuid)) { return new(null, null, null); }
         var key = AccountKey(account);
         if (UsageRead.Property(document.RootElement, "cachedUsageUtilization") is not { } cached

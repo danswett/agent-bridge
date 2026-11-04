@@ -778,6 +778,7 @@ UsageProbes NewUsageProbes(string folder)
         Processes = new SystemProcessInspector(),
         Find = agent => Launchers.Find(agent.ToString().ToLowerInvariant()) is { } l ? locator.Find(l, settings.Launch.Agent(l.Id)) : null,
         WorkingDirectory = Path.Combine(folder, UsageProbes.FolderName),
+        ClaudeAccountSeen = Path.Combine(folder, "usage-claude-account.json"),
         ClientVersion = HostVersion(),
         // Beside every profile, so hosts serving different bridge profiles share it (#238).
         Lease = key => new FileKeepAwakeLock(Path.Combine(Identity.DefaultRoot, "usage-probes", key + ".lock")).TryTake(),

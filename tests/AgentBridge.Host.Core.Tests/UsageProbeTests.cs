@@ -40,8 +40,9 @@ public sealed class UsageProbeTests : IDisposable
         CodexControlSocket = socket ?? Path.Combine(f.Root, "no-daemon.sock"),
     };
 
-    UsageProbes Probes(ICodexDaemon? daemon = null, FakeLeases? leases = null) => new()
+    UsageProbes Probes(ICodexDaemon? daemon = null, FakeLeases? leases = null, string? seen = null) => new()
     {
+        ClaudeAccountSeen = seen,
         Launcher = launcher,
         Processes = f.Processes,
         Find = agent => agent switch { AgentKind.Claude => "/fake/claude", AgentKind.Codex => "/fake/codex", _ => null },
@@ -93,6 +94,93 @@ public sealed class UsageProbeTests : IDisposable
     {
         await Until(() => !c.Probing || c.Cycle.IsCompleted);
         await c.Cycle;
+    }
+
+    string Seen => Path.Combine(f.Root, "profile", "usage-claude-account.json");
+
+    // What claude auth logout (Claude Code 2.1.317) leaves: the account and its reading gone, the rest kept.
+    void ClaudeLoggedOut() => File.WriteAllText(AccountPath, """{"numStartups":3,"theme":"dark"}""");
+
+    [Fact]
+    public async Task A_logout_after_an_account_was_seen_here_is_the_sign_out_and_asks_claude_nothing_until_it_signs_in()
+    {
+        ClaudeSaved(Now.AddMinutes(-1));
+        ClaudeScript();
+        var claude = new ClaudeUsageCollector(Options(), time, Probes(seen: Seen), Log);
+        var reading = (await claude.CollectAsync())!;
+        Assert.Null(reading.Error);
+
+        ClaudeLoggedOut();
+        var signedOut = (await claude.CollectAsync())!;
+
+        Assert.Equal(ClaudeUsageCollector.SignedOutError, signedOut.Error);
+        Assert.Equal(reading.AccountKey, signedOut.AccountKey);
+        Assert.Empty(signedOut.Windows);
+        Assert.Equal(Now, signedOut.MeasuredAt);
+        // Hours on: still the same sign-out, and neither auth status nor a probe was run for it.
+        var asked = launcher.Started.Count;
+        time.Advance(TimeSpan.FromHours(3));
+        Assert.Equal((ClaudeUsageCollector.SignedOutError, Now), ((await claude.CollectAsync())!.Error, (await claude.CollectAsync())!.MeasuredAt));
+        await Task.Delay(100);
+        Assert.Equal(asked, launcher.Started.Count);
+
+        // Signed in again: its reading, and no sign-out.
+        ClaudeSaved(time.GetUtcNow().AddMinutes(-1));
+        var back = (await claude.CollectAsync())!;
+        Assert.Null(back.Error);
+        Assert.Equal(reading.AccountKey, back.AccountKey);
+        Assert.DoesNotContain("signedOutAt\":\"", File.ReadAllText(Seen), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_machine_never_signed_in_to_claude_shows_nothing_and_asks_claude_nothing()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(AccountPath)!);
+        ClaudeLoggedOut();
+        ClaudeScript();
+        var claude = new ClaudeUsageCollector(Options(), time, Probes(seen: Seen), Log);
+
+        Assert.Null(await claude.CollectAsync());
+        time.Advance(TimeSpan.FromHours(3));
+        Assert.Null(await claude.CollectAsync());
+        await Task.Delay(100);
+        Assert.Empty(launcher.Started);
+    }
+
+    [Fact]
+    public async Task Another_account_signed_in_replaces_the_one_remembered_and_its_logout_is_that_accounts()
+    {
+        ClaudeSaved(Now.AddMinutes(-1));
+        ClaudeScript();
+        var claude = new ClaudeUsageCollector(Options(), time, Probes(seen: Seen), Log);
+        var first = (await claude.CollectAsync())!;
+
+        ClaudeSaved(Now.AddMinutes(-1), account: "CCCC-3333");
+        var second = (await claude.CollectAsync())!;
+        Assert.Null(second.Error);
+        Assert.NotEqual(first.AccountKey, second.AccountKey);
+
+        ClaudeLoggedOut();
+        Assert.Equal(second.AccountKey, (await claude.CollectAsync())!.AccountKey);
+    }
+
+    [Fact]
+    public async Task The_account_seen_here_and_its_sign_out_are_remembered_across_a_host_restart()
+    {
+        ClaudeSaved(Now.AddMinutes(-1));
+        ClaudeScript();
+        var key = (await new ClaudeUsageCollector(Options(), time, Probes(seen: Seen), Log).CollectAsync())!.AccountKey;
+
+        // Signed out while the host was down: the next host knows the account, and says so.
+        ClaudeLoggedOut();
+        time.Advance(TimeSpan.FromMinutes(5));
+        var after = (await new ClaudeUsageCollector(Options(), time, Probes(seen: Seen), Log).CollectAsync())!;
+        Assert.Equal((ClaudeUsageCollector.SignedOutError, key), (after.Error, after.AccountKey));
+
+        // And the time it found that out stands through another restart.
+        time.Advance(TimeSpan.FromMinutes(5));
+        var again = (await new ClaudeUsageCollector(Options(), time, Probes(seen: Seen), Log).CollectAsync())!;
+        Assert.Equal(after.MeasuredAt, again.MeasuredAt);
     }
 
     [Theory]
