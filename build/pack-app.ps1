@@ -65,11 +65,11 @@ Publish 'src/AgentBridge.App/AgentBridge.App.csproj' @()
 # The .pri carries the compiled XAML: without it the installed app fails at startup with
 # nothing but 0xC000027B (spike S3), while the build output runs fine.
 $required = 'AgentBridge.exe', 'AgentBridge.pri', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'agent-bridge-host-hook.exe', $AppIconFile, $AppLogoFile
-# The bundled monospace and its licence (Design/DesignKeys.cs FontFiles): the app names the font
+# The bundled fonts and their licences (Design/DesignKeys.cs FontFiles): the app names each font
 # by its file, so one left out would quietly fall back.
 $keys = Get-Content (Join-Path $root 'src' 'AgentBridge.App' 'Design' 'DesignKeys.cs') -Raw
 $required += [regex]::Matches($keys, '"(Assets/Fonts/[^"]+)"') | ForEach-Object { $_.Groups[1].Value -replace '/', '\' }
-if (-not ($required -like 'Assets\Fonts\*.ttf')) { throw 'Design/DesignKeys.cs lists no font files' }
+if (-not ($required -like 'Assets\Fonts\*.ttc')) { throw 'Design/DesignKeys.cs lists no font files' }
 $missing = $required | Where-Object { -not (Test-Path (Join-Path $publish $_)) }
 if ($missing) { throw "missing from the publish folder: $($missing -join ', ')" }
 # Every executable for the architecture asked for: an x64 one in an Arm64 package would run

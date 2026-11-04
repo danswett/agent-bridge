@@ -1,9 +1,17 @@
-# Proposal #544: a custom sans to pair with the monospace
+# Proposal #544: a custom sans to pair with the monospace (decided)
 
-> **Proposal — not approved.** Nothing here is spec. [ui.md](../ui.md),
-> [tokens.json](../../../design/tokens.json), the generated outputs and every client are
-> unchanged, and ui.md wins wherever this page and it disagree. The fonts built for this page
-> live only in [544-custom-sans/fonts/](544-custom-sans/fonts/), as proposal material.
+> **Decided 2026-11-03.** The owner approved **every recommended answer** (§10, recorded on
+> [#557](https://github.com/danswett/agent-bridge/pull/557)): 1 (a) B everywhere, as Slipgates Sans;
+> 2 (a) hinted statics on Windows, the variable pair elsewhere; 3 (a) no synthesized styles, as spec,
+> with a check on each platform; 4 (a) the mono gains Medium 500 and Vietnamese, and Windows checks
+> its bold and italic are real; 5 (a) the names Slipgates Sans and Slipgates Mono, with no Reserved
+> Font Name; 6 (a) a true italic on Windows; 7 (a) the reading measure about 8% wider. #557 applied
+> them: the font is [design/fonts/slipgates-sans](../../../design/fonts/slipgates-sans/README.md), the
+> rules are in [ui.md](../ui.md) §4, and `tools/design-gen` wires both fonts into every client.
+> **ui.md is the spec.** This page stays as the reasoning behind it; where the two differ, ui.md
+> wins. A and C were not chosen. Their fonts, and B's proposal build, stay in
+> [544-custom-sans/fonts/](544-custom-sans/fonts/) only so the boards still render; nothing ships
+> or loads them.
 
 *Written as a draft for the owner, from the design track.* Issues:
 [#544](https://github.com/danswett/agent-bridge/issues/544) (this),
@@ -21,7 +29,7 @@ version is made up.
 ## 1. The ask
 
 The owner likes the bundled monospace,
-[Agent Bridge Mono](../../../design/fonts/agent-bridge-mono/README.md): Iosevka 34.9.1 in the
+[Slipgates Mono](../../../design/fonts/slipgates-mono/README.md): Iosevka 34.9.1 in the
 IoskeleyMono configuration, with a tailed `l`, a 600-unit width and no ligatures. Today every
 other piece of text uses the platform's face: Segoe UI Variable on Windows, SF Pro on Apple,
 Roboto (Flex) on Android, and `system-ui` in the PWA (ui.md §4). The ask is a custom sans for
@@ -234,7 +242,7 @@ face loaded alone.
 every weight its tokens use. In the PWA, `tokens.css` and the service worker already declare
 all six faces. Two items still need checking:
 
-- **WinUI**, which references the mono by a single-file URI (`…#Agent Bridge Mono`). It is
+- **WinUI**, which references the mono by a single-file URI (`…#Slipgates Mono`). It is
   **unverified** whether DirectWrite picks up the sibling files from that URI or simulates bold
   and italic from Regular. That needs a SelfTest comparing advances, whatever the owner decides
   here.
@@ -320,7 +328,7 @@ is the fallback if a full rollout is too much for now.
 
 ## 10. Decisions for the owner
 
-Each has the recommended answer first.
+Each has the recommended answer first. **The owner chose (a) for every one** (2026-11-03).
 
 1. **Which option?**
    - **(a) B everywhere (recommended).**
@@ -354,10 +362,10 @@ Each has the recommended answer first.
 
    Board: [weights](544-custom-sans/proposal-544-weights.png) (mono row).
 5. **Names?**
-   - **(a) "Slipgates Sans" and "Slipgates Mono" (renaming Agent Bridge Mono with #536), with
+   - **(a) "Slipgates Sans" and "Slipgates Mono" (renaming Slipgates Mono with #536), with
      no Reserved Font Name (recommended):** simplest for contributors.
    - (b) The same names, with "Slipgates" reserved.
-   - (c) Keep "Agent Bridge Mono".
+   - (c) Keep "Slipgates Mono".
 
    Board: [specimens](544-custom-sans/proposal-544-specimens.png).
 6. **Italic on Windows:** today all Markdown emphasis there is Segoe's synthesized oblique.
@@ -374,12 +382,19 @@ Each has the recommended answer first.
    Board: [windows](544-custom-sans/proposal-544-windows.png),
    [pwa-desktop](544-custom-sans/proposal-544-pwa-desktop.png).
 
-If (a) is chosen for decision 1, the follow-ups are:
+What #557 did with them:
 
-- move B into `design/fonts/slipgates-sans/`;
-- update ui.md §4 and `type` in tokens.json (families, `inlineMono.text`, weights including
-  medium and italic);
-- update design-gen;
-- wire each client, with the §6 checks.
-
-Each is its own PR.
+- B became [design/fonts/slipgates-sans](../../../design/fonts/slipgates-sans/README.md), built by its
+  `build.py` from the Inter 4.1 release: the variable pair as TTF and WOFF2, and Inter's hinted
+  statics, 400–700 upright and italic, in one collection for Windows.
+- The mono was rebuilt as Slipgates Mono with Medium 500 and Vietnamese, and a collection for
+  Windows.
+- ui.md §4 and `type` in tokens.json name both families, the weights and styles the ramps use,
+  the no-synthesis rule (§4.2), the new inline-mono x-height and the 770 px measure.
+- `tools/design-gen` refuses a family that lacks a face the ramps use, and generates the PWA's
+  `@font-face` set with `font-synthesis: none`, the Windows font families and self-test keys,
+  `design/apple` (the font registration list and each face's PostScript name) and
+  `design/android/font` (a complete family XML per font).
+- The checks: a Playwright test in the PWA, and a DirectWrite and rendered-advance check in the
+  Windows self-test. The Apple and Android clients don't exist yet, so their checks are
+  follow-ups, as is a ClearType check on real hardware at 100% scale.

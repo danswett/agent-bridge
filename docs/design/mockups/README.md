@@ -9,7 +9,7 @@ ordinary row). The proposal boards render apart, into
 
 **Text fonts are stand-ins:** Inter takes the place of Segoe UI and SF Pro, so trust the
 images for layout, colour, size and spacing, not letterforms. The monospace is the real
-[Agent Bridge Mono](../../../design/fonts/agent-bridge-mono/README.md). To
+[Slipgates Mono](../../../design/fonts/slipgates-mono/README.md). To
 regenerate them, see [tools/design-mockups](../../../tools/design-mockups); the source is
 in [design/canvas](../../../design/canvas).
 

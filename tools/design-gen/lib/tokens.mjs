@@ -83,38 +83,75 @@ export function surfaceTokens(tokens) {
 
 export const allColorTokens = (tokens) => [...roleTokens(tokens), ...surfaceTokens(tokens)];
 
-// The monospace stack, as each client spells it. CSS's generic names are CSS's alone: XAML has
-// no ui-monospace, so it gets Windows' own monospace there instead.
-export function monoFamilies(tokens, client) {
-  const family = tokens.type.mono.family;
-  if (client === 'css') { return family.map((f) => (/^(ui-)?monospace$/.test(f) ? f : `"${f}"`)).join(', '); }
-  // XAML names a bundled font by its file: the first family, if it is ours, comes from the
-  // app's Assets/Fonts (bundled by AgentBridge.App.csproj), then the rest by name.
-  const own = monoFont(tokens);
-  const named = family.filter((f) => !/^(ui-)?monospace$/.test(f))
-    .map((f) => (own && f === own.family ? `ms-appx:///${own.appDir}/${own.faces[0].file}.ttf#${f}` : f));
-  return [...named, 'Consolas'].join(', ');
+// CSS's generic families and system keywords, which only CSS knows.
+const GENERIC = /^(ui-[\w-]+|system-ui|-apple-system|sans-serif|serif|monospace)$/;
+// What XAML ends each stack on, past every named family: Windows' own face of that kind.
+const XAML_LAST = { sans: 'Segoe UI', mono: 'Consolas' };
+
+// A stack (type.sans or type.mono), as each client spells it. CSS's generic names are CSS's
+// alone: XAML gets Windows' own face there instead.
+export function fontFamilies(tokens, kind, client) {
+  const family = tokens.type[kind].family;
+  if (client === 'css') { return family.map((f) => (GENERIC.test(f) ? f : `"${f}"`)).join(', '); }
+  // XAML names a bundled font by its file: the first family, if it is ours, is the collection
+  // in the app's Assets/Fonts (bundled by AgentBridge.App.csproj), then the rest by name. One
+  // collection holds every face, so DirectWrite sees the whole family rather than one file's
+  // face, which it would embolden and slant for the rest (#544).
+  const own = bundledFont(tokens, kind);
+  const named = family.filter((f) => !GENERIC.test(f))
+    .map((f) => (own && f === own.family ? `ms-appx:///${own.appDir}/${own.collectionFile}#${f}` : f));
+  return [...new Set([...named, XAML_LAST[kind]])].join(', ');
+}
+export const monoFamilies = (tokens, client) => fontFamilies(tokens, 'mono', client);
+
+export const WEIGHT_NAMES = Object.freeze({ 400: 'Regular', 500: 'Medium', 600: 'SemiBold', 700: 'Bold' });
+const faceName = (weight, style) => (weight === 400 && style === 'italic' ? 'Italic' : `${WEIGHT_NAMES[weight]}${style === 'italic' ? 'Italic' : ''}`);
+
+// A bundled family (type.sans or type.mono, with files), or null: its family name, where its
+// files are, and its real faces, by weight then style, in the order design/fonts builds them
+// into the collection (ttc/<Stem>.ttc), so a face's place in this list is its index there.
+// Each face is named as design/fonts names it (SlipgatesMono-SemiBoldItalic). A variable family
+// also has its upright and italic files (ttf/ and woff2/<Stem>.* and <Stem>-Italic.*), each
+// covering every weight; a static one has a TTF and a WOFF2 per face.
+export function bundledFont(tokens, kind) {
+  const def = tokens.type[kind];
+  if (!def?.files) { return null; }
+  const family = def.family[0];
+  const stem = family.replace(/\s+/g, '');
+  const styles = def.italic ? ['normal', 'italic'] : ['normal'];
+  const faces = [];
+  for (const weight of def.weights ?? [400]) {
+    if (!(weight in WEIGHT_NAMES)) { throw new Error(`type.${kind}.weights: no face name for weight ${weight}`); }
+    for (const style of styles) { faces.push({ weight, style, file: `${stem}-${faceName(weight, style)}` }); }
+  }
+  return {
+    kind, family, stem, dir: def.files, faces, variable: Boolean(def.variable),
+    variableFiles: def.variable ? styles.map((style) => ({ style, file: style === 'italic' ? `${stem}-Italic` : stem })) : [],
+    collection: `ttc/${stem}.ttc`, collectionFile: `${stem}.ttc`,
+    appDir: 'Assets/Fonts', license: 'OFL.txt', bundledLicense: `${stem}-OFL.txt`,
+  };
+}
+export const monoFont = (tokens) => bundledFont(tokens, 'mono');
+export const sansFont = (tokens) => bundledFont(tokens, 'sans');
+export const bundledFonts = (tokens) => ['sans', 'mono'].map((k) => bundledFont(tokens, k)).filter(Boolean);
+
+// The weights and styles the ramps ask for (type.weights, type.styles), as numbers: what every
+// bundled family must hold as real faces, so no client fakes one (type.synthesis).
+const RAMP_WEIGHTS = { light: 300, regular: 400, medium: 500, semibold: 600, bold: 700, heavy: 800 };
+export function rampFaces(tokens) {
+  const weights = (tokens.type.weights ?? ['regular']).map((w) => {
+    if (!(w in RAMP_WEIGHTS)) { throw new Error(`type.weights: "${w}" is not one of ${Object.keys(RAMP_WEIGHTS).join(', ')}`); }
+    return RAMP_WEIGHTS[w];
+  });
+  return weights.flatMap((weight) => (tokens.type.styles ?? ['normal']).map((style) => ({ weight, style })));
 }
 
-const WEIGHT_NAMES = { 400: 'Regular', 600: 'SemiBold', 700: 'Bold' };
-
-// The bundled monospace (type.mono.files), if there is one: its family, where its files are,
-// and one face per weight and style, named as design/fonts builds them
-// (AgentBridgeMono-SemiBoldItalic). The Regular face comes first.
-export function monoFont(tokens) {
-  const mono = tokens.type.mono;
-  if (!mono.files) { return null; }
-  const family = mono.family[0];
-  const stem = family.replace(/\s+/g, '');
-  const faces = [];
-  for (const style of mono.italic ? ['normal', 'italic'] : ['normal']) {
-    for (const weight of mono.weights ?? [400]) {
-      if (!(weight in WEIGHT_NAMES)) { throw new Error(`type.mono.weights: no file name for weight ${weight}`); }
-      const name = weight === 400 && style === 'italic' ? 'Italic' : `${WEIGHT_NAMES[weight]}${style === 'italic' ? 'Italic' : ''}`;
-      faces.push({ weight, style, file: `${stem}-${name}` });
-    }
+// No synthesized styles (ui.md §4.2): every face the ramps use is one each bundled family has.
+export function checkNoSynthesis(tokens) {
+  for (const font of bundledFonts(tokens)) {
+    const lacking = rampFaces(tokens).filter((r) => !font.faces.some((f) => f.weight === r.weight && f.style === r.style));
+    if (lacking.length) { throw new Error(`type.${font.kind} lacks ${lacking.map((r) => `${r.weight} ${r.style}`).join(', ')}, which the ramps use: a platform would synthesize it`); }
   }
-  return { family, dir: mono.files, faces, appDir: 'Assets/Fonts', license: 'OFL.txt' };
 }
 
 export function radii(tokens) {
@@ -264,14 +301,14 @@ export function layoutSizes(tokens) {
   return out;
 }
 
-// The Windows type ramp (type.roles.windows, ui.md §4.3): "20/28 semibold (Display optical size)"
-// is size 20, line height 28, semibold, in the Display optical size.
+// The Windows type ramp (type.roles.windows, ui.md §4.3): "20/28 semibold" is size 20, line
+// height 28, semibold.
 export function typeRamp(tokens) {
   const win = tokens.type.roles.windows;
   return Object.entries(win).filter(([k]) => k !== 'family').map(([role, spec]) => {
-    const m = /^(\d+)\/(\d+)(?: (semibold))?(?: \((Display) optical size\))?$/.exec(spec);
-    if (!m) { throw new Error(`type.roles.windows.${role}: "${spec}" is not size/line-height [semibold] [(Display optical size)]`); }
-    return { role, size: Number(m[1]), lineHeight: Number(m[2]), semibold: Boolean(m[3]), display: Boolean(m[4]), xaml: `AbType${pascal(role)}` };
+    const m = /^(\d+)\/(\d+)(?: (semibold))?$/.exec(spec);
+    if (!m) { throw new Error(`type.roles.windows.${role}: "${spec}" is not size/line-height [semibold]`); }
+    return { role, size: Number(m[1]), lineHeight: Number(m[2]), semibold: Boolean(m[3]), xaml: `AbType${pascal(role)}` };
   });
 }
 

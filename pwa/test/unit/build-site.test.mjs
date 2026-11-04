@@ -77,11 +77,12 @@ test('the page may reach the relay and the one storage account its blob store us
   }
 });
 
-test('the built site carries the monospace\'s six WOFF2s and their OFL licence, and keeps every shell file offline', () => {
+test('the built site carries both families\' WOFF2s and each one\'s OFL licence, and keeps every shell file offline', () => {
   const site = buildSite({ out: out('fonts') });
   const fonts = readdirSync(path.join(site, 'design', 'fonts')).sort();
-  assert.equal(fonts.filter((f) => f.endsWith('.woff2')).length, 6);
-  assert.ok(fonts.includes('OFL.txt'), 'the licence travels with the fonts');
+  // Slipgates Sans' variable pair, and Slipgates Mono's four weights, each with an italic.
+  assert.equal(fonts.filter((f) => f.endsWith('.woff2')).length, 10);
+  assert.deepEqual(fonts.filter((f) => f.endsWith('.txt')), ['SlipgatesMono-OFL.txt', 'SlipgatesSans-OFL.txt'], 'each licence travels with its fonts');
   const shell = [...sw(site).matchAll(/'\.\/([^']*)'/g)].map((m) => m[1]).filter(Boolean);
   // A shell file the site lacks fails the worker's install, so the app never works offline.
   assert.deepEqual(shell.filter((f) => !existsSync(path.join(site, f))), []);
@@ -89,7 +90,7 @@ test('the built site carries the monospace\'s six WOFF2s and their OFL licence, 
   // Every face tokens.css asks for is there.
   const css = readFileSync(path.join(site, 'design', 'tokens.css'), 'utf8');
   const faces = [...css.matchAll(/url\("(fonts\/[^"]+)"\)/g)].map((m) => m[1]);
-  assert.equal(faces.length, 6);
+  assert.equal(faces.length, 10);
   assert.deepEqual(faces.filter((f) => !existsSync(path.join(site, 'design', f))), []);
   rmSync(scratch, { recursive: true, force: true });
 });

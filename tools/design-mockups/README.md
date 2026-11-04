@@ -24,7 +24,7 @@ machines:
   because `@font-face` can't redefine a generic family and the machine's own font would
   otherwise change line wrapping. The canvas source keeps its stacks;
 - Roboto Flex for Roboto;
-- Cascadia Mono for the fallback monospace faces. Agent Bridge Mono itself is real, loaded from `design/fonts/agent-bridge-mono`.
+- Cascadia Mono for the fallback monospace faces. Slipgates Mono itself is real, loaded from `design/fonts/slipgates-mono`.
 
 So the images are right about layout, colour, sizes and spacing, but not about the exact
 letterforms. Every OS now uses the same fonts, but rasterization still differs slightly, so

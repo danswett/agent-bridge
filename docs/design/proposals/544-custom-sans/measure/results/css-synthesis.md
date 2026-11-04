@@ -41,18 +41,18 @@ Each row renders the text through ordinary CSS on the full family and compares i
 | 600 italic | font-weight/font-style | none | real face (SlipgatesSansB-Italic[opsz,wght].woff2 at wght 600) | 472.48 | 472.48 |
 | 700 italic | &lt;strong>&lt;em> | none | real face (SlipgatesSansB-Italic[opsz,wght].woff2 at wght 700) | 483.11 | 483.11 |
 
-## Agent Bridge Mono (6 statics, as bundled)
+## Slipgates Mono (6 statics, as bundled)
 
 | Asked | Via | font-synthesis | Result | Width (px) | Reference width |
 |---|---|---|---|---|---|
-| 400 normal | font-weight/font-style | none | real face (AgentBridgeMono-Regular.woff2) | 600.00 | 600.00 |
-| 500 normal | font-weight/font-style | none | no 500 normal face: CSS matching picks AgentBridgeMono-Regular.woff2; not synthesized | 600.00 | – |
-| 600 normal | font-weight/font-style | none | real face (AgentBridgeMono-SemiBold.woff2) | 600.00 | 600.00 |
-| 700 normal | &lt;strong> | none | real face (AgentBridgeMono-Bold.woff2) | 600.00 | 600.00 |
-| 400 italic | &lt;em> | none | real face (AgentBridgeMono-Italic.woff2) | 600.00 | 600.00 |
-| 500 italic | font-weight/font-style | none | no 500 italic face: CSS matching picks AgentBridgeMono-Italic.woff2; not synthesized | 600.00 | – |
-| 600 italic | font-weight/font-style | none | real face (AgentBridgeMono-SemiBoldItalic.woff2) | 600.00 | 600.00 |
-| 700 italic | &lt;strong>&lt;em> | none | real face (AgentBridgeMono-BoldItalic.woff2) | 600.00 | 600.00 |
+| 400 normal | font-weight/font-style | none | real face (SlipgatesMono-Regular.woff2) | 600.00 | 600.00 |
+| 500 normal | font-weight/font-style | none | no 500 normal face: CSS matching picks SlipgatesMono-Regular.woff2; not synthesized | 600.00 | – |
+| 600 normal | font-weight/font-style | none | real face (SlipgatesMono-SemiBold.woff2) | 600.00 | 600.00 |
+| 700 normal | &lt;strong> | none | real face (SlipgatesMono-Bold.woff2) | 600.00 | 600.00 |
+| 400 italic | &lt;em> | none | real face (SlipgatesMono-Italic.woff2) | 600.00 | 600.00 |
+| 500 italic | font-weight/font-style | none | no 500 italic face: CSS matching picks SlipgatesMono-Italic.woff2; not synthesized | 600.00 | – |
+| 600 italic | font-weight/font-style | none | real face (SlipgatesMono-SemiBoldItalic.woff2) | 600.00 | 600.00 |
+| 700 italic | &lt;strong>&lt;em> | none | real face (SlipgatesMono-BoldItalic.woff2) | 600.00 | 600.00 |
 
 ## Control: Slipgates Sans A, Regular file only
 
@@ -84,5 +84,5 @@ One paragraph of 203 characters, set on one line at 14 px, Regular.
 | Segoe UI Variable (Text, wght 400) | 1229.1 | 1.000 | 112 |
 | Slipgates Sans A | 1340.6 | 1.091 | 103 |
 | Slipgates Sans B | 1329.6 | 1.082 | 104 |
-| Agent Bridge Mono | 1705.2 | 1.387 | 81 |
+| Slipgates Mono | 1705.2 | 1.387 | 81 |
 

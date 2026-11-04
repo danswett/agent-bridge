@@ -24,8 +24,10 @@ const NAME = 'Agent Bridge';
 const BUNDLE = [];
 const SHELL = [
   './', './index.html', './app.css', './design/tokens.css', './design/sprite.svg',
-  './design/fonts/AgentBridgeMono-Regular.woff2', './design/fonts/AgentBridgeMono-Italic.woff2', './design/fonts/AgentBridgeMono-SemiBold.woff2',
-  './design/fonts/AgentBridgeMono-SemiBoldItalic.woff2', './design/fonts/AgentBridgeMono-Bold.woff2', './design/fonts/AgentBridgeMono-BoldItalic.woff2',
+  './design/fonts/SlipgatesSans.woff2', './design/fonts/SlipgatesSans-Italic.woff2',
+  './design/fonts/SlipgatesMono-Regular.woff2', './design/fonts/SlipgatesMono-Italic.woff2', './design/fonts/SlipgatesMono-Medium.woff2',
+  './design/fonts/SlipgatesMono-MediumItalic.woff2', './design/fonts/SlipgatesMono-SemiBold.woff2',
+  './design/fonts/SlipgatesMono-SemiBoldItalic.woff2', './design/fonts/SlipgatesMono-Bold.woff2', './design/fonts/SlipgatesMono-BoldItalic.woff2',
   './manifest.webmanifest', './icon.svg', './icons/icon-192.png', './icons/icon-512.png',
   './icons/maskable-192.png', './icons/maskable-512.png', './icons/apple-touch-icon.png',
   './fixtures/sessions-list.json',

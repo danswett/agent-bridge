@@ -4,7 +4,7 @@
 // the app can check at run time that every one of them resolves in every theme.
 
 import { toXamlColor } from './color.mjs';
-import { SYSTEM_COLORS, roleTokens, surfaceTokens, monoFamilies, monoFont, radii, spaces, accentShades, hyperlinkTokens, layoutSizes, typeRamp, inlineMono, inlineMonoSizes, motion, xamlCase } from './tokens.mjs';
+import { SYSTEM_COLORS, roleTokens, surfaceTokens, fontFamilies, monoFamilies, bundledFonts, rampFaces, radii, spaces, accentShades, hyperlinkTokens, layoutSizes, typeRamp, inlineMono, inlineMonoSizes, motion, xamlCase } from './tokens.mjs';
 import { MOVING_CLASSES, formatCommands, fmt } from './svg.mjs';
 
 const pascal = (s) => s.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('');
@@ -104,13 +104,11 @@ export function themeBrushes(tokens) {
 
 function typeStyle(t, tokens) {
   const setters = [
+    ['FontFamily', t.role === 'code' ? monoFamilies(tokens, 'xaml') : fontFamilies(tokens, 'sans', 'xaml')],
     ['FontSize', t.size],
     ['LineHeight', t.lineHeight],
     ['LineStackingStrategy', 'BlockLineHeight'],
     ...(t.semibold ? [['FontWeight', 'SemiBold']] : []),
-    // Segoe UI Variable's Display optical size; Windows 10, which lacks it, falls back to Segoe UI.
-    ...(t.display ? [['FontFamily', 'Segoe UI Variable Display, Segoe UI']] : []),
-    ...(t.role === 'code' ? [['FontFamily', monoFamilies(tokens, 'xaml')]] : []),
     ['Typography.NumeralAlignment', 'Tabular'],
   ];
   return `    <Style x:Key="${t.xaml}" TargetType="TextBlock">
@@ -145,9 +143,20 @@ ${accent.length ? `
          the system accent take it instead of the person's Windows accent. High contrast ignores it. -->
 ${accent.map((a) => `    <Color x:Key="${a.key}">${toXamlColor(a.value)}</Color>`).join('\n')}
 ` : ''}
-    <!-- The monospace (docs/design/ui.md §4.1): the bundled font, then the fallback stack. -->
+    <!-- The text face and the monospace (docs/design/ui.md §4.1): each bundled family as one
+         collection of real faces, then the fallback stack. WinUI's controls and its own text
+         styles draw in ContentControlThemeFontFamily, and a TextBlock or RichTextBlock with no
+         style of its own in the implicit styles below, so all of it is Slipgates Sans. -->
+    <FontFamily x:Key="SansFontFamily">${fontFamilies(tokens, 'sans', 'xaml')}</FontFamily>
+    <FontFamily x:Key="ContentControlThemeFontFamily">${fontFamilies(tokens, 'sans', 'xaml')}</FontFamily>
     <FontFamily x:Key="MonoFontFamily">${monoFamilies(tokens, 'xaml')}</FontFamily>
-    <!-- Inline mono beside Segoe UI Variable (docs/design/ui.md §4.2): WinUI has no
+    <Style TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="${fontFamilies(tokens, 'sans', 'xaml')}" />
+    </Style>
+    <Style TargetType="RichTextBlock">
+        <Setter Property="FontFamily" Value="${fontFamilies(tokens, 'sans', 'xaml')}" />
+    </Style>
+    <!-- Inline mono beside the text face (docs/design/ui.md §4.2): WinUI has no
          font-size-adjust, so the scale, and the size for each ramp role, that match its x-height. -->
     <x:Double x:Key="AbInlineMonoScale">${inlineMono(tokens).platforms.find((p) => p.name === 'windows').scale}</x:Double>
 ${inlineMonoSizes(tokens).map((r) => `    <x:Double x:Key="${r.xaml}">${r.value}</x:Double>`).join('\n')}
@@ -202,13 +211,50 @@ export function motionResources(tokens) {
   return out;
 }
 
-// The font files the app bundles, relative to its folder: what the XAML points at, and the OFL.
+// The font files the app bundles, relative to its folder: each family's collection, which the
+// XAML points at, and its OFL.
 export function fontFiles(tokens) {
-  const font = monoFont(tokens);
-  return font ? [...font.faces.map((f) => `${font.appDir}/${f.file}.ttf`), `${font.appDir}/${font.license}`] : [];
+  return bundledFonts(tokens).flatMap((f) => [`${f.appDir}/${f.collectionFile}`, `${f.appDir}/${f.bundledLicense}`]);
 }
 
-export function designKeysCs(tokens, glyphs, icons) {
+// The faces the self-test proves are real (docs/design/ui.md §4.2): for each bundled family its
+// collection and every weight and style; for Slipgates Sans, whose weights differ in width, the
+// advance of a probe string in each face (design/fonts/slipgates-sans/faces.json), which text
+// drawn through XAML's FontWeight and FontStyle must match.
+function fontChecks(tokens, manifests) {
+  const fonts = bundledFonts(tokens);
+  const sans = fonts.find((f) => f.kind === 'sans');
+  const probe = sans && manifests?.[sans.kind];
+  const advance = (face) => {
+    const m = probe?.faces.find((x) => x.weight === face.weight && x.style === face.style);
+    if (!m) { throw new Error(`${sans.dir}/faces.json has no ${face.weight} ${face.style} face`); }
+    return m.probe;
+  };
+  return `    // The bundled families, each one collection of real faces (docs/design/ui.md §4.2): the
+    // self-test asks DirectWrite for every weight and style in each and fails on a simulated one.
+    public static readonly (string Family, string File)[] FontCollections =
+    [
+${fonts.map((f) => `        ("${f.family}", "${f.appDir}/${f.collectionFile}"),`).join('\n')}
+    ];
+
+    public static readonly (int Weight, bool Italic)[] FontFaces =
+    [
+${rampFaces(tokens).map((r) => `        (${r.weight}, ${r.style === 'italic'}),`).join('\n')}
+    ];
+${probe ? `
+    // Slipgates Sans' probe and its advance in each face, in units of its em: XAML's text in that
+    // weight and style must be as wide, which a faked bold or italic of another face isn't.
+    public const string SansProbe = "${probe.probe}";
+    public const int SansUnitsPerEm = ${probe.unitsPerEm};
+
+    public static readonly (int Weight, bool Italic, int Advance)[] SansProbeAdvances =
+    [
+${sans.faces.map((f) => `        (${f.weight}, ${f.style === 'italic'}, ${advance(f)}),`).join('\n')}
+    ];
+` : ''}`;
+}
+
+export function designKeysCs(tokens, glyphs, icons, manifests = null) {
   const list = (xs) => xs.map((x) => `        "${x}",`).join('\n');
   return `// <auto-generated>
 // ${xamlHeader('design/tokens.json, design/glyphs and design/icons').replace(/\n\s*/g, ' ')}
@@ -253,6 +299,7 @@ ${list(glyphs.map(styleKey))}
 ${list(icons.map(styleKey))}
     ];
 
+    public const string SansFontFamily = "SansFontFamily";
     public const string MonoFontFamily = "MonoFontFamily";
 
     // Inline mono's scale and its size for each ramp role (docs/design/ui.md §4.2).
@@ -268,13 +315,13 @@ ${list(['AbInlineMonoScale', ...inlineMonoSizes(tokens).map((r) => r.xaml)])}
 ${list(motionResources(tokens).map((r) => r.key))}
     ];
 
-    // The bundled monospace and its licence, as the app's folder holds them
+    // The bundled fonts and their licences, as the app's folder holds them
     // (AgentBridge.App.csproj copies them from design/fonts).
     public static readonly string[] FontFiles =
     [
 ${list(fontFiles(tokens))}
     ];
-}
+${fontChecks(tokens, manifests)}}
 `;
 }
 

@@ -1,0 +1,106 @@
+{
+  "family": "Slipgates Sans",
+  "unitsPerEm": 2048,
+  "probe": "Hamburgefonstiv 0123456789",
+  "collection": "ttc/SlipgatesSans.ttc",
+  "faces": [
+    {
+      "weight": 400,
+      "style": "normal",
+      "postscript": "SlipgatesSans-Regular",
+      "index": 0,
+      "probe": 29312
+    },
+    {
+      "weight": 400,
+      "style": "italic",
+      "postscript": "SlipgatesSans-Italic",
+      "index": 1,
+      "probe": 29410
+    },
+    {
+      "weight": 500,
+      "style": "normal",
+      "postscript": "SlipgatesSans-Medium",
+      "index": 2,
+      "probe": 29742
+    },
+    {
+      "weight": 500,
+      "style": "italic",
+      "postscript": "SlipgatesSans-MediumItalic",
+      "index": 3,
+      "probe": 29845
+    },
+    {
+      "weight": 600,
+      "style": "normal",
+      "postscript": "SlipgatesSans-SemiBold",
+      "index": 4,
+      "probe": 30162
+    },
+    {
+      "weight": 600,
+      "style": "italic",
+      "postscript": "SlipgatesSans-SemiBoldItalic",
+      "index": 5,
+      "probe": 30276
+    },
+    {
+      "weight": 700,
+      "style": "normal",
+      "postscript": "SlipgatesSans-Bold",
+      "index": 6,
+      "probe": 30590
+    },
+    {
+      "weight": 700,
+      "style": "italic",
+      "postscript": "SlipgatesSans-BoldItalic",
+      "index": 7,
+      "probe": 30709
+    }
+  ],
+  "variable": [
+    {
+      "style": "normal",
+      "ttf": "ttf/SlipgatesSans.ttf",
+      "woff2": "woff2/SlipgatesSans.woff2",
+      "weight": [
+        100,
+        900
+      ],
+      "instances": {
+        "100": "SlipgatesSans-Thin",
+        "200": "SlipgatesSans-ExtraLight",
+        "300": "SlipgatesSans-Light",
+        "400": "SlipgatesSans",
+        "500": "SlipgatesSans-Medium",
+        "600": "SlipgatesSans-SemiBold",
+        "700": "SlipgatesSans-Bold",
+        "800": "SlipgatesSans-ExtraBold",
+        "900": "SlipgatesSans-Black"
+      }
+    },
+    {
+      "style": "italic",
+      "ttf": "ttf/SlipgatesSans-Italic.ttf",
+      "woff2": "woff2/SlipgatesSans-Italic.woff2",
+      "weight": [
+        100,
+        900
+      ],
+      "instances": {
+        "100": "SlipgatesSansItalic-Thin",
+        "200": "SlipgatesSansItalic-ExtraLight",
+        "300": "SlipgatesSansItalic-Light",
+        "400": "SlipgatesSansItalic",
+        "500": "SlipgatesSansItalic-Medium",
+        "600": "SlipgatesSansItalic-SemiBold",
+        "700": "SlipgatesSansItalic-Bold",
+        "800": "SlipgatesSansItalic-ExtraBold",
+        "900": "SlipgatesSansItalic-Black"
+      }
+    }
+  ]
+}

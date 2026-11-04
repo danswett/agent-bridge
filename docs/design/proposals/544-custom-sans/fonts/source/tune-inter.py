@@ -33,7 +33,7 @@ PS = "SlipgatesSansB"
 COPYRIGHT = ("Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter). "
              "Copyright 2026, Dan Swett (Slipgates Sans B modifications: Inter's alternates "
              "for l, 3, 4, 6, 9 and square punctuation made the defaults).")
-# The monospace's subset (design/fonts/agent-bridge-mono/private-build-plans.toml), so the
+# The monospace's subset (design/fonts/slipgates-mono/private-build-plans.toml), so the
 # two faces cover the same characters and fall back together, plus Spacing Modifier Letters
 # and Latin Extended Additional (Vietnamese), which a text face needs and Segoe UI covers.
 RANGES = [(32, 126), (160, 255), (256, 383), (384, 591), (688, 767), (768, 879), (7680, 7935), (880, 1023),

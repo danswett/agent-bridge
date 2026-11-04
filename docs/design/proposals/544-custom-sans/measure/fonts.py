@@ -84,11 +84,11 @@ def main():
     if "--system" in sys.argv:
         system = [pathlib.Path(p) for p in sys.argv[sys.argv.index("--system") + 1:]]
     proposal = root / "docs/design/proposals/544-custom-sans/fonts/woff2"
-    mono = sorted((root / "design/fonts/agent-bridge-mono").rglob("*.woff2"))
+    mono = sorted((root / "design/fonts/slipgates-mono").rglob("*.woff2"))
     regulars = {
         "A (Slipgates Sans A)": proposal / "SlipgatesSansA-Regular.woff2",
         "B (Slipgates Sans B)": proposal / "SlipgatesSansB-Regular.woff2",
-        "Mono (Agent Bridge Mono)": next(p for p in mono if p.name.endswith("-Regular.woff2")),
+        "Mono (Slipgates Mono)": next(p for p in mono if p.name.endswith("-Regular.woff2")),
     }
     for p in system:
         regulars[f"System: {load(p)['name'].getDebugName(1)} ({p.name})"] = p
@@ -140,7 +140,7 @@ def main():
         print(f"| {label} | {len(files)} | {sum(f.stat().st_size for f in files):,} "
               f"| {woff2_bytes(load(regular), latin):,} ({regular.name}) |")
     print(f"| Mono statics (bundled today) | {len(mono)} | {sum(f.stat().st_size for f in mono):,} "
-          f"| {woff2_bytes(load(regulars['Mono (Agent Bridge Mono)']), latin):,} |")
+          f"| {woff2_bytes(load(regulars['Mono (Slipgates Mono)']), latin):,} |")
     pinned = [instancer.instantiateVariableFont(load(f), {"opsz": 14}) for f in sorted(proposal.glob("SlipgatesSansB*[[]*.woff2"))]
     print(f"| B variable, opsz pinned at 14 (wght axis only), upright+italic | 2 | "
           f"{sum(woff2_bytes(f) for f in pinned):,} | {woff2_bytes(pinned[-1], latin):,} |")

@@ -2,7 +2,7 @@
 # NOT APPROVED. Proposal material only: nothing in design/, the tokens or the clients uses it.
 #
 # Built the way Iosevka Aile is built (spacing = "quasi-proportional", serifs = "sans"),
-# from design/fonts/agent-bridge-mono/private-build-plans.toml: the same Iosevka 34.9.1,
+# from design/fonts/slipgates-mono/private-build-plans.toml: the same Iosevka 34.9.1,
 # the same IoskeleyMono variants (tailed l, flag 1, straight 7, open 4/6/9, flat-top 3,
 # square dots), the same metric overrides (x-height 520, cap 690, ascender 740).
 # Four changes from the mono, each because a proportional text face needs it:

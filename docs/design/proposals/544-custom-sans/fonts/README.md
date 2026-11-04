@@ -1,9 +1,10 @@
-# Proposal fonts for #544 (not approved)
+# Proposal fonts for #544 (superseded)
 
-These are proposal material for [544-custom-sans.md](../../544-custom-sans.md). They are
-**not** the design system. Nothing in `design/tokens.json`, the generated outputs or any
-client loads them. If the owner approves an option, its fonts move to `design/fonts/` in a
-separate change, the way Agent Bridge Mono lives in `design/fonts/agent-bridge-mono/`.
+These are proposal material for [544-custom-sans.md](../../544-custom-sans.md), kept only so its
+boards still render. They are **not** the design system, and nothing in `design/tokens.json`,
+the generated outputs or any client loads them. The owner chose B, which now lives, rebuilt, in
+[design/fonts/slipgates-sans](../../../../../design/fonts/slipgates-sans/README.md) as Slipgates
+Sans; A (and C, which was A for headings only) was not chosen.
 
 Both faces are under the SIL Open Font License 1.1 ([OFL.txt](OFL.txt)). None of the upstream
 fonts declares a Reserved Font Name.
@@ -23,7 +24,7 @@ the mono ([fonts.md](../measure/results/fonts.md)).
 Only WOFF2 is committed; `ttf/` is ignored.
 
 - **A:** `bash source/build-a.sh`. It needs Node 20+, Python 3 with fontTools and brotli, and
-  ttfautohint (or the `ttfautohint-py` package), as `design/fonts/agent-bridge-mono/build.sh`
+  ttfautohint (or the `ttfautohint-py` package), as `design/fonts/slipgates-mono/build.sh`
   does. It clones Iosevka v34.9.1, builds `source/private-build-plans.toml` and runs
   `source/postprocess-a.py`, which writes `ttf/` and `woff2/`. It takes about four minutes.
 - **B:** download and unzip the Inter 4.1 release from github.com/rsms/inter. Then run

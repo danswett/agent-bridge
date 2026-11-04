@@ -4,13 +4,13 @@
 |---|---|---|---|---|---|---|---|
 | A (Slipgates Sans A) | 1000 | 520 | 0.520 | 0.690 | 1.000 | 0.494 | yes (fpgm/prep) |
 | B (Slipgates Sans B) | 2048 | 1118 | 0.546 | 0.728 | 1.050 | 0.510 | yes (fpgm/prep) |
-| Mono (Agent Bridge Mono) | 1000 | 520 | 0.520 | 0.690 | 1.000 | 0.600 | yes (fpgm/prep) |
+| Mono (Slipgates Mono) | 1000 | 520 | 0.520 | 0.690 | 1.000 | 0.600 | yes (fpgm/prep) |
 | System: Segoe UI Variable (SegUIVar.ttf) | 2048 | 1024 | 0.500 | 0.700 | 0.962 | 0.469 | yes (fpgm/prep) |
 | System: Roboto (Roboto.ttf) | 2048 | 1082 | 0.528 | 0.711 | 1.016 | 0.475 | yes (fpgm/prep) |
 
 ## Coverage (codepoints in cmap)
 
-| Block | A (Slipgates Sans A) | B (Slipgates Sans B) | Mono (Agent Bridge Mono) | System: Segoe UI Variable (SegUIVar.ttf) | System: Roboto (Roboto.ttf) |
+| Block | A (Slipgates Sans A) | B (Slipgates Sans B) | Mono (Slipgates Mono) | System: Segoe UI Variable (SegUIVar.ttf) | System: Roboto (Roboto.ttf) |
 |---|---|---|---|---|---|
 | Basic Latin (U+0020–007E) | 95 | 95 | 95 | 95 | 95 |
 | Latin-1 (U+00A0–00FF) | 96 | 95 | 96 | 96 | 96 |
@@ -35,13 +35,13 @@ A (Slipgates Sans A) lacks 135 of System: Segoe UI Variable (SegUIVar.ttf)'s Lat
 
 B (Slipgates Sans B) lacks 244 of System: Segoe UI Variable (SegUIVar.ttf)'s Latin/Greek/Cyrillic/punctuation codepoints, e.g. `ŉǄɐɑɒɓɔɕɖɗɘəɚɛɜɝɞɟɠɡɢɣɤɥɦɧɨɩɪɫɬɭɮɯɰɱɲɳɴɵ`.
 
-Mono (Agent Bridge Mono) lacks 462 of System: Segoe UI Variable (SegUIVar.ttf)'s Latin/Greek/Cyrillic/punctuation codepoints, e.g. `ɐɑɒɓɔɕɗɘəɚɛɜɝɞɠɡɢɣɤɥɦɧɨɩɪɬɮɯɰɱɲɴɵɶɷɸɺɼɿʀ`.
+Mono (Slipgates Mono) lacks 462 of System: Segoe UI Variable (SegUIVar.ttf)'s Latin/Greek/Cyrillic/punctuation codepoints, e.g. `ɐɑɒɓɔɕɗɘəɚɛɜɝɞɠɡɢɣɤɥɦɧɨɩɪɬɮɯɰɱɲɴɵɶɷɸɺɼɿʀ`.
 
 A (Slipgates Sans A) lacks 16 of System: Roboto (Roboto.ttf)'s Latin/Greek/Cyrillic/punctuation codepoints, e.g. `ə⁺⁻⁼⁽⁾ⁿ₊₋₌₍₎`.
 
 B (Slipgates Sans B) lacks 43 of System: Roboto (Roboto.ttf)'s Latin/Greek/Cyrillic/punctuation codepoints, e.g. `ŉəѺѻѼѽѾѿҞҟ⁰⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿ₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎`.
 
-Mono (Agent Bridge Mono) lacks 128 of System: Roboto (Roboto.ttf)'s Latin/Greek/Cyrillic/punctuation codepoints, e.g. `əʼˆˇˉ˘˙˚˛˜˝˳ḀḁḾḿẀẁẂẃẄẅẞẠạẢảẤấẦầẨẩẪẫẬậẮắẰ`.
+Mono (Slipgates Mono) lacks 128 of System: Roboto (Roboto.ttf)'s Latin/Greek/Cyrillic/punctuation codepoints, e.g. `əʼˆˇˉ˘˙˚˛˜˝˳ḀḁḾḿẀẁẂẃẄẅẞẠạẢảẤấẦầẨẩẪẫẬậẮắẰ`.
 
 ## Payload (WOFF2 bytes)
 
@@ -75,9 +75,9 @@ Mono (Agent Bridge Mono) lacks 128 of System: Roboto (Roboto.ttf)'s Latin/Greek/
 | SlipgatesSansB-SemiBold.woff2 | Slipgates Sans B SemiBold / Regular | Slipgates Sans B / SemiBold | 600 | REGULAR | – | 0 |
 | SlipgatesSansB-SemiBoldItalic.woff2 | Slipgates Sans B SemiBold / Italic | Slipgates Sans B / SemiBold Italic | 600 | ITALIC | italic | -9.39999 |
 | SlipgatesSansB[opsz,wght].woff2 | Slipgates Sans B / Regular | – / – | 400 | REGULAR | – | 0 |
-| AgentBridgeMono-Bold.woff2 | Agent Bridge Mono / Bold | Agent Bridge Mono / Bold | 700 | BOLD | bold | 0 |
-| AgentBridgeMono-BoldItalic.woff2 | Agent Bridge Mono / Bold Italic | Agent Bridge Mono / Bold Italic | 700 | ITALIC,BOLD | bold,italic | -12 |
-| AgentBridgeMono-Italic.woff2 | Agent Bridge Mono / Italic | Agent Bridge Mono / Italic | 400 | ITALIC | italic | -12 |
-| AgentBridgeMono-Regular.woff2 | Agent Bridge Mono / Regular | Agent Bridge Mono / Regular | 400 | REGULAR | – | 0 |
-| AgentBridgeMono-SemiBold.woff2 | Agent Bridge Mono Semibold / Regular | Agent Bridge Mono / Semibold | 600 | REGULAR | – | 0 |
-| AgentBridgeMono-SemiBoldItalic.woff2 | Agent Bridge Mono Semibold / Italic | Agent Bridge Mono / Semibold Italic | 600 | ITALIC | italic | -12 |
+| SlipgatesMono-Bold.woff2 | Slipgates Mono / Bold | Slipgates Mono / Bold | 700 | BOLD | bold | 0 |
+| SlipgatesMono-BoldItalic.woff2 | Slipgates Mono / Bold Italic | Slipgates Mono / Bold Italic | 700 | ITALIC,BOLD | bold,italic | -12 |
+| SlipgatesMono-Italic.woff2 | Slipgates Mono / Italic | Slipgates Mono / Italic | 400 | ITALIC | italic | -12 |
+| SlipgatesMono-Regular.woff2 | Slipgates Mono / Regular | Slipgates Mono / Regular | 400 | REGULAR | – | 0 |
+| SlipgatesMono-SemiBold.woff2 | Slipgates Mono Semibold / Regular | Slipgates Mono / Semibold | 600 | REGULAR | – | 0 |
+| SlipgatesMono-SemiBoldItalic.woff2 | Slipgates Mono Semibold / Italic | Slipgates Mono / Semibold Italic | 600 | ITALIC | italic | -12 |

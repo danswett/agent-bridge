@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Proposal #544, option A: rebuilds Slipgates Sans A (NOT APPROVED) into ../ttf and ../woff2.
-# The same toolchain and pinned Iosevka as design/fonts/agent-bridge-mono/build.sh; see its
+# The same toolchain and pinned Iosevka as design/fonts/slipgates-mono/build.sh; see its
 # README for the Windows notes. About four minutes on twelve threads.
 set -euo pipefail
 IOSEVKA_TAG=v34.9.1

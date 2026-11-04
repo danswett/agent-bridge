@@ -696,7 +696,7 @@ test('a folder\'s path in Details is mono, on one line, and gives up its middle 
   const v = await open(page, CODEX);
   const path = v.locator('.fact-folder .path');
   await expect(path).toHaveAttribute('title', cwd);
-  expect(await path.evaluate((e) => getComputedStyle(e).fontFamily)).toMatch(/^"?Agent Bridge Mono"?/);
+  expect(await path.evaluate((e) => getComputedStyle(e).fontFamily)).toMatch(/^"?Slipgates Mono"?/);
   const shape = await path.evaluate((e) => {
     const head = e.querySelector('.path-head');
     const tail = e.querySelector('.path-tail');

@@ -49,18 +49,26 @@ export function contentSecurityPolicy(relay, blobOrigins = []) {
   return `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'${connect}; object-src 'none'; base-uri 'none'; form-action 'none'`;
 }
 
-// The monospace's WOFF2s and its licence, from the repository's design/ (design/tokens.json
-// type.mono.files) into design/fonts/, where design/tokens.css's @font-face rules look. Copied
-// at build time rather than kept twice in the repository; the OFL travels with them.
+// The bundled fonts' WOFF2s and their licences, from the repository's design/ (design/tokens.json
+// type.sans.files and type.mono.files) into design/fonts/, where design/tokens.css's @font-face
+// rules look. Copied at build time rather than kept twice in the repository; each family's OFL
+// travels with it, as <Stem>-OFL.txt.
 export function copyFonts(out, repo = path.dirname(appRoot)) {
-  const mono = JSON.parse(readFileSync(path.join(repo, 'design', 'tokens.json'), 'utf8')).type.mono;
-  if (!mono.files) { return []; }
-  const from = path.join(repo, mono.files);
+  const type = JSON.parse(readFileSync(path.join(repo, 'design', 'tokens.json'), 'utf8')).type;
   const to = path.join(out, 'design', 'fonts');
-  mkdirSync(to, { recursive: true });
-  const files = [...readdirSync(path.join(from, 'woff2')).filter((f) => f.endsWith('.woff2')).map((f) => path.join('woff2', f)), 'OFL.txt'];
-  for (const f of files) { cpSync(path.join(from, f), path.join(to, path.basename(f))); }
-  return files.map((f) => path.basename(f));
+  const copied = [];
+  for (const font of [type.sans, type.mono].filter((f) => f?.files)) {
+    const from = path.join(repo, font.files);
+    const stem = font.family[0].replace(/\s+/g, '');
+    mkdirSync(to, { recursive: true });
+    for (const f of readdirSync(path.join(from, 'woff2')).filter((x) => x.endsWith('.woff2'))) {
+      cpSync(path.join(from, 'woff2', f), path.join(to, f));
+      copied.push(f);
+    }
+    cpSync(path.join(from, 'OFL.txt'), path.join(to, `${stem}-OFL.txt`));
+    copied.push(`${stem}-OFL.txt`);
+  }
+  return copied;
 }
 
 export function buildSite({ out, relay = '', blobOrigins = [], root = appRoot }) {

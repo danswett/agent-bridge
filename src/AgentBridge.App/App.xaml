@@ -8,19 +8,21 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
                 <!-- The design language's colour roles and surfaces (Light, Dark, HighContrast),
-                     mono stack, glyphs and icons, generated from design/ by tools/design-gen
-                     (design/README.md). The PWA gets the same, so a card reads the same on
-                     the desktop. No colour is written here. -->
+                     type ramp in Slipgates Sans and Slipgates Mono, glyphs and icons, generated
+                     from design/ by tools/design-gen (design/README.md). The PWA gets the same,
+                     so a card reads the same on the desktop. No colour is written here. -->
                 <ResourceDictionary Source="ms-appx:///Design/DesignResources.xaml" />
             </ResourceDictionary.MergedDictionaries>
 
+            <!-- A keyed style replaces the implicit TextBlock style, so each one here names the text face. -->
             <Style x:Key="AbSecondaryText" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />
                 <Setter Property="Foreground" Value="{ThemeResource AbText2}" />
                 <Setter Property="TextWrapping" Value="Wrap" />
                 <Setter Property="IsTextSelectionEnabled" Value="True" />
             </Style>
             <!-- Inline mono (ui.md §4.2, #215): a path, id, branch or tool call on a line of a ramp
-                 role, in Agent Bridge Mono at that role's generated inline size (its x-height the text
+                 role, in Slipgates Mono at that role's generated inline size (its x-height the text
                  face's) and the role's own line height and weight. The Code role (AbTypeCode) is for
                  code standing on its own lines. -->
             <Style x:Key="InlineMonoRow" TargetType="TextBlock" BasedOn="{StaticResource AbTypeRow}">
@@ -32,6 +34,7 @@
                 <Setter Property="FontSize" Value="{StaticResource AbInlineMonoMeta}" />
             </Style>
             <Style x:Key="AbSectionTitle" TargetType="TextBlock" BasedOn="{StaticResource SubtitleTextBlockStyle}">
+                <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />
                 <Setter Property="Margin" Value="0,12,0,4" />
             </Style>
             <!-- A subtle icon button for a header's actions (ui.md §7): 32×32, the desktop's smallest

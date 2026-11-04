@@ -11,7 +11,7 @@ const { chromium } = require('playwright');
 const root = path.resolve(process.argv[2]);
 const woff2 = p => `url(data:font/woff2;base64,${fs.readFileSync(path.join(root, p)).toString('base64')}) format('woff2')`;
 const P = 'docs/design/proposals/544-custom-sans/fonts/woff2/';
-const M = 'design/fonts/agent-bridge-mono/woff2/';
+const M = 'design/fonts/slipgates-mono/woff2/';
 const NEED = [[400, 'normal'], [500, 'normal'], [600, 'normal'], [700, 'normal'], [400, 'italic'], [500, 'italic'], [600, 'italic'], [700, 'italic']];
 const NAME = { 400: 'Regular', 500: 'Medium', 600: 'SemiBold', 700: 'Bold' };
 const statics = (dir, stem, have = [400, 500, 600, 700]) => NEED.filter(([w]) => have.includes(w)).map(([w, s]) => ({
@@ -23,7 +23,7 @@ const families = [
   { label: 'Slipgates Sans B (2 variable files)', variable: true, faces: [
     { w: '100 900', s: 'normal', src: P + 'SlipgatesSansB[opsz,wght].woff2' },
     { w: '100 900', s: 'italic', src: P + 'SlipgatesSansB-Italic[opsz,wght].woff2' }] },
-  { label: 'Agent Bridge Mono (6 statics, as bundled)', faces: statics(M, 'AgentBridgeMono', [400, 600, 700]) },
+  { label: 'Slipgates Mono (6 statics, as bundled)', faces: statics(M, 'SlipgatesMono', [400, 600, 700]) },
   { label: 'Control: Slipgates Sans A, Regular file only', control: true, faces: statics(P, 'SlipgatesSansA', [400]).filter(f => f.s === 'normal') },
 ];
 const TEXT = 'Hamburgefonstiv 0123 Il1|';
@@ -81,7 +81,7 @@ function cssMatch(faces, w, s) {
   // relative to Segoe UI Variable, and the characters that fit the 680 px reading measure.
   const segoe = process.env.SEGOE_UI_VARIABLE || 'C:/Windows/Fonts/SegUIVar.ttf';
   const para = 'The banner listens for TrustStateChanged, but LaunchView only checks it once, at load. I will subscribe in OnNavigatedTo and clear it as soon as the folder is trusted, then rerun the tests on the devbox.';
-  const faces = [['Slipgates Sans A', P + 'SlipgatesSansA-Regular.woff2'], ['Slipgates Sans B', P + 'SlipgatesSansB-Regular.woff2'], ['Agent Bridge Mono', M + 'AgentBridgeMono-Regular.woff2']];
+  const faces = [['Slipgates Sans A', P + 'SlipgatesSansA-Regular.woff2'], ['Slipgates Sans B', P + 'SlipgatesSansB-Regular.woff2'], ['Slipgates Mono', M + 'SlipgatesMono-Regular.woff2']];
   const rows = [];
   if (fs.existsSync(segoe)) rows.push(['Segoe UI Variable (Text, wght 400)', `url(data:font/ttf;base64,${fs.readFileSync(segoe).toString('base64')}) format('truetype')`, "font-variation-settings:'opsz' 10.5"]);
   for (const [n, f] of faces) rows.push([n, woff2(f), '']);

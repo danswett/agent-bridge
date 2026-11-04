@@ -45,13 +45,17 @@
     <Content Include="$(AppLogoFile)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!-- Agent Bridge Mono (docs/design/ui.md §4.1), from design/fonts rather than a second copy:
-       the TTFs the generated MonoFontFamily names by ms-appx, and the SIL Open Font License
-       they ship under, beside them. Design/DesignKeys.cs lists what must be here; the
-       self-test and build/pack-app.ps1 check it. -->
+  <!-- Slipgates Sans and Slipgates Mono (docs/design/ui.md §4.1), from design/fonts rather than
+       a second copy: each family's collection of hinted static faces, which the generated
+       SansFontFamily and MonoFontFamily name by ms-appx, and the SIL Open Font License each ships
+       under, beside it. One collection per family holds every weight and style the ramps use, so
+       DirectWrite fakes none of them (ui.md §4.2). Design/DesignKeys.cs lists what must be here;
+       the self-test and build/pack-app.ps1 check it. -->
   <ItemGroup>
-    <Content Include="..\..\design\fonts\agent-bridge-mono\ttf\*.ttf" Link="Assets\Fonts\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\..\design\fonts\agent-bridge-mono\OFL.txt" Link="Assets\Fonts\OFL.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\design\fonts\slipgates-sans\ttc\SlipgatesSans.ttc" Link="Assets\Fonts\SlipgatesSans.ttc" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\design\fonts\slipgates-sans\OFL.txt" Link="Assets\Fonts\SlipgatesSans-OFL.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\design\fonts\slipgates-mono\ttc\SlipgatesMono.ttc" Link="Assets\Fonts\SlipgatesMono.ttc" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\design\fonts\slipgates-mono\OFL.txt" Link="Assets\Fonts\SlipgatesMono-OFL.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

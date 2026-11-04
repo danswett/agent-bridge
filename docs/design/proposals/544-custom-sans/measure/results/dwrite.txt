@@ -54,8 +54,8 @@ family "Slipgates Sans B": 27 faces
 synthesized matches: 0
 
 ## mono
-files: AgentBridgeMono-Bold.ttf, AgentBridgeMono-BoldItalic.ttf, AgentBridgeMono-Italic.ttf, AgentBridgeMono-Regular.ttf, AgentBridgeMono-SemiBold.ttf, AgentBridgeMono-SemiBoldItalic.ttf
-family "Agent Bridge Mono": 9 faces
+files: SlipgatesMono-Bold.ttf, SlipgatesMono-BoldItalic.ttf, SlipgatesMono-Italic.ttf, SlipgatesMono-Regular.ttf, SlipgatesMono-SemiBold.ttf, SlipgatesMono-SemiBoldItalic.ttf
+family "Slipgates Mono": 9 faces
   asked 400 upright -> "Regular" 400 upright; simulations: none (real face)
   asked 500 upright -> "Semibold" 600 upright; simulations: none (real face)
   asked 600 upright -> "Semibold" 600 upright; simulations: none (real face)

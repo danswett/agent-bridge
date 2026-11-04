@@ -133,15 +133,26 @@
     <Color x:Key="SystemAccentColorDark2">#0A665C</Color>
     <Color x:Key="SystemAccentColorDark3">#08524A</Color>
 
-    <!-- The monospace (docs/design/ui.md §4.1): the bundled font, then the fallback stack. -->
-    <FontFamily x:Key="MonoFontFamily">ms-appx:///Assets/Fonts/AgentBridgeMono-Regular.ttf#Agent Bridge Mono, Cascadia Mono, SF Mono, Roboto Mono, Consolas</FontFamily>
-    <!-- Inline mono beside Segoe UI Variable (docs/design/ui.md §4.2): WinUI has no
+    <!-- The text face and the monospace (docs/design/ui.md §4.1): each bundled family as one
+         collection of real faces, then the fallback stack. WinUI's controls and its own text
+         styles draw in ContentControlThemeFontFamily, and a TextBlock or RichTextBlock with no
+         style of its own in the implicit styles below, so all of it is Slipgates Sans. -->
+    <FontFamily x:Key="SansFontFamily">ms-appx:///Assets/Fonts/SlipgatesSans.ttc#Slipgates Sans, Segoe UI Variable Text, Segoe UI, Roboto</FontFamily>
+    <FontFamily x:Key="ContentControlThemeFontFamily">ms-appx:///Assets/Fonts/SlipgatesSans.ttc#Slipgates Sans, Segoe UI Variable Text, Segoe UI, Roboto</FontFamily>
+    <FontFamily x:Key="MonoFontFamily">ms-appx:///Assets/Fonts/SlipgatesMono.ttc#Slipgates Mono, Cascadia Mono, SF Mono, Roboto Mono, Consolas</FontFamily>
+    <Style TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="ms-appx:///Assets/Fonts/SlipgatesSans.ttc#Slipgates Sans, Segoe UI Variable Text, Segoe UI, Roboto" />
+    </Style>
+    <Style TargetType="RichTextBlock">
+        <Setter Property="FontFamily" Value="ms-appx:///Assets/Fonts/SlipgatesSans.ttc#Slipgates Sans, Segoe UI Variable Text, Segoe UI, Roboto" />
+    </Style>
+    <!-- Inline mono beside the text face (docs/design/ui.md §4.2): WinUI has no
          font-size-adjust, so the scale, and the size for each ramp role, that match its x-height. -->
-    <x:Double x:Key="AbInlineMonoScale">0.9615</x:Double>
-    <x:Double x:Key="AbInlineMonoRow">13.46</x:Double>
-    <x:Double x:Key="AbInlineMonoReading">14.42</x:Double>
-    <x:Double x:Key="AbInlineMonoMeta">11.54</x:Double>
-    <x:Double x:Key="AbInlineMonoSectionHeader">11.54</x:Double>
+    <x:Double x:Key="AbInlineMonoScale">1.0498</x:Double>
+    <x:Double x:Key="AbInlineMonoRow">14.7</x:Double>
+    <x:Double x:Key="AbInlineMonoReading">15.75</x:Double>
+    <x:Double x:Key="AbInlineMonoMeta">12.6</x:Double>
+    <x:Double x:Key="AbInlineMonoSectionHeader">12.6</x:Double>
     <CornerRadius x:Key="AbRadiusControl">4</CornerRadius>
     <CornerRadius x:Key="AbRadiusCard">8</CornerRadius>
     <CornerRadius x:Key="AbRadiusPill">999</CornerRadius>
@@ -168,37 +179,41 @@
     <x:Double x:Key="AbLayoutSessionMin">440</x:Double>
     <x:Double x:Key="AbLayoutDivider">8</x:Double>
     <x:Double x:Key="AbLayoutDividerLine">3</x:Double>
-    <x:Double x:Key="AbLayoutReadingMax">712</x:Double>
+    <x:Double x:Key="AbLayoutReadingMax">770</x:Double>
     <x:Double x:Key="AbLayoutMachineTab">128</x:Double>
 
     <!-- The type ramp (docs/design/ui.md §4.3): tabular figures, no added tracking. -->
     <Style x:Key="AbTypeTitle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="ms-appx:///Assets/Fonts/SlipgatesSans.ttc#Slipgates Sans, Segoe UI Variable Text, Segoe UI, Roboto" />
         <Setter Property="FontSize" Value="20" />
         <Setter Property="LineHeight" Value="28" />
         <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
         <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="FontFamily" Value="Segoe UI Variable Display, Segoe UI" />
         <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
     </Style>
     <Style x:Key="AbTypeRow" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="ms-appx:///Assets/Fonts/SlipgatesSans.ttc#Slipgates Sans, Segoe UI Variable Text, Segoe UI, Roboto" />
         <Setter Property="FontSize" Value="14" />
         <Setter Property="LineHeight" Value="20" />
         <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
         <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
     </Style>
     <Style x:Key="AbTypeReading" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="ms-appx:///Assets/Fonts/SlipgatesSans.ttc#Slipgates Sans, Segoe UI Variable Text, Segoe UI, Roboto" />
         <Setter Property="FontSize" Value="15" />
         <Setter Property="LineHeight" Value="24" />
         <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
         <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
     </Style>
     <Style x:Key="AbTypeMeta" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="ms-appx:///Assets/Fonts/SlipgatesSans.ttc#Slipgates Sans, Segoe UI Variable Text, Segoe UI, Roboto" />
         <Setter Property="FontSize" Value="12" />
         <Setter Property="LineHeight" Value="16" />
         <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
         <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
     </Style>
     <Style x:Key="AbTypeSectionHeader" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="ms-appx:///Assets/Fonts/SlipgatesSans.ttc#Slipgates Sans, Segoe UI Variable Text, Segoe UI, Roboto" />
         <Setter Property="FontSize" Value="12" />
         <Setter Property="LineHeight" Value="16" />
         <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
@@ -206,10 +221,10 @@
         <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
     </Style>
     <Style x:Key="AbTypeCode" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="ms-appx:///Assets/Fonts/SlipgatesMono.ttc#Slipgates Mono, Cascadia Mono, SF Mono, Roboto Mono, Consolas" />
         <Setter Property="FontSize" Value="12" />
         <Setter Property="LineHeight" Value="18" />
         <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
-        <Setter Property="FontFamily" Value="ms-appx:///Assets/Fonts/AgentBridgeMono-Regular.ttf#Agent Bridge Mono, Cascadia Mono, SF Mono, Roboto Mono, Consolas" />
         <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
     </Style>
 

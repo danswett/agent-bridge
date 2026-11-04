@@ -80,23 +80,26 @@ test('every design resource the Windows app asks for is defined, in all three th
   for (const m of read(`${appDir}/Ui.cs`).matchAll(/Brush\("(Ab\w+)"\)/g)) { assert.ok(inEvery(m[1]), `${m[1]} is in every theme`); }
 });
 
-test('the Windows app bundles every font file its MonoFontFamily names, with the OFL beside them', () => {
-  // The app names Agent Bridge Mono by file (ms-appx:///Assets/Fonts/...): one the project
-  // doesn't copy would quietly fall back to another font on every installed machine.
+test('the Windows app bundles each family\'s collection its FontFamily names, with its OFL beside it', () => {
+  // The app names Slipgates Sans and Mono by file (ms-appx:///Assets/Fonts/...): one the project
+  // doesn't copy would quietly fall back to another font on every installed machine. One
+  // collection per family holds every weight and style, so DirectWrite simulates none (#544).
   const csproj = read(`${appDir}/AgentBridge.App.csproj`);
   const keys = read(`${appDir}/Design/DesignKeys.cs`);
   const files = [.../FontFiles =\s*\[([^\]]*)\]/.exec(keys)[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-  assert.ok(files.length >= 7);
   const tokens = JSON.parse(read('design/tokens.json'));
-  const fonts = tokens.type.mono.files.replace(/\//g, '\\\\');
-  for (const f of files) {
-    const name = f.split('/').pop();
-    const source = name.endsWith('.ttf') ? `ttf/${name}` : name;
-    assert.ok(existsSync(path.join(repoRoot, tokens.type.mono.files, source)), `${source} is in design/fonts`);
+  const families = [['Sans', tokens.type.sans.files], ['Mono', tokens.type.mono.files]];
+  assert.deepEqual(files, families.flatMap(([n]) => [`Assets/Fonts/Slipgates${n}.ttc`, `Assets/Fonts/Slipgates${n}-OFL.txt`]));
+  const escaped = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const [n, dir] of families) {
+    const win = dir.replace(/\//g, '\\');
+    for (const [source, link] of [[`ttc\\Slipgates${n}.ttc`, `Slipgates${n}.ttc`], ['OFL.txt', `Slipgates${n}-OFL.txt`]]) {
+      assert.ok(existsSync(path.join(repoRoot, dir, source.replace(/\\/g, '/'))), `${dir}/${source}`);
+      assert.match(csproj, new RegExp(escaped(`<Content Include="..\\..\\${win}\\${source}" Link="Assets\\Fonts\\${link}" CopyToOutputDirectory="PreserveNewest" />`)));
+    }
+    assert.match(read(`${appDir}/Design/DesignResources.xaml`), new RegExp(`ms-appx:///Assets/Fonts/Slipgates${n}\\.ttc#Slipgates ${n}, `));
   }
-  assert.match(csproj, new RegExp(`<Content Include="\\.\\.\\\\\\.\\.\\\\${fonts}\\\\ttf\\\\\\*\\.ttf" Link="Assets\\\\Fonts\\\\%\\(Filename\\)%\\(Extension\\)" CopyToOutputDirectory="PreserveNewest" />`));
-  assert.match(csproj, new RegExp(`<Content Include="\\.\\.\\\\\\.\\.\\\\${fonts}\\\\OFL\\.txt" Link="Assets\\\\Fonts\\\\OFL\\.txt" CopyToOutputDirectory="PreserveNewest" />`));
-  assert.match(read(`${appDir}/Design/DesignResources.xaml`), /ms-appx:\/\/\/Assets\/Fonts\/AgentBridgeMono-Regular\.ttf#/);
+  assert.doesNotMatch(csproj, /\\ttf\\/, 'no loose TTFs: a family split across files is one DirectWrite may fake a face of');
 });
 
 // A status glyph is a graphic drawn in currentColor, held to 3:1 rather than 4.5:1, so a rule

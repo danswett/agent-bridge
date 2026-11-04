@@ -27,7 +27,7 @@
   --appbar: 56px;
   --rail: 48px;
   --tabbar: 56px;
-  --font-text: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-text: var(--ab-font-sans);
   font-family: var(--font-text);
   font-size: 16px;
   line-height: 1.45;
@@ -795,7 +795,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .stream-scroll { flex: 1; min-height: 0; overflow: auto; padding: var(--ab-space-6); }
 /* The reading measure: about 68 characters, a step larger than the UI around it. */
 .stream {
-  max-width: 712px; margin: 0 auto; display: grid; gap: var(--ab-space-6);
+  max-width: 770px; margin: 0 auto; display: grid; gap: var(--ab-space-6);
   font-size: var(--type-reading); line-height: var(--type-reading-line);
 }
 .stream > [hidden] { display: none; }
@@ -1043,7 +1043,7 @@ summary {
    then Attach and an icon-only Send. */
 .reply-slot { flex: none; padding: var(--ab-space-3) var(--ab-space-6) var(--ab-space-4); border-top: 1px solid var(--ab-stroke2); }
 .reply-slot:empty { display: none; }
-.reply { max-width: 712px; margin: 0 auto; }
+.reply { max-width: 770px; margin: 0 auto; }
 .reply .note { margin: var(--ab-space-1) 0; }
 .reply-box {
   background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-bottom: 2px solid var(--ab-bridge);

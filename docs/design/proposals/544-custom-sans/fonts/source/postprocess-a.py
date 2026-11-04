@@ -2,7 +2,7 @@
 """Proposal #544, option A: finish the Iosevka build of Slipgates Sans A. NOT APPROVED.
 Usage: postprocess-a.py <iosevka dist/SlipgatesSansA> <out dir>
 
-As design/fonts/agent-bridge-mono/postprocess.py: credit every copyright holder (Iosevka
+As design/fonts/slipgates-mono/postprocess.py: credit every copyright holder (Iosevka
 writes only its own), fix the timestamps so a rebuild is byte-identical, write TTF and WOFF2."""
 import calendar, pathlib, sys
 from fontTools.ttLib import TTFont

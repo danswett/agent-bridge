@@ -142,41 +142,72 @@ every colour from the generated roles (#177).
 
 ### 4.1 Faces
 
-- **Text: each platform's system face.** Segoe UI Variable on Windows, SF Pro on Apple
-  platforms, Roboto Flex on Android, and `system-ui` in the PWA. This is most of what
-  makes a native app feel native. A licensed text face would make all four feel slightly
-  foreign, so none is used.
+- **Text: Slipgates Sans everywhere** (#544), on Windows, macOS, iOS and iPadOS, Android and
+  the PWA: our own tuned build of Inter, under the SIL OFL, in
+  [`/design/fonts/slipgates-sans`](../../design/fonts/slipgates-sans/README.md). Five of Inter's
+  own alternates are made the defaults to echo the mono (a tailed `l`, open `4`, `6` and `9`,
+  a flat-top `3` and square dots), so text and code read as one family. Inter was chosen over Iosevka Aile
+  (a quasi-proportional cut of the mono's own skeleton, which reads as typewritten in long
+  prose) and over keeping the system face for body text with a brand face only for headings,
+  which left two unrelated faces on every screen (#544).
+  - **Files:** hinted static faces in one collection on Windows, where ClearType wants hinting;
+    the variable pair (weight 400–700, upright and a true italic) everywhere else.
+  - **Stack:** Slipgates Sans, then each platform's system face (Segoe UI Variable, SF via
+    `system-ui`, Roboto), which cover loading and any character outside the font.
+  - **Scaling:** it scales exactly as the system face would: Dynamic Type through
+    `UIFontMetrics` on iOS and iPadOS, `sp` with Android's nonlinear font scale up to 200%,
+    Windows text scaling, and the browser's font size in the PWA.
 - **Code: one monospace everywhere,** for commands, paths, agent IDs, tool calls and code
   blocks. That's where agent apps usually look generic, and it's on screen constantly.
-  - **Agent Bridge Mono,** our own build of Iosevka with a Berkeley Mono-like
+  - **Slipgates Mono,** our own build of Iosevka with a Berkeley Mono-like
     character (IoskeleyMono configuration, a tailed `l`, a normal 600 width), in
-    [`/design/fonts/agent-bridge-mono`](../../design/fonts/agent-bridge-mono/README.md).
-    It was first built at 560 to fit more per line, but beside the system face that read
+    [`/design/fonts/slipgates-mono`](../../design/fonts/slipgates-mono/README.md).
+    It was first built at 560 to fit more per line, but beside the text face that read
     as condensed, so it was rebuilt at 600, close to Cascadia Mono's and Consolas'
     proportions (#295).
     It is under the SIL OFL, so it ships inside every client and lives in this public
     repository. Berkeley Mono was considered and rejected: its Commercial license limits
     embedding to apps without text entry, requires the font to be unextractable, and bars
     public sharing (#181).
-  - **Stack:** Agent Bridge Mono, then Cascadia Mono, SF Mono, Roboto Mono and
+  - **Stack:** Slipgates Mono, then Cascadia Mono, SF Mono, Roboto Mono and
     `ui-monospace` (Consolas in XAML, which has no generic name). The fallbacks cover
     loading and any character outside the font's subset.
 
 ### 4.2 Rules
 
-- **Two weights:** regular and semibold (bold for Apple titles). A semibold row title
-  means *unread activity*, and nothing else uses weight.
+- **Weights:** regular and semibold, with bold for Apple titles and medium for Android's
+  section headers (Material 3's Title Small), and italic for emphasis in agent text. A semibold
+  row title means *unread activity*, and nothing else uses weight.
+- **No synthesized styles.** Every weight and style the ramps use (`type.weights` ×
+  `type.styles` in `tokens.json`: 400, 500, 600 and 700, upright and italic) is a real face
+  in both Slipgates Sans and Slipgates Mono, and no client lets the platform fake a bold, an
+  italic or an oblique. `tools/design-gen` refuses to generate if a family lacks one, and each
+  platform is held to it:
+  - **PWA:** `font-synthesis: none` on the root, an `@font-face` for every face (the sans as
+    a variable `font-weight: 400 700` range, upright and italic). A Playwright test checks the
+    faces load and nothing is synthesized.
+  - **Windows:** each family is one font collection (`.ttc`) holding every face, so WinUI's
+    family has them all and DirectWrite has nothing to simulate. The self-test asks DirectWrite
+    for every weight and style and fails on a simulation, and checks rendered bold and italic
+    widths against the real faces' advances.
+  - **Apple:** every face is registered (`UIAppFonts`, `ATSApplicationFontsPath` on macOS,
+    from the generated `SlipgatesFonts.plist`) and named by PostScript name through the
+    generated `SlipgatesFonts.swift`. Never ask a face for `.bold()` or `.italic()` that
+    it lacks; take the named face, scaled with `UIFontMetrics`.
+  - **Android:** a font family XML with a `<font>` for every weight and style
+    (`design/android/font`), and `FontSynthesis.None` in Compose.
 - **Tabular figures** wherever a number can change (times, counts, percentages,
   durations), so text doesn't jitter. Durations read `4:02`, not `4m 02s`.
 - **Secondary text is opacity, not a third grey:** `text2` and `text3` in `tokens.json`.
 - **Sentence case** everywhere, except macOS button titles, which use Title Case as macOS
   does.
-- **Reading measure:** the conversation is capped at about 68 characters (680–712 px on
-  desktop) and set a step larger than the UI around it.
+- **Reading measure:** the conversation is capped at about 68 characters (735–770 px on
+  desktop: Slipgates Sans sets about 8% wider than Segoe UI Variable, #544) and set a step
+  larger than the UI around it.
 - **Mono** is never smaller than 11 px.
 - **Inline mono** (mono on a line of text, #215) sits as if it were the same face:
   1. **Matched x-height.** It is scaled so its x-height matches the text face's: the scale is
-     the text face's x-height over Agent Bridge Mono's, per platform, from `tokens.json`
+     the text face's x-height over Slipgates Mono's, per platform, from `tokens.json`
      `type.inlineMono` (generated as `--ab-inline-mono-x` and `--ab-inline-mono-scale` for the
      PWA, which uses `font-size-adjust` where the browser has it, and as `AbInlineMono*` sizes
      per ramp role for WinUI, which hasn't). Never under 11 px. Only the x-height is matched:
@@ -206,8 +237,9 @@ Size/line-height in px. Weights are regular unless noted.
 | Section header | 12/16 semibold | 13/18 semibold | 11/14 bold | 13/18 Footnote | 14/20 medium, Title Small, in `primary` |
 | Code | 12/18 | 13/18 | 11/16 | 13/18 | 13/20 |
 
-Letter-spacing follows each platform's own tracking: SF's per-size values on Apple and
-Material 3's on Android. Never add tracking to Segoe UI.
+Every platform sets these sizes in Slipgates Sans, with each role's real weight. Letter-spacing
+is Slipgates Sans' own, with no added tracking on any platform; Material 3's and SF's tracking
+values were made for Roboto and SF.
 
 ## 5. Space, shape, layout and motion
 
