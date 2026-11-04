@@ -10,6 +10,8 @@ interface IGitHub
 {
     JsonDocument GraphQL(string query, IReadOnlyDictionary<string, object> variables);
     JsonDocument Rest(string path);
+    /// <summary>A REST answer that isn't JSON, such as a job's log; only the weekly report reads one.</summary>
+    string RestText(string path) => throw new NotSupportedException($"{path} can't be read as text here.");
     void PostStatus(string slug, string sha, string state, string context, string description, string? targetUrl);
 }
 
@@ -26,7 +28,11 @@ sealed class GhCli : IGitHub
     {
         var args = new List<string> { "api", "graphql", "-f", $"query={query}" };
         foreach (var (name, value) in variables)
-            args.AddRange(value is int n ? ["-F", $"{name}={n.ToString(CultureInfo.InvariantCulture)}"] : ["-f", $"{name}={value}"]);
+            if (value is string[] list)
+                // gh builds an array from repeated key[]=value fields.
+                args.AddRange(list.SelectMany(item => new[] { "-f", $"{name}[]={item}" }));
+            else
+                args.AddRange(value is int n ? ["-F", $"{name}={n.ToString(CultureInfo.InvariantCulture)}"] : ["-f", $"{name}={value}"]);
         var doc = JsonDocument.Parse(Run(args));
         // GraphQL answers 200 with errors, and partial data would read as "no review", "no files".
         if (doc.RootElement.TryGetProperty("errors", out var errors) && errors.GetArrayLength() > 0)
@@ -35,6 +41,9 @@ sealed class GhCli : IGitHub
     }
 
     public JsonDocument Rest(string path) => JsonDocument.Parse(Run(["api", path]));
+
+    // A job's log holds the runner's colour codes, which gh refuses to print without this.
+    public string RestText(string path) => Run(["api", "--allow-escape-sequences", path]);
 
     public void PostStatus(string slug, string sha, string state, string context, string description, string? targetUrl)
     {

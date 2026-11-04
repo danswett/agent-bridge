@@ -271,6 +271,21 @@ suites:
     where: flake-hunt.yml hunt, classify, report
     status: exists
 
+  - id: weekly-report
+    kind: static
+    ring: 3
+    select: always
+    # The weekly quality report (quality/README.md §5), posted on the quality epic #357 each Monday
+    # at 08:00 PT: flaky issues and main's red runs, the tests that failed most, throughput and
+    # where open pull requests are stuck, and CI's wall time. It tests nothing and changes no
+    # suite's result; its logic is quality-tool's Report.cs, tested there. Off main, or by hand
+    # unless dry_run is off, it only writes the job summary.
+    platforms: [linux-x64]
+    runner: hosted
+    command: see weekly-report.yml (by hand, gh workflow run weekly-report.yml [-f dry_run=false]; locally, dotnet run --project tools/AgentBridge.Quality -c Release -- report)
+    where: weekly-report.yml report, post
+    status: exists
+
   - id: merge-rule
     kind: static
     ring: 1

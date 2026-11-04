@@ -1,0 +1,131 @@
+name: Weekly quality report
+
+# Posts the weekly quality report on the quality epic, #357, every Monday at 08:00 Pacific
+# (quality/README.md §5), so flakes get fixed rather than re-run and the owner can see what slows
+# merging: flaky issues and main's red runs, the tests that failed most, pull requests opened,
+# merged and where they're stuck, and CI's wall time. agent-bridge-quality report does the work;
+# this only runs it and posts what it wrote.
+#
+# The jobs, by what they may do:
+#   report   reads pull requests, issues, statuses, checks and Actions runs and their logs
+#            (read-only), writes the report to the job summary, and keeps it as an artifact.
+#   post     the only job that may write issues, and only on main, on the schedule or a dispatch
+#            with dry_run off: it comments the report, read as data, on the epic. It checks out
+#            nothing and runs no code from the repository.
+#
+# By hand: gh workflow run weekly-report.yml [--ref <branch>] [-f dry_run=false]. A dry run (the
+#   default, and always so off main) only writes the job summary.
+
+on:
+  schedule:
+    # 08:00 Pacific is 15:00 UTC in daylight time and 16:00 in standard time. Both fire each
+    # Monday, and the report job keeps the one that's 08:00 Pacific that day.
+    - cron: '0 15 * * 1'
+    - cron: '0 16 * * 1'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Write the report to the job summary only, and post nothing (always so off main)
+        type: boolean
+        default: true
+
+permissions: {}
+
+# Two runs from main would post twice, so they never overlap; a newer one waits.
+concurrency:
+  group: weekly-report-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  EPIC: '357'
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read # check out the reporter
+      pull-requests: read # open, merged and closed pull requests, their threads
+      issues: read # the flaky issues and their tallies
+      statuses: read # merge-rule's status on each open head
+      checks: read # each CI run's jobs and their times
+      actions: read # CI's runs, their attempts and failed jobs' logs
+    outputs:
+      post: ${{ steps.when.outputs.post }}
+    steps:
+      - name: Whether to report, and to post
+        id: when
+        shell: pwsh
+        env:
+          EVENT: ${{ github.event_name }}
+          CRON: ${{ github.event.schedule }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          REF: ${{ github.ref }}
+          REPO: ${{ github.repository }}
+        # A run from a branch, or from a fork, never posts; nor does a dispatch unless dry_run is
+        # off. Of the two schedules, the one that isn't 08:00 Pacific today does nothing at all.
+        run: |
+          $run = $true
+          if ($env:EVENT -eq 'schedule') {
+            $pacific = [TimeZoneInfo]::FindSystemTimeZoneById('America/Los_Angeles')
+            $daylight = $pacific.IsDaylightSavingTime([DateTimeOffset]::UtcNow)
+            $run = ($daylight -and $env:CRON -eq '0 15 * * 1') -or (-not $daylight -and $env:CRON -eq '0 16 * * 1')
+          }
+          $post = $run -and $env:REF -eq 'refs/heads/main' -and $env:REPO -eq 'danswett/agent-bridge' -and ($env:EVENT -eq 'schedule' -or $env:DRY_RUN -eq 'false')
+          Write-Host "Report: $run. Post: $post."
+          "run=$($run.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "post=$($post.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: steps.when.outputs.run == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        if: steps.when.outputs.run == 'true'
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build the reporter
+        if: steps.when.outputs.run == 'true'
+        run: dotnet build tools/AgentBridge.Quality -c Release --nologo -v q
+      - name: Report
+        if: steps.when.outputs.run == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          POST: ${{ steps.when.outputs.post }}
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP weekly-report
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll report --slug $env:REPO --run-url $env:RUN_URL --out "$out/report.md" | Out-Null
+          if ($LASTEXITCODE) { throw "agent-bridge-quality report failed ($LASTEXITCODE)" }
+          $note = if ($env:POST -eq 'true') { "_Posting on #$env:EPIC._" } else { '_Dry run: posted nowhere but here._' }
+          (Get-Content -Raw "$out/report.md") + "`n$note`n" >> $env:GITHUB_STEP_SUMMARY
+      - name: Keep the report
+        if: steps.when.outputs.post == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: weekly-report
+          path: ${{ runner.temp }}/weekly-report/report.md
+          if-no-files-found: error
+          retention-days: 30
+
+  post:
+    needs: report
+    # Main only, and never a dry run: the one job that may write issues runs nothing from the
+    # repository, and posts the report as a file.
+    if: needs.report.outputs.post == 'true' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write # comment on the epic
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: weekly-report
+          path: ${{ runner.temp }}/weekly-report
+      - name: Comment on the quality epic
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: gh issue comment "$EPIC" --repo "$REPO" --body-file "$RUNNER_TEMP/weekly-report/report.md"
