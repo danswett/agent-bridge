@@ -760,6 +760,25 @@ test('a click in the same task as an update that moves the question, before any 
   expect(await answered(page)).toBe(before);
 });
 
+test('a click whose read of where the answers are fails is dropped; a key still answers', async ({ page }) => {
+  await openDemo(page);
+  await askCodex(page, choices('q-read-fails'));
+  const v = await open(page, CODEX);
+  await expect(v.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
+  const before = await answered(page);
+  const press = (detail) => v.locator('.question-slot .choice').first().evaluate((c, detail) => {
+    // Where it is can't be read (a broken layout read, say): the guard can't tell it stayed put.
+    c.getClientRects = () => { throw new Error('no layout'); };
+    c.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail }));
+  }, detail);
+  await press(1);
+  await page.waitForTimeout(100);
+  expect(await answered(page)).toBe(before);
+  // A key's activation (detail 0) never reads where the answers are: it answers.
+  await press(0);
+  await expect.poll(() => answered(page)).toBeGreaterThan(before);
+});
+
 test('typing in a question doesn\'t hide a move above it in the same moment: the question still takes no click', async ({ page }) => {
   await openDemo(page);
   await askCodex(page, { id: 'q-typing', kind: 'form', message: 'Notes?', askedAt: new Date().toISOString(), fields: [{ name: 'n', title: 'Notes', type: 'text' }] });
