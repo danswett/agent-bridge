@@ -157,6 +157,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
             .InstallAsync("copilot", false, TextWriter.Null);
         var saved = IntakeState.Load(profile).State!.Homes!;
         locator.Installed[agent] = @"C:\fake\" + agent + ".exe";
+        locator.PathEnvironment = Path.Combine(f.Root, "new-runtime");
         starter.Registers = false;
         var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100), homes: saved);
 
@@ -166,6 +167,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal(saved.Copilot, environment["COPILOT_HOME"]);
         Assert.Equal(saved.Claude, environment["CLAUDE_CONFIG_DIR"]);
         Assert.Equal(saved.Codex, environment["CODEX_HOME"]);
+        Assert.Equal(locator.PathEnvironment, environment["PATH"]);
         Assert.False(string.IsNullOrEmpty(environment[Launchers.SessionVariable]));
     }
 
@@ -908,8 +910,10 @@ public abstract partial class LaunchFlowFixture
     private protected sealed class FakeLocator : IAgentLocator
     {
         public readonly Dictionary<string, string> Installed = [];
+        public string? PathEnvironment;
 
         public string? Find(Launcher launcher, AgentConfig config) => Installed.GetValueOrDefault(launcher.Id);
+        public string? ChildPath() => PathEnvironment;
     }
 
     private protected sealed class FakeRunner : ICommandRunner

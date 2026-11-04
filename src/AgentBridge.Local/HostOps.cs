@@ -15,6 +15,8 @@ public static class HostOps
     public const string AgentInstallCapability = "host.agents.install";
     public const string AgentsInstall = "host.agents.install";
     public const string AgentsInstallCancel = "host.agents.install.cancel";
+    public const string AgentSignInCapability = "host.agents.signIn";
+    public const string AgentsSignIn = "host.agents.signIn";
 
     public const string Status = "host.status";
     // Answers with the status, then sends a host.status event whenever it changes.
@@ -155,3 +157,5 @@ public sealed record AgentSetupResult(bool Completed, string Detail, bool Restar
 public sealed record AgentInstallRequest(string Agent, bool AcceptAgreements = false);
 public sealed record AgentInstallResult(bool Completed, string Detail, string? Executable = null);
 public sealed record AgentInstallProgress(string Agent, bool InProgress, string Detail, bool Blocked = false);
+public sealed record AgentSignInRequest(string Agent, bool Confirmed = false);
+public sealed record AgentSignInResult(bool Opened, string Detail);

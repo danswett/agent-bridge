@@ -30,6 +30,13 @@ this is not yet the first-run installer. **Set up / Repair** and **Remove connec
 for explicit confirmation and use the host's owned hook backend. Setup results and failures
 stay visible, successful changes refresh readiness evidence, and restart remains a separate
 person's action. No CLI sign-in, hook trust or workspace approval is implied.
+**Sign in / Switch account** separately confirms opening the supported CLI's own browser/
+terminal login flow. It preserves the same agent home and Claude configuration mode as
+future sessions; the refreshed child PATH also includes newly installed runtimes.
+Complete or cancel in that terminal. Credentials stay with the CLI, and opening or closing
+its window never marks account access, entitlement, hooks or trust verified. Older CLI
+versions without a documented standalone login command require an update or direct login.
+Agency sign-in remains organization-managed. Bridge relay sign-in is separate.
 Older hosts explain that an update
 and restart are needed, and disconnected hosts show no stale agent rows. See
 [agent readiness evidence](protocol/local-pipe.md#agent-readiness-evidence) for the contract.
