@@ -673,10 +673,10 @@ window.addEventListener('pointermove', (e) => {
   if (g.phase === 'pending') {
     const d = Math.hypot(g.x - g.sx, g.y - g.sy);
     if (g.type === 'touch') {
-      if (g.onGrip && !sorted && d > MOUSE_SLOP) lift();
+      if (g.onGrip && !sorted && d > MOUSE_SLOP) lift(true);
       else if (d > TOUCH_SLOP) { abort(); rehit = null; } // the finger moved first: let the list scroll; no click follows
     } else if (d > MOUSE_SLOP) {
-      if (sorted) abort(); else lift();
+      if (sorted) abort(); else lift(true);
     }
   } else if (g.phase === 'lifted') {
     track();
@@ -747,7 +747,7 @@ content.addEventListener('click', (e) => {
   if (hit) $('.row-main', li).focus({ preventScroll: true });
 }, true);
 
-function lift() {
+function lift(moved = false) {
   if (!g || g.phase !== 'pending') return;
   endPress();
   const li = g.li;
@@ -771,9 +771,13 @@ function lift() {
   placeSocket(true);
   document.body.classList.add('dragging');
   suppressClick = true;
+  // A lift made by moving already has the pointer away from the press: arm it and find the
+  // landing slot now, so a release on the very next event drops where the card is drawn.
+  let where = '';
+  if (moved) { g.armed = true; where = pick(true); }
   if (g.type === 'touch' && cfg.haptic && navigator.vibrate) { try { navigator.vibrate(10); } catch { /* not allowed */ } }
   const s = items[g.key];
-  say(`Picked up ${s.title}, position ${g.origin.i + 1} of ${g.origin.n} in ${groupName(g.origin.gid)}.`);
+  say(`Picked up ${s.title}, position ${g.origin.i + 1} of ${g.origin.n} in ${groupName(g.origin.gid)}.${where ? ' ' + where : ''}`);
   g.raf = requestAnimationFrame(tick);
   if ($('#sim-end').checked) { const k = g.key; g.endTimer = setTimeout(() => endSession(k), 1500); }
 }
@@ -837,7 +841,7 @@ function track() {
   pick();
 }
 
-function pick() {
+function pick(quiet = false) {
   const lr = list.getBoundingClientRect();
   const outside = g.x < lr.left - OUTSIDE || g.x > lr.right + OUTSIDE || g.y < lr.top - OUTSIDE || g.y > lr.bottom + OUTSIDE;
   let cand = g.origin;
@@ -864,16 +868,20 @@ function pick() {
   else if (crossing) chip.innerHTML = `${ICON_PIN}<span>${cand.gid === 'pinned' ? 'Pin' : 'Unpin'}</span>`;
   hdr.pinned.classList.toggle('target', crossing && cand.gid === 'pinned');
   hdr.sessions.classList.toggle('target', crossing && cand.gid === 'sessions');
-  if (outside !== g.outside) { g.outside = outside; if (outside) say('Release to cancel.', 200); }
+  // Quiet (from lift) returns the announcement for the caller to fold into its own.
+  let msg = '';
+  if (outside !== g.outside) { g.outside = outside; if (outside) msg = 'Release to cancel.'; if (msg && !quiet) say(msg, 200); }
   if (!same(cand, g.candidate)) {
     g.candidate = cand;
     placeSocket(false);
     const n = groupsWith(cand).find((x) => x.id === cand.gid).keys.length;
     if (!outside) {
-      say(crossing ? `${groupName(cand.gid)}, position ${cand.i + 1} of ${n}. Drops as ${cand.gid === 'pinned' ? 'pinned' : 'unpinned'}.`
-                   : `Position ${cand.i + 1} of ${n}.`, 500);
+      msg = crossing ? `${groupName(cand.gid)}, position ${cand.i + 1} of ${n}. Drops as ${cand.gid === 'pinned' ? 'pinned' : 'unpinned'}.`
+                     : `Position ${cand.i + 1} of ${n}.`;
+      if (!quiet) say(msg, 500);
     }
   }
+  return msg;
 }
 
 function tick(t) {
