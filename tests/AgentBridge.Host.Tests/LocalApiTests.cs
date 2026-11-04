@@ -27,6 +27,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     SessionService service = null!;
     HostControl control = null!;
     AgentReadinessService readiness = null!;
+    AgentSetupService setup = null!;
     UpdateService updates = null!;
     LocalServer server = null!;
     readonly P256KeyPair hostKey = P256KeyPair.Generate();
@@ -67,9 +68,15 @@ public sealed class LocalApiTests : IAsyncLifetime
         var roots = f.Options();
         readiness = new AgentReadinessService(profile, new IntakeState.AgentHomes(roots.CopilotHome, roots.ClaudeHome, roots.CodexHome),
             LaunchConfig.Default, new MissingAgents(), new NoCommands(), () => null);
+        var hookSource = Path.Combine(profile, "hook-source.exe");
+        File.WriteAllText(hookSource, "fixture hook");
+        setup = new AgentSetupService(new StandaloneHooks(profile,
+            new IntakeState.AgentHomes(roots.CopilotHome, roots.ClaudeHome, roots.CodexHome), hookSource,
+            Path.Combine(profile, "no-legacy"), () => null, new SetupAgents(), new EmptyMarketplaces()), () => null);
         control = new HostControl(new HostControlOptions
         {
             Agents = readiness,
+            AgentSetup = setup,
             Updates = updates,
             Profile = "test",
             Folder = profile,
@@ -225,6 +232,51 @@ public sealed class LocalApiTests : IAsyncLifetime
         await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsRefresh));
 
         Assert.Null(readiness.Snapshot);
+    }
+
+    [Fact]
+    public async Task The_local_app_can_set_up_hooks_and_host_status_requires_a_restart()
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentSetupCapability, (await ch.HelloAsync()).Capabilities);
+
+        var result = await ch.CallAsync<AgentSetupResult>(HostOps.AgentsSetup, new AgentSetupRequest("claude", "install"));
+
+        Assert.True(result.Completed, result.Detail);
+        Assert.True((await ch.CallAsync<HostStatus>(HostOps.Status)).RestartRequired);
+        Assert.NotNull(IntakeState.Load(profile).State);
+        Assert.Equal(0, restarts);
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    [InlineData(CallerKind.HostCli)]
+    public async Task Hook_setup_is_never_available_to_non_app_callers(CallerKind kind)
+    {
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        var ch = await ConnectAsync();
+        Assert.DoesNotContain(HostOps.AgentSetupCapability, (await ch.HelloAsync()).Capabilities);
+
+        await Assert.ThrowsAsync<HostErrorException>(() =>
+            ch.CallAsync(HostOps.AgentsSetup, new AgentSetupRequest("claude", "install")));
+
+        Assert.Null(IntakeState.Load(profile).State);
+        Assert.False(setup.RestartRequired);
+    }
+
+    sealed class SetupAgents : IAgentLocator
+    {
+        public string? Find(Launcher launcher, AgentConfig config) => "fixture-" + launcher.Id;
+    }
+
+    sealed class EmptyMarketplaces : ICommandRunner
+    {
+        public Task<CommandResult> RunAsync(string program, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            Assert.Equal(new[] { "plugin", "marketplace", "list", "--json" }, arguments);
+            return Task.FromResult(new CommandResult(true, false, 0, """{"marketplaces":[]}"""));
+        }
     }
 
     sealed class MissingAgents : IAgentLocator

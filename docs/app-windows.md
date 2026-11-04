@@ -26,7 +26,11 @@ Settings' **Agents on this machine** section uses the host's shared readiness re
 (`#384` foundation, partial `#231`), with executable/version detection, hook ownership/intake
 evidence and separately labelled current-run hook activity. **Check agents again** requests
 a fresh host scan. CLI sign-in, trust and new-session activation stay explicitly unverified;
-this is not yet the first-run installer or repair flow. Older hosts explain that an update
+this is not yet the first-run installer. **Set up / Repair** and **Remove connection** ask
+for explicit confirmation and use the host's owned hook backend. Setup results and failures
+stay visible, successful changes refresh readiness evidence, and restart remains a separate
+person's action. No CLI sign-in, hook trust or workspace approval is implied.
+Older hosts explain that an update
 and restart are needed, and disconnected hosts show no stale agent rows. See
 [agent readiness evidence](protocol/local-pipe.md#agent-readiness-evidence) for the contract.
 Version commands are contained in Windows process jobs; non-Windows hosts keep installation

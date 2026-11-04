@@ -7,12 +7,23 @@ approval marker, and tells the rest of the host. It never reaches Home Assistant
 path. When the host is down, every hook still answers its agent at once with the fixed safe
 reply. Issue #37; design §6.1 `Host.Intake`, §6.3 invariants 3 and 14.
 
-On a fresh machine, explicitly opt in with `hooks install` below. Until setup or migration,
+On a fresh machine, explicitly opt in from Settings or with `hooks install` below. Until setup or migration,
 no spool is read, no heartbeat is written and no registration is touched (G4, G5). Taking
 over an existing legacy installation still requires the explicit migration of #38
 (`agent-bridge-host migrate`, [migration.md](migration.md)).
 
 ## Fresh Windows installation
+
+The Windows app's **Settings > Agents on this machine** offers **Set up / Repair** and
+**Remove connection**. Each action asks for confirmation, defaults to Cancel, and uses the
+same owned setup backend as the commands below. Copilot and Agency share registrations.
+The host serializes these operations and rechecks read-only/legacy guards before writes.
+Results stay visible, including incomplete setup; successful setup requests fresh readiness
+evidence. A scan failure remains a separate visible error without erasing the setup outcome.
+Neither action restarts the host, signs in to a CLI, approves a workspace, or accepts trust.
+Restart is explicitly requested after setup is attempted, conservatively including failures
+that might have changed part of the registration. Start new sessions after restarting.
+Older hosts disable setup until updated; non-Windows hosts do not advertise this capability.
 
 Run these commands from a terminal you opened yourself, not inside an agent session (#67).
 Use the installed `agent-bridge-host.exe` beside the app if it is not on PATH:
@@ -97,7 +108,7 @@ and backups remain. An empty dedicated Copilot file is deleted; one containing s
 else's additions retains its ownership marker so it can safely be reinstalled later.
 The private binary/runtime/intake remain for already-open sessions
 until those end. Removing an unowned agent is refused. Automatic uninstall cleanup,
-instruction blocks, Settings setup and CLI bootstrapping remain follow-up work (#54, #231).
+instruction blocks and CLI bootstrapping remain follow-up work (#54, #231).
 
 ## Decision: the host ships its own native hook, speaking agent-ha-bridge's spool contract
 

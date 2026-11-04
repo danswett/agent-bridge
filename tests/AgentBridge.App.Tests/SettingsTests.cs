@@ -59,6 +59,7 @@ public sealed class SettingsTests : IAsyncLifetime
             _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
             return new { stopping = true };
         });
+        host.Capabilities.Add(HostOps.AgentSetupCapability);
         host.Start();
         connection = host.Connect(ui);
         manager = new HostManager(new InstallLayout(app, host.Folder, "test"), tasks, processes,
@@ -182,6 +183,85 @@ public sealed class SettingsTests : IAsyncLifetime
         await page.CheckAgentsAsync();
         Assert.True(page.HasError);
         Assert.Empty(older.Sent(HostOps.AgentsRefresh));
+    }
+
+    [Fact]
+    public async Task Settings_setup_is_explicit_reports_restart_and_never_claims_fresh_session_readiness()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = Readiness("1.2.3") });
+        Assert.True(settings.Agents.Single().CanSetUp);
+        host.On(HostOps.AgentsSetup, data =>
+        {
+            Assert.Equal("claude", data.GetProperty("agent").GetString());
+            Assert.Equal("install", data.GetProperty("action").GetString());
+            host.Status = host.Status with { RestartRequired = true };
+            return new AgentSetupResult(true, "Registered. Start new agent sessions to verify hooks.", true);
+        });
+        host.On(HostOps.AgentsRefresh, _ =>
+        {
+            host.Status = host.Status with { Agents = Readiness("2.3.4") };
+            return host.Status.Agents;
+        });
+
+        await settings.SetUpAgentAsync("claude");
+
+        Assert.Single(host.Sent(HostOps.AgentsSetup));
+        Assert.Single(host.Sent(HostOps.AgentsRefresh));
+        Assert.Contains("2.3.4", settings.Agents.Single().Installation);
+        Assert.Empty(host.Sent(HostOps.Restart));
+        Assert.True(settings.RestartRequired);
+        Assert.Contains("Start new agent sessions", settings.AgentSetupStatus);
+        Assert.Contains("Trust and a new session have not been verified", settings.Agents.Single().Checks);
+        Assert.False(settings.HasError);
+    }
+
+    [Fact]
+    public async Task A_failed_post_setup_scan_preserves_the_mutation_outcome_and_shows_the_scan_error()
+    {
+        await Connected();
+        host.On(HostOps.AgentsSetup, _ => new AgentSetupResult(true, "Registered. Restart explicitly.", true));
+        host.On(HostOps.AgentsRefresh, _ => throw new InvalidOperationException("fixture post-setup scan failed"));
+
+        await settings.SetUpAgentAsync("claude");
+
+        Assert.Equal("Registered. Restart explicitly.", settings.AgentSetupStatus);
+        Assert.Equal("fixture post-setup scan failed", settings.Error);
+        Assert.Empty(host.Sent(HostOps.Restart));
+    }
+
+    [Fact]
+    public async Task Settings_setup_failures_keep_partial_work_visible_and_do_not_restart()
+    {
+        await Connected();
+        host.On(HostOps.AgentsSetup, _ => new AgentSetupResult(false, "Hook setup incomplete: fixture partial work", true));
+
+        await settings.SetUpAgentAsync("codex");
+
+        Assert.Equal("Hook setup incomplete: fixture partial work", settings.Error);
+        Assert.Equal(settings.Error, settings.AgentSetupStatus);
+        Assert.Empty(host.Sent(HostOps.Restart));
+        Assert.False(settings.Busy);
+    }
+
+    [Fact]
+    public async Task Settings_never_sends_setup_to_older_or_read_only_hosts()
+    {
+        await using var older = new FakeHost();
+        older.Start();
+        await using var olderConnection = older.Connect(ui);
+        var oldPage = new SettingsViewModel(olderConnection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        await Wait.UntilAsync(() => oldPage.HostRunning, "the older host");
+        await oldPage.SetUpAgentAsync("claude");
+        Assert.Contains("does not support agent setup", oldPage.Error);
+        Assert.Empty(older.Sent(HostOps.AgentsSetup));
+        await ConnectedWith(FakeHost.StatusOf() with { ReadOnly = "fixture legacy host" });
+        await Wait.UntilAsync(() => connection.Status?.ReadOnly is not null, "read-only status");
+
+        Assert.False(settings.CanManageAgents);
+        await settings.SetUpAgentAsync("claude", remove: true);
+
+        Assert.Contains("fixture legacy host", settings.Error);
+        Assert.Empty(host.Sent(HostOps.AgentsSetup));
     }
 
     [Fact]

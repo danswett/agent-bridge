@@ -39,7 +39,7 @@
                     Title="Restart the host"
                     IsClosable="False"
                     IsOpen="{x:Bind ViewModel.RestartRequired, Mode=OneWay}"
-                    Message="A setting changed that the host reads when it starts.">
+                    Message="Settings or agent hooks changed. Restart when you are ready; new agent sessions load the current hooks.">
                     <InfoBar.ActionButton>
                         <Button Content="Restart now" Click="OnRestart" />
                     </InfoBar.ActionButton>
@@ -64,6 +64,7 @@
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="Agents on this machine" AutomationProperties.HeadingLevel="Level2" />
                 <TextBlock Style="{StaticResource AbSecondaryText}" AutomationProperties.AutomationId="AgentsState" Text="{x:Bind ViewModel.AgentsState, Mode=OneWay}" />
                 <Button Content="Check agents again" AutomationProperties.AutomationId="CheckAgents" Click="OnCheckAgents" IsEnabled="{x:Bind ViewModel.CanCheckAgents, Mode=OneWay}" />
+                <TextBlock Text="{x:Bind ViewModel.AgentSetupStatus, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" AutomationProperties.AutomationId="AgentSetupStatus" />
                 <ItemsControl ItemsSource="{x:Bind ViewModel.Agents, Mode=OneWay}" AutomationProperties.AutomationId="AgentReadiness">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="core:AgentReadinessRow">
@@ -75,6 +76,10 @@
                                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Home}" IsTextSelectionEnabled="True" />
                                     <TextBlock Text="{x:Bind Checks}" TextWrapping="Wrap" />
                                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind HookActivity}" />
+                                    <local:WrapRow Spacing="8">
+                                        <Button Content="Set up / Repair" Tag="{x:Bind Id}" IsEnabled="{x:Bind CanSetUp}" Click="OnSetUpAgent" AutomationProperties.AutomationId="SetUpAgent" />
+                                        <Button Content="Remove connection" Tag="{x:Bind Id}" IsEnabled="{x:Bind CanRemove}" Click="OnRemoveAgent" AutomationProperties.AutomationId="RemoveAgent" />
+                                    </local:WrapRow>
                                 </StackPanel>
                             </Border>
                         </DataTemplate>

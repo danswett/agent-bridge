@@ -38,6 +38,25 @@ public sealed partial class SettingsView : UserControl
     async void OnSaveName(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.SaveNameAsync(); } }
     async void OnCheckUpdates(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.CheckForUpdatesAsync(); } }
     async void OnCheckAgents(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.CheckAgentsAsync(); } }
+    async void OnSetUpAgent(object sender, RoutedEventArgs e) => await ConfirmAgentAsync(sender, remove: false);
+    async void OnRemoveAgent(object sender, RoutedEventArgs e) => await ConfirmAgentAsync(sender, remove: true);
+
+    async Task ConfirmAgentAsync(object sender, bool remove)
+    {
+        if (viewModel is not { CanManageAgents: true } v || sender is not Button { Tag: string id }) { return; }
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = remove ? "Remove this agent's connection?" : "Connect this agent?",
+            Content = remove
+                ? "Remove only this installation's hook registrations. Other settings, CLI sign-in and hook trust stay unchanged. Existing sessions keep their hooks until they end."
+                : "Register hooks owned by this installation, preserving other settings. Copilot and Agency share their hooks. You will need to restart the host and start a new agent session. Codex also asks you to trust its hooks at this machine. Nothing restarts or accepts trust automatically.",
+            PrimaryButtonText = remove ? "Remove connection" : "Set up hooks",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary) { await v.SetUpAgentAsync(id, remove); }
+    }
     async void OnInstallUpdate(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.InstallUpdateAsync(); } }
     void OnRefreshLog(object sender, RoutedEventArgs e) => viewModel?.RefreshLog();
 

@@ -47,6 +47,7 @@ public sealed class SettingsViewModel : Observable
     string updateStatus = "";
     string? updateVersion;
     string log = "";
+    string agentSetupStatus = "";
 
     public SettingsViewModel(HostConnection host, HostManager manager, IUpdater updater, IAppAtSignIn appAtSignIn, Func<AppPreferences> prefs, Action<AppPreferences> savePrefs, string appVersion, string defaultRelay)
     {
@@ -87,7 +88,10 @@ public sealed class SettingsViewModel : Observable
     public bool ElevatedWarning => Status?.Elevated == true;
 
     public IReadOnlyList<AgentReadinessRow> Agents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && Status?.Agents is { } report
-        ? [.. report.Agents.Select(a => new AgentReadinessRow(a))] : [];
+        ? [.. report.Agents.Select(a => new AgentReadinessRow(a, CanManageAgents))] : [];
+    public bool CanManageAgents => HostRunning && host.Can(HostOps.AgentSetupCapability) && !Busy
+        && Status?.ReadOnly is null && Status?.AgentHaBridge is null;
+    public string AgentSetupStatus { get => agentSetupStatus; private set => Set(ref agentSetupStatus, value); }
     public bool CanCheckAgents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && !Busy;
     public string AgentsState => !HostRunning ? "Connect to this machine's host to check its agents."
         : !host.Can(HostOps.AgentReadinessCapability) ? "This host does not report agent readiness. Update the app and restart the host."
@@ -379,7 +383,7 @@ public sealed class SettingsViewModel : Observable
     public bool Busy
     {
         get => busy;
-        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); } }
+        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(Agents)); } }
     }
     public string UpdateStatus { get => updateStatus; private set => Set(ref updateStatus, value); }
     public bool UpdateAvailable => updateVersion is not null;
@@ -438,6 +442,29 @@ public sealed class SettingsViewModel : Observable
         if (!HostRunning || !host.Can(HostOps.AgentReadinessCapability)) { throw new InvalidOperationException(AgentsState); }
         await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromSeconds(20));
         await host.RefreshStatusAsync();
+    });
+
+    public Task SetUpAgentAsync(string agent, bool remove = false) => RunAsync(async () =>
+    {
+        if (!HostRunning || !host.Can(HostOps.AgentSetupCapability))
+        {
+            throw new InvalidOperationException("This host does not support agent setup. Update the app and restart the host.");
+        }
+        if (Status?.ReadOnly is not null || Status?.AgentHaBridge is not null)
+        {
+            throw new InvalidOperationException($"Agent setup is unavailable: {Status.ReadOnly ?? Status.AgentHaBridge}");
+        }
+        AgentSetupStatus = remove ? "Removing only this installation's hooks..." : "Setting up owned hooks...";
+        var result = await host.CallAsync<AgentSetupResult>(HostOps.AgentsSetup,
+            new AgentSetupRequest(agent, remove ? "remove" : "install"), TimeSpan.FromMinutes(4));
+        AgentSetupStatus = result.Detail;
+        await host.RefreshStatusAsync();
+        if (!result.Completed) { throw new InvalidOperationException(result.Detail); }
+        if (host.Can(HostOps.AgentReadinessCapability))
+        {
+            await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromSeconds(20));
+            await host.RefreshStatusAsync();
+        }
     });
 
     public Task CheckForUpdatesAsync() => RunAsync(async () =>
