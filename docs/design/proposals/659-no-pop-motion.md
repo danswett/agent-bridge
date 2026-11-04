@@ -44,6 +44,8 @@ on a running client. "Pops" means the element, or what is next to it, changes in
 | Delegate strip chips | §5.3 Arriving and leaving names "a delegate in the strip" | `ListView` with empty transitions and no `Motion.Enter`, SessionView.xaml:181-234; status and facts swap | Items appended and removed in place, delegates-view.js:237-249 | **Yes; contrary to the spec on both clients** |
 | "N finished" fold | Same | Text binding | `textContent`, delegates-view.js:224 | Yes |
 | Your message | §5.3 Send and Answer: rises 12 and fades | `Acknowledge`, SessionView.xaml.cs:137 | `enter(e.user, 'acknowledge')`, session-card.js:707 | No |
+| A prompt you didn't type (#489): the prompt line arriving | §6.4 "A prompt you didn't type"; no motion for the line itself | In #504 (open, head ef32801e): `PromptLine` shown by `Visibility` (`Card.HasPrompt`), SessionView.xaml:297-300; no `Motion.Enter` for a new prompt, unlike Your message's `Acknowledge` | `e.prompt.hidden = !origin` in `#renderPrompt`, session-card.js:842-876; no `enter` | **Yes, on both.** Proposed (Arriving and leaving): the line fades in over `listItem` as its slot opens, and what is below eases down over `shift`; a new prompt replacing the last cross-fades the line in place (`value`), and its two-line preview with it. Reduced motion: a short cross-fade |
+| Show prompt closing (#489) | §5.3 Disclosure (Show prompt is listed): closing "closes the space at once" | In #504: `Disclose()` turns the chevron back and `Motion.Settle(PromptRule)` ends the text at once, SessionView.xaml.cs:142 | `promptFull.hidden = !open` in `#setPromptOpen`, session-card.js:876; `prompt-settle` runs only on open, app.css:828-830 | **Yes: the text vanishes at once and everything below jumps up** (as specified today). Proposed (Disclosure): the chevron turns back, the full text fades out over `disclosure`'s exit, and its space eases closed over `shift` while the two-line preview fades back in; what is below eases up with it. Opening is the mirror. Reduced motion: instant, or a short cross-fade between the preview and the full text |
 | Main agent's response | Not in the design: streams with no fade | Text binding | Markdown replaced wholesale, session-card.js:691 | Grows in place (as specified) |
 | The Now tool line | §6.4 Now; no motion | Visibility toggle | `hidden`, session-card.js:675 | Yes, and everything below it jumps |
 | Timeline events ("Started delegate X · 6h", "reported back") | §6.4 Delegate events; no motion | `ItemsControl`, no motion, SessionView.xaml:346-381 | `replaceChildren`, session-card.js:755 | Yes |
@@ -422,11 +424,13 @@ Once the owner decides, the proposal banner comes off §5.3 and these issues get
 1. **Windows app: nothing pops.** `shift` and `value` in App.Core's catalogue; a `Motion.Shift`
    helper; leaving rows fade (fixing contradiction 1); the strip's chips fade and shift (2);
    Tools as a keyed list with coalescing, the anchor and "N new"; timeline events, the Now line
-   and the question card arrive and leave; banners leave (4) and push; Details values and
+   the question card and the #489 prompt line (once #504 lands) arrive and leave, and Show
+   prompt's space eases closed; banners leave (4) and push; Details values and
    status words cross-fade; the click guard re-arms on a shift.
 2. **Windows app: Needs you as a toggle** (3), if not already tracked under #253.
 3. **PWA: nothing pops.** `flip()` and `conceal()` in motion.js; Tools and timeline events as
-   keyed lists; the disclosure's space and exit fade; banners and notes through
+   keyed lists; the #489 prompt line fades in; the disclosure's space and exit fade (Show
+   prompt included); banners and notes through
    `reveal`/`conceal` (4); value cross-fades; usage bars ease; `watchMoves` counts a shift; and
    motion.spec.mjs tests for each.
 4. **Apple and Android:** nothing to file until they are built; their columns in §5.3 are
