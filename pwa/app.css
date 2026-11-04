@@ -388,6 +388,12 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .machine-name { grid-column: 2; grid-row: 1; font-weight: 600; font-size: var(--type-row); line-height: var(--type-row-line); overflow-wrap: anywhere; }
 .machine-state { grid-column: 3; grid-row: 1; color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-row-line); white-space: nowrap; }
 .machine.selected .machine-state { color: var(--ab-bridge); font-weight: 600; }
+/* Bridge words on light's selected tint are under 4.5:1 (4.46:1 over the layer, 4.09:1 over a
+   phone's shell; #366), so there they take the text colour (ui.md §9.1 A8). Dark keeps Bridge,
+   and forced colours their system pair. */
+@media (prefers-color-scheme: light) and (forced-colors: none) {
+  .machine.selected .machine-state, .machine.selected .button.secondary:not(.armed) { color: var(--ab-text); }
+}
 .machine-sub {
   grid-column: 2 / 4; grid-row: 2; min-width: 0; color: var(--ab-text2);
   font-size: var(--type-meta); line-height: var(--type-meta-line); font-variant-numeric: tabular-nums;
@@ -478,8 +484,15 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   .new-session.attention::after { top: 6px; right: 6px; box-shadow: 0 0 0 2px var(--ab-shell); }
 }
 @media (min-width: 760px) {
-  /* In the list pane: the title and New, then the count and the sort menu. */
-  .sessions-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title actions" "count sort"; row-gap: var(--ab-space-1); }
+  /* In the list pane: the title and the sort menu, then the count and New. Sort is on the first
+     line, before New, so Tab's order, which is the page's, is the order drawn (ui.md §9.1 A3,
+     #371). That is the fallback for a pane (264 to 320 px today) with no room for the title, Sort
+     and New on one line; a pane with room keeps them on one line, Sort still first. */
+  .list-pane { container: list-pane / inline-size; }
+  .sessions-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title sort" "count actions"; row-gap: var(--ab-space-1); }
+  @container list-pane (min-width: 320px) {
+    .sessions-head { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "title sort actions" "count count count"; }
+  }
   .new-session { min-height: 32px; padding: 0 var(--ab-space-3); border-radius: var(--ab-radius-control); font-size: var(--type-row); }
   .new-session .ab-icon { width: 16px; height: 16px; --ab-icon-stroke: 1.7; }
   .new-session.attention::after { top: -3px; right: -3px; box-shadow: 0 0 0 2px var(--ab-layer); }
