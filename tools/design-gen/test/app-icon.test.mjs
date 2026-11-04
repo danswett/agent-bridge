@@ -189,6 +189,16 @@ test('a filled path covers its area by the nonzero rule, leaving a hole wound th
   for (let y = 28; y <= 52; y++) { assert.equal(alpha(59, y), 255, `(59, ${y})`); assert.equal(alpha(60, y), 255, `(60, ${y})`); }
 });
 
+test('an edge two oppositely wound subpaths share cancels, leaving no line across the notch it opens', () => {
+  const white = { r: 255, g: 255, b: 255 };
+  const pts = (list) => [...list.map(([x, y], i) => ({ c: i ? 'L' : 'M', p: [x, y] })), { c: 'Z', p: [] }];
+  const scene = (commands) => ({ grid: 100, shapes: [{ kind: 'path', commands, fill: white }] });
+  const cut = render(scene([...pts([[10, 10.4], [90, 10.4], [90, 90], [10, 90]]), ...pts([[30, 10.4], [30, 50], [70, 50], [70, 10.4]])]), 100).pixels;
+  const one = render(scene(pts([[10, 10.4], [30, 10.4], [30, 50], [70, 50], [70, 10.4], [90, 10.4], [90, 90], [10, 90]])), 100).pixels;
+  for (let x = 31; x <= 69; x++) { assert.equal(cut[(10 * 100 + x) * 4 + 3], 0, `(${x}, 10)`); }
+  assert.deepEqual(cut, one);
+});
+
 test('the Apple asset catalog lists every icon it ships, iOS in its three appearances, and the menu bar image is a template drawn in black', () => {
   const targets = appIconTargets(appIconSpec(path.join(repoRoot, 'design')));
   const set = 'design/apple/Assets.xcassets/AppIcon.appiconset';

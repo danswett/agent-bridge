@@ -79,14 +79,15 @@ function windingAt(px, py, s) {
   return winding;
 }
 
-// An edge inside the filled region is no boundary. Subpaths that overlap, as the nonzero rule
-// allows, leave such edges, and measuring to them cut see-through seams. Only an edge within
-// NEAR can lower a sample's coverage, so only those are probed, either side along its normal;
-// it is dropped only when both probes land inside the fill.
+// An edge is a boundary only where the fill changes across it. Subpaths that overlap, as the
+// nonzero rule allows, leave edges inside the fill, and measuring to them cut see-through seams;
+// oppositely wound subpaths that share an edge cancel it, and measuring to that one drew a faint
+// line across an empty notch. Only an edge within NEAR can change a sample's coverage, so only
+// those are probed, either side along its normal; it is dropped when both probes agree.
 const SIDE = 1e-4;
-function isInterior(fx, fy, ux, uy, s) {
+function isNoBoundary(fx, fy, ux, uy, s) {
   const nx = ux * SIDE, ny = uy * SIDE;
-  return windingAt(fx + nx, fy + ny, s) !== 0 && windingAt(fx - nx, fy - ny, s) !== 0;
+  return (windingAt(fx + nx, fy + ny, s) !== 0) === (windingAt(fx - nx, fy - ny, s) !== 0);
 }
 
 function pathDistance(px, py, s) {
@@ -105,7 +106,7 @@ function pathDistance(px, py, s) {
       // Probe a little way in from a vertex, where the neighbouring edge can't be in the way.
       const nudge = Math.min(NEAR, len / 2) / len;
       const tp = t < nudge ? nudge : t > 1 - nudge ? 1 - nudge : t;
-      if (isInterior(x0 + tp * dx, y0 + tp * dy, -dy / len, dx / len, s)) { continue; }
+      if (isNoBoundary(x0 + tp * dx, y0 + tp * dy, -dy / len, dx / len, s)) { continue; }
     }
     best = dist;
   }
