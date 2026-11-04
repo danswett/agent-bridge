@@ -181,6 +181,15 @@ public class CompletenessTests
     }
 
     [Fact]
+    public void Ci_workflow_wiring_is_part_of_the_check_when_ci_yml_exists()
+    {
+        var problems = Completeness.Check(Fixture.Catalog(), Fixture.Graph(), new Completeness.Inputs(
+            ["src/Protocol", "tests/Protocol.Tests"], Workflows, [], CiWorkflow: "jobs:\n  product:\n    runs-on: ubuntu-latest\n"));
+
+        Assert.Equal([(CiPlan.Kind, "ci.yml has no plan job")], problems.Select(p => (p.Kind, p.Message)));
+    }
+
+    [Fact]
     public void Workflow_jobs_and_solution_projects_are_read_from_their_files()
     {
         var jobs = Completeness.WorkflowJobs("""

@@ -29,6 +29,7 @@ sealed class Catalog
             suite.Platforms ??= [];
             suite.Triggers ??= [];
             suite.Project = suite.Project is null ? null : RepoPath.Normalize(suite.Project);
+            suite.Builds = suite.Builds is null ? null : RepoPath.Normalize(suite.Builds);
         }
         var duplicate = catalog.Suites.GroupBy(s => s.Id).FirstOrDefault(g => g.Count() > 1);
         if (duplicate is not null)
@@ -86,13 +87,15 @@ sealed class Catalog
                 if (string.IsNullOrWhiteSpace(suite.Where) && !ManualRunners.Contains(suite.Runner, StringComparer.Ordinal))
                     Add(suite, $"exists on a {suite.Runner} runner but has no where");
             }
-            if (suite.Select == "affected" && suite.Project is null && suite.Triggers.Count == 0)
+            if (suite.Select == "affected" && suite.Project is null && suite.Builds is null && suite.Triggers.Count == 0)
                 Add(suite, "is select: affected with neither project nor triggers, so nothing can select it");
-            if (suite.Project is not null)
+            foreach (var (field, folder) in new[] { ("project", suite.Project), ("builds", suite.Builds) })
             {
-                var count = csprojCount(suite.Project);
+                if (folder is null)
+                    continue;
+                var count = csprojCount(folder);
                 if (count != 1)
-                    Add(suite, $"names project {suite.Project}, which holds {(count == 0 ? "no" : count.ToString(System.Globalization.CultureInfo.InvariantCulture))} .csproj files, not one");
+                    Add(suite, $"names {field} {folder}, which holds {(count == 0 ? "no" : count.ToString(System.Globalization.CultureInfo.InvariantCulture))} .csproj files, not one");
             }
         }
         return problems;
@@ -109,6 +112,11 @@ sealed class Suite
     public List<string> Platforms { get; set; } = [];
     public string? Runner { get; set; }
     public string? Project { get; set; }
+    /// <summary>
+    /// A project the suite builds and ships, not a test project (app-package's src/AgentBridge.App):
+    /// whatever that project's build takes in, through ProjectReferences and linked files, selects it.
+    /// </summary>
+    public string? Builds { get; set; }
     public List<string> Triggers { get; set; } = [];
     public string? Command { get; set; }
     public string? Where { get; set; }

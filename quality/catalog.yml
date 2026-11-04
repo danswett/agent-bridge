@@ -21,6 +21,10 @@
 #                 The selector derives what reaches it from ProjectReferences. A perf suite names
 #                 the benchmark or tool project it runs instead, which isn't a test project
 #   triggers      path globs that make it affected (for .NET suites, in addition to the graph)
+#   builds        for a suite that builds and ships a project rather than testing one (app-package):
+#                 that project's folder, holding exactly one .csproj. Whatever the project's build
+#                 takes in, through ProjectReferences and files linked from outside its folder,
+#                 selects the suite
 #   command       how to run it; required once status is exists. Prose ("see ci.yml ...") marks
 #                 a suite only CI can run
 #   where         the workflow job that runs it today; required once status is exists, unless a
@@ -33,7 +37,7 @@
 #                 default false: a change reaching it adds the security suites and the
 #                 security-review label (quality/README.md §2, AGENTS.md rule 5)
 #
-# A suite with select: affected needs project or triggers (or both), or nothing can select it.
+# A suite with select: affected needs project, builds or triggers, or nothing can select it.
 #
 # Test categories (xUnit traits, #375): Category=Process starts real OS processes,
 # Category=Network binds real sockets, ports or pipes, and Category=HomeAssistantIntegration
@@ -53,6 +57,10 @@ global_triggers:
   - .github/workflows/**
   - .github/actions/**              # composite actions the workflows use (#433's install-trivy)
   - quality/**
+  # The selector and its tests: a change to them could change its own selection (#487). CI's plan
+  # job also runs the whole ring for these, and the paths above, without asking the selector.
+  - tools/AgentBridge.Quality/**
+  - tests/AgentBridge.Quality.Tests/**
 
 no_test_paths:
   # Changes only here select only suites whose triggers name them: docs-links (below) for
@@ -65,6 +73,7 @@ no_test_paths:
   - LICENSE
   - tools/design-mockups/**     # renders reference images only; nothing ships or tests from it
   - .github/dependabot.yml      # schedules update PRs; each PR's own changes select its tests
+  - .github/CODEOWNERS          # who reviews what; CI's plan runs the whole ring for .github/ anyway
 
 suites:
   # ---------------------------------------------------------------- .NET unit and component
@@ -219,7 +228,7 @@ suites:
     ring: 0
     select: affected
     # The selector and its catalog checks (quality/README.md §4). A change to it can change any
-    # selection, so its own tests run before anything trusts it.
+    # selection, so it's in global_triggers: the whole ring runs, its own tests included (#487).
     platforms: [win-x64, linux-x64]
     runner: local
     project: tests/AgentBridge.Quality.Tests
@@ -232,9 +241,11 @@ suites:
     ring: 1
     select: always
     # CI's plan job: this catalog is complete (every test project, workflow job and PWA test
-    # folder is in it, and every tracked file is claimed by a rule), then the selection that
-    # gates every other ci.yml job. quality-gate is the one check that sums them up. It runs on
-    # every pull request, docs-only ones too, since nothing else would run without it.
+    # folder is in it, every tracked file is claimed by a rule, and ci.yml's wiring to the plan
+    # agrees: gated jobs, the plan's JOBS, quality-gate's needs, the suite ids steps test for),
+    # then the selection that gates every other ci.yml job. quality-gate is the one check that
+    # sums them up. It runs on every pull request, docs-only ones too, since nothing else would
+    # run without it.
     platforms: [linux-x64]
     runner: hosted
     command: dotnet run --project tools/AgentBridge.Quality -c Release -- check
@@ -315,7 +326,8 @@ suites:
     kind: unit
     ring: 1
     select: affected
-    platforms: [win-x64]
+    # Both Windows runners run these steps, so a build/ change reaches windows-11-arm too.
+    platforms: [win-x64, win-arm64]
     runner: hosted
     triggers: [build/**]
     command: pwsh build/test-shadow-week.ps1; pwsh build/test-publish-prerelease.ps1
@@ -341,6 +353,9 @@ suites:
     # installer's silent per-user install and the installed copy's self-test, publish dry run.
     platforms: [win-x64, win-arm64]
     runner: hosted
+    # What the app's build takes in from outside src/ (the protocol's example sessions, embedded
+    # in App.Core for the demo the self-test runs) reaches it through builds (#487).
+    builds: src/AgentBridge.App
     triggers: [src/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, design/**]
     command: see ci.yml app job
     where: ci.yml app

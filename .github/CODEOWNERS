@@ -1,0 +1,23 @@
+# Who reviews what (GitHub requests their review on a pull request that touches it).
+# CI, the test catalog, the selector and the solution and build roots decide what every later change
+# is tested by, and a change to any of them runs the whole ring (ci.yml's whole-ring step), so it
+# is a workflow change and needs the owner's review (#487). Keep this in step with that list.
+/.github/                         @danswett
+/quality/                         @danswett
+/tools/AgentBridge.Quality/       @danswett
+/tests/AgentBridge.Quality.Tests/ @danswett
+/build/                           @danswett
+# CODEOWNERS paths are case sensitive, while the whole-ring step and the tools aren't (NuGet on
+# Linux loads NuGet.Config too, and MSBuild on Windows any case), so each spelling they load is here.
+Directory.*.props                 @danswett
+Directory.*.targets               @danswett
+directory.*.props                 @danswett
+directory.*.targets               @danswett
+*.sln                             @danswett
+*.slnx                            @danswett
+global.json                       @danswett
+Global.json                       @danswett
+nuget.config                      @danswett
+NuGet.config                      @danswett
+NuGet.Config                      @danswett
+Nuget.config                      @danswett

@@ -40,6 +40,35 @@ public class ChangedFilesTests
         }
     }
 
+    [Fact]
+    public void Paths_git_would_quote_come_back_verbatim()
+    {
+        var root = Fixture.ScratchFolder();
+        try
+        {
+            Git(root, "init", "-q", "-b", "main");
+            Write(root, "seed.txt");
+            Commit(root, "base");
+            // Straight into the index, since Windows can't hold these names on disk. One per line,
+            // git prints each quoted ("tools/q/a\"b.cs"), which no glob anchored at tools/ matches.
+            var blob = Git(root, "hash-object", "-w", "seed.txt").Trim();
+            string[] odd = ["docs/new\nline.md", "src/tab\there.cs", "tools/AgentBridge.Quality/a\"b.cs", "tools/AgentBridge.Quality/back\\slash.cs"];
+            foreach (var path in odd)
+                Git(root, "-c", "core.protectNTFS=false", "update-index", "--add", "--cacheinfo", $"100644,{blob},{path}");
+            Git(root, "-c", "user.name=quality", "-c", "user.email=quality@example.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "odd");
+
+            var (files, _) = ChangedFiles.Since(root, "HEAD~1", head: "HEAD");
+
+            // A backslash reads as a separator, as it does in a catalog glob: still under tools/.
+            Assert.Equal(["docs/new\nline.md", "src/tab\there.cs", "tools/AgentBridge.Quality/a\"b.cs", "tools/AgentBridge.Quality/back/slash.cs"], files);
+            Assert.Contains("tools/AgentBridge.Quality/a\"b.cs", ChangedFiles.Tracked(root));
+        }
+        finally
+        {
+            Fixture.Delete(root);
+        }
+    }
+
     static void Write(string root, string path, string text = "x")
     {
         var full = Path.Combine(root, path);

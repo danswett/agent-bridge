@@ -33,6 +33,51 @@ public class SelectorTests
     }
 
     [Fact]
+    public void A_suite_that_builds_a_project_is_selected_by_whatever_that_project_takes_in_and_by_nothing_else()
+    {
+        // A package of src/Host, which reaches HostCore, and through Protocol.Tests' link, nothing:
+        // a test project's linked files are not the package's.
+        var catalog = Catalog.Parse(Fixture.CatalogYaml + """
+
+              - id: package
+                kind: packaging
+                ring: 1
+                select: affected
+                platforms: [win-x64]
+                runner: hosted
+                builds: src/Host
+                status: planned
+            """);
+        var selector = new Selector(catalog, Fixture.Graph());
+
+        var reached = selector.Select(["src/HostCore/Parser.cs"], ring: 1);
+        var apart = selector.Select(["src/Relay/Relay.cs", "docs/protocol/examples/a.json"], ring: 1);
+
+        Assert.Equal(["src/HostCore/Parser.cs"], Fixture.ReasonFor(reached, "package", "builds src/Host, which reaches src/HostCore").Files);
+        Assert.DoesNotContain("package", Fixture.Ids(apart));
+    }
+
+    [Fact]
+    public void A_builds_folder_must_hold_exactly_one_csproj()
+    {
+        var catalog = Catalog.Parse("""
+            suites:
+              - id: package
+                kind: packaging
+                ring: 1
+                select: affected
+                platforms: [win-x64]
+                runner: hosted
+                builds: src/Nothing
+                status: planned
+            """);
+
+        var problem = Assert.Single(catalog.Validate(Fixture.Graph().CsprojCount));
+
+        Assert.Equal("suite package names builds src/Nothing, which holds no .csproj files, not one", problem.Message);
+    }
+
+    [Fact]
     public void A_path_matching_a_suites_triggers_selects_that_suite_in_the_requested_ring_only()
     {
         var selector = Fixture.Selector();

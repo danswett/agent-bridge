@@ -15,7 +15,9 @@ static class Program
               plus uncommitted and untracked files unless --head is given.
           check [--repo DIR]
               Fails when a test project, workflow job or pwa test folder is missing from the
-              catalog, a catalog project doesn't exist, or a tracked file is claimed by no rule.
+              catalog, a catalog project doesn't exist, a tracked file is claimed by no rule, or
+              ci.yml's wiring to the plan (gated jobs, the plan's JOBS, quality-gate's and
+              publish-gate's needs, the suite ids steps test for) has drifted.
           flakes --results DIR [--issues FILE] [--owner LOGIN] [--run-url URL] [--commit SHA]
                  [--plan FILE] [--summary FILE] [--dry-run]
               The flake hunt's reporter: classifies each test in DIR/<os>/run-<i>/*.trx (a TRX

@@ -47,6 +47,8 @@ public class CatalogTests
     [InlineData("spikes/s2-noise-interop/dotnet/Noise.cs", "pwa-e2e")]
     [InlineData("spikes/s2-noise-interop/web/noise-p256.js", "pwa-e2e")]
     [InlineData("spikes/s6-tpm-keys/src/DeviceKeys.cs", "pwa-e2e")]
+    // Embedded in App.Core for the demo the app job's self-test runs (#487).
+    [InlineData("docs/protocol/examples/sessions-list.json", "app-package")]
     public void A_file_a_job_checks_from_outside_its_folders_selects_that_suite_in_the_repository_catalog(string file, string suite)
     {
         var root = AppContext.BaseDirectory;
@@ -58,6 +60,26 @@ public class CatalogTests
 
         Assert.True(File.Exists(Path.Combine(root, file)), $"{file} no longer exists; update this test");
         Assert.Contains(suite, Fixture.Ids(selection));
+    }
+
+    // What decides selection must not narrow its own: a change to the selector, its tests or the
+    // catalog runs the whole ring (#487). CI's plan job also forces ring 2 for these, apart from it.
+    [Theory]
+    [InlineData("tools/AgentBridge.Quality/ChangedFiles.cs")]
+    [InlineData("tests/AgentBridge.Quality.Tests/SelectorTests.cs")]
+    [InlineData("quality/catalog.yml")]
+    [InlineData(".github/workflows/ci.yml")]
+    public void A_change_to_what_decides_selection_runs_the_whole_ring_in_the_repository_catalog(string file)
+    {
+        var root = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(root, "AgentBridge.slnx")))
+            root = Path.GetDirectoryName(root) ?? throw new InvalidOperationException("No AgentBridge.slnx above the test's output.");
+        var catalog = Catalog.Load(Path.Combine(root, "quality", "catalog.yml"));
+
+        var selection = new Selector(catalog, ProjectGraph.Load(root)).Select([file], ring: 1);
+
+        Assert.Equal("full", selection.Mode);
+        Assert.Equal(catalog.Suites.Where(s => s.Ring <= 1).Select(s => s.Id), Fixture.Ids(selection));
     }
 
     [Fact]

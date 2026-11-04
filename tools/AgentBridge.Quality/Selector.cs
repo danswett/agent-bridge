@@ -46,6 +46,7 @@ sealed class Selector(Catalog catalog, ProjectGraph graph)
         catalog.Suites.Select(s => (s, s.Triggers.Select(t => new Glob(t)).ToList())).ToList();
     // In catalog order, so reasons come out in the same order on every run.
     readonly List<Suite> projectSuites = catalog.Suites.Where(s => s.Project is not null).ToList();
+    readonly List<Suite> buildSuites = catalog.Suites.Where(s => s.Builds is not null).ToList();
 
     public Selection Select(IEnumerable<string> changedFiles, int ring, string? platform = null, IReadOnlyCollection<string>? named = null)
     {
@@ -152,6 +153,14 @@ sealed class Selector(Catalog catalog, ProjectGraph graph)
                 claimed = true;
                 if (suite.Ring <= ring)
                     add(suite, suite.Project == owner.Folder ? $"project {owner.Folder}" : $"project {suite.Project} reaches {owner.Folder}", file);
+            }
+            // A suite that ships a project is reached the same way: an embedded resource linked in
+            // from docs/protocol/examples once changed the app without selecting its package (#487).
+            foreach (var suite in buildSuites.Where(s => reachers.Contains(s.Builds!)))
+            {
+                claimed = true;
+                if (suite.Ring <= ring)
+                    add(suite, suite.Builds == owner.Folder ? $"builds {owner.Folder}" : $"builds {suite.Builds}, which reaches {owner.Folder}", file);
             }
         }
         return claimed;

@@ -15,13 +15,13 @@ static class ChangedFiles
         var mergeBase = Git(repoRoot, "merge-base", baseRef, head ?? "HEAD").Trim();
         var files = new SortedSet<string>(StringComparer.Ordinal);
         // --no-renames lists a moved file at both paths, so the suites of the old home run too.
-        AddLines(files, Git(repoRoot, "diff", "--name-only", "--no-renames", mergeBase, head ?? "HEAD"));
+        AddPaths(files, Git(repoRoot, "diff", "-z", "--name-only", "--no-renames", mergeBase, head ?? "HEAD"));
         if (head is null)
         {
-            AddLines(files, Git(repoRoot, "diff", "--name-only", "--no-renames", "HEAD"));
+            AddPaths(files, Git(repoRoot, "diff", "-z", "--name-only", "--no-renames", "HEAD"));
             // The index too: a change staged and then undone in the working tree is still to be committed.
-            AddLines(files, Git(repoRoot, "diff", "--cached", "--name-only", "--no-renames", "HEAD"));
-            AddLines(files, Git(repoRoot, "ls-files", "--others", "--exclude-standard"));
+            AddPaths(files, Git(repoRoot, "diff", "-z", "--cached", "--name-only", "--no-renames", "HEAD"));
+            AddPaths(files, Git(repoRoot, "ls-files", "-z", "--others", "--exclude-standard"));
         }
         return (files.ToList(), mergeBase);
     }
@@ -29,16 +29,19 @@ static class ChangedFiles
     public static IReadOnlyList<string> Tracked(string repoRoot)
     {
         var files = new SortedSet<string>(StringComparer.Ordinal);
-        AddLines(files, Git(repoRoot, "ls-files"));
+        AddPaths(files, Git(repoRoot, "ls-files", "-z"));
         return files.ToList();
     }
 
     public static string RepoRoot(string from) => Git(from, "rev-parse", "--show-toplevel").Trim();
 
-    static void AddLines(SortedSet<string> into, string output)
+    // NUL-separated (-z), as git writes every path verbatim: one-per-line output quotes a path
+    // holding ", \, a tab or another control character, and the quoted form ("tools/x/a\"b.cs")
+    // matched none of the catalog's globs (#523's review).
+    static void AddPaths(SortedSet<string> into, string output)
     {
-        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            into.Add(RepoPath.Normalize(line));
+        foreach (var path in output.Split('\0', StringSplitOptions.RemoveEmptyEntries))
+            into.Add(RepoPath.Normalize(path));
     }
 
     internal static string Git(string workingDirectory, params string[] args)
@@ -48,6 +51,8 @@ static class ChangedFiles
             WorkingDirectory = workingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            // git writes paths as UTF-8 bytes; the console's code page would garble them on Windows.
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
             UseShellExecute = false,
         };
         // Paths with non-ASCII characters come back quoted and escaped otherwise.
