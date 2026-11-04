@@ -1279,6 +1279,33 @@
           "json": {}
         },
         {
+          "name": "a-scheduled-prompt",
+          "json": {
+            "userMessage": "[Scheduled prompt #4] Check CI and report.",
+            "userMessageFrom": "schedule",
+            "userMessageLabel": "4",
+            "turnCount": 3
+          }
+        },
+        {
+          "name": "a-prompt-an-agent-sent",
+          "json": {
+            "userMessage": "Carry on with the next step.",
+            "userMessageFrom": "agent"
+          }
+        },
+        {
+          "name": "an-unknown-sender-reads-as-other-never-the-person",
+          "json": {
+            "userMessage": "Carry on.",
+            "userMessageFrom": "robot"
+          },
+          "reads": {
+            "userMessage": "Carry on.",
+            "userMessageFrom": "other"
+          }
+        },
+        {
           "name": "wrong-type-response",
           "json": {
             "response": 42,
@@ -1353,7 +1380,16 @@
           }
         }
       ],
-      "refused": []
+      "refused": [
+        {
+          "name": "a-sender-that-is-not-text",
+          "json": {
+            "userMessage": "Carry on.",
+            "userMessageFrom": 4
+          },
+          "refusedBy": "parse"
+        }
+      ]
     },
     "Subagent": {
       "direction": "host",
@@ -5775,6 +5811,38 @@
       "step": "read",
       "csharp": "reads it, the field its type's default",
       "pwa": "reads it, the field absent or filled in from another"
+    },
+    {
+      "vector": "Activity/a-scheduled-prompt",
+      "issue": 489,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads userMessageFrom and userMessageLabel, an unknown sender as other",
+      "pwa": "does not read them yet: the prompt reads as the person's"
+    },
+    {
+      "vector": "Activity/a-prompt-an-agent-sent",
+      "issue": 489,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads userMessageFrom and userMessageLabel, an unknown sender as other",
+      "pwa": "does not read them yet: the prompt reads as the person's"
+    },
+    {
+      "vector": "Activity/an-unknown-sender-reads-as-other-never-the-person",
+      "issue": 489,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads userMessageFrom and userMessageLabel, an unknown sender as other",
+      "pwa": "does not read them yet: the prompt reads as the person's"
+    },
+    {
+      "vector": "Activity/a-sender-that-is-not-text",
+      "issue": 489,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "refuses it: userMessageFrom is strict, so the prompt is never shown as the person's",
+      "pwa": "does not read userMessageFrom yet, so reads the prompt as the person's"
     },
     {
       "vector": "SessionsSynced/not-a-record",

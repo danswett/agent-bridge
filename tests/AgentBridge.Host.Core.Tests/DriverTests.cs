@@ -39,9 +39,19 @@ public class DriverTests
         // Codex counts the prompt at task_started; its text follows in a record of its own, and a
         // read can fall between them.
         d.Observe(At(1, SessionStatus.Working, "first"), Fixture.T0, drivers.Arm);
+        // Between the count and its text, the prompt shown is still the person's (#489).
+        Assert.False(d.PromptIsAgents);
         d.Observe(At(1, SessionStatus.Working, "the agent's prompt"), Fixture.T0, drivers.Arm);
 
         Assert.Equal((DriverKind.Agent, Principal), d.Shown);
+        Assert.True(d.PromptIsAgents);
+
+        // The person's next turn, read the same way: the agent's words stay the agent's until the
+        // person's own replace them.
+        d.Observe(At(2, SessionStatus.Working, "the agent's prompt"), Fixture.T0, drivers.Arm);
+        Assert.True(d.PromptIsAgents);
+        d.Observe(At(2, SessionStatus.Working, "mine"), Fixture.T0, drivers.Arm);
+        Assert.False(d.PromptIsAgents);
     }
 
     [Fact]
@@ -129,6 +139,405 @@ public class DriverTests
         Fixture.Append(events, Copilot.User("mine", 40), Copilot.TurnStart(41));
         await source.RefreshAsync();
         Assert.Equal((null, null), Driver(source.Get(Id)!));
+    }
+
+    // An agent's reply carries no mark in the transcript; the host knows the turn it started (#489).
+    [Fact]
+    public async Task A_prompt_an_agents_reply_started_is_the_agents_and_the_next_one_typed_at_the_machine_is_the_persons()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: drivers);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Activity.UserMessageFrom);
+
+        f.Time.Advance(TimeSpan.FromSeconds(5));
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, f.Time.GetUtcNow(), Principal);
+        await Until(source, s => s.Driver == DriverKind.Agent);
+        // Armed, but its prompt has not come: the one shown is still the person's.
+        Assert.Null(source.Get(Id)!.Activity.UserMessageFrom);
+
+        Fixture.Append(events, Copilot.User("the agent's words", 10), Copilot.TurnStart(11));
+        await source.RefreshAsync();
+        Assert.Equal(("the agent's words", UserMessageFrom.Agent), (source.Get(Id)!.Activity.UserMessage, source.Get(Id)!.Activity.UserMessageFrom));
+        Fixture.Append(events, Copilot.TurnEnd(12));
+        await source.RefreshAsync();
+        Assert.Equal(UserMessageFrom.Agent, source.Get(Id)!.Activity.UserMessageFrom);
+
+        Fixture.Append(events, Copilot.User("mine now", 13), Copilot.TurnStart(14));
+        await source.RefreshAsync();
+        Assert.Equal(("mine now", (UserMessageFrom?)null), (source.Get(Id)!.Activity.UserMessage, source.Get(Id)!.Activity.UserMessageFrom));
+    }
+
+    // Context Copilot gives the agent mid-turn (a skill, a memory, a shell's notice) is no new turn:
+    // counted as a prompt, it spent the agent's turn and its prompt read as the person's.
+    [Fact]
+    public async Task Context_given_in_the_middle_of_an_agents_turn_leaves_its_prompt_and_its_edge_the_agents()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: drivers);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromSeconds(5));
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, f.Time.GetUtcNow(), Principal);
+        await Until(source, s => s.Driver == DriverKind.Agent);
+        Fixture.Append(events, Copilot.User("the agent's words", 10), Copilot.TurnStart(11));
+        await source.RefreshAsync();
+        Fixture.Append(events,
+            Copilot.Event("user.message", new { content = "<skill-context name=\"docx\">...</skill-context>", interactionId = "i12", source = "skill-docx" }, 12),
+            Copilot.Event("user.message", new { content = "<system_notification> Shell command completed.</system_notification>", interactionId = "i13", source = "system", delivery = "steering" }, 13));
+        await source.RefreshAsync();
+
+        var s = source.Get(Id)!;
+        Assert.Equal(("the agent's words", UserMessageFrom.Agent, DriverKind.Agent, 1), (s.Activity.UserMessage, s.Activity.UserMessageFrom, s.Driver, s.Activity.TurnCount));
+    }
+
+    // A notice that starts a turn of its own once the agent's has ended changes the count but not
+    // the prompt: the agent's words stay the agent's.
+    [Fact]
+    public async Task A_notice_after_an_agents_turn_has_ended_leaves_its_prompt_the_agents()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: drivers);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromSeconds(5));
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, f.Time.GetUtcNow(), Principal);
+        await Until(source, s => s.Driver == DriverKind.Agent);
+        Fixture.Append(events, Copilot.User("the agent's words", 10), Copilot.TurnStart(11), Copilot.TurnEnd(12));
+        await source.RefreshAsync();
+        Fixture.Append(events,
+            Copilot.Event("user.message", new { content = "<system_notification> Shell command completed.</system_notification>", interactionId = "i20", source = "system", delivery = "idle" }, 20),
+            Copilot.TurnStart(21));
+        await source.RefreshAsync();
+
+        var s = source.Get(Id)!;
+        Assert.Equal((SessionStatus.Working, "the agent's words", UserMessageFrom.Agent), (s.Status, s.Activity.UserMessage, s.Activity.UserMessageFrom));
+    }
+
+    // Known by its words alone, an agent's "continue" after the person's was the person's, and the
+    // person's next "continue" the agent's. Each is its own record.
+    [Fact]
+    public async Task The_same_words_sent_by_the_person_and_by_an_agent_are_each_their_senders()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: drivers);
+        Fixture.Append(events, Copilot.User("continue", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromSeconds(5));
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, f.Time.GetUtcNow(), Principal);
+        await Until(source, s => s.Driver == DriverKind.Agent);
+        Fixture.Append(events, Copilot.User("continue", 10), Copilot.TurnStart(11), Copilot.TurnEnd(12));
+        await source.RefreshAsync();
+        Assert.Equal(UserMessageFrom.Agent, source.Get(Id)!.Activity.UserMessageFrom);
+
+        Fixture.Append(events, Copilot.User("continue", 13), Copilot.TurnStart(14));
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Activity.UserMessageFrom);
+    }
+
+    // A bridge reply that comes while a notice's turn is running, uncounted, brings no new count:
+    // known only by its new prompt, it is still the arm's.
+    [Fact]
+    public async Task A_reply_that_comes_while_a_notice_is_being_handled_is_still_the_agents()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: drivers);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3),
+            Copilot.Event("user.message", new { content = "<system_notification> Shell command completed.</system_notification>", interactionId = "i4", source = "system" }, 4),
+            Copilot.TurnStart(5));
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromSeconds(5));
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, f.Time.GetUtcNow(), Principal);
+        await Until(source, s => s.Driver == DriverKind.Agent);
+        Fixture.Append(events, Copilot.User("the agent's words", 10));
+        await source.RefreshAsync();
+
+        var s = source.Get(Id)!;
+        Assert.Equal(("the agent's words", UserMessageFrom.Agent), (s.Activity.UserMessage, s.Activity.UserMessageFrom));
+    }
+
+    // Read in one refresh, an agent's reply and the person's prompt typed after it: the latest is
+    // the person's, and the words the reply was sent with say it is not the agent's.
+    [Fact]
+    public async Task A_persons_prompt_read_with_an_agents_reply_in_one_refresh_is_the_persons()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: drivers);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromSeconds(5));
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, f.Time.GetUtcNow(), Principal);
+        drivers.For(Id).Expect("the agent's words");
+        await Until(source, s => s.Driver == DriverKind.Agent);
+        Fixture.Append(events, Copilot.User("the agent's words", 10), Copilot.TurnStart(11), Copilot.User("mine, typed meanwhile", 12));
+        await source.RefreshAsync();
+
+        var s = source.Get(Id)!;
+        Assert.Equal(("mine, typed meanwhile", (UserMessageFrom?)null), (s.Activity.UserMessage, s.Activity.UserMessageFrom));
+    }
+
+    // Read again from the start (the file was replaced), a Codex prompt now before the parsed window
+    // is known by the same record as before: the agent's stays the agent's.
+    [Fact]
+    public async Task An_agents_codex_prompt_read_again_from_before_the_window_is_still_the_agents()
+    {
+        const string Codex1 = "66666666-6666-4666-8666-666666666677";
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var rollout = f.CodexTranscript(Codex1);
+        f.CodexRegistration(Codex1, 950, rollout, updated: Fixture.T0);
+        f.Processes.Run(AgentKind.Codex, 950);
+        Fixture.Append(rollout,
+            Codex.Line("session_meta", new { id = Codex1, timestamp = Copilot.At(0), cwd = "/work/codex" }, 0),
+            Codex.Event(new { type = "task_started" }, 1), Codex.Event(new { type = "user_message", message = "go" }, 1),
+            Codex.Event(new { type = "task_complete", last_agent_message = "Done." }, 2));
+        await using var source = f.Source(tailBytes: 4096, drivers: drivers);
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromSeconds(5));
+        drivers.For(Codex1).ArmDriver(SessionDrivers.Agent, f.Time.GetUtcNow(), Principal);
+        Fixture.Append(rollout, Codex.Event(new { type = "task_started" }, 10), Codex.Event(new { type = "user_message", message = "the agent's words" }, 10));
+        await source.RefreshAsync();
+        Fixture.Append(rollout, [.. Enumerable.Range(0, 8).Select(i => Codex.Event(new { type = "agent_reasoning", text = new string('x', 1000) }, 11 + i))]);
+        await source.RefreshAsync();
+        Assert.Equal(UserMessageFrom.Agent, source.Get(Codex1)!.Activity.UserMessageFrom);
+
+        // Replaced by a shorter copy: read again, the prompt now skimmed rather than in the window.
+        var lines = File.ReadAllLines(rollout);
+        File.WriteAllLines(rollout, lines[..^1]);
+        await source.RefreshAsync();
+
+        var s = source.Get(Codex1)!;
+        Assert.Equal(("the agent's words", UserMessageFrom.Agent), (s.Activity.UserMessage, s.Activity.UserMessageFrom));
+    }
+
+    // Helpers for a Copilot session observed by a host-wide driver record.
+    sealed class Driven : IAsyncDisposable
+    {
+        public readonly Fixture F = new();
+        public readonly SessionDrivers Drivers = new();
+        readonly string events;
+        public readonly SessionSource Source;
+
+        public Driven()
+        {
+            events = F.CopilotSession(Id, 100);
+            F.Processes.Run(AgentKind.Copilot, 100);
+            Source = F.Source(drivers: Drivers);
+        }
+
+        public async Task<Session> After(params string[] lines)
+        {
+            Fixture.Append(events, lines);
+            await Source.RefreshAsync();
+            return Source.Get(Id)!;
+        }
+
+        public async Task ArmAsync(string? words)
+        {
+            F.Time.Advance(TimeSpan.FromSeconds(5));
+            Drivers.For(Id).ArmDriver(SessionDrivers.Agent, F.Time.GetUtcNow(), Principal);
+            if (words is not null) { Drivers.For(Id).Expect(words); }
+            await Until(Source, s => s.Driver == DriverKind.Agent);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await Source.DisposeAsync();
+            F.Dispose();
+        }
+    }
+
+    // Delivery puts an attachment's mention before the reply's words; it is still the reply.
+    [Theory]
+    [InlineData("look at this", "@C:\\staged\\shot.png look at this")]
+    [InlineData("look at this", "[Image #1] look at this")]
+    // Codex runs its placeholders together.
+    [InlineData("look at these", "[Image #1][Image #2] look at these")]
+    // Delivery types a control character as a space.
+    [InlineData("check\u001bthis", "check this")]
+    // A reply whose own words look like an attachment, with and without one before it.
+    [InlineData("@README.md explain this", "@README.md explain this")]
+    [InlineData("[Image #1] is the old one", "[Image #1] is the old one")]
+    [InlineData("@README.md explain this", "@C:\\staged\\shot.png @README.md explain this")]
+    public async Task A_reply_delivered_with_its_attachments_before_its_words_is_the_agents(string words, string delivered)
+    {
+        await using var d = new Driven();
+        await d.After(Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await d.ArmAsync(words);
+
+        var s = await d.After(Copilot.User(delivered, 10), Copilot.TurnStart(11));
+
+        Assert.Equal(UserMessageFrom.Agent, s.Activity.UserMessageFrom);
+    }
+
+    // Read in one refresh, the agent's "continue" and the person's after it: two prompts, and which
+    // the arm was for cannot be told, so neither is taken for the agent's. Words that only begin
+    // like the reply's are not it.
+    [Fact]
+    public async Task The_same_words_from_both_in_one_refresh_or_words_that_only_begin_like_the_reply_are_not_the_agents()
+    {
+        await using var d = new Driven();
+        await d.After(Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await d.ArmAsync("continue");
+        var both = await d.After(Copilot.User("continue", 10), Copilot.TurnStart(11), Copilot.User("continue", 12));
+        Assert.Null(both.Activity.UserMessageFrom);
+
+        await using var e = new Driven();
+        await e.After(Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await e.ArmAsync("continue");
+        var longer = await e.After(Copilot.User("continue, but do not deploy", 10), Copilot.TurnStart(11));
+        Assert.Null(longer.Activity.UserMessageFrom);
+    }
+
+    // A card's publish arms with its words; an empty Send arms over it and is put back. The words
+    // come back with it, so a person's prompt read with the reply is still theirs.
+    [Fact]
+    public void An_arm_put_back_keeps_the_words_it_expected()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        d.Observe(At(1, SessionStatus.Idle, "first"), Fixture.T0, drivers.Arm, "k1\nfirst", 1);
+        d.ArmDriver(SessionDrivers.Agent, Fixture.T0, Principal);
+        d.Expect("the agent's words");
+        var before = d.Save();
+        d.ArmDriver(SessionDrivers.Agent, Fixture.T0, Principal);
+        d.Restore(before);
+
+        d.Observe(At(1, SessionStatus.Working, "mine"), Fixture.T0, drivers.Arm, "k2\nmine", 2);
+
+        Assert.False(d.PromptIsAgents);
+    }
+
+    // A launch's arm is spent on its opening turn, but the prompt shown is the launch's only when it
+    // is the launch's words: the person may already have sent another.
+    [Fact]
+    public void A_launch_spent_on_a_prompt_that_is_not_its_own_leaves_that_prompt_the_persons()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        d.ArmLaunch(Fixture.T0, "Fix the build", resumed: false, Principal);
+
+        d.Observe(At(1, SessionStatus.Working, "and the tests too"), Fixture.T0, drivers.Arm);
+
+        Assert.Null(d.PendingAt);
+        Assert.False(d.PromptIsAgents);
+    }
+
+    // Reported after the person's own prompt was seen, a launch whose words that prompt only begins
+    // with: the arm is spent on it, but the prompt is still the person's.
+    [Fact]
+    public void A_launch_reported_after_a_persons_prompt_that_only_begins_like_it_leaves_that_prompt_the_persons()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        var persons = At(1, SessionStatus.Working, "Fix the build, but do not deploy");
+        d.Observe(persons, Fixture.T0, drivers.Arm);
+        d.ArmLaunch(Fixture.T0, "Fix the build", resumed: false, Principal);
+
+        d.Observe(persons, Fixture.T0, drivers.Arm);
+
+        Assert.Null(d.PendingAt);
+        Assert.False(d.PromptIsAgents);
+    }
+
+    // A press of Send arms before the box is read: a prompt read before its words are known is not
+    // taken for the agent's. Words known at the arm are part of it from the start.
+    [Fact]
+    public void A_prompt_read_before_an_agents_reply_words_are_known_stays_the_persons()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        d.Observe(At(1, SessionStatus.Idle, "go"), Fixture.T0, drivers.Arm);
+        d.ArmDriver(SessionDrivers.Agent, Fixture.T0, Principal, wordsToCome: true);
+
+        d.Observe(At(1, SessionStatus.Working, "mine, typed meanwhile"), Fixture.T0, drivers.Arm);
+        d.Expect("the agent's words");
+        Assert.False(d.PromptIsAgents);
+
+        var e = new SessionDrivers().For(Id);
+        e.Observe(At(1, SessionStatus.Idle, "go"), Fixture.T0, drivers.Arm);
+        e.ArmDriver(SessionDrivers.Agent, Fixture.T0, Principal, words: "the agent's words");
+        e.Observe(At(1, SessionStatus.Working, "mine, typed meanwhile"), Fixture.T0, drivers.Arm);
+        Assert.False(e.PromptIsAgents);
+    }
+
+    // A launch into a session already seen: the turn after it is the launch's only in its words.
+    [Fact]
+    public void A_prompt_after_a_launch_into_a_session_already_seen_is_the_launchs_only_in_its_words()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        d.Observe(At(1, SessionStatus.Idle, "go"), Fixture.T0, drivers.Arm);
+        d.ArmLaunch(Fixture.T0, "Fix the build", resumed: true, Principal);
+
+        d.Observe(At(1, SessionStatus.Working, "something else"), Fixture.T0, drivers.Arm);
+
+        Assert.False(d.PromptIsAgents);
+    }
+
+    // A resume in the very words of the person's last prompt: that prompt, already shown, stays
+    // theirs, and the arm waits for the launch's own.
+    [Fact]
+    public void A_resume_in_the_words_of_the_persons_last_prompt_leaves_it_theirs_and_takes_the_next()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        var persons = At(1, SessionStatus.Idle, "Fix the build");
+        d.Observe(persons, Fixture.T0, drivers.Arm, "k1\nFix the build", 1);
+        d.ArmLaunch(Fixture.T0, "Fix the build", resumed: true, Principal);
+
+        d.Observe(persons, Fixture.T0, drivers.Arm, "k1\nFix the build", 1);
+        Assert.False(d.PromptIsAgents);
+        Assert.NotNull(d.PendingAt);
+
+        d.Observe(At(1, SessionStatus.Working, "Fix the build"), Fixture.T0, drivers.Arm, "k2\nFix the build", 2);
+        Assert.True(d.PromptIsAgents);
+    }
+
+    [Fact]
+    public async Task A_persons_prompt_an_agent_then_answered_a_question_in_stays_the_persons()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: drivers);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.ToolStart("q1", "ask_user", new
+        {
+            message = "Which one?",
+            requestedSchema = new { properties = new { pick = new { type = "string", @enum = new[] { "a", "b" } } }, required = new[] { "pick" } },
+        }, 3));
+        await source.RefreshAsync();
+
+        drivers.For(Id).Answered(SessionDrivers.Agent, Principal);
+        await Until(source, s => s.Driver == DriverKind.Agent);
+
+        Assert.Equal(("go", (UserMessageFrom?)null), (source.Get(Id)!.Activity.UserMessage, source.Get(Id)!.Activity.UserMessageFrom));
     }
 
     [Fact]

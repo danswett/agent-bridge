@@ -71,10 +71,34 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
 
     protected static byte[] Marker(string text) => System.Text.Encoding.UTF8.GetBytes(text);
 
-    protected void UserPrompt(string text, DateTimeOffset? at, bool countsAsTurn = true)
+    protected void Prompted(string text, UserMessageFrom? from = null, string? label = null, string? key = null)
     {
         S.UserMessage = text;
         S.FirstUserMessage ??= text;
+        S.UserMessageFrom = from;
+        S.UserMessageLabel = label;
+        S.UserMessageKey = key;
+    }
+
+    // from and label: who wrote it, when not the person (#489). injected: context the agent was
+    // given rather than a prompt anybody sent, which starts the turn but leaves userMessage alone.
+    protected void UserPrompt(string text, DateTimeOffset? at, bool countsAsTurn = true, UserMessageFrom? from = null, string? label = null, bool injected = false, string? key = null, bool notice = false)
+    {
+        if (injected)
+        {
+            // No prompt: counted, it moved the turn a driver keys on, and an agent's reply lost its
+            // edge to a skill loaded in the middle of its turn. A notice arriving while idle (a
+            // shell's) starts a turn that is no prompt's, as Claude's notices do.
+            if (notice && S.Status != SessionStatus.Working)
+            {
+                S.UncountedTurn = true;
+                S.ForgetReasoning();
+            }
+            S.SetStatus(SessionStatus.Working);
+            S.Activity(at);
+            return;
+        }
+        Prompted(text, from, label, key);
         if (countsAsTurn) { S.Prompts++; }
         S.UncountedTurn = !countsAsTurn;
         // A new message starts a new turn: last turn's reasoning would otherwise sit under

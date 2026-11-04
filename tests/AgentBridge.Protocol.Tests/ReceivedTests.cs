@@ -331,6 +331,19 @@ public class ReceivedTests
         Assert.Equal((AgentKind.Claude, "", UsageSource.None, DateTimeOffset.MinValue), (r.Agents[1].Agent, r.Agents[1].Label, r.Agents[1].Source, r.Agents[1].MeasuredAt));
     }
 
+    // Read as absent, a prompt a schedule or an agent sent would be shown as the person's own (#489).
+    [Fact]
+    public void A_prompt_whose_sender_cannot_be_read_is_not_shown_and_an_unknown_sender_is_never_the_person()
+    {
+        var node = Session();
+        node["activity"]!["userMessage"] = "Carry on.";
+        node["activity"]!["userMessageFrom"] = 4;
+        Assert.Null(Read(node).Activity.UserMessage);
+
+        node["activity"]!["userMessageFrom"] = "robot";
+        Assert.Equal(("Carry on.", UserMessageFrom.Other), (Read(node).Activity.UserMessage, Read(node).Activity.UserMessageFrom));
+    }
+
     // Read as absent, a reading another machine took was filed as the passing host's own, past the
     // reader's own forget and roster filtering.
     [Theory]

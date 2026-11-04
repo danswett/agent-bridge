@@ -78,7 +78,7 @@ with the wrong type):
 | `Session` | `id` | |
 | `Subagent` | `id` | |
 | `ToolCall` | `id` | |
-| `Activity` | | `source` |
+| `Activity` | | `source`, `userMessageFrom` |
 | `ActivitySource` | | `response`, `reasoning` |
 | `Question` | | `id`, `kind`, `message`, `fields` (whole), `agent`, `answerAtMachine`, `truncated` |
 | `Field` | `name` | `type`, `title`, `description`, `options` (whole), `allowOther` |
@@ -105,9 +105,10 @@ all, while its session is: a choice is never shown without the words it was aske
 its bare value instead. A field or option with no `title`, `description` or `label` at all is
 read as usual. Launch
 options whose `defaults.permissions` can't be read are refused whole, so nothing is launched with
-a permission mode the client guessed. A session whose `activity.source` can't be read keeps an
-empty `activity` (rule 4: the required field takes its default): read as absent, a delegate's
-text would be shown as the main agent's.
+a permission mode the client guessed. A session whose `activity.source` or `activity.userMessageFrom` can't be
+read keeps an empty `activity` (rule 4: the required field takes its default): read as absent, a
+delegate's text would be shown as the main agent's, or a scheduled or agent-sent prompt as the
+person's own words.
 
 The shared vectors ([vectors/](vectors/README.md)) work these rules through for every record a
 host sends: each `missing-…` and `wrong-type-…` vector is either valid, with what it reads as, or
@@ -887,6 +888,8 @@ session left under an agent's control still says so while it is idle. It says so
 | `currentTool` | ToolCall? | The tool running now, while `working` |
 | `history` | ToolCall[]? | Only in `session.get`: the latest 50 tool calls, oldest first |
 | `userMessage` | string? | The latest user message, at most 2 KiB |
+| `userMessageFrom` | `"person"` \| `"schedule"` \| `"agent"` \| `"other"`? | **New (#489).** Who wrote `userMessage` when it was not the person typing: `schedule`, a prompt the agent's own scheduler sent; `agent`, one another agent sent, including a reply an agent sent through the bridge (`driver: agent` for the turn it started); `other`, anything else that is not someone typing. Absent means the person, and so does `person`. An unknown value reads as `other`, never as the person's. Absent whenever `userMessage` is |
+| `userMessageLabel` | string? | **New (#489).** A short plain-text label for a `userMessageFrom` that is not the person's, at most 64 bytes: a schedule's number (`"4"`, shown as "Scheduled prompt · #4"). Absent whenever `userMessage` is |
 | `turnCount` | number? | User prompts whose turn has finished: the prompts sent, less one while a turn is still in progress (`working` or `waiting`). Not the agent's own model rounds: Copilot writes `assistant.turn_end` after every round of tool calls, and those are not counted |
 | `compactions` | number? | Context compactions so far |
 | `background` | Background? | Work the session started that is still running after its own turn. Absent when there is none |
@@ -1005,7 +1008,7 @@ the above, and further only if the few ids and flags left (`source`, `waitingOn`
 
 6. Tool history, oldest first.
 7. `reasoning`.
-8. `userMessage`.
+8. `userMessage`, with `userMessageFrom` and `userMessageLabel`.
 9. `response`, to its last 4 KiB (`responseTruncated` set).
 10. The question's `message`, to its first 2 KiB (`truncated` set).
 11. The question's `fields` (`truncated` set).

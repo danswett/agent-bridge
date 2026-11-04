@@ -73,6 +73,29 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
 
     static bool IsSubagent(JsonElement e) => Json.Str(e, "agentId") is { Length: > 0 };
 
+    // Who wrote a main-agent user.message, from its data.source (activity.userMessageFrom, #489).
+    // Copilot writes none for a prompt typed in its window, and "user" for one typed with an
+    // attachment; "schedule-<n>" for a scheduled prompt and "agent-<id>" for one an agent sent.
+    // "memory", "system" (a shell's completion notice) and "skill-<name>" are context it gave the
+    // agent rather than a prompt anybody sent: they leave userMessage as it was. Anything else is
+    // not the person's, but not one of those either.
+    internal static (UserMessageFrom? From, string? Label, bool Injected) Source(string? source) => source switch
+    {
+        null or "" or "user" => (null, null, false),
+        "memory" or "system" => (null, null, true),
+        _ when source.StartsWith("skill-", StringComparison.Ordinal) => (null, null, true),
+        _ when source.StartsWith("schedule-", StringComparison.Ordinal) => (UserMessageFrom.Schedule, ScheduleNumber(source["schedule-".Length..]), false),
+        _ when source.StartsWith("agent-", StringComparison.Ordinal) => (UserMessageFrom.Agent, null, false),
+        _ => (UserMessageFrom.Other, null, false),
+    };
+
+    // A shell's completion notice Copilot delivered while no turn ran: it starts a turn of its own.
+    static bool Notice(JsonElement data) => Json.Str(data, "source") == "system" && Json.Str(data, "delivery") != "steering";
+
+    // The schedule's number as its label, and only a number: the label is shown as it is.
+    static string? ScheduleNumber(string n) =>
+        n.Length is > 0 and <= Limits.UserMessageLabel && n.All(char.IsAsciiDigit) ? n : null;
+
     protected override void Count(JsonElement e)
     {
         var data = Json.Obj(e, "data") ?? default;
@@ -81,9 +104,19 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "user.message" when !IsSubagent(e):
                 if (Text.NonBlank(Json.Str(data, "content")) is { } text)
                 {
-                    S.FirstUserMessage ??= text;
-                    S.UserMessage = text;
+                    var (from, label, injected) = Source(Json.Str(data, "source"));
+                    if (injected)
+                    {
+                        // A notice delivered while no turn ran (not "steering") starts a turn no
+                        // prompt's: kept past the skim, since the window may begin inside it, as
+                        // Claude's notices are. A prompt after it starts a counted turn again.
+                        // Memory and a skill's context come within a turn, and start none.
+                        if (Notice(data)) { S.UncountedTurn = true; }
+                        break;
+                    }
+                    Prompted(text, from, label, Json.Str(e, "id"));
                     S.Prompts++;
+                    S.UncountedTurn = false;
                     S.OwnReasoning = null;
                 }
                 break;
@@ -328,7 +361,8 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                         // Every prompt counts, whatever its delivery: interactive prompts are
                         // "steering" even when no turn is running, and those typed while idle
                         // or sent by the bridge are "idle" and carry parentAgentTaskId.
-                        UserPrompt(text, at);
+                        var (from, label, injected) = Source(Json.Str(data, "source"));
+                        UserPrompt(text, at, from: from, label: label, injected: injected, key: Json.Str(e, "id"), notice: injected && Notice(data));
                     }
                     _turnAskedForTools = false;
                     break;

@@ -84,13 +84,11 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                     case "task_started":
                         S.Prompts++;
                         break;
-                    case "user_message":
-                        S.UserMessage = Text.NonBlank(Json.Str(payload, "message")) ?? S.UserMessage;
-                        S.FirstUserMessage ??= S.UserMessage;
+                    case "user_message" when Text.NonBlank(Json.Str(payload, "message")) is { } said:
+                        Skimmed(said, Json.Time(e, "timestamp"));
                         break;
-                    case "item_completed" when Json.Obj(payload, "item") is { } item && Json.Str(item, "type") == "UserMessage":
-                        S.UserMessage = ContentText(item) ?? S.UserMessage;
-                        S.FirstUserMessage ??= S.UserMessage;
+                    case "item_completed" when Json.Obj(payload, "item") is { } item && Json.Str(item, "type") == "UserMessage" && ContentText(item) is { } said:
+                        Skimmed(said, Json.Time(e, "timestamp"));
                         break;
                     case "item_completed" when Json.Obj(payload, "item") is { } item && Json.Str(item, "type") == "CollabAgentToolCall":
                         Collab(item, Json.Time(e, "timestamp"));
@@ -425,11 +423,22 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         return true;
     }
 
+    // Which prompt it is, by its record's time (the driver's PromptKey, #489): the same whether the
+    // record is read in the window or skimmed before it, so a re-read keeps an agent's prompt the
+    // agent's.
+    static string? Key(DateTimeOffset? at) => at?.UtcTicks.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    void Skimmed(string text, DateTimeOffset? at)
+    {
+        S.UserMessage = text;
+        S.FirstUserMessage ??= text;
+        S.UserMessageKey = Key(at);
+    }
+
     void UserMessage(string text, DateTimeOffset? at)
     {
         // task_started counted the turn; a user message only says what it is.
-        S.UserMessage = text;
-        S.FirstUserMessage ??= text;
+        Skimmed(text, at);
         S.Pending.Clear();
         S.SetStatus(SessionStatus.Working);
         S.Activity(at);

@@ -152,7 +152,12 @@ public static class ProtocolVectors
             .Valid("response-only", new OwnActivity { Response = "Main agent's answer", At = T0 });
         f.Record<Activity>(Host)
             .Valid("full", FullActivity)
-            .Valid("empty", new Activity());
+            .Valid("empty", new Activity())
+            // Who wrote the latest prompt when it was not the person (#489).
+            .Valid("a-scheduled-prompt", new Activity { UserMessage = "[Scheduled prompt #4] Check CI and report.", UserMessageFrom = UserMessageFrom.Schedule, UserMessageLabel = "4", TurnCount = 3 })
+            .Valid("a-prompt-an-agent-sent", new Activity { UserMessage = "Carry on with the next step.", UserMessageFrom = UserMessageFrom.Agent })
+            .Reads("an-unknown-sender-reads-as-other-never-the-person", """{"userMessage":"Carry on.","userMessageFrom":"robot"}""")
+            .Refused("a-sender-that-is-not-text", """{"userMessage":"Carry on.","userMessageFrom":4}""");
         f.Record<Subagent>(Host)
             .Valid("working", Delegate)
             .Valid("ended", Nested)

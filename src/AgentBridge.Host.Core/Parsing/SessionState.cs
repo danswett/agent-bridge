@@ -10,6 +10,13 @@ internal sealed class SessionState
     // A title the agent generated itself (Claude's ai-title), better than the first message.
     public string? AgentTitle;
     public string? UserMessage;
+    // Who wrote UserMessage when it was not the person, and its label (activity.userMessageFrom,
+    // #489). Only Copilot's transcripts say so; null is the person.
+    public UserMessageFrom? UserMessageFrom;
+    public string? UserMessageLabel;
+    // The record UserMessage came from (Copilot's event id, Codex's time), where the parser knows
+    // it: the same words sent twice are two prompts, and a driver tells them apart by this.
+    public string? UserMessageKey;
     // The latest text, from whichever agent wrote it last, as older clients have it.
     public string? Response;
     public string? Reasoning;
@@ -54,7 +61,7 @@ internal sealed class SessionState
     public void Reset()
     {
         FirstUserMessage = null;
-        AgentTitle = null; UserMessage = null; Response = null; Reasoning = null; Model = null;
+        AgentTitle = null; UserMessage = null; UserMessageFrom = null; UserMessageLabel = null; UserMessageKey = null; Response = null; Reasoning = null; Model = null;
         ResponseBy = null; ReasoningBy = null; OwnResponse = null; OwnResponseCut = false; OwnReasoning = null; OwnAt = null;
         Cwd = null; Branch = null; Repository = null; StartedAt = null; UpdatedAt = null; LastActivityAt = null;
         Prompts = 0; Compactions = 0; Seen = false; UncountedTurn = false;

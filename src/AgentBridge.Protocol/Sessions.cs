@@ -81,6 +81,8 @@ public static class Limits
     public const int Response = 16 * 1024;
     public const int Reasoning = 4 * 1024;
     public const int UserMessage = 2 * 1024;
+    // activity.userMessageLabel: a schedule's number, say (#489).
+    public const int UserMessageLabel = 64;
     public const int ToolSummary = 200;
     public const int DriverPrincipal = 128;
     public const int QuestionMessage = 8 * 1024;
@@ -188,7 +190,8 @@ public static class SessionBudget
             s = s with { Activity = s.Activity with { History = history.Count == 0 ? null : [.. history] } };
         }
         if (!fits(s)) { s = s with { Activity = s.Activity with { Reasoning = null } }; }
-        if (!fits(s)) { s = s with { Activity = s.Activity with { UserMessage = null } }; }
+        // Who wrote it goes with it: a label on no message says nothing.
+        if (!fits(s)) { s = s with { Activity = s.Activity with { UserMessage = null, UserMessageFrom = null, UserMessageLabel = null } }; }
         if (!fits(s))
         {
             var (r, cut) = Limits.KeepEnd(s.Activity.Response, 4 * 1024);
@@ -267,6 +270,11 @@ public enum SessionStatus { Working, Waiting, Idle, Ending }
 [UnknownAs(Person)]
 public enum DriverKind { Person, Agent }
 
+// Who wrote activity.userMessage (#489). A value a client does not know is Other, never the
+// person's: a prompt is shown as the person's own only when nothing says it was not.
+[UnknownAs(Other)]
+public enum UserMessageFrom { Person, Schedule, Agent, Other }
+
 [UnknownAs(Done)]
 public enum ToolStatus { Running, Done, Failed }
 
@@ -337,6 +345,13 @@ public sealed record Activity
     public ToolCall? CurrentTool { get; init; }
     public IReadOnlyList<ToolCall>? History { get; init; }
     public string? UserMessage { get; init; }
+    // Who wrote UserMessage when it was not the person (#489): a schedule, an agent, or something
+    // else that is not someone typing. Absent means the person. Strict: read as absent, a prompt an
+    // agent or a schedule sent would be shown as the person's own words.
+    [Strict(Strictness.Security)]
+    public UserMessageFrom? UserMessageFrom { get; init; }
+    // A short plain-text label for it, at most Limits.UserMessageLabel bytes: a schedule's number.
+    public string? UserMessageLabel { get; init; }
     public int? TurnCount { get; init; }
     public int? Compactions { get; init; }
     // Work the session started that outlives its own turn, still running. Absent when there

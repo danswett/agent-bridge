@@ -232,6 +232,8 @@ internal sealed class SessionTracker
                 CurrentTool = effective == SessionStatus.Working ? _state.Tools.Current() : null,
                 History = history,
                 UserMessage = Limits.KeepStart(_state.UserMessage, Limits.UserMessage),
+                UserMessageFrom = _state.UserMessage is null ? null : _state.UserMessageFrom,
+                UserMessageLabel = _state.UserMessage is null ? null : Limits.KeepStart(_state.UserMessageLabel, Limits.UserMessageLabel),
                 TurnCount = _state.Seen ? Math.Max(0, _state.Prompts - (effective == SessionStatus.Idle || _state.UncountedTurn ? 0 : 1)) : null,
                 Compactions = _state.Seen ? _state.Compactions : null,
                 Background = Protocol.Background.Of(agents, shells),
@@ -240,6 +242,14 @@ internal sealed class SessionTracker
             },
         };
     }
+
+    // Which prompt the session's userMessage is, for the driver (#489): its record where the parser
+    // knows it, beside its words, so the same words sent again are another prompt.
+    public string? PromptKey => _state.UserMessage is { } text ? (_state.UserMessageKey ?? "") + "\n" + text : null;
+
+    // How many prompts the transcript has had, so the driver can tell when more than one came in one
+    // read, and so cannot know which of them a reply's arm was for.
+    public int Prompts => _state.Prompts;
 
     // The sub-agents with a question pending.
     HashSet<string> Waiting() => [.. _state.Pending.Where(q => q.Agent is not null).Select(q => q.Agent!)];

@@ -233,7 +233,8 @@ public sealed partial class HaConnector : IAsyncDisposable
             set => Drive.PendingAt = value;
         }
 
-        public void ArmDriver(string driver, DateTimeOffset now, string? principal = null) => Drive.ArmDriver(driver, now, principal);
+        public void ArmDriver(string driver, DateTimeOffset now, string? principal = null, string? words = null, bool wordsToCome = false) =>
+            Drive.ArmDriver(driver, now, principal, words, wordsToCome);
 
         public void Answered(string driver, string? principal) => Drive.Answered(driver, principal);
 
