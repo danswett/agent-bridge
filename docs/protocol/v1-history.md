@@ -121,7 +121,7 @@ out of range fails as a request (`{"ok": false, "error": …}`), as for any malf
 | `turns` | [Turn](#turn)s, **oldest first**: the newest `limit` turns before `before` (or the newest of the session's, without it) that fit the message. At least one unless there are none before it |
 | `before` | The cursor for the page before this one: pass it to get older turns. **Absent when nothing older will be served**, and then `start` is present |
 | `start` | Present exactly when `before` is absent: this page reaches the start of what the host serves. `{ "at": time }`: the start of the session, its first record's time, for "Start of session · Mon, Nov 9, 8:31 AM PT" (H6). `{ "limited": true }`, with `at` absent: the host serves no more (the 500-turn limit, or a turn longer than it reads back through; [Caps](#caps)), and a client shows "Start of available history" |
-| `partial` | Some of this page could not be read: a turn here is `unreadable`, or a turn was read only in part (its `truncated`). A client shows what it has. Absent otherwise |
+| `partial` | Not everything of this page's turns is here: a turn here is `unreadable` or `truncated` (read only in part, or cut to its caps). A client shows what it has. Absent otherwise |
 
 **The typed states**, never a silent empty list:
 
@@ -152,7 +152,7 @@ A prompt and everything until the next prompt (H7).
 |---|---|---|
 | `text` | string | The prompt as the agent received it, at most **8 KiB**, the **start** kept |
 | `truncated` | bool? | `text` was cut |
-| `from` | `"person"` \| `"schedule"` \| `"agent"` \| `"other"`? | **Strict (security).** Who wrote it when it was not the person typing, exactly as `activity.userMessageFrom` (#489): taken from what the agent's own record says, never parsed from the text. Absent means the person. An unknown value reads as `other`, never as the person's |
+| `from` | `"person"` \| `"schedule"` \| `"agent"` \| `"other"`? | **Strict (security).** Who wrote it when it was not the person typing, exactly as `activity.userMessageFrom` (#489): taken from what the agent's own record says, never parsed from the text, or `agent` for a prompt the host itself knew an agent sent through it (a reply or launch, which the transcript does not mark) and so showed as the agent's while it was the latest; the host keeps that for its newest 500 turns while it runs. Absent means the person. An unknown value reads as `other`, never as the person's |
 | `label` | string? | As `activity.userMessageLabel`: a schedule's number, at most 64 bytes |
 
 A prompt that can't be read as its `from` says (a `from` of the wrong type) refuses the turn, as
@@ -175,7 +175,7 @@ another agent sent **is** a prompt, with its `from`.
 | `kind` | `"response"` \| `"reasoning"` \| `"tool"` \| `"delegate"` \| `"question"` | What it is. A client **skips a part whose kind it doesn't know** (it reads as `unknown`), and draws the rest |
 | `at` | time | When it happened: for a tool, a question and a delegate event, when it started or was asked |
 | `text` | string? (Markdown for `response`) | `response`: one message of the main agent's, at most **16 KiB**, the **end** kept, as `activity.response`. `reasoning`: one reasoning block of the main agent's, at most **4 KiB**, the end kept, as `activity.reasoning` |
-| `truncated` | bool? | `text` was cut |
+| `truncated` | bool? | `text` was cut, or a question's `answer` was (to its 2 KiB, or left out to fit the turn) |
 | `tool` | [ToolCall](v1-sessions.md#toolcall)? | `tool`: the main agent's call, exactly as in `activity.history`: its name, a one-line summary (at most 200 bytes) and status, **never its arguments or results**. A call the transcript never ended reads `running` while the turn is the latest, and `failed` once a later prompt has started (the turn was abandoned), as `activity.history` does after an interruption |
 | `delegate` | [DelegateEvent](#delegateevent)? | `delegate`: one of the main agent's own delegates starting or reporting back (#661) |
 | `question` | [Question](v1-sessions.md#question)? | `question`: a question or an approval asked in this turn, exactly as `session.question` carried it while it waited (its `message` at most 8 KiB, the same budget rules), with `answerAtMachine` as it was. Never offered for answering again: a client draws it read-only (H4). A part whose question can't be read (Malformed records rule 3) has no `question`, and a client skips it |
@@ -329,13 +329,16 @@ turn was the latest, with the same `from`.
 | `delegate` `reported` | `subagent.completed` (`done`), `subagent.failed` (`failed`), or an `agent_idle` notification (`done`) | a task notification Claude marked as one | a `subagent_notification` that says it completed (`done`), errored or was interrupted (`failed`), or the session's own multi-agent call (a wait) returning that state |
 | The start | the first record's time | the first record's time | `session_meta`'s time |
 
-A delegate is reported **once per run**, as the live list counts runs: a message to it (Copilot's
-stamped `user.message`, Claude's `SendMessage`, Codex's `send_input`, `resume_agent`,
+A delegate is reported **once per run within a turn**, as the live list counts runs: a message to
+it (Copilot's stamped `user.message`, Claude's `SendMessage`, Codex's `send_input`, `resume_agent`,
 `send_message` or `followup_task`) starts another run. A run's end said by the run itself (a
-completion, a failure, a Codex wait) and then by a notice is one report: the notice is spent on that
-run, never on one a message has started since, however late it comes. Reports are for the main
-agent's own delegates that this read saw start, or that the session still knows (not only those
-`subagents` lists, which is capped at 20).
+completion, a failure, a Codex wait) and then by a notice in the same turn is one report: the
+notice is spent on that run, never on one a message has started since. Each turn decides its
+reports from its own records alone, so **a turn reads the same whatever page it is on**: a run's end
+said in one turn and the notice the main agent took in a later turn is reported in each, as each
+turn heard it. Reports are for the main agent's own delegates that this read saw start, or that
+the session still knows (not only those `subagents` lists, which is capped at 20), named as the
+session names them where it does.
 
 A question still waiting is in its turn with `outcome` `unknown`, and is also `session.question`,
 which is the one a client answers (§5.3's answer guard, #491). A question whose turn ended without

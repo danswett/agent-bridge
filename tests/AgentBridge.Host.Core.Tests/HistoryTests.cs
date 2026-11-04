@@ -308,6 +308,7 @@ public class HistoryTests
         Assert.True(ProtocolJson.ByteCount(turn) <= HistoryLimits.MaxTurnBytes);
         Assert.True(turn.Truncated);
         Assert.True(turn.PartsMore > 0);
+        Assert.True((await s.Page()).Partial);
         Assert.Equal("the last word", turn.Parts.Last(p => p.Kind == HistoryPartKind.Response).Text);
         Assert.DoesNotContain(turn.Parts, p => p.Kind == HistoryPartKind.Tool);
     }
@@ -456,6 +457,41 @@ public class HistoryTests
 
         var replied = await s.After(Copilot.Assistant("second", 4));
         Assert.Equal(replied.Activity.Turn, replied.Activity.ResponseTurn);
+    }
+
+    // Found in review of #292: a report spent across a page boundary or not, by page size.
+    [Fact]
+    public async Task A_turn_reads_the_same_whatever_page_it_is_on()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+            Copilot.User("start it", 1),
+            Copilot.ToolStart("t1", "task", new { description = "Background job", prompt = "go" }, 2),
+            Copilot.SubagentStarted("t1", "agent-1", 2),
+            Copilot.SubagentCompleted("t1", "agent-1", 3),
+            // Its notice is taken in the next turn.
+            Copilot.User("next", 4),
+            Copilot.AgentIdle("agent-1", 5),
+            Copilot.Assistant("ok", 6));
+
+        var together = (await s.Page(limit: 2)).Turns![1];
+        var alone = (await s.Page(limit: 1)).Turns!.Single();
+        Assert.Equal(JsonSerializer.Serialize(together, ProtocolJson.Options), JsonSerializer.Serialize(alone, ProtocolJson.Options));
+    }
+
+    [Fact]
+    public async Task An_answer_cut_to_its_cap_says_so_on_its_part_and_its_turn()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+            Copilot.User("ask", 1),
+            Copilot.ToolStart("q1", "ask_user", new { message = "Say a lot" }, 2),
+            Copilot.ToolResult("q1", new string('a', HistoryLimits.Answer + 100), 3));
+
+        var page = await s.Page();
+        var turn = page.Turns!.Single();
+        var asked = turn.Parts.Single(p => p.Kind == HistoryPartKind.Question);
+        Assert.Equal((HistoryLimits.Answer, true, true, true), (asked.Answer!.Length, asked.Truncated, turn.Truncated, page.Partial));
     }
 
     [Fact]

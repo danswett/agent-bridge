@@ -102,7 +102,8 @@ internal sealed class SessionTracker
         }
         if (_state.Background.Version != _delegatesVersion)
         {
-            MainDelegates = _state.Background.MainAgents();
+            var (names, calls) = _state.Background.MainAgents();
+            MainDelegates = new Conversation.HistorySeed(names, calls);
             _delegatesVersion = _state.Background.Version;
         }
         // Not responding (#800) comes from the clock and from the delegates' own transcripts, which
@@ -149,7 +150,7 @@ internal sealed class SessionTracker
 
     // The main agent's own delegates as of the last update, for a history read on another thread:
     // replaced whole, never changed in place.
-    public IReadOnlyDictionary<string, string?> MainDelegates { get; private set; } = new Dictionary<string, string?>();
+    public Conversation.HistorySeed MainDelegates { get; private set; } = new(new Dictionary<string, string?>(), new Dictionary<string, string>());
     int _delegatesVersion = -1;
 
     // updatedAt moves only when something a client shows changed. An event can be of a

@@ -94,11 +94,15 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
     public void Resolved(string? questionId, QuestionOutcome outcome, DateTimeOffset? at, string? answer = null)
     {
         if (questionId is null || !_questions.TryGetValue(questionId, out var i) || _parts[i].Outcome != QuestionOutcome.Unknown) { return; }
+        var said = outcome == QuestionOutcome.Answered ? Text.NonBlank(answer) : null;
+        var kept = Limits.KeepStart(said, HistoryLimits.Answer);
         _parts[i] = _parts[i] with
         {
             Outcome = outcome,
             AnsweredAt = at,
-            Answer = outcome == QuestionOutcome.Answered ? Limits.KeepStart(Text.NonBlank(answer), HistoryLimits.Answer) : null,
+            Answer = kept,
+            // A cut answer says so, as a cut text does: the turn is then truncated too.
+            Truncated = kept?.Length < said?.Length ? true : _parts[i].Truncated,
         };
     }
 

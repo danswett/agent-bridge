@@ -8,7 +8,7 @@ namespace AgentBridge.Host.Core.Conversation;
 // What one read of a session's history knows beyond the turn it is building: the delegates it has
 // seen start and what each is called, the main agent's task calls, whose tool calls are whose. One
 // per request; turns are built oldest first, so a start is known before its report.
-internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed, bool remoteApproval)
+internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed, IReadOnlyDictionary<string, string> calls, bool remoteApproval)
 {
     // The main agent's own delegates, by id, with their names: those this read saw start, and those
     // the session lists now (its subagents with no parent), whose starts may be on an older page.
@@ -16,21 +16,27 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     readonly Dictionary<string, Run> _runs = new(StringComparer.Ordinal);
     readonly Dictionary<string, string?> _tasks = new(StringComparer.Ordinal);
     // Who made a call (a delegate's own calls), and which delegate a task call started: two maps,
-    // since a nested delegate's task call is made by one delegate and starts another.
+    // since a nested delegate's task call is made by one delegate and starts another. The session
+    // knows the second for its own delegates, so an unstamped end names the same delegate whatever
+    // page its start is on.
     readonly Dictionary<string, string> _callAgent = new(StringComparer.Ordinal);
-    readonly Dictionary<string, string> _callDelegate = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string> _callDelegate = new(calls, StringComparer.Ordinal);
     readonly Dictionary<string, string> _permissions = new(StringComparer.Ordinal);
     const int Keep = 4096;
 
-    // A delegate's runs as the main agent hears of them, as BackgroundWork keeps them live: a run
-    // ends once, whoever says so first, and a notice for a run already said to have ended is owed
-    // to it, never spent on one a message has started since (a Codex wait, then its notice).
+    // A delegate's runs as the main agent hears of them within one turn, as BackgroundWork keeps
+    // them live: a run ends once, whoever says so first, and a notice for a run already said to have
+    // ended is owed to it, never spent on one a message has started since (a Codex wait, then its
+    // notice). Within a turn only: a turn must read the same whatever page it is on, and a page
+    // starting at it knows nothing of the turns before (found in review of #292).
     sealed class Run
     {
         public bool Working;
         public bool Said;
         public int Owed;
     }
+
+    public void TurnBegins() => _runs.Clear();
 
     public bool RemoteApproval { get; } = remoteApproval;
     // The session's own thread (Codex), from its first record.
@@ -102,7 +108,9 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     void Report(TurnBuilder turn, string agent, Run run, SubagentOutcome outcome, DateTimeOffset at)
     {
         (run.Working, run.Said) = (false, true);
-        turn.Delegate(new DelegateEvent { Agent = agent, Event = DelegateEventKind.Reported, Name = _main.GetValueOrDefault(agent), Outcome = outcome }, at);
+        // The session's name for it first, which is the same whatever page this is.
+        var name = listed.TryGetValue(agent, out var known) && known is not null ? known : _main.GetValueOrDefault(agent);
+        turn.Delegate(new DelegateEvent { Agent = agent, Event = DelegateEventKind.Reported, Name = name, Outcome = outcome }, at);
     }
 
     Run? RunOf(string agent)

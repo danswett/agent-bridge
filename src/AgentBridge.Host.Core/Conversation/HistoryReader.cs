@@ -18,6 +18,15 @@ internal sealed record HistoryBudgets
     public int ChunkBytes { get; init; } = 1024 * 1024;
 }
 
+// What the session knows that a page's own records may not say: the main agent's own delegates
+// (by id, with their names) and the task calls that started them, for a report whose start is on
+// an older page; and the turns whose prompt the host knew an agent sent through it (#489), which
+// the transcript does not mark.
+internal sealed record HistorySeed(IReadOnlyDictionary<string, string?> Delegates, IReadOnlyDictionary<string, string> Calls)
+{
+    public IReadOnlySet<string> AgentTurns { get; init; } = new HashSet<string>();
+}
+
 // One request's read of a session's transcript (docs/protocol/v1-history.md): backwards from the
 // cursor (or the end) to the prompts that start the page's turns, by byte search, parsing only the
 // lines that search picks; then forwards through each turn, parsing only the lines its dialect
@@ -33,10 +42,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
     public const string NotRead = "this session's transcript can't be read";
     public const string NoHistory = "this machine keeps no history for this agent";
 
-    // delegates: the main agent's own delegates the session lists now, by id, with their names, for
-    // a report whose start is on an older page.
-    public HistoryResult Read(string sessionId, AgentKind agent, string? path, string? before, int limit,
-        IReadOnlyDictionary<string, string?> delegates, bool remoteApproval)
+    public HistoryResult Read(string sessionId, AgentKind agent, string? path, string? before, int limit, HistorySeed seed, bool remoteApproval)
     {
         if (HistoryDialect.For(agent) is not { } dialect) { return HistoryResult.NotAvailable(NoHistory); }
         if (path is null) { return HistoryResult.NotAvailable(NotFound); }
@@ -46,7 +52,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return HistoryResult.NotAvailable(NotRead); }
         using (handle)
         {
-            try { return new Pass(this, handle, sessionId, dialect, new HistoryContext(delegates, remoteApproval)).Page(before, limit); }
+            try { return new Pass(this, handle, sessionId, dialect, new HistoryContext(seed.Delegates, seed.Calls, remoteApproval), seed.AgentTurns).Page(before, limit); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return HistoryResult.NotAvailable(NotRead); }
         }
     }
@@ -55,11 +61,10 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
     // newline), the turn's id, and what started it (null for one that could not be read).
     sealed record Start(long Offset, long End, byte[] Id, HistoryPrompt? Prompt, DateTimeOffset? At);
 
-    sealed class Pass(HistoryReader reader, SafeFileHandle file, string sessionId, HistoryDialect dialect, HistoryContext context)
+    sealed class Pass(HistoryReader reader, SafeFileHandle file, string sessionId, HistoryDialect dialect, HistoryContext context, IReadOnlySet<string> agentTurns)
     {
         readonly HistoryBudgets b = reader._budgets;
         readonly long length = RandomAccess.GetLength(file);
-        bool partial;
         // What this request has read backwards (finding the last line's end, then prompts) against
         // ScanBytes, and parsed (prompts found, then turns) against PageBytes: one budget each for
         // the whole request, so no step of it reads past what the request may.
@@ -118,7 +123,8 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             var page = turns.Take(n).Reverse().ToList();
             var oldest = starts[n - 1];
             var served = depth + n;
-            var result = new HistoryResult { Turns = page, Partial = partial ? true : null };
+            // What the served turns say: one built and then left out of the page says nothing of it.
+            var result = new HistoryResult { Turns = page, Partial = page.Any(t => t.Truncated == true || t.Unreadable == true) ? true : null };
             if (n == starts.Count && (reachedStart || oldest.Offset == FirstPrompt()))
             {
                 return result with { Start = new HistoryStart { At = firstAt } };
@@ -325,7 +331,6 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 var head = Head(start, content, chunk, chunkAt);
                 if (!dialect.MayStart(head)) { return true; }
                 starts.Add(new Start(start, end, TurnIds.RawOfLong(head, content), null, null));
-                partial = true;
                 return true;
             }
             if (starts.Count > 0 && parsed + content > b.PageBytes) { return false; }
@@ -336,7 +341,6 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             if (doc is null)
             {
                 starts.Add(new Start(start, end, TurnIds.Raw(line), null, null));
-                partial = true;
                 return true;
             }
             if (dialect.Start(doc.RootElement) is { } prompt)
@@ -388,7 +392,9 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         TurnBuilder Builder(Start s)
         {
             var id = Attachments.Base64Url(s.Id);
-            return new TurnBuilder(id, s.At ?? DateTimeOffset.UnixEpoch, s.Prompt) { Unreadable = s.Prompt is null };
+            // A prompt the host knew an agent sent (#489) is the agent's here too, as it was live.
+            var prompt = s.Prompt is { From: null } p && agentTurns.Contains(id) ? p with { From = UserMessageFrom.Agent } : s.Prompt;
+            return new TurnBuilder(id, s.At ?? DateTimeOffset.UnixEpoch, prompt) { Unreadable = s.Prompt is null };
         }
 
         // The rest of a turn after its prompt: everything up to the next turn, or its last TurnBytes
@@ -400,12 +406,12 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             {
                 from = spanEnd - b.TurnBytes;
                 turn.Truncated = true;
-                partial = true;
             }
             // A turn that could not be read holds only its id and time (v1-history.md). Its records
             // are still read into a turn nobody sees, so the delegates started in it are known by
             // name when they report back in a later one.
             var into = turn.Unreadable ? new TurnBuilder(turn.Id, turn.At, null) : turn;
+            context.TurnBegins();
             var at = s.At;
             Forward(from, spanEnd, (line, _) =>
             {
@@ -414,7 +420,6 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 if (doc is null)
                 {
                     turn.Truncated = true;
-                    partial = true;
                     return true;
                 }
                 at = Json.Time(doc.RootElement, "timestamp") ?? at;

@@ -569,17 +569,22 @@ internal sealed class BackgroundWork
         return (listed, all.Count > listed.Count ? all.Count - listed.Count : null);
     }
 
-    // The main agent's own delegates still kept (those with no parent), by id, with their names:
-    // all of them, not the Limits.Subagents listed, for history's reports of delegates whose
-    // starts are on an older page.
-    public Dictionary<string, string?> MainAgents()
+    // The main agent's own delegates still kept (those with no parent), by id, with their names,
+    // and the task calls that started them: all of them, not the Limits.Subagents listed, for
+    // history's reports of delegates whose starts are on an older page.
+    public (Dictionary<string, string?> Names, Dictionary<string, string> Calls) MainAgents()
     {
-        var main = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var names = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (var a in _agents.Values)
         {
-            if (a.Parent is null) { main.TryAdd(a.Id, DelegateName.Clean(a.Name)); }
+            if (a.Parent is null) { names.TryAdd(a.Id, DelegateName.Clean(a.Name)); }
         }
-        return main;
+        var calls = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (call, key) in _agentByCall)
+        {
+            if (_agents.TryGetValue(key, out var a) && a.Parent is null) { calls[call] = a.Id; }
+        }
+        return (names, calls);
     }
 
     // session.get { id, agent }: the entry with its own words and tools.

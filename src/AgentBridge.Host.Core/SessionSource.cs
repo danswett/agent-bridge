@@ -100,6 +100,18 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         // What the last commit was made from: Commit made again from the same is the same.
         public Session? CommittedFull;
         public (DateTimeOffset? Touched, DateTimeOffset? Ending, DriverKind? Driver, string? Principal, bool AgentsPrompt, SessionRestored? Restored, DateTimeOffset? Boundary, bool Prompted, SessionStatus Turn) CommittedWith;
+        // The turns whose prompt the host showed as an agent's (#489), newest last, as many as
+        // history serves: the transcript does not mark them, and history shows them as live did.
+        // Under the gate.
+        public readonly HashSet<string> AgentTurns = new(StringComparer.Ordinal);
+        public readonly Queue<string> AgentTurnOrder = new();
+
+        public void AgentTurn(string turn)
+        {
+            if (!AgentTurns.Add(turn)) { return; }
+            AgentTurnOrder.Enqueue(turn);
+            if (AgentTurnOrder.Count > HistoryLimits.Kept) { AgentTurns.Remove(AgentTurnOrder.Dequeue()); }
+        }
     }
 
     public SessionSource(SessionSourceOptions options, IProcessInspector? processes = null, TimeProvider? time = null, SessionDrivers? drivers = null)
@@ -235,17 +247,17 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     {
         AgentKind agent;
         string? transcript;
-        IReadOnlyDictionary<string, string?> delegates;
+        Conversation.HistorySeed seed;
         lock (_gate)
         {
             if (!_entries.TryGetValue(id, out var e)) { return HistoryResult.Gone; }
             agent = e.Tracker.Discovered.Agent;
             transcript = e.Tracker.Discovered.TranscriptPath;
-            delegates = e.Tracker.MainDelegates;
+            seed = e.Tracker.MainDelegates with { AgentTurns = new HashSet<string>(e.AgentTurns, StringComparer.Ordinal) };
         }
         var reader = HistoryReader();
         await _historyReads.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { return await Task.Run(() => reader.Read(id, agent, transcript, before, limit, delegates, _options.CopilotRemoteApproval), cancellationToken).ConfigureAwait(false); }
+        try { return await Task.Run(() => reader.Read(id, agent, transcript, before, limit, seed, _options.CopilotRemoteApproval), cancellationToken).ConfigureAwait(false); }
         finally { _historyReads.Release(); }
     }
 
@@ -1109,6 +1121,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             if (shown.Activity is { UserMessage: not null, UserMessageFrom: null } activity && agentsPrompt)
             {
                 shown = shown with { Activity = activity with { UserMessageFrom = UserMessageFrom.Agent } };
+                if (activity.Turn is { } turn) { lock (_gate) { entry.AgentTurn(turn); } }
             }
         }
         Commits++;
