@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using AgentBridge.App.Core;
+using AgentBridge.Host.Core.Usage;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
@@ -18,6 +19,18 @@ public sealed class HostManagerTests : IAsyncLifetime
     HostManager manager = null!;
 
     bool elevated;
+
+    sealed class CleanupCommands(CommandResult result) : ICommandRunner
+    {
+        public string? Program;
+        public IReadOnlyList<string>? Arguments;
+        public Task<CommandResult> RunAsync(string program, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            Program = program;
+            Arguments = arguments;
+            return Task.FromResult(result);
+        }
+    }
 
     public Task InitializeAsync()
     {
@@ -39,6 +52,34 @@ public sealed class HostManagerTests : IAsyncLifetime
     {
         await host.DisposeAsync();
         Directory.Delete(app, recursive: true);
+    }
+
+    [Fact]
+    public async Task Uninstall_hook_cleanup_uses_this_apps_host_and_profile_without_guessing_agent_homes()
+    {
+        var commands = new CleanupCommands(new CommandResult(true, false, 0, "Owned hook cleanup finished.\n"));
+
+        var detail = await manager.RemoveOwnedHooksAsync(commands);
+
+        Assert.Equal("Owned hook cleanup finished.", detail);
+        Assert.Equal(manager.Layout.HostExe, commands.Program);
+        Assert.Equal(["hooks", "cleanup", "--profile", manager.Layout.Profile], commands.Arguments);
+    }
+
+    [Theory]
+    [InlineData(false, false, -1)]
+    [InlineData(true, true, -1)]
+    [InlineData(true, false, 1)]
+    public async Task Failed_uninstall_cleanup_is_explicit_and_never_looks_successful(bool ran, bool timedOut, int exit)
+    {
+        var commands = new CleanupCommands(new CommandResult(ran, timedOut, exit, "sensitive output is not included in an error"));
+
+        Exception error = timedOut
+            ? await Assert.ThrowsAsync<TimeoutException>(() => manager.RemoveOwnedHooksAsync(commands))
+            : await Assert.ThrowsAsync<InvalidOperationException>(() => manager.RemoveOwnedHooksAsync(commands));
+
+        Assert.Contains("repair", error.Message);
+        Assert.DoesNotContain("sensitive output", error.Message);
     }
 
     [Fact]

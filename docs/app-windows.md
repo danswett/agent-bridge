@@ -225,6 +225,11 @@ into one folder with one version. An app update is a host update, so they never 
   `OnAfterUpdateFastCallback` (the new version) starts it again through its logon task.
   The app also stops the host itself before `ApplyUpdatesAndRestart`, and starts it on
   launch if it is not running.
+* `OnBeforeUninstallFastCallback` stops the host and attempts bounded cleanup of only the
+  default profile's owned agent hooks and instruction blocks, using its saved agent homes.
+  It never uninstalls a CLI, signs out an account or takes over migrated/unowned hooks.
+  Failure is logged and recovery data remains; reinstall and use Settings to repair.
+  Private hook binaries/runtime and profile data are retained for existing sessions.
 * Feed: GitHub Releases of `danswett/agent-bridge` (pre-releases included unless turned
   off; every merge to main publishes one, below), or a folder or URL holding
   `releases.<channel>.json` (`releases.win.json` for x64, `releases.win-arm64.json` for Arm64) in

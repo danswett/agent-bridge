@@ -276,6 +276,7 @@ switch (command)
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
         Console.Error.WriteLine("       agent-bridge-host hooks status | hooks install|remove <copilot|claude|codex> [...] [--dry-run]");
+        Console.Error.WriteLine("       agent-bridge-host hooks cleanup [--profile <name>]");
         Console.Error.WriteLine("       agent-bridge-host migrate [--dry-run] [--bridge-home <dir>] [--hook <file>] | rollback [--dry-run] | migration status");
         Console.Error.WriteLine("       agent-bridge-host devbox status | devbox dry-run");
         Console.Error.WriteLine("       [--copilot-home <dir>] [--claude-home <dir>] [--codex-home <dir>] [--profile <name>]");

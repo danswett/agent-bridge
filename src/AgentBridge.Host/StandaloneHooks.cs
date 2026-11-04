@@ -32,6 +32,29 @@ public sealed class StandaloneHooks(
     };
     string InstructionBackup(string agent) => Path.Combine(HookFolder, "backups", "instructions", $"{agent}.bin");
 
+    internal bool OwnsAgent(string agent)
+    {
+        var path = Path.Combine(Home(agent), OwnerFile);
+        FileAttributes attributes;
+        try { attributes = File.GetAttributes(path); }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException)
+        {
+            _ = PhysicalHome(Home(agent));
+            return false;
+        }
+        if ((attributes & FileAttributes.Directory) != 0)
+        {
+            throw new InvalidDataException($"{path} is a directory, not an ownership record; it was left alone");
+        }
+        var record = Read(path);
+        if (!HasCurrentOwnerVersion(record) || (string?)record["profile"] is not { } owner || !Path.IsPathFullyQualified(owner))
+        {
+            throw new InvalidDataException($"{path} has unrecognized ownership; inspect it before cleanup");
+        }
+        return Same(owner, profile);
+    }
+
     string Home(string agent) => agent switch
     {
         "copilot" => homes.Copilot,
@@ -43,6 +66,9 @@ public sealed class StandaloneHooks(
     static JsonObject Read(string path) => JsonNode.Parse(Registrations.Decode(File.ReadAllBytes(path)),
         documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip }) as JsonObject
         ?? throw new InvalidDataException($"{path} is not a JSON object; it was left alone");
+
+    static bool HasCurrentOwnerVersion(JsonObject record) =>
+        record["version"] is JsonValue value && value.TryGetValue<int>(out var version) && version == 1;
 
     static byte[] Bytes(JsonNode value) => Encoding.UTF8.GetBytes(value.ToJsonString(Pretty) + Environment.NewLine);
 
@@ -88,7 +114,7 @@ public sealed class StandaloneHooks(
         if (File.Exists(owner))
         {
             var record = Read(owner);
-            if ((int?)record["version"] != 1 || (string?)record["profile"] is not { } owned || !Same(owned, profile))
+            if (!HasCurrentOwnerVersion(record) || (string?)record["profile"] is not { } owned || !Same(owned, profile))
             {
                 throw new InvalidOperationException($"{owner} belongs to another installation; it was left alone");
             }
@@ -110,7 +136,7 @@ public sealed class StandaloneHooks(
         {
             var claudeOwner = Path.Combine(homes.Claude, OwnerFile);
             var record = File.Exists(claudeOwner) ? Read(claudeOwner) : null;
-            var owned = record is not null && (int?)record["version"] == 1
+            var owned = record is not null && HasCurrentOwnerVersion(record)
                 && (string?)record["profile"] is { } ownedProfile && Same(ownedProfile, profile);
             if (HasBridgeCommands(Read(claudeSettings), owned))
             {

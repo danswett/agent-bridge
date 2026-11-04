@@ -7,6 +7,7 @@ using System.Security.Principal;
 using System.Text;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
+using AgentBridge.Host.Core.Usage;
 
 namespace AgentBridge.App.Core;
 
@@ -195,6 +196,15 @@ public sealed class HostManager
     public string TaskName => LogonTaskXml.TaskName(layout.Profile, userSid);
     public bool HostInstalled => File.Exists(layout.HostExe) && File.Exists(layout.LauncherExe);
     public bool StartsAtSignIn => tasks.Exists(TaskName);
+
+    public async Task<string> RemoveOwnedHooksAsync(ICommandRunner commands, CancellationToken ct = default)
+    {
+        var result = await commands.RunAsync(layout.HostExe, ["hooks", "cleanup", "--profile", layout.Profile], TimeSpan.FromSeconds(10), ct);
+        if (!result.Ran) { throw new InvalidOperationException("Hook cleanup could not start; reinstall the app to repair the retained profile."); }
+        if (result.TimedOut) { throw new TimeoutException("Hook cleanup timed out; profile data and the private runtime were retained for repair."); }
+        if (result.ExitCode != 0) { throw new InvalidOperationException($"Hook cleanup incomplete (exit {result.ExitCode}); reinstall the app and use Settings to repair the retained profile."); }
+        return result.Output.Trim();
+    }
 
     public void SetStartAtSignIn(bool on)
     {
