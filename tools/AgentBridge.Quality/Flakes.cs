@@ -259,7 +259,7 @@ static class FlakeReport
                     // Only an issue filed by hand: one the hunt filed names its own test in its marker.
                     ? open.Where(i => !i.Body.Contains("<!-- flake-hunt:", StringComparison.Ordinal)
                             && (i.Labels.Contains(FlakyLabel) || i.Title.Contains("flaky", StringComparison.OrdinalIgnoreCase))
-                            && (i.Title.Contains(v.ShortName, StringComparison.Ordinal) || i.Body.Contains(v.ShortName, StringComparison.Ordinal)))
+                            && (Names(i.Title, v.ShortName) || Names(i.Body, v.ShortName)))
                         .OrderBy(i => i.Number).FirstOrDefault()
                     : null);
             if (existing is not null)
@@ -269,6 +269,10 @@ static class FlakeReport
         }
         return actions;
     }
+
+    // Class.Method whole: TrustTests.Known is not TrustTests.Known_more or OtherTrustTests.Known,
+    // but may follow a namespace or carry a theory's arguments.
+    static bool Names(string text, string test) => Regex.IsMatch(text, $@"(?<!\w){Regex.Escape(test)}(?!\w)");
 
     public static string Title(Verdict v, string kind)
     {

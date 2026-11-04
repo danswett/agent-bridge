@@ -96,6 +96,22 @@ public sealed class FlakesTests : IDisposable
     }
 
     [Fact]
+    public void A_hand_filed_issue_is_taken_only_for_the_whole_Class_Method_it_names()
+    {
+        Run("ubuntu-latest", "AgentBridge.App.Tests", 1, 1, ("AgentBridge.App.Tests.TrustTests.Known(x: 1)", "Failed"));
+        Run("ubuntu-latest", "AgentBridge.App.Tests", 2, 0, ("AgentBridge.App.Tests.TrustTests.Known(x: 1)", "Passed"));
+        var verdicts = FlakeHunt.Load(root).Classify();
+        var open = new List<OpenIssue>
+        {
+            new(801, "Flaky: TrustTests.Known_more", "", [], "danswett"),
+            new(802, "Flaky: OtherTrustTests.Known", "", [], "danswett"),
+        };
+
+        Assert.Equal("create", Assert.Single(FlakeReport.Plan(verdicts, open, Context)).Action);
+        Assert.Equal(803, Assert.Single(FlakeReport.Plan(verdicts, [.. open, new(803, "Flaky: AgentBridge.App.Tests.TrustTests.Known(x: 1)", "", [], "danswett")], Context)).Issue);
+    }
+
+    [Fact]
     public void An_issue_by_anyone_but_the_owner_or_the_hunt_never_takes_a_tests_flake_record_even_with_its_name_or_marker()
     {
         Run("ubuntu-latest", "AgentBridge.Host.Tests", 1, 1, ("AnswerFlowTests.Racy", "Failed"));
