@@ -34,7 +34,8 @@ day-to-day work:
 
 **Dependencies outside our control:** GitHub (sign-in device flow, Releases, Pages,
 Actions), Azure (Container Apps, Storage, Key Vault, Entra), Cloudflare DNS for
-`bad-duck.com`, and the browser push services (Apple, Google, Mozilla, Microsoft).
+`bad-duck.com`, and the browser push services (Apple, Google, Mozilla, Microsoft). GitHub
+Actions is the one every change goes through, so its outages get their own alert, A-GHA (§5.3).
 
 **What breaking looks like, worst first:** the relay is unreachable (every remote device is
 blind, and phones get no pushes); a bad Windows release reaches every machine (hosts can
@@ -181,6 +182,17 @@ locations every five minutes would cost about $22 a month against a $40 budget.
 
 Separate tests on the `azurecontainerapps.io` name and `/readyz` are deferred, for cost. The
 probe checks both by hand in an incident.
+
+**GitHub itself (A-GHA, [#658](https://github.com/danswett/agent-bridge/issues/658)).** CI,
+merges, the Windows release, relay deploys, Pages and the daily probe all run on GitHub Actions,
+so an Actions outage stalls everything. On 2026-11-04 one did, for hours, and nothing said so.
+Anything on Actions can't report that, so a Logic App in Azure checks every 5 min:
+- GitHub's status page, for the Actions and Pages components;
+- this repository's runs queued over 30 min, which often shows a stall before the status page
+  does.
+
+It records an availability result, `github-actions`, and the alert emails once when it starts and
+once when it clears. About $2 a month. Runbook: [github-outage](runbooks/github-outage.md).
 
 ### 5.4 Dependency and abuse alerts ([#574](https://github.com/danswett/agent-bridge/issues/574))
 

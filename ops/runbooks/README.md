@@ -19,6 +19,7 @@ for each alert.
 | [cost](cost.md) | A-BUDGET |
 | [windows-release](windows-release.md) | A-RELEASE; a release breaking machines |
 | [pwa](pwa.md) | A-PAGES; a PWA deploy breaking phones |
+| [github-outage](github-outage.md) | A-GHA; CI, merges or deploys stalled on GitHub |
 
 ## Before any of them
 
