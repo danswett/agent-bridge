@@ -11,7 +11,7 @@ namespace AgentBridge.Quality;
 /// merge-rule status on its head.
 /// </summary>
 sealed record ReportPr(int Number, string State, bool IsDraft, DateTimeOffset CreatedAt, DateTimeOffset? ReadyAt, DateTimeOffset? MergedAt, DateTimeOffset? ClosedAt,
-    string HeadRef, string BaseRef, string? Mergeable = null, int UnresolvedThreads = 0, string? MergeRuleState = null, string? MergeRuleDescription = null)
+    string HeadRef, string BaseRef, string? Mergeable = null, int UnresolvedThreads = 0, string? MergeRuleState = null, string? MergeRuleDescription = null, bool CrossRepository = false)
 {
     public bool Open => State == "OPEN";
     public bool Merged => State == "MERGED" && MergedAt is not null;
@@ -321,11 +321,12 @@ static class WeeklyReport
 
     /// <summary>
     /// How deep each open pull request stacks: 1 for one into the base branch, or onto a branch
-    /// with no open pull request; one more than its parent's for one onto another's head.
+    /// with no open pull request; one more than its parent's for one onto another's head. Only a
+    /// head in this repository can be a parent: a fork's branch of the same name is another branch.
     /// </summary>
     public static Dictionary<int, int> StackDepths(IReadOnlyList<ReportPr> open, string baseBranch)
     {
-        var byHead = open.GroupBy(p => p.HeadRef, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.OrderBy(p => p.Number).First(), StringComparer.Ordinal);
+        var byHead = open.Where(p => !p.CrossRepository).GroupBy(p => p.HeadRef, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.OrderBy(p => p.Number).First(), StringComparer.Ordinal);
         var depths = new Dictionary<int, int>();
         foreach (var pr in open)
         {
@@ -369,10 +370,12 @@ static class WeeklyReport
     // dotnet test's console logger: "  Failed Class.Method [16 s]", after the runner's timestamp.
     // "Failed!  - Failed: 1, ..." is the project's summary, not a test.
     static readonly Regex FailedLine = new(@"^(?:\S+Z\s)?\s*Failed (?<test>\S.*?) \[[^\]]*\]\s*$", RegexOptions.CultureInvariant | RegexOptions.Multiline);
+    // The runner's colour codes, which gh keeps in a log: around a line they'd hide it from the above.
+    static readonly Regex Ansi = new(@"\x1B\[[0-9;]*[A-Za-z]", RegexOptions.CultureInvariant);
 
     /// <summary>The tests a CI job's log says failed, each once.</summary>
     public static IReadOnlyList<string> FailedTests(string log) =>
-        FailedLine.Matches(log.ReplaceLineEndings("\n")).Select(m => m.Groups["test"].Value.Trim()).Distinct(StringComparer.Ordinal).ToList();
+        FailedLine.Matches(Ansi.Replace(log, "").ReplaceLineEndings("\n")).Select(m => m.Groups["test"].Value.Trim()).Distinct(StringComparer.Ordinal).ToList();
 
     // FlakeReport.Counts: "| OS | Failed | Runs |", then a row per OS.
     static readonly Regex TallyRow = new(@"^\|\s*(?<os>[A-Za-z0-9._-]+)\s*\|\s*(?<failed>\d+)\s*\|\s*(?<runs>\d+)\s*\|\s*$", RegexOptions.CultureInvariant | RegexOptions.Multiline);

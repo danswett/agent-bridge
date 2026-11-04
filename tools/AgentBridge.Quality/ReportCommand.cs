@@ -68,7 +68,7 @@ static class ReportCommand
     }
 
     const string PrFields = """
-        number state isDraft createdAt mergedAt closedAt updatedAt headRefName baseRefName
+        number state isDraft createdAt mergedAt closedAt updatedAt headRefName baseRefName isCrossRepository
         timelineItems(itemTypes: [READY_FOR_REVIEW_EVENT], last: 1) { nodes { ... on ReadyForReviewEvent { createdAt } } }
         """;
 
@@ -133,7 +133,7 @@ static class ReportCommand
     const string JobTimesQuery = """
         query($ids: [ID!]!) {
           rateLimit { cost remaining }
-          nodes(ids: $ids) { ... on WorkflowRun { databaseId checkSuite { checkRuns(first: 100) { nodes { name startedAt completedAt conclusion } } } } }
+          nodes(ids: $ids) { ... on WorkflowRun { databaseId checkSuite { checkRuns(first: 100) { nodes { databaseId name startedAt completedAt conclusion } } } } }
         }
         """;
 
@@ -152,8 +152,8 @@ static class ReportCommand
             var prs = PullRequests();
             var flaky = FlakyIssues();
             var (mainRuns, mainRedNow, mainFailedJobs) = MainRuns();
-            var prRuns = PrRuns();
-            var (failures, logsRead, logsUnread, failedJobs) = TestFailures(mainFailedJobs);
+            var (prRuns, prRerunGreen) = PrRuns();
+            var (failures, logsRead, logsUnread, failedJobs) = TestFailures(mainFailedJobs, prRerunGreen);
             return new ReportFacts
             {
                 Now = now,
@@ -329,13 +329,20 @@ static class ReportCommand
         /// The tests the logs of failed CI test jobs name: main's first, then pull requests' (the
         /// newest 50 failed runs), newest first, up to --max-logs logs split between them.
         /// </summary>
-        (IReadOnlyList<CiTestFailure>, int, int, int) TestFailures(List<(long Job, DateTimeOffset At)> mainJobs)
+        (IReadOnlyList<CiTestFailure>, int, int, int) TestFailures(List<(long Job, DateTimeOffset At)> mainJobs, List<(long Id, DateTimeOffset At)> prRerunGreen)
         {
             if (maxLogs == 0)
                 return ([], 0, 0, mainJobs.Count);
             var prRuns = RestPages($"repos/{slug}/actions/workflows/ci.yml/runs?event=pull_request&status=failure&created=%3E%3D{Since}", "workflow_runs", perPage: 50, maxPages: 1)
                 .Select(r => (r.GetProperty("node_id").GetString()!, Time(r, "created_at"))).ToList();
-            var prJobs = FailedTestJobs(prRuns).OrderByDescending(j => j.At).ToList();
+            // A run rerun to green no longer lists as failed, though its first attempt did fail:
+            // that attempt's jobs, one call a run, for at most half the log budget's runs.
+            var rerunJobs = prRerunGreen.OrderByDescending(r => r.At).Take(Math.Max(1, maxLogs / 2))
+                .SelectMany(r => RestPages($"repos/{slug}/actions/runs/{r.Id}/attempts/1/jobs", "jobs")
+                    .Where(j => j.GetProperty("conclusion").GetString() is "failure" or "timed_out" && IsTestJob(j.GetProperty("name").GetString()))
+                    .Select(j => (Job: j.GetProperty("id").GetInt64(), r.At)))
+                .ToList();
+            var prJobs = FailedTestJobs(prRuns).Concat(rerunJobs).OrderByDescending(j => j.At).ToList();
             // Half the logs for each, and what one side doesn't need to the other: a week of red
             // main runs would otherwise leave no pull request's log read.
             var mainQuota = Math.Min(mainJobs.Count, Math.Max(maxLogs / 2, maxLogs - prJobs.Count));
@@ -363,20 +370,28 @@ static class ReportCommand
             return (failures, read, unread, mainJobs.Count + prJobs.Count);
         }
 
-        /// <summary>The last 50 completed pull request runs of ci.yml that passed or failed, with their jobs' times.</summary>
-        IReadOnlyList<PrCiRun> PrRuns()
+        /// <summary>
+        /// The last 50 completed pull request runs of ci.yml that passed or failed, with their jobs'
+        /// times; and, of the newest 200 completed, those green only on a rerun in the window, whose
+        /// failed first attempts the failure ranking reads too.
+        /// </summary>
+        (IReadOnlyList<PrCiRun>, List<(long Id, DateTimeOffset At)>) PrRuns()
         {
-            var runs = RestPages($"repos/{slug}/actions/workflows/ci.yml/runs?event=pull_request&status=completed", "workflow_runs", maxPages: 2)
+            var completed = RestPages($"repos/{slug}/actions/workflows/ci.yml/runs?event=pull_request&status=completed", "workflow_runs", maxPages: 2).ToList();
+            var rerunGreen = completed
+                .Where(r => r.GetProperty("conclusion").GetString() == "success" && r.GetProperty("run_attempt").GetInt32() > 1 && Time(r, "created_at") >= since)
+                .Select(r => (r.GetProperty("id").GetInt64(), Time(r, "created_at"))).ToList();
+            var runs = completed
                 .Where(r => r.GetProperty("conclusion").GetString() is "success" or "failure")
                 .Take(50)
                 .Select(r => (Id: r.GetProperty("id").GetInt64(), Node: r.GetProperty("node_id").GetString()!,
                     Wall: Time(r, "updated_at") - Time(r, "run_started_at")))
                 .ToList();
             if (runs.Count == 0)
-                return [];
+                return ([], rerunGreen);
             using var doc = GraphQL(JobTimesQuery, new() { ["ids"] = runs.Select(r => r.Node).ToArray() });
-            return [.. doc.RootElement.GetProperty("data").GetProperty("nodes").EnumerateArray().Zip(runs).Select(pair =>
-                new PrCiRun(pair.Second.Id, pair.Second.Wall, ParseJobTimes(pair.First)))];
+            return ([.. doc.RootElement.GetProperty("data").GetProperty("nodes").EnumerateArray().Zip(runs).Select(pair =>
+                new PrCiRun(pair.Second.Id, pair.Second.Wall, ParseJobTimes(pair.First)))], rerunGreen);
         }
     }
 
@@ -421,7 +436,8 @@ static class ReportCommand
             pr.TryGetProperty("mergeable", out var m) ? m.GetString() : null,
             threads,
             state,
-            description);
+            description,
+            pr.TryGetProperty("isCrossRepository", out var cross) && cross.ValueKind == JsonValueKind.True);
     }
 
     // The hunt's own comments are by github-actions; the owner may file or update one by hand
@@ -460,8 +476,11 @@ static class ReportCommand
     {
         if (run.ValueKind != JsonValueKind.Object || !run.TryGetProperty("checkSuite", out var suite) || suite.ValueKind != JsonValueKind.Object)
             return [];
-        // A skipped job (one the plan didn't select) took no time worth ranking.
+        // A skipped job (one the plan didn't select) took no time worth ranking, and a rerun job
+        // counts once, as its latest attempt, so a retried run doesn't weigh double.
         return [.. suite.GetProperty("checkRuns").GetProperty("nodes").EnumerateArray()
+            .GroupBy(c => c.GetProperty("name").GetString() ?? "", StringComparer.Ordinal)
+            .Select(g => g.MaxBy(c => c.TryGetProperty("databaseId", out var id) ? id.GetInt64() : 0))
             .Where(c => c.GetProperty("conclusion").GetString() is "SUCCESS" or "FAILURE" or "TIMED_OUT")
             .Select(c => (Name: c.GetProperty("name").GetString() ?? "", Started: OptionalTime(c, "startedAt"), Completed: OptionalTime(c, "completedAt")))
             .Where(c => c.Started is not null && c.Completed is not null)

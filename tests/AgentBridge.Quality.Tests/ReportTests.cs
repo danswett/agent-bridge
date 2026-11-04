@@ -113,6 +113,14 @@ public sealed class ReportTests
     }
 
     [Fact]
+    public void A_forks_branch_is_never_a_stack_parent_though_it_shares_a_local_branchs_name()
+    {
+        var depths = WeeklyReport.StackDepths([Open(1, head: "codex/top", baseRef: "codex/base"), Open(2, head: "codex/base") with { CrossRepository = true }], "main");
+
+        Assert.Equal(1, depths[1]);
+    }
+
+    [Fact]
     public void A_branch_prefix_with_merges_this_week_and_none_open_still_has_its_row()
     {
         var report = WeeklyReport.Render(Facts(prs: [Merged(1, openedHoursAgo: 10, mergedHoursAgo: 7, head: "docs/a")]));
@@ -158,7 +166,7 @@ public sealed class ReportTests
     }
 
     [Fact]
-    public void A_jobs_log_yields_each_failed_test_once_and_not_dotnet_tests_summary_line()
+    public void A_jobs_log_yields_each_failed_test_once_coloured_or_not_and_not_dotnet_tests_summary_line()
     {
         const string log = """
             2026-11-04T05:54:41.5774220Z [xUnit.net 00:00:56.67]     LaunchPieceTests.A_probe [FAIL]
@@ -169,6 +177,8 @@ public sealed class ReportTests
             """;
 
         Assert.Equal(["LaunchPieceTests.A_probe", "TrustTests.Theory(kind: \"a [b]\")"], WeeklyReport.FailedTests(log));
+        // gh keeps the runner's colour codes in a log.
+        Assert.Equal(["Colour.Test"], WeeklyReport.FailedTests("2026-11-04T05:54:41.6Z \u001b[31m  Failed Colour.Test [2 s]\u001b[0m"));
     }
 
     [Fact]
@@ -224,11 +234,12 @@ public sealed class ReportTests
     }
 
     [Fact]
-    public void Ci_health_gives_the_median_wall_time_and_the_three_slowest_jobs_by_median_leaving_out_skipped_ones()
+    public void Ci_health_gives_the_median_wall_time_and_the_three_slowest_jobs_by_median_counting_a_rerun_job_once_and_leaving_out_skipped_ones()
     {
         const string run = """
             {"databaseId": 1, "checkSuite": {"checkRuns": {"nodes": [
-              {"name": "product (ubuntu-latest)", "startedAt": "2026-11-08T10:00:00Z", "completedAt": "2026-11-08T10:12:00Z", "conclusion": "SUCCESS"},
+              {"databaseId": 10, "name": "product (ubuntu-latest)", "startedAt": "2026-11-08T09:00:00Z", "completedAt": "2026-11-08T09:40:00Z", "conclusion": "FAILURE"},
+              {"databaseId": 11, "name": "product (ubuntu-latest)", "startedAt": "2026-11-08T10:00:00Z", "completedAt": "2026-11-08T10:12:00Z", "conclusion": "SUCCESS"},
               {"name": "app (win-x64)", "startedAt": "2026-11-08T10:00:00Z", "completedAt": "2026-11-08T10:08:00Z", "conclusion": "FAILURE"},
               {"name": "light", "startedAt": "2026-11-08T10:00:00Z", "completedAt": "2026-11-08T10:01:00Z", "conclusion": "SUCCESS"},
               {"name": "pwa-e2e", "startedAt": "2026-11-08T10:00:00Z", "completedAt": "2026-11-08T10:00:00Z", "conclusion": "SKIPPED"},
@@ -278,12 +289,24 @@ public sealed class ReportTests
         Assert.Contains("CI's logs of 1 of the 2 failed test job(s) found (main's and pull requests', newest first); **1 more couldn't be read**", output.ToString());
     }
 
+    [Fact]
+    public void A_pull_request_run_green_only_on_a_rerun_has_its_failed_first_attempts_tests_counted()
+    {
+        var github = new FakeGitHub(rerunGreen: true);
+        var output = new StringWriter();
+
+        Assert.Equal(0, ReportCommand.Run(["--slug", "o/r", "--max-logs", "4"], output, github, Now));
+
+        Assert.Contains("repos/o/r/actions/jobs/701/logs", github.Logs);
+        Assert.Contains("| `RerunTests.Flaky` | 0 | 1 | 0 |", output.ToString());
+    }
+
     /// <summary>
     /// A week on GitHub: one open pull request; a merged one, then one that changed before the
     /// window with more pages promised (which mustn't be read); one red main run and one red pull
     /// request run, each with a failed product job.
     /// </summary>
-    sealed class FakeGitHub(bool failPrLog = false) : IGitHub
+    sealed class FakeGitHub(bool failPrLog = false, bool rerunGreen = false) : IGitHub
     {
         public List<string> Queries { get; } = [];
         public List<string> Logs { get; } = [];
@@ -300,6 +323,8 @@ public sealed class ReportTests
                 return Page("pullRequests", Pr(2, "MERGED", "2026-11-09T10:00:00Z", "2026-11-09T09:00:00Z") + "," + Pr(3, "MERGED", "2026-10-01T10:00:00Z", "2026-10-01T09:00:00Z"), more: true);
             if (query.Contains("issues(", StringComparison.Ordinal))
                 return Page("issues", "", more: false);
+            if (query.Contains("startedAt", StringComparison.Ordinal))
+                return JsonDocument.Parse("{\"data\": {\"nodes\": [null]}}");
             var ids = (string[])variables["ids"];
             var job = ids[0] == "main-node" ? 501 : 601;
             return JsonDocument.Parse("{\"data\": {\"nodes\": [{\"databaseId\": 1, \"checkSuite\": {\"checkRuns\": {\"nodes\": [{\"databaseId\": " + job + ", \"name\": \"product (ubuntu-latest)\"}, {\"databaseId\": 9, \"name\": \"quality-gate\"}]}}}]}}");
@@ -315,6 +340,10 @@ public sealed class ReportTests
                 return JsonDocument.Parse("""{"workflow_runs": [""" + run.Replace("%N", "main-node", StringComparison.Ordinal) + "]}");
             if (path.Contains("status=failure", StringComparison.Ordinal))
                 return JsonDocument.Parse("""{"workflow_runs": [""" + run.Replace("%N", "pr-node", StringComparison.Ordinal) + "]}");
+            if (rerunGreen && path.Contains("status=completed", StringComparison.Ordinal))
+                return JsonDocument.Parse("""{"workflow_runs": [""" + run.Replace("%N", "rerun-node", StringComparison.Ordinal).Replace("\"failure\", \"run_attempt\": 1", "\"success\", \"run_attempt\": 2", StringComparison.Ordinal) + "]}");
+            if (rerunGreen && path.Contains("attempts/1/jobs", StringComparison.Ordinal))
+                return JsonDocument.Parse("""{"jobs": [{"id": 701, "name": "product (windows-latest)", "conclusion": "failure"}, {"id": 702, "name": "light", "conclusion": "failure"}]}""");
             return JsonDocument.Parse("""{"workflow_runs": []}""");
         }
 
@@ -323,6 +352,8 @@ public sealed class ReportTests
             Logs.Add(path);
             if (failPrLog && path.Contains("601", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 410: the log has expired");
+            if (path.Contains("701", StringComparison.Ordinal))
+                return "2026-11-08T10:05:00.0Z   Failed RerunTests.Flaky [1 s]";
             return path.Contains("501", StringComparison.Ordinal) ? "2026-11-08T10:05:00.0Z   Failed MainTests.Broke [1 s]" : "2026-11-08T10:05:00.0Z   Failed PrTests.Broke [1 s]";
         }
 
