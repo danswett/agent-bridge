@@ -1,0 +1,198 @@
+{
+  "profile": "connector-read-v1.json",
+  "generatedBy": "tests/AgentBridge.Host.Tests/ConnectorReadVectorTests.cs",
+  "cases": [
+    {
+      "name": "hello",
+      "request": {
+        "op": "hello",
+        "data": {}
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "protocol": 1,
+          "machine": {
+            "id": "00112233445566778899aabbccddeeff",
+            "name": "Fixture host",
+            "os": "windows",
+            "hostVersion": "0.1.0",
+            "sessions": 1
+          },
+          "capabilities": [
+            "sessions.read"
+          ]
+        }
+      }
+    },
+    {
+      "name": "list",
+      "request": {
+        "op": "sessions.list",
+        "data": {}
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "sessions": [
+            {
+              "id": "88888888-8888-4888-8888-888888888888",
+              "agent": "copilot",
+              "title": "Connector fixture",
+              "status": "working",
+              "statusSince": "2026-10-28T04:00:01.000Z",
+              "startedAt": "2026-10-28T03:00:00.000Z",
+              "updatedAt": "2026-10-28T04:00:03.000Z",
+              "processId": 100,
+              "activity": {
+                "currentTool": {
+                  "id": "fixture-tool",
+                  "name": "powershell",
+                  "summary": "Get-ChildItem",
+                  "status": "running",
+                  "startedAt": "2026-10-28T04:00:03.000Z"
+                },
+                "userMessage": "List the fixture files",
+                "turnCount": 0,
+                "compactions": 0
+              }
+            }
+          ],
+          "revision": 1
+        }
+      }
+    },
+    {
+      "name": "get",
+      "request": {
+        "op": "session.get",
+        "data": {
+          "id": "88888888-8888-4888-8888-888888888888"
+        }
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "id": "88888888-8888-4888-8888-888888888888",
+          "agent": "copilot",
+          "title": "Connector fixture",
+          "status": "working",
+          "statusSince": "2026-10-28T04:00:01.000Z",
+          "startedAt": "2026-10-28T03:00:00.000Z",
+          "updatedAt": "2026-10-28T04:00:03.000Z",
+          "processId": 100,
+          "activity": {
+            "currentTool": {
+              "id": "fixture-tool",
+              "name": "powershell",
+              "summary": "Get-ChildItem",
+              "status": "running",
+              "startedAt": "2026-10-28T04:00:03.000Z"
+            },
+            "history": [
+              {
+                "id": "fixture-tool",
+                "name": "powershell",
+                "summary": "Get-ChildItem",
+                "status": "running",
+                "startedAt": "2026-10-28T04:00:03.000Z"
+              }
+            ],
+            "userMessage": "List the fixture files",
+            "turnCount": 0,
+            "compactions": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "missing-session",
+      "request": {
+        "op": "session.get",
+        "data": {
+          "id": "99999999-9999-4999-8999-999999999999"
+        }
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "missing": true
+        }
+      }
+    },
+    {
+      "name": "missing-subagent",
+      "request": {
+        "op": "session.get",
+        "data": {
+          "id": "88888888-8888-4888-8888-888888888888",
+          "agent": "not-present"
+        }
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "missing": true
+        }
+      }
+    },
+    {
+      "name": "get-without-id",
+      "request": {
+        "op": "session.get",
+        "data": {}
+      },
+      "response": {
+        "ok": false,
+        "error": "session.get needs an id"
+      }
+    },
+    {
+      "name": "snapshot",
+      "request": {
+        "op": "sessions.subscribe",
+        "data": {}
+      },
+      "response": {
+        "ok": true,
+        "result": {
+          "revision": 1,
+          "count": 1
+        }
+      },
+      "events": [
+        {
+          "ev": "session.upsert",
+          "data": {
+            "id": "88888888-8888-4888-8888-888888888888",
+            "agent": "copilot",
+            "title": "Connector fixture",
+            "status": "working",
+            "statusSince": "2026-10-28T04:00:01.000Z",
+            "startedAt": "2026-10-28T03:00:00.000Z",
+            "updatedAt": "2026-10-28T04:00:03.000Z",
+            "processId": 100,
+            "activity": {
+              "currentTool": {
+                "id": "fixture-tool",
+                "name": "powershell",
+                "summary": "Get-ChildItem",
+                "status": "running",
+                "startedAt": "2026-10-28T04:00:03.000Z"
+              },
+              "userMessage": "List the fixture files",
+              "turnCount": 0,
+              "compactions": 0
+            }
+          }
+        },
+        {
+          "ev": "sessions.synced",
+          "data": {
+            "revision": 1
+          }
+        }
+      ]
+    }
+  ]
+}

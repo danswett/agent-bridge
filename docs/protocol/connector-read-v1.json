@@ -1,0 +1,53 @@
+{
+  "format": "agent-bridge.connector-read",
+  "version": 1,
+  "protocol": 1,
+  "status": "draft-application-contract",
+  "spec": "connector-read.md",
+  "maxMessageBytes": 49152,
+  "maxSessionBytes": 40960,
+  "authorization": "Not supplied by this contract. Requires independently approved enrollment and host-enforced grants.",
+  "recordVectors": "vectors/sessions.json",
+  "conversationVectors": "connector-read-conversations-v1.json",
+  "operations": {
+    "hello": { "resultRecords": ["HelloResult"] },
+    "sessions.list": { "capability": "sessions.read", "requestRecord": "ListRequest", "resultRecords": ["SessionList"] },
+    "session.get": { "capability": "sessions.read", "resultRecords": ["Session", "Subagent"], "missingResult": { "missing": true } },
+    "sessions.subscribe": { "capability": "sessions.read", "resultRecords": ["SubscribeResult"] }
+  },
+  "events": {
+    "session.upsert": { "record": "Session" },
+    "session.remove": { "record": "SessionRemoved" },
+    "sessions.synced": { "record": "SessionsSynced" },
+    "discovery.changed": { "record": "DiscoveryChanged" }
+  },
+  "requestSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["id", "op"],
+    "properties": {
+      "id": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+      "op": { "enum": ["hello", "sessions.list", "session.get", "sessions.subscribe"] },
+      "data": { "type": ["object", "null"] }
+    },
+    "allOf": [
+      {
+        "if": { "properties": { "op": { "const": "session.get" } } },
+        "then": {
+          "required": ["data"],
+          "properties": {
+            "data": {
+              "type": "object",
+              "required": ["id"],
+              "properties": { "id": { "type": "string" }, "agent": { "type": ["string", "null"] } }
+            }
+          }
+        }
+      },
+      {
+        "if": { "properties": { "op": { "const": "sessions.list" } } },
+        "then": { "properties": { "data": { "properties": { "cursor": { "type": ["string", "null"] } } } } }
+      }
+    ]
+  }
+}

@@ -125,6 +125,11 @@ way, without ending its stream. C#: `Received.Read<T>` and `[Strict]` in
 
 ## Test vectors
 
+External read-only connectors can start with the versioned
+[connector read profile](connector-read.md), its machine-readable operation index
+and disposable stdio mock. This is an application-contract test tool, not enrolled
+connector delivery or permission to connect a production service.
+
 Valid and refused examples of every record in this protocol, and of the signed command, are in
 [`vectors/`](vectors/README.md), as JSON that the C# records generate. The C# tests and the PWA's
 unit tests replay the same files, so a field renamed or a limit moved in one implementation fails

@@ -779,6 +779,9 @@ jobs:
         if: ${{ !cancelled() && (contains(fromJSON(env.SUITES), 'design-gen') || contains(fromJSON(env.SUITES), 'a11y-contrast')) }}
         run: node --test "tools/design-gen/test/*.test.mjs"
       # Plain Node: the unit tests and build-site.mjs import nothing from node_modules.
+      - name: Connector read-contract mock
+        if: ${{ !cancelled() && contains(fromJSON(env.SUITES), 'connector-conformance') }}
+        run: node --test tools/connector-conformance/mock-host.test.mjs
       - name: PWA unit tests
         id: pwa-unit
         if: ${{ !cancelled() && contains(fromJSON(env.SUITES), 'pwa-unit') }}
