@@ -118,6 +118,9 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
     && entries.some((e) => holder.contains(e.target))
     && entries.every((e) => holder.contains(e.target) || e.target.contains?.(holder));
   let view = null;
+  // Whether the last read saw the window or what a scroller shows change size: a clamp after it
+  // isn't the person's, whatever they are doing in the question.
+  let wasOutside = false;
   // How far everything holding the answers is scrolled and how big each is inside and out; for
   // each the holder's place doesn't pin (nothing fixed between them), how far the browser's
   // anchoring moved its scrolling to keep what's at its top in place as content above changed.
@@ -205,10 +208,12 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
     let resized = false;
     let clamped = false;
     by.forEach(([top, height, inner, carried, , , anchored], i) => {
-      const [wasTop, wasHeight, wasInner] = wasBy[i];
+      const [wasTop, wasHeight, wasInner, wasCarried] = wasBy[i];
       const sized = height !== wasHeight || inner !== wasInner;
       resized ||= sized;
-      if (top === wasTop || !carried) { return; }
+      // One that scrolled the answers before, or was last seen past its end with a new size, still
+      // can: pulled back to 0 as it stops overflowing (a read for that size may come first).
+      if (top === wasTop || !(carried || wasCarried || wasBy[i][7] === true)) { return; }
       // Pulled back: the end came up past where it was scrolled to, seen with the change of size,
       // or already seen with it (see overEnd).
       const over = wasBy[i][7] === true;
@@ -259,10 +264,13 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
     const size = [win.innerWidth, win.innerHeight];
     const outside = !view || size[0] !== view[0] || size[1] !== view[1]
       || by.some(([, , inner, carried], i) => carried && wasBy.length === by.length && inner !== wasBy[i][2]);
-    if (count && changed && !theirs(entries, outside)) { moved(); }
+    const fired = !!(count && changed && !theirs(entries, outside));
+    if (fired) { moved(); }
     view = size;
+    wasOutside = outside;
     was = at;
     wasBy = overEnd(by);
+    return fired;
   };
   const sized = typeof ResizeObserver === 'function' ? new ResizeObserver((entries) => read(true, entries)) : null;
   const watched = new Set();
@@ -301,8 +309,9 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
     if (since.shift) { was = was.map(([y, x]) => [y - since.shift, x]); }
     wasBy = overEnd(by);
     // A clamp is read now, not frames on: the answers it slid are under the pointer already. While
-    // the person's own act in the question holds, it is left to the read with what resized.
-    if (since.clamped && !own) {
+    // the person's own act in the question holds, it is left to the read with what resized, unless
+    // that read saw the window or a scroller change size (then the clamp isn't theirs).
+    if (since.clamped && (!own || wasOutside)) {
       read(true);
       return;
     }
@@ -333,6 +342,10 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
     },
     // Where they are now, as the place to measure moves from (a new set of answers drawn).
     settle() { was = null; read(false); },
+    // Read now, as a click comes (#491): something laid out since the last frame's read (an update
+    // in the task just before the click) is found before the click is let through, not a frame
+    // later. Nothing the person did is exempt here. Says whether it found a move.
+    check() { return read(true) === true; },
     // Nothing of it read or watched until track() (a session's view hidden while another shows).
     pause() {
       live = false;
@@ -1181,8 +1194,12 @@ export class SessionCard {
   // else in the slot (a kept draft's Dismiss, say), which the question didn't bring.
   #guardQuestion(slot) {
     slot.addEventListener('click', (e) => {
-      if (e.detail === 0 || (globalThis.performance?.now() ?? Date.now()) >= this.#guardUntil) { return; }
+      if (e.detail === 0) { return; }
       if (!this.#guarded?.contains(e.target) || !e.target.closest?.(QUESTION_CONTROLS)) { return; }
+      // Moved since the last frame was read (an update in the task just before this click, before
+      // any frame): found now, and the wait starts before the click is let through.
+      this.#moves?.check();
+      if ((globalThis.performance?.now() ?? Date.now()) >= this.#guardUntil) { return; }
       e.preventDefault();
       e.stopImmediatePropagation();
     }, true);

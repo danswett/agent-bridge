@@ -730,6 +730,36 @@ test('a question that stays takes no click for a moment when something above it 
   expect(await answered(page)).toBeGreaterThan(before);
 });
 
+test('a click in the same task as an update that moves the question, before any frame, doesn\'t answer it', async ({ page }) => {
+  await openDemo(page);
+  const question = choices('q-moved-now');
+  await askCodex(page, question);
+  const v = await open(page, CODEX);
+  await expect(v.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
+  const before = await answered(page);
+  const after = await page.evaluate((question) => new Promise((resolve) => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 61_000).toISOString();
+    const view = document.querySelector('.session-view[data-id="019a1b2c-codex-example"]');
+    const top = view.querySelector('.question-slot .choice').getBoundingClientRect().top;
+    // A click on its way lands as soon as the update is drawn into the page, before the browser
+    // has drawn a frame of it.
+    const seen = new MutationObserver(() => {
+      seen.disconnect();
+      const choice = view.querySelector('.question-slot .choice');
+      const by = choice.getBoundingClientRect().top - top;
+      choice.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      resolve({ moved: by > 1, armed: view.querySelector('.question-slot .question').hasAttribute('data-arriving') });
+    });
+    seen.observe(view.querySelector('.session-title'), { childList: true, subtree: true, characterData: true });
+    // The same question, untouched; the session's title grows long enough to wrap.
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: t, question, title: Array.from({ length: 24 }, () => 'a title long enough to wrap').join(' ') });
+  }), question);
+  expect(after).toEqual({ moved: true, armed: true });
+  await page.waitForTimeout(100);
+  expect(await answered(page)).toBe(before);
+});
+
 test('typing in a question doesn\'t hide a move above it in the same moment: the question still takes no click', async ({ page }) => {
   await openDemo(page);
   await askCodex(page, { id: 'q-typing', kind: 'form', message: 'Notes?', askedAt: new Date().toISOString(), fields: [{ name: 'n', title: 'Notes', type: 'text' }] });

@@ -71,7 +71,10 @@ function guardLane(list, scroller = null) {
   }) : null;
   changes?.observe(list, { childList: true });
   const click = (e) => {
-    if (e.detail === 0 || now() >= until || !e.target.closest?.(LANE_ANSWERS)) { return; }
+    if (e.detail === 0 || !e.target.closest?.(LANE_ANSWERS)) { return; }
+    // Moved since the last frame was read: found now, before the click is let through (#491).
+    moves.check();
+    if (now() >= until) { return; }
     e.preventDefault();
     e.stopImmediatePropagation();
   };

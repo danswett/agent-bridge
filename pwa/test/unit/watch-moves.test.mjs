@@ -153,3 +153,43 @@ test('what the conversation shows changing height as the person types, the windo
   p.read([p.holder, p.scroller]);
   assert.equal(p.moves(), 1);
 });
+
+test('a scroll pulled back to 0 as what it holds stops overflowing, after the read for the new size, is a move (#491)', () => {
+  const p = page();
+  p.scroller.scrollTop = 50;
+  p.scroller.scrollHeight = 400;
+  p.scroller.clientHeight = 350;
+  p.read();
+  // Taller now, as tall as what it holds: the new size is read before the scroll is pulled back.
+  p.scroller.clientHeight = 400;
+  p.read();
+  assert.equal(p.moves(), 0);
+  p.scroller.scrollTop = 0;
+  p.at.top += 50;
+  p.scroll();
+  assert.equal(p.moves(), 1);
+});
+
+test('a window resized as the person types, its clamp coming after the read for the new size, is a move at once (#491)', () => {
+  const p = page();
+  p.read();
+  p.watcher.own();
+  p.win.innerHeight = 1020;
+  p.scroller.clientHeight = 430;
+  p.read([p.scroller]);
+  assert.equal(p.moves(), 0);
+  p.scroller.scrollTop = 1803;
+  p.at.top += 120;
+  p.scroll();
+  assert.equal(p.moves(), 1);
+});
+
+test('a move laid out since the last read is found when a click asks, before any frame (#491)', () => {
+  const p = page();
+  p.read();
+  p.watcher.own();
+  p.at.top += 40;
+  assert.equal(p.watcher.check(), true);
+  assert.equal(p.moves(), 1);
+  assert.equal(p.watcher.check(), false);
+});

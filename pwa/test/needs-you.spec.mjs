@@ -545,6 +545,28 @@ test.describe('a moment before the lane takes a click', () => {
     await expect.poll(answers).toBe(before + 1);
   });
 
+  test('a click in the same task as something above the lane appearing, before any frame, doesn\'t answer', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, LAND, permission());
+    await expect(lane(page).locator('.needs-you-list[data-arriving]')).toHaveCount(0);
+    const before = (await log(page)).length;
+    const after = await page.evaluate((land) => {
+      const list = document.querySelector('#needs-you .needs-you-list');
+      const b = list.querySelector(`.needs-entry[data-id="${land}"] .needs-approve`);
+      const top = b.getBoundingClientRect().top;
+      // A bar comes in above the lane (as a banner does), and a click on its way lands at once.
+      const bar = document.createElement('div');
+      bar.style.height = '82px';
+      list.parentElement.before(bar);
+      const by = b.getBoundingClientRect().top - top;
+      b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      return { moved: by > 1, armed: list.hasAttribute('data-arriving') };
+    }, LAND);
+    expect(after).toEqual({ moved: true, armed: true });
+    await page.waitForTimeout(100);
+    expect((await log(page)).length).toBe(before);
+  });
+
   test('an entry that grows as its answer goes moves those after it, and the lane takes no click for a moment', async ({ page }) => {
     await openDemo(page);
     await ask(page, LAND, permission());
