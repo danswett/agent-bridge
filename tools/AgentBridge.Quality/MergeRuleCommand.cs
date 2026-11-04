@@ -122,7 +122,7 @@ static class MergeRuleCommand
         fragment pr on PullRequest {
           number title state isDraft baseRefName headRefOid
           labels(first: 100) { totalCount nodes { name } }
-          reviews(last: 100) { nodes { author { __typename login } state commit { oid } } }
+          reviews(last: 100) { nodes { author { __typename login } state body commit { oid } } }
           commits(last: 1) { nodes { commit {
             oid
             status { contexts { context state description createdAt creator { login } } }
@@ -603,7 +603,9 @@ static class MergeRuleCommand
                 r.GetProperty("author") is { ValueKind: JsonValueKind.Object } a ? a.GetProperty("login").GetString() ?? "" : "",
                 r.GetProperty("author") is { ValueKind: JsonValueKind.Object } b && b.GetProperty("__typename").GetString() == "Bot",
                 r.GetProperty("state").GetString() ?? "",
-                r.GetProperty("commit") is { ValueKind: JsonValueKind.Object } c ? c.GetProperty("oid").GetString() : null))
+                r.GetProperty("commit") is { ValueKind: JsonValueKind.Object } c ? c.GetProperty("oid").GetString() : null,
+                // A body that isn't there reads as one that says nothing, which doesn't count.
+                r.TryGetProperty("body", out var body) && body.ValueKind == JsonValueKind.String ? body.GetString() : null))
             .ToList();
 
         var statuses = new List<StatusFact>();

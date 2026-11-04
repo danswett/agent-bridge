@@ -93,8 +93,11 @@ sealed record MainFact(string State, string Reason);
 /// <summary>A commit status on the head: GitHub keeps every one posted, newest last by time.</summary>
 sealed record StatusFact(string Context, string State, string? Description, string? Creator, DateTimeOffset CreatedAt);
 
-/// <summary>A submitted review. <c>IsBot</c> is GraphQL's typename, which no user account can claim.</summary>
-sealed record ReviewFact(string Author, bool IsBot, string State, string? CommitOid);
+/// <summary>
+/// A submitted review. <c>IsBot</c> is GraphQL's typename, which no user account can claim.
+/// <c>Body</c> is what it said: Copilot posts its failures as reviews too (#706).
+/// </summary>
+sealed record ReviewFact(string Author, bool IsBot, string State, string? CommitOid, string? Body);
 
 /// <summary>A workflow run's or check run's progress, in GraphQL's words (COMPLETED, SUCCESS...).</summary>
 sealed record RunFact(string Status, string? Conclusion);
@@ -194,11 +197,20 @@ static class MergeRule
         if (!pr.LabelsComplete)
             failures.Add("it has more labels than the rule reads, so a hold label could be hidden");
 
-        var copilot = pr.Reviews.Any(r => r.IsBot
+        // Copilot's review of the exact head, by the bot itself, that actually completed. Copilot
+        // posts an error, a billing failure, a refusal or a review that didn't run in full as a
+        // COMMENTED review by the same bot on the same commit (#706: #406 and #358's billing
+        // errors), so that much proves nothing ran.
+        // One completed review on the head is enough, even beside a failed retry; a review of an
+        // earlier commit never stands in for it.
+        var onHead = pr.Reviews.Where(r => r.IsBot
             && string.Equals(r.Author, config.CopilotReviewer, StringComparison.Ordinal)
             && string.Equals(r.CommitOid, pr.HeadSha, StringComparison.OrdinalIgnoreCase)
-            && r.State is not ("PENDING" or "DISMISSED"));
-        if (!copilot)
+            && r.State is not ("PENDING" or "DISMISSED")).ToList();
+        var copilot = onHead.Any(r => CopilotReviewFailure(r.Body) is null);
+        if (!copilot && onHead.Count > 0)
+            failures.Add($"Copilot's review of {sha} didn't complete ({CopilotReviewFailure(onHead[^1].Body)}): request another");
+        else if (!copilot)
             pending.Add($"waiting for a Copilot review of {sha}");
 
         var sensitive = pr.FullyRead ? SensitiveFiles(config, pr.Files) : [];
@@ -279,6 +291,39 @@ static class MergeRule
     static bool MarkedSecurity(MergeRuleConfig config, PullRequestFacts pr) =>
         (config.SecurityMarks.TitlePrefix.Length > 0 && pr.Title.TrimStart().StartsWith(config.SecurityMarks.TitlePrefix, StringComparison.OrdinalIgnoreCase))
         || pr.Labels.Any(l => config.SecurityMarks.Labels.Contains(l, StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Null when a Copilot review's body shows it completed; otherwise why it doesn't count. Only
+    /// a review that opens with its overview counts, recognised by the marker Copilot starts it
+    /// with. Anything before the marker is a notice that the review fell short, and fails it even
+    /// with an overview and findings below: "couldn't run its full agentic review because it
+    /// didn't start before the timeout" (169 of the first 1,509 reviews here) and "unable to run
+    /// its full agentic suite" are incomplete reviews, which #706 rules out. Anything else (an
+    /// error, a diff too large to review, a body this doesn't know) fails closed too: Copilot
+    /// changing its format blocks merges until this learns it, rather than letting an unknown
+    /// outcome pass.
+    /// </summary>
+    public static string? CopilotReviewFailure(string? body)
+    {
+        var lines = (body ?? "").Split('\n');
+        var marker = Array.FindIndex(lines, l => l.Trim() == CopilotOverviewMarker);
+        var preamble = string.Join('\n', marker < 0 ? lines : lines[..marker]);
+        if (ReportedError.IsMatch(preamble))
+            return "it reported an error";
+        if (CouldNotReview.IsMatch(preamble))
+            return "it couldn't review the change";
+        if (marker < 0)
+            return "its outcome isn't recognized";
+        if (!string.IsNullOrWhiteSpace(preamble))
+            return "it was incomplete";
+        if (lines[(marker + 1)..].All(string.IsNullOrWhiteSpace))
+            return "its overview is empty";
+        return null;
+    }
+
+    const string CopilotOverviewMarker = "<!-- ccr-overview-v2 -->";
+    static readonly Regex ReportedError = new(@"\berror", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    static readonly Regex CouldNotReview = new(@"\b(able|couldn't|could not|can't|cannot|failed)( to)? review", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public static string Short(string sha) => sha.Length > 7 ? sha[..7] : sha;
 

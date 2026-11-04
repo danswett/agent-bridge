@@ -375,7 +375,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      the rules in [`merge-rule.yml`](merge-rule.yml): main green, that is the latest finished
      push run of `ci.yml` on main (at its latest attempt) passed, unless the pull request has the
      `fixes-main` label; not a draft; no `hold` or `do-not-merge`
-     label; a Copilot review whose commit is the head; CodeQL's latest run on the head green and
+     label; a completed Copilot review whose commit is the head (#706: Copilot posts an error,
+     a billing failure, a diff too large to review or a review that didn't run in full as a
+     review by the same bot on the same commit, so only one that opens with its overview
+     counts, and anything else fails, naming why, even an overview with findings below a
+     notice that the agentic review timed out); CodeQL's latest run on the head green and
      code scanning's `CodeQL` check not failed; every other check run and status on the head
      passed (success, skipped or neutral), since `apple.yml`, `codeql.yml`, `relay.yml`,
      `dependencies.yml`, `workflow-lint.yml` and `perf.yml` sit outside `quality-gate`, each

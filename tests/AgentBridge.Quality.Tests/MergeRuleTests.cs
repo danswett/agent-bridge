@@ -34,7 +34,24 @@ public class MergeRuleTests
 
     static readonly MainFact MainGreen = new("success", "main's CI 2222222 passed");
 
-    static readonly ReviewFact Copilot = new("copilot-pull-request-reviewer", IsBot: true, "COMMENTED", Head);
+    // Bodies as Copilot posted them on this repository's pull requests.
+    const string GenuineReview = """
+        <!-- ccr-overview-v2 -->
+
+        ### 🟢 Approval recommended
+
+        No active review issues require changes.
+
+        **No open issues** 🎉
+
+        <sub>Review effort: Balanced</sub>
+        """;
+
+    // #406's review 5774609210 on 73e3cca0 and #358's 5774844846 on 473c1db9: a COMMENTED review
+    // by the bot on the exact head, which the rule once counted as Copilot's review.
+    const string BillingError = "Copilot encountered an error: Your billing is not configured or you have Copilot licenses from multiple standalone organizations or enterprises. To use premium requests, select a billing entity via the GitHub site, under [Settings > Copilot > Features](/settings/copilot/features).";
+
+    static readonly ReviewFact Copilot = new("copilot-pull-request-reviewer", IsBot: true, "COMMENTED", Head, GenuineReview);
     static readonly RunFact Green = new("COMPLETED", "SUCCESS");
     const string MainCommit = "1111111123456789abcdef0123456789abcdef01";
 
@@ -74,6 +91,68 @@ public class MergeRuleTests
 
         Assert.Equal(("pending", "Waiting for a Copilot review of abcdef0"), (earlier.State, earlier.Description));
         Assert.Equal("pending", impostor.State);
+    }
+
+    [Fact]
+    public void Copilots_billing_error_on_the_exact_head_fails_rather_than_passing_as_its_review()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = BillingError }]))!;
+
+        Assert.Equal(("failure", "Copilot's review of abcdef0 didn't complete (it reported an error): request another"), (verdict.State, verdict.Description));
+    }
+
+    [Theory]
+    [InlineData("Copilot encountered an error and was unable to review this pull request. You can try again by re-requesting a review.", "it reported an error")]
+    [InlineData("Copilot wasn't able to review any files in this pull request. Copilot's per-file or total diff limits were exceeded.", "it couldn't review the change")]
+    [InlineData("Copilot wasn't able to review this pull request because it exceeds the maximum number of lines (20,000).", "it couldn't review the change")]
+    [InlineData("> [!WARNING]\n> Copilot encountered an error partway.\n\n<!-- ccr-overview-v2 -->\n\n### 🟢 Approval recommended", "it reported an error")]
+    [InlineData("<!-- ccr-overview-v2 -->\n\n", "its overview is empty")]
+    [InlineData("## Pull request overview\n\nLooks good.", "its outcome isn't recognized")]
+    [InlineData("", "its outcome isn't recognized")]
+    [InlineData(null, "its outcome isn't recognized")]
+    public void An_error_unavailable_incomplete_or_unrecognized_Copilot_outcome_on_the_head_is_not_a_review(string? body, string why)
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = body }]))!;
+
+        Assert.Equal(("failure", $"Copilot's review of abcdef0 didn't complete ({why}): request another"), (verdict.State, verdict.Description));
+    }
+
+    [Fact]
+    public void A_completed_review_counts_even_beside_a_failed_retry_on_the_same_head()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = BillingError }, Copilot]))!;
+
+        Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed"), (verdict.State, verdict.Description));
+    }
+
+    // As Copilot posted them on #632 (5767545859) and #558 (5767406640): an overview and findings
+    // below, but the review says itself that it didn't run in full.
+    [Theory]
+    [InlineData("> [!WARNING]\n> Copilot couldn't run its full agentic review because it didn't start before the timeout. Make sure your repository has a runner available, or add a `copilot-code-review.yml` file specifying one with the `runs-on` attribute. See the [docs](https://gh.io/AA11tgch) for more details.\n\n")]
+    [InlineData("> [!NOTE]\n> Copilot was unable to run its full agentic suite in this review.\n\n")]
+    public void A_review_that_says_it_didnt_run_in_full_fails_even_with_an_overview_and_findings(string notice)
+    {
+        const string overview = "<!-- ccr-overview-v2 -->\n\n## Copilot review overview\n\n<details open>\n<summary><strong>2 open issues</strong></summary>\n\n- [Encode the default iOS app icon without an alpha channel](https://github.com/danswett/agent-bridge/pull/558#discussion_r4463254963)\n</details>";
+
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = notice + overview }]))!;
+
+        Assert.Equal(("failure", "Copilot's review of abcdef0 didn't complete (it was incomplete): request another"), (verdict.State, verdict.Description));
+    }
+
+    [Fact]
+    public void A_completed_review_of_an_earlier_commit_doesnt_stand_in_for_an_error_on_the_head()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { CommitOid = Older }, Copilot with { Body = BillingError }]))!;
+
+        Assert.Equal("failure", verdict.State);
+    }
+
+    [Fact]
+    public void An_error_review_still_needs_the_independent_review_of_a_sensitive_change()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], reviews: [Copilot with { Body = BillingError }]))!;
+
+        Assert.Equal(["Copilot's review of abcdef0 didn't complete (it reported an error): request another", "needs an independent review of abcdef0: it touches .github/workflows/ci.yml"], verdict.Reasons);
     }
 
     [Fact]
@@ -213,6 +292,23 @@ public class MergeRuleTests
             Assert.Contains("sensitive: docs/old.md", dry.ToString(), StringComparison.Ordinal);
             Assert.Empty(github.Posted);
             Assert.Equal([$"{Head} success merge-rule Copilot reviewed abcdef0; every check passed; independent review on file https://run"], changed.Posted);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Fact]
+    public void The_billing_error_Copilot_posted_on_406_and_358s_heads_is_read_from_GitHub_and_fails_the_rule()
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head, reviewBody: BillingError));
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Equal([$"{Head} failure merge-rule Copilot's review of abcdef0 didn't complete (it reported an error): request another "], github.Posted);
         }
         finally
         {
@@ -936,7 +1032,7 @@ public class MergeRuleTests
 
     static object Job(long id, string name, string status, string? conclusion = null) => new { databaseId = id, name, status, conclusion };
 
-    static string GraphQLPullRequest(string head, string? commitOid = null, (string State, string Description)? mergeRule = null, string[]? labels = null, string receiptCreator = "danswett", string mergeRuleCreator = "github-actions", int number = 42, object[]? extraSuites = null, object[]? extraStatuses = null, int? labelsTotal = null, string title = "A change")
+    static string GraphQLPullRequest(string head, string? commitOid = null, (string State, string Description)? mergeRule = null, string[]? labels = null, string receiptCreator = "danswett", string mergeRuleCreator = "github-actions", int number = 42, object[]? extraSuites = null, object[]? extraStatuses = null, int? labelsTotal = null, string title = "A change", string reviewBody = GenuineReview)
     {
         var statuses = new List<object>
         {
@@ -958,8 +1054,8 @@ public class MergeRuleTests
             {
                 nodes = new object[]
                 {
-                    new { author = new { __typename = "User", login = "copilot-pull-request-reviewer" }, state = "COMMENTED", commit = new { oid = head } },
-                    new { author = new { __typename = "Bot", login = "copilot-pull-request-reviewer" }, state = "COMMENTED", commit = new { oid = head } },
+                    new { author = new { __typename = "User", login = "copilot-pull-request-reviewer" }, state = "COMMENTED", body = GenuineReview, commit = new { oid = head } },
+                    new { author = new { __typename = "Bot", login = "copilot-pull-request-reviewer" }, state = "COMMENTED", body = reviewBody, commit = new { oid = head } },
                 },
             },
             commits = new
