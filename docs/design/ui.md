@@ -12,7 +12,9 @@ same day (status.md §5). Two light-theme tokens are corrected for contrast in #
 (§5.3) was added in #232 and signed off by the owner on 2026-11-02. Attention (one row and one
 question, #253) replaced the Needs you lane with a filter, signed off by the owner on
 2026-11-02; the reasoning is in [proposals/253-attention.md](proposals/253-attention.md).* The
-owner's mock-ups live in a private design canvas, "Agent Bridge — Session Workbench".
+owner's mock-ups live in a private design canvas, "Agent Bridge — Session Workbench", and
+proposals wait for the owner's sign-off in the private design studio
+([design/README.md](../../design/README.md#owner-sign-off)).
 Every board is also rendered in [mockups/](mockups/README.md), and its source is in
 [`/design/canvas`](../../design/canvas/README.md). This page is the spec, and it is complete
 without them: where they disagree, this page wins and the mock-ups get fixed.

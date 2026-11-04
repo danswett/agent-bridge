@@ -162,3 +162,14 @@ Change `tokens.json` or an SVG, run the generator, and update `docs/design/ui.md
 PR. Any change
 to a status glyph or colour also needs the status table in ui.md §2.2 checked, because the
 glyphs must stay distinguishable in greyscale.
+
+### Owner sign-off
+
+A material design change (visual language, interaction or state semantics) needs the owner's
+sign-off before it lands here. The VP of Design posts each proposal's boards and numbered
+decisions as a `needs-signoff` issue in the private design studio,
+[danswett/agent-bridge-studio](https://github.com/danswett/agent-bridge-studio/issues?q=is%3Aissue+label%3Aneeds-signoff),
+which is visible to the owner and design collaborators only. The decision is recorded there
+and, as text, on the public issue. The studio is never the spec: an approved decision becomes
+real only through a PR here that changes `tokens.json`, the sources and
+`docs/design/ui.md`.
