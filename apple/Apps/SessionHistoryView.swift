@@ -4,6 +4,7 @@ import SwiftUI
 struct SessionHistoryView: View {
     let sessionID: String
     var updatedAt: String?
+    let connectionID: UUID?
     let onLoad: @MainActor (String) async throws -> JSONValue
     var onLoaded: @MainActor (JSONValue) -> Void = { _ in }
 
@@ -14,8 +15,11 @@ struct SessionHistoryView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if loader.isLoading {
+            if loader.isLoading, connectionID != nil {
                 ProgressView("Loading tools…")
+            }
+            if connectionID == nil {
+                Text("Tool history will refresh when the host reconnects.").foregroundStyle(.secondary)
             }
             if let error = loader.error {
                 Text(error).foregroundStyle(.secondary)
@@ -43,19 +47,22 @@ struct SessionHistoryView: View {
             }
             if loader.hasLoaded || loader.error != nil {
                 Button(loader.error == nil ? "Refresh Tool History" : "Try Again") { loader.refresh(load: onLoad) }
-                    .disabled(loader.isLoading)
+                    .disabled(loader.isLoading || connectionID == nil)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
             loader.activate(sessionID: sessionID)
-            loader.refresh(load: onLoad)
+            loader.connectionChanged(connectionID, load: onLoad)
         }
         .onChange(of: sessionID) {
             loader.activate(sessionID: sessionID)
-            loader.refresh(load: onLoad)
+            loader.connectionChanged(connectionID, load: onLoad)
         }
-        .onChange(of: updatedAt) { loader.refresh(load: onLoad) }
+        .onChange(of: connectionID) { loader.connectionChanged(connectionID, load: onLoad) }
+        .onChange(of: updatedAt) {
+            if connectionID != nil { loader.refresh(load: onLoad) }
+        }
         .onChange(of: loader.value) {
             if let value = loader.value {
                 onLoaded(value)

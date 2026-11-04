@@ -11,6 +11,9 @@ struct SessionWorkbench: View {
     @State private var needsOnly = false
     @FocusState private var searchFocused: Bool
     @Environment(\.openWindow) private var openWindow
+    #if os(macOS)
+        @Environment(\.openSettings) private var openSettings
+    #endif
 
     private var selected: SessionEntry? {
         (store.entries + store.endedEntries).first { $0.id == store.selectedSessionID }
@@ -49,10 +52,25 @@ struct SessionWorkbench: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        #if os(macOS)
             navigation
-            connectionFooter
-        }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if store.notifications.actionStatus != nil || store.canonicalHosts.contains(where: { $0.discoveryHold != nil }) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            actionReceipt
+                            discoveryWarnings
+                        }
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12).background(.bar)
+                    }
+                }
+        #else
+            VStack(spacing: 0) {
+                navigation
+                connectionFooter
+            }
+        #endif
     }
 
     private var navigation: some View {
@@ -97,8 +115,12 @@ struct SessionWorkbench: View {
                                 Text("All machines").tag(String?.none)
                                 ForEach(store.canonicalHosts) { host in Text(host.name).tag(Optional(host.id)) }
                             }
-                            Button("Machines", systemImage: "desktopcomputer") { showingMachines = true }
-                            Button("Connection Settings", systemImage: "network") { showingConnection = true }
+                            machinesButton
+                            #if os(macOS)
+                                SettingsLink { Label("Settings…", systemImage: "gearshape") }
+                            #else
+                                Button("Connection Settings", systemImage: "network", action: showConnection)
+                            #endif
                             Button("Reconnect", systemImage: "arrow.clockwise", action: store.connect).disabled(store.isSample || store.isFixture)
                             Button("Launch or Resume", systemImage: "plus") { showingLaunch = true }
                                 .disabled(!store.hosts.contains { $0.can("sessions.launch") || $0.capabilities.contains("launch.trust") || $0.attempts["launch"] != nil })
@@ -106,7 +128,7 @@ struct SessionWorkbench: View {
                             .accessibilityLabel("Session filters and connections")
                     }
                     ToolbarItem {
-                        Button("Machines", systemImage: "desktopcomputer") { showingMachines = true }
+                        machinesButton
                     }
                 }
         } detail: {
@@ -117,7 +139,9 @@ struct SessionWorkbench: View {
             }
         }
         .tint(.teal)
-        .sheet(isPresented: $showingConnection) { ConnectionView(store: store) }
+        #if os(iOS)
+            .sheet(isPresented: $showingConnection) { ConnectionView(store: store) }
+        #endif
         .sheet(isPresented: $showingMachines) { MachinesView(store: store) }
         .sheet(isPresented: $showingLaunch) { LaunchView(store: store) }
         .task {
@@ -176,6 +200,8 @@ struct SessionWorkbench: View {
     private func reader(_ entry: SessionEntry, layout: SessionDetailLayout) -> some View {
         SessionDetail(session: entry.session, readOnlyReason: entry.host?.readOnlyReason,
                       machineName: entry.machineName, canAnswer: canAnswer(entry),
+                      awaitingResponse: !entry.ended && entry.host?.isAwaitingResponse(for: entry.session.id) == true,
+                      historyConnectionID: entry.host.flatMap { $0.isLive ? $0.connectionID : nil },
                       onLoadHistory: entry.host.map { host in
                           { @MainActor @Sendable id in
                               // Leaving the detail must not cancel the shared transport.
@@ -200,7 +226,9 @@ struct SessionWorkbench: View {
                         Divider()
                         SessionActions(sessionID: entry.session.id, store: store, host: host, presentation: .composer)
                             .id(entry.id)
-                            .frame(maxHeight: 280)
+                            .frame(maxHeight: 280, alignment: .bottom)
+                            // The cap limits growth; it must not reserve empty space around a short draft.
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .frame(minWidth: 360, idealWidth: 660, maxWidth: .infinity)
@@ -264,43 +292,90 @@ struct SessionWorkbench: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label(store.isConnecting ? "Connecting" : store.isLive ? "No active sessions" : "Connect to Agent Bridge", systemImage: "terminal")
+            Label(store.connectionPresentation.emptyTitle, systemImage: "terminal")
         } description: {
-            if store.account == nil, !store.isSample, let status = store.signInStatus {
-                Text(status)
-            } else {
-                Text(store.isLive ? "Sessions appear when an agent starts on a connected machine." : "Sign in with the GitHub account you use on your host.")
-            }
+            Text(store.connectionPresentation.emptyDetail)
         } actions: {
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    connectionActions
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                VStack(spacing: 8) {
+                    connectionActions
+                }
+            }
+        }
+    }
+
+    private var connectionActions: some View {
+        Group {
             if !store.isSample, !store.isFixture, store.account == nil {
                 Button(store.isSigningIn ? "Continue Sign-In" : "Sign In with GitHub") {
-                    showingConnection = true
+                    showConnection()
                     if !store.isSigningIn {
                         store.signIn()
                     }
                 }
             }
-            Button("Connection Settings") { showingConnection = true }
+            #if os(macOS)
+                SettingsLink { Label("Settings…", systemImage: "gearshape") }
+            #else
+                Button("Connection Settings", action: showConnection)
+            #endif
             if !store.isSample {
                 Button("Explore Sample Sessions", action: store.showSamples)
             }
         }
     }
 
+    private func showConnection() {
+        #if os(macOS)
+            openSettings()
+        #else
+            showingConnection = true
+        #endif
+    }
+
+    private var machinesButton: some View {
+        Button("Machines", systemImage: "desktopcomputer") { showingMachines = true }
+            .help(machineStatusHelp)
+            .accessibilityHint(machineStatusHelp)
+    }
+
+    private var machineStatusHelp: String {
+        var lines = [store.connectionStatus]
+        if !store.isSample, !store.isFixture, store.connectionPresentation.remote != store.connectionStatus {
+            lines.append(store.connectionPresentation.remote)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    @ViewBuilder private var actionReceipt: some View {
+        if let actionStatus = store.notifications.actionStatus {
+            HStack(alignment: .top) {
+                Label(actionStatus, systemImage: "bubble.left")
+                Spacer(minLength: 8)
+                Button("Dismiss action result", systemImage: "xmark", action: store.notifications.dismissActionStatus)
+                    .labelStyle(.iconOnly)
+            }
+        }
+    }
+
+    private var discoveryWarnings: some View {
+        ForEach(store.canonicalHosts.filter { $0.discoveryHold != nil }) { host in
+            Label("\(host.name): \(host.discoveryHold ?? "")", systemImage: "exclamationmark.triangle")
+        }
+    }
+
     private var connectionFooter: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if let actionStatus = store.notifications.actionStatus {
-                HStack(alignment: .top) {
-                    Label(actionStatus, systemImage: "bubble.left")
-                    Spacer(minLength: 8)
-                    Button("Dismiss action result", systemImage: "xmark", action: store.notifications.dismissActionStatus)
-                        .labelStyle(.iconOnly)
-                }
-            }
+            actionReceipt
             Label(store.connectionStatus, systemImage: store.isLive ? "checkmark.circle" : "network")
-            ForEach(store.canonicalHosts.filter { $0.discoveryHold != nil }) { host in
-                Label("\(host.name): \(host.discoveryHold ?? "")", systemImage: "exclamationmark.triangle")
+            if !store.isSample, !store.isFixture, store.connectionPresentation.remote != store.connectionStatus {
+                Label(store.connectionPresentation.remote, systemImage: "network")
             }
+            discoveryWarnings
         }
         .font(.caption).foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, alignment: .leading).padding(12).background(.bar)

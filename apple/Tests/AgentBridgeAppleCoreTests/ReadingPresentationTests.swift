@@ -169,3 +169,44 @@ import Testing
     #expect(loader.value == nil)
     #expect(loader.error == "The host returned details for a different session.")
 }
+
+@MainActor @Test func historyRecoversOnReconnectWithoutASessionTimestampChange() async throws {
+    let gate = HistoryGate()
+    let loader = BridgeHistoryLoader()
+    loader.activate(sessionID: "one")
+    let first = UUID()
+    loader.connectionChanged(first) { try await gate.request($0, version: 1) }
+    try await waitForHistory { gate.calls.count == 1 }
+    gate.fail()
+    try await waitForHistory { !loader.isLoading }
+    #expect(loader.error != nil)
+    loader.connectionChanged(nil) { try await gate.request($0, version: 99) }
+    #expect(gate.calls.count == 1)
+    let reconnected = UUID()
+    loader.connectionChanged(reconnected) { try await gate.request($0, version: 2) }
+    try await waitForHistory { gate.calls.count == 2 }
+    gate.finish(id: "one", version: 2)
+    try await waitForHistory { !loader.isLoading }
+    #expect(loader.error == nil)
+    #expect(loader.value?["version"] == .number(2))
+    loader.connectionChanged(reconnected) { try await gate.request($0, version: 99) }
+    #expect(gate.calls.count == 2)
+}
+
+@MainActor @Test func historyDiscardsOldConnectionResultsAndNeverRefreshesWhileHidden() async throws {
+    let gate = HistoryGate()
+    let loader = BridgeHistoryLoader()
+    loader.activate(sessionID: "one")
+    loader.connectionChanged(UUID()) { try await gate.request($0, version: 1) }
+    try await waitForHistory { gate.calls.count == 1 }
+    loader.connectionChanged(nil) { try await gate.request($0, version: 99) }
+    loader.connectionChanged(UUID()) { try await gate.request($0, version: 2) }
+    gate.finish(id: "one", version: 1)
+    try await waitForHistory { gate.calls.count == 2 }
+    #expect(loader.value == nil)
+    gate.finish(id: "one", version: 2)
+    try await waitForHistory { !loader.isLoading }
+    loader.deactivate()
+    loader.connectionChanged(UUID()) { try await gate.request($0, version: 99) }
+    #expect(gate.calls.count == 2)
+}

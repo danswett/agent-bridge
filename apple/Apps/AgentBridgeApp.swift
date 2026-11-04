@@ -27,6 +27,12 @@ struct AgentBridgeApp: App {
             #endif
         }
         #if os(macOS)
+            Settings {
+                ConnectionView(store: store)
+            }
+            .defaultSize(width: 640, height: 620)
+            .windowResizability(.contentMinSize)
+
             MenuBarExtra {
                 BridgeMenuView(store: store)
             } label: {
@@ -52,6 +58,8 @@ struct AgentBridgeApp: App {
             }
             Button("Open Agent Bridge") { openWindow(id: "workbench"); NSApp.activate(ignoringOtherApps: true) }
             Button("Reconnect", action: store.connect).disabled(store.isSample || store.isFixture)
+            Divider()
+            SettingsLink()
             Divider()
             Button("Quit Agent Bridge") { NSApp.terminate(nil) }
         }

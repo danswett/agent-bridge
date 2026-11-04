@@ -36,6 +36,7 @@ private struct SessionActionContent: View {
     @State private var stopConnection: UUID?
     @State private var uploading = false
     @State private var composerHeight: CGFloat = 160
+    @FocusState private var replyFocused: Bool
     private var attachments: Binding<[(UUID, String)]> {
         Binding(get: { host.attachmentDrafts[sessionID] ?? [] }, set: { host.attachmentDrafts[sessionID] = $0 })
     }
@@ -138,7 +139,6 @@ private struct SessionActionContent: View {
             if let question {
                 questionSection(question)
             } else {
-                Text("Reply").font(.headline)
                 replyControls
             }
             if let error {
@@ -166,19 +166,79 @@ private struct SessionActionContent: View {
     }
 
     @ViewBuilder private var replyControls: some View {
-        TextField("Message this session", text: replyText, axis: .vertical)
-            .lineLimit(2 ... 5)
-            .textFieldStyle(.roundedBorder)
-            .accessibilityLabel("Reply message")
+        VStack(alignment: .leading, spacing: 12) {
+            TextField("Message this session", text: replyText, axis: .vertical)
+                .lineLimit(3 ... 8)
+                .textFieldStyle(.plain)
+                .font(.body)
+                .focused($replyFocused)
+                .accessibilityLabel("Reply message")
+                .accessibilityIdentifier("reply-composer-input")
+                .padding(.horizontal, 4)
+                .padding(.top, 4)
+            AttachmentComposer(store: store, host: host, attachments: attachments,
+                               disabled: replyHold != nil || attempt?.isSending == true || attempt?.uncertain == true,
+                               compact: true, onBusy: { uploading = $0 }) {
+                composerStatus
+                Spacer(minLength: 4)
+                if let model = session?.model, !model.isEmpty {
+                    Text(model)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help("Session model: \(model)")
+                        .accessibilityLabel("Session model: \(model)")
+                }
+                sendReplyButton
+            }
+        }
+        .padding(12)
+        .background(.background, in: .rect(cornerRadius: 20))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20)
+                .strokeBorder(replyFocused ? Color.accentColor.opacity(0.6) : Color.primary.opacity(0.12), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.04), radius: 6, y: 2)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("reply-composer")
         if let reason = replyHold {
             Text(reason).font(.callout).foregroundStyle(.secondary)
         }
-        AttachmentComposer(store: store, host: host, attachments: attachments,
-                           disabled: replyHold != nil || attempt?.isSending == true || attempt?.uncertain == true) { uploading = $0 }
-        Button("Send Reply", systemImage: "paperplane", action: sendReply)
-            .keyboardShortcut(.return, modifiers: .command)
-            .buttonStyle(.borderedProminent)
-            .disabled(busy || attempt?.uncertain == true || replyHold != nil || replyText.wrappedValue.isEmpty && attachments.wrappedValue.isEmpty)
+    }
+
+    private var composerStatus: some View {
+        Label(host.isLive ? (replyHold == nil ? session?.statusText ?? "Ended" : "Read-only") : "Offline",
+              systemImage: replyHold == nil ? "circle" : "lock")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .help(replyHold ?? "The current state reported by this session.")
+    }
+
+    private var sendDisabled: Bool {
+        busy || attempt?.uncertain == true || replyHold != nil || replyText.wrappedValue.isEmpty && attachments.wrappedValue.isEmpty
+    }
+
+    private var sendReplyButton: some View {
+        Button(action: sendReply) {
+            Label("Send Reply", systemImage: "arrow.up")
+                .labelStyle(.iconOnly)
+                .font(.headline)
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+                .background(sendDisabled ? Color.secondary.opacity(0.35) : Color.blue, in: .circle)
+                #if os(iOS)
+                    .frame(minWidth: 44, minHeight: 44)
+                #endif
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(.return, modifiers: .command)
+        .disabled(sendDisabled)
+        .help("Send reply (Command-Return)")
+        .accessibilityIdentifier("reply-composer-send")
     }
 
     @ViewBuilder private var inspector: some View {
