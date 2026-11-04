@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using AgentBridge.Host.Core.Updates;
 using AgentBridge.Local;
 
 namespace AgentBridge.App.Core;
@@ -534,7 +535,10 @@ public sealed class SettingsViewModel : Observable
     {
         if (updater.InstalledVersion is null) { UpdateStatus = "Updates are off in a development copy."; return; }
         UpdateStatus = "Checking…";
-        updateVersion = await updater.CheckAsync();
+        // GitHub limiting or unreachable is a wait, said as the status with when the next check
+        // is (#530), not an error to act on.
+        try { updateVersion = await updater.CheckAsync(); }
+        catch (ReleaseDiscoveryException e) { UpdateStatus = e.Message; return; }
         UpdateStatus = updateVersion is { } v ? $"Version {v} is available." : $"Up to date ({updater.InstalledVersion}).";
         Raise(nameof(UpdateAvailable));
     });

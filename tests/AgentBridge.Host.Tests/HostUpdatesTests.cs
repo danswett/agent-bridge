@@ -1,5 +1,8 @@
+using System.Net;
 using AgentBridge.HomeAssistant;
 using AgentBridge.Host;
+using AgentBridge.Host.Core.Updates;
+using Microsoft.Extensions.Time.Testing;
 using Velopack.Locators;
 using Xunit;
 
@@ -107,6 +110,48 @@ public sealed class HostUpdatesTests : IDisposable
         var found = await updates.CheckAsync(CancellationToken.None);
 
         Assert.Equal(offered, found?.Version);
+    }
+
+    [Fact]
+    public async Task Checks_on_GitHub_go_through_the_machines_shared_discovery_so_a_limit_holds_every_check_until_it_resets()
+    {
+        var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
+        var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.600", packages, null, null, null, "win");
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 4, 20, 0, 0, TimeSpan.Zero));
+        var github = new FakeGitHub();
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), github, time, random: () => 0);
+        var updates = new VelopackHostUpdates(root, "default", () => { }, _ => { }, copy, discovery);
+        github.Answer = () => new HttpResponseMessage(HttpStatusCode.TooManyRequests) { Headers = { RetryAfter = new(TimeSpan.FromMinutes(2)) } };
+
+        var limited = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => updates.CheckAsync(CancellationToken.None));
+        Assert.True(limited.Limited);
+        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => updates.CheckAsync(CancellationToken.None));
+        Assert.Equal(1, github.Requests);
+
+        // A release without this channel's feed offers nothing, as Velopack's own source treats it.
+        time.Advance(TimeSpan.FromMinutes(2));
+        github.Answer = () => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""[{"name":"Agent Bridge 0.1.601","prerelease":true,"published_at":"2026-11-04T19:00:00Z","assets":[]}]"""),
+        };
+        Assert.Null(await updates.CheckAsync(CancellationToken.None));
+        Assert.Null(await updates.CheckAsync(CancellationToken.None));
+        Assert.Equal(2, github.Requests);
+        Assert.Equal("https://api.github.com/repos/danswett/agent-bridge/releases?per_page=10&page=1", github.Url);
+    }
+
+    sealed class FakeGitHub : HttpMessageHandler
+    {
+        public Func<HttpResponseMessage> Answer = () => new(HttpStatusCode.InternalServerError);
+        public int Requests;
+        public string? Url;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref Requests);
+            Url = request.RequestUri?.ToString();
+            return Task.FromResult(Answer());
+        }
     }
 
     [Fact]

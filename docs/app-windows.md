@@ -259,6 +259,28 @@ into one folder with one version. An app update is a host update, so they never 
   off; every merge to main publishes one, below), or a folder or URL holding
   `releases.<channel>.json` (`releases.win.json` for x64, `releases.win-arm64.json` for Arm64) in
   `%LOCALAPPDATA%\AgentBridge\app\feed.txt` (for testing on a VM).
+* **Release discovery** (#530, `ReleaseDiscovery` in `AgentBridge.Host.Core/Updates`). The only
+  request that counts against GitHub's API limit is the release list
+  (`api.github.com/repos/danswett/agent-bridge/releases`), and it is made unauthenticated: 60 an
+  hour for the whole IP address, shared with everything else behind it. The app's GitHub
+  sign-in is the relay's and is never sent to the API, and the updater borrows no other
+  credential. Each release's `releases.<channel>.json` and the packages come from their browser
+  download URLs, which the limit doesn't count. Velopack's `GithubSource` asked for the list at
+  every check, from every profile's app and host and at every press of Check, and so ran the
+  budget out. Now the app and every host on a machine share one answer, in
+  `%LOCALAPPDATA%\AgentBridge\app\release-discovery.json`, with a lock file beside it so they
+  take turns: GitHub is asked at most once every 10 minutes (plus up to 2 minutes of jitter)
+  whoever asks, and checks in between are answered from the file. After that the request
+  carries the ETag (`If-None-Match`), and a 304 is answered from the file; GitHub doesn't count
+  a 304 against the limit only for authenticated requests, so the interval is what bounds an
+  unauthenticated budget. A 403 or 429 is not asked again until `Retry-After`, or
+  `X-RateLimit-Reset` once `X-RateLimit-Remaining` is 0 (at least a minute and at most an hour,
+  plus up to a minute of jitter). Any other failure (no network, a 5xx, an answer that isn't a
+  list) is backed off from a minute, doubling up to an hour. Until then a check fails at once, with
+  no request, saying when it will next try and when the last good check was. Settings shows that
+  as the update status rather than as an error, and a failure is never reported as "up to date".
+  No static feed is published (no Pages copy of `releases.<channel>.json`, and every release is a
+  pre-release, so `releases/latest/download` finds nothing), so the API list stays the source.
 * **One channel per architecture** (#222, `build/app-channels.ps1`). x64 is in Velopack's default
   channel, `win`, as every copy installed before Arm64 builds was packed; Arm64 is in
   `win-arm64`. The channel is recorded in the installed package (`current\sq.version`), and
