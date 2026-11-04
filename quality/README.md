@@ -183,7 +183,7 @@ Mapped to the threat model, so each untrusted party has tests aimed at it:
 | A stolen GitHub account: can register, not act | Roster and signed-command tests (exists). Plus device approval with a matching code once #55 lands |
 | Other processes of the same user | Local pipe ACL tests (exists, `local-api`). Fuzzing the pipe's framing |
 | Agents (prompt-injected) | Delegate-name cleaning, bidi and invisible characters (#220, #263). The §6.3 invariants. Folder trust never answered remotely. Fuzzing transcript lines and hook stdin |
-| Supply chain | CodeQL (C#, JS, Actions, later Swift). Dependency review on PRs, plus `dotnet list package --vulnerable` and `npm audit`. Secret scanning with push protection and a gitleaks pre-commit hook (a leaked signing key once forced a rotation). Trivy on the relay image. PSRule on `infra/`. actionlint and zizmor on workflows. SBOM and build provenance per artifact |
+| Supply chain | CodeQL (C#, JS, Actions, later Swift). Dependency review on PRs, plus `dotnet list package --vulnerable` and `npm audit`; every npm lockfile pins its packages by SHA-512 (#650). Secret scanning with push protection and a gitleaks pre-commit hook (a leaked signing key once forced a rotation). Trivy on the relay image. PSRule on `infra/`. actionlint and zizmor on workflows. SBOM and build provenance per artifact |
 
 Tag every test that enforces a threat-model property or a §6.3 invariant:
 `[Trait("Threat", "relay")]` or `[Trait("Invariant", "6.3.12")]`. Ring 2 then generates a

@@ -740,7 +740,8 @@ suites:
     # The review blocks on high or critical vulnerabilities in newly added dependencies, and needs
     # the repository's dependency graph (on since 2026-11-03). The audit is advisory: existing ones.
     # Both run in one job, on one runner. Not on a draft: ready for review runs it.
-    command: see dependencies.yml (dependency-review-action; dotnet list package --vulnerable; npm audit --omit=dev)
+    # Also blocking: every package-lock.json pins its packages by SHA-512, never SHA-1 (#650).
+    command: see dependencies.yml (dependency-review-action; no sha1- integrity in a package-lock.json; dotnet list package --vulnerable; npm audit --omit=dev)
     where: dependencies.yml review
     status: exists
 

@@ -22,6 +22,7 @@
 //                    and which system face the page is in, for inline mono's x-height
 //   demo.js          ?demo=1: simulated machines (?machines=2 or 3), no relay; loaded only then
 //   brand.js         the product's name, for every place the app shows it
+//   release-watch.js new releases of the app that keep failing to install
 import { RELAY } from '../config.js';
 import { BRAND, NOTIFICATIONS_BLOCKED } from './brand.js';
 import { loadIdentity, deviceName, kvGet, kvPut, kvDelete } from './identity.js';
@@ -40,6 +41,7 @@ import { UsageBook } from './usage.js';
 import { FleetStatus } from './fleet.js';
 import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UpdateControl } from './update.js';
+import { ReleaseWatch } from './release-watch.js';
 import { UsageView } from './ui/usage-view.js';
 import { reveal, watchDisclosures, watchPresses } from './ui/motion.js';
 import { RelayBlobs } from './blobs.js';
@@ -198,15 +200,43 @@ function setHostState(text) {
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) { return; }
   const hadController = !!navigator.serviceWorker.controller;
-  navigator.serviceWorker.register('sw.js').then((reg) => {
+  // Only an app running a release it has can be stuck on it: without one, each load is the network's.
+  const stuck = (yes) => {
+    if (yes && hadController) { reveal($('stuck-banner')); } else { $('stuck-banner').hidden = true; }
+  };
+  let releases = null;
+  // A release that takes over while the watch is still being made (its record may not say so yet).
+  let tookOver = false;
+  navigator.serviceWorker.register('sw.js').then(async (reg) => {
+    releases = new ReleaseWatch({ release: hadController ? await releaseInControl(reg) : null, onChange: stuck });
+    if (tookOver) { releases.installed(); }
+    stuck(releases.stuck);
+    reg.addEventListener('updatefound', () => releases.watch(reg.installing));
+    // One the browser found on its own as this page loaded, before it could listen.
+    releases.watch(reg.installing);
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') { reg.update().catch(() => {}); }
     });
   }).catch((e) => console.warn('service worker:', e.message));
   navigator.serviceWorker.addEventListener('controllerchange', () => {
+    tookOver = true;
+    releases?.installed();
     if (hadController) { reveal($('update-banner')); }
   });
   $('reload').onclick = () => location.reload();
+  // A load is the browser's next try.
+  $('retry-release').onclick = () => location.reload();
+}
+
+// The release in control: the worker's record of it (sw.js, releases.json), which each release
+// writes as it takes over. null from a worker that keeps none, or a cache that can't be read.
+async function releaseInControl(reg) {
+  try {
+    const record = await caches.match(new URL('releases.json', reg.scope).href);
+    return (await record?.json())?.active ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // ---- demo ----

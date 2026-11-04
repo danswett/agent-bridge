@@ -1,7 +1,8 @@
 # A bad PWA deploy
 
 **Alert:** A-PAGES (once REL-4 ships). Today, the signs are phones failing to load the PWA,
-sign in or act, while hosts and the Windows app are fine.
+sign in or act, while hosts and the Windows app are fine, or an installed app saying a new version
+keeps failing to install (a release the worker could not keep whole; #650).
 
 ## How the PWA ships today
 

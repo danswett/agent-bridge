@@ -7,7 +7,7 @@
 // tests import modules from.
 //
 //   node tools/build-site.mjs --out <dir> [--relay https://relay.example] [--blob-origin https://<account>.blob.core.windows.net]
-import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -77,8 +77,26 @@ export function buildSite({ out, relay = '', blobOrigins = [], root = appRoot })
   const csp = contentSecurityPolicy(origin, blobOrigins).replace(/"/g, '&quot;');
   writeFileSync(index, html.replace(marker, `${marker}\n  <meta http-equiv="Content-Security-Policy" content="${csp}">`));
   bundle(out);
+  checkShell(out);
   stampWorker(out);
   return out;
+}
+
+// The worker's shell, the files it keeps for a release, is listed by hand in sw.js (and the
+// bundle by bundle() below). A release installs whole or not at all, so one name the site lacks
+// would leave every installed app on the release it has, for good (#650): the build refuses it.
+export function shellFiles(source) {
+  const list = source.match(/const SHELL = \[([\s\S]*?)\];/);
+  const bundled = source.match(/const BUNDLE = \[([^\]]*)\];/);
+  if (!list || !bundled) { throw new Error('sw.js has no SHELL and BUNDLE lists to check'); }
+  return [...`${list[1]}${bundled[1]}`.matchAll(/'\.\/([^']*)'/g)].map((m) => m[1]);
+}
+
+const isFile = (p) => { try { return statSync(p).isFile(); } catch { return false; } };
+
+function checkShell(out) {
+  const missing = shellFiles(readFileSync(path.join(out, 'sw.js'), 'utf8')).filter((f) => !isFile(path.join(out, f || 'index.html')));
+  if (missing.length) { throw new Error(`sw.js keeps files the site lacks, so no release could install: ${missing.join(', ')}`); }
 }
 
 // 53 modules, each a request, in an import chain 8 deep, took 4.5 s to a first session on a

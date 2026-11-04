@@ -830,10 +830,12 @@ jobs:
         run: node --test tools/connector-conformance/mock-host.test.mjs
       # build-site.mjs bundles the app with esbuild (#609), and the unit tests build the site: the
       # PWA's packages, as locked, without Playwright's browsers (only the pwa-ui jobs fetch those).
+      # Without install scripts, as pages.yml builds the published site (#650), so a build that
+      # needed one fails here first.
       - name: The PWA's packages
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'pwa-unit') || contains(fromJSON(env.SUITES), 'pwa-site-csp')) }}
         working-directory: pwa
-        run: npm ci --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: PWA unit tests
         id: pwa-unit
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'pwa-unit')) }}
