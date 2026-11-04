@@ -124,20 +124,6 @@ public sealed partial class MainViewModel : Observable
         ? $"Answering, replying and ending sessions are off: {ha}. {Product.Name} only watches while agent-ha-bridge runs."
         : null;
 
-    // What holds each host's discovery, as agent-ha-bridge's status line said it: while it holds,
-    // a session that ended stays on its card, and nothing is offered for resume or reclaimed.
-    public string? HeldWhy
-    {
-        get
-        {
-            var lines = machines.Where(m => m.Host.State == LinkState.Connected && m.Host.Sessions.Held is not null && Shows(m))
-                .Select(m => $"{(machines.Count > 1 ? $"{m.Name}: " : "")}Discovery held: {m.Host.Sessions.Held!.Reason}. Sessions stay listed, and resuming them waits, until the host can account for every agent process.")
-                .ToList();
-            return lines.Count > 0 ? string.Join("\n", lines) : null;
-        }
-    }
-    public bool IsHeld => HeldWhy is not null;
-
     // The account's machines that are offline (the relay's roster), each with a two-press Forget.
     public ObservableCollection<OfflineMachineViewModel> OfflineMachines { get; } = [];
     public bool ShowOfflineMachines => OfflineMachines.Count > 0;
@@ -235,11 +221,9 @@ public sealed partial class MainViewModel : Observable
         Note();
     }
 
-    void OnHeldChanged()
-    {
-        Raise(nameof(HeldWhy));
-        Raise(nameof(IsHeld));
-    }
+    // What holds each host's discovery, as agent-ha-bridge's status line said it: while it holds,
+    // a session that ended stays on its card, and nothing is offered for resume or reclaimed.
+    void OnHeldChanged() => SyncHeld();
 
     public Machine? MachineOf(string? key) => machines.FirstOrDefault(m => m.Key == (key ?? Machine.LocalKey));
 

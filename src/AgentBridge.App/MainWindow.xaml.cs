@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Runtime.InteropServices;
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
@@ -5,8 +6,10 @@ using Microsoft.UI;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 
 namespace AgentBridge.App;
@@ -31,6 +34,8 @@ public sealed partial class MainWindow : Window
     // The UI thread's, taken while on it: the change arrives on another.
     readonly DispatcherQueue ui = DispatcherQueue.GetForCurrentThread();
     bool closed;
+    // The window has drawn once: a banner arriving after that comes in with motion.
+    bool drawn;
 
     internal MainWindow(MainViewModel viewModel, LaunchViewModel launch, bool selfTest, string? placementFile = null)
     {
@@ -41,7 +46,6 @@ public sealed partial class MainWindow : Window
         Title = Product.Name;
         AppTitleBar.Title = Product.Name;
         Motion.Banner(Banner);
-        Motion.Banner(DiscoveryHeld);
         Handle = WinRT.Interop.WindowNative.GetWindowHandle(this);
         CurrentHandle = Handle;
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, AppAssets.Icon));
@@ -64,7 +68,11 @@ public sealed partial class MainWindow : Window
         if (selfTest) { AppWindow.Resize(new SizeInt32(1100, 1400)); }
         else { Place(); }
         KeepSmallest();
-        Root.Loaded += (_, _) => { if (Root.XamlRoot is { } x) { x.Changed += (_, _) => KeepSmallest(); } };
+        Root.Loaded += (_, _) =>
+        {
+            drawn = true;
+            if (Root.XamlRoot is { } x) { x.Changed += (_, _) => KeepSmallest(); }
+        };
         Root.SizeChanged += (_, e) => FitSearch(e.NewSize.Width);
         AppWindow.Changed += OnWindowChanged;
         // Shown for the first time by Activate, which AppWindow.Changed doesn't always report.
@@ -159,6 +167,48 @@ public sealed partial class MainWindow : Window
     void OnCheckMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Check();
     void OnInstallMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Install();
     void OnForgetMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Offline?.Press();
+
+    // A machine's Discovery held banner (#293). Its close button is the InfoBar's own, named here
+    // for what it closes; and, as Motion.Banner, it comes in from above, but not as the window
+    // first draws.
+    void OnHeldLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not InfoBar { Tag: HeldNotice notice } bar) { return; }
+        if (CloseButtonOf(bar) is { } close)
+        {
+            AutomationProperties.SetName(close, notice.DismissName);
+            AutomationProperties.SetAutomationId(close, notice.DismissId);
+            ToolTipService.SetToolTip(close, "Dismiss");
+        }
+        if (drawn) { Motion.Enter(bar, "Toast", new Vector2(0, -1)); }
+    }
+
+    internal static Button? CloseButtonOf(InfoBar bar) => Descendants(bar).OfType<Button>().FirstOrDefault(b => b.Name == "CloseButton");
+
+    static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            yield return child;
+            foreach (var below in Descendants(child)) { yield return below; }
+        }
+    }
+
+    // Focus on the closing banner would go with it, to the window (ui.md §9.1 A4): it moves first
+    // to what Tab reaches next, the next banner's close button or the page under them.
+    void OnHeldClosing(InfoBar sender, InfoBarClosingEventArgs args)
+    {
+        if (FocusManager.GetFocusedElement(sender.XamlRoot) is not DependencyObject focused || !Motion.Within(focused, sender)) { return; }
+        var next = FocusManager.FindNextElement(FocusNavigationDirection.Next, new FindNextElementOptions { SearchRoot = sender.XamlRoot.Content });
+        if (next is not null && !Motion.Within(next, sender)) { _ = FocusManager.TryFocusAsync(next, FocusState.Programmatic); }
+    }
+
+    // Only how it is shown: nothing goes to the host, whose hold stands.
+    void OnHeldClosed(InfoBar sender, InfoBarClosedEventArgs args)
+    {
+        if (sender.Tag is HeldNotice notice) { ViewModel.Dismiss(notice); }
+    }
 
     // A window brought back from behind another (not minimised, so still on screen) shows its
     // question and Needs you under a pointer aimed at what covered it: they wait (AnswerGuard).

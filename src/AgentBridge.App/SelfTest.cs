@@ -262,6 +262,7 @@ static partial class SelfTest
             await CheckPanes(window, main, Check, outFile);
             await CheckDividers(window, main, Check, outFile);
             await CheckMachineTabs(window, main, Check, outFile);
+            await CheckHeldBanners(window, main, demo, remote, Check, outFile);
             await CheckDelegates(window, main, Check, outFile);
 
             // Launch a session from the Launch page: it starts, its row appears, and Open goes to it.

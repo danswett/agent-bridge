@@ -129,7 +129,34 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal(1, main.Waiting);
     }
 
-    // As agent-executor's host answers a device it has not approved: hello, offering nothing, and
+    // #293: each machine's Discovery held banner is its own, and dismissing one hides only it.
+    [Fact]
+    public async Task Dismissing_one_machines_discovery_held_banner_leaves_every_other_machines_banner_shown()
+    {
+        await BothMachinesAsync();
+        string[] Held() => TestUi.Read<string[]>(() => [.. main.HeldNotices.Select(n => n.Text)]);
+        await localHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("the claude processes could not be listed", [AgentKind.Claude])));
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot])));
+        await Wait.UntilAsync(() => Held().Length == 2, "both machines' banners");
+        Assert.StartsWith("Test PC: Discovery held: the claude processes", Held()[0]);
+        Assert.StartsWith("Build server: Discovery held: an unrecognised copilot process", Held()[1]);
+        Assert.Equal("Dismiss Discovery held on Build server", TestUi.Read(() => main.HeldNotices[1].DismissName));
+
+        TestUi.Read(() => { main.Dismiss(main.HeldNotices.Single(n => n.Machine == "remote-id")); return true; });
+        Assert.StartsWith("Test PC: Discovery held:", Assert.Single(Held()));
+
+        // The other machine's hold changing brings neither back but its own.
+        await localHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("a claude registration changed while it was read", [AgentKind.Claude])));
+        await Wait.UntilAsync(() => Held().SingleOrDefault()?.Contains("a claude registration", StringComparison.Ordinal) == true, "this machine's new hold");
+        Assert.Single(Held());
+
+        // Dismissing this machine's hides it too, and leaves the other's dismissal as it was.
+        TestUi.Read(() => { main.Dismiss(main.HeldNotices.Single()); return true; });
+        Assert.Empty(Held());
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("an unrecognised copilot process (pid 5120)", [AgentKind.Copilot])));
+        await Wait.UntilAsync(() => Held().Length == 1, "the other machine's banner back for its new hold");
+        Assert.StartsWith("Build server: Discovery held: an unrecognised copilot process (pid 5120)", Held()[0]);
+    }
     // a refusal of the sessions the app asks for next. Asked again every 5 s for hours (#602).
     async Task RefusedAsync()
     {
