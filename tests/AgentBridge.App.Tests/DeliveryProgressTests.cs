@@ -59,10 +59,10 @@ public sealed class DeliveryProgressTests : IAsyncLifetime
 
         var entry = deliveries.Submit("answer|s1|q1", Ops.SessionAnswer, r => new AnswerRequest { Id = "s1", Question = "q1", Request = r, Text = "yes" }, o => o != "busy");
         await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.Stage == DeliveryProgress.Received, "Sent");
-        Assert.Equal("Sent", QuestionViewModel.Describe(deliveries.Get(entry.Key)!, null).Whole);
+        Assert.Equal("Answer sent", QuestionViewModel.Describe(deliveries.Get(entry.Key)!, null).Speech);
         typed.SetResult();
         await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.Stage == DeliveryProgress.Typed, "Typed");
-        Assert.Equal("Passed to the agent", QuestionViewModel.Describe(deliveries.Get(entry.Key)!, null).Whole);
+        Assert.Equal("Answer passed to the agent", QuestionViewModel.Describe(deliveries.Get(entry.Key)!, null).Speech);
         Assert.Equal(DeliveryState.Sending, deliveries.Get(entry.Key)!.State);
         confirmed.SetResult();
         await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Done, "an outcome");
@@ -94,7 +94,7 @@ public sealed class DeliveryProgressTests : IAsyncLifetime
         await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Done, "an outcome");
 
         lock (stages) { Assert.Equal(new string?[] { null, Deliveries.Queued }, stages); }
-        Assert.Equal("Up next · after the agent's current step", ReceiptWords.InFlight(answer: false, deliveries.Get(entry.Key)! with { State = DeliveryState.Sending }, null, stalled: false).Whole);
+        Assert.Equal("Reply up next, after the agent's current step", ReceiptWords.InFlight(answer: false, deliveries.Get(entry.Key)! with { State = DeliveryState.Sending }, null, stalled: false).Speech);
         // Marked only as the stage moved on: the earlier stage replayed after it adds nothing.
         await Wait.UntilAsync(() => Logged(entry.Request) is not null, "the timing line");
         Assert.Matches(new Regex($@"^reply {entry.Request[..8]} delivered: sent \d+ ms, queued \d+ ms, result \d+ ms$"), Logged(entry.Request)!);
@@ -113,7 +113,7 @@ public sealed class DeliveryProgressTests : IAsyncLifetime
 
         var entry = deliveries.Submit("reply|s1", Ops.SessionReply, r => new ReplyRequest { Id = "s1", Request = r, Text = "carry on" }, _ => false, replayAfterRestart: false);
         await Wait.UntilAsync(() => host.Sent(Ops.SessionReply).Count == 1, "the reply sent");
-        Assert.Equal("Sending…", QuestionViewModel.Describe(deliveries.Get(entry.Key)!, null).Whole);
+        Assert.Equal("Sending reply", ReceiptWords.InFlight(answer: false, deliveries.Get(entry.Key)!, null, stalled: false).Speech);
         outcome.SetResult();
         await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Done, "an outcome");
 

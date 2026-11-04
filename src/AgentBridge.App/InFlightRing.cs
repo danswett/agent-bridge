@@ -16,8 +16,8 @@ public sealed partial class InFlightRing : UserControl
     public static readonly DependencyProperty ActiveProperty = DependencyProperty.Register(
         nameof(Active), typeof(bool), typeof(InFlightRing), new PropertyMetadata(false, (d, _) => ((InFlightRing)d).Apply()));
 
-    // Still: a request held on this device for a machine that isn't connected (a receipt's
-    // "Waiting for machine", ReceiptMarkView): nothing is moving, so the arc stays still, in text3.
+    // Still: a request held on this device for a machine that isn't connected (Send's ring while its
+    // receipt says "Waiting for the machine", ui.md §6.5): nothing is moving, so the arc stays still, in text3.
     public static readonly DependencyProperty StillProperty = DependencyProperty.Register(
         nameof(Still), typeof(bool), typeof(InFlightRing), new PropertyMetadata(false, (d, _) => ((InFlightRing)d).Apply()));
 

@@ -13,12 +13,14 @@ public static class Ui
     public static Visibility Count(int n) => n > 0 ? Visibility.Visible : Visibility.Collapsed;
     public static bool Not(bool on) => !on;
     public static double Opaque(bool on) => on ? 1.0 : 0.55;
+    // A glyph that cross-fades with another in the same place (Send's arrow, ring and check, ui.md §6.5).
+    public static double Fade(bool on) => on ? 1.0 : 0.0;
 
     public static Brush Brush(string key) => (Brush)Application.Current.Resources[key];
 
-    // A reply's or an answer's receipt (ui.md §6.5, decided on #617): words on their way in text2,
-    // beside the Bridge ring, so Delivered, in Bridge, stands out as the one good outcome. In a
-    // contrast theme every word is the window's text (§9): the badge beside it is the Highlight.
+    // A reply's or an answer's receipt (ui.md §6.5, decided on #617): its stalls and waits, and
+    // You answered, in text2; the exceptions in their own tone. In a contrast theme every word is
+    // the window's text (§9).
     public static Brush ReceiptBrush(Tone tone) => tone switch
     {
         Tone.Progress => Brush("AbText2"),

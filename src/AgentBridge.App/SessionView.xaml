@@ -341,25 +341,18 @@
                         </StackPanel>
                     </InfoBar>
 
+                    <!-- Words only (ui.md §6.5, "quiet unless something's wrong"): no ring or badge beside them. -->
                     <Grid Visibility="{x:Bind local:Ui.Show(Card.HasReceipt), Mode=OneWay}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
                         <!-- The room the longest outcome needs, drawn clear and unheard (ReceiptWords.Room). -->
                         <TextBlock
-                            Grid.ColumnSpan="2"
-                            Margin="24,0,0,0"
                             Style="{StaticResource AbTypeRow}"
                             TextWrapping="Wrap"
                             Opacity="0"
                             IsHitTestVisible="False"
                             AutomationProperties.AccessibilityView="Raw"
                             Text="{x:Bind Card.ReceiptRoom, Mode=OneWay}" />
-                        <local:ReceiptMarkView VerticalAlignment="Top" Margin="0,3,8,0" Mark="{x:Bind Card.ReceiptMark, Mode=OneWay}" />
                         <TextBlock
                             x:Name="Receipt"
-                            Grid.Column="1"
                             Style="{StaticResource AbTypeRow}"
                             TextWrapping="Wrap"
                             IsTextSelectionEnabled="True"
@@ -765,13 +758,20 @@
                                 AutomationProperties.AutomationId="SendReply"
                                 AutomationProperties.Name="Send"
                                 ToolTipService.ToolTip="Send (Ctrl+Enter)"
-                                IsEnabled="{x:Bind Card.Reply.CanSend, Mode=OneWay, FallbackValue=False}"
+                                IsEnabled="{x:Bind Card.Reply.SendEnabled, Mode=OneWay, FallbackValue=False}"
                                 Click="OnSendReply">
-                                <!-- The platform's ring in place of the icon while the reply is on its way (ui.md §5.3,
-                                     Send and Answer); still with Windows' animation effects off. -->
+                                <!-- Send says how its reply goes (ui.md §5.3, §6.5): the platform's ring in place of
+                                     the arrow while it is on its way (standing still while it waits for the machine),
+                                     then the check for about a second once delivered, then the arrow again. Only the
+                                     glyph cross-fades; the button keeps its size and colour. -->
                                 <Grid>
-                                    <ContentControl Style="{StaticResource AbIconSend}" Width="16" Height="16" Visibility="{x:Bind local:Ui.Hide(Card.Reply.Pending), Mode=OneWay, FallbackValue=Visible}" />
-                                    <local:InFlightRing AutomationProperties.AutomationId="SendRing" Active="{x:Bind Card.Reply.Pending, Mode=OneWay, FallbackValue=False}" />
+                                    <ContentControl Style="{StaticResource AbIconSend}" Width="16" Height="16" Opacity="{x:Bind local:Ui.Fade(Card.Reply.SendRest), Mode=OneWay, FallbackValue=1}">
+                                        <ContentControl.OpacityTransition><ScalarTransition Duration="0:0:0.15" /></ContentControl.OpacityTransition>
+                                    </ContentControl>
+                                    <local:InFlightRing AutomationProperties.AutomationId="SendRing" Active="{x:Bind Card.Reply.Pending, Mode=OneWay, FallbackValue=False}" Still="{x:Bind Card.Reply.SendStill, Mode=OneWay, FallbackValue=False}" />
+                                    <local:CheckGlyph AutomationProperties.AutomationId="SendCheck" Opacity="{x:Bind local:Ui.Fade(Card.Reply.SendCheck), Mode=OneWay, FallbackValue=0}">
+                                        <local:CheckGlyph.OpacityTransition><ScalarTransition Duration="0:0:0.15" /></local:CheckGlyph.OpacityTransition>
+                                    </local:CheckGlyph>
                                 </Grid>
                             </Button>
                         </Grid>
@@ -789,26 +789,19 @@
                     Foreground="{ThemeResource AbDangerText}"
                     Text="{x:Bind Card.Reply.Error, Mode=OneWay}"
                     Visibility="{x:Bind local:Ui.Show(Card.Reply.HasError), Mode=OneWay, FallbackValue=Collapsed}" />
-                <!-- The receipt (ui.md §6.5, #600, #617): its ring or check beside its words, which
-                     keep their place from Send to the outcome, and a polite live region. -->
+                <!-- The receipt (ui.md §6.5, #600, #617): words only, and only for an exception (a stall,
+                     a wait, an outcome other than Delivered), in room kept from Send until the box is
+                     next typed in; a polite live region, which hears every stage. -->
                 <Grid Visibility="{x:Bind local:Ui.Show(Card.Reply.ShowStatus), Mode=OneWay, FallbackValue=Collapsed}">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
                     <!-- The room the longest outcome needs, drawn clear and unheard (ReceiptWords.Room). -->
                     <TextBlock
-                        Grid.ColumnSpan="2"
-                        Margin="24,0,0,0"
                         Style="{StaticResource AbTypeMeta}"
                         TextWrapping="Wrap"
                         Opacity="0"
                         IsHitTestVisible="False"
                         AutomationProperties.AccessibilityView="Raw"
                         Text="{x:Bind Card.Reply.StatusRoom, Mode=OneWay}" />
-                    <local:ReceiptMarkView VerticalAlignment="Top" Margin="0,2,8,0" Mark="{x:Bind Card.Reply.StatusMark, Mode=OneWay}" />
                     <TextBlock
-                        Grid.Column="1"
                         Style="{StaticResource AbTypeMeta}"
                         TextWrapping="Wrap"
                         IsTextSelectionEnabled="True"

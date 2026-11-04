@@ -163,14 +163,16 @@ public sealed class NeedsYouTests : IAsyncLifetime
 
         ui.Post(entry.Approve);
         var q = Card("approval").Question!;
-        // On its way, the receipt says nothing for its first 400 ms (Receipt, #617).
+        // On its way, the receipt says nothing for its first 400 ms, and then only to a screen
+        // reader: the button's ring shows it goes (Receipt, #617).
         await Wait.UntilAsync(() => TestUi.Read(() => q.InFlight), "on its way");
         Assert.Equal("", TestUi.Read(() => entry.StatusText));
         clock.Advance(ReceiptTiming.Quiet);
-        await Wait.UntilAsync(() => entry.StatusText == "Sending…", "sending");
+        await Wait.UntilAsync(() => TestUi.Read(() => q.Announcement) == "Sending answer", "sending");
         TestUi.Read(() =>
         {
-            Assert.Equal("Sending…", q.StatusText);
+            Assert.Equal("", q.StatusText);
+            Assert.Equal("", entry.StatusText);
             Assert.False(q.CanAnswer);
             Assert.False(entry.CanAnswer);
             return true;

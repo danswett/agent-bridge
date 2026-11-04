@@ -62,6 +62,21 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_button_that_sent_a_delivered_answer_shows_its_check_for_about_a_second_and_the_card_says_You_answered_in_text2()
+    {
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        var q = Question(Make.Choice());
+
+        q.Choose(q.Fields[0].Options.Single(o => o.Value == "sqlite"));
+
+        await Wait.UntilAsync(() => q.SendCheck && q.StatusText == "You answered · \u2068sqlite\u2069", "the button's check");
+        Assert.Equal(Tone.Progress, q.StatusTone);
+        clock.Advance(ReceiptTiming.SendCheckHold);
+        await Wait.UntilAsync(() => !q.SendCheck, "the button at rest");
+        q.Detach();
+    }
+
+    [Fact]
     public async Task An_answer_whose_question_goes_while_it_is_on_its_way_keeps_its_quiet_window_and_stall_on_the_cards_receipt()
     {
         var gate = new TaskCompletionSource();
@@ -367,12 +382,52 @@ public sealed class CardTests : IAsyncLifetime
         r.Text = "Look at this and then this";
         reply.SetResult(new ReplyResult(AnswerOutcome.Delivered));
 
-        await Wait.UntilAsync(() => r.StatusText == "Delivered", "delivered");
+        await Wait.UntilAsync(() => r.StatusMark == ReceiptMark.Check, "delivered");
         Assert.Equal("and then this", r.Text);
         Assert.Empty(r.Attachments);
         Assert.Equal(3, host.Sent(Ops.AttachmentChunk).Count);
         var sent = host.Sent(Ops.SessionReply)[0];
         Assert.Equal(host.Sent(Ops.AttachmentStart)[0].GetProperty("attachment").GetString(), sent.GetProperty("attachments")[0].GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public async Task A_delivered_reply_shows_Sends_check_for_about_a_second_with_nothing_on_the_line_and_keeps_its_room_until_the_box_is_typed_in()
+    {
+        var reply = new TaskCompletionSource<ReplyResult>();
+        host.OnAsync(Ops.SessionReply, async _ => await reply.Task.ConfigureAwait(ConfigureAwaitOptions.ForceYielding));
+        var r = new ReplyViewModel(Make.Session(), attach: false, deliveries, connection, machineName: "Test PC");
+
+        r.Text = "carry on";
+        r.Send();
+        Assert.Equal((true, false, false), (r.ShowStatus, r.SendRest, r.SendCheck));
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionReply).Count == 1, "the reply");
+        reply.SetResult(new ReplyResult(AnswerOutcome.Delivered));
+
+        await Wait.UntilAsync(() => r.SendCheck && r.StatusMark == ReceiptMark.Check, "Send's check");
+        Assert.Equal(("", "", false, true), (r.StatusText, r.Text, r.SendRest, r.ShowStatus));
+        clock.Advance(ReceiptTiming.SendCheckHold - TimeSpan.FromMilliseconds(1));
+        Assert.True(r.SendCheck);
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        await Wait.UntilAsync(() => r.SendRest, "Send at rest");
+        // The room stays through the check and its return to rest, until the box is typed in.
+        Assert.True(r.ShowStatus);
+        r.Text = "n";
+        Assert.False(r.ShowStatus);
+        r.Detach();
+    }
+
+    [Fact]
+    public async Task A_reply_that_is_not_delivered_returns_Send_to_rest_at_once_with_no_check_and_says_why_on_the_line()
+    {
+        host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Stale, "the session ended"));
+        var r = new ReplyViewModel(Make.Session(), attach: false, deliveries, connection, machineName: "Test PC");
+
+        r.Text = "carry on";
+        r.Send();
+        await Wait.UntilAsync(() => !r.Pending && r.StatusText.Length > 0, "the outcome");
+
+        Assert.Equal((true, false, ReceiptMark.None), (r.SendRest, r.SendCheck, r.StatusMark));
+        r.Detach();
     }
 
     [Fact]
@@ -458,7 +513,7 @@ public sealed class CardTests : IAsyncLifetime
             bool Delivered()
             {
                 evidence.ObserveUi(r.StatusText, r.StatusTone, r.Error, state);
-                return r.StatusText == "Delivered";
+                return r.StatusMark == ReceiptMark.Check;
             }
             string Why()
             {
@@ -529,7 +584,7 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Equal((3_000_000L, false), (file.Size, file.Resized));
         r.Send();
 
-        await Wait.UntilAsync(() => r.StatusText == "Delivered", "delivered");
+        await Wait.UntilAsync(() => r.StatusMark == ReceiptMark.Check, "delivered");
         Assert.Equal(("remote-id", "photo.png", 3_000_000), Assert.Single(blobs.Puts));
         Assert.Empty(host.Sent(Ops.AttachmentChunk));
         var start = host.Sent(Ops.AttachmentStart)[0];
@@ -580,7 +635,7 @@ public sealed class CardTests : IAsyncLifetime
 
         r.Send();
 
-        await Wait.UntilAsync(() => r.StatusText == "Delivered", "delivered");
+        await Wait.UntilAsync(() => r.StatusMark == ReceiptMark.Check, "delivered");
         Assert.False(failed);
         Assert.Single(blobs.Puts);
     }

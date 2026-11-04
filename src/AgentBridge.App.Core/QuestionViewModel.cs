@@ -88,12 +88,30 @@ public sealed partial class QuestionViewModel : Observable
 
     void OnDelivery(Delivery d) { if (d.Key == Key) { Refresh(); } }
 
+    // The answer this view model saw on its way, whose delivery its button acknowledges with the
+    // check for about a second (ui.md §6.5); not one already delivered when it was made.
+    string? watched;
+    bool sendCheck;
+    ITimer? checkTimer;
+
+    // The button that sent the answer shows its check, not its ring or label's rest, for
+    // ReceiptTiming.SendCheckHold.
+    public bool SendCheck => sendCheck;
+
+    void SetCheck(bool on)
+    {
+        if (sendCheck == on) { return; }
+        sendCheck = on;
+        Raise(nameof(SendCheck));
+    }
+
     // The card let go of this question: it no longer follows the delivery, and answers nothing.
     // Whatever still holds it (a view mid-click) must not answer a question that went (#269).
     public void Detach()
     {
         deliveries.Changed -= OnDelivery;
         receipt.Dispose();
+        checkTimer?.Dispose();
         detached = true;
         RaiseControls();
     }
@@ -239,7 +257,10 @@ public sealed partial class QuestionViewModel : Observable
         }
         if (problem is not null) { Fail(problem, field); return; }
         Error = null;
-        deliveries.Submit(Key, Ops.SessionAnswer, request => answer with { Request = request }, outcome => outcome is not ("busy" or "refused"), payload: answer);
+        var entry = deliveries.Submit(Key, Ops.SessionAnswer, request => answer with { Request = request }, outcome => outcome is not ("busy" or "refused"), payload: answer);
+        // Watched from here, not only from a change seen on its way: a fast delivery can be done
+        // before the first change is posted, and its button still owes it the check.
+        if (entry.State is DeliveryState.Sending or DeliveryState.Waiting) { watched = entry.Request; }
     }
 
     public void Resend()
@@ -297,6 +318,14 @@ public sealed partial class QuestionViewModel : Observable
     public void Refresh()
     {
         var e = deliveries.Get(Key);
+        if (e?.State is DeliveryState.Sending or DeliveryState.Waiting) { watched = e.Request; }
+        else if (e is { State: DeliveryState.Done, Outcome: "delivered" } && e.Request == watched)
+        {
+            watched = null;
+            checkTimer?.Dispose();
+            SetCheck(true);
+            checkTimer = deliveries.Time.CreateTimer(_ => deliveries.Ui.Post(() => SetCheck(false)), null, ReceiptTiming.SendCheckHold, Timeout.InfiniteTimeSpan);
+        }
         receipt.Show(e, !current() && (Unsent(e) || e!.State == DeliveryState.Failed)
             ? new ReceiptLine("offline", $"Waiting for the {Product.HostName}{at}. Answer once it is back.", null, Tone.Progress, ReceiptMark.None, null)
             // An answer to what the question said before (Reworded) is not sent again: a fresh one is asked for.
@@ -321,10 +350,10 @@ public sealed partial class QuestionViewModel : Observable
 
     // What an answer's progress or outcome says, on the card, in the Needs you lane and in the
     // card's receipt once the question has gone: the receipt's words (Receipt; ui.md §6.4, decided
-    // on #617). On its way: Sending…, Sent, Passed to the agent, never Up next and never
-    // "answered". Confirmed: "You answered · value" with the check badge, where question gives
-    // the value (ReceiptWords.AnsweredValue). Any other outcome keeps its words. stalled: whether
-    // the state it is in has stalled (Receipt).
+    // on #617, "quiet unless something's wrong"). On its way: nothing on the line but a stall or a
+    // wait (the button's ring says it goes), never Up next. Confirmed: "You answered · value" in
+    // text2, where question gives the value (ReceiptWords.AnsweredValue). Any other outcome keeps
+    // its words. stalled: whether the state it is in has stalled (Receipt).
     public static ReceiptLine Describe(Delivery e, string? machineName, bool stalled = false, Question? question = null)
     {
         var at = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
@@ -347,7 +376,8 @@ public sealed partial class QuestionViewModel : Observable
         if (outcome == "delivered")
         {
             var value = ReceiptWords.AnsweredValue(question, e.Payload as AnswerRequest);
-            return new("delivered", "You answered", value is null ? null : ReceiptWords.Isolated(value), Tone.Ok, ReceiptMark.Check, value is null ? "Answer delivered. You answered" : $"Answer delivered. You answered {value}");
+            // In text2, with no badge: the answer's button says it was delivered, with its check.
+            return new("delivered", "You answered", value is null ? null : ReceiptWords.Isolated(value), Tone.Progress, ReceiptMark.Check, value is null ? "Answer delivered. You answered" : $"Answer delivered. You answered {value}");
         }
         var text = OutcomeText[outcome](at);
         if (outcome == "refused" && e.Reason is { } r) { text = $"The machine refused this answer: {r}."; }

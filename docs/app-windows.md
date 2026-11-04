@@ -635,29 +635,38 @@ every question (#754). The app keeps running in the notification area when its w
 closes, so toasts keep coming.
 
 **Progress and timing marks** (#600, [ui.md](design/ui.md) §6.4, §6.5 and §9, as the owner
-decided them on #617): an answer or a reply to a host whose hello offers `sessions.progress`
-asks for it (`"progress": true`), and its status line, the receipt, follows the host's progress
-frames before the outcome (`Deliveries`, `Delivery.Stage`; `Receipt` in App.Core): "Sent" once
-the machine has it, "Passed to the agent" once the keys have gone, or for a reply into a working
-session "Up next · after the agent's current step"; then "Delivered", or for an answer "You
-answered · *value*" (a tap's option, free text's first line cut to about 40 characters, nothing
-for a form of several fields), beside the check badge. A stage only moves forward, across resends
-of the same request; an older host is asked for nothing and goes from "Sending…" to the outcome.
-The line says nothing for its first 400 ms (Send's ring covers them), then the furthest stage,
-each in-between stage for at least 400 ms; an outcome shows at once. When the stages stop: "Still
-sending…" after 3 s with nothing heard (and for a resend), "Sent · still waiting on *machine*"
-after 5 s, "Passed to the agent · not picked up yet" after 10 s; Up next never stalls. A resend
-that meets the first copy in flight keeps its stage and adds "· still being delivered"; one held
-while the host isn't connected says "Waiting for *machine* · it goes when *machine* is back",
-with its ring still in text3 (`ReceiptTiming` holds the thresholds). In-flight words are text2
-beside the 16 px ring; the check badge is a Bridge disc with the done glyph's check knocked out
-(`ReceiptMarkView`). The line is a polite live region: each change is said once, prefixed
-"Reply" or "Answer", at most one a second (the later of two), never "Sending…", always the
-outcome; between announcements the line is named by its words, so it never reads as an earlier
-state. The timing and what was said are kept by request, so the question's line and the card's
-receipt after the question has gone share them. From Send the line keeps the room the longest
-outcome needs (`ReceiptWords.Room`, laid out unseen under it: two lines at phone width, one on a
-wide window), so no stage moves what is below. Each answer and reply also writes one
+decided them on #617 and revised to "quiet unless something's wrong"): an answer or a reply to a
+host whose hello offers `sessions.progress` asks for it (`"progress": true`), and follows the
+host's progress frames before the outcome (`Deliveries`, `Delivery.Stage`; `Receipt` in
+App.Core). The normal path is quiet: Send's ring (an answer's: the button's) is all that shows
+it goes, whatever stage the host reports; once delivered, Send cross-fades from the ring to the
+check for about a second (`ReceiptTiming.SendCheckHold`) and back to its arrow (`CheckGlyph`: the
+`check` icon's geometry as a stroked Path in the button's own ink, never Segoe's CheckMark). A single-choice question sends on a tap, so the tapped option is the
+control that sent it: it keeps full opacity with the ring, then the check, at its trailing edge,
+while the other options are disabled; only a busy or refused outcome enables them again (a stale
+or unconfirmed answer is the prompt's one attempt). Send, too, keeps its look while it shows its
+ring or check, doing nothing until it can send. An
+answer's card then says "You answered · *value*" in text2 (a tap's option, free text's first
+line cut to about 40 characters, nothing for a form of several fields). There is no badge and no
+"Delivered" line. Any other outcome returns Send to rest at once and says why on the line. A
+stage only moves forward, across resends of the same request; an older host is asked for
+nothing, reports no stage, and is otherwise the same. The line under the box (and an answer's
+status line) has words, in text2 and with nothing beside them, only when something needs
+saying: "Still sending…" after 3 s with nothing heard (and for a resend), "Sent · still waiting
+on *machine*" after 5 s, "Passed to the agent · not picked up yet" after 10 s (Up next never
+stalls); a resend that meets the first copy in flight keeps its stage and adds "· still being
+delivered"; one held while the host isn't connected says "Waiting for *machine* · it goes when
+*machine* is back", with Send's ring standing still in text3 (`ReceiptTiming` holds the
+thresholds). The line is a polite live region that hears every stage, quiet ones included:
+nothing for the first 400 ms, then the furthest stage reached ("Sending reply", "Reply sent",
+"Reply passed to the agent", "Reply up next, after the agent's current step"), each said once,
+at most one a second (the later of two), and the outcome always ("Reply delivered", "Answer
+delivered. You answered *value*"); between announcements the line is named by its words, so it
+never reads as an earlier state. The timing and what was said are kept by request, so the
+question's line and the card's receipt after the question has gone share them. From Send the
+line keeps the room the longest outcome needs (`ReceiptWords.Room`, laid out unseen under it:
+two lines at phone width, one on a wide window) until the box is next typed in, so neither an
+exception, the check nor Send's return to rest moves what is below. Each answer and reply also writes one
 line to `app.log` when it has its outcome: the request's first 8 hex digits (as the host's log
 names it), the outcome (one the protocol names, otherwise `other`), each mark in ms from the tap
 (`sent` once the request is handed to the channel, a resend's `sent 2`, `received`, `typed` or `queued`,

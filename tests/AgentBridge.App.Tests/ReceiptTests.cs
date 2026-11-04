@@ -4,21 +4,24 @@ using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
-// The receipt's timing (ui.md §6.5, decided on #617), on a fake clock: the quiet window, the
-// dwell, an outcome at once, each stall, the waits, an older host, and the announcements,
-// coalesced. pwa/test/unit/receipt.test.mjs holds the PWA's to the same.
+// The receipt's timing (ui.md §6.5, decided on #617, "quiet unless something's wrong"), on a fake
+// clock: the quiet window, the dwell, an outcome at once, each stall, the waits, an older host,
+// and the announcements, coalesced. The normal path's states have no words (Send's ring says
+// them), so they are told apart by key and by what is said. pwa/test/unit/receipt.test.mjs holds
+// the PWA's to the same.
 public sealed class ReceiptTests
 {
     readonly FakeTimeProvider clock = new(Make.T0);
     readonly List<string> drawn = [];
+    readonly List<string> keys = [];
     readonly List<string> said = [];
     Delivery entry = new() { Key = "reply|s1", Request = Guid.NewGuid().ToString(), State = DeliveryState.Sending, Attempts = 1 };
 
     Receipt NewReceipt(bool answer = false) => new(clock, InlineDispatcher.Instance,
         (e, stalled) => e.State == DeliveryState.Done
-            ? new ReceiptLine("delivered", "Delivered", null, Tone.Ok, ReceiptMark.Check, $"{(answer ? "Answer" : "Reply")} delivered")
+            ? new ReceiptLine("delivered", "", null, Tone.None, ReceiptMark.Check, $"{(answer ? "Answer" : "Reply")} delivered")
             : ReceiptWords.InFlight(answer, e, "ULTRA", stalled),
-        line => drawn.Add(line.Whole), said.Add);
+        line => { drawn.Add(line.Whole); keys.Add(line.Key); }, said.Add);
 
     void Show(Receipt r, Func<Delivery, Delivery>? change = null)
     {
@@ -28,39 +31,59 @@ public sealed class ReceiptTests
 
     void Tick(int ms) => clock.Advance(TimeSpan.FromMilliseconds(ms));
     string Shown => drawn[^1];
+    string Key => keys[^1];
 
     [Fact]
-    public void Nothing_shows_for_the_first_400_ms_then_the_furthest_stage_reached_so_a_fast_delivery_never_flashes_Sent()
+    public void Nothing_is_said_for_the_first_400_ms_then_the_furthest_stage_reached_so_a_fast_delivery_never_says_Sent()
     {
         using var r = NewReceipt();
         Show(r);
-        Assert.Equal("", Shown);
+        Assert.Equal("quiet", Key);
         Tick(100);
         Show(r, e => e with { Stage = DeliveryProgress.Received });
         Tick(200);
         Show(r, e => e with { Stage = DeliveryProgress.Typed });
-        Assert.Equal("", Shown);
+        Assert.Equal("quiet", Key);
+        Assert.Empty(said);
         Tick(100);
-        Assert.Equal("Passed to the agent", Shown);
-        Assert.DoesNotContain("Sent", drawn);
+        Assert.Equal("typed", Key);
+        Assert.Equal(["Reply passed to the agent"], said);
+        Assert.DoesNotContain("received", keys);
     }
 
     [Fact]
-    public void A_stage_shown_stays_at_least_400_ms_before_the_next_replaces_it()
+    public void The_normal_path_puts_no_words_on_the_line_and_a_screen_reader_still_hears_each_stage()
+    {
+        using var r = NewReceipt();
+        Show(r);
+        Tick(400);
+        Show(r, e => e with { Stage = DeliveryProgress.Received });
+        Tick(1000);
+        Show(r, e => e with { Stage = Deliveries.Queued });
+        Tick(1000);
+        Show(r, e => e with { State = DeliveryState.Done, Outcome = "delivered" });
+        Tick(1000);
+        Assert.Equal(["quiet", "sending", "received", "queued", "delivered"], keys);
+        Assert.All(drawn, d => Assert.Equal("", d));
+        Assert.Equal(["Sending reply", "Reply sent", "Reply up next, after the agent's current step", "Reply delivered"], said);
+    }
+
+    [Fact]
+    public void A_stage_reached_stays_at_least_400_ms_before_the_next_replaces_it()
     {
         using var r = NewReceipt();
         Show(r);
         Tick(100);
         Show(r, e => e with { Stage = DeliveryProgress.Received });
         Tick(300);
-        Assert.Equal("Sent", Shown);
+        Assert.Equal("received", Key);
         Tick(100);
         Show(r, e => e with { Stage = DeliveryProgress.Typed });
-        Assert.Equal("Sent", Shown);
+        Assert.Equal("received", Key);
         Tick(299);
-        Assert.Equal("Sent", Shown);
+        Assert.Equal("received", Key);
         Tick(1);
-        Assert.Equal("Passed to the agent", Shown);
+        Assert.Equal("typed", Key);
     }
 
     [Fact]
@@ -72,7 +95,8 @@ public sealed class ReceiptTests
         Show(r, e => e with { Stage = DeliveryProgress.Received });
         Tick(50);
         Show(r, e => e with { State = DeliveryState.Done, Outcome = "delivered" });
-        Assert.Equal(["", "Delivered"], drawn);
+        Assert.Equal(["quiet", "delivered"], keys);
+        Assert.Equal(["Reply delivered"], said);
     }
 
     [Fact]
@@ -81,9 +105,9 @@ public sealed class ReceiptTests
         using var r = NewReceipt();
         Show(r);
         Tick(400);
-        Assert.Equal("Sending…", Shown);
+        Assert.Equal(("sending", ""), (Key, Shown));
         Tick(2599);
-        Assert.Equal("Sending…", Shown);
+        Assert.Equal("", Shown);
         Tick(1);
         Assert.Equal("Still sending…", Shown);
     }
@@ -95,7 +119,7 @@ public sealed class ReceiptTests
         Show(r, e => e with { Stage = DeliveryProgress.Received });
         Tick(400);
         Tick(4599);
-        Assert.Equal("Sent", Shown);
+        Assert.Equal(("received", ""), (Key, Shown));
         Tick(1);
         Assert.Equal("Sent · still waiting on ULTRA", Shown);
     }
@@ -114,7 +138,7 @@ public sealed class ReceiptTests
         Show(busy);
         Tick(400);
         Tick(100_000);
-        Assert.Equal("Up next · after the agent's current step", Shown);
+        Assert.Equal(("queued", ""), (Key, Shown));
     }
 
     [Fact]
@@ -159,23 +183,23 @@ public sealed class ReceiptTests
     }
 
     [Fact]
-    public void A_machine_without_progress_shows_Sending_then_Still_sending_and_a_resend_never_says_Sending_again()
+    public void A_machine_without_progress_goes_quietly_then_says_Still_sending_and_a_resend_never_says_Sending_again()
     {
         using var r = NewReceipt();
         Show(r);
         Tick(400);
-        Assert.Equal("Sending…", Shown);
+        Assert.Equal(("sending", ""), (Key, Shown));
         Show(r, e => e with { State = DeliveryState.Waiting, Reason = "timed out" });
         Tick(400);
         Show(r, e => e with { State = DeliveryState.Sending, Reason = null, Attempts = 2 });
         Assert.Equal("Still sending…", Shown);
         Show(r, e => e with { State = DeliveryState.Done, Outcome = "delivered" });
-        Assert.Equal("Delivered", Shown);
+        Assert.Equal(("delivered", ""), (Key, Shown));
         Assert.DoesNotContain(drawn, d => d.Contains("again", StringComparison.Ordinal) || d.StartsWith("Sent", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Each_change_is_announced_once_prefixed_at_most_one_a_second_the_later_winning_the_outcome_always_and_never_Sending()
+    public void Each_change_is_announced_once_prefixed_at_most_one_a_second_the_later_winning_the_outcome_always()
     {
         using var r = NewReceipt();
         Show(r);
@@ -230,13 +254,14 @@ public sealed class ReceiptTests
         entry = new Delivery { Key = "reply|s1", Request = Guid.NewGuid().ToString(), State = DeliveryState.Sending, Attempts = 1 };
         Show(r);
         Tick(1000);
-        Assert.Equal(["Reply sent"], said);
+        Assert.Equal(["Reply sent", "Sending reply"], said);
     }
 
     [Fact]
     public void An_answer_never_says_Up_next()
     {
-        Assert.Equal("Passed to the agent", ReceiptWords.InFlight(true, entry with { Stage = Deliveries.Queued }, null, false).Whole);
+        var line = ReceiptWords.InFlight(true, entry with { Stage = Deliveries.Queued }, null, false);
+        Assert.Equal(("typed", "Answer passed to the agent"), (line.Key, line.Speech));
     }
 
     [Fact]

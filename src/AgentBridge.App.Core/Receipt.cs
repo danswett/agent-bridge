@@ -3,25 +3,24 @@ using AgentBridge.Protocol;
 namespace AgentBridge.App.Core;
 
 // The receipt of a reply or an answer on its way (#600; ui.md §6.4, §6.5 and §9, as the owner
-// decided them on #617): one line that changes its words in place from Send to the outcome.
+// decided them on #617, revised the same day to "quiet unless something's wrong").
 //
-//   Sending… → Sent → Passed to the agent (or, a reply to a working session, Up next · after
-//   the agent's current step) → Delivered (an answer: You answered · its value)
-//
-// The stages are the machine's (sessions.progress, Delivery.Stage); a machine without it goes
-// from Sending… to the outcome, and nothing here invents a stage nobody reported. What Receipt
-// decides is when each shows: nothing for the first 400 ms, which Send's own ring covers, so a
-// fast delivery never flickers through every stage; then the furthest stage reached, each
-// in-between state held at least 400 ms so it can be read; an outcome at once. When the stages
-// stop coming, the words say so (the stalls), and a screen reader hears each change once, at most
-// one a second. The PWA's pwa/js/ui/receipt.js is the same, word for word.
+// The normal path is quiet: Send's ring says a request is open, and its check (about a second)
+// that it was delivered; the line under the box stays empty through Sending, Sent, Passed to the
+// agent and Up next, and a reply's Delivered. A screen reader still hears each stage. The line has
+// words only for exceptions: the stalls, the waits, and an outcome other than Delivered; an answer
+// resolves its card to "You answered · value". The stages are the machine's (sessions.progress,
+// Delivery.Stage); a machine without it goes from Sending to the outcome, and nothing here invents
+// a stage nobody reported. What Receipt decides is when each is said: nothing for the first 400 ms,
+// then the furthest stage reached, at most one a second, an outcome at once. The PWA's
+// pwa/js/ui/receipt.js is the same, word for word.
 
 public enum ReceiptMark { None, Ring, Still, Check }
 
-// Key: the state, which the dwell holds apart (a stall changes the words, not the state). More:
-// the secondary words, after " · ". Mark: the ring, a still ring (nothing is moving), or the
-// check badge. Speech: what a screen reader hears, or null ("Sending…" isn't spoken: Send's
-// busy state says it).
+// Key: the state, which the dwell holds apart (a stall changes the words, not the state). Text:
+// the line's words, empty on the normal path. More: the secondary words, after " · ". Mark: what
+// Send shows: its ring, the ring standing still (nothing is moving), or its check. Speech: what a
+// screen reader hears, or null.
 public sealed record ReceiptLine(string Key, string Text, string? More, Tone Tone, ReceiptMark Mark, string? Speech)
 {
     public string Whole => More is null ? Text : $"{Text} · {More}";
@@ -36,6 +35,8 @@ public static class ReceiptTiming
     public static readonly TimeSpan Quiet = TimeSpan.FromMilliseconds(400);
     // An in-between state stays at least this long before the next replaces it.
     public static readonly TimeSpan Dwell = TimeSpan.FromMilliseconds(400);
+    // How long Send (an answer's button) shows its check once delivered, before it rests (sendCheckHold).
+    public static readonly TimeSpan SendCheckHold = TimeSpan.FromSeconds(1);
     // Nothing heard from the machine: "Still sending…".
     public static readonly TimeSpan StillSending = TimeSpan.FromSeconds(3);
     // Sent, and not passed to the agent: "· still waiting on machine".
@@ -67,14 +68,12 @@ public static class ReceiptWords
         _ => null,
     };
 
-    // The words of an answer or a reply still on its way (Sending or Waiting). working: a reply's
-    // session is working, which today's "Sending…" says, as a machine without progress says
-    // nothing more.
-    public static ReceiptLine InFlight(bool answer, Delivery e, string? machineName, bool stalled, bool working = false)
+    // An answer or a reply still on its way (Sending or Waiting): no words on the normal path, only
+    // what a screen reader hears; words for a stall or a wait.
+    public static ReceiptLine InFlight(bool answer, Delivery e, string? machineName, bool stalled)
     {
         var subject = answer ? "Answer" : "Reply";
         var m = string.IsNullOrEmpty(machineName) ? "the machine" : machineName;
-        string Busy(string t) => !answer && working ? $"{t} The session is working, and takes it at its next step." : t;
         // An answer never carries working (a question holds the session): there is no Up next for one.
         var stage = answer && e.Stage == Deliveries.Queued ? DeliveryProgress.Typed : e.Stage;
         if (e.State == DeliveryState.Waiting)
@@ -84,22 +83,27 @@ public static class ReceiptWords
             // A resend met the first copy still in flight: the stage it had reached stays.
             if (e.Reason == Deliveries.StillBeingDelivered) { return new($"{stage ?? "sending"}+delivering", StageText(stage) ?? "Sending…", "still being delivered", Tone.Progress, ReceiptMark.Ring, $"{subject} still being delivered"); }
             // Connected, but no answer came back (a lost response, a timeout): it goes again.
-            return new("retrying", Busy("Still sending…"), null, Tone.Progress, ReceiptMark.Ring, $"{subject} still sending");
+            return new("retrying", "Still sending…", null, Tone.Progress, ReceiptMark.Ring, $"{subject} still sending");
         }
+        // A stall's words keep the stage's key: the line fades them in, and out again when the next
+        // stage or the outcome makes them untrue.
         return stage switch
         {
             DeliveryProgress.Received => stalled
                 ? new("received", "Sent", $"still waiting on {m}", Tone.Progress, ReceiptMark.Ring, $"{subject} sent, still waiting on {m}")
-                : new("received", "Sent", null, Tone.Progress, ReceiptMark.Ring, $"{subject} sent"),
+                : Quietly("received", $"{subject} sent"),
             DeliveryProgress.Typed => stalled
                 ? new("typed", "Passed to the agent", "not picked up yet", Tone.Progress, ReceiptMark.Ring, $"{subject} passed to the agent, not picked up yet")
-                : new("typed", "Passed to the agent", null, Tone.Progress, ReceiptMark.Ring, $"{subject} passed to the agent"),
-            Deliveries.Queued => new("queued", "Up next", "after the agent's current step", Tone.Progress, ReceiptMark.Ring, $"{subject} up next, after the agent's current step"),
+                : Quietly("typed", $"{subject} passed to the agent"),
+            Deliveries.Queued => Quietly("queued", $"{subject} up next, after the agent's current step"),
             _ => stalled
-                ? new("sending", Busy("Still sending…"), null, Tone.Progress, ReceiptMark.Ring, $"{subject} still sending")
-                : new("sending", Busy("Sending…"), null, Tone.Progress, ReceiptMark.Ring, null),
+                ? new("sending", "Still sending…", null, Tone.Progress, ReceiptMark.Ring, $"{subject} still sending")
+                : Quietly("sending", $"Sending {subject.ToLowerInvariant()}"),
         };
     }
+
+    // The normal path: Send's ring, and nothing on the line but what a screen reader hears.
+    static ReceiptLine Quietly(string key, string speech) => new(key, "", null, Tone.Progress, ReceiptMark.Ring, speech);
 
     // What a confirmed answer says it was, after "You answered · " (the owner's decision on #617):
     // a tap question's option by its label; free text by its first line, cut to about 40
@@ -318,7 +322,8 @@ public sealed class Receipt : IDisposable
 
     void Put(ReceiptLine line)
     {
-        var signature = $"{line.Tone}|{line.Mark}|{line.Whole}";
+        // The key too: on the normal path the words stay empty while the state moves on.
+        var signature = $"{line.Key}|{line.Tone}|{line.Mark}|{line.Whole}";
         if (signature != drawn)
         {
             drawn = signature;

@@ -20,14 +20,14 @@ public sealed class QuestionView : StackPanel
     readonly Action<bool> editing;
     readonly List<Action> refreshers = [];
     readonly List<(INotifyPropertyChanged Source, PropertyChangedEventHandler Handler)> subscriptions = [];
-    // The answer's receipt (ui.md §6.4, #600, #617): its ring or check beside its words, a polite
-    // live region, in a row that keeps its place from Send to the outcome.
+    // The answer's receipt (ui.md §6.4, §6.5, #600, #617): words only, for an exception or "You
+    // answered", a polite live region that hears every stage, in a row that keeps its place from
+    // Send to the outcome. The ring and the check are the button's own.
     readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
-    readonly ReceiptMarkView mark = new() { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 2, 8, 0) };
     readonly Grid receipt = new();
     // Drawn clear and unheard under the words: the room the longest outcome needs at this width
     // (ReceiptWords.Room), kept from Send so neither a stage nor the outcome moves what is below.
-    readonly TextBlock room = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0, IsHitTestVisible = false, Margin = new Thickness(24, 0, 0, 0) };
+    readonly TextBlock room = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0, IsHitTestVisible = false };
     readonly TextBlock error = new() { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
     readonly Button resend = new() { Content = "Send again" };
     Button? send;
@@ -120,15 +120,10 @@ public sealed class QuestionView : StackPanel
             footer.Children.Add(resend);
             Children.Add(footer);
             Children.Add(error);
-            receipt.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            receipt.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            Grid.SetColumn(status, 1);
-            Grid.SetColumnSpan(room, 2);
             room.Text = vm.StatusRoom;
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetAccessibilityView(room, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetLiveSetting(status, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
             receipt.Children.Add(room);
-            receipt.Children.Add(mark);
             receipt.Children.Add(status);
             Children.Add(receipt);
         }
@@ -167,13 +162,11 @@ public sealed class QuestionView : StackPanel
 
     void Refresh()
     {
-        // An answer's outcome fades in on the card (ui.md §5.3, Send and Answer).
         // Each change of its words fades in (ui.md §5.3, Send and Answer); under reduced motion
         // Motion makes that the cross-fade alone.
         var fade = drawn && vm.StatusText.Length > 0 && vm.StatusText != status.Text;
         status.Text = vm.StatusText;
         status.Foreground = Ui.ReceiptBrush(vm.StatusTone);
-        mark.Mark = vm.StatusMark;
         receipt.Visibility = Ui.Show(vm.StatusText.Length > 0 || vm.InFlight);
         if (fade) { Motion.Enter(status, "Acknowledge"); }
         // Heard as it changes, not as the card is first drawn with what was said before.
@@ -188,9 +181,11 @@ public sealed class QuestionView : StackPanel
         if (send is not null)
         {
             send.Visibility = Ui.Show(vm.ShowSend);
-            send.IsEnabled = vm.CanAnswer;
-            // The ring on Send, unless one of the options sent it.
-            Ring(send, vm.InFlight && !(vm.Tap && vm.Fields is [var tapped, ..] && tapped.Options.Any(o => o.Value == vm.SentValue)));
+            // The ring, then the check, on Send, unless one of the options sent it; Send keeps its
+            // look while it shows them (ui.md §6.5), and vm.Send does nothing unless CanAnswer.
+            var mine = !(vm.Tap && vm.Fields is [var tapped, ..] && tapped.Options.Any(o => o.Value == vm.SentValue));
+            send.IsEnabled = vm.CanAnswer || (mine && (vm.InFlight || vm.SendCheck));
+            Ring(send, mine && vm.InFlight, mine && vm.SendCheck);
         }
         foreach (var r in refreshers) { r(); }
     }
@@ -211,19 +206,25 @@ public sealed class QuestionView : StackPanel
         var panel = new StackPanel { Spacing = 6 };
         foreach (var o in f.Options)
         {
-            var b = new Button { HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left };
+            var b = new Button { HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch };
             var label = new TextBlock { Text = o.Label, TextWrapping = TextWrapping.Wrap };
-            b.Content = WithRing(label);
+            b.Content = WithRing(label, trailing: true);
             if (o.Recommended || (vm.Approval && o.Tone == "allow")) { b.Style = (Style)Application.Current.Resources["AccentButtonStyle"]; }
             if (vm.Approval && o.Tone == "deny") { b.Foreground = Ui.Brush("AbDangerText"); }
             AutomationProperties(b, o.Label, $"Option:{o.Value}");
-            Acting(b).Click += (_, _) => vm.Choose(o);
+            // Choose changes the selection first, so only while the question can be answered.
+            Acting(b).Click += (_, _) => { if (vm.CanAnswer) { vm.Choose(o); } };
             refreshers.Add(() =>
             {
-                b.IsEnabled = vm.CanAnswer;
                 var sent = vm.SentValue == o.Value;
-                label.Text = sent ? $"✓ {o.Label}" : o.Label;
-                Ring(b, sent && vm.InFlight);
+                // Tap to answer (ui.md §6.5): the tapped option is the control that sent it, so it
+                // keeps full opacity, with its ring and then its check, while the others are
+                // disabled. Only busy or refused enables them again for a retry: a stale or unconfirmed
+                // answer is the prompt's one attempt (QuestionViewModel.CanAnswer).
+                b.IsEnabled = vm.CanAnswer || (sent && (vm.InFlight || vm.SendCheck));
+                // Its ring and check say it goes; the ✓ marks which option went once they are done.
+                label.Text = sent && !vm.InFlight && !vm.SendCheck ? $"✓ {o.Label}" : o.Label;
+                Ring(b, sent && vm.InFlight, sent && vm.SendCheck);
             });
             panel.Children.Add(b);
         }
@@ -355,22 +356,35 @@ public sealed class QuestionView : StackPanel
     }
 
     // A button's label with the platform's progress ring beside it, shown while the answer it sent
-    // is on its way (ui.md §5.3, Send and Answer; InFlightRing). Beside the label, never over it
-    // or fading it. A grid, not a horizontal stack: a stack measures the label at any width, and a
+    // is on its way (ui.md §5.3, Send and Answer; InFlightRing), and then the check for about a
+    // second once it is delivered (§6.5, CheckGlyph). Beside the label, never over it or fading
+    // it: before it on the answer's button, at a tapped option's trailing edge (§6.5, "Tap to
+    // answer"). A grid, not a horizontal stack: a stack measures the label at any width, and a
     // long option would no longer wrap to the card.
-    static Grid WithRing(FrameworkElement label)
+    static Grid WithRing(FrameworkElement label, bool trailing = false)
     {
-        var ring = new InFlightRing { Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
-        var grid = new Grid { ColumnDefinitions = { new ColumnDefinition { Width = GridLength.Auto }, new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) } } };
-        Grid.SetColumn(label, 1);
+        var margin = trailing ? new Thickness(8, 0, 0, 0) : new Thickness(0, 0, 8, 0);
+        var ring = new InFlightRing { Margin = margin, VerticalAlignment = VerticalAlignment.Center };
+        var check = new CheckGlyph { Margin = margin, VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed };
+        var grid = new Grid();
+        var auto = new ColumnDefinition { Width = GridLength.Auto };
+        var rest = new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) };
+        grid.ColumnDefinitions.Add(trailing ? rest : auto);
+        grid.ColumnDefinitions.Add(trailing ? auto : rest);
+        Grid.SetColumn(label, trailing ? 0 : 1);
+        Grid.SetColumn(ring, trailing ? 1 : 0);
+        Grid.SetColumn(check, trailing ? 1 : 0);
         grid.Children.Add(ring);
+        grid.Children.Add(check);
         grid.Children.Add(label);
         return grid;
     }
 
-    static void Ring(Button b, bool on)
+    static void Ring(Button b, bool on, bool check)
     {
-        if (b.Content is Grid { Children: [InFlightRing ring, ..] }) { ring.Active = on; }
+        if (b.Content is not Grid { Children: [InFlightRing ring, CheckGlyph glyph, ..] }) { return; }
+        ring.Active = on;
+        glyph.Visibility = Ui.Show(check && !on);
     }
 
     Button SendButton()
