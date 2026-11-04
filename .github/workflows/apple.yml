@@ -1,0 +1,22 @@
+name: Apple clients
+
+on:
+  pull_request:
+    paths: ['apple/**', '.github/workflows/apple.yml']
+  push:
+    branches: [main]
+    paths: ['apple/**', '.github/workflows/apple.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  native-clients:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install project and formatting tools
+        run: brew install xcodegen swiftformat
+      - name: Test the protocol and local socket; build both native apps
+        run: bash apple/scripts/verify.sh

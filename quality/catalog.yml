@@ -522,14 +522,17 @@ suites:
     kind: unit
     ring: 0
     select: affected
-    # The SwiftPM package on the codex/apple-* branches: AgentBridgeAppleCoreTests and
-    # AgentBridgeClientStateTests (about 35 files), including the shared Noise vectors. It should
-    # also replay docs/protocol/vectors, as C# and the PWA do (that folder's README says how).
+    # The SwiftPM package under apple/: AgentBridgeAppleCoreTests and AgentBridgeClientStateTests
+    # (about 35 files), including the shared Noise vectors. It should also replay
+    # docs/protocol/vectors, as C# and the PWA do (that folder's README says how). In CI it runs as
+    # the first step of apple/scripts/verify.sh, which apple.yml runs only for apple/** changes, and
+    # apple.yml isn't behind quality-gate yet (#453 folds it into ci.yml's plan).
     platforms: [macos-arm64]
     runner: local
     triggers: [apple/**, docs/protocol/**]
     command: cd apple && swift test
-    status: planned
+    where: apple.yml native-clients
+    status: partial
 
   - id: apple-build
     kind: packaging
@@ -539,7 +542,8 @@ suites:
     runner: hosted
     triggers: [apple/**]
     command: apple/scripts/verify.sh   # swiftformat lint, xcodegen, xcodebuild Mac and iOS simulator
-    status: planned
+    where: apple.yml native-clients
+    status: partial
 
   - id: apple-ui
     kind: ui
