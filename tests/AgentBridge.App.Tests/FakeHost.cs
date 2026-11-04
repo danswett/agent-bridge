@@ -13,7 +13,7 @@ sealed class FakeHost : IAsyncDisposable
     public static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
 
     readonly string folder = Path.Combine(Path.GetTempPath(), "aba-" + Guid.NewGuid().ToString("N")[..8]);
-    readonly ConcurrentDictionary<string, Func<JsonElement, object?>> ops = new();
+    readonly ConcurrentDictionary<string, Func<JsonElement, Task<object?>>> ops = new();
     LocalServer? server;
 
     public ConcurrentQueue<(string Op, JsonElement Data)> Received { get; } = new();
@@ -55,7 +55,20 @@ sealed class FakeHost : IAsyncDisposable
         AgentHaBridge = agentHaBridge,
     };
 
-    public void On(string op, Func<JsonElement, object?> answer) => ops[op] = answer;
+    public void On(string op, Func<JsonElement, object?> answer) => ops[op] = d => Task.FromResult(answer(d));
+
+    // A request the host takes its time over, held by awaiting. Held by blocking (.Wait, .Result,
+    // SpinWait) each one kept a pool thread for up to Patience, and the tests side by side then
+    // starved: an 8.4 s gap with 11 pool threads and 33 items queued on the Arm runner (#511).
+    public void OnAsync(string op, Func<JsonElement, Task<object?>> answer) => ops[op] = answer;
+
+    // A handler's hold, up to Patience: awaited, so it holds no pool thread. It resumes on the
+    // pool, as the blocked handler did, rather than inline on whichever thread opened the gate.
+    public static async Task Until(Task gate) =>
+        await Task.WhenAny(gate, Task.Delay(Patience)).ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+
+    // Until every connection there is has closed, up to Patience.
+    public Task UntilClosed() => Until(Task.WhenAll(Channels.Distinct().Select(c => c.Closed)));
 
     public FakeHost Start()
     {
@@ -86,7 +99,7 @@ sealed class FakeHost : IAsyncDisposable
                 await c.SendEventAsync(Events.SessionsSynced, new SessionsSynced(1, Held));
             }));
         }
-        return Task.FromResult(ops.TryGetValue(op, out var answer) ? answer(data) : null);
+        return ops.TryGetValue(op, out var answer) ? answer(data) : Task.FromResult<object?>(null);
     }
 
     public async Task SendAsync(string name, object data)

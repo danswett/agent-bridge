@@ -146,8 +146,8 @@ public sealed class SettingsTests : IAsyncLifetime
     public async Task The_agent_check_button_is_notified_as_soon_as_a_Settings_action_becomes_busy()
     {
         await ConnectedWith(FakeHost.StatusOf() with { Agents = Readiness("1.2.3") });
-        using var release = new ManualResetEventSlim();
-        host.On(HostOps.AgentsRefresh, _ => { release.Wait(); return host.Status.Agents; });
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(HostOps.AgentsRefresh, async _ => { await release.Task.ConfigureAwait(ConfigureAwaitOptions.ForceYielding); return host.Status.Agents; });
         var enabled = new List<bool>();
         settings.PropertyChanged += (_, e) =>
         {
@@ -160,7 +160,7 @@ public sealed class SettingsTests : IAsyncLifetime
             Assert.False(settings.CanCheckAgents);
             Assert.Contains(false, enabled);
         }
-        finally { release.Set(); await pending; }
+        finally { release.TrySetResult(); await pending; }
 
         Assert.False(settings.HasError);
         Assert.True(settings.CanCheckAgents);
@@ -195,6 +195,14 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal("readiness scan refused", settings.Error);
         Assert.False(settings.Busy);
     }
+
+    // The same, for a save the host takes its time over: held by awaiting, not by a pool thread (#511).
+    void SavesAsync(Func<System.Text.Json.JsonElement, Task<HostSettingsView>> save) => host.OnAsync(HostOps.Settings, async d =>
+    {
+        var saved = await save(d);
+        host.Status = host.Status with { Settings = saved };
+        return new SettingsResult(saved, false);
+    });
 
     [Fact]
     public async Task Signing_in_asks_the_host_through_the_relay_named_and_shows_the_code_it_reports()
@@ -443,14 +451,14 @@ public sealed class SettingsTests : IAsyncLifetime
         link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
         var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
         await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
-        host.On(HostOps.Settings, d =>
+        host.OnAsync(HostOps.Settings, async d =>
         {
             var saved = new HostSettingsView(true, RemoteFolderTrust: true,
                 RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]);
             // Saved, then this app revoked at the machine's terminal before the reply went: that
             // status arrives first.
             host.Status = host.Status with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [b]) };
-            host.SendAsync(HostOps.StatusEvent, host.Status).GetAwaiter().GetResult();
+            await host.SendAsync(HostOps.StatusEvent, host.Status);
             return new SettingsResult(saved, false);
         });
         await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) });
@@ -506,10 +514,10 @@ public sealed class SettingsTests : IAsyncLifetime
         await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1 && !settings.Busy, "the phone approved");
 
         // The next change fails, after the phone was revoked at the terminal and that status came.
-        host.On(HostOps.Settings, _ =>
+        host.OnAsync(HostOps.Settings, async _ =>
         {
             host.Status = host.Status with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
-            host.SendAsync(HostOps.StatusEvent, host.Status).GetAwaiter().GetResult();
+            await host.SendAsync(HostOps.StatusEvent, host.Status);
             throw new InvalidOperationException("the config file is locked");
         });
         settings.TrustDevices.Single(d => d.Id == a).Approved = false;
@@ -559,10 +567,10 @@ public sealed class SettingsTests : IAsyncLifetime
         link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
         var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
         await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
-        using var gate = new ManualResetEventSlim();
-        Saves(d =>
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        SavesAsync(async d =>
         {
-            gate.Wait(TimeSpan.FromSeconds(10));
+            await FakeHost.Until(gate.Task);
             return new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]);
         });
         await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) });
@@ -578,7 +586,7 @@ public sealed class SettingsTests : IAsyncLifetime
             await Wait.UntilAsync(() => settings.TrustDevices.Count == 3, "the browser's row");
             Assert.Equal([true, true, false], settings.TrustDevices.Select(d => d.Approved));
         }
-        finally { gate.Set(); }
+        finally { gate.TrySetResult(); }
         await Wait.UntilAsync(() => !settings.Busy, "the phone approved");
         Assert.Equal([true, true, false], settings.TrustDevices.Select(d => d.Approved));
     }
@@ -591,10 +599,10 @@ public sealed class SettingsTests : IAsyncLifetime
         link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
         var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
         await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
-        using var gate = new ManualResetEventSlim();
-        Saves(d =>
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        SavesAsync(async d =>
         {
-            gate.Wait(TimeSpan.FromSeconds(10));
+            await FakeHost.Until(gate.Task);
             return new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]);
         });
         await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: []) });
@@ -610,7 +618,7 @@ public sealed class SettingsTests : IAsyncLifetime
             await Wait.UntilAsync(() => settings.TrustDevices.Single(d => d.Id == a).Approved, "this app's box ticked");
             Assert.True(settings.TrustDevices.Single(d => d.Id == b).Approved);
         }
-        finally { gate.Set(); }
+        finally { gate.TrySetResult(); }
     }
 
     [Fact]
@@ -619,11 +627,11 @@ public sealed class SettingsTests : IAsyncLifetime
         var link = new FleetTests.FakeFleetLink();
         var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
         await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
-        host.On(HostOps.Settings, d =>
+        host.OnAsync(HostOps.Settings, async d =>
         {
             var saved = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]);
             host.Status = host.Status with { Settings = saved };
-            host.SendAsync(HostOps.StatusEvent, host.Status).GetAwaiter().GetResult();
+            await host.SendAsync(HostOps.StatusEvent, host.Status);
             return new SettingsResult(saved, false);
         });
         await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: []) });
@@ -657,10 +665,10 @@ public sealed class SettingsTests : IAsyncLifetime
         // A status from before arrives late, so the host is read again; that read is answered
         // from before the phone's status event, which comes while it is on its way.
         var reads = 0;
-        host.On(HostOps.Status, _ =>
+        host.OnAsync(HostOps.Status, async _ =>
         {
             if (Interlocked.Increment(ref reads) > 1) { return host.Status; }
-            host.SendAsync(HostOps.StatusEvent, approved).GetAwaiter().GetResult();
+            await host.SendAsync(HostOps.StatusEvent, approved);
             return before;
         });
         await host.SendAsync(HostOps.StatusEvent, before);

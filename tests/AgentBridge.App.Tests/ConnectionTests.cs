@@ -377,11 +377,11 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
         var first = true;
         var gate = new TaskCompletionSource();
-        host.On(Ops.SessionAnswer, data =>
+        host.OnAsync(Ops.SessionAnswer, async data =>
         {
             // Held until the pipe has closed, so this first outcome is surely lost: a fixed sleep
             // lost the race to a slow runner's stop, and the outcome got through (CI on #81).
-            if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => host.Channels.All(c => !c.IsOpen), FakeHost.Patience); }
+            if (first) { first = false; gate.SetResult(); await host.UntilClosed(); }
             return new AnswerResult(AnswerOutcome.Delivered);
         });
         var deliveries = new Deliveries(connection, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
@@ -406,11 +406,11 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
         var first = true;
         var gate = new TaskCompletionSource();
-        host.On(Ops.SessionReply, data =>
+        host.OnAsync(Ops.SessionReply, async data =>
         {
             // Held until the pipe has closed, so this first outcome is surely lost: a fixed sleep
             // lost the race to a slow runner's stop, and the outcome got through (CI on #81).
-            if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => host.Channels.All(c => !c.IsOpen), FakeHost.Patience); }
+            if (first) { first = false; gate.SetResult(); await host.UntilClosed(); }
             return new ReplyResult(AnswerOutcome.Delivered);
         });
         var deliveries = new Deliveries(connection, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
@@ -454,10 +454,10 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => link.State == LinkState.Connected && link.HostInstance == "run-1", "connected to run-1");
         var first = true;
         var gate = new TaskCompletionSource();
-        remote.On(Ops.SessionReply, data =>
+        remote.OnAsync(Ops.SessionReply, async data =>
         {
             // Held until the pipe has closed, so this first outcome is surely lost.
-            if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => remote.Channels.All(c => !c.IsOpen), FakeHost.Patience); }
+            if (first) { first = false; gate.SetResult(); await remote.UntilClosed(); }
             return new ReplyResult(AnswerOutcome.Delivered);
         });
         var deliveries = new Deliveries(link, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
@@ -498,9 +498,9 @@ public sealed class ConnectionTests : IAsyncLifetime
         Assert.StartsWith("connection ", link.HostInstance);
         var first = true;
         var gate = new TaskCompletionSource();
-        remote.On(Ops.SessionReply, data =>
+        remote.OnAsync(Ops.SessionReply, async data =>
         {
-            if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => remote.Channels.All(c => !c.IsOpen), FakeHost.Patience); }
+            if (first) { first = false; gate.SetResult(); await remote.UntilClosed(); }
             return new ReplyResult(AnswerOutcome.Delivered);
         });
         var deliveries = new Deliveries(link, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
@@ -589,10 +589,10 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
         var calls = 0;
         var gate = new TaskCompletionSource();
-        host.On(Ops.SessionReply, _ =>
+        host.OnAsync(Ops.SessionReply, async _ =>
         {
             if (Interlocked.Increment(ref calls) == 1) { throw new InvalidOperationException("the host failed after reading it"); }
-            gate.Task.Wait(FakeHost.Patience);
+            await FakeHost.Until(gate.Task);
             return new ReplyResult(AnswerOutcome.Delivered);
         });
         var clock = new FakeTimeProvider(Make.T0);
@@ -665,9 +665,9 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
         var first = true;
         var gate = new TaskCompletionSource();
-        host.On(Ops.SessionReply, _ =>
+        host.OnAsync(Ops.SessionReply, async _ =>
         {
-            if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => host.Channels.All(c => !c.IsOpen), FakeHost.Patience); }
+            if (first) { first = false; gate.SetResult(); await host.UntilClosed(); }
             return new ReplyResult(AnswerOutcome.Delivered);
         });
         var clock = new FakeTimeProvider(Make.T0);

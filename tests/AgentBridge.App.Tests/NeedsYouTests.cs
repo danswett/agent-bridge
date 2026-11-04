@@ -105,8 +105,8 @@ public sealed class NeedsYouTests : IAsyncLifetime
     [Fact]
     public async Task Approve_once_shows_its_ring_only_while_its_answer_is_on_its_way()
     {
-        using var gate = new ManualResetEventSlim();
-        host.On(Ops.SessionAnswer, _ => { gate.Wait(FakeHost.Patience); return new AnswerResult(AnswerOutcome.Delivered); });
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(Ops.SessionAnswer, async _ => { await FakeHost.Until(gate.Task); return new AnswerResult(AnswerOutcome.Delivered); });
         await SnapshotAsync();
         var entry = Entry("approval");
         Assert.False(TestUi.Read(() => entry.ApproveInFlight || entry.DenyInFlight));
@@ -115,7 +115,7 @@ public sealed class NeedsYouTests : IAsyncLifetime
         await Wait.UntilAsync(() => TestUi.Read(() => entry.ApproveInFlight), "the ring");
         Assert.False(TestUi.Read(() => entry.DenyInFlight));
 
-        gate.Set();
+        gate.TrySetResult();
         await Wait.UntilAsync(() => TestUi.Read(() => !entry.ApproveInFlight), "the ring to stop with the request");
     }
 
@@ -155,7 +155,7 @@ public sealed class NeedsYouTests : IAsyncLifetime
     public async Task Approve_once_in_the_lane_is_the_cards_own_button_one_request_one_progress()
     {
         var reply = new TaskCompletionSource<AnswerResult>();
-        host.On(Ops.SessionAnswer, _ => reply.Task.Result);
+        host.OnAsync(Ops.SessionAnswer, async _ => await reply.Task.ConfigureAwait(ConfigureAwaitOptions.ForceYielding));
         await SnapshotAsync();
         var entry = Entry("approval");
         Assert.Equal(NeedsYouMode.Approve, entry.Mode);

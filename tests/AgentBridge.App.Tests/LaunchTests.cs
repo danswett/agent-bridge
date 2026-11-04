@@ -19,6 +19,8 @@ public sealed class LaunchTests : IAsyncLifetime
     LaunchOptions options = Options();
     Func<JsonElement, object> outcome = r => new LaunchResult(LaunchOutcome.Started) { Session = "new-1", Launched = new LaunchedWith { Agent = "copilot", Permissions = "ask", Worktree = true } };
     int optionsAsked;
+    // An outcome the host takes its time over, in place of outcome: held by awaiting (#511).
+    Func<JsonElement, Task<object>>? held;
 
     static LaunchOptions Options() => new()
     {
@@ -37,7 +39,7 @@ public sealed class LaunchTests : IAsyncLifetime
     {
         host.Capabilities.Add(LaunchProtocol.Capability);
         host.On(LaunchProtocol.Options, _ => { Interlocked.Increment(ref optionsAsked); return options; });
-        host.On(LaunchProtocol.Launch, data => { lock (launched) { launched.Add(data.Clone()); } return outcome(data); });
+        host.OnAsync(LaunchProtocol.Launch, async data => { lock (launched) { launched.Add(data.Clone()); } return held is { } h ? await h(data) : outcome(data); });
         host.Start();
         connection = host.Connect(ui);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
@@ -149,10 +151,10 @@ public sealed class LaunchTests : IAsyncLifetime
     {
         var gate = new TaskCompletionSource();
         var first = true;
-        outcome = _ =>
+        held = async _ =>
         {
             // Held until the pipe has closed, so this first outcome is surely lost.
-            if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => host.Channels.All(c => !c.IsOpen), FakeHost.Patience); }
+            if (first) { first = false; gate.SetResult(); await host.UntilClosed(); }
             return new LaunchResult(LaunchOutcome.Started) { Session = "new-1" };
         };
         ui.Post(launch.Launch);
@@ -171,9 +173,9 @@ public sealed class LaunchTests : IAsyncLifetime
     {
         var gate = new TaskCompletionSource();
         var first = true;
-        outcome = _ =>
+        held = async _ =>
         {
-            if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => host.Channels.All(c => !c.IsOpen), FakeHost.Patience); return new LaunchResult(LaunchOutcome.Started) { Session = "never-seen" }; }
+            if (first) { first = false; gate.SetResult(); await host.UntilClosed(); return new LaunchResult(LaunchOutcome.Started) { Session = "never-seen" }; }
             return new LaunchResult(LaunchOutcome.Busy, "Busy: Copilot in bridge is waiting for a person to answer whether to trust that folder");
         };
         ui.Post(launch.Launch);
@@ -199,7 +201,7 @@ public sealed class LaunchTests : IAsyncLifetime
     public async Task A_prompt_typed_while_a_launch_is_on_its_way_is_kept_when_it_starts()
     {
         var gate = new TaskCompletionSource();
-        outcome = _ => { gate.Task.Wait(FakeHost.Patience); return new LaunchResult(LaunchOutcome.Started) { Session = "new-1" }; };
+        held = async _ => { await FakeHost.Until(gate.Task); return new LaunchResult(LaunchOutcome.Started) { Session = "new-1" }; };
         ui.Post(() => { launch.Prompt = "First."; launch.Launch(); });
         await Wait.UntilAsync(() => Sent().Length == 1, "the launch to go");
 
@@ -467,7 +469,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     public async Task A_launch_still_opens_its_session_after_switching_to_another_machine()
     {
         var gate = new TaskCompletionSource();
-        remoteHost.On(LaunchProtocol.Launch, _ => { gate.Task.Wait(FakeHost.Patience); return new LaunchResult(LaunchOutcome.Started) { Session = "there-new" }; });
+        remoteHost.OnAsync(LaunchProtocol.Launch, async _ => { await FakeHost.Until(gate.Task); return new LaunchResult(LaunchOutcome.Started) { Session = "there-new" }; });
         var opened = new List<string>();
         main.OpenRequested += c => opened.Add(c.Id);
         var launch = LaunchPage.Open(main, ui);
@@ -623,7 +625,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         link.Sources.Add(Laptop());
         link.Endpoints["host-id"] = localHost.Endpoint;
         localHost.Capabilities.Add(TransferProtocol.Capability);
-        localHost.On(LaunchProtocol.Launch, _ => { gate.Task.Wait(FakeHost.Patience); return new LaunchResult(LaunchOutcome.Started) { Session = "here-new" }; });
+        localHost.OnAsync(LaunchProtocol.Launch, async _ => { await FakeHost.Until(gate.Task); return new LaunchResult(LaunchOutcome.Started) { Session = "here-new" }; });
         link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
         var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered here");
@@ -857,7 +859,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     public async Task A_machine_that_leaves_with_a_launch_on_its_way_says_the_launch_is_not_confirmed()
     {
         var gate = new TaskCompletionSource();
-        remoteHost.On(LaunchProtocol.Launch, _ => { gate.Task.Wait(FakeHost.Patience); return new LaunchResult(LaunchOutcome.Started) { Session = "there-new" }; });
+        remoteHost.OnAsync(LaunchProtocol.Launch, async _ => { await FakeHost.Until(gate.Task); return new LaunchResult(LaunchOutcome.Started) { Session = "there-new" }; });
         var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
