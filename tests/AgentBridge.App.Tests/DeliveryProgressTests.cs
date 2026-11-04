@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
@@ -117,5 +118,25 @@ public sealed class DeliveryProgressTests : IAsyncLifetime
         lock (stages) { Assert.Null(Assert.Single(stages)); }
         await Wait.UntilAsync(() => Logged(entry.Request) is not null, "the timing line");
         Assert.Matches(new Regex($@"^reply {entry.Request[..8]} delivered: sent \d+ ms, result \d+ ms$"), Logged(entry.Request)!);
+    }
+
+    [Fact]
+    public async Task An_answer_that_fits_the_host_s_16_KiB_only_without_the_progress_flag_goes_without_it()
+    {
+        await StartAsync(progress: true);
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+
+        // 8 bytes under the limit as it is: "progress":true would put it 8 over, and the host refuse it.
+        var entry = deliveries.Submit("answer|s1|q1", Ops.SessionAnswer, r =>
+        {
+            var a = new AnswerRequest { Id = "s1", Question = "q1", Request = r, Text = "" };
+            return a with { Text = new string('x', Limits.AnswerRequest - 8 - JsonSerializer.SerializeToUtf8Bytes(a, ProtocolJson.Options).Length) };
+        }, o => o != "busy");
+        await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Done, "an outcome");
+
+        Assert.Equal("delivered", deliveries.Get(entry.Key)!.Outcome);
+        var sent = Assert.Single(host.Sent(Ops.SessionAnswer));
+        Assert.Equal(Limits.AnswerRequest - 8, JsonSerializer.SerializeToUtf8Bytes(sent.Deserialize<AnswerRequest>(ProtocolJson.Options), ProtocolJson.Options).Length);
+        Assert.False(sent.TryGetProperty("progress", out _));
     }
 }

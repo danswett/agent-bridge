@@ -304,9 +304,12 @@ public sealed class Deliveries
 
     static string? KindOf(string op) => op == Ops.SessionReply ? "reply" : op == Ops.SessionAnswer ? "answer" : null;
 
+    // The host measures an answer, flag and all, against its 16 KiB (Answers.Check): an answer
+    // that fits only without "progress": true goes without it, and shows Sending until its
+    // outcome, rather than be refused for asking how it went.
     static object AskProgress(object data) => data switch
     {
-        AnswerRequest a => a with { Progress = true },
+        AnswerRequest a when JsonSerializer.SerializeToUtf8Bytes(a with { Progress = true }, ProtocolJson.Options).Length <= Limits.AnswerRequest => a with { Progress = true },
         ReplyRequest r => r with { Progress = true },
         _ => data,
     };
