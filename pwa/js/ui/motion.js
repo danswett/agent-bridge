@@ -113,6 +113,15 @@ export function reveal(el, { entry = 'toast', dy = -1 } = {}) {
   enter(el, entry, { dy });
 }
 
+// Hides a shown banner as the catalogue's Toast and banner has it leave: the way it came, quicker.
+// Its space closes at once and a copy slides back toward its edge as it fades over the exit time;
+// under reduced motion (no distance) the copy only fades.
+export function conceal(el, { entry = 'toast', dy = -1 } = {}) {
+  if (!el || el.hidden) { return; }
+  leave(el, entry, { dy });
+  el.hidden = true;
+}
+
 // Disclosures (Reasoning, Tool history, a delegate's details, Ended): when the person opens
 // one, what it reveals settles in, a nudge down, as its space opens at once; closing is at
 // once. Only an open the person asked for: a <details> a page opens for them (a question
@@ -219,7 +228,9 @@ export function select(to, entry, from, { pseudo = null, axis = 'xy', scaleX = f
 // words, so the copy is built node by node, never from markup: text stays text, every HTML element
 // becomes a plain div or span (no link, button, field, script or frame), and no id, class, name or
 // data attribute is kept; only the glyphs' SVG shapes and their sprite references are.
-export function leave(el, entry) {
+// dy (-1, 0 or 1): the edge it travels the entry's distance toward as it fades, for what came in
+// from one (a banner); 0, as a row leaves, fades where it was.
+export function leave(el, entry, { dy = 0 } = {}) {
   const doc = el?.ownerDocument;
   const t = timing(entry, { exit: true, doc });
   if (!el?.isConnected || !(t.duration > 0) || !doc?.body?.attachShadow) { return null; }
@@ -242,7 +253,9 @@ export function leave(el, entry) {
   });
   host.attachShadow({ mode: 'closed' }).append(inlineCopy(el));
   doc.body.append(host);
-  const a = run(host, [{ opacity: 1 }, { opacity: 0 }], entry, t, { fill: 'forwards' });
+  const y = dy * t.distance;
+  const frames = y ? [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translate(0px, ${y}px)` }] : [{ opacity: 1 }, { opacity: 0 }];
+  const a = run(host, frames, entry, t, { fill: 'forwards' });
   if (!a) { host.remove(); return null; }
   const done = () => host.remove();
   a.finished.then(done, done);

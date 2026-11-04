@@ -43,7 +43,7 @@ import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UpdateControl } from './update.js';
 import { ReleaseWatch } from './release-watch.js';
 import { UsageView } from './ui/usage-view.js';
-import { reveal, watchDisclosures, watchPresses } from './ui/motion.js';
+import { conceal, reveal, watchDisclosures, watchPresses } from './ui/motion.js';
 import { RelayBlobs } from './blobs.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
 
@@ -195,6 +195,22 @@ function setHostState(text) {
 }
 
 // ---- service worker and updates ----
+// A status banner appearing (ui.md, PWA: app banners): its words go to a live region already on
+// the page, which a region unhidden with them already in it is not reliably read out as.
+function showStatus(banner) {
+  if (!banner.hidden) { return; }
+  reveal(banner);
+  $('banner-said').textContent = banner.querySelector('span').textContent;
+}
+
+// And going: nothing left in the live region for a screen reader to come across once it has gone.
+function hideStatus(banner) {
+  if (banner.hidden) { return; }
+  conceal(banner);
+  const said = $('banner-said');
+  if (said.textContent === banner.querySelector('span').textContent) { said.textContent = ''; }
+}
+
 // An installed PWA keeps running the code it has until restarted (S5 limitation), so a
 // new version is announced with a reload button instead of waiting for a force-quit.
 function registerServiceWorker() {
@@ -203,7 +219,7 @@ function registerServiceWorker() {
   // Only an app running a release it has can be stuck on it: without one, each load is the network's.
   const releases = new ReleaseWatch({
     onChange: (stuck) => {
-      if (stuck && hadController) { reveal($('stuck-banner')); } else { $('stuck-banner').hidden = true; }
+      if (stuck && hadController) { showStatus($('stuck-banner')); } else { hideStatus($('stuck-banner')); }
     },
   });
   // Which release is in control, read again after each takeover; only the latest read counts.
@@ -226,7 +242,7 @@ function registerServiceWorker() {
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     releases.tookOver();
     learn();
-    if (hadController) { reveal($('update-banner')); }
+    if (hadController) { showStatus($('update-banner')); }
   });
   $('reload').onclick = () => location.reload();
   // A load is the browser's next try.
@@ -652,7 +668,7 @@ function begin(account) {
   connection.on('presence', () => page.drawMachines());
   connection.on('log', (line) => console.log(line));
   connection.on('state', ({ state }) => {
-    if (state === 'replaced') { reveal($('replaced-banner')); } else { $('replaced-banner').hidden = true; }
+    if (state === 'replaced') { reveal($('replaced-banner')); } else { conceal($('replaced-banner')); }
     switch (state) {
       // News, as reconnecting is: the strip shows on a phone, in plain words.
   case 'connecting': return setPill('Connecting…', 'busy');

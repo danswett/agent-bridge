@@ -67,12 +67,15 @@
     </nav>
 
     <main id="main" class="content" tabindex="-1">
-      <div id="update-banner" class="banner" role="status" hidden>
+      <!-- What a status banner says as it appears: a live region already on the page, since one
+           unhidden with its words already in it is not reliably read out. -->
+      <p id="banner-said" class="sr-only" role="status" aria-live="polite"></p>
+      <div id="update-banner" class="banner" hidden>
         <span>A new version of the app is ready.</span>
         <button type="button" id="reload" class="button">Reload</button>
       </div>
-      <div id="stuck-banner" class="banner" role="status" hidden>
-        <span>A new version of the app keeps failing to install, so this is still the one you had.</span>
+      <div id="stuck-banner" class="banner" hidden>
+        <span>A new version of the app keeps failing to install. You're still on the version you had.</span>
         <button type="button" id="retry-release" class="button secondary">Try again</button>
       </div>
       <div id="demo-banner" class="banner demo" hidden>
