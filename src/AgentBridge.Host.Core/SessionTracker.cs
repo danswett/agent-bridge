@@ -44,6 +44,9 @@ internal sealed class SessionTracker
 
     public DiscoveredSession Discovered { get; private set; }
 
+    // Tests: the transcript being followed.
+    internal TranscriptTail? Tail => _tail;
+
     public Session Update(DiscoveredSession discovered)
     {
         // What Build reads besides the clock it never consults for an unchanged session: the
@@ -62,7 +65,11 @@ internal sealed class SessionTracker
                 _parser.Reset();
                 changed = true;
             }
-            changed |= _tail.Read(_parser) is TailOutcome.Appended or TailOutcome.Restarted;
+            // Unreadable too: a read can parse new lines and then fail (the anchor after them), and
+            // the parser has moved though the read says it failed. A transcript that stays
+            // unreadable is rebuilt each pass, which is rare and costs no revision (the JSON is
+            // the same).
+            changed |= _tail.Read(_parser) is TailOutcome.Appended or TailOutcome.Restarted or TailOutcome.Unreadable;
             // A nested Claude delegate's start and parent are written only beside the session's
             // transcript; one can exist only once a delegate of the session's does.
             if (_parser is ClaudeParser claude && _state.Background.HasAgents)

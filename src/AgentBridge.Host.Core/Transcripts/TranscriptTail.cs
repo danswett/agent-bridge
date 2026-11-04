@@ -54,6 +54,8 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
 
     // Tests: how many times the file was opened.
     internal int Opens { get; private set; }
+    // Tests: run once a read has parsed what it found, before it notes where it stopped.
+    internal Action? AfterParse { get; set; }
 
     public TailOutcome Read(ILineSink sink)
     {
@@ -140,6 +142,7 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
         // A trailing line with no newline yet stays unread: the offset stops just past the
         // last newline, so it is read whole once it is finished.
         (_offset, _aligned) = Scan(stream, position, length, aligned, stopAtLineStart: long.MaxValue, sink.Parse);
+        AfterParse?.Invoke();
         _anchorLength = ReadAnchor(stream, _offset, _anchor);
         return restart ? TailOutcome.Restarted : TailOutcome.Appended;
     }

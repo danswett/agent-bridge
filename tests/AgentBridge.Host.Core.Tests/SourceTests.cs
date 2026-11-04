@@ -145,6 +145,27 @@ public class SourceTests
         Assert.InRange(allocated, 0, 4096);
     }
 
+    // Found in review (#634): a read that parsed new lines and then failed said Unreadable, and the
+    // session the new lines changed was not built again until something else changed.
+    [Fact]
+    public void A_read_that_takes_new_lines_and_then_fails_still_builds_the_session_again()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("working on it", 3));
+        var discovered = new DiscoveredSession(Id, AgentKind.Copilot, events, Path.GetDirectoryName(events), 100);
+        var tracker = new SessionTracker(discovered, f.Options(), f.Time);
+        var built = tracker.Update(discovered);
+
+        Fixture.Append(events, Copilot.Assistant("done", 4));
+        tracker.Tail!.AfterParse = () => throw new IOException("the drive went away");
+        var after = tracker.Update(discovered);
+
+        Assert.Equal(2, tracker.Builds);
+        Assert.NotSame(built, after);
+        Assert.Contains("done", after.Activity.Response);
+    }
+
     [Fact]
     public async Task An_event_of_a_visible_kind_that_changes_nothing_does_not_move_updatedAt()
     {
