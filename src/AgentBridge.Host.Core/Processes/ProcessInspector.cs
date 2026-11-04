@@ -107,7 +107,13 @@ public sealed class SystemProcessInspector : IProcessInspector
         var now = Environment.TickCount64;
         lock (_gate)
         {
-            foreach (var p in kept) { _listed[(p.Id, p.StartedAt?.UtcTicks ?? 0)] = now; }
+            foreach (var p in kept)
+            {
+                // Only what is cached: a command line that could not be read is not kept, and its
+                // stamp would never be let go.
+                var key = (p.Id, p.StartedAt?.UtcTicks ?? 0);
+                if (_commandLines.ContainsKey(key)) { _listed[key] = now; }
+            }
             // Forget processes no scan has listed for a while, so a host up for days does not keep
             // one entry per session it ever saw. Not by asking the OS whether each still runs: a
             // gone pid answered with an exception, every pass (#608).

@@ -251,7 +251,14 @@ internal static class CopilotDiscovery
     internal static FileAttributes? Attributes(string path)
     {
         var attributes = new FileInfo(path).Attributes;
-        return (int)attributes == -1 ? null : attributes;
+        if ((int)attributes != -1) { return attributes; }
+        // Windows says -1 for a drive that is not ready (removable media, a locked volume) too,
+        // which is not absence: taken for it, every session there would be retired.
+        if (Path.GetPathRoot(Path.GetFullPath(path)) is { Length: > 0 } root && !Directory.Exists(root))
+        {
+            throw new IOException($"{root} is not ready");
+        }
+        return null;
     }
 
     // The subfolders, each with whether it is a link. The attributes come with the listing.
