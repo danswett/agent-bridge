@@ -140,6 +140,8 @@ public class CiPlanTests
 
         Assert.Equal(["ci.yml job ha-integration" + Problem], Check(Wired.Replace("needs: [plan, product, ha-integration]", "needs: [plan, product]")));
         Assert.Equal(["ci.yml job lint" + Problem], Check(Wired.Replace("  quality-gate:", "  lint:\n    runs-on: ubuntu-latest\n  quality-gate:")));
+        // Downstream of the gate, it could fail after the gate passed.
+        Assert.Equal(["ci.yml job lint" + Problem], Check(Wired.Replace("  quality-gate:", "  lint:\n    needs: quality-gate\n  quality-gate:")));
     }
 
     [Theory]

@@ -117,10 +117,11 @@ static partial class CiPlan
             var gateNeeds = Needs(gate);
             if (!gateNeeds.Contains(Plan))
                 Add($"ci.yml {Gate} doesn't need plan, so a failed plan would skip every job and pass the gate");
-            // Every check job, whether it reads the plan or not; a job downstream of the gate
-            // (publish-gate, checked below) can't be in its needs, and the delivery jobs run only on
-            // main, where a superseded publish is cancelled by design.
-            foreach (var (id, job) in jobs.Where(j => j.Key is not (Gate or Plan) && !Delivery.Contains(j.Key) && !Needs(j.Value).Contains(Gate)))
+            // Every check job, whether it reads the plan or not. Only the delivery jobs, which run
+            // on main where a superseded publish is cancelled by design, stay out; a check placed
+            // downstream of the gate (needs: quality-gate) could fail after it passed, so it's
+            // reported too.
+            foreach (var (id, job) in jobs.Where(j => j.Key is not (Gate or Plan) && !Delivery.Contains(j.Key)))
                 if (!gateNeeds.Contains(id))
                     Add($"ci.yml job {id} isn't in {Gate}'s needs, so its result wouldn't count (only {string.Join(", ", Delivery.Order(StringComparer.Ordinal))} may stay out)");
         }
