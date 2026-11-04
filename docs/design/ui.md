@@ -17,7 +17,8 @@ the held message) were decided by the owner on 2026-11-03 and added here (§6.7)
 and the boards are in [proposals/519-collaborators.md](proposals/519-collaborators.md). The
 accessibility contract (§9.1) gathers the accessibility rules already decided here and the WCAG
 requirements they rest on, each with the check that enforces it, and the rules the owner
-approved for it on 2026-11-04 (#707).* The
+approved for it on 2026-11-04 (#707). Delegate events in the conversation (§6.4, #661) and the
+history beside them (#292) were decided by the owner on 2026-11-04.* The
 owner's mock-ups live in a private design canvas, "Agent Bridge — Session Workbench", and
 proposals wait for the owner's sign-off in the private design studio
 ([design/README.md](../../design/README.md#owner-sign-off)).
@@ -466,9 +467,9 @@ easing in, its duration out, and how far it travels.
 | Push and pop | Narrow widths (§5.2): list → session → delegate | Opening a row or a delegate; Back, Esc or the system back gesture | The incoming screen's surface covers the old screen at once, and its content slides 24 in from the trailing side and fades in. Pop is the mirror: the screen beneath returns at once, and its content slides 24 in from the leading side. An approval's command never slides: a session asking a question only fades in, and the list's Needs you lane is there at once. Only content fades, never a surface, so two screens never show through each other | `push`: emphasis, decelerate; medium | Windows: `Frame` navigation with `SlideNavigationTransitionInfo`, or a connected animation from the row's title to the session's, configured Direct (never Gravity's lift and shadow). PWA: the tokens on the incoming content. Apple: `NavigationStack`. Android: Material's shared axis X, with predictive back | Cross-fade |
 | Pane and inspector | Wide widths: the delegate inspector, Details | The header's inspector toggle; Details; choosing a delegate | The pane's content slides 12 in from the trailing edge and fades in. The columns take their new widths at once, so text reflows once and not on every frame | `pane`: standard, decelerate; fast out; small | Windows: the tokens on the pane's content. PWA: a transition on transform and opacity. macOS: `.inspector` | Cross-fade |
 | Tab switch | Conversation / Delegates / Tools; machine tabs; the phone's bottom bar | Choosing a tab | The indicator moves to the new tab, as Selection does. The new content fades in without sliding (Fluent's top-level fade) | `tab`: standard, decelerate | Windows: `SelectorBar`'s and `NavigationView`'s own indicators. Apple: `TabView`. Android: `NavigationBar` | Instant |
-| Disclosure | Show reasoning, Show prompt, Tool history, the finished delegates, the Ended group, the machine list | Opening or closing it | The chevron turns, and the content fades in and settles 4 down. Its space opens at once: nothing below it slides. Closing turns the chevron back and closes the space at once | `disclosure`: standard, decelerate; fast out; nudge | Windows: `Expander`'s own motion where it is one; Show prompt's compact disclosure, the tokens on the chevron and the content (`Motion.Turn`, `Motion.Enter`). PWA: the tokens on the chevron and the content | Instant |
-| Arriving and leaving | A session row (also as Needs you shows or hides it), a delegate in the strip | A host adds or removes it; a question is asked or answered; Needs you is turned on or off | The item fades in where it lands. Leaving, its space closes at once and it fades out where it was. Neighbours never slide | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` replaced by this fade, because `AddDeleteThemeTransition` and `RepositionThemeTransition` slide the neighbours. PWA: the tokens on the row; a copy of a leaving row, which nothing can find or tap, fades where it was. Until #253 reaches the PWA, its Needs you entries and an approval's command appear at once and never fade or move: only an entry's mark fades in. Apple: `.transition(.opacity)`. Android: `animateItem` with no placement spec | Cross-fade |
-| Status glyph | A row, the session header, the delegate strip | The state changes, such as working → idle | The old glyph cross-fades into the new one, with its colour. The words change at once. The arc and the orbit turning are §2.1's, not this | `glyph`: fast, standard | The same on every platform: opacity on the two glyphs | Instant |
+| Disclosure | Show reasoning, Show prompt, Tool history, the finished delegates, the Ended group, the machine list, a fold of delegate events (§6.4) | Opening or closing it | The chevron turns, and the content fades in and settles 4 down. Its space opens at once: nothing below it slides. Closing turns the chevron back and closes the space at once | `disclosure`: standard, decelerate; fast out; nudge | Windows: `Expander`'s own motion where it is one; Show prompt's compact disclosure, the tokens on the chevron and the content (`Motion.Turn`, `Motion.Enter`). PWA: the tokens on the chevron and the content | Instant |
+| Arriving and leaving | A session row (also as Needs you shows or hides it), a delegate in the strip, a delegate event in the conversation, the Jump to latest pill (§6.4) | A host adds or removes it; a question is asked or answered; Needs you is turned on or off; the conversation is scrolled more than a screen from its end, or back to it (the pill) | The item fades in where it lands. Leaving, its space closes at once and it fades out where it was. Neighbours never slide | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` replaced by this fade, because `AddDeleteThemeTransition` and `RepositionThemeTransition` slide the neighbours. PWA: the tokens on the row; a copy of a leaving row, which nothing can find or tap, fades where it was. Until #253 reaches the PWA, its Needs you entries and an approval's command appear at once and never fade or move: only an entry's mark fades in. Apple: `.transition(.opacity)`. Android: `animateItem` with no placement spec | Cross-fade |
+| Status glyph | A row, the session header, the delegate strip, a delegate event's line in the conversation (§6.4) | The state changes, such as working → idle | The old glyph cross-fades into the new one, with its colour. The words change at once. The arc and the orbit turning are §2.1's, not this | `glyph`: fast, standard | The same on every platform: opacity on the two glyphs | Instant |
 | Activity dot | A row's trailing edge (§6.1) | The session updates while its row isn't open; the row is opened | The 6 px dot fades in, and later fades out. It never pulses, grows or repeats. The title's weight changes at once | `activityDot`: standard, decelerate; fast out | The same on every platform | Instant |
 | Selection | The list's 3×16 Bridge pill; the rail's pill | Choosing a row or a destination | The pill slides from the old row to the new one when both are on screen, and fades in when the old one isn't. The row's fill changes at once | `selection`: standard, standard | Windows: `NavigationView`'s own pill on the rail, and the same motion on the list. Apple: the system's selection | Instant |
 | Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
@@ -476,7 +477,7 @@ easing in, its duration out, and how far it travels.
 | Toast and banner | In-app toasts; banners such as a host going offline | The event it reports | It slides 12 in from its edge and fades in, then leaves the same way, quicker | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens. PWA: the tokens on the banner coming in; a leaving one's space closes at once, and a copy of it, which nothing can find or tap, goes back the way it came. System notifications are each OS's own | Cross-fade |
 | Sheet | The delegate sheet on iOS (§6.3), and any phone sheet | Opening a delegate; dragging between detents; dismissing | The sheet rises from the bottom edge and the scrim fades in. While dragged it follows the finger with no easing, and on release it settles at the nearest detent | `sheet`: emphasis, decelerate; standard out | iOS: `.sheet` with `.presentationDetents([.medium, .large])` and the system's spring. Android: `ModalBottomSheet`. PWA: the tokens on transform | Cross-fade at the detent. A drag still follows the finger |
 | Menu and flyout | The row menu, Sort, the overflow menu, flyouts | A click, a long press, Shift+F10 or the menu key | It fades in and settles 4 from its anchor. Choosing an item acts at once, and the menu fades out | `menu`: fast, decelerate; fast out; nudge | Windows: `MenuFlyout`'s own. PWA: the tokens, on a popover where supported. Apple and Android: the system menus | Instant |
-| Scroll to a question | The open session's conversation, and the list when a notification opens a session | A question arrives while the person is at the end of the conversation; a toast, the tray, the menu bar, a waiting row or (in the PWA, until #253 reaches it) a Needs you entry opens a session | The view scrolls smoothly to the question or the row. It never scrolls a conversation the person has scrolled back through (a response growing below on its own doesn't count: the reader is still at its end), is touching, or has the pointer over, nor one in a page or app in the background. For 500 ms after a question appears in a conversation on screen (arriving, shown as its session opens, shown again as its tab, the Sessions page or the app comes back (the window taking the focus back included, visible all along or not), moved as the inspector is shown or hidden or the window crosses a layout width, moved where it is by anything above it changing height (the title wrapping, a tool line, the response, the reasoning or your message, a kept draft dismissed or an answer's receipt going, the delegate strip or a banner appearing or going), by the conversation being pulled back as it gets shorter, or sideways as the window or a pane is narrowed or widened, or becoming answerable as its machine's hold lifts or its machine starts taking answers), or is scrolled into view (a notification's answer focused included), a click or tap on its choices, Approve once, Deny or Send is ignored, so a click already on its way to what was there can't answer it. Needs you's Approve once, Deny and Resend wait the same way after the lane changes (an entry arriving, going or moving, and its answers moved by an entry above growing as its answer goes, by anything above the lane changing height, a banner or the app bar appearing included, or by the list being pulled back as rows below get shorter or go while it is scrolled to its end; an answer's status appearing below the last answers, or the list scrolling, moves nothing and doesn't restart it) or comes back on screen, and while a session opened from it scrolls the list to its row. A smooth scroll to it counts from where it comes to rest; a scroll the person makes after that doesn't restart the wait, unless something above the answers changes height in the same moment, which counts as a move (the scroll and the move can't be told apart). A scroll pulled back to its end (what it scrolls got shorter, or it got taller) is never set aside as the person's: it counts as a move. A click or tap on an answer first reads where the answers are: moved since they were last read (an update drawn in the moment before the click), or unreadable, the click is ignored and the wait starts. A key acts at once | `scroll`: emphasis, standard | Windows: `StartBringIntoView` with `AnimationDesired`; the answers' places read after each layout pass and scroll (`AnswerWatch`) and as a pointer presses one, setting aside only a scroll the person makes (a wheel, a finger, a key or the scroll bar). PWA: `scrollIntoView` with smooth behaviour, at the browser's pace; the places read on `ResizeObserver` and scroll events (`watchMoves`) and as a click comes. Apple: `ScrollViewReader`. Android: `animateScrollToItem` | Instant: a jump |
+| Scroll to a question | The open session's conversation, and the list when a notification opens a session | A question arrives while the person is at the end of the conversation; a toast, the tray, the menu bar, a waiting row or (in the PWA, until #253 reaches it) a Needs you entry opens a session; Jump to latest is chosen (§6.4), which scrolls to the end as the person asked, scrolled back or not | The view scrolls smoothly to the question or the row. It never scrolls a conversation the person has scrolled back through (a response growing below on its own doesn't count: the reader is still at its end), is touching, or has the pointer over, nor one in a page or app in the background. For 500 ms after a question appears in a conversation on screen (arriving, shown as its session opens, shown again as its tab, the Sessions page or the app comes back (the window taking the focus back included, visible all along or not), moved as the inspector is shown or hidden or the window crosses a layout width, moved where it is by anything above it changing height (the title wrapping, a tool line, the response, the reasoning or your message, a kept draft dismissed or an answer's receipt going, the delegate strip or a banner appearing or going), by the conversation being pulled back as it gets shorter, or sideways as the window or a pane is narrowed or widened, or becoming answerable as its machine's hold lifts or its machine starts taking answers), or is scrolled into view (a notification's answer focused included), a click or tap on its choices, Approve once, Deny or Send is ignored, so a click already on its way to what was there can't answer it. Needs you's Approve once, Deny and Resend wait the same way after the lane changes (an entry arriving, going or moving, and its answers moved by an entry above growing as its answer goes, by anything above the lane changing height, a banner or the app bar appearing included, or by the list being pulled back as rows below get shorter or go while it is scrolled to its end; an answer's status appearing below the last answers, or the list scrolling, moves nothing and doesn't restart it) or comes back on screen, and while a session opened from it scrolls the list to its row. A smooth scroll to it counts from where it comes to rest; a scroll the person makes after that doesn't restart the wait, unless something above the answers changes height in the same moment, which counts as a move (the scroll and the move can't be told apart). A scroll pulled back to its end (what it scrolls got shorter, or it got taller) is never set aside as the person's: it counts as a move. A click or tap on an answer first reads where the answers are: moved since they were last read (an update drawn in the moment before the click), or unreadable, the click is ignored and the wait starts. A key acts at once | `scroll`: emphasis, standard | Windows: `StartBringIntoView` with `AnimationDesired`; the answers' places read after each layout pass and scroll (`AnswerWatch`) and as a pointer presses one, setting aside only a scroll the person makes (a wheel, a finger, a key or the scroll bar). PWA: `scrollIntoView` with smooth behaviour, at the browser's pace; the places read on `ResizeObserver` and scroll events (`watchMoves`) and as a click comes. Apple: `ScrollViewReader`. Android: `animateScrollToItem` | Instant: a jump |
 | Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle | By key or menu, the moved row slides to its new place, and the row it passed takes its own new place at once. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place. No other row moves | `reorder`: standard, standard | Windows: no `ReorderThemeTransition`, which slides the neighbours. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
 | Collapse | A phone's session header (§6.2, #620) | Scrolling the conversation up 64 or down 32 in one direction, mid-conversation; a tap on the bar's title; focus moving into the header | The header slides down over the conversation, or back up under the bar. The conversation never moves. Near the top there is no motion of its own: the header rides with the scroll | `collapse`: standard, standard | PWA: the tokens on transform. Apple: the large title's own collapse. Android: the top app bar's scroll behaviours | Cross-fade |
 
@@ -760,6 +761,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   panes the Delegates tab lists every delegate under its parent, finished ones folded, and the
   one opened is pushed in the list's place with "All delegates" to go back. A
   delegate stays open across a resize, and as it finishes (its fold opens).
+- **Present tense:** the strip, the Delegates tab and the chips are a delegate's only live
+  status. The conversation keeps a past-tense record of its events (§6.4, #661), and the
+  inspector holds the detail.
 - **A host that lists none** (Claude, Codex, a host before sub-agents) gets no strip; its
   Delegates tab, while it counts background agents, says only how many.
 - **One action:** "Ask main agent to stop it". It pre-fills a reply to the main agent, after
@@ -905,9 +909,38 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   own. "Main agent" only where the host says whose the words are (`activity.source`, `own`
   or a delegate list); otherwise the label is the agent's name ("Claude"), as such a host may
   send a delegate's words as the response.
-- **Delegate events:** one line each, meta style, with an icon: "Started 3 delegates ·
-  26m", "Delegate *Read witness shell logic* reported back · 22m". The name links to the
+- **Delegate events** (#661, decided by the owner on 2026-11-04): a past-tense record of the
+  main agent's own delegates starting and reporting back. The strip, tab or chips (§6.3) are the
+  present tense and the only live status, and the inspector holds the detail, so a line never
+  says a delegate is working and never shows the working glyph. Each line is meta style, with
+  the delegate icon for a start and the outcome's glyph for a report-back. Each name links to its
   delegate, and the word "Delegate" stays outside the link.
+  - **Where (D1):** each event sits between messages by its time. A report-back sits just above
+    the main agent turn it started (subagents.md §3). Events are never gathered under the
+    latest reply.
+  - **One line per delegate per gap (D2):** a delegate that starts and reports back between the
+    same two messages is one line, "Delegate *Run full test suite* · ran 21m, reported back ·
+    2h" ("failed" or "ended" as it ended), aged by its report. A start-only line reads "Started
+    delegate *Tidy changelog* · 9m", and if that delegate reports back before the next message
+    the line becomes the merged form in place, easing (#659): its glyph cross-fades (Status
+    glyph, §5.3), its words change at once, and nothing below it slides.
+  - **Every delegate named (D3):** delegates started within 60 s of each other share a line,
+    "Started *Tidy changelog* and *Update screenshots* · 9m". With three or more it reads
+    "Started 3 delegates: *A*, *B* and 1 more", and "1 more" expands the line to name the rest.
+    One that reports back in the same gap leaves the shared line for its own merged line, in place.
+  - **Runs fold (D3):** more than 3 lines in a row between two messages fold into one, "5
+    delegates · 4 reported back, 1 still working ›". It counts and shows no working glyph; "1
+    still working" links to that delegate's strip item. It expands in place to its lines,
+    indented under a rule (Disclosure, §5.3), and is remembered open or closed per session.
+  - **Earlier (D4):** until history loads (below, #292), the events older than the oldest message
+    shown fold into one line at the top of the conversation, "Earlier · 4 delegates started, 3
+    reported back ›". It expands to their lines, in time order, which don't fold again.
+  - **Time and access:** the age is relative; the tooltip and the accessible name give the
+    absolute time in Pacific ("Started 12:41 PM, reported back 12:55 PM PT"). A fold is one
+    accessible item, a button opened and closed with Enter or Space. Its accessible name is its
+    whole summary, in the order shown ("5 delegates · 4 reported back, 1 still working"), as
+    §9.1 A1 asks. Whether it is open is exposed apart from the name, by `aria-expanded`
+    (Windows: the ExpandCollapse pattern), and is never in the name.
 - **Questions** (#253): in the stream, as a card in Needs you colours. It is the one place a
   question's words are drawn, and the one place in the app it is answered. The header reads
   "Main agent asks" or "Delegate *name* asks". Then come the question and the platform's own
@@ -1046,6 +1079,63 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Now:** the tool the main agent is running, as a meta line under its reply (glyph, then the
   tool's name and arguments in mono). Not while the session waits on a question: the card says
   what is happening.
+- **History** (#292). *Decided by the owner on 2026-11-04, each as recommended
+  ([proposals/661-delegate-events.md](proposals/661-delegate-events.md) §3).* The Windows app
+  shows only the latest exchange. With history, a session's whole conversation is the one
+  column, oldest at the top, in the app and the PWA alike.
+  - **H0 A turn** is one prompt and everything until the next: the prompt (the person's, or a
+    scheduled or agent-sent one, marked as A prompt you didn't type says, above), the main
+    agent's response, reasoning and tool lines, the delegate events between them, and the
+    questions and approvals asked in it, each with its outcome. Pages, counts and the limit are
+    in turns.
+  - **H1 Scroll-back:** a session opens at its latest message. Scrolling up reads back through
+    the same column; there is no separate history view.
+  - **H2 Loading earlier:** the next page loads on its own as the reader comes within a screen of
+    the top, and a "Load earlier messages" button at the top does the same for a keyboard, a
+    screen reader or a retry. The view keeps the first item on screen where it is, so nothing
+    being read jumps as a page lands above it. While a page loads, the top reads "Loading
+    earlier messages…". A page is about 20 turns.
+  - **H3 Jump to latest:** more than a screen up, a "Jump to latest" pill sits above the reply
+    box. A message that arrives meanwhile is added below without moving the view, and the pill
+    counts it: "2 new · Jump to latest". The pill fades in and out as Arriving and leaving
+    (§5.3), and nothing pops (#659). Choosing it scrolls smoothly to the end, as Scroll to a
+    question does (§5.3). At the end, the view follows new messages; sending a message always goes to the end.
+  - **H3a A question while reading back:** a question or approval that arrives while the person
+    reads history is added at the end like any message, and the pill reads "Question · Jump to
+    latest" in Needs you's text colour. Nothing scrolls on its own (Scroll to a question never
+    scrolls a conversation scrolled back through, §5.3), so no answer control moves under the
+    pointer. Its card's answer guard (500 ms, §5.3) starts as §5.3 says: as the card comes on screen,
+    or, after Jump to latest, where the smooth scroll comes to rest. It arms again whenever its
+    controls move in place (#491).
+  - **H4 What history holds:** everything stays where it happened.
+    - Delegate events follow the rules above. The Earlier line shrinks as pages load, its events
+      taking their places between messages, and goes once the start is reached.
+    - A resolved question stays where it was asked, read-only, as far back as history goes, in
+      place of the latest 20 kept now (Questions, above).
+    - An approval stays as its resolved card, drawn exactly as written and escaped (An
+      approval's card, below), and never offers Approve once again.
+    - The Now line shows only under the latest reply.
+  - **H5 States,** each one meta line:
+    - empty: "No messages yet", centred;
+    - the first page loading: "Loading conversation…", centred, with the reply box usable;
+    - an earlier page failed: "Couldn't load earlier messages" and Try again, at the top, with
+      what is shown kept;
+    - a host that sends no history: "Earlier messages aren't available from this machine",
+      above the oldest message shown;
+    - the start reached: "Start of session · Mon, Nov 9, 8:31 AM PT";
+    - a turn the host couldn't read: "A turn here couldn't be read", in its place, the turns
+      around it kept;
+    - a turn cut short (over the host's cap): its text as sent, ending "Cut short · see the
+      machine".
+  - **H6 Limit:** a client keeps about 500 turns of a session, draws only those near the screen,
+    and lets the far end go as more load; scrolling back loads them again. A host keeps what its
+    transcript holds, and past that the top reads "Start of available history".
+  - **H7 Search:** none within a session until #289, which searches every turn of every
+    session. A search of the loaded turns alone would miss the rest and read as complete.
+  - **H8 What the design needs from the protocol** (the wire format is #292's): turns with
+    stable ids, in order, each with its time; a page of turns before a given turn (a
+    before-cursor) and whether older ones remain; a flag on a turn cut short or unreadable; and
+    live turns carrying the same ids, so a turn loaded twice is drawn once.
 - **Code blocks** (#296): in the Code role (§4.3), wrapped to the block's width rather than
   scrolled sideways, with Copy in the top-right corner above the code (with the copy icon in the app):
   "Copy", then "Copied" (or "Copy failed") for 1.5 s, named "Copy code" whatever it shows, the
@@ -2046,3 +2136,7 @@ The collaborator surfaces (#519) are drawn on the Proposal #519 boards
 The states #253 added (the toggle's states, rows, the question card's forms, Tools and the
 delegate inspector) are drawn on the Proposal #253 boards, which stay on the canvas as their
 reference ([proposals/253-attention/](proposals/253-attention/)).
+
+The delegate events (#661) and the history (#292) are drawn on the Proposal #661
+boards: before and after, the run fold and Earlier expanded, and history scrolled up, on a phone
+and the desktop, dark and light ([proposals/661-delegate-events.md](proposals/661-delegate-events.md)).

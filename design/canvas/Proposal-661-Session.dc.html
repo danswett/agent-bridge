@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #661: delegate events in the conversation, and history (#292)</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button,textarea,input{font:inherit}
+</style>
+</helmet>
+<div style="width: {{w}}px; height: {{h}}px; box-sizing: border-box; background: {{t.shell}}; color: {{t.text}}; font-family: {{font}}; font-size: {{baseSize}}; line-height: {{baseLine}}; font-variant-numeric: tabular-nums; display: flex; flex-direction: column; overflow: hidden; border-radius: {{outerRadius}}">
+
+  <sc-if value="{{desktop}}">
+  <div style="height: 48px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 16px; font-size: 12px; line-height: 16px">
+    <span style="width: 16px; height: 16px; border-radius: 4px; background: {{t.accent}}"></span><span>Agent Bridge</span>
+  </div>
+  </sc-if>
+
+  <div style="flex: 1; min-height: 0; display: flex">
+
+    <sc-if value="{{desktop}}">
+    <nav aria-label="App" style="width: 48px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 4px; color: {{t.text2}}">
+      <span style="width: 40px; height: 36px; border-radius: 4px; background: {{t.sel}}; color: {{t.text}}; display: grid; place-items: center"><dc-import name="Icon" icon="delegate" size="16" hint-size="16px,16px"></dc-import></span>
+      <span style="width: 40px; height: 36px; display: grid; place-items: center"><dc-import name="Icon" icon="search" size="16" hint-size="16px,16px"></dc-import></span>
+    </nav>
+    </sc-if>
+
+    <div style="flex: 1; min-width: 0; display: flex; background: {{t.layer}}; border-top-left-radius: {{layerRadius}}; border-top: {{layerEdge}}; border-left: {{layerEdge}}">
+
+      <sc-if value="{{desktop}}">
+      <section aria-label="Sessions" style="width: 320px; flex: none; border-right: 1px solid {{t.stroke}}; display: flex; flex-direction: column; font-size: 14px; line-height: 20px">
+        <div style="padding: 20px 20px 12px; font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif; font-size: 20px; line-height: 28px; font-weight: 600">Sessions</div>
+        <ul style="list-style: none; margin: 0; padding: 0 8px; display: flex; flex-direction: column; gap: 2px">
+          <sc-for list="{{sessions}}" as="s">
+          <li style="display: flex; gap: 12px; padding: 10px 12px; border-radius: 4px; background: {{s.bg}}"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="{{s.kind}}" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import></span><div style="min-width: 0; flex: 1"><div style="display: flex; gap: 8px; align-items: baseline"><span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{s.name}}</span><span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">{{s.age}}</span></div><div style="font-size: 12px; line-height: 16px; color: {{t.text2}}; margin-top: 2px">{{s.sub}}</div></div></li>
+          </sc-for>
+        </ul>
+      </section>
+      </sc-if>
+
+      <main style="flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative">
+
+        <sc-if value="{{phone}}">
+        <header style="padding: 52px 8px 12px 4px; display: flex; align-items: center; gap: 4px; background: {{t.shell}}">
+          <span aria-label="Back to sessions" style="width: 44px; height: 44px; display: grid; place-items: center"><dc-import name="Icon" icon="back" size="20" hint-size="20px,20px"></dc-import></span>
+          <div style="flex: 1; min-width: 0">
+            <div style="font-weight: 600; font-size: 17px; line-height: 22px">Release 0.4 prep</div>
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 13px; line-height: 18px; color: {{t.text2}}"><dc-import name="Glyph" kind="delegating" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import>Delegating · BUILD-PC</div>
+          </div>
+          <span aria-label="More actions" style="width: 44px; height: 44px; display: grid; place-items: center"><dc-import name="Icon" icon="more" size="20" hint-size="20px,20px"></dc-import></span>
+        </header>
+        <section aria-label="Delegates" style="display: flex; gap: 8px; padding: 0 20px 12px; overflow: hidden; background: {{t.shell}}">
+          <sc-for list="{{strip}}" as="c">
+          <span style="flex: none; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px 0 10px; border-radius: 18px; border: 1px solid {{c.edge}}; background: {{c.bg}}; color: {{c.color}}; font-size: 14px"><dc-import name="Glyph" kind="{{c.kind}}" theme="{{theme}}" size="14" hint-size="14px,14px"></dc-import>{{c.short}}</span>
+          </sc-for>
+        </section>
+        </sc-if>
+
+        <sc-if value="{{desktop}}">
+        <header style="padding: 20px 24px 16px 32px">
+          <h2 style="margin: 0; font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif; font-size: 20px; line-height: 28px; font-weight: 600">Release 0.4 prep</h2>
+          <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; line-height: 16px; color: {{t.text2}}"><dc-import name="Glyph" kind="delegating" theme="{{theme}}" size="14" hint-size="14px,14px"></dc-import><span style="color: {{t.text}}">Delegating to 3 agents</span><span>·</span><span>BUILD-PC</span><span>·</span><span>release-tools</span></div>
+        </header>
+        <section aria-label="Delegates" style="padding: 0 24px 16px 32px; display: flex; gap: 8px; border-bottom: 1px solid {{t.stroke}}">
+          <sc-for list="{{strip}}" as="c">
+          <span style="flex: {{c.flex}}; min-width: 0; padding: 8px 12px; border-radius: 6px; border: 1px solid {{c.edge}}; background: {{c.bg}}; color: {{c.color}}; display: flex; gap: 10px; align-items: center"><dc-import name="Glyph" kind="{{c.kind}}" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="flex: 1; min-width: 0"><span style="display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{c.name}}</span><span style="display: block; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{c.sub}}</span></span></span>
+          </sc-for>
+        </section>
+        </sc-if>
+
+        <!-- Conversation -->
+        <div style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: {{anchor}}; border-top: {{streamEdge}}">
+          <div style="padding: {{streamPad}}; display: flex; flex-direction: column; gap: 20px; max-width: {{measure}}">
+            <sc-for list="{{items}}" as="it">
+            <sc-if value="{{it.isYou}}"><div style="align-self: flex-end; max-width: {{youMax}}; padding: 10px 14px; border-radius: 8px; background: {{t.card}}; border: 1px solid {{t.stroke}}">{{it.text}}</div></sc-if>
+            <sc-if value="{{it.isAgent}}"><div><div style="font-size: {{metaSize}}; line-height: {{metaLine}}; color: {{t.text2}}; margin-bottom: 6px"><span style="font-weight: 600; color: {{t.text}}">Main agent</span>&#160;&#160;{{it.age}}</div><p style="margin: 0; font-size: {{bodySize}}; line-height: 24px">{{it.text}}</p></div></sc-if>
+            <sc-if value="{{it.isNote}}"><div role="status" style="text-align: center; font-size: {{metaSize}}; line-height: {{metaLine}}; color: {{t.text2}}">{{it.text}}</div></sc-if>
+            <sc-if value="{{it.isGroup}}">
+            <div style="display: flex; flex-direction: column; gap: 8px; font-size: {{metaSize}}; line-height: {{metaLine}}; color: {{t.text2}}">
+              <sc-for list="{{it.rows}}" as="l">
+              <sc-if value="{{l.isLine}}"><div title="{{l.tip}}" style="display: flex; gap: 8px; align-items: flex-start; position: relative"><span style="flex: none; width: 16px; height: {{metaLine}}; display: flex; align-items: center; justify-content: center"><sc-if value="{{l.icon}}"><dc-import name="Icon" icon="delegate" size="16" hint-size="16px,16px"></dc-import></sc-if><sc-if value="{{l.glyph}}"><dc-import name="Glyph" kind="{{l.glyph}}" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import></sc-if></span><span style="position: relative"><sc-for list="{{l.segs}}" as="s"><sc-if value="{{s.link}}"><a href="#" style="color: {{t.link}}; text-decoration: none">{{s.t}}</a></sc-if><sc-if value="{{s.plain}}">{{s.t}}</sc-if></sc-for><sc-if value="{{l.showTip}}"><div role="tooltip" style="position: absolute; left: calc(100% + 12px); top: -5px; z-index: 2; padding: 6px 10px; border-radius: 4px; background: {{t.tipBg}}; border: 1px solid {{t.stroke2}}; color: {{t.text}}; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,0.18)">{{l.tip}}</div></sc-if></span></div></sc-if>
+              <sc-if value="{{l.isFold}}">
+              <div>
+                <div role="button" tabindex="0" aria-expanded="{{l.expanded}}" aria-label="{{l.label}}" style="display: inline-flex; max-width: 100%; gap: 8px; align-items: flex-start; border-radius: 4px; margin: -2px -4px; padding: 2px 4px; outline: {{l.focus}}"><span style="flex: none; width: 16px; height: {{metaLine}}; display: flex; align-items: center; justify-content: center"><dc-import name="Icon" icon="delegate" size="16" hint-size="16px,16px"></dc-import></span><span><sc-for list="{{l.segs}}" as="s"><sc-if value="{{s.link}}"><a href="#" style="color: {{t.link}}; text-decoration: none">{{s.t}}</a></sc-if><sc-if value="{{s.plain}}">{{s.t}}</sc-if></sc-for></span><span style="flex: none; height: {{metaLine}}; display: flex; align-items: center; transform: rotate({{l.rot}}deg)"><dc-import name="Icon" icon="chevron" size="12" hint-size="12px,12px"></dc-import></span></div>
+                <sc-if value="{{l.open}}">
+                <div style="margin: 8px 0 0 7px; padding-left: 16px; border-left: 1px solid {{t.stroke2}}; display: flex; flex-direction: column; gap: 8px">
+                  <sc-for list="{{l.kids}}" as="k">
+                  <div title="{{k.tip}}" style="display: flex; gap: 8px; align-items: flex-start"><span style="flex: none; width: 16px; height: {{metaLine}}; display: flex; align-items: center; justify-content: center"><sc-if value="{{k.icon}}"><dc-import name="Icon" icon="delegate" size="16" hint-size="16px,16px"></dc-import></sc-if><sc-if value="{{k.glyph}}"><dc-import name="Glyph" kind="{{k.glyph}}" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import></sc-if></span><span><sc-for list="{{k.segs}}" as="s"><sc-if value="{{s.link}}"><a href="#" style="color: {{t.link}}; text-decoration: none">{{s.t}}</a></sc-if><sc-if value="{{s.plain}}">{{s.t}}</sc-if></sc-for></span></div>
+                  </sc-for>
+                </div>
+                </sc-if>
+              </div>
+              </sc-if>
+              </sc-for>
+            </div>
+            </sc-if>
+            </sc-for>
+          </div>
+        </div>
+
+        <sc-if value="{{pill}}">
+        <div style="position: absolute; left: 0; right: 0; bottom: {{pillBottom}}; display: flex; justify-content: {{pillAlign}}; padding: 0 {{pillPad}}; pointer-events: none">
+          <span role="button" aria-label="2 new messages. Jump to latest" style="display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px 0 12px; border-radius: 16px; background: {{t.card}}; border: 1px solid {{t.stroke2}}; box-shadow: 0 4px 12px rgba(0,0,0,0.16); font-size: 13px; line-height: 18px"><span style="display: flex; transform: rotate(90deg); color: {{t.link}}"><dc-import name="Icon" icon="chevron" size="12" hint-size="12px,12px"></dc-import></span><span style="color: {{t.link}}; font-weight: 600">2 new</span><span style="color: {{t.text2}}">·</span><span>Jump to latest</span></span>
+        </div>
+        </sc-if>
+
+        <div style="flex: none; padding: {{composerPad}}">
+          <div style="max-width: {{composerMax}}; display: flex; align-items: flex-end; gap: 4px; padding: 4px 4px 4px 14px; border-radius: 8px; background: {{t.card}}; border: 1px solid {{t.stroke}}; border-bottom: 2px solid {{t.accent}}">
+            <label style="flex: 1; min-width: 0"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message the main agent</span><textarea rows="1" placeholder="Message the main agent" style="width: 100%; box-sizing: border-box; min-height: 40px; resize: none; border: 0; background: transparent; outline: none; color: {{t.text}}; font-size: {{inputSize}}; line-height: 20px; padding: 10px 0"></textarea></label>
+            <span aria-label="Attach files" style="width: 40px; height: 40px; color: {{t.text2}}; display: grid; place-items: center"><dc-import name="Icon" icon="attach" size="18" hint-size="18px,18px"></dc-import></span>
+            <span aria-label="Send" style="width: 40px; height: 40px; border-radius: 6px; border: 1px solid {{t.accentEdge}}; background: {{t.accent}}; color: {{t.onAccent}}; display: grid; place-items: center"><dc-import name="Icon" icon="send" size="18" hint-size="18px,18px"></dc-import></span>
+          </div>
+        </div>
+      </main>
+
+      <sc-if value="{{inspector}}">
+      <aside aria-label="Delegate" style="width: 336px; flex: none; border-left: 1px solid {{t.stroke}}; padding: 24px; display: flex; flex-direction: column; gap: 24px; box-sizing: border-box">
+        <div>
+          <div style="display: flex; align-items: center; gap: 8px"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><h3 style="margin: 0; font-size: 16px; line-height: 22px; font-weight: 600">Watch overnight soak</h3></div>
+          <dl style="margin: 12px 0 0; display: grid; grid-template-columns: 72px 1fr; gap: 4px 12px; font-size: 12px; line-height: 16px">
+            <dt style="color: {{t.text2}}">Status</dt><dd style="margin: 0">Running for 52m</dd>
+            <dt style="color: {{t.text2}}">Started</dt><dd style="margin: 0">1:48 PM PT</dd>
+            <dt style="color: {{t.text2}}">Kind</dt><dd style="margin: 0">Background</dd>
+            <dt style="color: {{t.text2}}">ID</dt><dd style="margin: 0; font-family: {{mono}}">agent-7c20</dd>
+          </dl>
+        </div>
+        <div>
+          <div style="font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}; margin-bottom: 6px">Task</div>
+          <p style="margin: 0; font-size: 14px; line-height: 20px">Run the release candidate overnight. Report memory use and any crash in the morning.</p>
+        </div>
+        <div>
+          <div style="font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}; margin-bottom: 6px">Latest</div>
+          <p style="margin: 0; font-size: 14px; line-height: 20px">Hour one: memory flat at 212 MB, no crashes.</p>
+        </div>
+        <div>
+          <div style="font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}; margin-bottom: 6px">In the conversation</div>
+          <p style="margin: 0; font-size: 14px; line-height: 20px; color: {{t.text2}}">The strip is the only live status. This panel holds the detail, and the conversation keeps a past-tense record.</p>
+        </div>
+        <span style="margin-top: auto; height: 32px; border-radius: 4px; border: 1px solid {{t.stroke2}}; background: {{t.subtle}}; font-size: 14px; display: grid; place-items: center">Ask main agent to stop it</span>
+      </aside>
+      </sc-if>
+
+      <sc-if value="{{statesPanel}}">
+      <aside aria-label="History states" style="width: 336px; flex: none; border-left: 1px solid {{t.stroke}}; padding: 24px; display: flex; flex-direction: column; gap: 16px; box-sizing: border-box">
+        <div>
+          <h3 style="margin: 0; font-size: 16px; line-height: 22px; font-weight: 600">History states</h3>
+          <div style="font-size: 12px; line-height: 16px; color: {{t.text2}}; margin-top: 2px">Decided (H5, H6). Each sits where the conversation shows it.</div>
+        </div>
+        <sc-for list="{{states}}" as="st">
+        <div style="border-radius: 8px; background: {{t.card}}; border: 1px solid {{t.stroke}}; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px">
+          <div style="font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}">{{st.label}}</div>
+          <div style="font-size: 12px; line-height: 16px; color: {{t.text2}}; text-align: center">{{st.text}}<sc-if value="{{st.action}}">&#160;&#160;<a href="#" style="color: {{t.link}}; text-decoration: none">{{st.action}}</a></sc-if></div>
+          <div style="font-size: 12px; line-height: 16px; color: {{t.text3}}">{{st.where}}</div>
+        </div>
+        </sc-for>
+      </aside>
+      </sc-if>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"form":{"editor":"enum","options":["phone","desktop"],"default":"phone"},"state":{"editor":"enum","options":["before","after","expanded","earlier","history"],"default":"after"},"$preview":{"width":390,"height":1240}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const desktop = this.props.form === 'desktop';
+    const state = ['before', 'after', 'expanded', 'earlier', 'history'].includes(this.props.state) ? this.props.state : 'after';
+    const dark = {
+      shell: '#202326', layer: '#272A2E', card: '#2F3338', stroke: 'rgba(255,255,255,0.07)', stroke2: 'rgba(255,255,255,0.12)', subtle: 'rgba(255,255,255,0.05)', sel: 'rgba(255,255,255,0.07)',
+      text: '#FFFFFF', text2: 'rgba(255,255,255,0.72)', text3: 'rgba(255,255,255,0.54)', accent: '#2DD4BF', accentEdge: 'rgba(255,255,255,0.08)', onAccent: '#062621', accentSoft: 'rgba(45,212,191,0.1)', link: '#5EE6D3', tipBg: '#3A3E44'
+    };
+    const light = {
+      shell: '#EEF0F2', layer: '#F9F9F9', card: '#FFFFFF', stroke: 'rgba(0,0,0,0.07)', stroke2: 'rgba(0,0,0,0.12)', subtle: 'rgba(0,0,0,0.03)', sel: 'rgba(0,0,0,0.05)',
+      text: '#1A1A1A', text2: 'rgba(0,0,0,0.62)', text3: 'rgba(0,0,0,0.52)', accent: '#0B7A6E', accentEdge: 'rgba(0,0,0,0.1)', onAccent: '#FFFFFF', accentSoft: 'rgba(11,122,110,0.07)', link: '#0B7A6E', tipBg: '#FFFFFF'
+    };
+    const t = theme === 'light' ? light : dark;
+
+    // Fictional session, now 2:40 PM PT. Times are minutes since midnight.
+    const NOW = 14 * 60 + 40;
+    const m = (s) => { const [h, mm] = s.split(':').map(Number); return h * 60 + mm; };
+    const age = (s) => { const d = NOW - m(s); return d < 60 ? d + 'm' : Math.floor(d / 60) + 'h'; };
+    const pt = (s) => { const [h, mm] = s.split(':').map(Number); return ((h + 11) % 12 + 1) + ':' + String(mm).padStart(2, '0') + (h < 12 ? ' AM' : ' PM'); };
+    const ran = (a, b) => { const d = m(b) - m(a); return d < 60 ? d + 'm' : Math.floor(d / 60) + 'h ' + (d % 60) + 'm'; };
+    const D = {
+      map: ['Map settings screens', '8:35', '8:43'], inv: ['Inventory icon exports', '8:35', '8:48'], notes: ['Draft release notes', '8:35', '8:46'],
+      cold: ['Measure cold start', '10:58', '12:57'], fset: ['Fix settings copy', '11:08', '11:14'], ferr: ['Fix error-message copy', '11:08', '11:20'],
+      suite: ['Run full test suite', '11:22', '11:43'], rc: ['Build release candidate', '12:41', '12:55'],
+      upd: ['Smoke-test updater', '13:00', '13:12'], win: ['Check Windows install', '13:00', '13:18'], mac: ['Check macOS install', '13:00', '13:25'], lin: ['Check Linux install', '13:00', '13:31'],
+      soak: ['Watch overnight soak', '13:48'], log: ['Tidy changelog', '14:31'], shots: ['Update screenshots', '14:31']
+    };
+    const P = (x) => ({ t: x, plain: true }); const L = (x) => ({ t: x, link: true });
+    const line = (segs, tip, mark) => ({ isLine: true, segs, tip, icon: mark === 'icon', glyph: mark === 'icon' ? '' : mark });
+    // After (D1–D4).
+    const merged = (k) => { const [n, s, e] = D[k]; return line([P('Delegate '), L(n), P(' · ran ' + ran(s, e) + ', reported back · ' + age(e))], 'Started ' + pt(s) + ', reported back ' + pt(e) + ' PT', 'done'); };
+    const started = (k) => { const [n, s] = D[k]; return line([P('Started delegate '), L(n), P(' · ' + age(s))], 'Started ' + pt(s) + ' PT', 'icon'); };
+    const reported = (k) => { const [n, s, e] = D[k]; return line([P('Delegate '), L(n), P(' reported back · ' + age(e))], 'Started ' + pt(s) + ', reported back ' + pt(e) + ' PT', 'done'); };
+    const startedTwo = (a, b) => line([P('Started '), L(D[a][0]), P(' and '), L(D[b][0]), P(' · ' + age(D[a][1]))], 'Started ' + pt(D[a][1]) + ' PT', 'icon');
+    const startedMany = (ks) => line([P('Started ' + ks.length + ' delegates: '), L(D[ks[0]][0]), P(', '), L(D[ks[1]][0]), P(' and '), L((ks.length - 2) + ' more'), P(' · ' + age(D[ks[0]][1]))], 'Started ' + pt(D[ks[0]][1]) + ' PT', 'icon');
+    // The name is the whole visible summary (§9.1 A1); open or closed is aria-expanded alone.
+    const fold = (segs, open, kids, focus) => ({ isFold: true, segs, label: segs.map((s) => s.t).join(''), open, expanded: open ? 'true' : 'false', rot: open ? 90 : 0, kids, focus: focus ? '2px solid ' + t.accent : 'none' });
+    // Before: what the PWA does today (attribution.js delegateEvents), every event under the latest reply.
+    const bStart = (n, s) => line([P('Started delegate '), L(n), P(' · ' + age(s))], '', 'icon');
+    const bMany = (c, s) => line([P('Started ' + c + ' delegates · ' + age(s))], '', 'icon');
+    const bEnd = (k) => line([P('Delegate '), L(D[k][0]), P(' reported back · ' + age(D[k][2]))], '', 'done');
+
+    const you = (text) => ({ isYou: true, text });
+    const agent = (s, text) => ({ isAgent: true, age: age(s), text });
+    const group = (...rows) => ({ isGroup: true, rows });
+    const note = (text) => ({ isNote: true, text });
+
+    const M = {
+      m1: you('Settings first. Fix the copy issues the audit found, then rerun the suite.'),
+      m2: agent('11:07', 'On it. Two delegates will fix the copy in parallel, then I’ll run the full suite.'),
+      m3: agent('11:53', 'The copy fixes are in and the full suite passes. Shall I build the release candidate?'),
+      m4: you('Yes. Build it and check all three platforms.'),
+      m5: agent('12:59', 'The release candidate is built, and cold start is down to 1.4 s from 2.1 s. Checking the installs next.'),
+      m6: agent('13:52', 'All three installs pass and the updater works. The overnight soak runs in the background; meanwhile I’ll tidy the changelog and update the screenshots.')
+    };
+    const earlierKids = [merged('map'), merged('notes'), merged('inv'), started('cold')];
+    const earlierOpen = state === 'earlier';
+    const earlier = fold([P('Earlier · 4 delegates started, 3 reported back')], earlierOpen, earlierKids, false);
+    const runOpen = state === 'expanded';
+    const run = fold([P('5 delegates · 4 reported back, '), L('1 still working')], runOpen, [merged('upd'), merged('win'), merged('mac'), merged('lin'), started('soak')], runOpen && desktop);
+    const rcLine = merged('rc');
+    if (desktop && state === 'after') rcLine.showTip = true;
+
+    let items;
+    if (state === 'before') {
+      items = [M.m4, M.m6, group(
+        bMany(3, '8:35'), bEnd('map'), bEnd('notes'), bEnd('inv'), bStart('Measure cold start', '10:58'),
+        bMany(2, '11:08'), bEnd('fset'), bEnd('ferr'), bStart('Run full test suite', '11:22'), bEnd('suite'),
+        bStart('Build release candidate', '12:41'), bEnd('rc'), bEnd('cold'), bMany(4, '13:00'),
+        bEnd('upd'), bEnd('win'), bEnd('mac'), bEnd('lin'), bStart('Watch overnight soak', '13:48'), bMany(2, '14:31'))];
+    } else if (state === 'history') {
+      items = [note('Loading earlier messages…'),
+        you('Audit the settings screens, the icon exports and the release notes before we cut 0.4.'),
+        agent('8:34', 'I’ll run three delegates in parallel and collect what they find.'),
+        group(startedMany(['map', 'inv', 'notes'])),
+        you('Include the 200% icon sizes too.'),
+        group(reported('map')),
+        agent('8:44', 'The settings audit found three copy issues: two truncated labels and one tooltip that contradicts its toggle.'),
+        group(reported('notes'), reported('inv')),
+        agent('8:49', 'The notes are drafted, and every icon has a 200% export except the tray icon.'),
+                group(started('cold')),
+                M.m1, M.m2];
+    } else {
+      items = [group(earlier), M.m1, M.m2,
+        group(merged('fset'), merged('ferr'), merged('suite')),
+        M.m3, M.m4, group(rcLine, reported('cold')), M.m5, group(run), M.m6, group(startedTwo('log', 'shots'))];
+    }
+
+    const strip = [
+      { kind: 'working', name: 'Watch overnight soak', short: 'Watch overnight soak', sub: '52m', edge: t.accent, bg: t.accentSoft, color: t.text, flex: '1' },
+      { kind: 'working', name: 'Tidy changelog', short: 'Tidy changelog', sub: '9m', edge: t.stroke2, bg: 'transparent', color: t.text, flex: '1' },
+      { kind: 'working', name: 'Update screenshots', short: 'Update screenshots', sub: '9m', edge: t.stroke2, bg: 'transparent', color: t.text, flex: '1' },
+      { kind: 'done', name: '12 finished', short: '12 done', sub: 'Latest 1h ago', edge: t.stroke2, bg: 'transparent', color: t.text2, flex: '0 0 140px' }
+    ];
+    const sessions = [
+      { kind: 'delegating', name: 'Release 0.4 prep', age: 'Now', sub: 'Delegating to 3 agents · BUILD-PC', bg: t.sel },
+      { kind: 'needs', name: 'Docs pass for 0.4', age: '12m', sub: 'Needs you · LAB-MAC', bg: 'transparent' },
+      { kind: 'idle', name: 'Triage nightly failures', age: '1h', sub: 'Idle · BUILD-PC', bg: 'transparent' },
+      { kind: 'done', name: 'Rename settings keys', age: '3h', sub: 'Done · LAB-MAC', bg: 'transparent' }
+    ];
+    const states = [
+      { label: 'Empty', text: 'No messages yet', where: 'Centred in the conversation.' },
+      { label: 'First page loading', text: 'Loading conversation…', where: 'Centred. The reply box stays usable.' },
+      { label: 'An earlier page failed', text: 'Couldn’t load earlier messages', action: 'Try again', where: 'At the top. What is shown stays.' },
+      { label: 'Host without history', text: 'Earlier messages aren’t available from this machine', where: 'At the top, above the oldest message shown.' },
+      { label: 'Start reached', text: 'Start of session · Mon, Nov 9, 8:31 AM PT', where: 'At the top, once nothing is older.' },
+      { label: 'Past the limit', text: 'Start of available history', where: 'At the top, when the host’s transcript ends first.' },
+      { label: 'A turn the host couldn’t read', text: 'A turn here couldn’t be read', where: 'In its place. The turns around it stay.' },
+      { label: 'A turn cut short', text: 'Cut short · see the machine', where: 'At the end of the turn’s text, over the host’s cap.' }
+    ];
+
+    const history = state === 'history';
+    return {
+      theme, t, items, strip, sessions, states,
+      phone: !desktop, desktop,
+      inspector: desktop && !history, statesPanel: desktop && history,
+      pill: history, pillBottom: desktop ? '96px' : '92px', pillAlign: 'center', pillPad: desktop ? '32px' : '20px',
+      w: desktop ? 1440 : 390, h: 1240,
+      font: desktop ? "'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif" : "system-ui, 'Segoe UI Variable Text', -apple-system, Roboto, sans-serif",
+      baseSize: desktop ? '14px' : '15px', baseLine: desktop ? '20px' : '22px',
+      bodySize: desktop ? '15px' : '16px', metaSize: desktop ? '12px' : '13px', metaLine: desktop ? '16px' : '18px',
+      inputSize: desktop ? '14px' : '16px',
+      outerRadius: desktop ? '8px' : '40px', layerRadius: desktop ? '8px' : '0',
+      layerEdge: desktop ? '1px solid ' + t.stroke : '0',
+      streamEdge: desktop ? '0' : '1px solid ' + t.stroke,
+      streamPad: desktop ? '24px 24px 24px 32px' : '20px',
+      measure: desktop ? '712px' : 'none', youMax: desktop ? '480px' : '80%',
+      composerPad: desktop ? '0 24px 24px 32px' : '8px 12px 28px', composerMax: desktop ? '680px' : 'none',
+      anchor: state === 'earlier' || history ? 'flex-start' : 'flex-end',
+      mono: "'Slipgates Mono', 'Cascadia Mono', ui-monospace, monospace"
+    };
+  }
+}
+</script>
+</body>
+</html>
