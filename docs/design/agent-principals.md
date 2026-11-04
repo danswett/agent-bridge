@@ -185,8 +185,10 @@ The credential replaces `AGENT_HA_AGENT_TOKEN`, as design.md:495 planned.
   * a launch made **by an agent** can never widen its sender's scope, and inherits its `depth` + 1
     and its conversation `chain` (§5.4).
 * **Expiry.** A token is valid while its session's bound process lives, and for at most
-  `agents.credentialDays` (default **7**, Q42). A longer-lived session is re-adopted with one press
-  at the machine.
+  `agents.credentialDays` (default **7**, Q42). A longer-lived session is renewed with one press
+  at the machine, or **remotely** from a person's device with presence. A remote renewal is
+  for the **same live process** (id and start time), never increases the scope, rechecks the
+  policy, and never resurrects a credential whose process has ended.
 
 ### 3.4 Local agent → host authentication
 
@@ -547,6 +549,20 @@ non-disclosing first). Each refusal is audited with its reason:
 
 ## 5. Policy
 
+**The framing, from the adversarial PM/Security review (2026-11-03, revision 11).**
+* **Forced-ask is an optimisation, not the main path.** No signal of an organisation's effective
+  policy has been established, and isolation can't be certified (§5.3). So for most people,
+  including everyone on a managed Copilot, Claude or Codex plan, agent messages travel through
+  the **per-message gate (G)** and the **own-account setting (O)** of §5.7. **G and O are the
+  product**, and get first-class UX: quiet holds, batches, windows and workflow budgets.
+* **Authorizing an action never cleanses its provenance.** An approved message, launch or
+  forward still says where its content came from (§5.8).
+* **A new process is not a clean context.** Taint follows whatever context the agent retains:
+  across person-driven turns, resume, transfer and compaction (§5.8).
+* **Hygiene isn't a boundary.** The provenance prefix (§6.4), look-alike filtering (§6.3) and
+  storing no names (§7.11.10) reduce confusion and exposure. None of them is a security boundary;
+  the host's checks are.
+
 ### 5.1 The per-machine policy
 
 The policy lives in the machine's `config.json` under `agents`. Like `launch.remoteFolderTrust`,
@@ -566,12 +582,12 @@ meant as off is never read as on (host-config.md:139-141).
     "allowAgentLaunchedToLaunch": false
   },
   "inbound": {
-    "local":  { "read": "any", "reply": "forced-ask", "gate": false, "allowAllTargets": false, "launch": { "workspaces": "approved", "permissions": "ask", "agents": ["<default>"], "profiles": ["<default>"] } },
+    "local":  { "read": "any", "reply": "forced-ask", "gate": "quiet", "allowAllTargets": false, "launch": { "workspaces": "approved", "permissions": "ask", "agents": ["<default>"], "profiles": ["<default>"] } },
     "remote": {
       "fromMachines": "any",
       "read": "any",
       "reply": "forced-ask",
-      "gate": false,
+      "gate": "quiet",
       "allowAllTargets": false,
       "launch": { "workspaces": "approved", "permissions": "ask", "agents": ["<default>"], "profiles": ["<default>"] }
     },
@@ -601,7 +617,7 @@ meant as off is never read as on (host-config.md:139-141).
 | `outbound.allowAgentLaunchedToLaunch` | bool | Whether a session an agent launched may itself launch (fan-out, §5.4) |
 | `inbound.*.read` | `any` \| `agent-launched` \| `none` | Which sessions on this machine an agent may read. `any` is any live session. `agent-launched` is only sessions an agent launched through the bridge. `none` is none. **Default: `any`** |
 | `inbound.*.reply` | `forced-ask` \| `agent-launched` \| `none` | Which sessions an agent may reply to. `forced-ask` is every session the host launched in forced-ask mode with no grant or mode change since (§5.3), which is the widest possible value. `agent-launched` is the subset an agent launched. `none` is none. **Default: `forced-ask`** (Q37). Adopted and manually started sessions are never reply targets, because their mode is unknown (§5.3) |
-| `inbound.*.gate` | bool | Whether a reply into a session that **isn't provably forced-ask** (allow-all or unknown-mode, §5.3) is **held** for the owner's per-message, presence-signed approval instead of refused (§5.7 G). **Default: `false`**. Never offered to connectors |
+| `inbound.*.gate` | `off` \| `quiet` \| `push` | Whether a reply or launch into a session that **isn't provably forced-ask** (allow-all or unknown-mode, §5.3) is **held** for the owner's per-message, presence-signed approval instead of refused (§5.7 G). `quiet` holds are counted on Needs-you and never pushed; `push` allows at most one aggregated, text-free push an hour. **Default: `quiet`** for the account's own agents; cross-account G is per link (`expose.gate`). Never offered to connectors |
 | `inbound.*.allowAllTargets` | `false`, or `{ workspaces: "same" \| "any" }` | Whether **this account's own** agents may reply into allow-all and unknown-mode sessions on this machine **without** a gate (§5.7 O). Set in `inbound.local`, it covers agents on this machine; in `inbound.remote`, agents on the account's other machines. Never for another account, a connector, a federated or `homeassistant:` principal, or a chain with a cross-account hop. **Default: `false`** in both. When enabled, the app proposes `inbound.local` with `workspaces: "same"`, and shows the escalation warning |
 | `inbound.*.launch` | `false`, or `{ workspaces: "approved" \| [labels], permissions: "ask", agents: [ids], profiles: [names] }` | Where an agent may launch. **`permissions` can only be `ask`**, and the launch request must say so explicitly (§5.2). `allowAll` is not expressible for an agent: it stays a person's decision, and design.md §5.6 already requires a confirmation for it even from a phone. `agents` and `profiles` are **allowlists**, empty by default except the machine's default agent and profile, each checked not to grant allow-all (§5.2) |
 | `inbound.remote.fromMachines` | `any` \| `[add hash]` | Which of the account's machines may send. `any` means any active, non-probationary rostered host. A list names **add entries**, which the app picks by machine name, never bare device ids. A machine that is re-enrolled or displaced has a new add hash, so it drops out until the owner re-selects it (§8.10, V3, V4) |
@@ -615,8 +631,10 @@ per-machine policy". So the defaults let any session be **read** from the owner'
 and let **replies** go to sessions the host launched in forced-ask mode (§5.3). Launch is
 allowed in approved workspaces with an explicit `ask` only. The policy is the only way to narrow
 it, and the app shows it as plain choices ("Agents on your other machines can: read ✓, reply to
-sessions started by Agent Bridge ✓, launch in approved folders ✓"). The allow-all opt-ins (§5.7)
-are listed separately, off, each with its warning. Until a host is in roster
+sessions started by Agent Bridge ✓, launch in approved folders ✓"). The gate (§5.7 G) is on in
+`quiet` mode, so own agents' messages to sessions that aren't provably forced-ask wait for you
+instead of failing. The own-account setting (O) and the link opt-ins are listed separately, off,
+each with its warning. Until a host is in roster
 `enforce` mode, `inbound.remote` is ignored and treated as `none` (decision 4).
 
 ### 5.2 Allowed actions
@@ -700,8 +718,10 @@ connector `act` profile, Q26):
   (v1-launch.md:101).
 * **Every agent launch is a provably forced-ask launch** (§5.3 (A)): a host-owned configuration
   home, project sources off or absent, no managed policy, allowlisted flags and a scrubbed
-  environment. Anything else **refuses the launch**. An agent launch carries the agent's own
-  prompt, which runs at once, so this check is its only guard.
+  environment. Anything else is **held as a gated launch** for the owner's presence-signed
+  approval of its full manifest and exact prompt (§5.7 G, from AP8; refused before then). An
+  agent launch carries the agent's own prompt, which runs at once, so this check is its only
+  guard.
 * **Agency is never used** for an agent launch, and `agent: "auto"` resolving to Agency
   (host-launch.md:65) is refused: Agency adds flags and profile config the host can't show keep
   forced-ask (host-launch.md:29-30).
@@ -756,7 +776,18 @@ a list the host reads one by one:
 | In-session grants | Copilot's "Yes, and don't ask again" and "remember these paths" (host-answers.md:85-88). Claude's "don't ask again", for the session or persisted. Codex's "always allow", which writes a rule file. A resume may restore session-scoped approvals and skill rules |
 | Runtime switches and reloads | `/allow-all`, `/yolo`, `/permissions`, Codex's `/approvals`. **Claude reloads** permissions and hooks when a settings file changes, and loads one **created** mid-session, a new `.claude/` included. **Copilot reloads** hooks, MCP servers and agents on a plugin change, and `/skills reload` loads new skills |
 
-**(A) in detail: a provably forced-ask launch.** All of these, or the launch isn't forced-ask:
+**(A) in detail: a provably forced-ask launch.**
+
+**Unknown means unknown, per adapter and version.** Forced-ask is claimed for an agent version only
+with all three of:
+* a **source inventory** for that version;
+* **positive evidence of the effective policy**;
+* **adversarial launch, resume and runtime tests**.
+
+File-access traces (Process Monitor and the like) are **regression tests, not proofs**: they show
+what one run touched, not what another configuration would load. No signal of an organisation's
+effective policy is established today, so **managed (corporate) Copilot, Claude and Codex use G or
+O** (§5.7). For a given launch, all of these hold, or it isn't forced-ask:
 
 1. **A host-owned configuration home** per agent kind: `COPILOT_HOME`, `CLAUDE_CONFIG_DIR` and
    `CODEX_HOME` point at `<host data>/agent-homes/<agent>/`. It holds only:
@@ -765,9 +796,13 @@ a list the host reads one by one:
      `approval_policy = "untrusted"`, `sandbox_mode = "workspace-write"`, `features.hooks = false`,
      no rules, MCP servers or trusted projects; Copilot no `allowedUrls`, plugins, hooks, skills,
      agents or saved approvals;
-   * **a copy of the sign-in credential only** (Claude's `.credentials.json`, Codex's
-     `auth.json`, Copilot's token through its documented variable), never the rest of the
-     personal home;
+   * **the sign-in credential only**, never the rest of the personal home. **The OS credential
+     store is preferred** (Copilot's keychain entry or documented token variable). A **copy**
+     of Claude's `.credentials.json` or Codex's `auth.json` doesn't work: both rotate refresh
+     tokens, so a copy diverges from the original and one of them stops signing in. Where a CLI
+     can only keep a credential file in its configuration home, AP1 must show a working
+     arrangement (the CLI reading the OS store, or a single shared credential file referenced
+     rather than copied). Otherwise that adapter isn't forced-ask and uses G or O;
    * the CLI's own **state** (session history, logs), in the subdirectories it uses for them.
 
    **Before every launch** the host checks the home against its manifest: every host-written
@@ -782,8 +817,19 @@ a list the host reads one by one:
    extension path** for that agent: Copilot `.github/copilot/`, `.github/skills/`,
    `.github/agents/`, `.github/hooks/` and legacy commands; Claude `.claude/` and `.mcp.json`
    unless AP1 shows `--setting-sources` excludes each; Codex `.codex/` unless AP1 shows an
-   untrusted project's are ignored. Instruction files (`AGENTS.md`, `CLAUDE.md`,
-   `copilot-instructions.md`) carry no authority and are allowed.
+   untrusted project's are ignored.
+   * **The known gaps** also refuse the launch until AP1 shows them neutralised:
+     * Copilot also loads `.claude/skills`, `.agents/skills` and `~/.agents/skills`;
+     * Codex also loads `.agents/skills` from the working directory up to the repository root,
+       `$HOME/.agents/skills`, `/etc/codex`, a parent directory's `.codex/config.toml`, and
+       cloud-managed requirements;
+     * `CLAUDE_CONFIG_DIR` doesn't contain everything (anthropics/claude-code #81278, #79952,
+       #97680).
+   * Setting `HOME` and `USERPROFILE` to the host-owned home as well narrows the personal sources
+     further. It can't suppress system or cloud policy, which is why step 3 exists.
+   * **Imports.** Only instruction files (`copilot-instructions.md`, `AGENTS.md`, `CLAUDE.md`), and
+     only for adapters whose source inventory passes. They carry text, not authority. No skills
+     and no MCP servers are imported. An import that defeats the proof moves the session to G or O.
 3. **No managed or server policy may apply.** The host refuses if a managed-settings file, an MDM
    profile or a policy registry key for that agent exists, or if the signed-in account is one
    whose organization can set permissions server-side (Claude Team or Enterprise, Copilot
@@ -800,8 +846,9 @@ a list the host reads one by one:
    **unreadable is not absence**, as for the policy (§5.1) and the credential store (§3.4).
 
 **Agent launches are exposed for all three agents.** A launch's prompt runs at once, so the launch
-check is its only guard. An agent launch is allowed only as a provably forced-ask launch; anything
-else is refused. A gated launch, approved like a gated message, is a later option (Q47).
+check is its only guard. An agent launch goes ahead unattended only as a provably forced-ask
+launch. Anything else is a **gated launch** (§5.7 G), held for the owner's approval of its full
+manifest and exact prompt; before AP8 it is refused.
 
 **Staying forced-ask.** Before every delivery the host checks that nothing has changed since
 launch:
@@ -907,7 +954,7 @@ and principal, `SessionDrivers`):
 
 **A person resets it.** Any person input to a session (a reply or answer from any of the person's
 devices, or typing at the machine) takes the session back (v1-sessions.md:863-867) and ends its
-part in any conversation. Its next outbound message is a fresh root. This is the same "until the
+part in any conversation. It resets the **chain budget only, never taint** (§5.8). Its next outbound message is a fresh root. This is the same "until the
 person takes it back" rule as the purple edge, so the budget is easy to explain: "agents can go
 back and forth 20 times on their own; then one of them needs you".
 
@@ -916,6 +963,19 @@ entry can carry the hash of the envelope that delivered it, and the target can a
 host for that envelope and verify it, so a compromised host can't launder a long chain into a
 short one without other hosts' signatures. Under (b), a compromised host can lie about the chain.
 Either way, a compromised host is bounded by the target's per-origin rates (§5.5).
+
+**Workflow budget.** A coordinator running a long piece of work needs more than 20 messages. The
+person grants it a **workflow budget** with presence (for example 150 agent messages over 8
+hours), shown on its card with a notice at 80% and a one-tap, presence-confirmed top-up.
+* The per-conversation and per-pair caps still apply alongside it; the budget is an aggregate
+  ceiling, not an exemption.
+* Schedules and tool approvals don't reset it.
+* Running out gives `budgetExhausted`, with words the agent can relay to the person ("I've used
+  this workflow's 150 messages; top it up on DESK to continue").
+
+**Drivers.** A **payload-free timer** (a wake-up with no text) keeps the session's taint state
+unchanged. An **immutable, owner-approved schedule** may keep own-account eligibility for O.
+Text from Home Assistant or a connector adds **untrusted-automation influence** (§5.8).
 
 ### 5.5 Rate limits
 
@@ -946,6 +1006,12 @@ refusals before signing.
   and signature (for `in`). **Not the text**: it is already in the target session's transcript,
   and the audit log shouldn't become a second copy of everything agents say. Q14 offers keeping
   it.
+* **Grants and provenance.** Every entry also records its **origin** (the retained external
+  origins and categories, §5.8), its **authorizer** (the person command that approved a hold,
+  window, batch or gated launch, or the setting that allowed it), the **grant** used (direct,
+  G, a window, O, a link's status or content grant), the **outcome**, and, for a read, the
+  **projection served**. Never the content. A read served to a person device is marked
+  **served**, not "read by a human": the host can't know whether anyone looked.
 * **Credential events.** Issue, adoption, rejection (wrong session, wrong process), revocation and
   its cause.
 * **Shown.** The app gets an "Agent activity" view per machine (later slice) that filters the log:
@@ -954,76 +1020,127 @@ refusals before signing.
 * **Verifiable.** Under 4.2(a), the person's app can re-verify any inbound entry against the
   roster.
 
-### 5.7 Reaching allow-all sessions: the owner's opt-ins
+### 5.7 Reaching allow-all sessions: the gate and the owner's opt-ins
 
-**Owner decision** (coordinator, 2026-11-03, 19:59 PT). The owner mostly runs sessions in
-allow-all and wants cross-session messaging to work with them. §5.3's restriction is on the
-**target** only. **A sender's own mode never matters:** an allow-all session holding a credential
-(§3.2) can read, launch, and reply into forced-ask targets like any other. What §5.3 forbids is an
-agent's words arriving, **unattended**, in a session that will run them without a prompt. The
-owner chose three opt-in paths through that rule. Each is off by default, and each keeps §5.2's
-delivery guard (idle only, an empty normal-mode composer, `Expect` on the words and the Enter,
-escaping), which there protects the **timing**, not the mode. A fourth option, **sandboxed
-allow-all** (allow-all only inside an OS sandbox the host sets up, so unattended execution is
-confined), was **not chosen** and is recorded as deferred (Q34).
+**Owner decision** (coordinator, 2026-11-03, 19:59 PT), shaped by the adversarial PM/Security
+review (revision 11).
+* The owner mostly runs sessions in allow-all, and wants cross-session messaging to work with
+  them. §5.3's restriction is on the **target** only.
+* **A sender's own mode never matters:** an allow-all session holding a credential (§3.2) can
+  read, launch, and reply into forced-ask targets like any other.
+* What §5.3 forbids is an agent's words arriving, **unattended**, in a session that will run them
+  without a prompt. Since forced-ask is rarely provable (§5), the paths below are how agent
+  messaging normally works.
+* Each keeps §5.2's delivery guard (idle only, an empty normal-mode composer, `Expect` on the
+  words and the Enter, escaping), which there protects the **timing**, not the mode.
 
-**(G) A per-message gate for every target that isn't provably forced-ask** (§5.3 (B)):
+**(G) The per-message gate, for every target that isn't provably forced-ask** (§5.3 (B)):
 allow-all, unknown, adopted, manually started, a session whose configuration changed, and
-Claude and Codex sessions. Same account and cross-account.
-`inbound.*.gate` (§5.1), and per link `expose.gate` (§7.4). Off by default.
-
-1. **Held.** A reply that passes every check except §5.3's target rule, addressed to an
-   allow-all or unknown-mode session, isn't refused: the target host **holds** it. The sender
-   gets the additive outcome `held`, with a `hold` id. A resend with the same `request` returns the
-   current outcome: `held`, then `delivered`, `unconfirmed`, or `refused` with `code: "gateDenied"`
-   or `"gateExpired"`. The replay record (§4.4) is written when the message is held, so the
-   envelope's 120 s expiry is checked at acceptance, and the held copy can't be replayed. The
-   chain budget and rates (§5.4, §5.5) are charged at hold time, so a denied message still costs
-   the sender.
-2. **The prompt.** The target owner's devices get it in the **Needs-you lane**, as a new item kind
-   `agentMessage` on the target session: the sender's **verified label** (§6.3: agent, machine,
-   and for another account the T2 login and link name), the target session, and the **full
-   message text, never truncated** (up to the 16 KiB reply limit, scrollable), with hidden
-   characters revealed as approvals reveal them (`NeedsYou.Reveal`). The text shown is the
-   **exact characters the host will type**, provenance prefix and escaping included. It says
-   plainly: "**Approving makes this your own instruction to an allow-all session.** It can run
-   commands on *DESK* without asking." Buttons: **Deny**, **Approve once**, and **Allow
-   @sender → this session for 5 / 15 / 30 / 60 min**. Deny is first; nothing is pre-selected.
-3. **The approval is a person command.** It is signed with **presence** on a person's device
-   (#391 §7.2, as other approvals and transfers are), over
-   `F("agent-bridge gate v1", {hold, target: {account, machine, session, instance}, sender:
-   {account, generation, add, session, instance}, textSha256, decision, minutes?, request,
-   expiresAt})`. The host checks a person-kind signer, presence, the hold still pending, the
-   exact `textSha256` of what it holds, the sender principal and target instance, and the
-   request in the durable replay store (single use). So neither a relay nor a host can swap the
-   text, the sender or the target. It can't come from an agent connection, a connector, the
-   `homeassistant:` press path or any path without presence: those have no person `sign` key.
-4. **Expiry.** A hold not approved within **5 minutes** expires (`gateExpired`) and is discarded.
-5. **Delivery.** An approved message is typed **once**, under §5.2's full guard. If the target
-   isn't idle when approved, the host waits for idle until the hold's expiry, then gives up
-   (`gateExpired`). It never retries a delivery that came back `unconfirmed`.
-6. **A window** ("Allow @sender → this session for N minutes"):
-   * N is one of 5, 15, 30 or 60. It is **per sender principal and per target session**, keyed by
-     the sender's `(account, generation, add, session, instance)` and the target's `(machine,
-     session, instance)`. Never a wildcard, never per machine or account.
-   * Only the target owner's presence-signed approval opens one. **A sender can't open, extend or
-     see one**: no op in the agent or connector set touches it.
-   * Revocable at once from the session card ("Stop allowing @sender"). It ends when either
-     session ends or is resumed (a new `instance`), when the target's mode or grants change as
-     §5.3 can see, or when the link is suspended or tombstoned.
-   * Window deliveries skip the prompt but nothing else. They are rate-limited
-     (`limits.gateWindowPerMinute`, default 2, at most 20 per window), each is **audited** with the
-     window id and the message hash, and the person sees a quiet running count on the card.
-7. **Not for connectors in v1.** A connector reply into an allow-all or unknown session is
-   refused outright, and the gate isn't offered (§9.6, Q26).
-8. **What it makes reachable.** Every unknown-mode session can be reached this way: adopted and
-   manually started sessions, and Claude and Codex sessions that §5.3 leaves unknown (Q45).
+Claude, Codex and organisation-managed sessions. Same account and cross-account.
+* **Settings.** `inbound.*.gate` (§5.1) is `off`, `quiet` or `push`. The own-account default is
+  **`quiet`**: a hold runs nothing without the owner's presence, so holding is safe to leave on.
+  Cross-account G stays **opt-in per link** (`expose.gate`, §7.4).
+* **Holding.** A reply that passes every check except §5.3's target rule isn't refused: the target
+  host **holds** it.
+  * The sender gets the additive outcome `held`, with a `hold` id. A resend with the same
+    `request` returns the current outcome.
+  * The replay record (§4.4) is written at hold time, so the envelope's 120 s expiry is checked at
+    acceptance and the held copy can't be replayed.
+  * The chain budget, workflow budget and rates (§5.4, §5.5) are charged at hold time, so a denied
+    message still costs the sender.
+* **A bounded queue** of held messages:
+  * Each hold has an **absolute expiry**: 60 minutes for a quiet hold, 5 to 15 minutes for a
+    pushed one. Approving it doesn't restart the clock.
+  * A hold is for its exact text. New text means a new hold, and the person's own input to the
+    target cancels its pending holds.
+  * An approved hold waits for the target's next idle, up to that expiry. At delivery the host
+    **rechecks everything**: policy, link revocation, taint, the target instance and §5.2's
+    guard. It types once, and never retries a delivery that came back `unconfirmed`.
+* **Notifications. No push per hold.** This is normative. Quiet holds are counted on Needs-you
+  and never pushed. A person can opt in to **at most one aggregated push per hour**, carrying a
+  generic count and **no text** ("3 agent messages are waiting"). Quiet hours are per device. A
+  hold that expires overnight is dropped, so there's no morning backlog: the morning shows a
+  count, not a queue.
+* **The prompt**, in the Needs-you lane as item kind `agentMessage`:
+  * Heading: "**@alex's agent wants to run something on DESK**". It shows the immediate sender's
+    **verified label** (§6.3) **and the retained external origins** (§5.8).
+  * **A deterministic, explicitly partial summary**, such as "contains these commands, among
+    other text", listing what looks like a command, URL or file path. It never offers a model's
+    reassurance.
+  * The **full text** is one tap away, exactly as it will be typed, prefix and escaping included,
+    never truncated (up to 16 KiB), with hidden characters revealed (`NeedsYou.Reveal`).
+  * Buttons: **Deny** and **Authorize to run**, Deny first, with nothing pre-selected, plus the
+    window choice below. It says plainly: "Authorizing makes this your own instruction to a
+    session that can run commands on *DESK* without asking."
+  * **Reducing authority needs no biometrics:** mute (for an hour, or until morning) and pause.
+    "**Block replies from @alex**" turns off `expose.reply` for that link through an
+    authenticated, replay-protected person-device command; **widening** anything needs presence.
+  * It never suggests a broader grant as an escalation.
+* **The approval is a person command**, signed with **presence** on a person's device (#391 §7.2),
+  over `F("agent-bridge gate v1", {hold, target: {account, machine, session, instance}, sender:
+  {account, generation, add, session, instance}, origins, textSha256, decision, window?, request,
+  expiresAt})`.
+  * The host checks: a person-kind signer; presence; the hold still pending; the exact
+    `textSha256`; the sender principal; the retained origins; the target instance; and the
+    request in the durable replay store (single use).
+  * So neither a relay nor a host can swap anything. Agent connections, connectors, the
+    `homeassistant:` press path and any path without presence can't produce one.
+  * **Approval keeps provenance:** the delivered text still names its external origins, and the
+    target inherits the sender's taint (§5.8).
+* **Batch approval.** One presence signature can cover an **immutable, bounded batch** (at most 20
+  holds). It binds each item's text hash, sender and target instance, every text is shown, and
+  each item is delivered idempotently on its own.
+* **Windows** ("Authorize @sender to run things in these sessions for N minutes", N one of 5, 15,
+  30 or 60):
+  * A window covers a **signed, fixed set of target instances**, which the person can pick many
+    of at once from a workspace. The set **never grows on its own**.
+  * A **tainted** sender's window is a distinct **G delegation grant** for a fixed set of origins.
+    A new origin appearing in the sender's taint pauses it. It is never O.
+  * **The expansion fold:**
+    * A gated launch carries an "**Include in @coordinator's window**" checkbox, unticked by
+      default, bound to that launch's resulting instance.
+    * The first hold to a target outside the window offers "**Authorize and add this session to
+      the window**".
+    * Expansion is bound to the window, sender, instance and origin restrictions. It never
+      includes descendants automatically, never extends the expiry, and never resets a budget.
+  * Only the target owner's presence-signed approval opens or expands a window. **A sender can't
+    open, extend or see one.**
+  * A window is revocable at once, and ends when a covered session ends or gets a new instance,
+    when the target's mode or grants change, or when the link is suspended or tombstoned.
+  * Window deliveries skip the prompt but nothing else. They are rate-limited
+    (`limits.gateWindowPerMinute`, default 2), and each is audited.
+* **A gated launch, in v1.** A launch that isn't provably forced-ask, allow-all included, is
+  **held for presence approval** instead of refused (§5.2).
+  * The approval binds the **full manifest** (agent and version, flags, profile, permissions,
+    model, effort, environment changes), the **exact prompt**, the destination (a **fresh worktree
+    the host makes**), an expiry and the requester's taint.
+  * Its **source report** separates what the host **verified**, **observed** and **can't know**.
+    It never claims to list everything that will load.
+  * The screen says: "**Allow-all lets this run code with your account's privileges. A fresh
+    worktree is organisation, not containment.**"
+  * A launch an external party requested keeps external provenance (§5.8).
+* **What the sender learns.**
+  * An own-account sender gets precise codes: `gateDenied`, `gateExpired`, `gateCancelled`.
+  * An **external** sender gets one code, `notDelivered`, for deny, expiry, mute and block alike,
+    reported at a **common deadline** (the hold's absolute expiry), so timing doesn't reveal
+    which. The real reason stays in the owner's audit, and a blocked body isn't kept longer than
+    needed. This makes the cases hard to tell apart, not perfectly indistinguishable.
+* **A refusal nudge**, at most weekly, when own agents' messages keep being refused: "Agents
+  couldn't reach 4 of your sessions this week", with the choices in a neutral order (**Keep off ·
+  Ask me each time · Allow my own agents (same repo)**) and none marked recommended. It is
+  suppressed when the refusals came from tainted or externally chained senders.
+* **Revocation at use.** Link and policy state are rechecked before a queued delivery, a window
+  delivery and every subscription event. Revoking cancels holds, windows and pending launches.
+* **Not for connectors in v1.** A connector reply into a session that isn't provably forced-ask is
+  refused outright, with no hold (§9.6, Q26).
 
 **(O) Own agents into own allow-all sessions, without a gate.** `inbound.*.allowAllTargets`
-(§5.1). It covers allow-all **and unknown-mode** sessions, since §5.3 already treats unknown as
-allow-all. Off by default, set only at the machine, and **never** for another account's, a
-connector's, a federated or a `homeassistant:` principal, or for any message whose chain has a
-cross-account hop (§5.4 `via`, the §7.5 taint rule).
+(§5.1).
+* It covers allow-all **and unknown-mode** sessions, since §5.3 treats unknown as allow-all.
+* Off by default, and set only at the machine.
+* **Never** for: another account's principal, a connector's, a federated or a `homeassistant:`
+  principal; a message whose chain has a cross-account hop (§5.4 `via`, §7.5); or a **tainted**
+  sender (§5.8). An immutable, owner-approved schedule may keep a session eligible (§5.4).
 * **The risk, shown in the setting:** "Any agent of yours, including one in an ask-mode session or
   one following instructions injected into it, could get commands run without a prompt through
   another of your sessions that runs in allow-all." The owner turns it on knowingly.
@@ -1035,18 +1152,86 @@ cross-account hop (§5.4 `via`, the §7.5 taint rule).
     id) or `"any"`.
 
   **Recommended when enabled: same workspace, same machine** (`inbound.local` only).
-* Chain depth, conversation budgets and rates apply unchanged, with a separate, lower per-target
-  rate for allow-all targets (`limits.allowAllPerTargetPerMinute`, default 3).
+* Chain depth, conversation and workflow budgets and rates apply unchanged, with a separate,
+  lower per-target rate for allow-all targets (`limits.allowAllPerTargetPerMinute`, default 3).
 
-**(R) Read-only cross-account access to allow-all sessions.** Per link,
-`expose.allowAllRead` (§7.4, §7.11.5). Off by default.
-* Linked accounts may **read** (`sessions.list`, `session.get`, `sessions.subscribe`) the
-  owner's allow-all and unknown-mode sessions **in the pinned workspaces**, under §7.4's read
-  projection and §7.5's taint rule.
-* **Never reply** through it. A reply into those sessions still needs gate (G), with
-  `expose.gate` on the same link.
+**(R) Read-only cross-account access to allow-all sessions.** Per link, `expose.allowAllRead`
+(§7.4, §7.11.5). Off by default.
+* Linked accounts' agents may **read** (`sessions.list`, `session.get`, `session.read`, whose wait
+  form is how agents follow a session) the owner's allow-all and unknown-mode sessions **in the
+  pinned workspaces**. The person view uses `sessions.subscribe` (§7.12). Both are under §7.4's
+  projection, and the reader becomes tainted (§5.8).
+* **Never reply** through it. A reply into those sessions still needs G, with `expose.gate` on.
 * **The disclosure, shown in the link dialog:** "Their agents could read what your allow-all
   sessions say, including command output. Transcripts can contain secrets."
+
+**(S) Sandboxed allow-all.** An OS-enforced restriction of the filesystem, credentials, IPC and
+network egress around an allow-all session.
+* It isn't a prerequisite for reads or for cross-account G.
+* **Recommended immediately after AP9** (Q50; the owner decides).
+* Removing the gate on the strength of a sandbox would need **separately demonstrated
+  boundaries**, not this design's assertion.
+### 5.8 Provenance and taint
+
+**Taint follows retained context, not processes.**
+* **What sets it.** A session becomes **tainted** when content it may act on arrives from
+  outside the owner's own agents and people:
+  * **cross-account free-form content**, from a reply **or a read** (a collaborator's transcript
+    the agent read is as influential as one sent to it);
+  * **Home Assistant and connector text**, recorded as **untrusted-automation influence**, with
+    no invented foreign identity;
+  * **forwarded scout output** (below).
+* **What it records.** Taint is kept per origin account and category (`external:<account>`,
+  `automation:<connector>`, `forwarded`), with the time it was first and last set.
+* **What it survives.** It survives anything that keeps the context: person-driven turns,
+  resume, transfer, compaction, and a new process or instance that reloads the conversation.
+  **A new process is not a clean context.**
+* **What clears it.** Only two things:
+  * an **adapter-demonstrated context removal**, proved by a version-specific vector;
+  * a **fresh conversation** (below).
+
+  Never a person's reply, a timer, a resume or a compaction.
+
+**What a tainted sender may do.**
+* It may use the gate (G), a gated launch, or a direct reply to a **provably forced-ask** target.
+  The receiver then **inherits** the taint.
+* It may **never** use the own-account setting (O).
+* **Approval authorizes execution and keeps the origin label.** `driverFrom` (§6.1) and the
+  prefix (§6.4) name the external source, and the gate prompt shows the retained external origins
+  beside the immediate sender (§5.7).
+
+**"Start a fresh coordinator", one tap.** It starts a fresh conversation from:
+* the immutable prompt **a person originally supplied**, with its provenance. A prompt that came
+  through G from an agent or an external source doesn't qualify;
+* plus a typed, host-built **state block**: session ids, statuses and typed status facts, below.
+
+It carries no transcript, summary, resume or subagent memory. "Clean" means **no retained
+external Bridge content**. It doesn't mean immune to injection through the repository or `gh`.
+
+**Typed `session.status`, which doesn't taint.** A collaborator's agent can coordinate on status
+without importing free-form content:
+* **Bounded fields only:** enums, booleans, counts and timestamps, with **opaque handles the
+  reader generates**. No titles, branch names, check names, error text or peer-supplied hashes.
+* **The reader's side fetches PR and CI state** from GitHub, bound to the pinned repository, the
+  reader's assigned work items, and the expected PR, head SHA and required checks.
+* **It guides scheduling only.** It never authorizes a merge, a deploy or the use of a credential.
+* **Open design item** (Q52): hosts hold no GitHub token, so v1 fetches through the reader's app,
+  or a separately designed broker. CI state is unavailable while no person device is online.
+
+**The badge.** A tainted session's card reads "**External Bridge content retained · @welshofer ·
+14:05**", with its categories. **Residual:** the bridge can't taint what the agent reads through
+`gh` or the repository itself.
+
+**`replyPath`.** For each session, the host computes, per requesting principal and including
+taint: `direct | gate | gate(tainted) | own-allow-all | refused(<reason>)`. It is advisory, and
+never reveals a session the principal can't see. Cards show it as "Agents: direct / ask you /
+blocked".
+
+**The scout template.** A scout (an agent sent to read a collaborator's sessions or a repo)
+reports **typed, host- and GitHub-observed facts separately from its recommendations**. It has no
+`approved` or `nextAction` fields that another agent could mistake for authority. Forwarding a
+scout's output to another session is a gate action titled "**Approve forwarding this external
+content**": provenance is kept, and the receiver becomes influenced.
 
 ---
 
@@ -1058,7 +1243,9 @@ cross-account hop (§5.4 `via`, the §7.5 taint rule).
 |---|---|---|
 | `driver` | `Session` | `agent`, unchanged (v1-sessions.md:832) |
 | `driverPrincipal` | `Session` | `agent:<machine>/<session>` (§3.1), replacing `homeassistant:<id>` for native agents. HA-connector presses keep theirs |
-| `driverFrom` (new) | `Session` | `{ account?, login?, repo?, machine, machineName, session, title?, agent, federated?, depth }`: who drives, for display. `machineName` is the **target host's** view of the sender's roster name (signed by a person's device, #391 §3.2), never a name the envelope carries. `title` is the sender's session title as the envelope's issuer gave it (cut to 120 bytes, hidden characters made visible as `NeedsYou.Reveal` does). `account`, `login` and `repo` (the link's repository, §7.11) only when it is another account's (§7). `login` is the receiving side's own resolution of the T2-verified user id (`GET /user/{id}` by its app, recorded in its link statement and refreshed daily), never a name the peer supplied |
+| `driverFrom` (new) | `Session` | `{ account?, login?, repo?, machine, machineName, session, title?, agent, federated?, depth, origins? }`: who drives, for display. `machineName` is the **target host's** view of the sender's roster name (signed by a person's device, #391 §3.2), never a name the envelope carries. `title` is the sender's session title as the envelope's issuer gave it (cut to 120 bytes, hidden characters made visible as `NeedsYou.Reveal` does). `account`, `login` and `repo` (the link's repository, §7.11) only when it is another account's (§7). `login` is the receiving side's own resolution of the T2-verified user id (`GET /user/{id}` by its app, recorded in its link statement and refreshed daily), never a name the peer supplied. `origins` lists the sender's **retained external origins** (§5.8), kept even when the person authorized the message through the gate |
+| `taint` (new) | `Session` | `{ origins: [{ account?, category, firstAt, lastAt }] }`: the session's own retained external content (§5.8), for the account's own clients. It drives the badge "External Bridge content retained" |
+| `replyPath` (new) | `Session` | `direct` \| `gate` \| `gate(tainted)` \| `own-allow-all` \| `refused(<reason>)`, computed per requesting principal (§5.8). Advisory; it never reveals a hidden session |
 | `activity.userMessageFrom` | `Activity` | `agent` (PR #501), set **only** from a verified agent command or a local agent connection, never from anything the sender's text contains (the #501 security review's requirement) |
 | `activity.userMessageLabel` | `Activity` | Built **only from verified fields** (§6.3): `"<agent> on <machineName>"`, for example `"copilot on DESK"`; across accounts `"<agent> on <link name> · @<T2 login>"`. Cut to 64 bytes. Clients show it as "Sent by copilot on *DESK*". The sender's `title` is never in the label: older clients that show only the label must not show an unverified title as the sender |
 
@@ -1130,8 +1317,11 @@ types:
 * PR #501's matching of an agent's prompt by its record and text is done on the text **as typed**,
   prefix included, which the host knows.
 * Whether same-account messages carry the prefix is Q6 (recommended: yes, default `prefix`).
-* **The prefix is a hint to the receiving agent, not a security boundary.** A model may ignore
-  it, and a sender's words may still persuade. What bounds an injected instruction is §5: the
+* **Retained origins.** When the sender is tainted (§5.8), the header also names the retained
+  external origins, even when the person approved the message through the gate: `· carries
+  content from @alex` or `· carries automation text`. Authorizing never cleanses provenance.
+* **The prefix and the look-alike filtering are hygiene, not a security boundary.** A model may
+  ignore them, and a sender's words may still persuade. What bounds an injected instruction is §5: the
   scope, the §5.3 exclusions, the delivery guard, the budgets, and the fact that approvals and
   folder trust stay with the person.
 
@@ -1356,11 +1546,13 @@ A message flows only if **both** owners allowed it: A's **reach** (outbound) and
 |---|---|---|
 | **Expose: machines** | None | Specific machines of theirs |
 | **Expose: sessions** | **None visible** | Only **shared** sessions: those launched in the link's **workspace** (`expose.workspaces: ["Project X"]`), or explicitly shared by the person ("Share with @alex's agents" on a session card). For a repo-scoped link, the link's workspace is the workspaces **pinned** to the repo at acceptance, and worktrees the host made for them (§7.11.5). **Allow-all and unknown-mode sessions are not exposed** (§5.3), unless the link's `allowAllRead` opt-in exposes those in the pinned workspaces for **reading only** (§5.7 R). Everything else is `not-found`, the same as nonexistent |
-| **Expose: actions** | None | `read`, `reply`. `launch` opt-in, only into the link's workspace, `ask` only, counted against `launchesPerMachinePerHour` / 4. `gate` opt-in: replies to allow-all or unknown sessions in the link's workspaces are held for this owner's per-message approval (§5.7 G). The own-account setting (§5.7 O) never applies to a link |
-| **Expose: read projection** | When read is allowed: `id`, `title`, `agent`, `status`, `statusSince`, `activity.response` (≤ 16 KiB), `waiting: bool`, `driverFrom` | Nothing more in v-full. **Never** `cwd`, `userMessage` (it may hold the owner's private instructions), `reasoning`, tool `history`, `subagents`, `question` content, usage, attachments, or `repository`/`branch` unless the link names that repository |
+| **Expose: status** (recommended preset) | None | Typed `session.status` only (§5.8): bounded enums, booleans, counts, timestamps and reader-generated handles. **No titles**, no free text; a person-view display projection can add titles as its own grant (§7.12). It doesn't taint the reader. This is the preset the dialog offers first |
+| **Expose: content** | None | Free-form reads under the projection below. The dialog warns: "**@alex and their AI provider may process and retain what their agents read, under their own policies. Read-only access and later revocation don't retract copies.**" It taints the reader (§5.8) |
+| **Expose: actions** | None | `read` (status or content, above), `reply`. `launch` opt-in, only into the link's workspace, `ask` only, counted against `launchesPerMachinePerHour` / 4. `gate` opt-in: replies to allow-all or unknown sessions in the link's workspaces are held for this owner's per-message approval (§5.7 G). The own-account setting (§5.7 O) never applies to a link |
+| **Expose: content projection** | When content is allowed: `id`, `title`, `agent`, `status`, `statusSince`, `activity.response` (≤ 16 KiB), `waiting: bool`, `driverFrom` | Nothing more in v-full. **Never** `cwd`, `userMessage` (it may hold the owner's private instructions), `reasoning`, tool `history`, `subagents`, `question` content, usage, attachments, or `repository`/`branch` unless the link names that repository. Titles are content, never status; a person view shows them only under a separately authorized display projection (§7.12) |
 | **Reach: which of my sessions may send** | **None** | Only sessions launched in the link's workspace, or adopted for the link explicitly. So an agent working in a private repository with access to secrets can't be talked into posting to the collaborator: it has no reach |
 | **Reach: actions** | None | `read`, `reply`, `launch` (if the peer exposes it) |
-| **Expiry** | 30 days | Renewable with presence. A link that expires stops both directions on each side's hosts without the other's help |
+| **Expiry** | 30 days | Renewable with presence, or within a **renewal mandate**: a longer period (for example 6 months) the owner approves up front, inside which the app refreshes the link without presence while membership and activity stay fresh (§7.11.4). A promised final expiry is never extended silently. A link that expires stops both directions on each side's hosts without the other's help |
 
 Consent is **asymmetric and local**: each owner's hosts enforce that owner's statement and nothing
 the other side says. B can expose read to A without A letting any of A's sessions send.
@@ -1382,10 +1574,11 @@ the other side says. B can expose read to A without A letting any of A's session
    custodian's key can't keep a link alive after the peer removes that device; §7.3's residual
    covers a thief with an attester's keys too. Otherwise the link is stale: nothing flows (Q9).
 5. **Policy:** this side's expose statement (sessions, actions, projection) and the per-link
-   rates, **half** the single-account defaults. `maxDepth` across accounts is **2**: an external
-   message may reach one shared session, which may not forward it within this account (a
-   session whose turn an external agent drove has **no reach** into non-shared sessions, the
-   "taint" rule).
+   rates, **half** the single-account defaults. **Taint** (§5.8): the receiving session becomes
+   tainted by the external origin, whatever drives it later. `maxDepth` across accounts is **2**:
+   the external message is hop 1; the tainted session may make **one** further hop within this
+   account, and only through G or into a provably forced-ask target, which inherits the taint.
+   Never through O, and never a third hop.
 6. **Prefix** mandatory (§6.4).
 
 ### 7.6 What each relay operator sees
@@ -1408,6 +1601,14 @@ list.
   send the **tombstone** (§7.3). That side's hosts stop accepting and stop signing immediately,
   with no cooperation from the other side or either relay. The other side's hosts stop as soon as
   the tombstone reaches them. Then the relay registration is withdrawn (an honest-relay courtesy).
+* **Revocation at use.** Every host rechecks the link before a queued delivery, a window
+  delivery and each subscription event (§5.7 G), and a revocation cancels that link's holds,
+  windows and pending launches. The app shows **which hosts have acknowledged** the revocation
+  ("Revoked · DESK ✓ · LAPTOP pending") rather than promising an instant global effect.
+* **What revoking does and doesn't do**, said in the dialog: "Revoking stops new access. What
+  @alex's sessions already read stays in their transcripts, and their AI provider may keep it
+  under its own policies. We can't retract copies." Where the directory keeps entries (§7.11.10)
+  and where transcripts live (each person's own machines and providers) are stated separately.
 * **A stolen or removed person's device of A holding `linkKey`.** Its removal from A's roster
   revokes every link it holds the key for. A's hosts stop co-signing and each sends a tombstone
   under its own `hostSign`, which B verifies against the hosts it confirmed (§7.3). Before removal,
@@ -1453,9 +1654,9 @@ list.
 ### 7.10 Full-design slices (after owner approval and a separate security review)
 
 F1: link descriptors, link codes and statements (library and vectors). F2: relay `guest`
-admission. F3: host enforcement, projection and taint, including `allowAllRead` and the link's `expose.gate`
+admission. F3: host enforcement, projection and taint, the **status** and **content** grants and typed `session.status` (§7.4, §5.8), `notDelivered`, revocation acknowledgements, including `allowAllRead` and the link's `expose.gate`
 (§5.7, after AP8). F4: app and PWA link pages and the external marker, with the allow-all opt-ins
-and their warnings (§7.11.5). F5: spaces as named sets of links (optional). F6: repo discovery (§7.11):
+and their warnings (§7.11.5). F5: spaces as named sets of links and presets (optional), with no future members and no transitivity, built **after** F7. F6: repo discovery (§7.11):
 SSH-signed descriptors, the members-only directory, membership freshness and the suggestion UI.
 F6 depends on F1-F4, because it produces F1 links, and on the **directory store** (§7.11.10): the
 `directory` container in design.md §5.8's Cosmos DB account, the `directory-store.bicep` stamp
@@ -1663,6 +1864,15 @@ SSH-host-key rule.
 
 #### 7.11.5 Consent and UX
 
+* **Setup is a prerequisites wizard.** It checks the GitHub sign-in, the token's repository
+  permissions (Q38), an SSH signing key on GitHub, and a second device or recovery key (§7.3),
+  and fixes what it can with the person watching.
+  * It **never registers an SSH signing key silently**: adding one to GitHub is a step the person
+    confirms.
+  * A phone-only person approves setup through their **paired desktop**, which holds the key; the
+    private key is never copied to the phone.
+  * Scope comes from **named presets** the person picks explicitly ("Status only",
+    "Read and ask me", "Custom"). None is pre-selected.
 * **Opt-in per repository** (Settings → Collaboration → "Find collaborators who use Agent Bridge
   on danswett/agent-bridge"). Nothing is registered or queried for a repo until its owner opts in.
   The same page sets the repo's **activity window** (default 90 days, §7.11.4).
@@ -1674,13 +1884,22 @@ SSH-host-key rule.
   > Connect? Agents in this repo's sessions could read and reply to each other.
   > [Review and connect] [Not now] [Never for this repo]
 
+* **Declining is silent.** "Not now" and "Never for this repo" tell the other side nothing, and
+  can't be told apart from not using Agent Bridge at all.
 * **Accepting** opens §7.4's scope with the repo choices (below), shows the optional link code,
-  and signs §7.3's link statement with presence. **Nothing connects until both owners have
+  and signs §7.3's link statement with presence. It starts with a **consequence preview**:
+  "6 of your sessions in this repo run allow-all; @welshofer sees 0 of them. 3 sessions would be
+  visible as status." The preview updates as the person ticks options, and nothing is ticked for
+  them. **Nothing connects until both owners have
   accepted in their own apps.** The other side sees "@danswett accepted. Review and connect?",
   never an automatic connection.
 * **Repo scope** (the choices in the dialog):
   * **Nothing is pre-ticked** (Q40), as in §7.4 and #391's "pre-ticks nothing". The person ticks
-    read and/or reply. Launch is a separate opt-in.
+    **status** (the recommended preset) or **content**, with content's provider-retention
+    warning (§7.4), and/or reply. Launch is a separate opt-in.
+  * **Organisation policy** is named only when it is actually configured or enforced on this
+    machine; otherwise the app says "External sharing is disabled on this machine". A personal
+    consent button never overrides an organisation-enforced restriction.
   * **Read** covers @alex's agents **and @alex in their own app** (§7.12): "@alex and their
     agents can read these sessions."
   * **Allow-all sessions** (§5.7), two further opt-ins, unticked, each with its warning:
@@ -1708,11 +1927,18 @@ SSH-host-key rule.
     @alex at all.
   * The projection, taint and limits of §7.4-§7.5 apply unchanged.
 * **Revocation:** on demand by either owner (one press, unilateral, §7.7). Automatically on lost
-  membership (§7.11.4). Automatically on descriptor expiry (90 days, renewed by the app with a new
-  SSH signature, so the key's continued registration on GitHub is rechecked). And on "Never for
+  membership (§7.11.4). Automatically on descriptor expiry (30 days, renewed by the app with a new
+  SSH signature, within the link's renewal mandate, §7.4, so the key's continued registration on
+  GitHub is rechecked). And on "Never for
   this repo".
 * **Audit:** the link history (accepted, verified, suspended, revoked, each with its cause),
   GitHub's own membership record, and the per-message audit of §5.6.
+* **Batch linking.** Several collaborators on one repo can be linked from a **fixed, visible list**:
+  each is an exact pairwise grant that both people accept. **Spaces** (§7.10 F5) only group links
+  and presets: no future members, no transitivity, and they come **after** the person view (F7).
+* **The supported audience.** No birth dates are collected by default. Whether minors are a
+  supported audience is an **owner decision before public launch** (Q51); GitHub's age terms
+  alone aren't sufficient.
 
 #### 7.11.6 Repository threats
 
@@ -1723,7 +1949,7 @@ SSH-host-key rule.
 | A compromised maintainer **adds an attacker as a collaborator** | The attacker becomes a *suggestion* | Consent is the gate. The suggestion names the account, and accepting is never automatic. Default scope is the repo only, launch off |
 | **Fork** | No effect | Descriptors and directory entries bind the **immutable repo id**. A fork has a different id, and its owner isn't a collaborator upstream. Renames and transfers keep the id |
 | **A contributor leaves** | Suspended within 24 h (their side's check) and 72 h at the latest (host freshness) | §7.11.4 |
-| **A dormant member with write access** (one of hundreds of org writers who never touch the repo) | Isn't suggested, and can't list the directory's entries: the directory answers only callers who are active (§7.11.2). Their own entry is withdrawn by their app and hidden by the directory | Activity is required of both people. Where the directory can't verify activity it gates on write access only and says so; the apps still filter |
+| **A dormant member with write access** (one of hundreds of org writers who never touch the repo) | Isn't **suggested**: the apps' activity filter excludes them (§7.11.4). **Can still list** the directory's entries, since the directory gates on write access only (§7.11.2). Their own entry is withdrawn by their app while they're dormant | A privacy cost only: a listing is neither a suggestion nor a link, entries carry no names, and endpoints are sealed by default (§7.11.7) |
 | **Read access, a fork, a star, or a one-off past contribution** to a public repo | Never qualifies | None is write access now, and a fork's repository id never matches (§7.11.4) |
 | **Faked activity**: a writer pushes a commit whose author or `Co-authored-by` names a dormant member, or opens a PR to look active | At most a **suggestion**, or a directory listing for a writer who could have been active anyway | Activity is a filter, never authority. Write access and both owners' consent still gate every link |
 | **Activity lapses on an existing link** | The link stays, and no new suggestions are shown | Membership is unchanged (§7.11.4) |
@@ -1857,6 +2083,10 @@ for by A's hosts. B sees them as `driverFrom { account, login, federated: true, 
      (design.md:605, multi-region writes): one container, `directory`, in that account, shared by
      every stamp now and as regions are added, partitioned on `/pk` (item 2). A new region joins
      by adding its location to the account, with no data move.
+   * **The writer must be the caller.** The directory accepts a registration, renewal or
+     withdrawal only if the descriptor's `github.userId` equals the caller's user id proven by
+     step 2's T2 challenge (§7.11.2), and the repository id equals the one proven by step 3's
+     App check.
    * **Expiry and withdrawal.** Per-item `ttl` is the descriptor's `expiresAt` minus now (30 days
      at most). Withdrawal writes a **signed tombstone** (signed by the descriptor's `linkKey`, with
      a newer `issuedAt`), whose own TTL is 31 days, longer than any descriptor it replaces.
@@ -1877,9 +2107,12 @@ for by A's hosts. B sees them as `driverFrom { account, login, federated: true, 
      (relay-deploy.md:358-363). A per-stamp directory would hide members on one stamp from
      members on another, so the directory must not follow that pattern.
    * **Infrastructure.**
-     * A Bicep module, `directory-store.bicep`, that each stamp includes beside `roster-store.bicep`
-       and `blob-store.bicep`. It adds the stamp's region to the Cosmos account and creates the
-       database and container on first deployment.
+     * **The shared Cosmos DB account is managed in one place**: a global Bicep module,
+       `directory-account.bicep`, deployed once, owns the account, its `locations` list, the
+       database and the container. Adding a region is one edit to that list.
+     * Each stamp's `directory-store.bicep`, beside `roster-store.bicep` and `blob-store.bicep`,
+       only **references** the existing account and assigns its own identity's roles. It never
+       sets `locations`, so two stamps can't fight over the account's regions.
      * The stamp's managed identity gets the Cosmos DB Built-in Data Contributor role, scoped to
        that container, with `disableLocalAuth: true`: **no keys**.
      * Key Vault access is `get` on `directory-secret` and `unwrapKey` on `directory-data`.
@@ -1897,15 +2130,22 @@ for by A's hosts. B sees them as `driverFrom { account, login, federated: true, 
      dormancy) writes the signed tombstone at once, which hides the entry everywhere; the TTL then
      removes both.
    * **On demand**, "Remove me from collaborator discovery" in the app signs a withdrawal for
-     every repository the person ever registered. A person who has lost their keys signs in to
-     the relay with GitHub, and the directory deletes the entries keyed by their user id across
-     those repositories. Either way, the directory **hard-deletes** the entries and their
+     every repository the person ever registered.
+   * **Where the repository list comes from.** Entries are keyed only by HMACs of
+     `(repo, user)`, so the directory can't find a user's entries without the repository ids. It
+     therefore keeps one more item per user: the **user index**, keyed by
+     `HMAC(directorySecret, "user" ‖ userId)` and encrypted like the entries. It holds the
+     blinded entry keys that user has registered, and is updated on every registration and
+     withdrawal. A person who has lost their keys signs in to the relay with GitHub, and the
+     directory reads that index and deletes every entry it lists. Either way, the directory **hard-deletes** the entries and their
      tombstones once the tombstones have replicated to every region.
    * **Backups.** Cosmos DB's backup keeps deleted entries for its retention window, set to
      **7 days** of continuous backup for this container, and no other copy exists. A restore is
      for disaster recovery only, and is followed by re-applying every tombstone and deletion
      recorded since the restore point.
    * Nothing about an entry reaches logs or metrics beyond blinded keys and counts (item 2).
+   * **No names is hygiene, not a boundary** (§5). The numeric id is still personal data, and the
+     operator can still resolve it.
 
 
 ### 7.12 Collaborators in the person's own app (owner decision)
@@ -1915,10 +2155,13 @@ linked collaborator's exposed sessions in their own app, read-only, with a perso
 machines, and can filter their own sessions to those involving external agents.
 
 **What the person sees.**
-* Under a link where the other side granted **read** (§7.4), the person's app (the PWA, the
-  Windows app, Home Assistant later) lists that collaborator's **exposed** sessions: those in the
+* Under a link where the other side granted **read** (§7.4), the person's app (the PWA and the
+  Windows app) lists that collaborator's **exposed** sessions: those in the
   pinned workspaces, never allow-all or unknown ones unless the other side ticked `allowAllRead`
   (§5.7 R). The person can open the transcript view.
+* Under a **status** grant the person sees typed status only (§5.8). **Titles** appear only if the
+  exposing owner also grants the **person-view display projection**, which is separate from both
+  status and content (§7.4).
 * Content is **exactly** what an agent's read under that link gets: §7.4's projection, §7.5's
   rates, and the same exclusions. The exposing side audits it like an agent read.
 * **No reply, answer, approve, launch, stop or transfer controls** on a collaborator's session,
@@ -1948,6 +2191,15 @@ Why (b):
   removing that device stops it at once.
 * **Nothing new to disclose.** B never learns A's devices beyond an opaque add hash in its audit,
   and never needs a foreign device key.
+
+**Person-kind only.**
+* A's host resolves the **active person-kind add** from the authenticated caller on its own
+  channel. It never takes a device id from the request, and refuses a host, agent or connector
+  caller.
+* Home Assistant and other connectors get **no** access to a collaborator's content through
+  this. That would need a separate grant from the **exposing** owner.
+* Proxied results **never enter the host's own session inventory** that is served to agents,
+  the local pipe or connectors. They go to the requesting person device only.
 
 **The action set across the link** for `kind: "person"` is `sessions.list`, `session.get`,
 `session.read` and `sessions.subscribe`, with the subscription relayed by A's host to the device.
@@ -2526,11 +2778,16 @@ In addition to design.md §5.1 (:348-361) and #391 §2.
 | **A hostile approver senior to a host** (#391 §3.3) | Can displace the host's enrollment with its own descriptor | Impersonate that machine's agents. A displacing copy lacks the machine's `dh` private key, so it can't carry envelopes (§8.10, V4) | Deny service to the genuine machine, and be announced |
 | **A newly enrolled host** | Approved, within 72 h | Send cross-machine agent commands during its probation, unless a person allows it at the target (§8.10, V5) | Act locally |
 | **An allow-all session** on any machine | Runs anything typed into it without a prompt | Receive any agent's or connector's reply **unattended**, local, remote or cross-account (§5.3, Q34). Receive a connector's at all in v1 | Be read, within the read policy. Receive a reply its owner approved, message by message or through a window (§5.7 G). Receive own agents' replies if the owner enabled `allowAllTargets` (§5.7 O) |
-| **Prompt fatigue** at the gate | A stream of held messages | Get one through without a person's presence-signed approval. Pile up: holds expire in 5 minutes, and are charged to the sender's rates and budget when held (§5.7 G) | Tire the person into approving. Mitigated by Deny first and nothing pre-selected, the per-pair rates, and the quiet lane (no push per hold) |
+| **Prompt fatigue** at the gate | A stream of held messages | Get one through without a person's presence-signed approval. Pile up: holds have an absolute expiry (60 minutes quiet, 5 to 15 pushed), there's no morning backlog, and holds are charged to the sender's rates and budgets (§5.7 G) | Tire the person into approving. Mitigated by Deny first, nothing pre-selected, no push per hold, at most one text-free aggregated push an hour, batches and windows instead of repeated identical prompts, and the summary that never reassures |
 | **Social engineering through the message text** ("Dan asked me to run this", a forged header) | The sender controls every word | Hide anything: the full text is shown, never truncated, hidden characters revealed, the sender's label from verified fields only (§6.3) | Persuade the person. The prompt says that approving makes it their own instruction to an allow-all session |
 | **Message substitution** after approval (a relay, a host, or a resend with new text) | Holds or relays the bytes | Deliver different text, to a different session or instance, or from a different sender: the approval signs `textSha256`, the target instance and the sender principal, and is single-use in the durable replay store (§5.7 G) | Deny service by dropping the approval |
-| **Window abuse** | An open window from one sender to one session | Open or extend it (only the target owner's presence-signed approval can), widen it to other sessions or senders, or outlive either session's instance, a mode change or a revocation | Send up to `gateWindowPerMinute` (2) messages a minute until it ends, each typed under the guard and audited |
-| **Own-account escalation** through `allowAllTargets` | An ask-mode or prompt-injected agent of the owner's | Use it when it is off (the default), from another account, a connector or a chain with a cross-account hop, or outside its workspace and machine scope (§5.7 O) | When on, run commands without a prompt through a sibling allow-all session in scope. The owner accepts this knowingly |
+| **Window abuse** | An open window from one sender to a fixed set of target instances | Open, extend or expand it (only the target owner's presence-signed approval can), grow it automatically (no descendants, no expiry extension, no budget reset), keep it when a new origin appears in a tainted sender (it pauses), widen it to other senders, or outlive either session's instance, a mode change or a revocation | Send up to `gateWindowPerMinute` (2) messages a minute until it ends, each typed under the guard and audited |
+| **Own-account escalation** through `allowAllTargets` | An ask-mode or prompt-injected agent of the owner's | Use it when it is off (the default), from another account, a connector, `homeassistant:`, a chain with a cross-account hop or a tainted sender, or outside its workspace and machine scope (§5.7 O) | When on, run commands without a prompt through a sibling allow-all session in scope. The owner accepts this knowingly |
+| **Taint laundering** (an agent resumes, compacts, transfers or restarts to shed what it read from a collaborator) | An agent that retained external content | Lose the taint: it survives anything that keeps the context, and clears only through an adapter-demonstrated removal or a fresh conversation from a person's own prompt (§5.8). Use O while tainted | Act through G and forced-ask targets, which inherit the taint and show its origins |
+| **Forwarding a scout's findings** | A scout that read a collaborator's sessions | Pass its output on as clean: forwarding is a gate action, "Approve forwarding this external content", that keeps provenance and taints the receiver (§5.8). Smuggle authority in fields like `approved` or `nextAction`: the template has none | Influence the receiver once the person approves forwarding |
+| **Batch approval abuse** | Many holds approved at once | Add, swap or reorder an item after signing: the batch is immutable, bounded (20) and binds each item's text, sender and target instance (§5.7 G) | Get the person to approve a long batch without reading; every text is shown |
+| **A stale queued message** | An approved hold waiting for idle | Arrive after its absolute expiry, after the person typed into the target, under a revoked link, or into a new instance: all are rechecked at delivery (§5.7 G) | Arrive within its expiry, after the context that justified it moved on a little |
+| **A gated launch** | A held launch request, possibly from a tainted or external requester | Change the manifest, prompt or destination after approval, or shed external provenance (§5.7 G) | Run with the account's privileges once approved. The screen says a fresh worktree is organisation, not containment |
 | **The relay** | Untrusted | Read, forge, replay or splice envelopes (Noise, signature, durable replay, channel-peer = signer) | Deny or delay service, observe host-to-host sizes and timing |
 | **Clock faults** | A host's clock is wrong | Make a used command run again (durable record, high-water mark) | Make commands fail with `clock` until fixed |
 | **Agent loops** | Two well-meaning agents ping-pong | Run unattended past 20 messages or 60 minutes per person-started conversation | Use up to those budgets |
@@ -2545,6 +2802,9 @@ All of 10.1, plus §7.8, and the repository-specific events of §7.11.6. In addi
 | **A collaborator's agent targeting an allow-all session** | Reach it unattended: allow-all and unknown sessions are never exposed for replies, and the own-account setting never applies to a link (§5.3, §5.7 O) | Read it, if the owner ticked `allowAllRead` (§5.7 R). Get a message typed into it that the owner approved through the gate, if `expose.gate` is on (§5.7 G) |
 | **Exfiltration through `allowAllRead`**: a collaborator's agent reading allow-all sessions | Read outside the pinned workspaces or past §7.4's projection, or reply through it | Read what those sessions say, including command output and any secret in it. The link dialog says so (§7.11.5) |
 | **Cross-account social engineering at the gate**: a collaborator's agent's message, shown for approval | Appear as the owner's own agent: the prompt carries the external marker and the T2 login (§6.2) | Persuade the owner, as for the same account |
+| **An external sender probing outcomes**: telling a deny from a mute, a block or an expiry | Learn which: every case is one `notDelivered`, reported at a common deadline (§5.7 G) | Infer something from patterns over time; the design doesn't promise perfect indistinguishability |
+| **Content retention by the collaborator's AI provider** | Be retracted by revoking: copies already read stay in their transcripts and provider (§7.7) | Keep what was read under content grants. Status grants carry no free text (§7.4) |
+| **A collaborator's connector** (their Home Assistant, say) | Reach this side's content through their person view: person-kind only, results never enter their host's agent, pipe or connector inventory (§7.12) | — |
 | **A rewritten `rendezvous` pointer** | Collect GitHub tokens: none are ever sent (§7.11.2). Switch directories silently: the origin is pinned (§7.11.2) | Collect T2 directory signatures and descriptors from owners who accept the new origin (§7.11.6) |
 
 The essential difference is that the counterpart **owner** is a party
@@ -2586,15 +2846,16 @@ Each slice is one PR, security-reviewed independently before merge.
 
 | # | Slice | Depends on | Crosses machines? |
 |---|---|---|---|
-| **AP1** | **Smallest first slice: local agent principals, Windows only** (§3.4). It covers:<br>• credentials issued at launch (`AGENT_BRIDGE_TOKEN`, hashed store with process binding, a Job object per launch);<br>• `agent.hello` with **ancestry or Job membership read in full, failing closed**, never the environment variable. It is a **safety rail, not a boundary**: parent-PID spoofing and Job joining are stated residuals (§3.4);<br>• **isolation for forced-ask launches** (§5.3 (A)): a host-owned configuration home per agent (`COPILOT_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) with a manifest checked and reset before every launch; project sources switched off, or the launch refused when the workspace or main checkout has a repository extension path; refusal when managed, MDM or server policy may apply; the Copilot flag allowlist with no Agency or `extraArgs`, Claude's `--permission-mode default`, Codex's `-a untrusted -s workspace-write -c features.hooks=false`; a scrubbed environment; failing closed on any unreadable or ambiguous scope;<br>• **directory watches** on every scope, including the creation of new extension paths, and the CLI's plugin, skill and agent sets;<br>• in-session grant and mode-change **detection**: Copilot from `permission.requested`/`permission.completed`, the others `unknown` unless a vector proves a signal before delivery;<br>• a **Copilot input-box reader** (host-replies.md:19-23 has none today), so the composer can be read before typing and before Enter (§5.2);<br>• the `agents` policy (`enabled`, `issue`, `inbound.local`, `exclude`, `limits`);<br>• local `session.reply`, `session.launch` and reads as an agent connection;<br>• chains, budgets and rates for local targets, and the audit log;<br>• `driverPrincipal = agent:<machine>/<session>`, `driverFrom`, the escaped prefix, and `userMessageFrom = agent` from the verified source;<br>• `agent-bridge-host agent list\|read\|reply\|launch` for tests, and the federation stub fields (§7.9).<br>**Exit criteria, each with a test that fails without it:**<br>• **an allow-all or unknown-mode session is never a reply target** (§5.3), including a session switched to allow-all after launch. The §5.7 opt-ins come later (AP8, AP9), so AP1 has none;<br>• **an agent launch or resume without an explicit `permissions: "ask"` is refused**, as are a non-allowlisted `agent` or `profile`, a resume of an allow-all session, and a `transfer`;<br>• **agent replies are delivered only to idle sessions** (`notIdle` otherwise, re-checked before Enter), **with `KeySend.Expect` on both the words and the Enter for every agent kind**, Copilot included. A prompt opened between the check and each key types nothing;<br>• a **non-empty or shell-mode composer is refused**, and Enter is sent only when the **complete** composer equals the authorized message exactly (§5.2);<br>• a session launched in forced-ask mode becomes `unknown` after an in-session "don't ask again" grant or a runtime mode switch (§5.3, Q44);<br>• **the mandatory refusal vectors of §5.3, for all three agents**: pre-seeded user allow rules, hooks, rule files and skills or commands with `allowed-tools`; subagents with a `permissionMode`; every repository extension path (in the workspace and in a linked worktree's main checkout); a managed file and a policy registry key; Copilot's `defaultPermissionMode: "assisted"`; Codex hooks with `features.hooks=false` unproven; an `auto` launch that would pick Agency. Each refuses the launch;<br>• **mid-session vectors**: adding a hook, a skill, a settings file or a `.claude/` directory, a plugin change, and `/skills reload` each make the session `unknown`; a Codex agent writing `.codex/` into an untrusted workspace gains nothing;<br>• leading option keys and `@path` are escaped;<br>• a token from another session or a plain detached helper is refused, as are `AGENT_BRIDGE_SESSION` alone and a partial ancestry read;<br>• a manual or adopted session isn't a reply target, and a manual one gets no credential;<br>• an agent can't answer an approval or folder trust;<br>• a forged header in a title or body (including confusables) is neutralized;<br>• depth and budget refuse, and the person's reply resets them;<br>• a resumed session's old token is dead | #501 merged | **No** (decision 4 holds) |
+| **AP1** | **Smallest first slice: local agent principals, Windows only** (§3.4). It covers:<br>• credentials issued at launch (`AGENT_BRIDGE_TOKEN`, hashed store with process binding, a Job object per launch);<br>• `agent.hello` with **ancestry or Job membership read in full, failing closed**, never the environment variable. It is a **safety rail, not a boundary**: parent-PID spoofing and Job joining are stated residuals (§3.4);<br>• **isolation for forced-ask launches** (§5.3 (A)): a host-owned configuration home per agent (`COPILOT_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) with a manifest checked and reset before every launch; project sources switched off, or the launch refused when the workspace or main checkout has a repository extension path; refusal when managed, MDM or server policy may apply; the Copilot flag allowlist with no Agency or `extraArgs`, Claude's `--permission-mode default`, Codex's `-a untrusted -s workspace-write -c features.hooks=false`; a scrubbed environment; failing closed on any unreadable or ambiguous scope;<br>• **directory watches** on every scope, including the creation of new extension paths, and the CLI's plugin, skill and agent sets;<br>• in-session grant and mode-change **detection**: Copilot from `permission.requested`/`permission.completed`, the others `unknown` unless a vector proves a signal before delivery;<br>• a **Copilot input-box reader** (host-replies.md:19-23 has none today), so the composer can be read before typing and before Enter (§5.2);<br>• the `agents` policy (`enabled`, `issue`, `inbound.local`, `exclude`, `limits`);<br>• local `session.reply`, `session.launch` and reads as an agent connection;<br>• chains, budgets and rates for local targets, and the audit log;<br>• `driverPrincipal = agent:<machine>/<session>`, `driverFrom`, the escaped prefix, and `userMessageFrom = agent` from the verified source;<br>• `agent-bridge-host agent list\|read\|reply\|launch` for tests, and the federation stub fields (§7.9).<br>**Exit criteria, each with a test that fails without it:**<br>• **an allow-all or unknown-mode session is never a reply target** (§5.3), including a session switched to allow-all after launch. The §5.7 opt-ins come later (AP8, AP9), so AP1 has none;<br>• **an agent launch or resume without an explicit `permissions: "ask"` is refused**, as are a non-allowlisted `agent` or `profile`, a resume of an allow-all session, and a `transfer`;<br>• **agent replies are delivered only to idle sessions** (`notIdle` otherwise, re-checked before Enter), **with `KeySend.Expect` on both the words and the Enter for every agent kind**, Copilot included. A prompt opened between the check and each key types nothing;<br>• a **non-empty or shell-mode composer is refused**, and Enter is sent only when the **complete** composer equals the authorized message exactly (§5.2);<br>• a session launched in forced-ask mode becomes `unknown` after an in-session "don't ask again" grant or a runtime mode switch (§5.3, Q44);<br>• **the mandatory refusal vectors of §5.3, for all three agents**: pre-seeded user allow rules, hooks, rule files and skills or commands with `allowed-tools`; subagents with a `permissionMode`; every repository extension path (in the workspace and in a linked worktree's main checkout); a managed file and a policy registry key; Copilot's `defaultPermissionMode: "assisted"`; Codex hooks with `features.hooks=false` unproven; the known gaps (Copilot `.claude/skills`, `.agents/skills`, `~/.agents/skills`; Codex `.agents/skills` up to the repository root, `$HOME/.agents/skills`, `/etc/codex`, a parent `.codex/config.toml`, cloud-managed requirements; `CLAUDE_CONFIG_DIR` leaks); a managed (corporate) account, which goes to G or O; a copied credential file; an `auto` launch that would pick Agency. Each refuses the forced-ask launch. File-access traces are kept as **regression tests, not proofs**;<br>• **mid-session vectors**: adding a hook, a skill, a settings file or a `.claude/` directory, a plugin change, and `/skills reload` each make the session `unknown`; a Codex agent writing `.codex/` into an untrusted workspace gains nothing;<br>• leading option keys and `@path` are escaped;<br>• a token from another session or a plain detached helper is refused, as are `AGENT_BRIDGE_SESSION` alone and a partial ancestry read;<br>• a manual or adopted session isn't a reply target, and a manual one gets no credential;<br>• an agent can't answer an approval or folder trust;<br>• a forged header in a title or body (including confusables) is neutralized;<br>• depth and budget refuse, and the person's reply resets them;<br>• a resumed session's old token is dead | #501 merged | **No** (decision 4 holds) |
 | AP2 | #45's MCP server on AP1 (stdio), with the old tool names and outcomes | AP1 | No |
 | AP3 | Adoption on Windows: app action, CLI, `agent.credential` | AP1 | No |
 | AP4 | Envelope library: encoding, signing (a) or MAC (b), strict parser, shared positive and negative vectors | #391 R1 (+ roster v2 V1-V2 if (a), §8.10) | Library only |
 | AP5 | Cross-machine: `agent.command` host-to-host, verification §4.7, `inbound.remote`, `outbound`, durable replay via R6, `instance` on `Session`, `agent.outcome`, `session.read` wait | AP4, #391 R3 + R6, hosts in `enforce` | **Yes** |
 | AP6 | Clients: "from *X* on *Y*" in the app and PWA (extending #503/#504), Settings for the policy, the Agent activity view | AP1 (local), AP5 (remote) | n/a |
 | AP7 | Re-enable `inbound.remote` defaults per machine during the owner's cutover (#391 R8) | AP5, R8 | Yes, live |
-| AP8 | **The per-message gate** for every target that isn't provably forced-ask (§5.7 G, §5.3 (B)): `inbound.*.gate`, holds, the `held` outcome and `gateDenied`/`gateExpired` codes, the Needs-you `agentMessage` item with full text and revealed characters, the presence-signed `gate v1` approval, windows and their rate limit, audit. **Exit tests:** an approval for different text, sender, target or instance is refused; a replayed approval is refused; an approval without presence, or from an agent connection, a connector or the `homeassistant:` path, is refused; a hold expires after 5 minutes; a window ends on revocation, either session's end or resume, and a target mode change; a sender can't open or extend a window; a connector reply into allow-all is refused with no hold; delivery still runs §5.2's guard | AP1, AP6, #391 person commands with presence (§7.2) and R6. Remote targets also AP5 | Same machine first; remote with AP5 |
-| AP9 | **Own agents into own allow-all sessions** (§5.7 O): `inbound.*.allowAllTargets`, its warning in Settings, workspace scope. **Exit tests:** off by default; refused for another account's, a connector's, a federated or `homeassistant:` principal and for a chain with a cross-account hop; refused outside the workspace scope; `allowAllPerTargetPerMinute`, depth and budget apply; the guard still applies | AP1 (`inbound.local`). `inbound.remote`: AP5 | Local first; remote with AP5 |
+| AP8 | **The gate, as the main path** (§5.7 G, §5.3 (B)), and **provenance** (§5.8). It covers:<br>• `inbound.*.gate` (`off`/`quiet`/`push`, default `quiet`), holds with absolute expiry, the bounded queue, `held` and the `gateDenied`/`gateExpired`/`gateCancelled` codes;<br>• the Needs-you `agentMessage` item with its deterministic partial summary and full text;<br>• the presence-signed `gate v1` approval, batches, windows over fixed instance sets with the expansion fold, and G delegation grants;<br>• **gated launches**, with the manifest, source report and fresh worktree;<br>• mute, pause and block without biometrics, and the refusal nudge;<br>• taint tracking, `driverFrom.origins`, `taint`, `replyPath`, the badge, and "Start a fresh coordinator";<br>• workflow budgets;<br>• audit of origin, authorizer, grant and outcome.<br>**Exit tests:**<br>• an approval for different text, sender, origins, target or instance is refused, and so is a replayed one;<br>• an approval without presence, or from an agent connection, a connector or the `homeassistant:` path, is refused;<br>• a hold expires at its absolute deadline even when approved late, and the person's input cancels it;<br>• **no hold is ever pushed individually**;<br>• a batch can't change after signing;<br>• a window never grows except by a presence-signed expansion, and pauses on a new origin;<br>• taint survives resume, compaction, transfer and a person's reply, and a tainted sender can't use O;<br>• a gated launch can't change after approval;<br>• a connector reply into allow-all is refused with no hold;<br>• delivery still runs §5.2's guard | AP1, AP6, #391 person commands with presence (§7.2) and R6. Remote targets also AP5 | Same machine first; remote with AP5 |
+| AP9 | **Own agents into own allow-all sessions** (§5.7 O): `inbound.*.allowAllTargets`, its warning in Settings, workspace scope. **Exit tests:** off by default; refused for another account's, a connector's, a federated or `homeassistant:` principal, for a chain with a cross-account hop, and for a tainted sender; refused outside the workspace scope; `allowAllPerTargetPerMinute`, depth and budget apply; the guard still applies | AP1 (`inbound.local`). `inbound.remote`: AP5 | Local first; remote with AP5 |
+| AP10 | **Sandboxed allow-all** (§5.7 S): OS-enforced restriction of the filesystem, credentials, IPC and network egress. **Recommended immediately after AP9; the owner decides (Q50).** It doesn't remove the gate without separately demonstrated boundaries | AP9, a separate design and review | Local |
 | F1-F7 | Federation (§7.10), with repo discovery (§7.11) as F6 and the person view (§7.12) as F7 | AP5, owner approval, separate review. F6 also needs the Cosmos DB directory store (§7.11.10) | Cross-account |
 | C1-C6 | Connector API (§9.7). C1 is the read-only first slice | C1: #534, #407. Production (C5): §8.7 | C5 only |
 
@@ -2773,20 +3034,28 @@ Decisions the reviews of `f3559996` asked to make explicit:
     * **(G) A per-message gate**, same account and cross-account: the reply is held, and the
       target's owner approves that exact message with presence on their own device, once or for a
       5-60 minute window per sender and target. Never for connectors in v1.
-    * **(O) Own agents into own allow-all sessions without a gate**, per machine, never for
-      another account, a connector or a federated principal, recommended scope same workspace and
-      same machine, with the escalation risk shown and accepted.
+    * **(O) Own agents into own allow-all sessions without a gate**, per machine. It is never for
+      another account, a connector, a federated or `homeassistant:` principal, a chain with a
+      cross-account hop, or a tainted sender (§5.8). The recommended scope is the same workspace
+      on the same machine, with the escalation risk shown and accepted.
     * **(R) Read-only cross-account access** to allow-all sessions in a link's pinned workspaces,
       per link, with the content-exposure warning. Replies still need (G).
 
-    **Sandboxed allow-all** (allow-all confined to an OS sandbox the host sets up) was **not
-    chosen**. It is deferred, and could later make a sandboxed session a target without a gate.
+    **Sandboxed allow-all** (S, §5.7) is now recommended immediately after AP9 (Q50). It is not
+    a prerequisite for reads or federation, and doesn't remove the gate without separately
+    demonstrated boundaries.
+    **Revision 11 (the adversarial PM/Security review)** changes two defaults within this
+    decision. Own-account G is **on in `quiet` mode** (a hold runs nothing without presence, and
+    is never pushed). A launch that isn't provably forced-ask is **held as a gated launch** rather
+    than refused. Cross-account G, O and R stay off until opted in.
 35. **Q35. Replies into working sessions.** **Recommended:** refused as `notIdle`, idle only
     (§5.2), re-checked before Enter. That is a new additive refusal code, since `busy` already
     means an answer or reply is being typed (v1-sessions.md:454).
-    Host-side queuing, delivered at the next idle with the guard re-run, is a later option. It
-    isn't in v1, because a queued message can arrive after the context that justified it has
-    changed.
+    A **direct** reply into a forced-ask session is not queued. A message **held by the gate**
+    is: once approved, it waits for the target's next idle up to the hold's absolute expiry,
+    approval doesn't restart the clock, the person's own input cancels it, and everything is
+    rechecked at delivery (§5.7 G). That bounds the "context changed" risk a general queue would
+    have.
 36. **Q36. Agent launches with `permissions` or `profile` absent.** **Recommended:** refuse.
     `permissions` must be explicitly `ask`, never filled from the machine's defaults. `agent` and
     `profile` must be on the policy's allowlists, and any agent, profile or model setting the host
@@ -2830,7 +3099,8 @@ Decisions the reviews of `f3559996` asked to make explicit:
     by workspace label and path. A remote change suspends the link until the person re-confirms.
     Never derived per message from live git settings (§7.11.5).
 42. **Q42. `credentialDays` and sub-agents.** **Recommended:** 7 days, then one press at the
-    machine to re-adopt. Sub-agents share the parent session's credential, since they are the
+    machine, or a presence-confirmed remote renewal for the same live process with no scope
+    increase and no resurrection (§3.3). Sub-agents share the parent session's credential, since they are the
     same process tree and the same principal. The audit records the sub-agent where the host can
     tell. Per-sub-agent scopes are a later option.
 43. **Q43. The in-host Home Assistant press path after AP1.** Presses by
@@ -2857,8 +3127,9 @@ Decisions the reviews of `f3559996` asked to make explicit:
     their own sessions in scope with no prompt if `allowAllTargets` is on (§5.7 O). (b) Allow them
     on the launch check alone, accepting that a grant made at the machine is invisible.
     **Recommended: (a).** (b) reopens the unattended-execution path the reviews closed. Claude and
-    Codex join the unattended path when AP1 vectors find a pre-delivery signal (a hook
-    agent-bridge installs in the host-owned home and reads, say).
+    Codex join the unattended path when AP1 vectors find a pre-delivery signal that adds no
+    authority to the session. A hook in the host-owned home wouldn't qualify: that home has no
+    hooks by design (§5.3 (A)), and a hook runs commands.
 46. **Q46. Links held on a single machine.** If A's only machine is both the link custodian and
     its only host, a thief who passes that machine's sign-in holds `linkKey` and `hostSign`
     together and renews the link until a tombstone arrives or it expires (§7.3, "The residual").
@@ -2880,8 +3151,10 @@ Decisions the reviews of `f3559996` asked to make explicit:
     sessions lack the person's own skills, MCP servers, plugins, custom agents, hooks and saved
     approvals; a workspace with repository extension paths can't have one; and their history
     lives in the host-owned home, visible through the bridge rather than the CLI's own resume
-    list. Agent **launches** must be provably forced-ask or are refused in v1; a gated launch, the
-    owner approving the exact prompt and settings, is a later option.
+    list. Agent **launches** that aren't provably forced-ask are **gated launches** in v1 (§5.7 G).
+    After the adversarial review, the recommendation stands, with forced-ask treated as an
+    **optimisation**: unknown stays unknown per adapter and version, and managed (corporate)
+    accounts use G or O (§5).
 48. **Q48. Directory storage.** **Decided by the owner (2026-11-03, 20:10 PT), §7.11.10.**
     * No names are stored: no login, display name, email or repository name.
     * The numeric user id stays only inside the signed descriptor, encrypted at rest, and is
@@ -2901,5 +3174,29 @@ Decisions the reviews of `f3559996` asked to make explicit:
     * Your own sessions get an "Involving external agents" filter.
     * Reads are proxied through one of the reader's own listed hosts, as a `kind: "person"`
       principal.
+    * **Person-kind only:** the host resolves the person's device from the authenticated caller,
+      connectors (Home Assistant included) get no collaborator content without a separate grant
+      from the exposing owner, and proxied results never enter the host's inventory for agents,
+      the pipe or connectors (revision 11).
     * **Deferred:** the person replying into a collaborator's session, which would be its own
       future grant, presence-signed and separately reviewed.
+50. **Q50. When to build sandboxed allow-all (S).** It is not a prerequisite for reads or for
+    cross-account G (§5.7 S). (a) Immediately after AP9. (b) After federation (F7). (c) Not
+    planned. **Recommended: (a)**, because most of the owner's sessions run allow-all, and a
+    sandbox narrows what an approved message can do. It removes the gate only with separately
+    demonstrated boundaries.
+51. **Q51. The supported audience, and managed enterprises, before public launch.**
+    * **Minors:** no birth dates are collected by default, and GitHub's age terms alone aren't
+      sufficient (§7.11.5). (a) Adults only, stated in the terms. (b) Minors with a reduced
+      preset (no cross-account content, no external G). **Recommended: (a)** until a separate
+      review designs (b).
+    * **Managed enterprises:** there is no effective-policy signal (§5.3). (a) Launch with G and
+      O as the only paths on managed accounts, and name organisation policy only when it is
+      actually configured. (b) Hold enterprise launch until a signal exists.
+      **Recommended: (a).**
+52. **Q52. Where typed status gets PR and CI state.** Hosts hold no GitHub token (§5.8). (a) The
+    reader's app fetches it with the person's own token, so CI state is unavailable while no
+    person device of the reader is online. (b) A separately designed broker with its own
+    narrowly scoped GitHub App. **Recommended: (a) in v1**, with (b) designed only if offline
+    status proves necessary. Either way status guides scheduling only, and never authorizes a
+    merge, a deploy or the use of a credential.
