@@ -634,7 +634,15 @@ reaches the real host or its profile.
   accent button in Bridge, the caption buttons in the app's theme, the 360×600 minimum), checks the Machines page's rows (#213), draws every page, the Sessions page in three panes with the inspector, in Light and
   Dark and, on CI, turns Windows' high contrast on to draw every page again and check that every role and surface is a
   system colour and the caption buttons the system's, then turns it back off and checks the caption buttons come back in the app's theme, and saves a picture
-  of each page. Last, it measures a live resize (#765): it resizes the window a step a frame, 8 px at a time, from 1560 px to
+  of each page. Whole-window pictures capture the window's composed client, including Mica,
+  rather than only the XAML tree: a translucent page layer without its backdrop otherwise
+  becomes light in a PNG viewer (#785). Isolated-control pictures still use XAML rendering.
+  The dark page pass reopens each output PNG and checks a page-background pixel is opaque
+  and no lighter, in sRGB relative luminance, than the platform's dark layer token's straight
+  colour (the upper bound for that layer over dark Mica). Encoded white and transparent
+  regression samples exercise that guard too; missing, blank or failed window captures fail
+  the self-test. No capture-only page fill or bitmap recolouring is applied.
+  Last, it measures a live resize (#765): it resizes the window a step a frame, 8 px at a time, from 1560 px to
   400 and back, and keeps every interval between the UI thread's frames (`CompositionTarget.Rendering`) by the window's width
   class, once with the demo's own sessions and once with a window as heavy as a real one (16 more sessions, a conversation of
   over 200 items, 50 tool rows and a strip of 20 delegates, the finished ones unfolded), and writes p50, p95, the longest and how many frames went over
