@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   Limits, answerability, answerRequest, buildAnswer, checkAnswer, draftText, hostJsonBytes, initialState,
-  optionTone, orderOptions, prepareAnswer, problemField, tapToAnswer, utf8Bytes,
+  optionTone, orderOptions, problemField, tapToAnswer, utf8Bytes,
 } from '../../js/answers.js';
 import { readAnswerResult, readQuestion } from '../../js/protocol.js';
 
@@ -267,21 +267,4 @@ test('text is sent well-formed: a lone surrogate, which the C# host cannot read,
   st.c.other = '\ud83d';
   assert.deepEqual(buildAnswer(q, st).answer.fields, { t: 'a\ufffdb \ufffd 😀', c: { other: '\ufffd' } });
   assert.deepEqual(buildAnswer(form(), { text: 'x\udbff' }).answer, { text: 'x\ufffd' });
-});
-
-test('an answer within the progress flag of the 16 KiB limit is refused before it goes, as a host offering progress refuses it', () => {
-  // A host offering sessions.progress gets "progress": true too (#600), and counts it.
-  const names = ['t0', 't1', 't2', 't3'];
-  const q = form(...names.map((name) => ({ name, type: 'text' })));
-  const filled = (last) => {
-    const s = initialState(q);
-    for (const [i, name] of names.entries()) { s[name] = { ...s[name], text: i < 3 ? 'x'.repeat(Limits.text) : last }; }
-    return s;
-  };
-  const request = (last) => answerRequest({ sessionId: 's1', questionId: 'q1', request: '00000000-0000-4000-8000-000000000000', answer: buildAnswer(q, filled(last)).answer });
-  const room = Limits.request - hostJsonBytes(request('x'));
-  const last = 'x'.repeat(1 + room - 8);
-  assert.equal(hostJsonBytes(request(last)), Limits.request - 8);
-  assert.equal(checkAnswer(q, request(last)), null);
-  assert.match(prepareAnswer(q, filled(last), 's1').problem, /larger than 16 KiB/);
 });

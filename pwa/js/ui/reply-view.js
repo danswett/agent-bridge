@@ -334,9 +334,8 @@ export class ReplyBox {
     const text = this.els.input.value;
     const files = [...this.#files];
     const { service, hostId, sessionId } = this.replying;
-    // Checked as it will be sent, with a stand-in request the length of a real one, and the
-    // progress flag a host offering it gets (#600).
-    const problem = checkReply({ ...replyRequest({ sessionId, request: '00000000-0000-4000-8000-000000000000', text, attachments: files }), progress: true });
+    // Checked as it will be sent, with a stand-in request the length of a real one.
+    const problem = checkReply(replyRequest({ sessionId, request: '00000000-0000-4000-8000-000000000000', text, attachments: files }));
     if (problem) {
       this.#error(`${capitalise(problem)}.`);
       this.els.input.focus();
