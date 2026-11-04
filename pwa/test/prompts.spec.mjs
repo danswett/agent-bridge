@@ -176,14 +176,24 @@ test('a prompt from a host that doesn\'t say who sent it, or that says the perso
   const column = await v.locator('.stream').boundingBox();
   const box = await bubble.boundingBox();
   expect(Math.abs(box.x + box.width - (column.x + column.width))).toBeLessThan(1);
-  // A scheduled prompt, then the person's again: the bubble comes back.
+  // A scheduled prompt, then the person's again: the bubble comes back, and only the person's rises
+  // as their message acknowledged (ui.md §5.3); a prompt they didn't type never does.
+  await bubble.evaluate((el) => {
+    el.rises = [];
+    const animate = el.animate.bind(el);
+    el.animate = (...args) => { const a = animate(...args); el.rises.push(a); return a; };
+  });
+  // motion.js names each animation just after making it, so the names are read here, later.
+  const rises = () => bubble.evaluate((el) => el.rises.filter((a) => a.id === 'ab-motion-acknowledge').length);
   await upsert(page, CODEX, scheduled({ turnCount: 3 }));
   await expect(v.locator('.prompt-origin')).toBeVisible();
   await expect(bubble).toBeHidden();
+  expect(await rises()).toBe(0);
   await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later(), activity: { userMessage: 'Stop that.', userMessageFrom: 'person', userMessageLabel: null, turnCount: 3 } });
   await expect(bubble).toBeVisible();
   await expect(bubble.locator('.plain')).toHaveText('Stop that.');
   await expect(v.locator('.prompt-origin')).toBeHidden();
+  expect(await rises()).toBe(1);
 });
 
 test('a label is text: no markup, no hidden characters, no fact of its own, and never read as the main agent', async ({ page }) => {
