@@ -265,7 +265,7 @@ Production's alerts, its availability test and the resource group's budget are i
 | Metric alerts on `agent-bridge-relay` | Replicas (A-REPLICAS), restarts (A-RESTART, A-CRASHLOOP), memory (A-MEM), CPU (A-CPU), 5xx count (A-5XX) |
 | `budget-agent-bridge-relay` | $40 a month on the whole resource group. Emails at 50%, 80% and 100% actual, and 100% forecast |
 | `ops-probe.yml` (GitHub, daily) | The certificate's remaining life (A-CERT), the CNAME and `asuid` TXT (A-DNS), health, CORS and the push key. Problems go on one `area:ops` issue, which closes itself when clean (not on a run whose DNS lookups couldn't complete) |
-| `logic-agent-bridge-github-watch` | Every 5 min, from Azure: GitHub's status page for Actions and Pages, and this repository's runs queued over 30 min. Records the availability result `github-actions`; alert A-GHA fires when 2 of the last 3 checks found a problem, and A-GHA-SILENT when no result has arrived in 30 min (#658) |
+| `logic-agent-bridge-github-watch` | Every 5 min, from Azure: GitHub's status page for Actions and Pages, and this repository's runs queued over 30 min. Records the availability result `github-actions`; alert A-GHA fires when 2 of the last 3 checks found a problem, and A-GHA-SILENT when no fully read result has arrived in 30 min (#658) |
 
 It's applied with production, like any infra change (a person, not CI). The first time, pass the
 address alerts go to; later runs reuse the one in the action group:

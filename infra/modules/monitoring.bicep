@@ -469,16 +469,19 @@ resource githubAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   }
 }
 // A-GHA-SILENT. A metric alert never fires on missing data, so a watch that stopped (disabled,
-// deleted, or failing before it reports) would look exactly like GitHub being fine. This fires
-// when no github-actions result has arrived in 30 minutes. A log alert every 15 minutes costs
+// deleted, or failing before it reports) would look exactly like GitHub being fine. So would one
+// that reports but can't read a source: success counts no evidence as healthy, and the most likely
+// cause, the anonymous runs API's hourly limit on Logic Apps' shared addresses, would blind the
+// queued-run half for good. So this counts only fully read results (no "unreachable",
+// "unreadable" or "unknown" in the message) and fires when none has arrived in 30 minutes. A log alert every 15 minutes costs
 // about $0.50 a month.
 resource githubWatchSilent 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
-  name: 'A-GHA-SILENT GitHub watch not reporting'
+  name: 'A-GHA-SILENT GitHub watch blind'
   location: location
   tags: tags
   kind: 'LogAlert'
   properties: {
-    description: 'No github-actions result from logic-agent-bridge-github-watch in 30 minutes, so A-GHA is blind. Runbook: ops/runbooks/github-outage.md'
+    description: 'No fully read github-actions result from logic-agent-bridge-github-watch in 30 minutes (none arrived, or a source was unreachable or unreadable), so A-GHA is blind. Runbook: ops/runbooks/github-outage.md'
     severity: 3
     enabled: true
     scopes: [appInsights.id]
@@ -487,7 +490,7 @@ resource githubWatchSilent 'Microsoft.Insights/scheduledQueryRules@2022-06-15' =
     criteria: {
       allOf: [
         {
-          query: 'availabilityResults | where name == "github-actions"'
+          query: 'availabilityResults | where name == "github-actions" | where message !has "unreachable" and message !has "unreadable" and message !has "unknown"'
           timeAggregation: 'Count'
           operator: 'LessThan'
           threshold: 1

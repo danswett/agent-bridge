@@ -1,6 +1,6 @@
 # GitHub outage
 
-**Alert:** A-GHA; A-GHA-SILENT (the watch itself stopped reporting). Also use this page when CI,
+**Alert:** A-GHA; A-GHA-SILENT (the watch stopped reporting, or can't read a source). Also use this page when CI,
 merges or deploys sit queued and nothing seems wrong with them.
 
 Everything that changes the product runs on GitHub Actions: PR CI, Copilot reviews, `merge-rule`
@@ -62,8 +62,10 @@ There's nothing to fix on our side. The job is to avoid adding load, and to reco
    **Owner**.
 2. Re-run what failed because of the outage, rather than pushing again:
    `gh run rerun <id> --failed`.
-3. A CodeQL run that ended `skipped` fails `merge-rule` closed; run it again with
-   `gh workflow run codeql.yml --ref <branch>` (AGENTS.md rule 4).
+3. A CodeQL run that ended `skipped` fails `merge-rule` closed. Close and reopen the PR to run it
+   again (`gh pr close <n>` then `gh pr reopen <n>`, with `--repo danswett/agent-bridge`): the
+   `reopened` event is what counts as the PR's analysis. `codeql.yml` has no `workflow_dispatch`,
+   so `gh workflow run codeql.yml` fails.
 4. For each PR you held: once its head's other checks are green again (CI, CodeQL and the
    re-runs; `merge-rule` stays red while `hold` is on, by design), remove the `hold` label,
    then re-arm auto-merge pinned to that head:
@@ -74,7 +76,10 @@ There's nothing to fix on our side. The job is to avoid adding load, and to reco
 
 ## If A-GHA-SILENT fires
 
-The watch hasn't recorded a result in 30 minutes, so A-GHA can't fire. Look at
+No fully read result in 30 minutes, so A-GHA is blind. First read the latest results' messages
+(the query under Confirm). If they arrive but say `unknown (API 403)` or `unreadable`, the watch
+runs but can't read a source; see "Runs API failing" below, or check whether githubstatus.com
+changed its format. If nothing arrives, the watch itself stopped. Look at
 `logic-agent-bridge-github-watch` in the portal: is it enabled, and what do the latest runs show
 failed? `az resource show --subscription $sub -g $rg -n logic-agent-bridge-github-watch
 --resource-type Microsoft.Logic/workflows --query properties.state` reads its state. If it was
@@ -85,8 +90,8 @@ reports again, check https://www.githubstatus.com yourself.
 
 - **Runs API failing:** the check calls GitHub's API without a token, and Azure Logic Apps share
   their outbound addresses, so the hourly limit for anonymous calls can run out. The message then
-  shows `unknown (API 403)`. That's never counted as an outage, but it does blind the queued-run
-  half. The fix is a fine-grained, read-only token with Actions read access on this repository,
+  shows `unknown (API 403)`. That's never counted as an outage, but it blinds the queued-run half,
+  and after 30 minutes A-GHA-SILENT fires. The fix is a fine-grained, read-only token with Actions read access on this repository,
   kept in Key Vault and never in the repository (#658).
 - **Busy hours fire it:** runs queued over 30 min with plenty running means the pool is full,
   not down. Raise `githubStallMinutes` in `infra/modules/monitoring.bicep`.
