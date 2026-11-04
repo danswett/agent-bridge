@@ -343,6 +343,9 @@ sealed class TestUi : SynchronizationContext
     readonly object gate = new();
     readonly BlockingCollection<(SendOrPostCallback Run, object? State, ExecutionContext? Context)> queue = new();
 
+    // The test case this runs, which StallWatch names when its waits stop looking.
+    public string? Test { get; private init; }
+
     // A thread of its own, as the app's UI thread is, rather than the thread pool's: the fakes
     // block pool threads (a host held mid-request, a dispatcher waiting for its turn), and under
     // load a test's steps then waited for the pool to grow before they could take theirs.
@@ -358,9 +361,9 @@ sealed class TestUi : SynchronizationContext
     public static T Read<T>(Func<T> read) => ForTest.Invoke(read);
 
     // A test case, run on a UI thread of its own from start to end.
-    public static Task<T> RunAsync<T>(Func<Task<T>> run)
+    public static Task<T> RunAsync<T>(Func<Task<T>> run, string? test = null)
     {
-        var ui = new TestUi();
+        var ui = new TestUi { Test = test };
         var done = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         ui.Post(_ =>
         {
@@ -455,21 +458,28 @@ static class Wait
         var deadline = DateTime.UtcNow + (patience ?? FakeHost.Patience);
         var last = DateTime.UtcNow;
         var longest = TimeSpan.Zero;
-        while (!TestUi.Read(done))
+        var look = StallWatch.Begin(what, TestUi.ForTest.Test);
+        try
         {
-            var now = DateTime.UtcNow;
-            if (now - last > longest) { longest = now - last; }
-            last = now;
-            // On Windows CI several tests have timed out within the same few milliseconds (#465):
-            // a gap of seconds between two looks says the test itself could not run (the pool or
-            // its UI thread held), not that what it waited for never came.
-            if (now > deadline)
+            while (!TestUi.Read(done))
             {
-                throw new TimeoutException($"timed out waiting for {what} (longest gap between looks {longest.TotalMilliseconds:F0} ms; "
-                    + $"pool threads {ThreadPool.ThreadCount}, queued {ThreadPool.PendingWorkItemCount}){(why is null ? "" : $": {TestUi.Read(why)}")}");
+                look.Looked();
+                var now = DateTime.UtcNow;
+                if (now - last > longest) { longest = now - last; }
+                last = now;
+                // On Windows CI several tests have timed out within the same few milliseconds (#465):
+                // a gap of seconds between two looks says the test itself could not run (the pool or
+                // its UI thread held), not that what it waited for never came. What StallWatch saw
+                // meanwhile says which (#660).
+                if (now > deadline)
+                {
+                    throw new TimeoutException($"timed out waiting for {what} (longest gap between looks {longest.TotalMilliseconds:F0} ms; "
+                        + $"pool threads {ThreadPool.ThreadCount}, queued {ThreadPool.PendingWorkItemCount}){(why is null ? "" : $": {TestUi.Read(why)}")}{StallWatch.Since(look)}");
+                }
+                await Task.Delay(20);
             }
-            await Task.Delay(20);
         }
+        finally { StallWatch.End(look); }
     }
 }
 

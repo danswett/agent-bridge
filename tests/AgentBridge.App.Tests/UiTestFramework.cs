@@ -25,6 +25,7 @@ public sealed class UiTestFramework(IMessageSink sink) : XunitTestFramework(sink
     {
         ThreadPool.GetMinThreads(out var workers, out var io);
         ThreadPool.SetMinThreads(Math.Max(workers, 32), io);
+        StallWatch.Start();
     }
 
     protected override ITestFrameworkExecutor CreateExecutor(AssemblyName assemblyName) =>
@@ -40,11 +41,38 @@ public sealed class UiTestFramework(IMessageSink sink) : XunitTestFramework(sink
         }
     }
 
+    // xunit runs at most maxParallelThreads test classes at once (one per core by default): its
+    // assembly runner waits for a turn in RunTestCollectionAsync before it starts a class. This
+    // runner replaced that step to run its own class runner, and so dropped the wait, from #401
+    // on: every class started together, and the TRX of CI's stalled runs shows up to 32 App
+    // tests running at the same moment on the 4-core Arm runner, and 21 on windows-latest. Each
+    // has a UI thread, a host on a pipe and pool threads waiting for its UI turn, so the pool
+    // reached its 32 threads and then grew by one every second or so on a busy machine, and
+    // every test's waits stopped together for 4 to 10 s (#465, #511, #660). So it waits for a
+    // turn here, as xunit's own does.
     sealed class AssemblyRunner(ITestAssembly assembly, IEnumerable<IXunitTestCase> testCases, IMessageSink sink, IMessageSink executionSink, ITestFrameworkExecutionOptions options)
         : XunitTestAssemblyRunner(assembly, testCases, sink, executionSink, options)
     {
-        protected override Task<RunSummary> RunTestCollectionAsync(IMessageBus messageBus, ITestCollection testCollection, IEnumerable<IXunitTestCase> testCases, CancellationTokenSource cancellationTokenSource) =>
-            new CollectionRunner(testCollection, testCases, DiagnosticMessageSink, messageBus, TestCaseOrderer, new ExceptionAggregator(Aggregator), cancellationTokenSource).RunAsync();
+        SemaphoreSlim? turns;
+
+        protected override Task<RunSummary> RunTestCollectionsAsync(IMessageBus messageBus, CancellationTokenSource cancellationTokenSource)
+        {
+            // As xunit reads it: 0 (the default) is one per core, and below 0 is no limit.
+            var max = ExecutionOptions.MaxParallelThreads() ?? 0;
+            if (max == 0) { max = Environment.ProcessorCount; }
+            if (max > 0) { turns = new SemaphoreSlim(max); }
+            return base.RunTestCollectionsAsync(messageBus, cancellationTokenSource);
+        }
+
+        protected override async Task<RunSummary> RunTestCollectionAsync(IMessageBus messageBus, ITestCollection testCollection, IEnumerable<IXunitTestCase> testCases, CancellationTokenSource cancellationTokenSource)
+        {
+            if (turns is not null) { await turns.WaitAsync(cancellationTokenSource.Token); }
+            try
+            {
+                return await new CollectionRunner(testCollection, testCases, DiagnosticMessageSink, messageBus, TestCaseOrderer, new ExceptionAggregator(Aggregator), cancellationTokenSource).RunAsync();
+            }
+            finally { turns?.Release(); }
+        }
     }
 
     sealed class CollectionRunner(ITestCollection collection, IEnumerable<IXunitTestCase> testCases, IMessageSink sink, IMessageBus bus, ITestCaseOrderer orderer, ExceptionAggregator aggregator, CancellationTokenSource cancel)
@@ -64,6 +92,21 @@ public sealed class UiTestFramework(IMessageSink sink) : XunitTestFramework(sink
     sealed class MethodRunner(ITestMethod testMethod, IReflectionTypeInfo @class, IReflectionMethodInfo method, IEnumerable<IXunitTestCase> testCases, IMessageSink sink, IMessageBus bus, ExceptionAggregator aggregator, CancellationTokenSource cancel, object[] constructorArguments)
         : XunitTestMethodRunner(testMethod, @class, method, testCases, sink, bus, aggregator, cancel, constructorArguments)
     {
-        protected override Task<RunSummary> RunTestCaseAsync(IXunitTestCase testCase) => TestUi.RunAsync(() => base.RunTestCaseAsync(testCase));
+        protected override async Task<RunSummary> RunTestCaseAsync(IXunitTestCase testCase)
+        {
+            var now = Interlocked.Increment(ref running);
+            for (var most = Volatile.Read(ref mostAtOnce); now > most; most = Volatile.Read(ref mostAtOnce))
+            {
+                if (Interlocked.CompareExchange(ref mostAtOnce, now, most) == most) { break; }
+            }
+            try { return await TestUi.RunAsync(() => base.RunTestCaseAsync(testCase), testCase.DisplayName); }
+            finally { Interlocked.Decrement(ref running); }
+        }
     }
+
+    static int running;
+    static int mostAtOnce;
+
+    // The most test cases that have run at the same moment so far in this run.
+    public static int MostAtOnce => Volatile.Read(ref mostAtOnce);
 }

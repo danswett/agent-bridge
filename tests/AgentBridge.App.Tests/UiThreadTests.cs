@@ -58,4 +58,36 @@ public sealed class UiThreadTests
         Assert.True(mine.OnIt);
         Assert.False(other.OnIt);
     }
+
+    // The harness runs no more test classes at once than xunit would, one per core (#660). From
+    // #401 to #660 it ran them all together, and their waits stopped for seconds at a time.
+    [Fact]
+    public void No_more_tests_run_at_once_than_there_are_cores() =>
+        Assert.InRange(UiTestFramework.MostAtOnce, 1, Environment.ProcessorCount);
+
+    // What StallWatch writes down when a test's waits stop looking (#660): every thread's stack,
+    // a blocked one's included, read while the process goes on. On Windows x64, where it reads them.
+    [Fact]
+    public void The_stall_watch_reads_the_stack_of_a_thread_blocked_elsewhere()
+    {
+        if (!OperatingSystem.IsWindows() || System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture != System.Runtime.InteropServices.Architecture.X64) { return; }
+        using var parked = new ManualResetEventSlim();
+        using var go = new ManualResetEventSlim();
+        var thread = new Thread(() => ParkedUntil(parked, go)) { IsBackground = true };
+        thread.Start();
+        Assert.True(parked.Wait(FakeHost.Patience));
+        try
+        {
+            var stacks = StallWatch.Stacks();
+            Assert.Contains($"{nameof(UiThreadTests)}.{nameof(ParkedUntil)}", stacks);
+        }
+        finally { go.Set(); thread.Join(); }
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    static void ParkedUntil(ManualResetEventSlim parked, ManualResetEventSlim go)
+    {
+        parked.Set();
+        go.Wait();
+    }
 }
