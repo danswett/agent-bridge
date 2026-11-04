@@ -115,6 +115,206 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.True(File.Exists(Hook));
     }
 
+    string Instructions(string agent) => agent switch
+    {
+        "copilot" => Path.Combine(Homes.Copilot, "instructions", "agent-bridge.instructions.md"),
+        "claude" => Path.Combine(Homes.Claude, "CLAUDE.md"),
+        _ => Path.Combine(Homes.Codex, "AGENTS.md"),
+    };
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    public async Task Setup_adds_owned_guidance_and_removal_restores_existing_text_exactly(string agent)
+    {
+        var path = Instructions(agent);
+        Write(path, "User guidance\r\n\r\nDo not change this text.");
+        var before = File.ReadAllBytes(path);
+
+        await Setup.InstallAsync(agent, false, TextWriter.Null);
+
+        Assert.StartsWith(Encoding.UTF8.GetString(before), File.ReadAllText(path));
+        Assert.Contains("agent@session", File.ReadAllText(path));
+        Assert.Contains("Never sweep", File.ReadAllText(path));
+        Assert.Equal(before, File.ReadAllBytes(Path.Combine(Profile, "hooks", "backups", "instructions", $"{agent}.bin")));
+        var installed = File.ReadAllBytes(path);
+        await Setup.InstallAsync(agent, false, TextWriter.Null);
+        Assert.Equal(installed, File.ReadAllBytes(path));
+        await Setup.RemoveAsync(agent, false, TextWriter.Null);
+        Assert.Equal(before, File.ReadAllBytes(path));
+    }
+
+    [Theory]
+    [InlineData(0, "")]
+    [InlineData(1, " \r\n\r\n")]
+    [InlineData(2, "User guidance\nNo final newline")]
+    [InlineData(3, "User guidance\rOnly CR endings\r")]
+    public async Task Instruction_round_trips_preserve_BOM_encoding_whitespace_and_line_endings(int format, string text)
+    {
+        Encoding encoding = format switch
+        {
+            0 => new UTF8Encoding(true, true),
+            1 => new UnicodeEncoding(false, true, true),
+            2 => new UnicodeEncoding(true, true, true),
+            _ => new UTF32Encoding(false, true, true),
+        };
+        var path = Instructions("claude");
+        Directory.CreateDirectory(Homes.Claude);
+        byte[] before = [.. encoding.GetPreamble(), .. encoding.GetBytes(text)];
+        File.WriteAllBytes(path, before);
+
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Assert.Equal(encoding.GetPreamble(), File.ReadAllBytes(path)[..encoding.GetPreamble().Length]);
+        Assert.Contains("agent@session", File.ReadAllText(path));
+        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+
+        Assert.Equal(before, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public async Task A_new_instruction_file_is_removed_but_later_user_additions_survive_repair_and_removal()
+    {
+        var path = Instructions("claude");
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Assert.True(File.Exists(path));
+        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+        Assert.False(File.Exists(path));
+
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        File.AppendAllText(path, "\nUser additions\n\n");
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+
+        Assert.Equal("\nUser additions\n\n", File.ReadAllText(path));
+    }
+
+    [Theory]
+    [InlineData("<!-- agent-bridge-owner:broken -->")]
+    [InlineData("<!-- /agent-bridge-owner -->")]
+    [InlineData("<!-- agent-bridge-owner:0000000000000000000000000000000000000000000000000000000000000000;created=1;separator=0 -->\nForeign\n<!-- /agent-bridge-owner -->\n")]
+    [InlineData("<!-- agent-ha-bridge-owner:0123456789abcdef0123456789abcdef -->\nLegacy")]
+    public async Task Foreign_or_incomplete_guidance_refuses_setup_before_any_mutation(string text)
+    {
+        Write(Instructions("claude"), text);
+        var before = Listing();
+
+        await Assert.ThrowsAnyAsync<InvalidDataException>(() => Setup.InstallAsync("claude", false, TextWriter.Null));
+
+        Assert.Equal(before, Listing());
+    }
+
+    [Fact]
+    public async Task Unsupported_instruction_encoding_is_refused_without_losing_bytes()
+    {
+        var path = Instructions("claude");
+        Directory.CreateDirectory(Homes.Claude);
+        File.WriteAllBytes(path, [0xff, 0x80, 0xc0]);
+        var before = Listing();
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => Setup.InstallAsync("claude", false, TextWriter.Null));
+
+        Assert.Equal(before, Listing());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Retained_legacy_guidance_at_alternate_locations_blocks_all_fresh_setup(bool copilot)
+    {
+        var path = copilot ? Path.Combine(Homes.Copilot, "instructions", "agent-ha-bridge.instructions.md")
+            : Path.Combine(Homes.Codex, "AGENTS.override.md");
+        Write(path, "<!-- agent-ha-bridge-owner:0123456789abcdef0123456789abcdef -->\nLegacy\n");
+        var before = Listing();
+
+        Exception exception = copilot
+            ? await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("claude", false, TextWriter.Null))
+            : await Assert.ThrowsAsync<InvalidDataException>(() => Setup.InstallAsync("claude", false, TextWriter.Null));
+
+        Assert.Contains("legacy", exception.Message);
+        Assert.Equal(before, Listing());
+    }
+
+    [Fact]
+    public async Task Codex_setup_refuses_shadowing_user_overrides_without_changing_any_files()
+    {
+        Write(Path.Combine(Homes.Codex, "AGENTS.override.md"), "User guidance\n");
+        var before = Listing();
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
+
+        Assert.Contains("overrides AGENTS.md", exception.Message);
+        Assert.Equal(before, Listing());
+    }
+
+    [Fact]
+    public async Task Codex_removal_preserves_an_override_created_after_installation()
+    {
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
+        var path = Path.Combine(Homes.Codex, "AGENTS.override.md");
+        Write(path, "User guidance\n");
+
+        await Setup.RemoveAsync("codex", false, TextWriter.Null);
+
+        Assert.Equal("User guidance\n", File.ReadAllText(path));
+        Assert.False(File.Exists(Instructions("codex")));
+        Assert.False(File.Exists(Path.Combine(Homes.Codex, "agent-bridge-owner.json")));
+    }
+
+    [Fact]
+    public async Task Shared_symbolic_instruction_targets_are_refused_before_any_mutation()
+    {
+        if (OperatingSystem.IsWindows()) { return; } // File symlinks require privileges on Windows; Linux CI covers this.
+        var shared = Path.Combine(root, "shared-instructions.md");
+        Write(shared, "User guidance\n");
+        Directory.CreateDirectory(Homes.Claude);
+        Directory.CreateDirectory(Homes.Codex);
+        File.CreateSymbolicLink(Instructions("claude"), shared);
+        File.CreateSymbolicLink(Instructions("codex"), shared);
+        var before = Listing();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("claude", false, TextWriter.Null));
+
+        Assert.Contains("shared targets", exception.Message);
+        Assert.Equal(before, Listing());
+    }
+
+    [Fact]
+    public async Task Damaged_owned_guidance_refuses_removal_before_hooks_or_ownership_change()
+    {
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var path = Instructions("claude");
+        File.WriteAllText(path, File.ReadAllText(path).Replace("<!-- /agent-bridge-owner -->", ""));
+        var before = Listing();
+
+        await Assert.ThrowsAnyAsync<InvalidDataException>(() => Setup.RemoveAsync("claude", false, TextWriter.Null));
+
+        Assert.Equal(before, Listing());
+    }
+
+    [Fact]
+    public async Task A_concurrent_instruction_save_is_preserved_and_failed_setup_remains_repairable()
+    {
+        var path = Instructions("claude");
+        Write(path, "Original\n");
+        DurableFile.BeforeCommit.Value = target =>
+        {
+            if (target == path) { File.WriteAllText(path, "Concurrent user save\n"); }
+        };
+        try
+        {
+            await Assert.ThrowsAsync<DurableFile.ChangedMeanwhileException>(() => Setup.InstallAsync("claude", false, TextWriter.Null));
+        }
+        finally { DurableFile.BeforeCommit.Value = null; }
+        Assert.Equal("Concurrent user save\n", File.ReadAllText(path));
+        Assert.True(File.Exists(Owner("claude")));
+
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+
+        Assert.Equal("Concurrent user save\n", File.ReadAllText(path));
+    }
+
     [Fact]
     public async Task A_failed_Settings_setup_reports_partial_work_and_can_be_repaired()
     {
