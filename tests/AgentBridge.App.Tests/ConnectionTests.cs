@@ -436,6 +436,24 @@ public sealed class ConnectionTests : IAsyncLifetime
         public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 
+    [Fact]
+    public void A_discovery_hold_reported_after_a_sessions_synced_that_waits_on_its_answer_is_not_undone_when_the_snapshot_finishes()
+    {
+        var store = new SessionStore();
+        var on = new object();
+        var older = new DiscoveryHeld("the claude processes could not be listed", [AgentKind.Claude]);
+        var newer = new DiscoveryHeld("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot]);
+        store.BeginSnapshot(on);
+        // Read on the pump before the subscribe's answer is applied: the synced waits for it.
+        store.EndSnapshot(older, on, 5);
+        store.SetHeld(newer);
+
+        store.Answered(on, 4);
+
+        Assert.True(store.Complete);
+        Assert.Equal(newer, store.Held);
+    }
+
     static void Skip(FakeHost h, long count)
     {
         foreach (var ch in h.Channels.OfType<LocalChannel>().Where(c => c.IsOpen).Distinct()) { ch.SkipEventSeq(count); }

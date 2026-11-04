@@ -503,6 +503,15 @@ public sealed class SessionStore
 
     public void SetHeld(DiscoveryHeld? held)
     {
+        // A discovery.changed read after a sessions.synced that still waits on its subscribe's
+        // answer is the newer word: finishing that snapshot later must not put the synced's older
+        // hold back, which hid a newly reported hold until the next change.
+        if (early is { } e) { early = (e.Seq, held); }
+        ApplyHeld(held);
+    }
+
+    void ApplyHeld(DiscoveryHeld? held)
+    {
         if (held?.Reason == Held?.Reason && (held?.Agents ?? []).SequenceEqual(Held?.Agents ?? [])) { return; }
         Held = held;
         HeldChanged?.Invoke();
@@ -640,7 +649,7 @@ public sealed class SessionStore
         snapshot = null;
         Complete = true;
         foreach (var id in sessions.Keys.Where(id => !seen.Contains(id)).ToList()) { Remove(id); }
-        SetHeld(held);
+        ApplyHeld(held);
         Synced?.Invoke();
     }
 }
