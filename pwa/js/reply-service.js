@@ -29,7 +29,7 @@ export class ReplyService extends AnswerService {
   constructor(options) {
     super({
       ...options,
-      send: async (client, data, entry, progress) => {
+      send: async (client, data, entry, progress, stage) => {
         const files = entry?.answer?.attachments ?? [];
         const abort = new AbortController();
         this.#sending.set(entry.key, abort);
@@ -46,7 +46,7 @@ export class ReplyService extends AnswerService {
           abort.signal.throwIfAborted();
           this.#sending.delete(entry.key);
           if (files.length) { progress({ sent: total, total, phase: 'reply' }); }
-          return await client.reply(data);
+          return await client.reply(data, { onProgress: stage });
         } catch (e) {
           if (abort.signal.aborted) { throw Object.assign(new Error(CANCELLED), { fromHost: true, reason: CANCELLED }); }
           throw e;
@@ -59,6 +59,7 @@ export class ReplyService extends AnswerService {
         ...(e.answer.attachments?.length ? { attachments: e.answer.attachments.map((f) => ({ id: f.id })) } : {}),
       }),
       final: () => false,
+      marks: 'reply',
     });
     this.#current = options.current;
     this.#blobs = options.blobs;

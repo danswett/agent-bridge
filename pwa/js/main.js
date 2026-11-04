@@ -46,6 +46,7 @@ import { UsageView } from './ui/usage-view.js';
 import { conceal, reveal, watchDisclosures, watchPresses } from './ui/motion.js';
 import { cameBack, watchFocusRing } from './ui/focus.js';
 import { RelayBlobs } from './blobs.js';
+import { recentTimings } from './timing.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
 
 // Installed on iOS or iPadOS, the edge swipe walks the same back stack as Android's Back.
@@ -316,9 +317,13 @@ async function startDemo() {
     // ?signin=1: a host that runs an agent's own device-code sign-in when asked (#800), with four
     // sessions waiting on one, a quota error and a session not responding (demoSignIn).
     signingIn: params.get('signin') === '1',
+    // ?progress=0: a host from before sessions.progress, which says nothing until the outcome.
+    progress: params.get('progress') !== '0',
   });
   if (params.get('signin') === '1') { demoSignIn(host); }
   host.updateStepMs = Number(params.get('updateStep')) || host.updateStepMs;
+  // ?confirmDelay=: how long after typing an answer or reply the machine confirms it, to see Typed.
+  host.confirmDelayMs = Number(params.get('confirmDelay')) || 0;
   // ?machines=2 or 3: the account's other machines, after this one.
   const machines = [host, ...demoMachines(Number(params.get('machines')) || 1, { answerDelayMs, stopWindowMs })];
   // With ?signin=1, each other machine that takes answers needs a sign-in too (#800).
@@ -406,6 +411,8 @@ async function startDemo() {
   const { answers, replies, stops, launches, launchPanel, view } = page;
   window.agentBridgeDemo = {
     host, hosts, connection, store: hosts.sessions, view, answers, replies, stops, launches, launchPanel, book, blobs: blobStore, page,
+    // This device's timing marks for its last answers and replies (timing.js).
+    timings: recentTimings,
     // Each demo machine, by its id: 'demo', 'demo-laptop', 'demo-shadow'.
     machines: Object.fromEntries(machines.map((m) => [m.machine.id, m])),
     get client() { return hosts.link(host.machine.id)?.client ?? null; },
@@ -750,7 +757,7 @@ function begin(account) {
 
   // For the E2E tests and debugging from the console. Holds no secrets beyond what the
   // page already has.
-  window.agentBridge = { connection, hosts, store: hosts.sessions, answers, replies, stops, launches, notices, fleet, book, page };
+  window.agentBridge = { connection, hosts, store: hosts.sessions, answers, replies, stops, launches, notices, fleet, book, page, timings: recentTimings };
   drawNotify();
   connection.start();
 }

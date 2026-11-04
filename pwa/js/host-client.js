@@ -5,7 +5,7 @@
 // `onmessage(message)` / `onclose(error)` callbacks, carrying already-parsed JSON. In the
 // app that is an end-to-end Noise channel (channels.js); in demo mode and the unit tests
 // it is an in-process fake. Nothing here knows which.
-import { Events, Ops, readAnswerResult, readAttachmentState, readDiscoveryHeld, readHello, readSession, readStopResult, readSubagent } from './protocol.js';
+import { Capabilities, Events, Ops, readAnswerResult, readAttachmentState, readDiscoveryHeld, readHello, readProgress, readSession, readStopResult, readSubagent } from './protocol.js';
 import { PatchError, applyPatch, readPatch } from './session-patch.js';
 import { USAGE, readUsage } from './usage.js';
 import { UPDATE, readUpdateState } from './update.js';
@@ -67,6 +67,10 @@ export class HostClient {
   #updateSubscribed = false;
   closed = false;
   synced = false;
+  // What the host offered in its latest hello on this channel: a reply or an answer asks for
+  // progress only from a host that offers it, as an older one would refuse the request's
+  // unknown field or never send a frame for it.
+  capabilities = [];
 
   // Typing and confirming an answer can take a host a while, so session.answer gets longer
   // than other requests before it counts as lost (and is resent with the same request). A
@@ -99,15 +103,16 @@ export class HostClient {
 
   request(op, data = {}, options = {}) { return this.#request(op, data, options).done; }
 
-  // The request's id too, known as soon as it is made.
-  #request(op, data = {}, { timeoutMs = this.#timeoutMs } = {}) {
+  // The request's id too, known as soon as it is made. onProgress hears the request's interim
+  // progress frames, read (readProgress), in the order they come.
+  #request(op, data = {}, { timeoutMs = this.#timeoutMs, onProgress = null } = {}) {
     if (this.closed) { return { id: null, done: Promise.reject(new HostError(op, 'the channel is closed')) }; }
     const id = ++this.#next;
     const done = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.#pending.delete(id)) { reject(new HostError(op, 'timed out')); }
       }, timeoutMs);
-      this.#pending.set(id, { op, resolve, reject, timer });
+      this.#pending.set(id, { op, resolve, reject, timer, onProgress });
       // A send that fails (the relay went away under the channel) fails this request at
       // once, rather than leaving it to time out: S5's sleeping-iPhone lesson.
       Promise.resolve().then(() => this.#transport.send({ id, op, data })).catch((e) => {
@@ -118,7 +123,16 @@ export class HostClient {
     return { id, done };
   }
 
-  async hello() { return readHello(await this.request(Ops.hello)); }
+  async hello() {
+    const hello = readHello(await this.request(Ops.hello));
+    this.capabilities = hello.capabilities;
+    return hello;
+  }
+
+  // A session.answer's or session.reply's data, asking for progress where the host offers it.
+  #withProgress(data, onProgress) {
+    return onProgress && this.capabilities.includes(Capabilities.sessionsProgress) ? { ...data, progress: true } : data;
+  }
 
   // Every page of sessions.list. Not used by the live view, which subscribes instead (pages
   // can overlap or miss a session if anything changes between them), but kept for one-shot
@@ -157,15 +171,18 @@ export class HostClient {
   }
 
   // Answers a question: data is session.answer's { id, question, request, fields | text }.
-  // Resolves to { outcome, reason }; rejects only when no outcome arrived (HostError).
-  async answer(data, { timeoutMs = this.#answerTimeoutMs } = {}) {
-    return readAnswerResult(await this.request(Ops.sessionAnswer, data, { timeoutMs }));
+  // Resolves to { outcome, reason, timings? }; rejects only when no outcome arrived (HostError).
+  // onProgress({ stage, working }) hears how far the host has got, where it says
+  // (sessions.progress); a host that doesn't sends only the outcome.
+  async answer(data, { timeoutMs = this.#answerTimeoutMs, onProgress = null } = {}) {
+    return readAnswerResult(await this.request(Ops.sessionAnswer, this.#withProgress(data, onProgress), { timeoutMs, onProgress }));
   }
 
   // Sends a session a prompt: data is session.reply's { id, request, text, attachments? }.
-  // Resolves to { outcome, reason }; rejects only when no outcome arrived (HostError).
-  async reply(data, { timeoutMs = this.#replyTimeoutMs } = {}) {
-    return readAnswerResult(await this.request(Ops.sessionReply, data, { timeoutMs }));
+  // Resolves to { outcome, reason, timings? }; rejects only when no outcome arrived (HostError).
+  // onProgress as for answer().
+  async reply(data, { timeoutMs = this.#replyTimeoutMs, onProgress = null } = {}) {
+    return readAnswerResult(await this.request(Ops.sessionReply, this.#withProgress(data, onProgress), { timeoutMs, onProgress }));
   }
 
   // Sends a file ahead of a reply (attachments.js does the chunking). Each resolves to
@@ -264,6 +281,15 @@ export class HostClient {
     if (Number.isInteger(m.re)) {
       const p = this.#pending.get(m.re);
       if (!p) { return; }
+      // An interim frame (re and progress, no ok) says how far the request has got, and never
+      // settles it: the response still follows. One this app can't read is passed over.
+      if (!('ok' in m) && 'progress' in m) {
+        const progress = readProgress(m.progress);
+        if (progress && p.onProgress) {
+          try { p.onProgress(progress); } catch (e) { console.error(e); }
+        }
+        return;
+      }
       this.#pending.delete(m.re);
       clearTimeout(p.timer);
       // Here, in the order of the channel, not when the awaiting code next runs: every event

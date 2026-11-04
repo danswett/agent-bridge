@@ -61,7 +61,7 @@ test.describe('on a phone', () => {
     await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.');
     await expect(reply).toHaveAttribute('data-reply', 'delivered');
     await expect(input).toHaveValue('');
-    expect(await log(page)).toEqual([{ id: IDLE, request: expect.stringMatching(UUID), text: 'Looks good.\nNow open the PR – please 🚀' }]);
+    expect(await log(page)).toEqual([{ id: IDLE, request: expect.stringMatching(UUID), text: 'Looks good.\nNow open the PR – please 🚀', progress: true }]);
     expect((await typed(page)).map((t) => t.said)).toEqual(['Looks good. Now open the PR – please 🚀']);
     // The host's upsert: the session is working on it, and it is your latest message.
     await expect(card(page, IDLE)).toHaveAttribute('data-status', 'working');
@@ -210,6 +210,67 @@ test.describe('outcomes', () => {
   });
 });
 
+// Where the machine says how far a reply has got (sessions.progress, #600): Sent once it has it,
+// Typed once the keys have gone, Queued when they went into a working session. The demo host
+// holds before typing and before its outcome, so each stage stays to be looked at.
+test.describe('progress', () => {
+  test.use({ viewport: { width: 390, height: 664 } });
+  const holdBefore = (page, step) => page.evaluate((s) => window.agentBridgeDemo.host.holdBefore(s), step);
+  const releaseBefore = (page, step) => page.evaluate((s) => window.agentBridgeDemo.host.releaseBefore(s), step);
+
+  test('a reply shows Sent, then Typed, then Delivered, and keeps its timing marks on this device', async ({ page }) => {
+    await openDemo(page);
+    const reply = box(page, IDLE);
+    const status = reply.locator('.reply-status');
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('carry on');
+    await holdBefore(page, 'typing');
+    await holdBefore(page, 'result');
+    await reply.getByRole('button', { name: 'Send' }).click();
+    await expect(status).toHaveText('Sent. The machine is typing it…');
+    await expect(reply).toHaveAttribute('aria-busy', 'true');
+    await releaseBefore(page, 'typing');
+    await expect(status).toHaveText('Typed. Waiting for the session to take it…');
+    await expect(reply.getByRole('button', { name: 'Send' })).toBeDisabled();
+    await releaseBefore(page, 'result');
+    await expect(status).toHaveText('Delivered. The session has your reply.');
+    expect((await log(page))[0].progress).toBe(true);
+    // Tap to outcome, each stage between, and the machine's own timings beside them.
+    const [timing] = await page.evaluate(() => window.agentBridgeDemo.timings());
+    expect(timing).toMatchObject({ kind: 'reply', outcome: 'delivered', host: { typed: expect.any(Number), confirmed: expect.any(Number) } });
+    expect(timing.client.map(([mark]) => mark)).toEqual(['sent', 'received', 'typed', 'result']);
+  });
+
+  test('a reply typed into a working session shows Queued: the session takes it at its next step', async ({ page }) => {
+    await openDemo(page);
+    await page.evaluate(({ id, t }) => {
+      const d = window.agentBridgeDemo;
+      d.upsert({ ...d.host.get(id), status: 'working', statusSince: t, updatedAt: t });
+    }, { id: IDLE, t: later() });
+    await expect(card(page, IDLE)).toHaveAttribute('data-status', 'working');
+    const reply = box(page, IDLE);
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('and add a test');
+    await holdBefore(page, 'result');
+    await reply.getByRole('button', { name: 'Send' }).click();
+    await expect(reply.locator('.reply-status')).toHaveText('Queued. The session is working, and takes it at its next step.');
+    await releaseBefore(page, 'result');
+    await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.');
+  });
+
+  test('a machine from before progress is asked for none, and the reply says Sending until its outcome', async ({ page }) => {
+    await openDemo(page, '&progress=0');
+    const reply = box(page, IDLE);
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('carry on');
+    await holdBefore(page, 'typing');
+    await reply.getByRole('button', { name: 'Send' }).click();
+    await expect(reply.locator('.reply-status')).toHaveText('Sending…');
+    await releaseBefore(page, 'typing');
+    await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.');
+    expect(await log(page)).toEqual([{ id: IDLE, request: expect.stringMatching(UUID), text: 'carry on' }]);
+    const [timing] = await page.evaluate(() => window.agentBridgeDemo.timings());
+    expect(timing).toMatchObject({ kind: 'reply', outcome: 'delivered', host: null });
+    expect(timing.client.map(([mark]) => mark)).toEqual(['sent', 'result']);
+  });
+});
 test.describe('from a keyboard', () => {
   test('Ctrl+Enter or Cmd+Enter sends, and Enter alone is a new line', async ({ page }) => {
     await openDemo(page);

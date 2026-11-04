@@ -77,11 +77,28 @@ test.describe('on a phone', () => {
     await expect(receipt).toHaveText('Your answer: Delivered. The session has your answer.');
     await expect(receipt).toHaveAttribute('data-answer', 'delivered');
     const [sent] = await log(page);
-    expect(sent).toEqual({ id: CODEX, question: 'q-choice', request: expect.stringMatching(UUID), fields: { answer: 'sqlite' } });
+    expect(sent).toEqual({ id: CODEX, question: 'q-choice', request: expect.stringMatching(UUID), fields: { answer: 'sqlite' }, progress: true });
     expect(await typed(page)).toHaveLength(1);
     await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
   });
 
+  test('an answer shows Sent, then Typed once the question has gone, then Delivered, where the machine says (#600)', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, choice());
+    await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.holdBefore('typing'); h.holdBefore('result'); });
+    await q.locator('.choice[data-value="pg"]').tap();
+    await expect(q.locator('.answer-status')).toHaveText('Sent. The machine is typing it…');
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseBefore('typing'));
+    // Typed: the host's upsert takes the question away, and the card says how far the answer has got.
+    await expect(q).toHaveCount(0);
+    const receipt = card(page, CODEX).locator('.answer-receipt');
+    await expect(receipt).toHaveText('Your answer: Typed. Waiting for the session to take it…');
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseBefore('result'));
+    await expect(receipt).toHaveText('Your answer: Delivered. The session has your answer.');
+    const [timing] = await page.evaluate(() => window.agentBridgeDemo.timings());
+    expect(timing).toMatchObject({ kind: 'answer', outcome: 'delivered', host: { typed: expect.any(Number) } });
+    expect(timing.client.map(([mark]) => mark)).toEqual(['sent', 'received', 'typed', 'result']);
+  });
   test('Other… opens a box for an answer of your own, which must say something', async ({ page }) => {
     await openDemo(page);
     const q = await ask(page, choice({ allowOther: true }));
@@ -221,7 +238,7 @@ test.describe('on a phone', () => {
     await q.getByRole('button', { name: 'Send answer' }).tap();
     await expect(q).toHaveCount(0);
     const [sent] = await log(page);
-    expect(sent).toEqual({ id: CODEX, question: 'q-plain', request: expect.stringMatching(UUID), text: 'The phone can answer now.' });
+    expect(sent).toEqual({ id: CODEX, question: 'q-plain', request: expect.stringMatching(UUID), text: 'The phone can answer now.', progress: true });
     expect(sent.fields).toBeUndefined();
   });
 
@@ -265,7 +282,7 @@ test.describe('on a phone', () => {
 
     await q.getByRole('button', { name: 'Approve once' }).tap();
     await expect(q).toHaveCount(0);
-    expect((await log(page))[0]).toEqual({ id: COPILOT, question: 'r1#0123456789abcdef', request: expect.stringMatching(UUID), fields: { decision: 'approve' } });
+    expect((await log(page))[0]).toEqual({ id: COPILOT, question: 'r1#0123456789abcdef', request: expect.stringMatching(UUID), fields: { decision: 'approve' }, progress: true });
   });
 
   test('a Copilot permission prompt at a machine with approving turned off says so and offers nothing', async ({ page }) => {
@@ -368,7 +385,7 @@ test.describe('outcomes', () => {
     await script(page, { outcome: 'delivered', drop: true });
     const q = await ask(page, choice());
     await q.locator('.choice[data-value="pg"]').click();
-    await expect(q.locator('.answer-status')).toHaveText(/Sending|Waiting for the connection/);
+    await expect(q.locator('.answer-status')).toHaveText(/Sending|Sent\. The machine is typing it|Typed\. |Waiting for the connection/);
     await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.', { timeout: 10000 });
     const sent = await log(page);
     expect(sent.length).toBeGreaterThanOrEqual(2);

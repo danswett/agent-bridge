@@ -316,3 +316,62 @@ test('what holds the host\'s discovery arrives with the snapshot and with each c
   t.host({ ev: 'discovery.changed', seq: 4, data: { discoveryHeld: { reason: 42 } } });
   assert.equal(store.held, null);
 });
+
+// ---- progress (sessions.progress, #600) ----
+
+async function greeted(capabilities) {
+  const t = fakeTransport();
+  const client = new HostClient(t, { timeoutMs: 1000 });
+  const p = client.hello();
+  await flush();
+  t.host({ re: t.lastRequest('hello').id, ok: true, result: { protocol: 1, machine: { id: 'm' }, capabilities } });
+  await p;
+  return { t, client };
+}
+
+test('a reply asks for progress only from a host that offers sessions.progress', async () => {
+  const older = await greeted(['sessions.read', 'sessions.reply']);
+  older.client.reply({ id: 's1', request: 'r1', text: 'go' }, { onProgress: () => {} }).catch(() => {});
+  await flush();
+  assert.deepEqual(older.t.lastRequest('session.reply').data, { id: 's1', request: 'r1', text: 'go' });
+  const newer = await greeted(['sessions.read', 'sessions.reply', 'sessions.answer', 'sessions.progress']);
+  newer.client.reply({ id: 's1', request: 'r1', text: 'go' }, { onProgress: () => {} }).catch(() => {});
+  newer.client.answer({ id: 's1', question: 'q1', request: 'r2', text: 'yes' }, { onProgress: () => {} }).catch(() => {});
+  await flush();
+  assert.equal(newer.t.lastRequest('session.reply').data.progress, true);
+  assert.equal(newer.t.lastRequest('session.answer').data.progress, true);
+  older.client.close();
+  newer.client.close();
+});
+
+test('progress frames tell a reply how far it has got, in order, and never settle it', async () => {
+  const { t, client } = await greeted(['sessions.read', 'sessions.reply', 'sessions.progress']);
+  const heard = [];
+  let settled = false;
+  const p = client.reply({ id: 's1', request: 'r1', text: 'go' }, { onProgress: (s) => heard.push(s) }).finally(() => { settled = true; });
+  await flush();
+  const re = t.lastRequest('session.reply').id;
+  t.host({ re, progress: { stage: 'received' } });
+  t.host({ re, progress: { stage: 'typed', working: true } });
+  // A stage this app doesn't know, from a newer host, is passed over and settles nothing either.
+  t.host({ re, progress: { stage: 'pondering' } });
+  await flush();
+  assert.equal(settled, false);
+  assert.deepEqual(heard, [{ stage: 'received', working: false }, { stage: 'typed', working: true }]);
+  t.host({ re, ok: true, result: { outcome: 'delivered', timings: { typed: 352, recorded: 1190, confirmed: 1361, bogus: 'x' } } });
+  assert.deepEqual(await p, { outcome: 'delivered', reason: null, timings: { typed: 352, recorded: 1190, confirmed: 1361 } });
+});
+
+test('a progress frame for a request the client is not waiting on is ignored', async () => {
+  const { t, client } = await greeted(['sessions.read', 'sessions.reply', 'sessions.progress']);
+  const heard = [];
+  const p = client.reply({ id: 's1', request: 'r1', text: 'go' }, { onProgress: (s) => heard.push(s) });
+  await flush();
+  const re = t.lastRequest('session.reply').id;
+  t.host({ re: re + 7, progress: { stage: 'typed', working: false } });
+  t.host({ re, ok: true, result: { outcome: 'delivered' } });
+  assert.deepEqual(await p, { outcome: 'delivered', reason: null });
+  // Nor one for the request after its response: it is settled and gone.
+  t.host({ re, progress: { stage: 'received' } });
+  assert.deepEqual(heard, []);
+});

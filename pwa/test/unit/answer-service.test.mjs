@@ -226,3 +226,56 @@ test('HostClient.answer sends session.answer and reads an unknown outcome as unc
   t.onmessage({ re: 1, ok: true, result: { outcome: 'typed-later', reason: 'newer host' } });
   assert.deepEqual(await p, { outcome: 'unconfirmed', reason: 'newer host' });
 });
+
+// ---- progress (sessions.progress, #600) ----
+
+// fakeClient's, with what the machine says of its progress played through the onProgress the
+// service passed.
+function progressClient() {
+  const c = fakeClient();
+  c.answer = (data, { onProgress } = {}) => new Promise((resolve, reject) => { c.calls.push({ data, resolve, reject, progress: onProgress }); });
+  return c;
+}
+
+test("an answer's stages from the machine are shown in order: Sent, then Typed, then its outcome", async () => {
+  const { conn, service, seen, submit } = setup();
+  conn.client = progressClient();
+  const stages = [];
+  service.watch('h1', 's1', 'q1', (e) => stages.push(e.stage));
+  submit();
+  const call = conn.client.last();
+  call.progress({ stage: 'received', working: false });
+  call.progress({ stage: 'typed', working: false });
+  call.resolve({ outcome: 'delivered', reason: null, timings: { typed: 40, confirmed: 90 } });
+  await flush();
+  assert.deepEqual(stages, [null, 'received', 'typed', 'typed']);
+  assert.deepEqual(seen, ['sending', 'sending', 'sending', 'done:delivered']);
+  assert.deepEqual(service.get('h1', 's1', 'q1').detail.timings, { typed: 40, confirmed: 90 });
+});
+
+test('typed into a working session is Queued, and a stage behind one already reached changes nothing', async () => {
+  const { conn, service, submit } = setup();
+  conn.client = progressClient();
+  submit();
+  const call = conn.client.last();
+  call.progress({ stage: 'typed', working: true });
+  assert.equal(service.get('h1', 's1', 'q1').stage, 'queued');
+  // A resend's repeat replays the stages reached, received first: what was typed stays typed.
+  call.progress({ stage: 'received', working: false });
+  assert.equal(service.get('h1', 's1', 'q1').stage, 'queued');
+});
+
+test('a stage from an attempt given up on is not shown on the next', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { conn, service, submit } = setup();
+  conn.client = progressClient();
+  submit();
+  const first = conn.client.last();
+  first.reject(new HostError('session.answer', 'timed out'));
+  await flush();
+  t.mock.timers.tick(5);
+  await flush();
+  assert.equal(conn.client.calls.length, 2);
+  first.progress({ stage: 'typed', working: false });
+  assert.equal(service.get('h1', 's1', 'q1').stage, null);
+});
