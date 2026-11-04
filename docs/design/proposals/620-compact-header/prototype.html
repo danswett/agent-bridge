@@ -47,7 +47,8 @@
   .scroller { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: var(--full) 16px 16px; scroll-padding-top: calc(var(--covered, var(--full)) + 8px); }
   .head { position: absolute; left: 0; right: 0; top: 0; z-index: 2; pointer-events: none; }
   /* touch-action: a vertical swipe on the header scrolls the conversation (script below); the chips still pan sideways. */
-  .full { pointer-events: auto; touch-action: pan-x; background: var(--shell); border-bottom: 1px solid var(--stroke); transform: translateY(var(--ty)); will-change: transform; }
+  /* max-height: on a screen shorter than the header (a landscape phone) it scrolls within itself, so focus in it can always be shown. */
+  .full { pointer-events: auto; touch-action: pan-x; max-height: var(--stage-h, none); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; background: var(--shell); border-bottom: 1px solid var(--stroke); transform: translateY(var(--ty)); will-change: transform; }
   .animating .full { transition: transform var(--dur) var(--ease); }
   .bar { position: absolute; left: 0; right: 0; top: 0; z-index: 3; height: var(--bar); display: flex; align-items: center; gap: 6px; padding: 0 4px; pointer-events: none; }
   .bar::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--shell); border-bottom: 1px solid var(--stroke); opacity: 0; transition: opacity var(--xfade) linear; }
@@ -201,6 +202,7 @@
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
 
   const measure = () => {
+    phone.style.setProperty('--stage-h', `${$('stage').clientHeight}px`);
     fullH = full.offsetHeight;
     room = Math.max(0, fullH - BAR);
     phone.style.setProperty('--full', `${fullH}px`);
@@ -231,7 +233,8 @@
       return;
     }
     returned = v;
-    if (!instant) animate();
+    if (!v && last <= room) { clearTimeout(animTimer); phone.classList.remove('animating'); }   // near the top it follows the finger at once
+    else if (!instant) animate();
     render();
   };
 
@@ -276,7 +279,7 @@
   bt.addEventListener('click', () => setReturned(true));
   // Focus is never hidden: reaching anything in the header brings the header back first, and holds it.
   full.addEventListener('focusin', () => { focusInside = true; if (last > 0) setReturned(true, true); });
-  full.addEventListener('focusout', (e) => { if (!full.contains(e.relatedTarget)) focusInside = false; });
+  full.addEventListener('focusout', (e) => { if (!full.contains(e.relatedTarget)) { focusInside = false; full.scrollTop = 0; } });
 // The header floats over the conversation, so a vertical swipe or wheel that starts on it scrolls the
 // conversation, as the app's would. On a landscape phone the header can cover the whole conversation.
 full.addEventListener('wheel', (e) => {
@@ -321,15 +324,23 @@ full.addEventListener('touchcancel', endTouch);
       requestAnimationFrame(() => requestAnimationFrame(() => { last = Math.max(0, scroller.scrollTop); programmatic = false; render(); }));
     });
   });
-  if ('ResizeObserver' in window) new ResizeObserver(measure).observe(full); else addEventListener('resize', measure);
+  if ('ResizeObserver' in window) { const ro = new ResizeObserver(measure); ro.observe(full); ro.observe($('stage')); } else addEventListener('resize', measure);
 
   // A scroll the app makes (to an arriving question, a restored position) never folds or brings back the header.
   const scrollProgrammatically = (target) => {
-    const hidden = -ty, wasFull = hidden === 0;
+    let hidden = -ty;
+    // The one exception to keeping the header as it was: on a screen shorter than twice the header the kept header
+    // would cover what the app scrolls to, so it folds to the bar first.
+    const stageH = $('stage').clientHeight;
+    if (hidden < room && stageH - Math.max(BAR, fullH - hidden) < stageH / 2) {
+      clearTimeout(fadeTimer); clearTimeout(animTimer); fading = false; phone.classList.remove('fading', 'animating');
+      hidden = room;
+    }
+    const wasFull = hidden === 0;
     programmatic = true;
     // Hold the header exactly as it was, part-way slid included, while the scroll happens: no flash, no fold.
     returned = wasFull;
-    held = !wasFull && hidden < room ? hidden : null;
+    held = !wasFull ? hidden : null;
     const top = target(Math.max(BAR, fullH - hidden));
     scroller.scrollTop = top;
     requestAnimationFrame(() => requestAnimationFrame(() => {

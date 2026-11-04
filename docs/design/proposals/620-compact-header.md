@@ -280,7 +280,10 @@ And in `tokens.json`'s `motion.catalogue`:
 >     direction changes. A tap on the bar's title brings it back, and the top always shows it
 >     in full.
 >   - **Only the person's own scrolling counts.** A scroll the app makes (to a question, a
->     restored position) and a response growing below leave the header as it was. Overscroll
+>     restored position) and a response growing below leave the header as it was, except on
+>     a screen shorter than twice the header (a landscape phone), where a scroll to a question
+>     folds it to the bar first; there the header is also capped at the conversation's height
+>     and scrolls within itself, so focus inside it is never out of view. Overscroll
 >     is clamped. Scroll to a question puts it 8 below what the header covers, and the
 >     conversation's scroll padding does the same for focus.
 >   - **While the session waits on you,** the bar's glyph is `needs` on its disc.

@@ -667,7 +667,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     brings it back, and the top always shows it in full.
   - **Only the person's own scrolling counts:** a finger, a wheel, a trackpad, the keys or the
     scroll bar. A scroll the app makes (to a question, a restored position) and a response
-    growing below leave the header as it was. Overscroll is clamped, so a bounce never reads
+    growing below leave the header as it was, except on a screen shorter than twice the
+    header (a landscape phone), where a scroll to a question folds it to the bar first.
+    There the header is also capped at the conversation's height and scrolls within itself,
+    so focus inside it is never out of view. Overscroll is clamped, so a bounce never reads
     as a scroll up. Scroll to a question puts it 8 below what the header covers (the bar, or
     the whole header if it was showing). The question guard (§5.3) is unaffected: the
     question never moves as the header collapses or returns.
