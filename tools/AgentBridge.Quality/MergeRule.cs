@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
@@ -11,9 +12,11 @@ namespace AgentBridge.Quality;
 sealed class MergeRuleConfig
 {
     public string Base { get; set; } = "";
+    public string StatusPoster { get; set; } = "";
     public string CopilotReviewer { get; set; } = "";
     public List<string> HoldLabels { get; set; } = [];
     public IndependentReviewConfig IndependentReview { get; set; } = new();
+    public SecurityMarksConfig SecurityMarks { get; set; } = new();
     public CodeQlConfig Codeql { get; set; } = new();
     public List<string> IgnoreWorkflows { get; set; } = [];
     public List<string> SensitivePaths { get; set; } = [];
@@ -31,9 +34,12 @@ sealed class MergeRuleConfig
         config.SensitivePaths ??= [];
         config.IndependentReview ??= new();
         config.IndependentReview.Posters ??= [];
+        config.SecurityMarks ??= new();
+        config.SecurityMarks.Labels ??= [];
         config.Codeql ??= new();
         var missing = new List<string>();
         if (string.IsNullOrWhiteSpace(config.Base)) missing.Add("base");
+        if (string.IsNullOrWhiteSpace(config.StatusPoster)) missing.Add("status_poster");
         if (string.IsNullOrWhiteSpace(config.CopilotReviewer)) missing.Add("copilot_reviewer");
         if (string.IsNullOrWhiteSpace(config.IndependentReview.Context)) missing.Add("independent_review.context");
         if (config.IndependentReview.Posters.Count == 0) missing.Add("independent_review.posters");
@@ -52,6 +58,12 @@ sealed class IndependentReviewConfig
 {
     public string Context { get; set; } = "";
     public List<string> Posters { get; set; } = [];
+}
+
+sealed class SecurityMarksConfig
+{
+    public string TitlePrefix { get; set; } = "";
+    public List<string> Labels { get; set; } = [];
 }
 
 sealed class CodeQlConfig
@@ -86,45 +98,54 @@ sealed record PullRequestFacts(
     RunFact? CodeQlRun,
     RunFact? CodeQlCheck)
 {
+    public string Title { get; init; } = "";
+
     /// <summary>Every other check run and status on the head (MergeRuleCommand.ReadChecks says which count).</summary>
     public IReadOnlyList<CheckFact> Checks { get; init; } = [];
 
-    /// <summary>False when read without the head's checks, which can then only fail it, never pass it.</summary>
-    public bool ChecksRead { get; init; } = true;
+    /// <summary>
+    /// False when read without the head's checks and files (the open list), which can then only
+    /// fail it, never pass it.
+    /// </summary>
+    public bool FullyRead { get; init; } = true;
 
     /// <summary>False when the pull request has more labels than were read: a hold could be among the rest.</summary>
     public bool LabelsComplete { get; init; } = true;
 }
 
-/// <summary>The `merge-rule` status to post: success, pending or failure, and why.</summary>
-sealed record Verdict(string State, string Description, IReadOnlyList<string> Reasons, IReadOnlyList<string> SensitiveFiles);
+/// <summary>The `merge-rule` status to post: success, pending, failure or error, and why.</summary>
+sealed record MergeVerdict(string State, string Description, IReadOnlyList<string> Reasons, IReadOnlyList<string> SensitiveFiles);
 
 static class MergeRule
 {
     public const string StatusContext = "merge-rule";
-    // Who posts merge-rule: the workflow's GITHUB_TOKEN, the GitHub Actions app the ruleset pins.
-    // Logins are read without REST's "[bot]" suffix, as GraphQL gives them.
-    public const string Poster = "github-actions";
     // GitHub truncates nothing: it refuses a longer description.
     const int MaxDescription = 140;
 
     /// <summary>
-    /// One status for pull requests that share a head: the worst verdict, failure before pending
-    /// before success, naming its pull request when there's more than one.
+    /// One status for pull requests that share a head: the worst verdict, failure or error before
+    /// pending before success, naming its pull request when there's more than one.
     /// </summary>
-    public static Verdict Combine(IReadOnlyList<(PullRequestFacts Pr, Verdict Verdict)> judged)
+    public static MergeVerdict Combine(IReadOnlyList<(PullRequestFacts Pr, MergeVerdict Verdict)> judged)
     {
-        static int Rank(string state) => state switch { "failure" => 2, "pending" => 1, _ => 0 };
+        static int Rank(string state) => state switch { "failure" or "error" => 2, "pending" => 1, _ => 0 };
         var (pr, worst) = judged.OrderByDescending(j => Rank(j.Verdict.State)).ThenBy(j => j.Pr.Number).First();
         return judged.Count == 1 ? worst : worst with { Description = Truncate($"#{pr.Number}: {worst.Description}") };
     }
+
+    /// <summary>
+    /// What to post when a pull request's facts couldn't be read: error, which fails the required
+    /// check like failure, so an earlier success doesn't stand on facts no one could check.
+    /// </summary>
+    public static MergeVerdict ReadError(PullRequestFacts pr, string message) =>
+        new("error", Truncate(Printable($"Couldn't read #{pr.Number} on {Short(pr.HeadSha)}: {message}")), [message], []);
 
     /// <summary>
     /// The verdict on one pull request, or null when the rule doesn't apply (closed, or into
     /// another branch). Failure is anything a person must act on; pending is what's on its way
     /// (Copilot's review, CodeQL). Every missing piece is named, failures first.
     /// </summary>
-    public static Verdict? Evaluate(MergeRuleConfig config, PullRequestFacts pr)
+    public static MergeVerdict? Evaluate(MergeRuleConfig config, PullRequestFacts pr)
     {
         if (pr.State != "OPEN" || pr.BaseRef != config.Base)
             return null;
@@ -146,8 +167,9 @@ static class MergeRule
         if (!copilot)
             pending.Add($"waiting for a Copilot review of {sha}");
 
-        var globs = config.SensitivePaths.Select(p => new Glob(p, ignoreCase: true)).ToList();
-        var sensitive = pr.Files.Where(f => globs.Any(g => g.IsMatch(f))).Distinct(StringComparer.Ordinal).ToList();
+        var sensitive = pr.FullyRead ? SensitiveFiles(config, pr.Files) : [];
+        var marked = MarkedSecurity(config, pr);
+        var needsReceipt = marked || (pr.FullyRead && (sensitive.Count > 0 || !pr.FilesComplete));
         var receipt = pr.Statuses
             .Where(s => s.Context == config.IndependentReview.Context
                 && s.Creator is not null && config.IndependentReview.Posters.Contains(s.Creator, StringComparer.OrdinalIgnoreCase))
@@ -156,20 +178,21 @@ static class MergeRule
         // A reviewer's failure blocks any pull request, sensitive or not.
         if (receipt is { State: "failure" or "error" })
             failures.Add($"the independent review of {sha} failed: {receipt.Description}");
-        else if ((sensitive.Count > 0 || !pr.FilesComplete) && receipt?.State != "success")
+        else if (needsReceipt && receipt?.State != "success")
         {
             // A file list GitHub cut short could hide a sensitive file, so it counts as one.
-            var what = !pr.FilesComplete ? "its file list is incomplete"
-                : $"it touches {sensitive[0]}{(sensitive.Count > 1 ? $" (+{sensitive.Count - 1} more)" : "")}";
+            var what = sensitive.Count > 0 ? $"it touches {Printable(sensitive[0])}{More(sensitive.Count)}"
+                : marked ? "it's marked as a security change"
+                : "its file list is incomplete";
             failures.Add($"needs an independent review of {sha}: {what}");
         }
 
-        // Read without its checks, a pull request is judged on the rest alone, which can fail it
-        // but never pass it: the caller reads the checks whenever this isn't already a failure.
-        if (!pr.ChecksRead)
+        // Read without its checks and files, a pull request is judged on the rest alone, which can
+        // fail it but never pass it: the caller reads them whenever this isn't already a failure.
+        if (!pr.FullyRead)
         {
             if (failures.Count == 0)
-                pending.Add($"its checks on {sha} aren't read yet");
+                pending.Add($"its checks and files on {sha} aren't read yet");
         }
         // Pending, since CodeQL starts with the push; but a pull request retargeted onto main gets
         // no run until a push or a reopen (codeql.yml's types), so the description says so.
@@ -202,10 +225,26 @@ static class MergeRule
         var reasons = failures.Concat(pending).ToList();
         var state = failures.Count > 0 ? "failure" : pending.Count > 0 ? "pending" : "success";
         var description = state == "success"
-            ? $"Copilot reviewed {sha}; every check passed{(sensitive.Count > 0 || !pr.FilesComplete ? "; independent review on file" : "")}"
+            ? $"Copilot reviewed {sha}; every check passed{(needsReceipt ? "; independent review on file" : "")}"
             : Capitalize(string.Join("; ", reasons));
-        return new Verdict(state, Truncate(description), reasons, sensitive);
+        return new MergeVerdict(state, Truncate(Printable(description)), reasons, sensitive);
     }
+
+    /// <summary>
+    /// The changed paths that need the independent review: those a sensitive glob matches, and any
+    /// with a control character or one GitHub couldn't decode (U+FFFD), which no glob should have
+    /// to anticipate.
+    /// </summary>
+    public static List<string> SensitiveFiles(MergeRuleConfig config, IEnumerable<string> files)
+    {
+        var globs = config.SensitivePaths.Select(p => new Glob(p, ignoreCase: true)).ToList();
+        return files.Where(f => f.Any(c => char.IsControl(c) || c == '\uFFFD') || globs.Any(g => g.IsMatch(f)))
+            .Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    static bool MarkedSecurity(MergeRuleConfig config, PullRequestFacts pr) =>
+        (config.SecurityMarks.TitlePrefix.Length > 0 && pr.Title.TrimStart().StartsWith(config.SecurityMarks.TitlePrefix, StringComparison.OrdinalIgnoreCase))
+        || pr.Labels.Any(l => config.SecurityMarks.Labels.Contains(l, StringComparer.OrdinalIgnoreCase));
 
     public static string Short(string sha) => sha.Length > 7 ? sha[..7] : sha;
 
@@ -214,6 +253,17 @@ static class MergeRule
     static string Capitalize(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
 
     static string Truncate(string s) => s.Length <= MaxDescription ? s : s[..(MaxDescription - 1)] + "…";
+
+    /// <summary>Control characters shown as \uXXXX, so a path with a line break can't break a status or a log line.</summary>
+    public static string Printable(string s)
+    {
+        if (!s.Any(char.IsControl))
+            return s;
+        var sb = new StringBuilder(s.Length);
+        foreach (var c in s)
+            sb.Append(char.IsControl(c) ? $"\\u{(int)c:x4}" : c.ToString());
+        return sb.ToString();
+    }
 
     /// <summary>A Markdown table cell can't hold a pipe or a line break.</summary>
     public static string Cell(string s) => Regex.Replace(s.Replace("|", "\\|", StringComparison.Ordinal), @"\s+", " ");

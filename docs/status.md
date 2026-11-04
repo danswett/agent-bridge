@@ -417,7 +417,10 @@ agent-ha-bridge releases from this work:
   ruleset (`quality/ruleset-main.json`) are in the repository, but the ruleset, auto-merge and
   branch deletion on merge aren't switched on yet. Until the coordinator applies them (the commands
   and the rollback are in #524), merge by hand under AGENTS.md's rule, and treat `merge-rule`'s
-  status as advice. Once they're applied, change this line to say so, with the date.
+  status as advice. Once they're applied, change this line to say so, with the date. Auto-merge
+  stays off even then, until the merge-rule GitHub App posts the status (docs/merge-rule-app.md):
+  a same-repo PR's own workflow could forge it. Until then the coordinator merges by hand, after its
+  own local `merge-rule --pr <n>`, which counts only `danswett`'s receipts.
 
 ## 9. Decision log (after design.md §10)
 

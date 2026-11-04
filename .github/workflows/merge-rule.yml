@@ -36,7 +36,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
   status:
   workflow_run: # zizmor: ignore[dangerous-triggers]
-    workflows: [CI, CodeQL, Dependencies, HA contract drift, IaC scan, Merge rule review relay, Pages, Perf, Relay deploy, Workflow lint]
+    workflows: [CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Merge rule review relay, Pages, Perf, Relay deploy, Workflow lint]
     types: [requested, in_progress, completed]
   check_suite:
     types: [completed] # the only type Actions accepts here
@@ -78,6 +78,13 @@ jobs:
       group: merge-rule
       cancel-in-progress: false
     steps:
+      # A push sets off a burst of events (each workflow requested, then finished). Waiting a
+      # little lets the rest of the burst fold into the one run that waits behind this one, which
+      # keeps the GraphQL budget (GITHUB_TOKEN: 1,000 points an hour for the repository) well
+      # clear: quality/README.md §4.9 has the numbers.
+      - name: Let a burst of events settle
+        if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+        run: sleep 45
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Main's evaluator and rules, whatever the event; never the pull request's.

@@ -9,6 +9,11 @@
 # Only pull requests into this branch are judged; main's ruleset protects only it.
 base: main
 
+# Who posts merge-rule, as GraphQL names it (without REST's "[bot]"): the workflow's GITHUB_TOKEN
+# today. Once the merge-rule GitHub App exists (docs/merge-rule-app.md), its slug, so the
+# evaluator recognises its own earlier post and doesn't post the same verdict again.
+status_poster: github-actions
+
 # A review whose author is this bot, on the head commit, is the Copilot review. GraphQL names the
 # bot without REST's "[bot]" suffix, and the evaluator also requires the author to be a Bot, so a
 # user account with the same login can't stand in for it.
@@ -24,6 +29,13 @@ hold_labels: [hold, do-not-merge]
 independent_review:
   context: independent-review
   posters: [danswett]
+
+# A pull request marked as a security change needs the receipt whatever it touches: a title
+# starting with this word (any case), or one of these labels. #549, a fix to how approvals render,
+# touched no path below and would otherwise have passed on Copilot's review alone.
+security_marks:
+  title_prefix: Security
+  labels: [security]
 
 # CodeQL (#452): the latest run on the head of the workflow with this name must have succeeded,
 # and code scanning's check of that name (new alerts at GitHub's threshold) must not have failed.
@@ -45,7 +57,10 @@ ignore_workflows: [Merge rule]
 # follows AGENTS.md's rule 5: when in doubt, a path is on it. Not "key" alone, though: that would
 # take in the design system's DesignKeys.
 sensitive_paths:
-  # The rule itself, CI, the selector and the build: what decides what "green" means.
+  # The rule itself, CI, the selector and the build: what decides what "green" means. AGENTS.md
+  # holds the merge and receipt rules sessions follow, and docs/status.md who may merge.
+  - AGENTS.md
+  - docs/status.md
   - .github/**
   - quality/**
   - tools/AgentBridge.Quality/**
@@ -96,6 +111,18 @@ sensitive_paths:
   - pwa/js/answers.js
   - pwa/js/answer-service.js
   - pwa/js/host-session.js
+  # What an approval or a question shows before someone answers it: a prompt that renders
+  # differently from what the agent asked can get a yes it shouldn't (#549).
+  - pwa/js/hidden-text.js
+  - pwa/js/markdown.js
+  - pwa/js/needs-you.js
+  - pwa/js/ui/question-view.js
+  - pwa/js/ui/needs-you-view.js
+  - src/**hiddentext**
+  - src/**markdown**
+  - src/**needsyou**
+  - src/**question**
+  - src/**toast**
   # The PWA's build and its packages: what's served to every phone.
   - pwa/tools/build-site.mjs
   - pwa/package.json

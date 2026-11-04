@@ -321,8 +321,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
 9. **The merge rule, enforced (#452):** main's ruleset ([`ruleset-main.json`](ruleset-main.json))
    requires two checks from GitHub Actions, `quality-gate` and `merge-rule`, plus resolved
    threads, squash merges and no force pushes or deletion, with no bypass, and asks Copilot to
-   review each push. Sessions turn on auto-merge (AGENTS.md, "Pull requests"), and GitHub merges
-   when both are green.
+   review each push. Auto-merge stays off, and the merge coordinator merges by hand, until a GitHub
+   App posts `merge-rule` (last bullet); then sessions turn it on, and GitHub merges when both are
+   green.
    - `merge-rule` is a commit status that main's copy of `.github/workflows/merge-rule.yml` posts
      on each open pull request's head, from `agent-bridge-quality merge-rule` (`MergeRule.cs`) and
      the rules in [`merge-rule.yml`](merge-rule.yml): not a draft; no `hold` or `do-not-merge`
@@ -331,8 +332,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      passed (success, skipped or neutral), since `apple.yml`, `codeql.yml`, `relay.yml`,
      `dependencies.yml`, `workflow-lint.yml` and `perf.yml` sit outside `quality-gate`, each
      workflow counting by its latest run on the head; and, when a changed path is in
-     `sensitive_paths`, an `independent-review` status on the head whose latest from a listed
-     poster is success. Pending while Copilot, CodeQL or a check is on its way, failure otherwise,
+     `sensitive_paths` (or is one GitHub couldn't decode, or holds a control character), or the
+     title starts with `Security` or the `security` label is on, an `independent-review` status
+     on the head whose latest from a listed poster is success. The files are those of the exact
+     commit judged (`compare/main...<sha>`), not the pull request's latest. Pending while Copilot, CodeQL or a check is on its way, failure otherwise,
      with the missing piece named in its description and the run's summary. Pull requests that
      share a head get the worst of their verdicts, since a status belongs to the commit.
    - A pull request can't loosen its own gate (#487, Finding 1): every trigger
@@ -349,11 +352,23 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      languages CodeQL skips uploads no results, and that rule would wait for them forever.
    - Locally, `dotnet run --project tools/AgentBridge.Quality -c Release -- merge-rule --pr N`
      (or `--all`) prints the verdict and posts nothing; only `--post` posts.
+   - A head whose facts can't be read gets `error`, which fails the required check like failure,
+     so an earlier success doesn't stand; a hold label, read with the open list, still fails it.
+   - Budget: `GITHUB_TOKEN` has 1,000 GraphQL points an hour for the repository. A run costs
+     about one point per page of the open list plus one per pull request that isn't already
+     failing (15 points and 13 REST calls with 25 open on 2026-11-03), and prints what it spent.
+     Runs go one at a time, and an event-driven run waits 45 seconds first so a push's burst of
+     events folds into the one run queued behind it: at about 2.5 minutes a run, at most 24 an hour,
+     so under 400 points an hour at worst and nearer 150 usually (the schedule's 6 plus events).
+     Below 200 points left, a run warns in its log.
    - The receipts and the status are honest-mistake guards for sessions sharing the owner's
      account, not a defence against that account: it can post any status. A workflow added by a
-     pull request could, with `statuses: write`, post its own `merge-rule`; that change is
-     sensitive, so an independent review is what catches it. A GitHub App as the only allowed
-     source of `merge-rule` would close that gap.
+     same-repo pull request could, with `statuses: write`, post its own `merge-rule` from GitHub
+     Actions, which the ruleset can't tell from main's. So auto-merge stays off, and the merge
+     coordinator merges by hand after its own local `merge-rule --pr N` (receipts from listed
+     posters only), until a GitHub App with only `statuses: write` and `pull_requests: read`,
+     whose key only `main` can reach (an environment), posts `merge-rule` and the ruleset pins it
+     to that App ([docs/merge-rule-app.md](../docs/merge-rule-app.md)).
 
 Later, once per-test coverage is collected (§5), selection can narrow from projects to
 individual test classes in the slow projects. Project-level selection already captures most
@@ -568,6 +583,7 @@ Each phase is a few PRs, and each PR leaves CI green and useful on its own.
    worth a decision for anything with tokens.
 5. **Required checks.** Decided 2026-11-03 (#357, #452): `main` requires `quality-gate`, then
    also `merge-rule`, which holds the rest of the merge rule and CodeQL (§4.9), through a
-   ruleset with no bypass, and sessions use auto-merge. Open: when each advisory gate (diff
+   ruleset with no bypass, and sessions use auto-merge once a GitHub App posts `merge-rule`
+   (until then the merge coordinator merges by hand; §4.9). Open: when each advisory gate (diff
    coverage, axe, perf) becomes required.
 6. **Lab budget.** A monthly ceiling for `rg-agent-bridge-lab`.

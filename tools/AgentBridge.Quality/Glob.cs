@@ -15,7 +15,8 @@ sealed class Glob
     public Glob(string pattern, bool ignoreCase = false)
     {
         Pattern = pattern;
-        regex = new Regex(ToRegex(RepoPath.Normalize(pattern)), RegexOptions.CultureInvariant | (ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None));
+        // Singleline, so ** crosses a line break too: a path can hold one, and must still match.
+        regex = new Regex(ToRegex(RepoPath.Normalize(pattern)), RegexOptions.CultureInvariant | RegexOptions.Singleline | (ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None));
     }
 
     public string Pattern { get; }
@@ -51,7 +52,8 @@ sealed class Glob
             else
                 sb.Append(Regex.Escape(c.ToString()));
         }
-        return sb.Append('$').ToString();
+        // \z, not $: $ also matches before a final line break.
+        return sb.Append(@"\z").ToString();
     }
 
     public override string ToString() => Pattern;

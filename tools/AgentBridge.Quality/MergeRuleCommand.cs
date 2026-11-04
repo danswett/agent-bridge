@@ -13,7 +13,11 @@ interface IGitHub
     void PostStatus(string slug, string sha, string state, string context, string description, string? targetUrl);
 }
 
-/// <summary>GitHub through the gh CLI, authenticated by GH_TOKEN in a workflow and by gh's own login locally.</summary>
+/// <summary>
+/// GitHub through the gh CLI, authenticated by GH_TOKEN in a workflow and by gh's own login locally.
+/// Posts use MERGE_RULE_POST_TOKEN when it's set: the merge-rule App's token, which can post
+/// statuses but not read checks (docs/merge-rule-app.md).
+/// </summary>
 sealed class GhCli : IGitHub
 {
     public static readonly GhCli Instance = new();
@@ -37,12 +41,14 @@ sealed class GhCli : IGitHub
         var args = new List<string> { "api", "-X", "POST", $"repos/{slug}/statuses/{sha}", "-f", $"state={state}", "-f", $"context={context}", "-f", $"description={description}" };
         if (!string.IsNullOrEmpty(targetUrl))
             args.AddRange(["-f", $"target_url={targetUrl}"]);
-        Run(args);
+        Run(args, Environment.GetEnvironmentVariable("MERGE_RULE_POST_TOKEN") is { Length: > 0 } token ? token : null);
     }
 
-    static string Run(IEnumerable<string> args)
+    static string Run(IEnumerable<string> args, string? token = null)
     {
         var start = new ProcessStartInfo("gh") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        if (token is not null)
+            start.Environment["GH_TOKEN"] = token;
         foreach (var arg in args)
             start.ArgumentList.Add(arg);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("Couldn't start gh.");
@@ -72,10 +78,11 @@ static class MergeRuleCommand
               Markdown table to FILE. A dry run (no --post) changes nothing.
         """;
 
-    // A head's checks cost most of the query, so the list of open pull requests reads without them,
-    // and a pull request is read again with them only when its other facts don't already fail it.
-    // That keeps a run within GITHUB_TOKEN's GraphQL budget however often it's triggered. Both
-    // connections report their totals, so a list cut short fails rather than passes.
+    // Two reads (#524's review, GITHUB_TOKEN's GraphQL budget): the open list without checks or
+    // files, which decides every pull request it can fail; then, for those it can't, the pull
+    // request again with its head's checks, and that head's files from REST. Both connections
+    // report their totals, so a list cut short fails rather than passes. rateLimit is read with
+    // every query, so a run can say what it cost.
     const string ChecksFields = """
             checkSuites(last: 80) { totalCount nodes {
               app { slug }
@@ -87,9 +94,8 @@ static class MergeRuleCommand
 
     static string Fragment(bool checks) => """
         fragment pr on PullRequest {
-          number state isDraft baseRefName headRefOid changedFiles
+          number title state isDraft baseRefName headRefOid
           labels(first: 100) { totalCount nodes { name } }
-          files(first: 100) { pageInfo { hasNextPage } nodes { path changeType } }
           reviews(last: 100) { nodes { author { __typename login } state commit { oid } } }
           commits(last: 1) { nodes { commit {
             oid
@@ -103,6 +109,7 @@ static class MergeRuleCommand
     static string OneQuery(bool checks) => Fragment(checks) + """
 
         query($owner: String!, $name: String!, $number: Int!) {
+          rateLimit { cost remaining }
           repository(owner: $owner, name: $name) { pullRequest(number: $number) { ...pr } }
         }
         """;
@@ -110,6 +117,7 @@ static class MergeRuleCommand
     static readonly string OpenQuery = Fragment(checks: false) + """
 
         query($owner: String!, $name: String!, $base: String!, $cursor: String) {
+          rateLimit { cost remaining }
           repository(owner: $owner, name: $name) {
             pullRequests(states: OPEN, baseRefName: $base, first: 25, after: $cursor, orderBy: { field: CREATED_AT, direction: ASC }) {
               pageInfo { hasNextPage endCursor }
@@ -118,6 +126,39 @@ static class MergeRuleCommand
           }
         }
         """;
+
+    /// <summary>One run's reads: what it cost, and each head's files, which never change, read once.</summary>
+    sealed class Session(IGitHub github, MergeRuleConfig config, string slug)
+    {
+        public IGitHub GitHub { get; } = github;
+        public MergeRuleConfig Config { get; } = config;
+        public string Slug { get; } = slug;
+        public int GraphQLPoints { get; private set; }
+        public int? GraphQLRemaining { get; private set; }
+        public int RestCalls { get; private set; }
+        public Dictionary<string, (List<string> Files, bool Complete)> FilesBySha { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public JsonDocument GraphQL(string query, Dictionary<string, object> variables)
+        {
+            var doc = GitHub.GraphQL(query, variables);
+            if (doc.RootElement.GetProperty("data").TryGetProperty("rateLimit", out var rate) && rate.ValueKind == JsonValueKind.Object)
+            {
+                GraphQLPoints += rate.GetProperty("cost").GetInt32();
+                GraphQLRemaining = rate.GetProperty("remaining").GetInt32();
+            }
+            else
+                GraphQLPoints++;
+            return doc;
+        }
+
+        public JsonDocument Rest(string path)
+        {
+            RestCalls++;
+            return GitHub.Rest(path);
+        }
+
+        public string Cost => $"GraphQL {GraphQLPoints} point(s){(GraphQLRemaining is { } left ? $", {left} left this hour" : "")}; REST {RestCalls} call(s)";
+    }
 
     public static int Run(IReadOnlyList<string> args, TextWriter output, IGitHub github)
     {
@@ -130,6 +171,8 @@ static class MergeRuleCommand
         var config = MergeRuleConfig.Load(configPath);
         var slug = options.GetValueOrDefault("slug") ?? Environment.GetEnvironmentVariable("GITHUB_REPOSITORY") ?? "danswett/agent-bridge";
         var post = options.ContainsKey("post");
+        var session = new Session(github, config, slug);
+        var problems = 0;
 
         // The status belongs to a commit, not a pull request, and two open pull requests can share
         // a head: so every mode judges all open pull requests on the head it's about, and posts the
@@ -139,57 +182,64 @@ static class MergeRuleCommand
         {
             if (!int.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out var n))
                 throw new ArgumentException($"--pr {number} is not a pull request number.");
-            var one = FetchOne(github, config, slug, n, checks: false);
+            var one = FetchOne(session, n, checks: false);
             if (MergeRule.Evaluate(config, one) is null)
             {
                 output.WriteLine($"#{one.Number}: not judged ({one.State.ToLowerInvariant()}, into {one.BaseRef}).");
                 prs = [];
             }
             else
-                prs = FetchOpen(github, config, slug).Where(p => SameSha(p.HeadSha, one.HeadSha)).ToList();
+            {
+                var (open, error) = FetchOpen(session);
+                prs = open.Where(p => SameSha(p.HeadSha, one.HeadSha)).ToList();
+                if (prs.Count == 0)
+                    prs = [one];
+                problems += Report(output, error);
+            }
         }
         else
         {
-            prs = FetchOpen(github, config, slug);
+            var (open, error) = FetchOpen(session);
+            prs = open;
+            problems += Report(output, error);
             if (options.TryGetValue("sha", out var sha))
                 prs = prs.Where(p => SameSha(p.HeadSha, sha)).ToList();
         }
-        prs = prs.Select(p => WithChecks(github, config, slug, p)).ToList();
 
         var rows = new List<string>();
-        var failedPosts = 0;
         foreach (var head in prs.GroupBy(p => p.HeadSha.ToLowerInvariant()))
         {
-            var members = head.ToList();
-            var judged = Judge(config, members);
+            var judged = head.Select(p => Assess(session, p)).Where(j => j.Verdict is not null && SameSha(j.Pr.HeadSha, head.Key))
+                .Select(j => (j.Pr, Verdict: j.Verdict!)).ToList();
             if (judged.Count == 0)
                 continue;
             var combined = MergeRule.Combine(judged);
-            if (post && !Unchanged(members[0], combined))
+            if (post && !Unchanged(config, judged[0].Pr, combined))
             {
                 // The facts were read up front; a hold label, a failed receipt or a red check may
                 // have landed since. So read each pull request again just before posting, rather
                 // than overwrite a newer verdict with a stale one. One that has moved to another
                 // head is that head's business: its push starts a run of its own.
-                members = members.Select(p => WithChecks(github, config, slug, FetchOne(github, config, slug, p.Number, checks: false)))
-                    .Where(p => SameSha(p.HeadSha, head.Key)).ToList();
-                judged = Judge(config, members);
+                judged = judged.Select(j => Reread(session, j.Pr)).Where(j => j.Verdict is not null && SameSha(j.Pr.HeadSha, head.Key))
+                    .Select(j => (j.Pr, Verdict: j.Verdict!)).ToList();
                 if (judged.Count == 0)
                     continue;
                 combined = MergeRule.Combine(judged);
             }
-            var unchanged = Unchanged(members[0], combined);
+            if (judged.Any(j => j.Verdict.State == "error"))
+                problems++;
+            var unchanged = Unchanged(config, judged[0].Pr, combined);
             var action = !post ? "dry run, not posted" : unchanged ? "unchanged, not posted again" : "posted";
             if (post && !unchanged)
             {
                 try
                 {
-                    github.PostStatus(slug, members[0].HeadSha, combined.State, MergeRule.StatusContext, combined.Description, options.GetValueOrDefault("target-url"));
+                    github.PostStatus(slug, judged[0].Pr.HeadSha, combined.State, MergeRule.StatusContext, combined.Description, options.GetValueOrDefault("target-url"));
                 }
                 catch (InvalidOperationException e)
                 {
                     // One head's failed post mustn't stop the others being judged.
-                    failedPosts++;
+                    problems++;
                     action = "NOT posted: " + e.Message;
                 }
             }
@@ -197,7 +247,7 @@ static class MergeRuleCommand
             {
                 output.WriteLine($"#{pr.Number} {MergeRule.Short(pr.HeadSha)} {verdict.State}: {verdict.Description} ({action})");
                 foreach (var file in verdict.SensitiveFiles)
-                    output.WriteLine($"    sensitive: {file}");
+                    output.WriteLine($"    sensitive: {MergeRule.Printable(file)}");
                 rows.Add($"| #{pr.Number} | `{MergeRule.Short(pr.HeadSha)}` | {verdict.State} | {MergeRule.Cell(verdict.Description)} | {MergeRule.Cell(action)} |");
             }
             if (judged.Count > 1)
@@ -205,6 +255,10 @@ static class MergeRuleCommand
         }
         if (prs.Count == 0 && !options.ContainsKey("pr"))
             output.WriteLine(options.TryGetValue("sha", out var s) ? $"No open pull request into {config.Base} has head {s}." : $"No open pull requests into {config.Base}.");
+        output.WriteLine($"API: {session.Cost}.");
+        // A run that can't read fails its heads with error, so say why before the budget runs out.
+        if (session.GraphQLRemaining is < 200)
+            output.WriteLine($"::warning::merge-rule: only {session.GraphQLRemaining} GraphQL points left this hour; runs may fail with error until it resets.");
 
         if (options.TryGetValue("summary", out var summary) && summary.Length > 0)
         {
@@ -218,9 +272,59 @@ static class MergeRuleCommand
                 foreach (var row in rows)
                     md.AppendLine(row);
             }
+            md.AppendLine();
+            md.AppendLine($"API: {session.Cost}.");
             File.AppendAllText(summary, md.ToString());
         }
-        return failedPosts == 0 ? 0 : 1;
+        return problems == 0 ? 0 : 1;
+    }
+
+    static int Report(TextWriter output, string? error)
+    {
+        if (error is null)
+            return 0;
+        output.WriteLine($"The open list stopped partway ({error}); judged only the pull requests read before it.");
+        return 1;
+    }
+
+    static readonly Type[] ReadFailures = [typeof(InvalidOperationException), typeof(JsonException), typeof(KeyNotFoundException), typeof(FormatException)];
+
+    static bool IsReadFailure(Exception e) => ReadFailures.Contains(e.GetType());
+
+    /// <summary>
+    /// The verdict on a pull request read from the open list: its light facts' failure, if they
+    /// have one (a hold takes effect without anything more to read), otherwise the verdict on a
+    /// full read. A full read that fails gives error, never the light read's pending, so the head
+    /// doesn't keep an earlier success.
+    /// </summary>
+    static (PullRequestFacts Pr, MergeVerdict? Verdict) Assess(Session session, PullRequestFacts light)
+    {
+        var verdict = MergeRule.Evaluate(session.Config, light);
+        if (verdict is null or { State: "failure" })
+            return (light, verdict);
+        try
+        {
+            var full = FetchFull(session, light.Number);
+            return (full, MergeRule.Evaluate(session.Config, full));
+        }
+        catch (Exception e) when (IsReadFailure(e))
+        {
+            return (light, MergeRule.ReadError(light, e.Message));
+        }
+    }
+
+    static (PullRequestFacts Pr, MergeVerdict? Verdict) Reread(Session session, PullRequestFacts known)
+    {
+        PullRequestFacts light;
+        try
+        {
+            light = FetchOne(session, known.Number, checks: false);
+        }
+        catch (Exception e) when (IsReadFailure(e))
+        {
+            return (known, MergeRule.ReadError(known, e.Message));
+        }
+        return Assess(session, light);
     }
 
     // REST names a bot "app[bot]" and GraphQL "app"; read both the GraphQL way.
@@ -231,101 +335,119 @@ static class MergeRuleCommand
 
     static bool SameSha(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
-    static List<(PullRequestFacts Pr, Verdict Verdict)> Judge(MergeRuleConfig config, IEnumerable<PullRequestFacts> prs) =>
-        prs.Select(p => (Pr: p, Verdict: MergeRule.Evaluate(config, p)))
-            .Where(j => j.Verdict is not null)
-            .Select(j => (j.Pr, j.Verdict!))
-            .ToList();
-
-    // Only the workflow's own post counts as already said: the ruleset requires merge-rule from
-    // GitHub Actions, so the same words posted by a person (a local --post) don't satisfy it.
-    static bool Unchanged(PullRequestFacts pr, Verdict verdict) =>
+    // Only the workflow's own post counts as already said: the ruleset requires merge-rule from one
+    // poster, so the same words posted by a person (a local --post) don't satisfy it.
+    static bool Unchanged(MergeRuleConfig config, PullRequestFacts pr, MergeVerdict verdict) =>
         pr.Statuses.Where(s => s.Context == MergeRule.StatusContext).OrderByDescending(s => s.CreatedAt).FirstOrDefault() is { } current
-        && current.Creator == MergeRule.Poster
+        && current.Creator == config.StatusPoster
         && current.State == verdict.State && current.Description == verdict.Description;
 
-    static PullRequestFacts FetchOne(IGitHub github, MergeRuleConfig config, string slug, int number, bool checks)
+    static PullRequestFacts FetchOne(Session session, int number, bool checks)
     {
-        var (owner, name) = Split(slug);
-        using var doc = github.GraphQL(OneQuery(checks), new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["number"] = number });
+        var (owner, name) = Split(session.Slug);
+        using var doc = session.GraphQL(OneQuery(checks), new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["number"] = number });
         var node = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest");
         if (node.ValueKind != JsonValueKind.Object)
-            throw new InvalidOperationException($"{slug} has no pull request #{number}.");
-        return Complete(github, config, slug, ParseFacts(node, config));
+            throw new InvalidOperationException($"{session.Slug} has no pull request #{number}.");
+        return WithReceiptHistory(session, ParseFacts(node, session.Config));
     }
 
     /// <summary>
-    /// The pull request read without its checks, unless its other facts don't already fail it:
-    /// then read again with them, since only failure is decided without them.
+    /// The pull request with its head's checks, and the files of that same head: compare against
+    /// the base, for the exact commit judged, not the pull request's files, which may already be
+    /// a newer push's.
     /// </summary>
-    static PullRequestFacts WithChecks(IGitHub github, MergeRuleConfig config, string slug, PullRequestFacts light) =>
-        MergeRule.Evaluate(config, light) is { State: "failure" } ? light : FetchOne(github, config, slug, light.Number, checks: true);
-
-    static List<PullRequestFacts> FetchOpen(IGitHub github, MergeRuleConfig config, string slug)
+    static PullRequestFacts FetchFull(Session session, int number)
     {
-        var (owner, name) = Split(slug);
-        var prs = new List<PullRequestFacts>();
-        string? cursor = null;
-        do
-        {
-            var variables = new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["base"] = config.Base };
-            if (cursor is not null)
-                variables["cursor"] = cursor;
-            using var doc = github.GraphQL(OpenQuery, variables);
-            var page = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequests");
-            foreach (var node in page.GetProperty("nodes").EnumerateArray())
-                prs.Add(Complete(github, config, slug, ParseFacts(node, config)));
-            var info = page.GetProperty("pageInfo");
-            cursor = info.GetProperty("hasNextPage").GetBoolean() ? info.GetProperty("endCursor").GetString() : null;
-        }
-        while (cursor is not null);
-        return prs;
+        var facts = FetchOne(session, number, checks: true);
+        var (files, complete) = FilesOf(session, facts.HeadSha);
+        return facts with { Files = files, FilesComplete = complete };
     }
 
     /// <summary>
-    /// GraphQL lists at most 100 files and no renamed file's old path, so a longer list, or any
-    /// rename, is read again from REST, which has both (up to GitHub's 3000). And GraphQL gives
-    /// only each context's newest status: when the newest receipt isn't from a listed poster, an
-    /// earlier one from a poster still counts (a failure above all), so the history comes from REST.
+    /// What a commit changes since it left the base: compare base...sha, three dots, as a pull
+    /// request's own diff does. GitHub lists at most 300 files there, so 300 means "maybe more",
+    /// which counts as incomplete, as a missing list does. Renamed files' old paths count too.
     /// </summary>
-    static PullRequestFacts Complete(IGitHub github, MergeRuleConfig config, string slug, (PullRequestFacts Facts, bool NeedsRestFiles, int ChangedFiles) parsed)
+    static (List<string> Files, bool Complete) FilesOf(Session session, string sha)
     {
-        var facts = parsed.Facts;
-        if (parsed.NeedsRestFiles)
+        if (session.FilesBySha.TryGetValue(sha, out var known))
+            return known;
+        using var doc = session.Rest($"repos/{session.Slug}/compare/{Uri.EscapeDataString(session.Config.Base)}...{sha}");
+        var files = new List<string>();
+        var complete = doc.RootElement.TryGetProperty("files", out var list) && list.ValueKind == JsonValueKind.Array;
+        if (complete)
         {
-            var files = new List<string>();
-            var listed = 0;
-            foreach (var file in RestPages(github, $"repos/{slug}/pulls/{facts.Number}/files"))
+            foreach (var file in list.EnumerateArray())
             {
-                listed++;
                 files.Add(file.GetProperty("filename").GetString()!);
                 if (file.TryGetProperty("previous_filename", out var previous) && previous.GetString() is { } old)
                     files.Add(old);
             }
-            facts = facts with { Files = files, FilesComplete = listed >= parsed.ChangedFiles };
+            complete = list.GetArrayLength() < 300;
         }
-        var receipts = config.IndependentReview;
-        if (facts.Statuses.Any(s => s.Context == receipts.Context && (s.Creator is null || !receipts.Posters.Contains(s.Creator, StringComparer.OrdinalIgnoreCase))))
-        {
-            var history = RestPages(github, $"repos/{slug}/commits/{facts.HeadSha}/statuses")
-                .Where(s => s.GetProperty("context").GetString() == receipts.Context)
-                .Select(s => new StatusFact(
-                    receipts.Context,
-                    s.GetProperty("state").GetString() ?? "",
-                    s.GetProperty("description").GetString(),
-                    Login(s.GetProperty("creator")),
-                    DateTimeOffset.Parse(s.GetProperty("created_at").GetString()!, CultureInfo.InvariantCulture)))
-                .ToList();
-            facts = facts with { Statuses = facts.Statuses.Where(s => s.Context != receipts.Context).Concat(history).ToList() };
-        }
-        return facts;
+        return session.FilesBySha[sha] = (files, complete);
     }
 
-    static IEnumerable<JsonElement> RestPages(IGitHub github, string path)
+    /// <summary>
+    /// The open list, light. A page that fails after others were read gives what was read and
+    /// the error, so the pull requests already known are still judged.
+    /// </summary>
+    static (List<PullRequestFacts> Prs, string? Error) FetchOpen(Session session)
+    {
+        var (owner, name) = Split(session.Slug);
+        var prs = new List<PullRequestFacts>();
+        string? cursor = null;
+        do
+        {
+            var variables = new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["base"] = session.Config.Base };
+            if (cursor is not null)
+                variables["cursor"] = cursor;
+            try
+            {
+                using var doc = session.GraphQL(OpenQuery, variables);
+                var page = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequests");
+                foreach (var node in page.GetProperty("nodes").EnumerateArray())
+                    prs.Add(WithReceiptHistory(session, ParseFacts(node, session.Config)));
+                var info = page.GetProperty("pageInfo");
+                cursor = info.GetProperty("hasNextPage").GetBoolean() ? info.GetProperty("endCursor").GetString() : null;
+            }
+            catch (Exception e) when (IsReadFailure(e) && prs.Count > 0)
+            {
+                return (prs, e.Message);
+            }
+        }
+        while (cursor is not null);
+        return (prs, null);
+    }
+
+    /// <summary>
+    /// GraphQL gives only each context's newest status: when the newest receipt isn't from a
+    /// listed poster, an earlier one from a poster still counts (a failure above all), so the
+    /// history comes from REST.
+    /// </summary>
+    static PullRequestFacts WithReceiptHistory(Session session, PullRequestFacts facts)
+    {
+        var receipts = session.Config.IndependentReview;
+        if (!facts.Statuses.Any(s => s.Context == receipts.Context && (s.Creator is null || !receipts.Posters.Contains(s.Creator, StringComparer.OrdinalIgnoreCase))))
+            return facts;
+        var history = RestPages(session, $"repos/{session.Slug}/commits/{facts.HeadSha}/statuses")
+            .Where(s => s.GetProperty("context").GetString() == receipts.Context)
+            .Select(s => new StatusFact(
+                receipts.Context,
+                s.GetProperty("state").GetString() ?? "",
+                s.GetProperty("description").GetString(),
+                Login(s.GetProperty("creator")),
+                DateTimeOffset.Parse(s.GetProperty("created_at").GetString()!, CultureInfo.InvariantCulture)))
+            .ToList();
+        return facts with { Statuses = facts.Statuses.Where(s => s.Context != receipts.Context).Concat(history).ToList() };
+    }
+
+    static IEnumerable<JsonElement> RestPages(Session session, string path)
     {
         for (var page = 1; ; page++)
         {
-            using var doc = github.Rest($"{path}?per_page=100&page={page}");
+            using var doc = session.Rest($"{path}?per_page=100&page={page}");
             var items = doc.RootElement.EnumerateArray().Select(e => e.Clone()).ToList();
             foreach (var item in items)
                 yield return item;
@@ -334,17 +456,13 @@ static class MergeRuleCommand
         }
     }
 
-    /// <summary>One pull request's facts from the GraphQL fragment above.</summary>
-    internal static (PullRequestFacts Facts, bool NeedsRestFiles, int ChangedFiles) ParseFacts(JsonElement pr, MergeRuleConfig config)
+    /// <summary>
+    /// One pull request's facts from the GraphQL fragment above. Its files come from FetchFull;
+    /// read without checks, it's marked not fully read, which can fail it but never pass it.
+    /// </summary>
+    internal static PullRequestFacts ParseFacts(JsonElement pr, MergeRuleConfig config)
     {
         var head = pr.GetProperty("headRefOid").GetString()!;
-        var changed = pr.GetProperty("changedFiles").GetInt32();
-        var filesNode = pr.GetProperty("files");
-        var fileNodes = filesNode.GetProperty("nodes").EnumerateArray().ToList();
-        var files = fileNodes.Select(f => f.GetProperty("path").GetString()!).ToList();
-        var needsRest = filesNode.GetProperty("pageInfo").GetProperty("hasNextPage").GetBoolean()
-            || fileNodes.Any(f => f.GetProperty("changeType").GetString() is "RENAMED" or "COPIED");
-
         var reviews = pr.GetProperty("reviews").GetProperty("nodes").EnumerateArray()
             .Select(r => new ReviewFact(
                 r.GetProperty("author") is { ValueKind: JsonValueKind.Object } a ? a.GetProperty("login").GetString() ?? "" : "",
@@ -371,7 +489,6 @@ static class MergeRuleCommand
                         Login(s.GetProperty("creator")),
                         DateTimeOffset.Parse(s.GetProperty("createdAt").GetString()!, CultureInfo.InvariantCulture)))
                     .ToList();
-            // Read without its checks (the open list), a pull request is judged on its other facts only.
             checksRead = commit.TryGetProperty("checkSuites", out var suites);
             if (checksRead)
                 (run, codeScanning, checks) = ReadChecks(suites, config);
@@ -383,21 +500,25 @@ static class MergeRuleCommand
         }
 
         var labels = pr.GetProperty("labels").GetProperty("nodes").EnumerateArray().Select(l => l.GetProperty("name").GetString() ?? "").ToList();
-        var facts = new PullRequestFacts(
+        return new PullRequestFacts(
             pr.GetProperty("number").GetInt32(),
             pr.GetProperty("state").GetString() ?? "",
             pr.GetProperty("isDraft").GetBoolean(),
             pr.GetProperty("baseRefName").GetString() ?? "",
             head,
             labels,
-            files,
-            FilesComplete: files.Count >= changed,
+            Files: [],
+            FilesComplete: true,
             reviews,
             statuses,
             run,
             codeScanning)
-        { Checks = checks, ChecksRead = checksRead, LabelsComplete = !Truncated(pr.GetProperty("labels"), labels.Count) };
-        return (facts, needsRest, changed);
+        {
+            Title = pr.TryGetProperty("title", out var title) ? title.GetString() ?? "" : "",
+            Checks = checks,
+            FullyRead = checksRead,
+            LabelsComplete = !Truncated(pr.GetProperty("labels"), labels.Count),
+        };
     }
 
     /// <summary>
