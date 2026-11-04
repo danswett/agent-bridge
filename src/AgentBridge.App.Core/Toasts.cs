@@ -39,6 +39,8 @@ public sealed class ToastPlanner
     {
         public Session? Last;
         public string? Shown;
+        // What the toast up says, to replace it if its question comes back otherwise.
+        public Question? ShownQuestion;
         public HashSet<string> Notified = new(StringComparer.Ordinal);
         public string? FinishedKey;
         public (ToastKind Kind, DateTimeOffset At, string? Question)? Due;
@@ -95,6 +97,7 @@ public sealed class ToastPlanner
                 sink.Withdraw(TagOf(s.Id));
                 t.Shown = null;
             }
+            else { Reword(t, s); }
             if (s.Question is { } q && !t.Notified.Contains(q.Id))
             {
                 if (t.Due is not { Kind: ToastKind.Question } d || d.Question != q.Id) { t.Due = (ToastKind.Question, now + QuestionDelay, q.Id); }
@@ -119,6 +122,7 @@ public sealed class ToastPlanner
             sink.Withdraw(TagOf(s.Id));
             t.Shown = null;
         }
+        else { Reword(t, s); }
         if (s.Question is { } q && !t.Notified.Contains(q.Id))
         {
             // Counted from when it was first seen: a question whose card keeps changing is not
@@ -131,6 +135,16 @@ public sealed class ToastPlanner
         }
         else if (t.Due is { Kind: ToastKind.Finished } && s.Status != SessionStatus.Idle) { t.Due = null; }
         else if (t.Due is { Kind: ToastKind.Question } d && s.Question?.Id != d.Question) { t.Due = null; }
+    }
+
+    // The toast up for a question that came back under its id saying something else, or answerable
+    // otherwise (a host updated to refuse what it used to offer, #220): replaced, quietly, so its
+    // buttons are never what the question no longer allows.
+    void Reword(Tracked t, Session s)
+    {
+        if (t.Shown is not { } shown || s.Question is not { } q || q.Id != shown || t.ShownQuestion is not { } was || was.Id != q.Id || QuestionViewModel.SaysTheSame(q, was)) { return; }
+        t.ShownQuestion = q;
+        sink.Show(new ToastNotice(TagOf(s.Id), ToastXml.Question(s, Capabilities(), MachineName(), MachineKey), true));
     }
 
     // A wait on a delegate's question (waitingOn) as it begins: whether the main agent's turn was
@@ -201,6 +215,7 @@ public sealed class ToastPlanner
                 t.Again = null;
                 if (!Enabled() || WindowActive()) { continue; }
                 t.Shown = q.Id;
+                t.ShownQuestion = q;
                 sink.Show(new ToastNotice(TagOf(id), ToastXml.Question(s, Capabilities(), MachineName(), MachineKey), Quiet() || again));
             }
             else
@@ -254,7 +269,7 @@ public static partial class ToastXml
         var q = s.Question!;
         var (answerable, _) = QuestionViewModel.Answerability(q, capabilities, s.Agent);
         var what = q.AnswerAtMachine == true ? "waiting at the machine" : q.Kind == QuestionKind.Approval ? "waiting for your approval" : "waiting on you";
-        var body = Plain(q.Message, 300);
+        var body = Plain(q.Kind == QuestionKind.Approval ? ShownText.Reveal(q.Message, rightToLeft: true) : q.Message, 300);
         var open = Args(machineKey, ("action", "open"), ("session", s.Id));
         var b = Start(open, Title(s), $"{Machine(machine)}{what}", body.Length > 0 ? body : "This session is waiting for an answer.");
         b.Append("<actions>");

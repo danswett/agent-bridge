@@ -2,15 +2,29 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Core.Parsing;
 
 // One Copilot permission prompt, read from its permission.requested event: what a person is
 // asked to allow, written out in full for a client, and the identity an approval binds to.
 //
-// The question id is "<requestId>#<digest>", the digest a hash of the message shown. So an
-// approval names both the request and exactly what the person read: a host that finds the
-// request now reads differently (or another request in its place) types nothing.
+// The question id is "<requestId>#<digest>". The digest is a hash of:
+//   - the message as it was built from Copilot's own words, before anything in it was escaped
+//     for display;
+//   - each name the message shows only escaped and on one line (a tool's title or name, an
+//     access kind), as Copilot wrote it, when that name holds a character drawn other than as
+//     it runs;
+//   - and whether the prompt is held at the machine at all.
+// So an approval names both the request and exactly what would be approved: a host that finds
+// the request now reads differently (or another request in its place) types nothing, and no
+// prompt answered here shares an id with one that is not. Hashing the escaped text instead would
+// let a prompt holding a real U+202E and one holding the six characters "\u202E" share one id.
+//
+// Message is what clients show: every character that is not drawn where it runs (a bidi
+// control, a zero-width character, a control but newline and tab) and every right-to-left
+// letter as a visible escape (ShownText, #220). Approve once is still offered for it: the
+// owner's "escape and allow" rule (#253, decision 3).
 //
 // AtMachine says why the prompt is not offered to other devices at all: a kind the host
 // does not drive, or a request to run outside Copilot's sandbox.
@@ -41,7 +55,9 @@ public static class CopilotPermission
     // machine.
     static readonly HashSet<string> Driven = new(StringComparer.Ordinal) { "commands", "write", "read", "path", "url", "mcp", "custom-tool" };
 
-    static readonly JsonWriterOptions Indented = new() { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    // Lines end in \n on every platform: a CR is a character not drawn where it runs (ShownText),
+    // and Windows' default line ending would end every line of a tool's arguments in its escape.
+    static readonly JsonWriterOptions Indented = new() { Indented = true, NewLine = "\n", Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     // data: a permission.requested event's data. promptRequest is what the CLI draws, so it is
     // preferred; older builds wrote only permissionRequest, whose shell kind is the commands
@@ -66,7 +82,11 @@ public static class CopilotPermission
         }
 
         message ??= Fallback(p, kind);
-        return new CopilotPermissionPrompt(request, toolCallId, kind, message, Digest(kind, message), atMachine) { Probes = Probes(kind, p) };
+        // What a person reads must be what runs. A bidi control or a zero-width character is drawn
+        // somewhere other than where it runs (or not at all), and right-to-left letters reorder
+        // what is drawn around them, so each is shown as a visible escape (#220), and Approve once
+        // is still offered (#253, decision 3). The digest stays over what Copilot wrote.
+        return new CopilotPermissionPrompt(request, toolCallId, kind, ShownText.Reveal(message, rightToLeft: true), Digest(kind, message, p, atMachine is not null), atMachine) { Probes = Probes(kind, p) };
     }
 
     static List<string> Probes(string kind, JsonElement p)
@@ -161,12 +181,28 @@ public static class CopilotPermission
         return $"{fence}{language}\n{text}\n{fence}";
     }
 
-    // A name inside **bold**: markup characters would change what the line says.
-    static string Plain(string text) => Text.OneLine(text)?.Replace("*", "\\*").Replace("_", "\\_").Replace("`", "\\`") ?? "";
+    // A name inside **bold**: markup characters would change what the line says. Hidden
+    // characters are shown escaped first, so collapsing the name to one line cannot drop them.
+    static string Plain(string text) => Text.OneLine(ShownText.Reveal(text, rightToLeft: true))?.Replace("*", "\\*").Replace("_", "\\_").Replace("`", "\\`") ?? "";
 
-    static string Digest(string kind, string message)
+    // The names a message shows escaped and on one line, whose own text the identity holds as well
+    // when it holds a character drawn other than as it runs: a custom tool named with a real U+202E
+    // and one named with the six characters "\u202E" are shown alike, as are titles
+    // "Get file\nsafe" and "Get file\n" with Hebrew letters (one line of each is shown), but they
+    // are not the same prompt. Any other prompt's id is as it was.
+    static readonly string[] Named = ["toolTitle", "toolName", "accessKind"];
+
+    static string Digest(string kind, string message, JsonElement p, bool atMachine)
     {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{kind}\n{message}"));
+        var identity = new StringBuilder($"{kind}\n{message}");
+        // And whether it is answered here at all: no prompt that is can share an id with one that
+        // is not, whatever the reason.
+        if (atMachine) { identity.Append("\n\0at-machine"); }
+        foreach (var name in Named)
+        {
+            if (Json.Str(p, name) is { } raw && ShownText.Misleads(raw)) { identity.Append($"\n\0{name}\0{raw}"); }
+        }
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(identity.ToString()));
         return Convert.ToHexStringLower(hash.AsSpan(0, 8));
     }
 }

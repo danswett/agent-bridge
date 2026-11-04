@@ -509,7 +509,9 @@ this build's mark (the argument `v=2`: `ToastXml.AnswerVersionKey`, `ToastXml.An
 and never for a question it knows is an approval. The answer goes to the host over the pipe
 with a fresh request id, and a follow-up toast says what became of it. A session's toasts
 share one tag, so a question replaces only its own, and a question answered anywhere
-withdraws it. A finished turn raises a toast with the start of the main agent's own response, never a delegate's (it can be turned
+withdraws it. A question that comes back under its id saying something else, or answerable
+otherwise (a host updated to refuse what it offered), quietly replaces its toast, and its card
+rebuilds its controls; what was typed that the new form cannot take stays on the card. A finished turn raises a toast with the start of the main agent's own response, never a delegate's (it can be turned
 off on its own). A click opens the app on that session, waiting for it to arrive if the
 click is what started the app. Nothing is raised while the app's window is in front.
 Toasts go quietly into Notification Center, without popping up, while Windows says the

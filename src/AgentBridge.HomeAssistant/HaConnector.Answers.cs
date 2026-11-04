@@ -161,8 +161,16 @@ public sealed partial class HaConnector
         var question = full.Question;
         if (question is not null && p.Armed?.Question.Id == question.Id)
         {
-            if (p.Armed.Rearm && !p.Armed.ReadFirst) { await RearmAsync(full, p, name, ct); }
-            return;
+            // The same question can come to be shown otherwise, or answered otherwise: a delegate's
+            // name arriving that holds its approval to the terminal (#220), or a host updated to
+            // refuse what it used to offer. The card is then armed again for what it says now; a tap
+            // made before stays one made looking at something else.
+            if (SamePlan(HaDecision.Plan(question, full), p.Armed.Plan))
+            {
+                if (p.Armed.Rearm && !p.Armed.ReadFirst) { await RearmAsync(full, p, name, ct); }
+                return;
+            }
+            log($"Home Assistant connector re-arming {p.Node}: its question now reads or is answered differently");
         }
         if (question is null)
         {
@@ -238,6 +246,15 @@ public sealed partial class HaConnector
 
     // What a card's answer channels held just before it was read ahead of a re-arm.
     sealed record CardSeen(Observation Payload, Observation Submit, Observation Reply, string? Decision);
+
+    // Whether a plan shows and takes what the armed one does: its words, how it is answered, and
+    // what it offers (lists compared by what they hold, not by reference).
+    static bool SamePlan(DecisionPlan a, DecisionPlan b) =>
+        a.Question == b.Question && a.AnswerOnTap == b.AnswerOnTap && a.TerminalOnly == b.TerminalOnly && a.TakesTypedAnswer == b.TakesTypedAnswer
+        && a.AgentName == b.AgentName && a.Choices.SequenceEqual(b.Choices)
+        && a.Fields.Count == b.Fields.Count && a.Fields.Zip(b.Fields).All(p => p.First.Label == p.Second.Label && p.First.IsText == p.Second.IsText
+            && p.First.MultiSelect == p.Second.MultiSelect && p.First.AllowsEmpty == p.Second.AllowsEmpty
+            && p.First.Options.SequenceEqual(p.Second.Options) && p.First.DefaultIndexes.SequenceEqual(p.Second.DefaultIndexes));
 
     static bool Same(CardSeen a, CardSeen b) =>
         Same(a.Payload, b.Payload) && Same(a.Submit, b.Submit) && Same(a.Reply, b.Reply) && a.Decision == b.Decision;

@@ -379,6 +379,33 @@ public sealed class AnswerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_delegates_approval_armed_on_the_tap_goes_to_the_terminal_when_a_name_drawn_other_than_as_it_runs_arrives()
+    {
+        var approval = new Question
+        {
+            Id = "p1", Kind = QuestionKind.Approval, Message = "Allow dotnet test?", AskedAt = FakeSessions.T0, Agent = "agent-3a91",
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
+        };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { WaitingOn = "agent-3a91", Question = approval });
+        await using var c = Connector();
+        await Pass(c);
+        Assert.True(Attributes(SessionEntities.Decision(Node)).GetProperty("answer_on_tap").GetBoolean());
+
+        // The session's list of delegates catches up after the question, under the same id.
+        sessions.Set(sessions.Get(A)! with
+        {
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "\u202Eetius tset", Status = SubagentStatus.Waiting }],
+        });
+        await Pass(c);
+
+        var attributes = Attributes(SessionEntities.Decision(Node));
+        Assert.False(attributes.TryGetProperty("answer_on_tap", out var tap) && tap.GetBoolean());
+        Assert.Empty(attributes.GetProperty("choices").EnumerateArray());
+        Assert.StartsWith("Delegate etius tset asks:", attributes.GetProperty("question").GetString());
+        Assert.Contains("answered in the terminal", attributes.GetProperty("question").GetString());
+    }
+
+    [Fact]
     public async Task An_answer_the_host_refuses_is_said_to_be_not_sent_and_can_be_given_again()
     {
         outcome = _ => new AnswerResult(AnswerOutcome.Busy, "another answer or reply to this session is being delivered");

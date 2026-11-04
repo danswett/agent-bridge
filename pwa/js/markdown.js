@@ -16,7 +16,7 @@
 // is not on screen as it runs shown as escapes (hidden-text.js, #220), and Copy takes what is drawn.
 // An approval's message is never Markdown: it is drawn exactly as written (parseApproval).
 
-import { notesFor, revealLineSeparators, reveal } from './hidden-text.js';
+import { notesFor, revealLineSeparators, reveal, unescapeShown } from './hidden-text.js';
 
 const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 const MAX_DEPTH = 12;
@@ -693,10 +693,19 @@ function codeBlock(raw, doc) {
   return wrap;
 }
 
+// What an approval's card says its message held (ui.md §6.4), counting the escapes a host sends for
+// hidden characters and right-to-left letters as them (#220): Approve once is offered for it, and an
+// escape can be read past while its character still acts (`# just a note\u000D Write-Output RAN`).
+export function approvalNotes(text) {
+  // Read from the raw message, as main reads an approval's notes (#423): a CRLF host's line endings
+  // are ordinary, and a bare CR is one.
+  return notesFor(unescapeShown(String(text ?? '')));
+}
+
 // What a drawn block held that its escapes stand for, said in words beside it (ui.md §6.4):
 // "Contains hidden characters", "Contains right-to-left text", or both.
 function notesOf(raw, doc) {
-  const said = notesFor(raw);
+  const said = typeof raw === 'string' ? notesFor(raw) : raw;
   if (said.length === 0) { return null; }
   const notes = doc.createElement('div');
   notes.className = 'md-notes';
@@ -764,7 +773,7 @@ export function renderMarkdown(text, doc = document, { approval = false } = {}) 
   if (!approval) { return toDom(parseMarkdown(text), doc); }
   const nodes = parseApproval(text);
   const frag = toDom(revealed(nodes), doc);
-  const notes = nodes.length ? notesOf(text, doc) : null;
+  const notes = nodes.length ? notesOf(approvalNotes(text), doc) : null;
   if (notes) { frag.prepend(notes); }
   return frag;
 }

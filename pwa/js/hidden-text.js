@@ -51,6 +51,20 @@ export function reveal(text, { rightToLeft = false } = {}) {
 // commented out, while bash runs it (#220).
 export const revealLineSeparators = (text) => String(text ?? '').replace(/\r(?!\n)|[\u0085\u2028\u2029]/g, escape);
 
+// A host sends an approval's hidden characters and right-to-left letters as escapes (\u202E,
+// \u{E0041}; the host's ShownText.Reveal, #220). Each such escape read back as the character it
+// stands for, so what is said of a message a host escaped (its notes, the Needs you lane's refusal)
+// is what would be said of it as the agent wrote it. Six characters an agent wrote itself count too;
+// an escape of anything else is left as it is.
+export function unescapeShown(text) {
+  return String(text ?? '').replace(/\\u(?:([0-9A-Fa-f]{4})|\{([0-9A-Fa-f]{1,6})\})/g, (written, four, any) => {
+    const value = parseInt(four ?? any, 16);
+    if (value > 0x10FFFF) { return written; }
+    const c = String.fromCodePoint(value);
+    return hasHidden(c) || hasRightToLeft(c) ? c : written;
+  });
+}
+
 export const HIDDEN_NOTE = 'Contains hidden characters';
 export const RIGHT_TO_LEFT_NOTE = 'Contains right-to-left text';
 

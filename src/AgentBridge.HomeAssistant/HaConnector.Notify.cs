@@ -493,7 +493,15 @@ public sealed partial class HaConnector
     (string Title, string Message)? QuestionPush(Session full, string name, Question question)
     {
         var plan = HaDecision.Plan(question, full);
-        var message = question.Agent is null ? question.Message : $"{HaDecision.Asker(question, full)} asks:\n\n{question.Message}";
+        // An approval that may be drawn other than as it runs (#220) is not carried at all: a phone
+        // may draw a push as HTML, which decodes a reference such as "&#x202E;" into the character,
+        // or as plain text, which shows "&amp;" as written, and nothing here knows which. It is
+        // answered at the machine, so the push says that instead. Any other approval's text is
+        // revealed as on the card.
+        var text = question.Kind != QuestionKind.Approval ? question.Message
+            : HaDecision.Misleads(question, full) ? HaDecision.MisleadingPush
+            : ShownText.Reveal(question.Message);
+        var message = question.Agent is null ? text : $"{HaDecision.Asker(question, full)} asks:\n\n{text}";
         (string Title, string Message)? push = (full.Agent, question.Kind) switch
         {
             (AgentKind.Copilot, QuestionKind.Approval) => HaNotify.CopilotPermission(message),

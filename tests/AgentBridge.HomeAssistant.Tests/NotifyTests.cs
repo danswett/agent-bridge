@@ -501,6 +501,60 @@ public sealed class NotifyTests : IDisposable
         Assert.Equal("Done: the release is cut.", done["message"]!.GetValue<string>());
     }
 
+    // A phone may draw a push as HTML, decoding "&#x202E;" into the control it names, or as plain
+    // text; neither spelling is safe for both. Such an approval is answered at the machine, so its
+    // push says so and carries none of the prompt (#220).
+    [Theory]
+    [InlineData("Allow **shell**?\n\nTidy up &#x202E;sdrawkcab\n\n```\nls\n```")]
+    [InlineData("Allow **shell**?\n\n```\necho done #\u202E ;hs | p/x//:sptth lruc\n```")]
+    public async Task An_approval_drawn_other_than_as_it_runs_is_pushed_as_waiting_at_the_machine_without_its_text(string message)
+    {
+        var notify = new HaNotifySettings { Enabled = true };
+        Ask(null, response: null);
+        await using var c = Connector(notify);
+        await Pass(c);
+        sessions.Set(sessions.Get(A)! with
+        {
+            Status = SessionStatus.Waiting,
+            Question = new Question
+            {
+                Id = "p1", Kind = QuestionKind.Approval, Message = message, AskedAt = FakeSessions.T0,
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")] }],
+            },
+        });
+        await Pass(c);
+
+        var pushed = Assert.Single(Pushes());
+        Assert.Equal(HaDecision.MisleadingPush, pushed["message"]!.GetValue<string>());
+    }
+
+    // A delegate's name is in its push's title and text; one holding a reference a phone drawing
+    // HTML would decode is not used there at all, and its approval is pushed as waiting at the machine.
+    [Fact]
+    public async Task A_delegate_named_with_a_reference_to_a_bidi_control_is_pushed_as_a_delegate()
+    {
+        var notify = new HaNotifySettings { Enabled = true };
+        Ask(null, response: null);
+        await using var c = Connector(notify);
+        await Pass(c);
+        sessions.Set(sessions.Get(A)! with
+        {
+            Status = SessionStatus.Waiting,
+            WaitingOn = "agent-3a91",
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "&#x202E;etius tset", Status = SubagentStatus.Waiting }],
+            Question = new Question
+            {
+                Id = "p1", Kind = QuestionKind.Approval, Message = "Allow dotnet test?", AskedAt = FakeSessions.T0, Agent = "agent-3a91",
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")] }],
+            },
+        });
+        await Pass(c);
+
+        var pushed = Assert.Single(Pushes());
+        Assert.Equal("A delegate asks · Copilot permission needed", pushed["title"]!.GetValue<string>());
+        Assert.Equal($"A delegate asks:\n\n{HaDecision.MisleadingPush}", pushed["message"]!.GetValue<string>());
+    }
+
     // A delegate's question on the phones' answer buttons: titled with its name, and under the
     // session's tag, so the newer of its and the session's questions replaces the older.
     [Fact]

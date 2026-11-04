@@ -276,13 +276,18 @@ public sealed partial class SessionCardViewModel : Observable
 
         var q = session.Question;
         QuestionViewModel? rebuilt = null;
-        if (question is not null && (q is null || q.Id != question.Id || capsChanged))
+        var carried = "";
+        // The same question can come back saying something else, or answerable differently: a host
+        // updated to refuse what it used to offer (#220). Its controls are rebuilt from what it says
+        // now, never kept from what it said.
+        var reworded = question is not null && q is not null && q.Id == question.Id && !QuestionViewModel.SaysTheSame(q, question.Question);
+        if (question is not null && (q is null || q.Id != question.Id || capsChanged || reworded))
         {
             // The question changed or went: text typed and not sent stays on the card, and an
             // answer that went keeps saying what became of it. The same question rebuilt for new
             // capabilities takes its draft along instead.
             var draft = question.UnsentText();
-            if (q is not null && q.Id == question.Id) { rebuilt = question; }
+            if (q is not null && q.Id == question.Id) { rebuilt = question; carried = draft; }
             else if (draft.Length > 0)
             {
                 OrphanText = draft;
@@ -296,6 +301,14 @@ public sealed partial class SessionCardViewModel : Observable
         {
             var next = new QuestionViewModel(q, session.Id, session.Agent, caps, ctx.Deliveries, name, ctx.Current);
             if (rebuilt is not null) { next.TakeDraft(rebuilt); }
+            // What a question that came back otherwise cannot take (its fields cut by a budget, or
+            // no longer answerable here) stays on the card, not lost with the old controls. One
+            // rebuilt for capabilities alone keeps it in its fields until it can be answered again.
+            if (reworded && carried.Length > 0 && (!next.Answerable || next.UnsentText() != carried))
+            {
+                OrphanText = carried;
+                OrphanNote = "The question changed while you were answering it. What you typed is kept here.";
+            }
             Question = next;
         }
         if (q is not null && receiptKey is not null && ctx.Deliveries.Get(receiptKey) is { State: DeliveryState.Done }) { receiptKey = null; }

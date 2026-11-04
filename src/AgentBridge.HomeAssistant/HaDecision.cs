@@ -86,7 +86,13 @@ public static partial class HaDecision
         // The name alone, "" when there is none: "A delegate" is how a line says who asks, not a name.
         var name = DelegateName.Clean(Name(question, session)) is { } clean ? HaPayloads.NeutraliseTemplates(clean) : "";
         var asker = Asker(question, session);
-        return Plan(question with { Message = $"{asker} asks:\n\n{question.Message}" }, session.Agent) with { Agent = agent, AgentName = name, Asker = asker };
+        // What the approval says is judged before who asks leads it, and with the name as the
+        // session reported it (Misleads): neutralising template braces adds a zero-width space,
+        // which is the card's own. Who asks leads the card's Markdown as literal text, so it cannot
+        // open a fence or a link around the prompt.
+        var asks = $"{HaPayloads.NeutraliseTemplates(MarkdownLiteral(Titled(question, session)))} asks:\n\n";
+        var held = Misleads(question, session) ? Misleading : Unshaped(question);
+        return Plan(question with { Message = asks + Shown(question, held, asks.Length) }, session.Agent, held) with { Agent = agent, AgentName = name, Asker = asker };
     }
 
     static string? Name(Question question, Session session) => session.Subagents?.FirstOrDefault(a => a.Id == question.Agent)?.Name;
@@ -95,12 +101,91 @@ public static partial class HaDecision
     // session's list, else "A delegate" (one the list no longer carries). Cleaned again, as in the
     // subagents attribute, and always after the word Delegate (#263): it leads the question and
     // titles a push, and a look-alike no check catches must still not read "Main agent asks".
-    public static string Asker(Question question, Session session) =>
-        HaPayloads.NeutraliseTemplates(DelegateName.Titled(Name(question, session)));
+    public static string Asker(Question question, Session session) => HaPayloads.NeutraliseTemplates(Titled(question, session));
+
+    // Cleaning drops hidden characters but keeps right-to-left letters and a character reference
+    // (&#x202E;), which a phone drawing a push as HTML decodes into the control it names; a name that
+    // still holds either is "A delegate" (#220).
+    static string Titled(Question question, Session session) =>
+        DelegateName.Clean(Name(question, session)) is { } clean && !ShownText.Misleads(clean) ? DelegateName.Titled(clean) : "A delegate";
+
+    // Who asks, with what Markdown would act on backslash-escaped, which CommonMark shows as itself:
+    // no fence, code span, emphasis, link, tag or reference, so it cannot open anything around the
+    // prompt below it. It always starts with "Delegate" or "A delegate", so nothing in it can make a
+    // heading or a list. Plain hyphens, colons and dots are left as they are, since a question's
+    // push shows the card's text as plain text.
+    static string MarkdownLiteral(string text) => MarkdownActive().Replace(text, @"\$0");
+
+    [GeneratedRegex(@"[\\`*_\[\]<>&~|!#]")]
+    private static partial Regex MarkdownActive();
+    // An approval a sub-agent asked for is judged with the name that leads it.
+    public static bool Misleads(Question question, Session session) =>
+        Misleads(question) || (question.Kind == QuestionKind.Approval && question.Agent is not null && Name(question, session) is { } name && ShownText.Misleads(name));
 
     // The host's question as the card should show it.
     public static DecisionPlan Plan(Question question, AgentKind agent)
     {
+        var held = Misleads(question) ? Misleading : Unshaped(question);
+        return Plan(question with { Message = Shown(question, held, 0) }, agent, held);
+    }
+
+    // An approval allows what runs, not what the card draws: one holding a character drawn
+    // somewhere other than where it runs, right-to-left letters that reorder it, or a character
+    // reference a renderer would decode to either, is answered at the machine (#220). The host
+    // sends hidden characters and right-to-left letters escaped, offering Approve once for them
+    // (#253, decision 3), so from it this is a reference, which this card's Markdown would decode;
+    // the card holds to its rule whatever it is given.
+    static bool Misleads(Question question) => question.Kind == QuestionKind.Approval && ShownText.Misleads(question.Message);
+
+    // This card draws an approval as Markdown, and the agent's own words in it, before a host escapes
+    // them (#212), can close the command's fence early or show a link's words where `curl ... | sh`
+    // runs: one that would not be drawn as written (ApprovalShape) is answered in the terminal too.
+    static string? Unshaped(Question question) =>
+        question.Kind == QuestionKind.Approval && !ApprovalShape.DrawsAsWritten(ShownText.Reveal(question.Message, rightToLeft: true)) ? NotAsWritten : null;
+
+    // What an approval's escapes stand for, in words above it (ui.md §6.4): Approve once is offered
+    // for it, and an escape can be read past while its character still acts (PowerShell ends a `#`
+    // comment at a bare CR, shown as \u000D on the comment's line).
+    static string Notes(Question question) =>
+        question.Kind == QuestionKind.Approval && ShownText.Notes(question.Message) is { Count: > 0 } notes ? $"_{string.Join(" · ", notes)}_\n\n" : "";
+
+    // And a held one is shown as its source, those characters as visible escapes, in a code block whose
+    // fence nothing in it can close: nothing in a block is decoded or drawn as Markdown, so a
+    // reference is shown as written wherever it stood, without the card having to know what
+    // Markdown would make of the text around it. Cut, if it must be, before it is fenced, to leave
+    // room for what leads it (a delegate's name) and the notes after it.
+    static string Shown(Question question, string? held, int leading)
+    {
+        var notes = Notes(question);
+        if (held is null) { return question.Kind == QuestionKind.Approval ? notes + ShownText.Reveal(question.Message, rightToLeft: true) : question.Message; }
+        var room = QuestionMaxChars - leading - notes.Length - TerminalNote(held).Length - TruncatedNote.Length;
+        var text = ShownText.Reveal(question.Message, rightToLeft: true);
+        var cut = false;
+        while (true)
+        {
+            var fence = FenceFor(text);
+            var block = $"{fence}\n{text}\n{fence}";
+            // Nothing left to cut: the empty block, whatever room there is (a delegate's name
+            // is kept to a length that always leaves it more).
+            if (block.Length <= room || text.Length == 0) { return notes + (cut ? block + TruncatedNote : block); }
+            text = text[..Math.Max(0, text.Length - (block.Length - room))];
+            cut = true;
+        }
+    }
+
+    // Backticks or tildes, whichever needs the shorter fence: one longer than any run of it that
+    // starts a line, which is all that could close it.
+    static string FenceFor(string text)
+    {
+        var lines = text.Split('\n').Select(l => l.TrimStart(' ')).ToList();
+        int Longest(char c) => lines.Select(l => l.Length - l.TrimStart(c).Length).DefaultIfEmpty(0).Max();
+        var (ticks, tildes) = (Longest('`'), Longest('~'));
+        return ticks <= tildes ? new string('`', Math.Max(3, ticks + 1)) : new string('~', Math.Max(3, tildes + 1));
+    }
+
+    static DecisionPlan Plan(Question question, AgentKind agent, string? held)
+    {
+        if (held is not null) { return Terminal(question, held); }
         if (question.AnswerAtMachine == true || question.Truncated == true)
         {
             return Terminal(question, question.Truncated == true ? TooLong : "this prompt can only be answered at the machine.");
@@ -140,6 +225,11 @@ public static partial class HaDecision
     }
 
     const string TooLong = "it was too long to show here in full, so it is answered where it can be read.";
+    const string Misleading = "it holds characters that can be drawn other than as they run, so it is answered where it runs.";
+    const string NotAsWritten = "it would not be drawn here as it is written, so it is answered where it runs.";
+
+    // What a push says in place of such an approval.
+    public const string MisleadingPush = "An approval is waiting at the machine. It holds characters that can be drawn other than as they run, so it is not shown here; answer it in the terminal.";
 
     // Shown with nothing to answer, and the note saying why kept inside the card's limit: a long
     // question is cut before the note, never the note itself.

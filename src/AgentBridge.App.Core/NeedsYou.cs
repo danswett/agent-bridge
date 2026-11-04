@@ -176,6 +176,8 @@ public sealed partial class NeedsYouEntry : Observable
         // Nor is one with right-to-left letters, which reorder what is drawn around them without any
         // control: three Hebrew letters before `; rm -rf / #` show its comment marker first.
         if (HiddenText.HasHidden(q.Message) || HiddenText.HasRightToLeft(q.Message)) { return false; }
+        // A host sends them as escapes (\u202E, #220), so their escapes count as them.
+        if (ShownText.HasRevealed(q.Message)) { return false; }
         // Every line ending the renderer breaks on is counted: a bare CR is a line too.
         var m = q.Message.Trim().Replace("\r\n", "\n").Replace('\r', '\n');
         return m.Length > 0 && m.Length <= PromptMaxChars && m.Split('\n').Length <= PromptMaxLines && LiteralShape(m) && !HasTable(MarkdownModel.Parse(m));

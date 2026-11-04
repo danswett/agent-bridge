@@ -70,7 +70,14 @@ public sealed partial class QuestionViewModel : Observable
     public string Id => Question.Id;
     public bool Approval => Question.Kind == QuestionKind.Approval;
     public string Heading => Approval ? "Permission requested" : "Waiting on you";
-    public string Message => Question.Message;
+    // An approval's text with anything not drawn where it runs, and its right-to-left letters, as
+    // visible escapes (#220): a host escapes them, and an older one's prompt is drawn so too. The card
+    // draws it exactly as written, as one block nothing in it is read as Markdown in (#323,
+    // MarkdownModel.Approval), so it is never wrapped in a fence of its own: one would be drawn too.
+    public string Message => !Approval ? Question.Message : Shown(Question);
+    // What the approval's escapes stand for, in words above it (ui.md §6.4): "Contains hidden
+    // characters", "Contains right-to-left text".
+    public IReadOnlyList<string> Notes => Approval ? ShownText.Notes(Question.Message) : [];
     public bool Answerable { get; }
     public string? Why { get; }
     public bool Tap { get; }
@@ -266,6 +273,19 @@ public sealed partial class QuestionViewModel : Observable
         return (text, outcome == "delivered" ? Tone.Ok : outcome == "refused" ? Tone.Bad : Tone.Warn);
     }
 
+    // Whether a question still says what it said, as controls were built for: its words, kind, flags
+    // and fields, each with everything that shapes what can be given (they arrive as new lists on
+    // every update, so compared by what they hold). The same id can come back otherwise: a host
+    // updated to refuse what it used to offer (#220), or a budget that had to cut it.
+    public static bool SaysTheSame(Question a, Question b) =>
+        a.Kind == b.Kind && a.Message == b.Message && a.Truncated == b.Truncated && a.AnswerAtMachine == b.AnswerAtMachine && a.Agent == b.Agent
+        && a.Fields.Count == b.Fields.Count && a.Fields.Zip(b.Fields).All(p => SameField(p.First, p.Second));
+
+    static bool SameField(Field a, Field b) =>
+        a.Name == b.Name && a.Type == b.Type && a.Title == b.Title && a.Description == b.Description
+        && a.AllowOther == b.AllowOther && a.Required == b.Required && a.Default?.GetRawText() == b.Default?.GetRawText()
+        && (a.Options ?? []).SequenceEqual(b.Options ?? []);
+
     // Whether this client may answer, and if not, why (pwa/js/answers.js, answerability).
     public static (bool Ok, string? Why) Answerability(Question q, IReadOnlyList<string> capabilities, AgentKind agent)
     {
@@ -275,10 +295,26 @@ public sealed partial class QuestionViewModel : Observable
                 && capabilities.Contains(Capabilities.SessionsAnswer) && !capabilities.Contains(Capabilities.SessionsApprove);
             return (false, off ? "approvalOff" : "atMachine");
         }
+        // Approve once allows what runs, not what is drawn. An approval's hidden characters and
+        // right-to-left letters are drawn here as escapes, with notes saying so, so it is still
+        // offered (#253, decision 3); one Markdown would not draw as written is answered at the
+        // machine (DrawnAsWritten).
+        if (q.Kind == QuestionKind.Approval && !DrawnAsWritten(q)) { return (false, "atMachine"); }
         if (!capabilities.Contains(Capabilities.SessionsAnswer)) { return (false, "machine"); }
         if (q.Truncated == true) { return (false, "truncated"); }
         return (true, null);
     }
+
+    // A CRLF is the line ending it is, as MarkdownModel.Approval and the PWA take it (#423); its CR is
+    // still in what runs, so the notes, read from the message as it came, say so.
+    static string Shown(Question q) => ShownText.Reveal(q.Message.Replace("\r\n", "\n"), rightToLeft: true);
+
+    // Whether Markdown would draw an approval as written: a character reference (&#x202E;) would be
+    // decoded to the character it stands for, and the agent's own words, before a host escapes them
+    // (#212), can close the command's fence early or show a link's words where `curl ... | sh` runs
+    // (ApprovalShape). This card draws an approval exactly as written since #323; the hold is kept
+    // all the same, the rule Home Assistant's card, which draws Markdown, holds to as well.
+    static bool DrawnAsWritten(Question q) => !ShownText.HasMisleadingReference(q.Message) && ApprovalShape.DrawsAsWritten(Shown(q));
 
     // A lone surrogate cannot be read by the host (System.Text.Json refuses it), so text goes
     // well-formed, with U+FFFD in its place.

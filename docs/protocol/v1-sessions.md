@@ -538,8 +538,33 @@ the path or paths, the file and its diff (or, without one, its whole new content
 showing neither is `answerAtMachine`), the URL, or the tool with its arguments, and the
 intention Copilot gave. One too large to send whole is `truncated`, and refused like any
 truncated question. Its `id` is `<requestId>#<digest>`: Copilot's request id and a hash of
-the message. An answer is bound to both, so the host refuses (`stale`) if that request is
+the message as built from Copilot's own words, before anything in it is escaped for display.
+An answer is bound to both, so the host refuses (`stale`) if that request is
 no longer waiting or now reads differently from what the client was shown.
+
+What a person reads must be what runs (#220). In the `message`, every character that is not
+drawn where it runs is a visible escape (`\u202E`, or `\u{E0041}` past the first plane): format
+characters such as bidi controls and zero-width spaces and joiners, controls other than newline
+and tab, private-use and unassigned code points, unpaired surrogates, U+2028 and U+2029, and
+every default-ignorable code point; so is every right-to-left letter (`\u05D0`), which reorders
+what is drawn around it without any control. Approve once is still offered for such a prompt:
+the owner's "escape and allow" rule (#253, decision 3). The digest stays over the original text
+(and over a tool's name as written, where it held such a character or right-to-left letters, and
+over whether the prompt is answered at the machine at all), so a prompt holding a real U+202E and
+one holding the six characters `\u202E` never share an id. These rules hold for every agent's
+`approval`, and a client escapes an older host's approval that still carries such a character.
+Home Assistant's card, which draws an approval as Markdown, answers one with a character
+reference such as `&#x202E;` that its renderer would decode to such a character (with or without a
+semicolon, with any number of leading zeros, or an HTML5 name such as `&ZeroWidthSpace;`) in the
+terminal, shown as its source ([ha-connector.md](../ha-connector.md)); the Windows app's card,
+which draws an approval exactly as written (#323), holds it at the machine too. The Needs you lane
+never offers one inline, its escapes included, and a card says what its escapes stand for
+("Contains hidden characters", "Contains right-to-left text") above it. Those two cards also hold
+at the machine an approval Markdown would not draw as written (the agent's own words closing the
+command's fence, a link, an image or HTML, or text after a block; `ApprovalShape`). These rules cover characters only, not Markdown:
+whether an approval's prose can be drawn as Markdown (a link or image hiding what runs) is #212
+for Copilot's intention and #209 for a Codex approval's command, which until then is sent as
+Markdown prose (`Needs approval: <command>`).
 
 The answer is `{ "decision": "approve" }` or `{ "decision": "deny" }`, nothing else.
 Approve is the prompt's plain "Yes", once: no option that grants more ("don't ask again",

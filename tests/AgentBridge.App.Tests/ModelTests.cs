@@ -40,6 +40,16 @@ public sealed class MarkdownTests
     }
 
     [Fact]
+    public void An_entity_for_a_character_not_drawn_where_it_runs_is_shown_as_written_and_any_other_is_decoded()
+    {
+        var p = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse("Run it &#x202E;sdrawkcab &amp; &#8203;now &copy; &#x5D0;")));
+
+        var text = string.Concat(p.Inlines.OfType<MdText>().Select(t => t.Text));
+        Assert.Equal("Run it &#x202E;sdrawkcab & &#8203;now © \u05D0", text);
+        Assert.False(ShownText.HasHidden(text));
+    }
+
+    [Fact]
     public void Tables_become_rows_of_cells()
     {
         var table = Assert.IsType<MdTable>(Assert.Single(MarkdownModel.Parse("| a | b |\n|---|---|\n| 1 | 2 |")));
