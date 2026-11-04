@@ -251,6 +251,17 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Equal("truncated", q.Why);
     }
 
+    // So does a Codex approval a host from #209 had to cut, though it is no longer whole in its block.
+    [Fact]
+    public void A_codex_approval_a_host_had_to_cut_says_that_part_of_it_is_missing()
+    {
+        var q = new QuestionViewModel(Make.Approval() with { Message = "Allow **Bash**?\n\n```\necho one\necho tw", Truncated = true }, "s1", AgentKind.Codex,
+            [.. connection.Capabilities, Capabilities.SessionsApprove], deliveries, "Test PC");
+
+        Assert.False(q.Answerable);
+        Assert.Equal("truncated", q.Why);
+    }
+
     // The security review's commands (tests/fixtures/approvals/codex-commands.json, #209): all
     // ASCII, yet as Markdown prose each draws a link's words or an image in place of what runs. The
     // card draws either exactly as written (#323); as a host sends it, Markdown too would draw the

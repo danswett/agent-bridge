@@ -166,13 +166,15 @@ export function answerability(question, capabilities, agent = null) {
       && capabilities.includes('sessions.answer') && !capabilities.includes('sessions.approve');
     return { ok: false, why: off ? 'approvalOff' : 'atMachine' };
   }
+  if (!capabilities.includes('sessions.answer')) { return { ok: false, why: 'machine' }; }
+  // Before the shape, as the app's card does: a cut approval ends inside its block, and the person is
+  // told that part of it is missing, not only that it is answered at the machine.
+  if (question.truncated) { return { ok: false, why: 'truncated' }; }
   // A Codex approval is answered here only as a host sends it from #209 (wholeCommand). An older
   // host sent "Needs approval: " and the hook's 300-character preview, cut to 297 and "..." with
   // nothing marking it truncated, so a card drawing all of it still showed only the start of what
   // Approve once runs (#209 security review).
   if (question.kind === 'approval' && agent === 'codex' && !wholeCommand(question.message)) { return { ok: false, why: 'atMachine' }; }
-  if (!capabilities.includes('sessions.answer')) { return { ok: false, why: 'machine' }; }
-  if (question.truncated) { return { ok: false, why: 'truncated' }; }
   return { ok: true, why: null };
 }
 

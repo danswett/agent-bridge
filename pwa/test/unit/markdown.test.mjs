@@ -539,3 +539,12 @@ test('an older host\'s codex preview cut short of what runs is drawn as written 
   assert.deepEqual(answerability(approval(c.legacy), caps, 'codex'), { ok: false, why: 'atMachine' });
   assert.deepEqual(answerability(approval(c.message), caps, 'codex'), { ok: true, why: null });
 });
+
+// A host from #209 marks a Codex approval it had to cut, which then ends inside its block: the card
+// says part of it is missing, as for any cut question, not only that it is answered at the machine.
+test('a codex approval a host had to cut says that part of it is missing', async () => {
+  const { answerability } = await import('../../js/answers.js');
+  const caps = ['sessions.read', 'sessions.answer', 'sessions.approve'];
+  const cut = { id: 'd1', kind: 'approval', truncated: true, message: 'Allow **Bash**?\n\n```\necho one\necho tw', fields: [{ name: 'decision', type: 'choice', options: [{ value: 'approve', label: 'Approve once' }, { value: 'deny', label: 'Deny' }], required: true }] };
+  assert.deepEqual(answerability(cut, caps, 'codex'), { ok: false, why: 'truncated' });
+});
