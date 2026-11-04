@@ -276,9 +276,21 @@ public sealed partial class QuestionViewModel : Observable
         Raise(nameof(InFlight));
     }
 
+    // How far an answer or a reply on its way has got, where its machine says (Delivery.Stage,
+    // #600; the PWA's describeStage, word for word): Sent once the machine has it, Typed once the
+    // keys have gone, Queued when they went into a working session. Null until the machine says,
+    // or from one that never does: then it is Sending.
+    public static string? StageText(string? stage) => stage switch
+    {
+        DeliveryProgress.Received => "Sent. The machine is typing it…",
+        DeliveryProgress.Typed => "Typed. Waiting for the session to take it…",
+        Deliveries.Queued => "Queued. The session is working, and takes it at its next step.",
+        _ => null,
+    };
+
     public static (string Text, Tone Tone) Describe(Delivery e, string at) => e.State switch
     {
-        DeliveryState.Sending => (e.Attempts > 1 ? "Sending again…" : "Sending…", Tone.Progress),
+        DeliveryState.Sending => (StageText(e.Stage) ?? (e.Attempts > 1 ? "Sending again…" : "Sending…"), Tone.Progress),
         DeliveryState.Waiting => (e.Reason == "still being delivered" ? "The machine is still delivering it…" : $"Waiting for the {Product.HostName}{at}. Your answer goes as soon as it is back.", Tone.Progress),
         DeliveryState.Failed => ($"Couldn't send it: {e.Reason ?? "the machine said no"}.", Tone.Bad),
         _ => Outcome(e, at),

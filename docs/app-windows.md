@@ -634,6 +634,20 @@ under its tag is silent too): without it Windows plays its default sound, which 
 every question (#754). The app keeps running in the notification area when its window
 closes, so toasts keep coming.
 
+**Progress and timing marks** (#600, [ui.md](design/ui.md) §6.5): an answer or a reply to a
+host whose hello offers `sessions.progress` asks for it (`"progress": true`), and its status
+line follows the host's progress frames before the outcome (`Deliveries`, `Delivery.Stage`):
+"Sent. The machine is typing it…", "Typed. Waiting for the session to take it…", or "Queued.
+The session is working, and takes it at its next step." when it went into a working session.
+A stage only moves forward, across resends of the same request; an older host is asked for
+nothing and shows "Sending…" until the outcome, as before. Each answer and reply also writes one
+line to `app.log` when it has its outcome: the request's first 8 hex digits (as the host's log
+names it), the outcome, each mark in ms from the tap (`sent`, a resend's `sent 2`, `received`,
+`typed` or `queued`, `result`), and the host's own `timings` (ms from its receipt: `typed`,
+`recorded`, `confirmed`), for example
+`reply 1a2b3c4d delivered: sent 3 ms, received 41 ms, typed 388 ms, result 1402 ms; host: typed 352 ms, recorded 1190 ms, confirmed 1361 ms`.
+Nothing of it is sent anywhere. The demo host offers progress too.
+
 The activator is the app's own (`INotificationActivationCallback` in an HKCU
 `LocalServer32` registration, S3 finding 1, without the toolkit S3 used), under the AUMID
 Velopack gives the app's shortcuts (`velopack.AgentBridgeApp`). It is registered with COM

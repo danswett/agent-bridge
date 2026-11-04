@@ -402,6 +402,9 @@ public sealed class ReplyViewModel : Observable
     {
         switch (e.State)
         {
+            // Past its files: the reply itself is on its way, and the machine says how far.
+            case DeliveryState.Sending when QuestionViewModel.StageText(e.Stage) is { } stage:
+                return (stage, Tone.Progress);
             case DeliveryState.Sending when e.Progress is { Total: > 0 } p:
                 var count = (e.Payload as List<ReplyAttachment>)?.Count ?? 1;
                 return ($"Sending {(count == 1 ? "the attachment" : $"{count} attachments")}… {100 * p.Sent / p.Total}%", Tone.Progress);

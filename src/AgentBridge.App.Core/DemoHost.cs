@@ -188,8 +188,8 @@ public sealed partial class DemoHost : IAsyncDisposable
             case Ops.Hello:
                 {
                     var hello = new HelloResult(1, new MachineInfo(MachineId, MachineName, "windows", version, Dev: true, Sessions: Count), remote
-                        ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, AuthState.Capability]
-                        : [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, HostOps.Capability, HostOps.AgentReadinessCapability, HostOps.AgentSetupCapability, HostOps.AgentInstallCapability]);
+                        ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, Capabilities.SessionsProgress, UsageProtocol.Capability, LaunchProtocol.Capability, AuthState.Capability]
+                        : [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, Capabilities.SessionsProgress, UsageProtocol.Capability, LaunchProtocol.Capability, HostOps.Capability, HostOps.AgentReadinessCapability, HostOps.AgentSetupCapability, HostOps.AgentInstallCapability]);
                     // Held for a test: the reply a recovery reads before it subscribes again.
                     if (HoldHello is { } hold) { HoldHello = null; return After(hold.Task, hello); }
                     return Done(hello);
@@ -229,20 +229,27 @@ public sealed partial class DemoHost : IAsyncDisposable
             case Ops.SessionAnswer:
                 {
                     var r = data.Deserialize<AnswerRequest>(ProtocolJson.Options)!;
+                    // As a host that offers sessions.progress says how far it has got (#598, #600).
+                    var progress = r.Progress == true ? ServedRequest.Current : null;
+                    progress?.Progress(new DeliveryProgress(DeliveryProgress.Received));
                     Session? s;
                     lock (gate) { s = sessions.GetValueOrDefault(r.Id); }
                     if (s?.Question is not { } q || q.Id != r.Question) { return Done(new AnswerResult(AnswerOutcome.Stale, "the session is no longer asking that question")); }
                     if (Answers.Check(q, r) is { } problem) { return Done(new AnswerResult(AnswerOutcome.Refused, problem)); }
+                    progress?.Progress(new DeliveryProgress(DeliveryProgress.Typed, s.Status == SessionStatus.Working));
                     _ = Change(s with { Question = null, Status = SessionStatus.Working, StatusSince = now, UpdatedAt = now });
                     return Done(new AnswerResult(AnswerOutcome.Delivered));
                 }
             case Ops.SessionReply:
                 {
                     var r = data.Deserialize<ReplyRequest>(ProtocolJson.Options)!;
+                    var progress = r.Progress == true ? ServedRequest.Current : null;
+                    progress?.Progress(new DeliveryProgress(DeliveryProgress.Received));
                     if (Replies.Check(r) is { } problem) { return Done(new ReplyResult(AnswerOutcome.Refused, problem)); }
                     Session? s;
                     lock (gate) { s = sessions.GetValueOrDefault(r.Id); }
                     if (s is null) { return Done(new ReplyResult(AnswerOutcome.Stale, "the session has ended")); }
+                    progress?.Progress(new DeliveryProgress(DeliveryProgress.Typed, s.Status == SessionStatus.Working));
                     _ = Change(s with { Status = SessionStatus.Working, StatusSince = now, UpdatedAt = now, Activity = s.Activity with { UserMessage = r.Text } });
                     return Done(new ReplyResult(AnswerOutcome.Delivered));
                 }

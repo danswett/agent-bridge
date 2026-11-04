@@ -160,15 +160,21 @@ public sealed class HostConnection : IAsyncDisposable
     // goes on. knownHost: send nothing until that process is known, for an op that must never
     // reach a restarted host a second time. onlyTo: send only to that process, else throw
     // HostRestartedException, checked against the very connection the call would go on.
-    public Task<JsonElement> CallAsync(string op, object? data, TimeSpan? timeout, bool knownHost, string? onlyTo, out string? instance, CancellationToken ct = default)
+    // progress: hears the host's progress frames for it (IClientChannel.RequestAsync), on the
+    // receive path.
+    public Task<JsonElement> CallAsync(string op, object? data, TimeSpan? timeout, bool knownHost, string? onlyTo, out string? instance, CancellationToken ct = default, Action<JsonElement>? progress = null)
     {
         var now = Volatile.Read(ref current);
         if (now is null || !now.Channel.IsOpen) { throw new HostNotRunningException($"not connected to the {Product.HostName}"); }
         if (knownHost && now.Instance is null) { throw new HostNotRunningException($"still connecting to the {Product.HostName}"); }
         if (onlyTo is not null && now.Instance != onlyTo) { throw new HostRestartedException(); }
         instance = now.Instance;
-        return now.Channel.CallAsync(op, data, timeout, ct);
+        return now.Channel.CallAsync(op, data, timeout, ct, progress);
     }
+
+    // A line for the app's log (the one this connection was given), for what the app measures of
+    // its own deliveries (Deliveries' timing marks, #600).
+    internal void Log(string line) => log(line);
 
     public async Task<T> CallAsync<T>(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
         (await CallAsync(op, data, timeout, ct)).Deserialize<T>(ProtocolJson.Options) ?? throw new HostErrorException($"{op} returned nothing");
