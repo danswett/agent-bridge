@@ -116,6 +116,75 @@ public sealed class AgentVerificationTests
     }
 
     [Theory]
+    [InlineData("process exited")]
+    [InlineData("configuration changed")]
+    [InlineData("evidence expired")]
+    public async Task Retrying_a_retained_run_revalidates_its_own_evidence_after_a_newer_test_replaces_it(string invalid)
+    {
+        await using var service = Service();
+        var first = Request();
+        service.Start(first);
+        var launch = await launcher.Called.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Answer(launch);
+        hooks.Send(Hook());
+        launcher.Result.SetResult(new(LaunchOutcome.Started) { Session = SessionId });
+        await Wait(() => service.Snapshot.Single().State == VerificationState.Verified && hooks.Subscribers == 0);
+
+        var second = Request();
+        service.Start(second);
+        await Wait(() => service.Snapshot.Single().State == VerificationState.NeedsAction);
+        Assert.Equal(second.Request, service.Snapshot.Single().Request);
+        Assert.Equal(VerificationState.Verified, service.Start(first).State);
+        switch (invalid)
+        {
+            case "process exited": source.Processes.TryRemove(SessionId, out _); break;
+            case "configuration changed": blocked = "Host restart required."; break;
+            case "evidence expired": time.Advance(TimeSpan.FromMinutes(11)); break;
+            default: throw new ArgumentOutOfRangeException(nameof(invalid));
+        }
+
+        Assert.Equal(VerificationState.NeedsAction, service.Start(first).State);
+        Assert.Equal(VerificationState.NeedsAction, service.Cancel(first.Request).State);
+        Assert.Equal(2, launcher.Calls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_new_process_waiting_for_registration_keeps_the_same_test_open_until_discovery_clears_or_times_out(bool timeout)
+    {
+        await using var service = Service();
+        var request = Request();
+        service.Start(request);
+        var launch = await launcher.Called.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        source.Held = new("A new CLI process has not registered its session yet.", [AgentKind.Copilot]);
+        launcher.Result.SetResult(new(LaunchOutcome.Unconfirmed, "Answer folder trust in its window."));
+        await Wait(() => service.Snapshot.Single().Detail.Contains("Waiting for session discovery", StringComparison.Ordinal));
+        Assert.Equal(VerificationState.Running, service.Snapshot.Single().State);
+
+        if (timeout)
+        {
+            time.Advance(TimeSpan.FromMinutes(9));
+            await Wait(() => service.Snapshot.Single().State == VerificationState.NeedsAction);
+            Assert.Contains("timed out", service.Snapshot.Single().Detail);
+        }
+        else
+        {
+            Answer(launch);
+            hooks.Send(Hook());
+            launcher.Register(Guid.Parse(request.Request), SessionId);
+            time.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(20);
+            Assert.Equal(VerificationState.Running, service.Snapshot.Single().State);
+            Assert.Equal(ReadinessState.Unknown, service.Snapshot.Single().Discovery.State);
+            source.Held = null;
+            await Wait(() => service.Snapshot.Single().State == VerificationState.Verified);
+        }
+        Assert.Equal(1, launcher.Calls);
+        await Wait(() => hooks.Subscribers == 0);
+    }
+
+    [Theory]
     [InlineData("old")]
     [InlineData("unknown time")]
     [InlineData("future")]
@@ -262,7 +331,8 @@ public sealed class AgentVerificationTests
         public event Action<Guid, string>? SessionStarted;
         public void Register(Guid request, string id) => SessionStarted?.Invoke(request, id);
         public Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default)
+        public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref Calls);
             Called.TrySetResult(request);
@@ -283,6 +353,7 @@ public sealed class AgentVerificationTests
     {
         public ConcurrentDictionary<string, Session> Sessions { get; } = new();
         public ConcurrentDictionary<string, SessionProcess> Processes { get; } = new();
+        public DiscoveryHeld? Held { get; set; }
         public long Revision => 0;
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
         public IReadOnlyList<Session> Snapshot() => Sessions.Values.ToArray();

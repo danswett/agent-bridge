@@ -57,21 +57,23 @@ public sealed class AgentVerificationService : IAsyncDisposable
         {
             lock (gate)
             {
-                return latest.Values.Select(run =>
-                {
-                    if (run.Report.State != VerificationState.Verified) { return run.Report; }
-                    var why = unavailable()
-                        ?? (source.Held is not null ? "Session discovery is incomplete." : null)
-                        ?? (source.ProcessOf(run.Report.Session!) != run.Process ? "The verified session's process is no longer current." : null)
-                        ?? (time.GetUtcNow() - run.Report.CheckedAt >= TimeSpan.FromMinutes(10) ? "The test evidence has expired." : null);
-                    return why is null ? run.Report : run.Report with
-                    {
-                        State = VerificationState.NeedsAction,
-                        Detail = $"{why} Run a new verification before finishing setup.",
-                    };
-                }).ToArray();
+                return latest.Values.Select(Current).ToArray();
             }
         }
+    }
+
+    AgentVerificationReport Current(Run run)
+    {
+        if (run.Report.State != VerificationState.Verified) { return run.Report; }
+        var why = unavailable()
+            ?? (source.Held is not null ? "Session discovery is incomplete." : null)
+            ?? (source.ProcessOf(run.Report.Session!) != run.Process ? "The verified session's process is no longer current." : null)
+            ?? (time.GetUtcNow() - run.Report.CheckedAt >= TimeSpan.FromMinutes(10) ? "The test evidence has expired." : null);
+        return why is null ? run.Report : run.Report with
+        {
+            State = VerificationState.NeedsAction,
+            Detail = $"{why} Run a new verification before finishing setup.",
+        };
     }
 
     public AgentVerificationReport Start(AgentVerificationRequest request)
@@ -91,7 +93,7 @@ public sealed class AgentVerificationService : IAsyncDisposable
             if (runs.TryGetValue(key, out var existing))
             {
                 if (existing.Request != request) { throw new ArgumentException("A verification UUID cannot be reused with different selections."); }
-                return Snapshot.FirstOrDefault(r => r.Request == request.Request) ?? existing.Report;
+                return Current(existing);
             }
             if (runs.Values.Any(r => r.Report.State == VerificationState.Running)) { throw new InvalidOperationException("Another verification is running. Finish it or stop observing it before opening another test session."); }
             if (unavailable() is { } why) { throw new InvalidOperationException($"Verification is unavailable: {why}"); }
@@ -134,7 +136,7 @@ public sealed class AgentVerificationService : IAsyncDisposable
                 };
                 changed = true;
             }
-            report = run.Report;
+            report = Current(run);
         }
         if (changed) { Changed?.Invoke(); }
         return report;
@@ -162,7 +164,7 @@ public sealed class AgentVerificationService : IAsyncDisposable
             if (unavailable() is { } unavailableNow) { Finish(VerificationState.Blocked, unavailableNow); return; }
             // Launch commits independently of a pipe's lifetime. Cancelling this test stops
             // observation, never claims the launch was undone, and never kills its session.
-            launching = launcher.LaunchAsync(new LaunchRequest
+            launching = launcher.LaunchVerificationAsync(new LaunchRequest
             {
                 Request = run.Request.Request, Agent = run.Request.Agent, Workspace = run.Request.Workspace,
                 Profile = run.Request.Profile, Permissions = LaunchProtocol.Ask, Prompt = prompt,
@@ -172,7 +174,6 @@ public sealed class AgentVerificationService : IAsyncDisposable
             {
                 ct.ThrowIfCancellationRequested();
                 if (unavailable() is { } why) { Finish(VerificationState.Blocked, why); return; }
-                if (source.Held is not null) { Finish(VerificationState.Blocked, "Session discovery became incomplete. Run the test again after resolving it."); return; }
                 while (reader.TryRead(out var notice))
                 {
                     var now = time.GetUtcNow();
@@ -197,7 +198,15 @@ public sealed class AgentVerificationService : IAsyncDisposable
                         Set(run, Read(run) with { Launch = new(ReadinessState.NeedsAction, result.Reason ?? "Check the test session's window for sign-in or folder trust. Observation continues.") });
                     }
                 }
-                if (bound.Task.IsCompletedSuccessfully)
+                if (source.Held is not null)
+                {
+                    Set(run, Read(run) with
+                    {
+                        Detail = "Waiting for session discovery to complete. Answer sign-in or folder-trust questions in the test window; observation continues.",
+                        Discovery = new(ReadinessState.Unknown, "Session discovery is incomplete; waiting within this test's timeout."),
+                    });
+                }
+                else if (bound.Task.IsCompletedSuccessfully)
                 {
                     var id = await bound.Task;
                     if (before.Contains(id)) { Finish(VerificationState.NeedsAction, "The launcher returned an existing session, not a new verification session. Run a new test."); return; }

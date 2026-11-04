@@ -203,6 +203,10 @@ fixed harmless prompt asking for a unique reply without tools, file access or de
 The App must explain and obtain consent before sending `confirmed: true`: this opens a real
 provider session, may consume paid usage, and may first ask the person to sign in or trust
 the folder. Verification never answers those questions or changes permissions.
+The verification-specific launcher forces `ask` even if machine/request defaults allow all,
+and refuses any configured `extraArgs` for that launcher before starting anything.
+Provider-defined arguments can override permissions through aliases or config switches;
+they are neither silently removed nor checked against an incomplete bypass-flag denylist.
 
 Each report contains `request`, `agent`, `workspace`, optional `profile`, `state`, `detail`,
 `startedAt`, `checkedAt`, and separate `{ state, detail }` checks named `launch`, `discovery`,
@@ -213,6 +217,9 @@ Each report contains `request`, `agent`, `workspace`, optional `profile`, `state
 
 Only the launcher's exact request/session binding counts, including registration after its
 initial `unconfirmed` answer. Arbitrary new-looking sessions cannot satisfy the test.
+Discovery becoming held after launch keeps the same test observing within its existing
+timeout, so sign-in/trust followed by late registration does not require another launch.
+Evidence is evaluated only after discovery is complete again.
 Discovery must identify a process started in this run; sessions present before the request
 cannot count. The main agent must answer this run's unique prompt, not echo it or borrow a
 delegate's response. A hook must name the same session and agent, have fresh receipt/handling
@@ -229,7 +236,9 @@ A verified result applies only to that selected agent/profile/workspace on this 
 not relay connectivity, every configured agent, or a separately proven account entitlement.
 Before using it as a finish gate, read fresh `host.status`. Changed setup/configuration,
 incomplete discovery, a changed/missing session process or ten-minute-old evidence projects
-`needsAction`. Restart discards every result. This backend alone does not provide the guided
+`needsAction`. The same freshness projection applies when retrying any retained request UUID
+or asking to stop a run that already ended, even after a newer run replaced its status row.
+Restart discards every result. This backend alone does not provide the guided
 first-run shell, Settings controls or disposable clean-machine acceptance.
 
 ### Agent readiness evidence

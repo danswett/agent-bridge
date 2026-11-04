@@ -396,6 +396,56 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.StartsWith("Unknown profile 'play'; this machine has home, work", (await LaunchAsync(ch, new { agent = "agency", profile = "play" })).Reason);
     }
 
+    [Theory]
+    [InlineData("copilot", "--allow-all")]
+    [InlineData("agency", "--allow-all")]
+    [InlineData("claude", "--dangerously-skip-permissions")]
+    [InlineData("codex", "--ask-for-approval=never")]
+    [InlineData("codex", "--config=approval_policy=\"never\"")]
+    [InlineData("copilot", "--no-auto-update")]
+    public async Task Verification_refuses_configured_extra_arguments_before_starting_any_process(string agent, string extra)
+    {
+        locator.Installed[agent] = @"C:\fake\" + agent + ".exe";
+        var config = Config(c => c with
+        {
+            Agents = new Dictionary<string, AgentConfig> { [agent] = new() { ExtraArgs = [extra] } },
+        });
+        var launcher = Launcher(config);
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = agent, Workspace = "App", Prompt = "connection test" };
+
+        var result = await launcher.LaunchVerificationAsync(request, "local app verification");
+
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Contains("cannot guarantee standard permissions", result.Reason);
+        Assert.Empty(starter.Specs);
+        Assert.Equal(extra, Assert.Single(config.Agent(agent).ExtraArgs));
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("agency")]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    public async Task The_real_verification_launcher_keeps_standard_permissions_despite_allow_all_defaults(string agent)
+    {
+        locator.Installed[agent] = @"C:\fake\" + agent + ".exe";
+        starter.Registers = false;
+        var launcher = Launcher(Config(c => c with { Permissions = LaunchProtocol.AllowAll }),
+            wait: TimeSpan.FromMilliseconds(50), follow: TimeSpan.FromMilliseconds(100));
+        var result = await launcher.LaunchVerificationAsync(new LaunchRequest
+        {
+            Request = Guid.NewGuid().ToString("D"), Agent = agent, Workspace = "App",
+            Permissions = LaunchProtocol.AllowAll, Prompt = "connection test",
+        }, "local app verification");
+
+        var spec = Assert.Single(starter.Specs);
+        Assert.Equal(LaunchProtocol.Ask, result.Launched?.Permissions);
+        Assert.DoesNotContain("--allow-all", spec.Arguments);
+        Assert.DoesNotContain("--dangerously-skip-permissions", spec.Arguments);
+        Assert.DoesNotContain("--ask-for-approval", spec.Arguments);
+        Assert.Equal("connection test", spec.Arguments[^1]);
+    }
+
     [Fact]
     public async Task A_folder_trust_question_is_left_for_the_machine_and_other_launches_are_busy_meanwhile()
     {
