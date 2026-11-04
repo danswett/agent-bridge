@@ -204,8 +204,11 @@ sealed class AnswerWatch
     ScrollerLook Look(ScrollViewer sv)
     {
         var at = sv.TransformToVisual(null).TransformPoint(default);
+        // What it scrolls as measured, which ExtentHeight isn't when that is shorter than the viewport
+        // (CI's three panes: the question grew and the extent, the pane's height, didn't).
+        var extent = sv.Content is UIElement content ? content.DesiredSize : new Windows.Foundation.Size(sv.ExtentWidth, sv.ExtentHeight);
         return new ScrollerLook(at.X, at.Y, sv.HorizontalOffset, sv.VerticalOffset, sv.ScrollableWidth, sv.ScrollableHeight,
-            sv.ViewportWidth, sv.ViewportHeight, sv.ExtentWidth, sv.ExtentHeight,
+            sv.ViewportWidth, sv.ViewportHeight, extent.Width, extent.Height,
             DateTimeOffset.UtcNow >= unsettledUntil && scrollers.TryGetValue(sv, out var p) && p.Scrolling);
     }
 

@@ -197,7 +197,9 @@ public sealed class AnswerGuard
 
 // A scroller holding a question's answers, as one look saw it: where its viewport is in the window,
 // how far it is scrolled, how far it can be, and whether the person is scrolling it now (a wheel,
-// a finger, a key or its scroll bar).
+// a finger, a key or its scroll bar). Its extent is what it scrolls as that measured itself, not
+// stopped at the viewport: a conversation shorter than its pane grows as the question does, where
+// the scroller's own extent, the pane's height, stays put.
 public readonly record struct ScrollerLook(
     double Left, double Top, double OffsetX, double OffsetY, double ScrollableWidth, double ScrollableHeight,
     double ViewportWidth, double ViewportHeight, double ExtentWidth, double ExtentHeight, bool Person);
