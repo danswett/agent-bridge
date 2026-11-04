@@ -456,7 +456,13 @@ public sealed class HostConnection : IAsyncDisposable
                 // Before anything of the event is applied: the snapshot under way is no longer the
                 // whole of anything, so nothing ends it, not even this event when it is the
                 // sessions.synced (#427).
-                if (ev.Seq != last + 1) { Resubscribe(ch, ev.Seq, gaps); }
+                if (ev.Seq != last + 1)
+                {
+                    // An event numbered again or back (a host that is broken) may carry an older state
+                    // than the one held: the list is not whole after it, and is never resumed from.
+                    if (ev.Seq <= last) { ui.Post(Sessions.Refuse); }
+                    Resubscribe(ch, ev.Seq, gaps);
+                }
                 last = ev.Seq;
                 Apply(ch, ev, held, gaps);
             }
@@ -501,8 +507,11 @@ public sealed class HostConnection : IAsyncDisposable
         log($"refused a {kind} the app could not read ({e.GetType().Name}{where}); any more are refused without a word");
     }
 
-    // A session, from an upsert or a patch applied (revision: the patch's).
-    void Upserted(IClientChannel ch, JsonElement data, long seq, long? revision)
+    // A session, from an upsert or a patch applied (revision: the patch's). Applied only while its
+    // channel is the one followed: an old channel's pump can still be draining after its
+    // replacement's snapshot is whole, and its older state would overwrite the newer one with
+    // nothing to resend it, a resumed snapshot sending only what changed since.
+    Session Upserted(IClientChannel ch, JsonElement data, long seq, long? revision)
     {
         Session s;
         bool exact;
@@ -516,10 +525,14 @@ public sealed class HostConnection : IAsyncDisposable
         }
         ui.Post(() =>
         {
+            if (!Followed(ch)) { return; }
             Sessions.Upsert(s, exact, ch, seq);
             Sessions.Advance(ch, revision);
         });
+        return s;
     }
+
+    bool Followed(IClientChannel ch) => ReferenceEquals(Volatile.Read(ref pumping), ch);
 
     // Host records are read as the spec says (Received): a field that cannot be read is absent,
     // unless the record is filed or decided on by it. The host's own status, a local-pipe record
@@ -530,14 +543,11 @@ public sealed class HostConnection : IAsyncDisposable
         {
             case Events.SessionUpsert:
                 {
-                    // Kept as received, the JSON and not what the app made of it: what a patch on it
-                    // applies to. A session is refused only when its id is not text (Received), so
-                    // every session on the list is kept.
-                    if (ev.Data.ValueKind == JsonValueKind.Object && ev.Data.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
-                    {
-                        held[id.GetString()!] = (ev.Seq, JsonObject.Create(ev.Data)!);
-                    }
-                    Upserted(ch, ev.Data, ev.Seq, revision: null);
+                    // Read first, which refuses one the app can't read (an id that is not text, or
+                    // holds a lone surrogate) as before; then kept as received, the JSON and not what
+                    // the app made of it, as what a patch on it applies to.
+                    var s = Upserted(ch, ev.Data, ev.Seq, revision: null);
+                    held[s.Id] = (ev.Seq, JsonObject.Create(ev.Data)!);
                     break;
                 }
             case Events.SessionPatch:
@@ -579,6 +589,7 @@ public sealed class HostConnection : IAsyncDisposable
                     held.Remove(r.Id);
                     ui.Post(() =>
                     {
+                        if (!Followed(ch)) { return; }
                         Sessions.Remove(r.Id);
                         Sessions.Advance(ch, r.Revision);
                     });
@@ -898,7 +909,10 @@ public sealed class SessionStore
                 Reject();
                 return;
             }
-            seen = new HashSet<string>(live, StringComparer.Ordinal);
+            // The live ids, and any session upserted on this channel after the response: one that
+            // started after the synced, read before the subscribe's answer reached the UI thread
+            // (early), is not in live, and dropping it left it missing until it changed again.
+            seen = new HashSet<string>(live.Concat(seen), StringComparer.Ordinal);
         }
         snapshot = null;
         Complete = true;

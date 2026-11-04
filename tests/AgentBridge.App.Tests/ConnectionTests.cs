@@ -1175,4 +1175,74 @@ public sealed class ConnectionTests : IAsyncLifetime
         Assert.True(third.GetProperty("patch").GetBoolean());
         Assert.False(third.TryGetProperty("since", out _));
     }
+
+    [Fact]
+    public void A_session_that_started_after_a_resumed_snapshot_whose_synced_was_read_before_its_answer_is_kept()
+    {
+        var store = new SessionStore();
+        var first = new object();
+        store.BeginSnapshot(first, "run-1");
+        store.Answered(first, 0);
+        store.Upsert(Make.Session("a"), true, first, 1);
+        store.EndSnapshot(null, first, 2, 5, null);
+        var second = new object();
+        store.BeginSnapshot(second, "run-1");
+
+        // Read on the pump before the subscribe's answer reached the UI thread: the resumed synced,
+        // and a session that started after it.
+        store.EndSnapshot(null, second, 1, 6, ["a"]);
+        store.Upsert(Make.Session("b"), true, second, 2);
+        store.Answered(second, 0, resumed: true);
+
+        Assert.True(store.Complete);
+        Assert.Equal(["a", "b"], Ids(store));
+        Assert.Equal(6, store.ResumeFrom("run-1")!.Revision);
+    }
+
+    [Fact]
+    public async Task An_event_numbered_again_may_be_an_older_state_so_the_list_is_never_resumed_from_after_it()
+    {
+        await using var other = Patching(Make.Session("a"));
+        await using var conn = other.Connect();
+        await Wait.UntilAsync(() => conn.Sessions.Complete, "the snapshot");
+
+        Skip(other, -1);
+        await other.SendAsync(Events.SessionUpsert, Make.Session("a", status: SessionStatus.Working));
+
+        await Wait.UntilAsync(() => other.Sent(Ops.SessionsSubscribe).Count == 2 && conn.Sessions.Complete, "a full snapshot");
+        var again = other.Sent(Ops.SessionsSubscribe)[1];
+        Assert.True(again.GetProperty("patch").GetBoolean());
+        Assert.False(again.TryGetProperty("since", out _));
+    }
+
+    [Fact]
+    public async Task A_patch_the_replaced_channel_reads_late_does_not_undo_what_the_channel_that_replaced_it_sent()
+    {
+        await using var other = Patching(Make.Session("a"));
+        var channels = new List<GatedChannel>();
+        await using var conn = new HostConnection(async ct =>
+        {
+            var g = new GatedChannel(await LocalClient.ConnectAsync(other.Endpoint, TimeSpan.FromSeconds(1), ct));
+            lock (channels) { channels.Add(g); }
+            return g;
+        }, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+        conn.Start();
+        await Wait.UntilAsync(() => conn.Sessions.Complete, "the first snapshot");
+
+        // The first channel's pump falls behind with a change still to read, and is replaced.
+        var first = channels[0];
+        first.Hold();
+        await other.SendAsync(Events.SessionUpsert, Make.Session("a", title: "Older"));
+        await Wait.UntilAsync(() => first.Holding > 0, "the change held on the first channel");
+        await other.StopAsync();
+        other.Start();
+        await Wait.UntilAsync(() => channels.Count == 2 && conn.Sessions.Complete && conn.Sessions.Get("a")?.Title == "Older", "the second channel's snapshot");
+        await other.SendAsync(Events.SessionUpsert, Make.Session("a", title: "Newer"));
+        await Wait.UntilAsync(() => conn.Sessions.Get("a")?.Title == "Newer", "the newer change");
+
+        first.Release();
+        await Wait.UntilAsync(() => first.Drained, "the first channel's pump to read its change");
+        await Task.Delay(300);
+        Assert.Equal("Newer", TestUi.Read(() => conn.Sessions.Get("a")!.Title));
+    }
 }
