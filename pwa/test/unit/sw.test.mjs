@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import { BRAND } from '../../js/brand.js';
 
 const pwa = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const scope = 'https://danswett.github.io/agent-bridge/app/';
@@ -93,7 +94,7 @@ test('an empty, unreadable or odd push still shows a notification, as iOS requir
   await sw.fire('push', push({ web_push: 8030, notification: { title: 42, body: null, tag: '', data: 'x' } }));
   assert.equal(sw.shown.length, 3);
   for (const n of sw.shown) {
-    assert.equal(n.title, 'Agent Bridge');
+    assert.equal(n.title, BRAND.name);
     assert.equal(n.body, 'A session needs you.');
     assert.equal(n.tag, undefined, 'no tag, so no renotify either (which needs one)');
     assert.equal(n.renotify, undefined);

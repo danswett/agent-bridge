@@ -1,4 +1,4 @@
-// Agent Bridge PWA: boot and wiring. The pieces:
+// The PWA: boot and wiring. The pieces:
 //   identity.js      this device's non-extractable key (IndexedDB)
 //   signin.js        GitHub device flow through the relay; the stored account
 //   relay.js         one relay WebSocket: key proof, presence, routed frames
@@ -21,7 +21,9 @@
 //   platform.js      the platform layer (#168): shortcut hints, safe areas, the edge swipe back,
 //                    and which system face the page is in, for inline mono's x-height
 //   demo.js          ?demo=1: simulated machines (?machines=2 or 3), no relay
+//   brand.js         the product's name, for every place the app shows it
 import { RELAY } from '../config.js';
+import { BRAND, NOTIFICATIONS_BLOCKED } from './brand.js';
 import { loadIdentity, deviceName, kvGet, kvPut, kvDelete } from './identity.js';
 import { accountStore, startDeviceFlow } from './signin.js';
 import { BridgeConnection } from './connection.js';
@@ -519,9 +521,9 @@ function begin(account) {
     const button = $('notify-toggle');
     const silent = openLinks().filter((l) => !l.capabilities.includes(Capabilities.push)).map(nameOf);
     const notes = {
-      install: 'On iPhone and iPad, notifications need Agent Bridge on the Home Screen: tap Share, then Add to Home Screen, and open it from there.',
-      unsupported: "This browser can't show notifications from Agent Bridge.",
-      denied: 'Notifications are blocked for Agent Bridge. Allow them in Settings to turn them on.',
+      install: `On iPhone and iPad, notifications need ${BRAND.name} on the Home Screen: tap Share, then Add to Home Screen, and open it from there.`,
+      unsupported: `This browser can't show notifications from ${BRAND.name}.`,
+      denied: `${NOTIFICATIONS_BLOCKED} Allow them in Settings to turn them on.`,
     };
     $('notify').hidden = false;
     button.hidden = support !== 'ok';

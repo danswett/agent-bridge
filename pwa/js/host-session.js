@@ -28,6 +28,7 @@
 import { HostClient } from './host-client.js';
 import { Capabilities, PROTOCOL_VERSION } from './protocol.js';
 import { SessionsStore } from './sessions-store.js';
+import { UNSUPPORTED_SESSIONS } from './brand.js';
 
 const LAST_HOST = 'agent-bridge.app.lastHost';
 
@@ -493,7 +494,7 @@ export class HostSession {
     } catch (e) {
       if (stale()) { client?.close(); return; }
       if (e.unsupported) {
-        this.#set(link, 'unsupported', `This machine doesn't support Agent Bridge sessions yet (${e.reason ?? e.message}).`);
+        this.#set(link, 'unsupported', `This machine ${UNSUPPORTED_SESSIONS} yet (${e.reason ?? e.message}).`);
         return;
       }
       if (link.client === client) { link.client = null; link.channel = null; link.stale = true; }

@@ -2,6 +2,7 @@
 // script can use it for ECDH but never read its private bytes back out. Its device id is
 // the first 16 bytes of SHA-256 of the public key, which makes ids self-certifying.
 import { P256KeyPair, hex } from './noise-p256.js';
+import { BRAND } from './brand.js';
 
 // Its own database: the spike PWA at /s4/ shares this origin (danswett.github.io) and keeps
 // its key in 'agent-bridge-s4'. The two are different devices to the relay.
@@ -60,5 +61,5 @@ export const deviceIdOf = async (pub) =>
 export function deviceName(ua = globalThis.navigator?.userAgent ?? '') {
   const platform = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android'
     : /Mac/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : 'Browser';
-  return `${platform} · Agent Bridge`;
+  return `${platform} · ${BRAND.name}`;
 }

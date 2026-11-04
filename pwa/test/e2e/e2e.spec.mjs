@@ -21,6 +21,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSite } from '../../tools/build-site.mjs';
+import { BRAND, UNSUPPORTED_SESSIONS } from '../../js/brand.js';
 import { startStaticServer, APP_PATH } from '../serve.mjs';
 import { startFixtureHost } from './fixture-host.mjs';
 
@@ -140,7 +141,7 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   await context.routeWebSocket(/\/v1\/ws$/, (ws) => { ws.connectToServer(); sockets.push(ws); });
   await signIn(page);
   await page.click('#machine-tabs [data-device-name="demo-host"]');
-  await expect(page.locator('#host-state')).toContainText("doesn't support Agent Bridge sessions yet", { timeout: 30000 });
+  await expect(page.locator('#host-state')).toContainText(`${UNSUPPORTED_SESSIONS} yet`, { timeout: 30000 });
   await expect(page.locator('.session')).toHaveCount(0);
   await page.close();
 
@@ -179,7 +180,7 @@ test('with every machine shown, a machine\'s sessions come over its own channel,
   await expect(page.locator('.session').first()).toBeVisible({ timeout: 30000 });
   await expect(page.locator(`.session[data-host-id="${host.deviceId}"]`).first().locator('.machine-label')).toHaveText('fixture-host');
   // The S4 demo host predates the sessions protocol: it says so, and the fixture host's sessions stay.
-  await expect(page.locator('#host-state')).toContainText("demo-host: This machine doesn't support Agent Bridge sessions yet", { timeout: 30000 });
+  await expect(page.locator('#host-state')).toContainText(`demo-host: This machine ${UNSUPPORTED_SESSIONS} yet`, { timeout: 30000 });
   await expect(page.locator(`.session:not([data-host-id="${host.deviceId}"])`)).toHaveCount(0);
 });
 
@@ -334,7 +335,7 @@ test.describe('notifications', () => {
       endpoint: saved.endpoint,
       keys: { p256dh: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4', auth: 'BTBZMqHH6r4Tts7J_aSIgg' },
       app: appUrl,
-      device: expect.stringContaining('Agent Bridge'),
+      device: expect.stringContaining(BRAND.name),
     });
     // Subscribed with the relay's own VAPID key, for visible notifications only.
     const key = (await (await fetch(`${relayUrl}/v1/push/key`)).json()).key;
