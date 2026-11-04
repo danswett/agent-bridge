@@ -21,7 +21,7 @@ import { ReplyLimits, checkReply, replyRequest } from '../replies.js';
 import { AttachmentLimits, describeSize, prepareAttachment } from '../attachments.js';
 import { CANCELLED } from '../reply-service.js';
 import { isSendKey, shortcutHints } from '../platform.js';
-import { ReceiptClock, describeInFlight, drawReceipt, drawn, receiptLive } from './receipt.js';
+import { ReceiptClock, describeInFlight, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
 
 let seq = 0;
 const where = (machineName) => (machineName ? ` on ${machineName}` : '');
@@ -44,13 +44,14 @@ const OUTCOME_TEXT = {
 };
 
 // What a reply's progress or outcome says: the receipt under the box (receipt.js; ui.md §6.5,
-// decided on #617). Its files' upload, then Sending…, Sent, Passed to the agent or Up next, and
-// Delivered with the check badge; any other outcome keeps its words. stalled: whether the state
-// it is in has stalled (ReceiptClock). Returns { key, text, more, tone, mark, speech }; tone:
-// progress | ok | warn | bad.
-export function describeReply(entry, { machineName, working = false, stalled = false } = {}) {
+// decided on #617). Its files' upload is a line; Sending…, Sent, Passed to the agent or Up next
+// and Delivered are only heard (Send's ring and check show them); a stall, a wait and any other
+// outcome are a line, in today's words. stalled: whether the state it is in has stalled
+// (ReceiptClock). Returns { key, text, more, tone, line, speech }; tone: progress | warn | bad,
+// or room for nothing to show.
+export function describeReply(entry, { machineName, stalled = false } = {}) {
   const at = where(machineName);
-  const said = (key, text, tone) => ({ key, text, more: null, tone, mark: null, speech: `Reply: ${text}` });
+  const said = (key, text, tone) => ({ key, text, more: null, tone, line: true, speech: `Reply: ${text}` });
   switch (entry.state) {
     case 'sending': {
       const p = entry.progress;
@@ -60,18 +61,19 @@ export function describeReply(entry, { machineName, working = false, stalled = f
         const percent = Math.floor((100 * p.sent) / p.total);
         const doing = p.phase === 'upload' ? `Uploading ${what}…` : p.phase === 'fetch' ? `The machine is receiving ${what}…` : `Sending ${what}…`;
         // Said once a phase, not at every percent.
-        return { key: 'upload', text: `${doing} ${percent}%`, more: null, tone: 'progress', mark: 'ring', speech: `Reply: ${doing}` };
+        return { key: 'upload', text: `${doing} ${percent}%`, more: null, tone: 'progress', line: true, speech: `Reply: ${doing}` };
       }
-      return describeInFlight('reply', entry, { machineName, stalled, working });
+      return describeInFlight('reply', entry, { machineName, stalled });
     }
     case 'waiting':
-      return describeInFlight('reply', entry, { machineName, stalled, working });
+      return describeInFlight('reply', entry, { machineName, stalled });
     case 'failed':
       if (entry.reason === CANCELLED) { return said('cancelled', 'Cancelled. Nothing was sent to the session.', 'warn'); }
       return said('failed', `Couldn't send it: ${entry.reason ?? 'the machine said no'}.`, 'bad');
     default: {
       const outcome = OUTCOME_TEXT[entry.outcome] ? entry.outcome : 'unconfirmed';
-      if (outcome === 'delivered') { return { key: 'delivered', text: 'Delivered', more: null, tone: 'ok', mark: 'check', speech: 'Reply delivered' }; }
+      // Send's check says it (holdCheck), and the line keeps its room, empty.
+      if (outcome === 'delivered') { return { key: 'delivered', text: '', more: null, tone: 'room', line: false, speech: 'Reply delivered' }; }
       let text = OUTCOME_TEXT[outcome](at);
       if (outcome === 'refused' && entry.reason) { text = `The machine refused this reply: ${entry.reason}.`; }
       if (outcome === 'unconfirmed' && entry.reason) { text += ` (${entry.reason})`; }
@@ -113,10 +115,11 @@ export class ReplyBox {
     this.#largeMax = largeMax;
     this.#build();
     this.#receipt = new ReceiptClock({
-      describe: (entry, { stalled }) => describeReply(entry, { machineName: this.machineName, working: this.#session?.status === 'working', stalled }),
+      describe: (entry, { stalled }) => describeReply(entry, { machineName: this.machineName, stalled }),
       draw: (d) => drawReceipt(this.els.status, 'answer-status reply-status', d),
       say: (text) => { this.els.live.textContent = text; },
       heard: () => drawn(this.els.live),
+      delivered: () => holdCheck(this.els.send),
     });
     const { service, hostId, sessionId } = replying;
     this.#unwatch = service.watch(hostId, sessionId, (e) => this.#show(e));
@@ -154,7 +157,12 @@ export class ReplyBox {
     const id = this.idBase;
     const e = this.els = {};
     e.input = h('textarea', { id: `${id}-text`, rows: 2, class: 'text-input reply-input', placeholder: 'Message the main agent', 'aria-describedby': `${id}-hint ${id}-bytes ${id}-held` });
-    e.input.addEventListener('input', () => { this.#clearError(); this.#sync(); });
+    e.input.addEventListener('input', () => {
+      this.#clearError();
+      // The receipt's room is kept from Send until the box is typed in again (ui.md §6.5).
+      if (!e.status.textContent) { e.status.classList.remove('room'); }
+      this.#sync();
+    });
     // Ctrl+Enter or Cmd+Enter sends, as in most chat boxes; Enter alone is a new line.
     e.input.addEventListener('keydown', (ev) => {
       if (isSendKey(ev)) { ev.preventDefault(); this.#send(); }
@@ -386,7 +394,7 @@ export class ReplyBox {
     const reading = this.#preparing > 0 && !this.#pending(entry);
     this.#receipt.show(reading ? null : entry);
     if (reading) {
-      drawReceipt(e.status, 'answer-status reply-status', { text: 'Reading the attachment…', more: null, tone: 'progress', mark: 'ring' });
+      drawReceipt(e.status, 'answer-status reply-status', { key: 'reading', text: 'Reading the attachment…', more: null, tone: 'progress', line: true });
     } else if (this.#reading && !entry) {
       drawReceipt(e.status, 'answer-status reply-status', null);
     }
@@ -394,6 +402,8 @@ export class ReplyBox {
     // Send is busy (ui.md §9), not the form: the receipt's live region is in it, and a reader may
     // hold back what a busy region says until it is done.
     e.send.setAttribute('aria-busy', reading || this.#pending(entry) ? 'true' : 'false');
+    // Held on this device for a machine that isn't connected: Send's ring stands still.
+    e.send.classList.toggle('still', entry?.state === 'waiting' && entry.reason === 'not connected');
     e.resend.hidden = entry?.state !== 'failed' || entry.request === this.#edited || entry.reason === CANCELLED;
     const { service, hostId, sessionId } = this.replying;
     e.cancel.hidden = !(entry?.state === 'sending' && service.cancellable?.(hostId, sessionId));

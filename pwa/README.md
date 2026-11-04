@@ -235,33 +235,36 @@ Before anything is sent the form is checked as the host will check it: `required
 values, Other not empty, 4 KiB of UTF-8 per free text (counted in bytes; a counter appears
 near the limit) and 16 KiB per request. A problem is named and focus goes to its field.
 
-While an answer is on its way the controls are disabled, and one line, the receipt
-(`js/ui/receipt.js`, ui.md §6.4 and §6.5 as the owner decided them on #617), says where it has
-got. A machine whose `hello` lists `sessions.progress` is asked for it (`"progress": true`,
-[v1-sessions.md](../docs/protocol/v1-sessions.md); left off a request that fits its limit only
-without it, which then shows Sending… until its outcome), and says how far it has got before the
-outcome comes: "Sent" once it has the answer, "Passed to the agent" once the keys have gone
-(for a reply into a working session, "Up next · after the agent's current step"), then "You
-answered · *value*" with the check badge once confirmed: a tap's option, free text's first
-line cut to about 40 characters, or nothing for a form of several fields. A stage only moves
-forward, across resends. A machine from before it goes from "Sending…" to the outcome.
+While an answer is on its way the controls are disabled. Where it has got is the receipt
+(`js/ui/receipt.js`; ui.md §5.3, §6.5 and §9 as the owner decided them on #617, "quiet unless
+something's wrong"). A machine whose `hello` lists `sessions.progress` is asked for it
+(`"progress": true`, [v1-sessions.md](../docs/protocol/v1-sessions.md); left off a request that
+fits its limit only without it), and says how far it has got: sent once it has it, passed to
+the agent once the keys have gone, up next for a reply into a working session. A stage only
+moves forward, across resends. The normal path shows nothing but the ring on the control that
+sent (Send, the option tapped, or Approve once or Deny in Needs you); its stages are heard, not
+seen ("Sending reply", "Reply sent", "Reply passed to the agent", "Reply up next, after the
+agent's current step"). Delivered, that ring turns to the `check` icon for about a second
+(`sendCheckHoldMs`) and back to the control's own glyph, and a confirmed answer's card resolves
+to "You answered · *value*" in text2: a tap's option, free text's first line with its runs of
+white space as one, cut at a word break within 40 characters, or nothing for a form of several
+fields. A machine from before progress is heard as sending until its outcome, and never as sent.
 
-The receipt shows nothing for its first 400 ms (Send's ring covers them: on Send, the option
-tapped, or Approve once or Deny in Needs you, for as long as the request is in flight), then the furthest
-stage reached, each in-between stage for at least 400 ms; an outcome shows at once. When the
-stages stop: "Still sending…" after 3 s with nothing heard (and for a resend), "Sent · still
-waiting on *machine*" after 5 s, "Passed to the agent · not picked up yet" after 10 s; Up next
-never stalls. A resend that meets the first copy in flight keeps its stage and adds "· still
-being delivered"; one held for a machine that isn't connected says "Waiting for *machine* · it
-goes when *machine* is back", with its ring still. The thresholds are `ReceiptTiming`. A screen
-reader hears each change once, prefixed "Reply" or "Answer", at most one a second (the later of
-two), never "Sending…", always the outcome; that is kept by request, so the form, Needs you and
-the card's receipt after the question has gone share one timing and say each change once
-between them, said in a view of the request that is on screen, or else on the page's own live
-line (a session's card while another is open, a receipt gone with its question, a reply box
-moved on to the next reply), never lost and never on a line showing another request. From
-Send the line keeps the room the longest outcome needs (two lines in a box
-under 640 px wide, one above), so no stage moves the box. If the response is
+A line of words appears only for an exception: "Still sending…" after 3 s with nothing heard
+(and for a resend), "Sent · still waiting on *machine*" after 5 s, "Passed to the agent · not
+picked up yet" after 10 s (Up next never stalls), "· still being delivered" after the stage a
+resend met the first copy at, "Waiting for *machine* · it goes when *machine* is back" (the ring
+still), and any outcome but delivered, in today's words. It goes when the next stage or the
+outcome makes it untrue. Nothing is shown or heard for the first 400 ms; after that a screen
+reader hears the furthest stage reached, prefixed "Reply" or "Answer", at most one a second (the
+later of two), and the outcome at once. The thresholds are `ReceiptTiming`. All of it is kept
+by request, so the form, Needs you and the card's receipt after the question has gone share one
+timing and say each change once between them, in a view of the request that is on screen, or
+else on the page's own live line (a session's card while another is open, a receipt gone with
+its question, a reply box moved on to the next reply), never lost and never on a line showing
+another request. From Send the line keeps the room the longest outcome needs (two lines in a
+box under 640 px wide, one above), empty unless it has something to say, until the box is typed
+in again, so nothing moves the box.If the response is
 lost (a timeout, the channel or relay dropping) it is resent with the same `request` on
 the next channel to that machine, so the host returns the first outcome and never types it
 twice; after 9 minutes without an outcome (hosts remember requests for 10) it is reported
@@ -269,7 +272,7 @@ as unconfirmed rather than sent again. Outcomes:
 
 | Outcome | Shown | Then |
 |---|---|---|
-| `delivered` | Delivered. The session has your answer. | The host's upsert takes the question away; the card keeps the line |
+| `delivered` | The check on the control that sent it for about a second, then You answered · *value* | The host's upsert takes the question away; the card keeps the line |
 | `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check at the machine. | Final; nothing offers to send it again |
 | `stale` | Already answered or gone | Final |
 | `busy` | Another answer is being delivered. Try again in a moment. | Send comes back after 2 s, as a new request |
@@ -303,7 +306,7 @@ what was sent (anything typed meanwhile stays), and every other outcome keeps th
 
 | Outcome | Shown | Then |
 |---|---|---|
-| `delivered` | Delivered, with the check badge | The session's upsert shows it as your last message |
+| `delivered` | Send's check for about a second; no line | The session's upsert shows it as your last message |
 | `unconfirmed`, or unknown | Sent, but not confirmed. Check at the machine before sending it again. | The words stay; sending them again is a new reply |
 | `stale` | Not sent: the session has ended. | |
 | `busy` | Not sent: an answer or another reply is being delivered. | Send comes back after 2 s |
@@ -520,9 +523,9 @@ the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `
   while in use, 44 px targets, and the keyboard.
 * `test/reply.spec.mjs`, in demo mode: a reply delivered as one line and taken out of the
   box (keeping what was typed meanwhile), every outcome keeping the words, a resend after a
-  lost response (typed once), Sent, Passed to the agent and Up next from a machine with
-  `sessions.progress` with the timing marks kept, the check badge and what a screen reader
-  hears, forced colours, Sending alone from one without it, the box held while a question is pending, the checks before
+  lost response (typed once), its stages heard and not seen from a machine with
+  `sessions.progress` with the timing marks kept, Send's ring and check, the line's room and a
+  stall's words, forced colours, heard as sending alone from one without it, the box held while a question is pending, the checks before
   sending, 44 px targets, Ctrl/Cmd+Enter, and no box for a machine without `sessions.reply`.
 * `test/attach.spec.mjs`, in demo mode: a picked file and a pasted screenshot shown as
   chips and typed as `@` mentions ahead of the words, files alone, removing one, the size

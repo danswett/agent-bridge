@@ -17,13 +17,13 @@ const CLAUDE = '6f1c2b7e-claude-example';
 const DELEGATES = 'demo-delegates';
 
 // The elements the catalogue animates in the PWA today, each of which the walk shows on screen:
-// the moving part of a working and a delegating glyph, the in-flight progress ring, a usage bar, a
+// the moving part of a working and a delegating glyph, Send's in-flight ring (#600), a usage bar, a
 // session row (Arriving and leaving, Press), the pushed session
 // (Push and pop), a tab (on a phone; a desktop has none), the row menu (Menu and flyout), the
 // inspector (Pane and inspector; on a phone it holds the Tools tab), a Needs you entry (Arriving
 // and leaving), and Show reasoning (Disclosure).
 const ANIMATED = [
-  '.glyph .glyph-spin', '.glyph .glyph-orbit', '.answer-status.progress', '.usage-fill',
+  '.glyph .glyph-spin', '.glyph .glyph-orbit', '.reply .button.send[aria-busy="true"]', '.usage-fill',
   '.session .row-main', '.session-view', '.view-tab', '.row-menu', '.inspector', '.needs-you-list > li', 'details.reasoning > summary',
 ];
 
@@ -118,7 +118,7 @@ async function walk(page, { phone }) {
   const claude = await open(page, CLAUDE);
   await claude.getByRole('textbox', { name: 'Reply' }).fill('Ship it.');
   await claude.getByRole('button', { name: 'Send' }).click();
-  await expect(claude.locator('.answer-status.progress, .answer-receipt.progress').first()).toBeVisible();
+  await expect(claude.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-busy', 'true');
   await look('a reply in flight');
   await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
 
@@ -180,7 +180,7 @@ for (const layout of [
       const all = steps.flatMap((s) => s.found).join('\n');
       expect(all).toMatch(/glyph-spin: animation glyph-turn 1200ms/);
       expect(all).toMatch(/glyph-orbit: animation glyph-turn 8000ms/);
-      expect(all).toMatch(/progress::before: animation spin 1000ms/);
+      expect(all).toMatch(/button\.send::after: animation spin 1000ms/);
       // A reading isn't something the person did: phase 2 took the bars' 0.4 s ease out (ui.md §5.3).
       expect(all).not.toMatch(/usage-fill: transition/);
     });

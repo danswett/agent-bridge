@@ -335,23 +335,6 @@
     <x:String x:Key="AbMotionReorderEase">0.33,0,0.67,1</x:String>
     <x:String x:Key="AbMotionReorderReduced">Instant</x:String>
 
-    <Style x:Key="AbGlyphCheck" TargetType="ContentControl">
-        <Setter Property="Width" Value="16" />
-        <Setter Property="Height" Value="16" />
-        <Setter Property="IsTabStop" Value="False" />
-        <Setter Property="Template">
-            <Setter.Value>
-                <ControlTemplate TargetType="ContentControl">
-                    <Viewbox Stretch="Uniform">
-                        <Canvas Width="16" Height="16">
-                            <Path Data="F1 M14.6,8 A6.6,6.6 0 0 1 1.4,8 A6.6,6.6 0 0 1 14.6,8 Z" Fill="{TemplateBinding Foreground}" />
-                            <Path Data="F1 M5.3,8.2 L7.2,10.1 L10.8,6.3" Stroke="{TemplateBinding Background}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
-                        </Canvas>
-                    </Viewbox>
-                </ControlTemplate>
-            </Setter.Value>
-        </Setter>
-    </Style>
     <Style x:Key="AbGlyphDelegating" TargetType="ContentControl">
         <Setter Property="Width" Value="16" />
         <Setter Property="Height" Value="16" />
@@ -827,6 +810,22 @@
                     <Viewbox Stretch="Uniform">
                         <Canvas Width="20" Height="20">
                             <Path Data="F1 M12.5,4.5 L7,10 L12.5,15.5" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+                        </Canvas>
+                    </Viewbox>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="AbIconCheck" TargetType="ContentControl">
+        <Setter Property="Width" Value="20" />
+        <Setter Property="Height" Value="20" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContentControl">
+                    <Viewbox Stretch="Uniform">
+                        <Canvas Width="20" Height="20">
+                            <Path Data="F1 M4.5,10.5 L8,14 L15.5,6" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
                         </Canvas>
                     </Viewbox>
                 </ControlTemplate>

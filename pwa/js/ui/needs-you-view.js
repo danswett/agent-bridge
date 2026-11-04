@@ -7,7 +7,7 @@ import { glyph } from './glyph.js';
 import { needsYou, AppBadge } from '../needs-you.js';
 import { tapState, prepareAnswer } from '../answers.js';
 import { BUSY_PAUSE_MS, answerControls, answerState, describeAnswer } from './question-view.js';
-import { ReceiptClock, drawn, receiptLive, receiptText } from './receipt.js';
+import { ReceiptClock, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
 import { duration, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
 
@@ -117,14 +117,14 @@ export class NeedsYouLane {
         view.receipt = new ReceiptClock({
           describe: (entry, { stalled }) => describeAnswer(entry, this.machine(view.entry.hostId).name, { question: view.entry.question, stalled }),
           draw: (d) => {
-            els.status.textContent = receiptText(d);
-            els.status.className = `needs-status${d?.tone ? ` ${d.tone}` : ''}`;
-            // From the tap, its line is there (empty for the quiet window), so the entry grows
-            // once, as the answer goes, not as the first words come.
+            drawReceipt(els.status, 'needs-status', d);
+            // From the tap, its line is there (empty unless something's wrong), so the entry grows
+            // once, as the answer goes, not as an exception's words come.
             els.status.hidden = !d;
           },
           say: (text) => { els.live.textContent = text; },
           heard: () => drawn(els.live),
+          delivered: () => holdCheck([els.approve, els.deny].find((b) => b.getAttribute('aria-pressed') === 'true')),
         });
         view.unwatch = ctx.service.watch(e.hostId, e.sessionId, e.questionId, (entry) => this.#show(view, entry));
         this.#show(view, ctx.service.get(e.hostId, e.sessionId, e.questionId));
@@ -191,6 +191,8 @@ export class NeedsYouLane {
     clearTimeout(view.pause);
     const { again, pause } = answerControls(entry);
     view.el.dataset.answer = answerState(entry);
+    // Held on this device for a machine that isn't connected: the ring on its button stands still.
+    view.el.classList.toggle('still', entry?.state === 'waiting' && entry.reason === 'not connected');
     view.receipt.show(entry);
     els.approve.disabled = els.deny.disabled = !again || pause;
     els.resend.hidden = entry?.state !== 'failed';

@@ -123,7 +123,7 @@ test('an answer, a reply with files, and End session from a session go to the ma
   ]);
   await reply.getByRole('textbox', { name: 'Reply' }).fill('see these');
   await reply.getByRole('button', { name: 'Send' }).click();
-  await expect(reply.locator('.reply-status')).toHaveText('Delivered');
+  await expect(reply).toHaveAttribute('data-reply', 'delivered');
   expect((await machine(page, LAPTOP, 'typedReplies')).map((r) => r.files.map((f) => f.name))).toEqual([['notes.md', 'photo.jpg']]);
   expect(await page.evaluate(() => window.agentBridgeDemo.blobs.log.filter((l) => l.op === 'put').map((l) => l.to))).toEqual([LAPTOP]);
   expect(await machine(page, 'demo', 'replyLog')).toEqual([]);
