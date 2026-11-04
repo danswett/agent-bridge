@@ -60,7 +60,18 @@ sealed class AnswerWatch
     // takes more than one layout pass, and on a machine drawing at 60 Hz two frames had gone before
     // the last of them, so the person's own click held their question (CI, x64). Where nothing is
     // drawn (a disconnected session) frames hardly come at all, and the window never closed.
-    public void Own() => ownUntil = DateTimeOffset.UtcNow + Act;
+    public void Own()
+    {
+        ownAt = DateTimeOffset.UtcNow;
+        ownUntil = ownAt + Act;
+        told = false;
+    }
+
+    // When the person's act was, and whether a hold near it has been logged: the first is, with
+    // what moved, so a hold of their own click can be told apart from a real move afterwards.
+    DateTimeOffset ownAt;
+    bool told;
+    AnswerLook? last;
 
     // The app drew something in the question itself (who asks, its heading): whatever moves in the
     // moment it is drawn in counts, whatever the person is doing.
@@ -128,12 +139,21 @@ sealed class AnswerWatch
                 QuestionBox(chain.FirstOrDefault()));
             var now = DateTimeOffset.UtcNow;
             var found = moves.Read(look, own: exempt && !checking && now < ownUntil && now >= forcedUntil);
+            if (found && !told && now < ownUntil + TimeSpan.FromSeconds(1))
+            {
+                told = true;
+                AppLog.Write($"answers: held {(now - ownAt).TotalMilliseconds:0} ms after the person's own act (checking: {checking}; app drawing: {now < forcedUntil}): {Brief(last)} -> {Brief(look)}");
+            }
+            last = look;
             if (found) { foundChecking |= checking; moved(); }
             return found;
         }
         finally { reading = false; }
     }
 
+    static string Brief(AnswerLook? l) => l is null ? "none" :
+        $"{l.Answers.Count} at {string.Join(" ", l.Answers.Select(a => $"{a.X:0.#},{a.Y:0.#}"))}; question {l.Question}; window {l.WindowWidth}x{l.WindowHeight}; "
+        + string.Join(" | ", l.Scrollers.Select(s => $"scroller at {s.Left:0.#},{s.Top:0.#} view {s.ViewportWidth:0.#}x{s.ViewportHeight:0.#} offset {s.OffsetY:0.#} extent {s.ExtentWidth:0.#}x{s.ExtentHeight:0.#}{(s.Person ? " (theirs)" : "")}"));
     // The holder's buttons (choices, Approve once, Deny, Send, Other, a link, a code block's Copy)
     // and text boxes, where they are shown.
     IEnumerable<FrameworkElement> Answers()
