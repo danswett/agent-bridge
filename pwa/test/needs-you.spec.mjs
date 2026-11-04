@@ -657,8 +657,19 @@ test.describe('a moment before the lane takes a click', () => {
     const before = (await log(page)).length;
     // Two sessions below the lane go (into the Ended group, folded, shorter than their rows): the
     // list gets shorter, the browser pulls its scroll back, and the lane comes down with it, with
-    // nothing in the lane itself changing.
-    await page.evaluate((ids) => { for (const id of ids) { window.agentBridgeDemo.remove(id); } }, [CLAUDE, CODEX]);
+    // nothing in the lane itself changing. The page reads its layout as they go (as drawing what
+    // leaves does), so the browser pulls the scroll back there and then; and its scroll event can
+    // come before the size change is reported (as CI's Chromium and WebKit had it), here at once.
+    await page.evaluate((ids) => {
+      const pane = document.getElementById('list-pane');
+      const list = document.getElementById('session-list');
+      const drawn = new MutationObserver(() => {
+        void document.body.getBoundingClientRect();
+        pane.dispatchEvent(new Event('scroll'));
+      });
+      drawn.observe(list, { childList: true, subtree: true });
+      for (const id of ids) { window.agentBridgeDemo.remove(id); }
+    }, [CLAUDE, CODEX]);
     await page.clock.runFor(20);
     await expect.poll(() => lane(page).locator('.needs-you-list').evaluate((l) => l.hasAttribute('data-arriving'))).toBe(true);
     const moved = await approve.evaluate((b, top) => ({ by: b.getBoundingClientRect().top - top, scrolled: document.getElementById('list-pane').scrollTop }), top);
@@ -667,6 +678,53 @@ test.describe('a moment before the lane takes a click', () => {
     await approve.evaluate((b) => b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })));
     await page.clock.runFor(50);
     expect((await log(page)).length).toBe(before);
+  });
+
+  test('on a phone, the window growing taller with the page scrolled to its end slides the lane down, and it takes no click for a moment', async ({ page }) => {
+    await page.setViewportSize({ width: 400, height: 600 });
+    await openDemo(page);
+    await ask(page, LAND, permission());
+    const end = await page.evaluate(async () => {
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      return Math.round(window.scrollY);
+    });
+    expect(end).toBeGreaterThan(40);
+    await still(page);
+    const approve = lane(page).locator('.needs-approve').first();
+    const top = await approve.evaluate((b) => b.getBoundingClientRect().top);
+    const before = (await log(page)).length;
+    // Taller, but by less than it was scrolled, so the page is still longer than the window and
+    // nothing on it changes size: the browser only pulls the page's scroll back.
+    const grow = Math.min(100, end - 20);
+    await page.setViewportSize({ width: 400, height: 600 + grow });
+    await expect.poll(() => lane(page).locator('.needs-you-list').evaluate((l) => l.hasAttribute('data-arriving')), { intervals: [10, 10, 20, 20, 50], timeout: 3000 }).toBe(true);
+    const after = await approve.evaluate((b, top) => {
+      const by = b.getBoundingClientRect().top - top;
+      b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      return { by: by > 1, scrolled: Math.round(window.scrollY) };
+    }, top);
+    expect(after).toEqual({ by: true, scrolled: end - grow });
+    await page.waitForTimeout(100);
+    expect((await log(page)).length).toBe(before);
+  });
+
+  test('the list scrolled in the same moment as something below the lane grows holds no click', async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 500 });
+    await openDemo(page);
+    await ask(page, LAND, permission());
+    await still(page);
+    const after = await page.evaluate(async () => {
+      const pane = document.getElementById('list-pane');
+      const approve = document.querySelector('#needs-you .needs-approve');
+      const top = approve.getBoundingClientRect().top;
+      // A scroll, and in the same moment the list below the lane grows (a session arriving).
+      pane.scrollTop = 40;
+      document.getElementById('session-list').append(Object.assign(document.createElement('div'), { style: 'height: 100px' }));
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r))));
+      return { scrolled: Math.round(top - approve.getBoundingClientRect().top), armed: approve.closest('.needs-you-list').hasAttribute('data-arriving') };
+    });
+    expect(after).toEqual({ scrolled: 40, armed: false });
   });
 
   test('an entry opened holds the lane while the list scrolls to its row, and a scroll after the wait holds nothing', async ({ page }) => {

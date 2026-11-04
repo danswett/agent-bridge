@@ -79,12 +79,88 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
   // nothing the person did, and still counts.
   let own = false;
   let acts = 0;
-  const theirs = (entries) => own && (entries ?? []).every((e) => holder.contains(e.target) || e.target.contains?.(holder));
+  // Something the app drew in or around the question (a redraw, a receipt's words): the next
+  // frame is not the person's alone, whichever came first.
+  let forced = false;
+  let draws = 0;
+  const theirs = (entries) => own && !forced && !!entries && entries.every((e) => holder.contains(e.target) || e.target.contains?.(holder));
+  // How far everything holding the answers is scrolled, how big each is inside and out, and where
+  // the answers' holder sits in what each scrolls. A scroll moves the answers on screen by its
+  // change in scrolling less what of it only followed the holder moving inside what scrolls
+  // (anchoring: the browser keeping what's on screen in place as content above grows or
+  // shrinks). That rest is a scroll someone made, and is taken off where they were rather than
+  // read afresh, which would also take in a move laid out in the same frame (a title wrapping
+  // as the list scrolls); what anchoring did is left for the read to find in place. A scroller
+  // pulled back to a lower end (what it holds got shorter, or it got taller) slides the answers
+  // under a still pointer: nothing of it is taken off, and the read finds the move, whichever
+  // comes first, the scroll event or the read.
+  const doc = holder.ownerDocument;
+  const holders = () => {
+    const all = [];
+    for (let up = holder.parentElement; up; up = up.parentElement) { all.push(up); }
+    return all;
+  };
+  const scrolledBy = () => {
+    const at = holder.getBoundingClientRect().top;
+    return holders().map((el) => {
+      const top = el.scrollTop || 0;
+      const height = el.scrollHeight || 0;
+      const inner = el.clientHeight || 0;
+      // The holder's place in what el scrolls: the document's box moves with its own scrolling,
+      // an element's doesn't.
+      const box = el.getBoundingClientRect?.().top ?? 0;
+      const within = height > inner ? at - (el === doc?.documentElement ? box : box - top) : 0;
+      return [top, height, inner, within];
+    });
+  };
+  let wasBy = [];
+  // A size change that resized nothing watched (the window taller where the page itself scrolls,
+  // a margin, something positioned) brings no read of its own: the next frame reads instead,
+  // after this frame's own read if there is one.
+  let pending = false;
+  const frame = (fn) => (win.requestAnimationFrame ? win.requestAnimationFrame(fn) : setTimeout(fn, 16));
+  // It runs in a frame's callbacks, before that frame's resize read: while the person's own act
+  // in the question holds, it waits, so what they did is read with what resized (and theirs).
+  const later = () => {
+    if (pending) { return; }
+    pending = true;
+    frame(() => frame(() => {
+      if (!pending) { return; }
+      if (own) {
+        pending = false;
+        later();
+        return;
+      }
+      read(true);
+    }));
+  };
+  // How far a scroll since the last look moved the answers on screen (see scrolledBy), and
+  // whether anything scrolling changed size; null if they are held elsewhere now.
+  const scrolledSince = (by) => {
+    if (by.length !== wasBy.length) { return null; }
+    let shift = 0;
+    let resized = false;
+    by.forEach(([top, height, inner, within], i) => {
+      const [wasTop, wasHeight, wasInner, wasWithin] = wasBy[i];
+      const sized = height !== wasHeight || inner !== wasInner;
+      resized ||= sized;
+      if (top === wasTop) { return; }
+      const pulled = sized && top < wasTop && height - inner < wasHeight - wasInner && top >= height - inner - 1;
+      if (!pulled) { shift += (top - wasTop) - (within - wasWithin); }
+    });
+    return { shift, resized };
+  };
   const read = (count, entries = null) => {
+    pending = false;
+    // A scroll can be laid out before its scroll event comes (made in a frame's own callbacks,
+    // or by the compositor): what it moved is taken off here, so the event finds nothing left.
+    const since = was && scrolledSince(scrolledBy());
+    if (since?.shift) { was = was.map((y) => y - since.shift); }
     const at = controls().filter((b) => b.getClientRects().length > 0).map((b) => b.getBoundingClientRect().top);
     const changed = was && (at.length !== was.length || at.some((y, i) => Math.abs(y - was[i]) > 1));
     if (count && changed && !theirs(entries)) { moved(); }
     was = at;
+    wasBy = scrolledBy();
   };
   const sized = typeof ResizeObserver === 'function' ? new ResizeObserver((entries) => read(true, entries)) : null;
   const watched = new Set();
@@ -110,7 +186,19 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
     for (const el of also) { observe(el); }
   };
   track();
-  const scrolled = (e) => { if (e.target?.contains?.(holder)) { read(false); } };
+  const scrolled = (e) => {
+    if (!e.target?.contains?.(holder) || !was) { return; }
+    const by = scrolledBy();
+    const since = scrolledSince(by);
+    // Held elsewhere now (moved to another page): left for the next read.
+    if (!since) {
+      later();
+      return;
+    }
+    if (since.shift) { was = was.map((y) => y - since.shift); }
+    wasBy = by;
+    if (since.resized) { later(); }
+  };
   win.addEventListener?.('scroll', scrolled, { capture: true, passive: true });
   return {
     track,
@@ -125,8 +213,14 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
     own() {
       own = true;
       const mine = ++acts;
-      const frame = win.requestAnimationFrame?.bind(win) ?? ((fn) => setTimeout(fn, 16));
       frame(() => frame(() => { if (mine === acts) { own = false; } }));
+    },
+    // The app drew something in or around the question itself: whatever moves in the frames it's
+    // drawn in counts.
+    notOwn() {
+      forced = true;
+      const mine = ++draws;
+      frame(() => frame(() => { if (mine === draws) { forced = false; } }));
     },
     // Where they are now, as the place to measure moves from (a new set of answers drawn).
     settle() { was = null; read(false); },
@@ -863,6 +957,8 @@ export class SessionCard {
     // was entered, but takes nothing until the machine says the question is still asked.
     const held = staleNote(ctx?.stale, this.machineName, 'answered');
     if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null, asker, held])) { return; }
+    // Drawn by the app, not by the person typing in it: whatever this moves counts.
+    this.#moves?.notOwn();
     const old = this.#panel;
     const sameQuestion = !!(old && q && old.questionId === q.id && answerable && old.answering.hostId === ctx.hostId);
     if (old && !sameQuestion) {
@@ -1080,6 +1176,8 @@ export class SessionCard {
     const receipt = { element, final: false, unwatch: null, fresh: true };
     const show = (entry) => {
       if (!entry) { return; }
+      // Its words change as the answer goes, above a question that may stay: whatever they move counts.
+      this.#moves?.notOwn();
       const { text, tone } = describeAnswer(entry, this.machineName);
       element.className = `answer-receipt ${tone}`;
       element.dataset.answer = entry.state === 'done' ? entry.outcome : entry.state;
