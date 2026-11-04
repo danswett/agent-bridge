@@ -134,6 +134,27 @@ public class CopilotVerifierTests
         Assert.False(CopilotVerifier.Check(plan, Human("""{ "n": 33 }""")).Item1);
     }
 
+    [Theory]
+    // Typed as plain decimal, so recorded as that: the verifier takes the number, or its text,
+    // for exactly that value, and nothing else (#700).
+    [InlineData("1e5", "100000", "100000", "100001")]
+    [InlineData("-1.5e-3", "-0.0015", "-0.0015", "-0.00150001")]
+    [InlineData("1E2", "100", "100", "1000")]
+    public void A_number_typed_as_plain_decimal_is_confirmed_by_the_value_typed_in_either_form(string given, string typed, string recorded, string other)
+    {
+        const string Free = """{ "message": "m", "requestedSchema": { "properties": { "n": { "type": "number" } } } }""";
+        var plan = Plan(Free, JsonDocument.Parse($$"""{ "n": {{given}} }""").RootElement.Clone());
+
+        Assert.Equal(typed, plan.Keys.Sends[0].Text);
+        Assert.True(CopilotVerifier.Check(plan, Human($$"""{ "n": {{recorded}} }""")).Item1);
+        Assert.True(CopilotVerifier.Check(plan, Human($$"""{ "n": "{{recorded}}" }""")).Item1);
+        Assert.True(CopilotVerifier.Check(plan, Human($$"""{ "n": "{{given}}" }""")).Item1);
+        Assert.False(CopilotVerifier.Check(plan, Human($$"""{ "n": {{other}} }""")).Item1);
+        Assert.False(CopilotVerifier.Check(plan, Human($$"""{ "n": "{{other}}" }""")).Item1);
+        Assert.False(CopilotVerifier.Check(plan, Human($$"""{ "n": " {{recorded}}" }""")).Item1);
+        Assert.False(CopilotVerifier.Check(plan, Human("""{ "n": "Infinity" }""")).Item1);
+    }
+
     [Fact]
     public void A_structured_answer_matching_every_field_is_delivered_in_any_list_order_and_whitespace()
     {

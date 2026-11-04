@@ -230,7 +230,8 @@ public class CopilotPlannerTests
         var plan = Plan(Free, Answer(Raw("""{ "n": 1e5 }""")));
 
         Assert.Equal([("100000", true)], Keys(plan));
-        Assert.Equal("1e5", Assert.IsType<Expected.Number>(Assert.Single(plan.Fields).Value).Raw.GetRawText());
+        // Expected as typed, the number the CLI records.
+        Assert.Equal("100000", Assert.IsType<Expected.Number>(Assert.Single(plan.Fields).Value).Raw.GetRawText());
     }
 
     [Theory]

@@ -138,7 +138,10 @@ public static class CopilotPlanner
                     {
                         return (null, null, "Copilot would record a different number than this one, or one too long to type; answer at the machine");
                     }
-                    return ([typed], new Expected.Number(value.Clone()), null);
+                    // Expected as the text typed, which is what the CLI records, so the verifier
+                    // compares the same canonical number the keys produced.
+                    using var emitted = JsonDocument.Parse(typed);
+                    return ([typed], new Expected.Number(emitted.RootElement.Clone()), null);
                 }
             case CopilotFieldKind.Boolean:
                 {
