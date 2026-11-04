@@ -82,7 +82,7 @@ public sealed class SystemProcessInspector : IProcessInspector
                     try { started = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero); }
                     catch (Exception e) when (e is InvalidOperationException or Win32Exception or NotSupportedException) { }
                     // Only the agent's own executable is asked for its parent: that is the
-                    // loader to recognise in Classify.
+                    // loader or launcher to recognise in Classify.
                     var parent = candidate is "node" or "bun" ? null : AgentBridge.Hooks.Ancestry.ParentOf(id);
                     listing.Add(new(candidate, id, started, CommandLineOf((id, started?.UtcTicks ?? 0)), parent));
                 }
@@ -125,6 +125,17 @@ public sealed class SystemProcessInspector : IProcessInspector
         // restart, and worktree reclaim never ran while a session started by hand was open (#153).
         var loaders = all.Where(p => p.Candidate is not ("node" or "bun") && p.Parent is > 0)
             .Select(p => (Id: p.Parent!.Value, Child: p.StartedAt)).ToList();
+        // VS Code's copilot shim (bin\copilot-shim\copilot.exe), which Agency runs Copilot
+        // through, is a copilot.exe of its own that starts the real CLI with the same arguments
+        // and waits on it. The real CLI holds the session's lock; counted as well, the shim was a
+        // process no session accounted for, and held discovery for two minutes after every
+        // launch and every restart (#615). Only Copilot's, and only a child given the very same
+        // arguments: a CLI that starts another for some other purpose is two sessions.
+        var launched = agent == AgentKind.Copilot
+            ? all.Where(p => p.Candidate is not ("node" or "bun") && p.Parent is > 0 && !string.IsNullOrWhiteSpace(p.CommandLine))
+                .Select(p => (Id: p.Parent!.Value, Child: p.StartedAt, Arguments: Arguments(p.CommandLine)))
+                .ToList()
+            : [];
         foreach (var process in all)
         {
             var (candidate, id, started, commandLine, _) = process;
@@ -153,10 +164,21 @@ public sealed class SystemProcessInspector : IProcessInspector
             {
                 continue;
             }
+            // A launcher whose real CLI is listed: the CLI stands for it, under the same rule
+            // as a loader, both start times known and the launcher's no later than its child's.
+            if (candidate is not ("node" or "bun") && started is { } launcherStarted && !string.IsNullOrWhiteSpace(commandLine)
+                && launched.Any(l => l.Id == id && l.Child is { } child && launcherStarted <= child && l.Arguments.SequenceEqual(Arguments(commandLine), StringComparer.Ordinal)))
+            {
+                continue;
+            }
             found.Add(new AgentProcess(id, started, commandLine));
         }
         return (new(found, known) { Listed = listed, Unidentified = unidentified }, kept);
     }
+
+    // A command line's arguments without its program, which differs between a launcher and
+    // the CLI it starts.
+    static string[] Arguments(string? commandLine) => [.. CommandLine.Split(commandLine).Skip(1)];
 
     static bool IsRunning(int pid)
     {
