@@ -5,6 +5,7 @@ using Microsoft.UI.Composition;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
@@ -119,13 +120,9 @@ public sealed partial class SessionsPage
         List.AddHandler(PointerReleasedEvent, new PointerEventHandler(OnCardReleased), true);
         List.AddHandler(PointerCanceledEvent, new PointerEventHandler(OnCardCanceled), true);
         List.AddHandler(PointerCaptureLostEvent, new PointerEventHandler(OnCardCaptureLost), true);
-        // Needs you, the list's header, changing height (a question arriving or answered) moves every card
-        // under a held one: it stays under the still pointer, and the gap and headers go with the cards.
-        ListHeader.SizeChanged += (_, _) =>
-        {
-            if (drag is { } d) { Follow(d.At); }
-            else if (settling.Count > 0) { PlaceLayer(); }
-        };
+        // Needs you, the list's header, changing height moves the cards under a settling one: the layer
+        // goes with them. (While a card is held, OnFrame keeps it under the pointer.)
+        ListHeader.SizeChanged += (_, _) => { if (drag is null && settling.Count > 0) { PlaceLayer(); } };
     }
 
     // The main view model's changes that end a drag: the sort leaving Your order, another machine's
@@ -291,8 +288,18 @@ public sealed partial class SessionsPage
         Wait(press = new Press { Kind = PointerDeviceType.Touch, Row = row, Card = card, Item = item, Start = at, Grip = false });
     }
 
-    // How far the held card is drawn from where the pointer holds it.
-    internal double? HeldDrift => drag is { } d && List.ItemsPanelRoot is { } panel ? List.TransformToVisual(panel).TransformPoint(d.At).Y - d.Grab - d.ItemTop - d.Translation : null;
+    // How far the held card is drawn from where the pointer holds it: measured afresh, the item where the
+    // list lays it out now and the translation its visual has, not the drag's own figures.
+    internal double? HeldDrift
+    {
+        get
+        {
+            if (drag is not { } d || List.ItemsPanelRoot is not { } panel) { return null; }
+            Visual(d.Item).Properties.TryGetVector3("Translation", out var drawn);
+            var top = LaidOut(d.Item).Y;
+            return List.TransformToVisual(panel).TransformPoint(d.At).Y - d.Grab - top - drawn.Y;
+        }
+    }
     internal FrameworkElement ListHeaderView => ListHeader;
 
     internal void MoveTo(Point at) { if (drag is not null) { Follow(at); } }
@@ -313,7 +320,7 @@ public sealed partial class SessionsPage
     {
         if (viewModel is null || List.ItemsPanelRoot is not { } panel) { return; }
         FinishSettling();
-        var itemTop = item.TransformToVisual(panel).TransformPoint(default).Y;
+        var itemTop = LaidOut(item).Y;
         var panelAt = List.TransformToVisual(panel).TransformPoint(at);
         var d = new Drag
         {
@@ -416,7 +423,7 @@ public sealed partial class SessionsPage
             d.Cards[key] = cards[i];
             if (List.ContainerFromItem(cards[i]) is ListViewItem { ContentTemplateRoot: SessionRow r } li && li.Visibility == Visibility.Visible && li.ActualHeight > 0)
             {
-                drawn[i] = (li.TransformToVisual(panel).TransformPoint(default).Y, r.HeaderPart, li.ActualHeight);
+                drawn[i] = (LaidOut(li).Y, r.HeaderPart, li.ActualHeight);
                 if (cards[i] != d.Card) { d.Items[key] = li; }
             }
             else { d.Unrealized[key] = cards[i]; }
@@ -459,12 +466,15 @@ public sealed partial class SessionsPage
     {
         if (drag is not { } d || List.ItemsPanelRoot is not { } panel) { return; }
         d.At = at;
-        // A card auto-scroll has drawn since: measured, and put where it belongs at once.
-        if (d.Unrealized.Values.Any(c => List.ContainerFromItem(c) is ListViewItem { ContentTemplateRoot: SessionRow }))
+        // A card auto-scroll has drawn since, or the cards laid out again elsewhere in the panel (the
+        // list's header, Needs you, changing height): measured again, and put where they belong at once.
+        var laidOut = LaidOut(d.Item).Y;
+        if (Math.Abs(laidOut - d.ItemTop) >= 0.5 || d.Unrealized.Values.Any(c => List.ContainerFromItem(c) is ListViewItem { ContentTemplateRoot: SessionRow }))
         {
             var target = d.Target;
             if (Measure(d))
             {
+                d.ItemTop = laidOut;
                 d.Target = d.Model.Allows(target) ? target : d.Model.Origin;
                 ShowLayer(d);
                 Arrange(d, d.Target, instant: true);
@@ -535,7 +545,7 @@ public sealed partial class SessionsPage
         if (List.ItemsPanelRoot is not { } panel) { return; }
         var origin = d.Model.Layout(d.Model.Origin);
         var width = d.Item.ActualWidth;
-        var left = d.Item.TransformToVisual(panel).TransformPoint(default).X;
+        var left = LaidOut(d.Item).X;
         var headingAt = HeadingPlace(d, panel);
         headingInset = headingAt.Y;
         pinnedFrom = origin.PinnedHeader ?? 0;
@@ -627,7 +637,18 @@ public sealed partial class SessionsPage
     // (OnListScrolled).
     void OnFrame(object? sender, object e)
     {
-        if (drag is not { } d || listScroll is not { } scroll) { return; }
+        if (drag is not { } d) { return; }
+        // Anything that laid the cards out again under a still pointer (Needs you, the list's header,
+        // changing height as a question arrives or is answered, and the list's scroll anchoring after it,
+        // which no event reports in order): the card is put back under the pointer, the cards measured
+        // again, and the gap and headings with them.
+        if (List.ItemsPanelRoot is { } panel)
+        {
+            var pointer = List.TransformToVisual(panel).TransformPoint(d.At).Y;
+            var laidOut = LaidOut(d.Item).Y;
+            if (Math.Abs(pointer - d.Grab - laidOut - d.Translation) >= 0.5) { Follow(d.At); }
+        }
+        if (listScroll is not { } scroll) { return; }
         var now = Stopwatch.GetTimestamp();
         var dt = d.LastFrame == 0 ? 0 : Stopwatch.GetElapsedTime(d.LastFrame, now).TotalSeconds;
         d.LastFrame = now;
@@ -890,7 +911,7 @@ public sealed partial class SessionsPage
         // the layout pass that put them there is the one this follows.
         Reset(resetting);
         var header = row.HeaderPart;
-        var dy = from - (item.TransformToVisual(panel).TransformPoint(default).Y + header);
+        var dy = from - (LaidOut(item).Y + header);
         var step = Motion.Catalogue.Enter("Reorder", Motion.Enabled);
         if (!step.Runs || Math.Abs(dy) < 0.5 && !row.Lifted)
         {
@@ -935,7 +956,7 @@ public sealed partial class SessionsPage
         var heading = row.Card?.Pinned == true ? PinnedHeading : SessionsHeading;
         heading.Visibility = Visibility.Visible;
         var o = row.HeadingOffset(item);
-        var top = item.TransformToVisual(panel).TransformPoint(default);
+        var top = LaidOut(item);
         Settle(heading);
         Canvas.SetLeft(heading, top.X + o.X);
         Canvas.SetTop(heading, top.Y + o.Y);
@@ -1017,6 +1038,14 @@ public sealed partial class SessionsPage
     }
 
     // --- Motion. ---
+
+    // Where the list lays an item out in its panel: not where it is drawn, which TransformToVisual gives,
+    // with the drag's Translation and Scale on it (a held or gliding card).
+    static Point LaidOut(FrameworkElement item)
+    {
+        var slot = LayoutInformation.GetLayoutSlot(item);
+        return new Point(slot.X + item.Margin.Left, slot.Y + item.Margin.Top);
+    }
 
     static Visual Visual(UIElement e)
     {
