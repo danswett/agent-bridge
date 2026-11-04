@@ -91,7 +91,10 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     public void Ended(TurnBuilder turn, string agent, SubagentOutcome outcome, DateTimeOffset at)
     {
         if (!_main.ContainsKey(agent) || RunOf(agent) is not { } run) { return; }
-        if (run.Working || !run.Said) { Report(turn, agent, run, outcome, at); }
+        // The same end said again (a second wait on a run already reported) owes nothing more: owed,
+        // it would swallow the next run's notice (found in review of #292).
+        if (!run.Working && run.Said) { return; }
+        Report(turn, agent, run, outcome, at);
         run.Owed++;
     }
 

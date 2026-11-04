@@ -63,6 +63,8 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
 
     sealed class Pass(HistoryReader reader, SafeFileHandle file, string sessionId, HistoryDialect dialect, HistoryContext context, IReadOnlySet<string> agentTurns)
     {
+        delegate bool DroppedLine(ReadOnlySpan<byte> head, long offset);
+
         readonly HistoryBudgets b = reader._budgets;
         readonly long length = RandomAccess.GetLength(file);
         // What this request has read backwards (finding the last line's end, then prompts) against
@@ -135,7 +137,8 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         }
 
         // The transcript's fingerprint (its first record, or the first 4 KiB of one longer), and
-        // the time of its first record that has one: the start of the session.
+        // the time of its first record that has one: the start of the session. What it parses is
+        // the request's, as all its parsing is (found in review of #292).
         (byte[] Fingerprint, DateTimeOffset? At) First()
         {
             var head = new byte[(int)Math.Min(HeadBytes, length)];
@@ -146,6 +149,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             var looked = 0;
             Forward(0, Math.Min(length, b.FirstBytes), (line, _) =>
             {
+                if (!Charge(line.Length)) { return false; }
                 using var doc = Parse(line);
                 if (doc is null) { return true; }
                 dialect.First(doc.RootElement, context);
@@ -155,10 +159,21 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             return (fingerprint, at);
         }
 
+        // Parsing this many bytes more is within the request's budget, and is charged to it.
+        bool Charge(long bytes)
+        {
+            if (parsed + bytes > b.PageBytes) { return false; }
+            parsed += bytes;
+            return true;
+        }
+
         long? _firstPrompt;
         bool _firstPromptLooked;
 
-        // Where the first turn starts, when it is within the first bytes looked at.
+        // Where the first turn starts, when it is within the first bytes looked at and the budget:
+        // null when it is not known, so a page is never taken for the start when it may not be. A
+        // line too long to read whose start may begin a turn is one, as Examine takes it, so a turn
+        // that can't be read is never skipped past (found in review of #292).
         long? FirstPrompt()
         {
             if (_firstPromptLooked) { return _firstPrompt; }
@@ -166,6 +181,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             Forward(0, Math.Min(length, b.FirstBytes), (line, offset) =>
             {
                 if (!dialect.MayStart(line.Span)) { return true; }
+                if (!Charge(line.Length)) { return false; }
                 using var doc = Parse(line);
                 if (doc is null || dialect.Start(doc.RootElement) is not null)
                 {
@@ -173,6 +189,11 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                     return false;
                 }
                 return true;
+            }, dropped: (head, offset) =>
+            {
+                if (!dialect.MayStart(head)) { return true; }
+                _firstPrompt = offset;
+                return false;
             });
             return _firstPrompt;
         }
@@ -432,9 +453,10 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         }
 
         // Calls onLine for each whole line in [from, to) until it says stop; a line longer than
-        // MaxLineBytes is passed over, as the tail passes over it. Unaligned, the fragment before
-        // the first newline belongs to a line that began earlier, and is dropped.
-        void Forward(long from, long to, Func<ReadOnlyMemory<byte>, long, bool> onLine, bool aligned = true)
+        // MaxLineBytes is passed over, as the tail passes over it, and dropped told of it with its
+        // first bytes. Unaligned, the fragment before the first newline belongs to a line that began
+        // earlier, and is dropped.
+        void Forward(long from, long to, Func<ReadOnlyMemory<byte>, long, bool> onLine, bool aligned = true, DroppedLine? dropped = null)
         {
             if (from >= to) { return; }
             var chunk = ArrayPool<byte>.Shared.Rent(b.ChunkBytes);
@@ -472,6 +494,13 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                                 if (whole.Length > 0 && whole.Span[^1] == '\r') { whole = whole[..^1]; }
                                 if (whole.Length > 0 && !onLine(whole, lineStart)) { return; }
                             }
+                        }
+                        if (!dropping && oversized && dropped is not null)
+                        {
+                            var content = ContentLength(lineStart, pos + i + newline + 1);
+                            var head = new byte[(int)Math.Min(HeadBytes, content)];
+                            ReadAt(head, lineStart);
+                            if (!dropped(head, lineStart)) { return; }
                         }
                         dropping = false;
                         oversized = false;

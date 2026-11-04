@@ -245,10 +245,10 @@ the prompt (8 KiB here, 2 KiB in `activity.userMessage`; [Security](#security-an
 holds. A host reads at most 256 MiB of transcript backwards per request, finding the end of the
 last whole line included (a line still being written that is longer than that leaves nothing to
 page, `start.limited` and `partial`). Going back it searches every line whole for the bytes a
-turn's record carries (`"user.message"` for Copilot, `"user"` and no `"tool_result"` for Claude,
+turn's record carries (`"user.message"` for Copilot, `"user"` and no tool-result block, `"type":"tool_result"`, for Claude,
 `"user_message"` or `"UserMessage"` for Codex: only ever JSON tokens, never text inside a string)
 and parses as JSON only the lines that carry them, wherever in the line the writer put them. It
-parses at most 32 MiB per request: the prompts it finds count first, and it stops adding older
+parses at most 32 MiB per request: what it reads of the transcript's first records (the start's time, and whether the oldest turn found is the first) and the prompts it finds count first, and it stops adding older
 turns there, at least one. It parses at most 8 MiB of any one turn (a longer turn is read from
 its prompt and its **last** 8 MiB, `truncated` set, and what it skipped counted in neither
 `parts` nor `partsMore`). A turn whose prompt is more than 256 MiB before the cursor ends the

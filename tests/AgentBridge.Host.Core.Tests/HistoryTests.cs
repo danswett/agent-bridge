@@ -443,6 +443,22 @@ public class HistoryTests
         Assert.Equal((await s.Page()).Turns![^1].Id, next.Activity.Turn);
     }
 
+    // Found in review of #292: the forward look for the first prompt passed over a line too long
+    // to read, so the page after it was taken for the start and the turn before was unreachable.
+    [Fact]
+    public async Task A_first_prompt_too_long_to_read_is_still_paged_back_to()
+    {
+        await using var s = new Copilot_(options: With(maxLineBytes: 2048));
+        await s.After(Copilot.User("huge " + new string('h', 3000), 1), Copilot.User("two", 2), Copilot.User("three", 3));
+
+        var newest = await s.Page(limit: 2);
+        Assert.Equal(["two", "three"], newest.Turns!.Select(Prompt));
+        Assert.Null(newest.Start);
+        var earlier = await s.Page(newest.Before, limit: 2);
+        Assert.True(earlier.Turns!.Single().Unreadable);
+        Assert.NotNull(earlier.Start);
+    }
+
     [Fact]
     public async Task The_live_reply_names_its_own_turn_so_a_new_prompt_never_shows_the_last_turns_reply_as_its_own()
     {
@@ -748,6 +764,46 @@ public class HistoryTests
             [(DelegateEventKind.Started, Fixture.T0.AddSeconds(2)), (DelegateEventKind.Reported, Fixture.T0.AddSeconds(3)),
              (DelegateEventKind.Reported, Fixture.T0.AddSeconds(5)), (DelegateEventKind.Reported, Fixture.T0.AddSeconds(8))],
             events);
+    }
+
+    // Found in review of #292: each wait saying the same end again owed another notice, which then
+    // swallowed the next run's.
+    [Fact]
+    public async Task A_codex_run_end_said_by_several_waits_owes_one_notice_and_the_next_run_still_reports()
+    {
+        var (_, page) = await ReadCodex(
+            Codex.Event(new { type = "user_message", message = "delegate" }, 1),
+            Collab("spawn_agent", 2, JsonValue.Create("pending_init")),
+            Collab("wait", 3, Completed),
+            Collab("wait", 4, Completed),
+            SubagentNotice(5),
+            Collab("send_input", 6, JsonValue.Create("running")),
+            SubagentNotice(7));
+
+        var reports = page.Turns!.Single().Parts.Where(p => p.Delegate is { Event: DelegateEventKind.Reported }).Select(p => p.At);
+        Assert.Equal([Fixture.T0.AddSeconds(3), Fixture.T0.AddSeconds(7)], reports);
+    }
+
+    // Found in review of #292: a prompt that is just the words "tool_result" holds that bare token.
+    [Fact]
+    public async Task A_claude_prompt_that_says_tool_result_is_still_a_prompt()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        Fixture.Append(transcript,
+            Claude.User("first", 1),
+            Claude.Assistant(2, "end_turn", Claude.Text("One.")),
+            Claude.User("tool_result", 3),
+            Claude.Assistant(4, "end_turn", Claude.Text("Two.")));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        var turns = (await source.HistoryAsync(Id, null, 20)).Turns!;
+        Assert.Equal(["first", "tool_result"], turns.Select(Prompt));
+        Assert.Equal("Two.", turns[1].Parts.Single().Text);
+        Assert.Equal(source.Get(Id)!.Activity.Turn, turns[1].Id);
     }
 
     // ---- the recorded sessions ----
