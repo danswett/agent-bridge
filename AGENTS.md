@@ -48,8 +48,11 @@ Everything lands through a PR, including documentation.
 6. If CI fails on something you did not touch, check whether `main` fails the same way and say so.
 
 Delegated work: when a coordinating session hands work to delegates, each delegate
-opens one PR per slice and reports "#<n> ready at <sha>". **Only the coordinator
-merges.**
+opens one PR per slice and reports "#<n> ready at <sha>". **Only the designated merge
+coordinator merges: currently Quality**, not each implementation or UI coordinator.
+The [current role reference](docs/status.md#running-work) identifies the accepted
+owner and handoff evidence while the #170 index cutover is incomplete. Implementation owners submit exact-head
+readiness on their PR and yield the merge slot; a ready packet is not a merge grant.
 
 ### Before each push
 

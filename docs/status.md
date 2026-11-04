@@ -6,7 +6,8 @@ next, and how the work is done. Keep it current: update it in the same PR as any
 that moves the project along (a merge that closes a stage, a machine migrated, a
 decision made).
 
-*Last updated: 2026-11-02, Pacific.*
+*Last updated: 2026-11-03, Pacific (coordination and source-of-truth rules). Older
+implementation and machine snapshots below retain their stated dates.*
 
 | Read next | For |
 |---|---|
@@ -86,10 +87,65 @@ The work has been built phone-first. All merged PRs are listed in §7.
 
 ### Running work
 
-Check `gh pr list -R danswett/agent-bridge` for open PRs. Two coordinators work at once (decided 2026-11-01):
-- **Overall coordinator** (Copilot session 50e5b45a on DEV-VM1 since 2026-11-02 14:20 PT, taking over from a6ed320ca83044c5): the whole project, track A of the UI plan (sub-agents S1 #173, S2 #174, S5 #175), #172 (shared usage), the relay, migration, the shadow gate, machines, and this page outside §5.
-- **UI coordinator**: track B (§5), which names the session currently holding it; it moved to DSWETT-DEV-VM2 on 11-02. It merges its own PRs under the same rule.
-- Cross-track needs go on #170.
+Check `gh pr list -R danswett/agent-bridge` for open PRs. The roles and linked
+acceptance receipts below are the current role reference. The #170 index cutover
+is incomplete: its existing
+[canonical tracker](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6590748446)
+and [frontier](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6612294268)
+remain routing references until every active destination is verified.
+- **Quality is the sole merge coordinator**, accepted in
+  [the takeover receipt](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6617409924).
+  Implementation coordinators, delegates and triage do not merge independently.
+- **A, overall implementation coordinator** (session 50e5b45a, DEV-VM1), retains
+  backend implementation, delegates and reviews. Its former merge role ended in
+  [the stand-down receipt](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6617290473).
+- **B, UI implementation coordinator** (session 4d05d459, DEV-VM2), retains track B
+  and client integration, yielding merge order to Quality.
+- **Triage/readiness** (session 3e736b53, DEV-VM1) maintains canonical routing,
+  verifies owner acceptance and consumes the existing single collector. It has no
+  merge authority and must not create another periodic GitHub poller.
+- **VP of Design** (session c187cf6c) is additive: audits, proposals and design review
+  under [#477](https://github.com/danswett/agent-bridge/issues/477). Material design
+  changes still require owner approval; design leadership is not merge authority.
+
+#### Operational sources of truth
+
+| Record | Owns |
+|---|---|
+| Canonical issue | Scope, acceptance criteria, priority, accepted implementation owner, dependencies and next action |
+| Implementation PR | Exact head, CI, actual review, finding dispositions, unresolved threads and readiness evidence for Quality |
+| GitHub Project views, once configured | Filterable indexes over those issues and PRs; not a second plan or evidence of acceptance |
+| #170 root/index, after verified cutover | Current roles, operating rules and links; not a repeated whole-project inventory or per-PR queue |
+| Repository docs and approved designs | Durable architecture, roadmap and decisions; not a minute-by-minute activity log |
+
+A suggested owner is **unclaimed** until explicitly accepted. Link the acceptance
+receipt; preserve existing delegates and contributor branch ownership. A shared
+GitHub account, an unverified checkbox, silence or an old ready packet is not a new acceptance.
+If the next action requires owner input, state the precise decision; do not relabel an
+already-approved requirement as blocked on design.
+
+Keep cross-track dependencies on their canonical issues. Put readiness and
+merge/rebase requests on the PR for Quality. Every head change needs fresh CI and
+an actual Copilot review on that exact head. Only an **independent** review may
+use a bounded delta: the previously reviewed commit must be a proved ancestor of
+the new head, and the independent reviewer must explicitly clear that delta at the
+new head. A rebase without that ancestry needs a full independent review; neither
+old CI nor an old Copilot review is inherited. Safety, trust, security and required
+checks remain gates. Quality's
+[current operating receipt](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6617409924)
+allows ready PRs while main CI is pending, but pauses merges while main is red until
+green or reverted; it does not waive final-head PR gates.
+
+The minute collector retains the full event journal, including failed/partial reads
+as unknown. The consumer reconciles it into the canonical records and publishes
+**material changes**, not repeated inventory dumps. Archive old coordination
+snapshots with their cutoffs, keep their history and links, and explicitly supersede
+old authority instructions during a handoff. Do not remove the old tracker until all
+active rows have a verified destination; a Project-permission failure is not an empty
+queue or a completed migration.
+
+The following handoff/resumption notes are **historical, 2026-11-02**; use canonical
+issues and PRs for current heads, owners and gates:
 
 **Handoff, 2026-11-02 13:30 PT** (the overall coordinator's session ends for DEV-VM1's migration; background delegates are lost, their work is on branches):
 - **#238 (#200, live Claude and Codex usage)**, head ac2b8498: CI green, Copilot reviewed, 0 threads. Before merge it needs:
@@ -159,9 +215,10 @@ current gate reading. The record of that shadow follows.
 
 The design session's output is in the repository (#182). The owner **signed off ui.md on
 2026-11-01**; subagents.md's sign-off and its §8 questions sit with the overall coordinator
-(track A). A UI coordinator session runs track B and merges its PRs; it keeps this section
+(track A). A UI coordinator session runs track B and keeps this section
 current. Since 2026-11-02 13:10 PT that is Copilot session 4d05d459 on a Cloud PC, which
-took over from f7ba0bcc when DEV-VM1 began migrating. The sources:
+took over from f7ba0bcc when DEV-VM1 began migrating. Quality now owns all merges
+(see Running work above). The sources:
 
 - [design/ui.md](design/ui.md): the spec for every client (status language, colour, type,
   layout, surfaces, platform shells);
@@ -208,7 +265,10 @@ fixed word, `Delegate "…" asks`, because folding look-alikes misses some (a Cy
 not by name (#250, #252). The same cleaning at the host, in push notifications and in HA (the
 `subagents` attribute and the asker in HA's questions and notifications) is #263 (track A). #220 is separate: bidi and invisible characters in an approval's command.
 
-UI PRs merge as soon as each meets the merge rule. A backend PR that overlaps them, such as #186, rebases onto them (decided 2026-11-01, 16:05).
+UI PRs enter Quality's merge queue as soon as each meets the merge rule; they do not
+needlessly wait for unrelated backend work. An overlapping backend PR rebases onto
+the accepted merge order (the earlier UI-first dependency decision was 2026-11-01,
+16:05 PT).
 
 ui-plan.md §1 shows the dependencies. Changes to the layout touch both the PWA (`pwa/`)
 and the app (`src/AgentBridge.App`) and keep them at parity.
