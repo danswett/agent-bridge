@@ -1,6 +1,6 @@
 # Relay resources: restarts, memory, CPU, sockets, latency
 
-**Alerts:** A-RESTART, A-MEM, A-CPU, A-SOCKETS, A-FORWARD, A-CANARY-SLOW.
+**Alerts:** A-RESTART, A-CRASHLOOP, A-MEM, A-CPU, A-SOCKETS, A-FORWARD, A-CANARY-SLOW.
 
 The replica is 0.25 vCPU and 0.5 GiB, and holds at most 10,000 sockets
 (`Relay:MaxConnections`). Memory per idle socket is the binding limit (design §5.9). There's

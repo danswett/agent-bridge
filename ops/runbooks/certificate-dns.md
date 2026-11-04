@@ -1,6 +1,7 @@
 # Certificate and DNS
 
-**Alerts:** A-CERT, or A-AVAIL failing while A-AVAIL-ORIGIN passes.
+**Alerts:** A-CERT and A-DNS (the daily `ops-probe.yml` opens an `area:ops` issue), or A-AVAIL
+failing while the probe shows the app's own name (`-Url https://agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io`) healthy.
 
 `relay.bad-duck.com` is a Cloudflare CNAME, **DNS only (grey cloud)**, to the production app,
 plus a TXT record `asuid.relay` holding the environment's verification id. The certificate is

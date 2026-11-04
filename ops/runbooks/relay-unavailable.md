@@ -1,6 +1,6 @@
 # Relay unavailable
 
-**Alerts:** A-AVAIL, A-AVAIL-ORIGIN, A-READY, A-REPLICAS, A-5XX, A-CANARY.
+**Alerts:** A-AVAIL, A-REPLICAS, A-5XX, A-CANARY.
 **Users see:** the PWA and apps say they can't reach the relay, machines are listed as
 offline, and pushes stop. Hosts keep working locally and reconnect by themselves when the
 relay is back (backoff of at most 30 s).

@@ -19,6 +19,7 @@ the app, then an Azure-managed certificate bound with SNI.
 ./infra/deploy.ps1 -WhatIf
 ./infra/deploy.ps1
 ./infra/deploy.ps1 -Production -ProductionImage abrelaywus2.azurecr.io/agent-bridge-relay@sha256:... -ProductionVersion <sha>
+./infra/deploy.ps1 -Production -ProductionImage <running digest> -ProductionVersion <sha> -AlertEmail <address>   # first time with monitoring
 ./infra/deploy.ps1 -BaseOnly -SeedProductionFrom kv-abrelay-wus2   # a new stamp taking over another's keys
 #>
 [CmdletBinding()]
@@ -41,6 +42,9 @@ param(
     # Shared resources, identities, vaults and keys only; no apps. For a new stamp whose
     # registry has to receive an image before the apps can start.
     [switch]$BaseOnly,
+    # Where production alerts are emailed (modules/monitoring.bicep). Needed once: later runs
+    # reuse the address already in the action group. Never committed, never printed.
+    [string]$AlertEmail,
     [switch]$WhatIf
 )
 
@@ -115,6 +119,15 @@ $env:RELAY_PRODUCTION_IMAGE = $ProductionImage
 $env:RELAY_PRODUCTION_VERSION = $ProductionVersion
 $env:RELAY_DEPLOY_PRODUCTION = if ($Production) { 'true' } else { 'false' }
 $env:RELAY_OPERATOR = az ad signed-in-user show --query id -o tsv
+
+# Production's monitoring needs an address to send alerts to. A listing, not `show`, so a missing
+# action group is an empty answer rather than an error. The address stays in this process.
+$env:RELAY_ALERT_EMAIL = if ($AlertEmail) { $AlertEmail } else {
+    az monitor action-group list --subscription $Subscription -g $ResourceGroup --query "[?name=='ag-agent-bridge-ops'] | [0].emailReceivers[0].emailAddress" -o tsv
+}
+if ($Production -and -not $env:RELAY_ALERT_EMAIL) {
+    Write-Host 'monitoring: no alert address yet, so production alerts, the availability test and the budget are skipped; pass -AlertEmail once'
+}
 foreach ($kind in 'staging', 'production') {
     $var = "RELAY_$($kind.ToUpperInvariant())_DEPLOYER"
     if (-not (Get-Item "env:$var" -ErrorAction SilentlyContinue)) {

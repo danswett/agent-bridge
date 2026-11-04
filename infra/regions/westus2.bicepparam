@@ -52,3 +52,10 @@ param deployApps = bool(readEnvironmentVariable('RELAY_DEPLOY_APPS', 'true'))
 param deployProduction = bool(readEnvironmentVariable('RELAY_DEPLOY_PRODUCTION', 'false'))
 
 param operatorPrincipalId = readEnvironmentVariable('RELAY_OPERATOR', '')
+
+// Monitoring (modules/monitoring.bicep, ops/alerts.md). The alert address is never in this file:
+// deploy.ps1 sets RELAY_ALERT_EMAIL from -AlertEmail or the existing action group.
+param alertEmail = readEnvironmentVariable('RELAY_ALERT_EMAIL', '')
+param appInsightsName = 'appi-agent-bridge-relay-wus2'
+param budgetAmount = 40
+param budgetStartDate = '2026-11-01'
