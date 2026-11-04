@@ -151,7 +151,7 @@ public sealed class AgentVerificationService : IAsyncDisposable
         {
             var before = source.Snapshot().Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var expected = $"AGENT_BRIDGE_VERIFY_{Guid.NewGuid():N}";
-            var prompt = $"This is an Agent Bridge connection test. Reply with exactly {expected} and nothing else. Do not use tools, read or change files, or delegate.";
+            var prompt = $"This is an {Product.Name} connection test. Reply with exactly {expected} and nothing else. Do not use tools, read or change files, or delegate.";
             var agent = run.Request.Agent == "agency" ? AgentKind.Copilot : Enum.Parse<AgentKind>(run.Request.Agent, ignoreCase: true);
             var hookAgent = run.Request.Agent == "agency" ? "copilot" : run.Request.Agent;
             var proofs = new Queue<HookProof>();
