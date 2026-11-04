@@ -50,6 +50,13 @@ public sealed class HostConnection : IAsyncDisposable
 
     // How long to wait between attempts while the host is not there. Tests shorten it.
     public TimeSpan RetryDelay { get; init; } = TimeSpan.FromSeconds(2);
+    // How long to wait after the host refused this device (Refusal), unless RetryNow says
+    // something changed sooner; null waits RetryDelay, as for any other failure. Another
+    // machine's host that had not approved this device was asked every 5 s for hours, each time
+    // a channel handshake for an answer that could only change at that machine (#602).
+    public TimeSpan? RefusedRetryDelay { get; init; }
+    // What the waits between attempts are timed by. Tests use a fake.
+    public TimeProvider Time { get; init; } = TimeProvider.System;
     // How often an open connection asks the host again what it offers. Tests shorten it.
     public TimeSpan CapabilityRefresh { get; init; } = TimeSpan.FromSeconds(10);
     // Whether it follows the host's sessions and usage. A connection only for sending (this
@@ -105,6 +112,23 @@ public sealed class HostConnection : IAsyncDisposable
         if (Volatile.Read(ref resync) is { CurrentCount: 0 } s) { s.Release(); }
     }
 
+    // Set by RetryNow, cleared as each attempt starts: a change seen during an attempt that ends
+    // refused still cuts the wait after it short.
+    int poked;
+    // Ends the wait after a refusal early. Its continuations run asynchronously, so the attempt a
+    // RetryNow starts is not run inline on the caller's (UI) thread.
+    TaskCompletionSource? wake;
+
+    // Something that could change a refusal happened (the account's machines changed, this one came
+    // back online, the person opened it): after a refusal, try again now rather than at the end of
+    // RefusedRetryDelay. Never sooner than RetryDelay after the last attempt, so a roster that
+    // changes often costs no more than a failure that is not a refusal. Nothing otherwise.
+    public void RetryNow()
+    {
+        Volatile.Write(ref poked, 1);
+        Volatile.Read(ref wake)?.TrySetResult();
+    }
+
     // Waits until there is a connection, for those that have something to send.
     public Task WhenConnectedAsync(CancellationToken ct = default) => Volatile.Read(ref connected).Task.WaitAsync(ct);
 
@@ -152,13 +176,20 @@ public sealed class HostConnection : IAsyncDisposable
 
     async Task RunAsync(CancellationToken ct)
     {
+        // What the host last refused this device with, while every attempt since has been refused
+        // the same way: logged once, not at every attempt.
+        string? refusal = null;
         while (!ct.IsCancellationRequested)
         {
             IClientChannel? ch = null;
+            HelloResult? said = null;
+            string? refusedNow = null;
+            Volatile.Write(ref poked, 0);
             try
             {
                 ch = await connect(ct);
                 var hello = await ch.HelloAsync(ct);
+                said = hello;
                 // A gap in this connection's events: its own signal, so a wait abandoned when the
                 // connection ends cannot swallow the next connection's.
                 // Not disposed: the pump may still release it as the connection ends, and a
@@ -234,6 +265,12 @@ public sealed class HostConnection : IAsyncDisposable
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (LocalRefusedException e) { ui.Post(() => SetState(LinkState.Refused, e.Message)); }
             catch (HostNotRunningException e) { ui.Post(() => SetState(LinkState.NotRunning, e.Message)); }
+            catch (HostErrorException e) when (Refusal(said))
+            {
+                refusedNow = e.Message;
+                if (refusal != e.Message) { log($"the host refused this device: {e.Message} (asking again in {Describe(RefusedRetryDelay ?? RetryDelay)}, or once something changes)"); }
+                ui.Post(() => SetState(LinkState.Refused, e.Message));
+            }
             catch (Exception e) when (e is IOException or HostErrorException or JsonException or TimeoutException or OperationCanceledException)
             {
                 log($"host connection failed: {e.Message}");
@@ -246,14 +283,51 @@ public sealed class HostConnection : IAsyncDisposable
                 if (ch is not null) { await ch.DisposeAsync(); }
                 if (Volatile.Read(ref connected).Task.IsCompleted) { Volatile.Write(ref connected, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)); }
             }
+            refusal = refusedNow;
             ui.Post(() =>
             {
                 if (State == LinkState.Connected) { SetState(LinkState.Connecting, "the host went away; reconnecting"); }
             });
-            try { await Task.Delay(RetryDelay, ct); }
+            try { await WaitAsync(refusedNow is not null, ct); }
             catch (OperationCanceledException) { break; }
         }
     }
+
+    // A refusal is the host's own answer, not a lost connection: an error in reply to hello (the
+    // one op every peer may ask), or to what follows a hello that offered this device nothing to
+    // read (no sessions.read: a host that has not approved it, as agent-executor's does). It stays
+    // until someone changes something at that machine, so it is asked again only after
+    // RefusedRetryDelay or a RetryNow. The protocol has no error code for it (v1-sessions.md
+    // "Channel framing"), so it is told by when it came rather than by its words.
+    static bool Refusal(HelloResult? said) => said is null || !said.Capabilities.Contains(Protocol.Capabilities.SessionsRead);
+
+    async Task WaitAsync(bool refused, CancellationToken ct)
+    {
+        if (!refused || RefusedRetryDelay is not { } longer || Volatile.Read(ref poked) == 1)
+        {
+            await Task.Delay(RetryDelay, Time, ct);
+            return;
+        }
+        var started = Time.GetTimestamp();
+        var woken = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Volatile.Write(ref wake, woken);
+        using var cut = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        try
+        {
+            // A RetryNow between the attempt's end and the wait's start set poked without a wait to end.
+            if (Volatile.Read(ref poked) == 1) { woken.TrySetResult(); }
+            var done = await Task.WhenAny(Task.Delay(longer, Time, cut.Token), woken.Task);
+            // Ends the long delay's timer when woken, rather than leaving it for minutes.
+            cut.Cancel();
+            ct.ThrowIfCancellationRequested();
+            if (done != woken.Task) { return; }
+            var left = RetryDelay - Time.GetElapsedTime(started);
+            if (left > TimeSpan.Zero) { await Task.Delay(left, Time, ct); }
+        }
+        finally { Interlocked.CompareExchange(ref wake, null, woken); }
+    }
+
+    static string Describe(TimeSpan delay) => delay >= TimeSpan.FromMinutes(1) ? $"{delay.TotalMinutes:0.#} min" : $"{delay.TotalSeconds:0.#} s";
 
     // Usage and update state ride along with the sessions: a reading of either the app cannot read
     // is refused, and the connection goes on with the one it had. Thrown, it ended the connection

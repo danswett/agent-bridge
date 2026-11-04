@@ -84,6 +84,8 @@ public sealed partial class MainViewModel : Observable
             // A choice no longer listed (its machine forgotten, or kept offline past its time,
             // while a menu still held it) would filter the list to nothing under All's tab.
             if (value is null || !Machines.Contains(value) || !Set(ref selected, value)) { return; }
+            // Opened by the person: a host that refused this device is asked again now (#602).
+            if (value.Key is { } key && key != Machine.LocalKey) { MachineOf(key)?.Host.RetryNow(); }
             Refilter();
             // The session open stays open only while its row is listed.
             if (open is not null && !Visible(open)) { Selected = null; }

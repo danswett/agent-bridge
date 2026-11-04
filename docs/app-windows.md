@@ -99,7 +99,13 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
 * **Which machines.** Every host in the relay's presence for the account, other than this
   machine's own (its device id is the `machine.id` its hello gives), which the app reaches over
   its pipe. Each gets a connection that subscribes to sessions and usage and reconnects as the
-  pipe's does. A machine that leaves presence while the app's relay connection stays up on the
+  pipe's does. A host that refuses this device is not a lost connection (#602): an error in reply
+  to hello, or to the subscribe after a hello that offered nothing to read (no `sessions.read`, as
+  a host that has not approved this device answers). It changes only at that machine, so the app
+  logs it once, not at every attempt, and asks again after 5 minutes (`Fleet.RefusedRetryDelay`),
+  or sooner when the account's machines change, that machine comes back online or it is opened,
+  though never sooner than the ordinary 5 s. Any other failure is retried every 5 s, as before.
+  A machine that leaves presence while the app's relay connection stays up on the
   same account stays (#269): its rows, the session open, its tab, your order and pins are kept,
   each row saying "Offline · last seen …", and its connection goes on trying. Nothing on those rows
   can be answered, approved, replied to, attached to, ended or launched on, and their questions
