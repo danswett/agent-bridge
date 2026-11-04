@@ -104,7 +104,8 @@ jobs:
         run: |
           $out = Join-Path $env:RUNNER_TEMP weekly-report
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll report --slug $env:REPO --run-url $env:RUN_URL --out "$out/report.md" | Out-Null
+          # In the log as well as the summary, since the API can't read a job's summary back.
+          dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll report --slug $env:REPO --run-url $env:RUN_URL --out "$out/report.md"
           if ($LASTEXITCODE) { throw "agent-bridge-quality report failed ($LASTEXITCODE)" }
           $note = if ($env:POST -eq 'true') { "_Posting on #$env:EPIC._" } else { '_Dry run: posted nowhere but here._' }
           (Get-Content -Raw "$out/report.md") + "`n$note`n" >> $env:GITHUB_STEP_SUMMARY
