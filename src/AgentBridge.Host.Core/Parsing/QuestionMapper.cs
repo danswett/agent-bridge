@@ -168,7 +168,8 @@ internal static class QuestionMapper
     }
 
     // One Field per schema property, in order. A schema that arrived as text (the model
-    // wrote it as a string) is parsed first.
+    // wrote it as a string) is parsed first, once, as CopilotForm.Read parses it: text that
+    // parses to more text is no form (#510 review, Trust on 8335427d).
     public static IReadOnlyList<Field> SchemaFields(JsonElement schema) => SchemaForm(schema).Fields;
 
     // The fields, and whether every one reads as one input Copilot CLI is known to draw for it
@@ -182,7 +183,7 @@ internal static class QuestionMapper
             try
             {
                 using var doc = JsonDocument.Parse(Json.Repaired(System.Text.Encoding.UTF8.GetBytes(schema.GetString() ?? "")));
-                return SchemaForm(doc.RootElement, budget);
+                return doc.RootElement.ValueKind == JsonValueKind.Object ? SchemaForm(doc.RootElement, budget) : ([], true);
             }
             catch (Exception e) when (e is JsonException or InvalidOperationException) { return ([], true); }
         }
@@ -206,7 +207,9 @@ internal static class QuestionMapper
         return (fields, drivable);
     }
 
-    // Whether every field of a schema reads as one input Copilot CLI is known to draw for it.
+    // Whether every field of a schema reads as one input Copilot CLI is known to draw for it,
+    // under a heading the host can find on screen and tell from every other field's. A schema
+    // sent as text is parsed once, as CopilotForm.Read parses it.
     static bool Drivable(JsonElement schema)
     {
         if (schema.ValueKind == JsonValueKind.String)
@@ -214,15 +217,24 @@ internal static class QuestionMapper
             try
             {
                 using var doc = JsonDocument.Parse(schema.GetString() ?? "");
-                return Drivable(doc.RootElement);
+                return doc.RootElement.ValueKind == JsonValueKind.Object && Drivable(doc.RootElement);
             }
-            catch (JsonException) { return true; }
+            catch (JsonException) { return false; }
         }
         if (Json.Obj(schema, "properties") is not { } properties) { return true; }
-        // A property that is not an object is refused too (CopilotForm.Schema), even beside one
-        // that is: listed as answerable, that form was refused every time (#510 review, Copilot
-        // 4480874464).
-        return properties.EnumerateObject().All(p => p.Value.ValueKind == JsonValueKind.Object && CopilotFieldSchema.Read(p.Value).Problem is null);
+        var headings = new List<string?>();
+        foreach (var p in properties.EnumerateObject())
+        {
+            // A property that is not an object is refused too (CopilotForm.Schema), even beside
+            // one that is: listed as answerable, that form was refused every time (#510 review,
+            // Copilot 4480874464). So is a field with no heading to find on screen, or two whose
+            // headings cannot be told apart there (CopilotFormScreen; Trust on 8335427d).
+            if (p.Value.ValueKind != JsonValueKind.Object) { return false; }
+            var (input, _, problem) = CopilotFieldSchema.Read(p.Value);
+            if (problem is not null || CopilotFieldSchema.Label(p.Name, p.Value) is not { } label) { return false; }
+            headings.Add(CopilotFieldSchema.Heading(label, input is CopilotFieldSchema.Input.Text or CopilotFieldSchema.Input.Number));
+        }
+        return CopilotFieldSchema.Alike(headings) is null;
     }
 
     // A required text box that opens with only spaces in it has no answer from another device: its

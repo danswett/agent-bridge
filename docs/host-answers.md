@@ -66,8 +66,10 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     reads the same twice running (two reads in a row, not two reads with another between).
     Counted before, a label of the new field reading like the words could pass for them, and
     the same words given to the field before could hide them. They are counted only in that
-    field's input, between its heading and the hints, each run of a box's rows joined (a long
-    answer wraps across them) and every other row read alone: across the whole screen, a
+    field's input, the rows strictly between its heading and the hints, read as one: 1.0.105
+    draws a text field's input between two rules with no edge down either side, its first row
+    "❯ " and the rows a long answer wraps onto indented, so the words' end can run across the
+    wrap. Across the whole screen, a
     field titled "Data" over hints starting "enter" read "ae" across the two, so the words
     "ae" typed between them never showed more often and their Enter was never pressed (#510
     review). Read in less of the screen, words only ever show less, never where they are not.
@@ -129,7 +131,9 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     title as the CLI draws them together, untrimmed ("Pick one " is "Pick one :"); a title of
     white space alone, drawn as a blank row or a lone colon, or with a line break or another
     control character, which splits its heading across rows while the tab bar's first row
-    still reads as the labels, is refused before the first key; a heading or question the
+    still reads as the labels, is refused before the first key. Both, like a `requestedSchema`
+    encoded as JSON twice (read once, it is text, not a form), are listed `answerAtMachine`,
+    so no client offers what would be refused; a heading or question the
     console wraps mid-word is refused rather than typed into (#848). With more than one
     field, the tab bar read at the first field, before any key, vouches for every later
     field's width and characters: a bar too wide for the window shows only some labels,

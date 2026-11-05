@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using AgentBridge.Host.Core.Parsing;
 
 namespace AgentBridge.Host.Delivery.Copilot;
 
@@ -40,29 +41,18 @@ public static partial class CopilotFormScreen
     // them, each below the last.
     public static string? Showing(IReadOnlyList<string> rows, CopilotForm form, int index) => Locate(rows, form, index, out _, out _);
 
-    // The rows of the field being answered, between its heading and the hints, where what is
-    // typed into it is drawn: each run of a box's rows (a vertical edge first, `qc`'s or a
-    // border's, the rows a long answer wraps onto) joined, every other row on its own. Null when
-    // the rows do not show this form at that field. Words are looked for here alone: counted
+    // The rows of the field being answered, strictly between its heading and the hints, where
+    // what is typed into it is drawn; null when the rows do not show this form at that field.
+    // Words are looked for here alone, the rows read as one so a long answer is found across the
+    // rows it wraps onto: Copilot CLI 1.0.105 draws a text field's input (`Fxn`, `qc`) between a
+    // rule above and below with no edge down either side, its first row "❯ " and the rest
+    // indented, so no edge says which rows go together (#510 review, Trust on 8335427d). Counted
     // across the whole screen, a field titled "Data" over hints starting "enter" read "ae" across
     // the two, and the words "ae" typed between them hid it, so their Enter was never pressed
-    // (#510 review, Copilot 4480874526). It can only find fewer than the whole screen did, so it
-    // never shows words the field does not.
-    public static List<List<string>>? Input(IReadOnlyList<string> rows, CopilotForm form, int index)
-    {
-        if (Locate(rows, form, index, out var heading, out var hints) is not null) { return null; }
-        var runs = new List<List<string>>();
-        char? edge = null;
-        foreach (var row in rows.Skip(heading + 1).Take(hints - heading - 1))
-        {
-            var first = row.TrimStart(' ') is { Length: > 0 } text ? text[0] : ' ';
-            var boxed = first is '\u2502' or '\u2503' or '\u2551' or '|';
-            if (boxed && edge == first) { runs[^1].Add(row); }
-            else { runs.Add([row]); }
-            edge = boxed ? first : null;
-        }
-        return runs;
-    }
+    // (Copilot 4480874526). The heading and hints are never part of it; it is less than the
+    // whole screen, so it never shows words the screen does not.
+    public static List<string>? Input(IReadOnlyList<string> rows, CopilotForm form, int index) =>
+        Locate(rows, form, index, out var heading, out var hints) is null ? [.. rows.Skip(heading + 1).Take(hints - heading - 1)] : null;
 
     static string? Locate(IReadOnlyList<string> rows, CopilotForm form, int index, out int fieldHeading, out int hintsStart)
     {
@@ -149,39 +139,16 @@ public static partial class CopilotFormScreen
 
     static int Indent(string row) => row.Length - row.TrimStart(' ').Length;
 
-    // The field's heading as drawn: a text or number box's title alone, any other's with a
-    // colon (`Fxn`, `Lxn`; `Dxn`, `Oxn`, `Nxn`). Read as "<title>:" for every field, the text
-    // field after a list was never found: the list was picked and committed, and the form left
-    // half answered (#510 review, Copilot 5780329899). The colon is added to the title as
-    // written before the whitespace is collapsed, as the CLI draws the two together (`t,":"`,
-    // never trimmed): "Pick one " is drawn "Pick one :", which the title collapsed first and the
-    // colon added after read as "Pick one:", and the list was refused after the fields before it
-    // had been committed (Copilot 5780656913).
+    // The field's heading as drawn (CopilotFieldSchema.Heading).
     static string Headed(CopilotField field) =>
-        Collapse(field.Label! + (field.Kind is CopilotFieldKind.Text or CopilotFieldKind.Number ? "" : ":"));
+        CopilotFieldSchema.Heading(field.Label!, field.Kind is CopilotFieldKind.Text or CopilotFieldKind.Number);
 
-    // Why two of the form's fields could not be told apart on screen, or null. The field being
-    // answered is known by its heading and, among several, by the tab hints, which say only
-    // whether it is first, last or between; the tab bar marks it by colour alone, which the
-    // screen read does not carry. So two fields with the same heading, both between the first
-    // and the last, look the same: a screen that changed without the form moving on (an Enter
-    // the CLI did not act on, while something else repainted) would pass for the next one, and
-    // its keys go into the field before (#510 review, Copilot 5780128109).
-    public static string? Ambiguous(CopilotForm form)
-    {
-        var count = form.Fields.Count;
-        string Place(int i) => i == 0 ? "first" : i == count - 1 ? "last" : "between";
-        var seen = new HashSet<(string, string)>();
-        for (var i = 0; i < count; i++)
-        {
-            if (form.Fields[i].Label is not { } label) { continue; }
-            if (!seen.Add((Headed(form.Fields[i]), Place(i))))
-            {
-                return $"two of this question's fields are headed \"{label}\", and the host cannot tell on screen which of them the form is at; answer it at the machine";
-            }
-        }
-        return null;
-    }
+    // Why two of the form's fields could not be told apart on screen, or null
+    // (CopilotFieldSchema.Alike, which QuestionMapper lists for the machine too).
+    public static string? Ambiguous(CopilotForm form) =>
+        CopilotFieldSchema.Alike([.. form.Fields.Select(f => f.Label is null ? null : Headed(f))]) is { } i
+            ? $"two of this question's fields are headed \"{form.Fields[i].Label}\", and the host cannot tell on screen which of them the form is at; answer it at the machine"
+            : null;
 
     // The form's key hints, below `from`: accept, decline and cancel always, and with more than
     // one field, next and prev as the field's place says. Read from the hints row alone, never

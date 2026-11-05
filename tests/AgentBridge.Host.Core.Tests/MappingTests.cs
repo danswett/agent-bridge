@@ -57,6 +57,17 @@ public class QuestionMappingTests
     [InlineData("""{ "question": "Which?", "choices": ["a", "b"] }""")]
     [InlineData("""{ "message": "m", "choices": [], "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""")]
     [InlineData("""{ "message": "m", "choices": ["a"], "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""")]
+    // Two fields between the first and the last headed alike, which the host cannot tell apart
+    // on screen; a field with no heading to find (a title with a line break, of white space, empty
+    // or not a string); and a schema encoded as JSON twice, which CopilotForm.Read parses once
+    // to text (#510 review, Trust on 8335427d).
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "a": { "type": "boolean" }, "x": { "type": "string", "title": "Same" }, "y": { "type": "string", "title": "Same" }, "z": { "type": "boolean" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "a": { "type": "boolean" }, "x": { "type": "boolean", "title": "Same  one" }, "y": { "type": "boolean", "title": "Same one" }, "z": { "type": "boolean" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "boolean", "title": "Pick\n" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "string", "title": "   " } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "string", "title": "" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "boolean", "title": 5 } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": "\"{\\\"properties\\\":{\\\"go\\\":{\\\"type\\\":\\\"boolean\\\"}}}\"" }""")]
     public void A_question_the_host_would_refuse_to_type_is_shown_to_be_answered_at_the_machine(string arguments) =>
         Assert.True(Ask(arguments).AnswerAtMachine);
 
@@ -67,6 +78,11 @@ public class QuestionMappingTests
     [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "name": { "type": "string" }, "n": { "type": "number" } } } }""")]
     [InlineData("""{ "message": "m", "requestedSchema": "{\"properties\":{\"go\":{\"type\":\"boolean\"}}}" }""")]
     [InlineData("""{ "message": "m", "choices": null, "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""")]
+    // Alike headings the hints tell apart (first and last), or that differ by the colon a text
+    // box goes without; and a null title, which the CLI reads as the field's name.
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "x": { "type": "string", "title": "Same" }, "y": { "type": "string", "title": "Same" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "a": { "type": "boolean" }, "x": { "type": "string", "title": "Same" }, "y": { "type": "boolean", "title": "Same" }, "z": { "type": "boolean" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "boolean", "title": null } } } }""")]
     public void A_form_the_host_types_is_offered_to_be_answered_from_a_client(string arguments) =>
         Assert.Null(Ask(arguments).AnswerAtMachine);
 

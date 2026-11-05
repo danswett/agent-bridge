@@ -87,21 +87,9 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields, string? Mes
         return (new CopilotForm(fields), null);
     }
 
-    // The field's heading as Copilot CLI 1.0.105 draws it (`Uxn`: `title ?? name`; a list's,
-    // Yes/No's or multi-select's component adds a colon, a text or number box's does not). A
-    // title that is not a string, or an empty one (drawn as nothing at all), is not a heading
-    // the host can look for. Nor is one of white space alone: a text or number box draws it as a
-    // blank row, which cannot be told from the blank rows around it, and a list's as a lone
-    // colon. Nor is one with a control character: a line break ("Pick\n", "Pick\r") splits the
-    // heading across rows, its colon on the next, while the tab bar's first row still reads as
-    // the labels, so the field was found missing only once the fields before it had been
-    // answered (#510 review, Trust on 412f1b2d). Without a label every field of the form is
-    // refused before the first key, rather than this one only once the fields before it have
-    // been answered (#510 review, Copilot 5780656913).
-    static string? Label(string name, JsonElement p) =>
-        (!p.TryGetProperty("title", out var title) || title.ValueKind == JsonValueKind.Null ? name
-        : title.ValueKind == JsonValueKind.String && title.GetString() is { Length: > 0 } text ? text
-        : null) is { } label && !string.IsNullOrWhiteSpace(label) && !label.Any(char.IsControl) ? label : null;
+    // In Host.Core, so a question the host would not type is listed for the machine (#510
+    // review, Trust on 8335427d).
+    static string? Label(string name, JsonElement p) => CopilotFieldSchema.Label(name, p);
 
     static (CopilotField?, string?) Field(string name, JsonElement p, PatternBudget patterns)
     {

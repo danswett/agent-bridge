@@ -473,11 +473,20 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         {
             List<string> rows = [];
             if (hint is not null) { rows.Add(hint); }
-            return Framed("Approve the mark?", labels, 1, [.. rows, "╭──────────────╮", words ? $"│ {Feedback} │" : "│              │", "╰──────────────╯"], colon: false);
+            return Framed("Approve the mark?", labels, 1, [.. rows, .. Input(words ? Feedback : "")], colon: false);
         }
         List<string> list = [];
         if (before is not null) { list.Add(before); }
         return Framed("Approve the mark?", labels, 0, [.. list, moved ? "    a" : "  ❯ a", moved ? "  ❯ b" : "    b", "    c"]);
+    }
+
+    // A text field's input as Copilot CLI 1.0.105 draws it (`Fxn`, `qc` with no side borders): a
+    // rule above and below, the first row "❯ " and the words, the rows they wrap onto indented,
+    // with no edge down either side. Wrapped at `wrap` columns of words when given.
+    static IEnumerable<string> Input(string words, int wrap = 0)
+    {
+        var rows = wrap > 0 && words.Length > wrap ? Enumerable.Range(0, (words.Length + wrap - 1) / wrap).Select(i => words.Substring(i * wrap, Math.Min(wrap, words.Length - i * wrap))).ToList() : [words];
+        return [" ──────────────", .. rows.Select((r, i) => i == 0 ? $" ❯ {r}" : $"   {r}"), " ──────────────"];
     }
 
     // Copilot CLI 1.0.105's ask_user form (cli-main.js `MIo`, `Uxn`, `Ft`) at field `at`: its
@@ -580,18 +589,18 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
     // A form of one text field titled "Data", whose box shows `typed`, and with `elsewhere` a
     // row above the form, where the session's own output is.
-    async Task AskDataAsync()
+    async Task AskDataAsync(string title = "Data")
     {
         Fixture.Append(events, Recorded("q1", new { pick = "a" }), Copilot.ToolDone("q1", second++), Copilot.ToolStart("q2", "ask_user", new
         {
             message = "Notes?",
-            requestedSchema = new { properties = new { data = new { type = "string", title = "Data" } } },
+            requestedSchema = new { properties = new { data = new { type = "string", title } } },
         }, second++));
         await source.RefreshAsync();
     }
 
     static List<string> DataScreen(string typed, string? elsewhere = null) =>
-        [.. elsewhere is null ? Array.Empty<string>() : [elsewhere], .. Framed("Notes?", ["Data"], 0, ["╭──────╮", $"│ {typed,-4} │", "╰──────╯"], colon: false)];
+        [.. elsewhere is null ? Array.Empty<string>() : [elsewhere], .. Framed("Notes?", ["Data"], 0, Input(typed), colon: false)];
 
     [Fact]
     public async Task Words_are_looked_for_in_the_field_they_are_typed_into_not_across_the_rows_beside_it()
@@ -630,6 +639,41 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Words_the_field_wraps_onto_a_second_row_are_found_across_the_wrap_and_get_their_Enter()
+    {
+        // As Copilot CLI 1.0.105 draws a long answer: its first row "❯ " and the rest indented,
+        // with no edge down either side, so the words' end runs across the wrap. Read row by row,
+        // it showed nowhere, and the Enter was withheld (#510 review, Trust on 8335427d).
+        await AskDataAsync();
+        const string Long = "The bar is close but the middle stroke stops short of the join";
+        injector.Screen = () => Framed("Notes?", ["Data"], 0, Input(injector.Plans.Any(p => p.Plan.Sends.Any(s => s.Text == Long)) ? Long : "", wrap: Long.Length - 5), colon: false);
+        injector.OnInject = () => { if (HasEnterOnly(injector.Plans[^1].Plan)) { Fixture.Append(events, Recorded("q2", new { data = Long })); } };
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, new { data = Long }, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(2, injector.Plans.Count);
+        Assert.True(HasEnterOnly(injector.Plans[^1].Plan));
+    }
+
+    [Fact]
+    public async Task Words_a_fields_label_already_says_are_not_taken_for_the_words_typed_into_it()
+    {
+        // The field is titled with the words, and the hints run on from it; the CLI never draws
+        // what was typed. Only the field's input is read, so their Enter stays unpressed.
+        await AskDataAsync(title: "Data ae");
+        injector.Screen = () => Framed("Notes?", ["Data ae"], 0, Input(""), colon: false);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, new { data = "ae" }, Guid.NewGuid().ToString());
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        Assert.Contains("not submitted", result.GetProperty("reason").GetString());
+        Assert.Equal(("ae", false), (Assert.Single(Assert.Single(injector.Plans).Plan.Sends).Text, injector.Plans[0].Plan.Sends[0].Enter));
+    }
+
+    [Fact]
     public async Task A_list_that_repaints_before_it_takes_its_Enter_is_not_taken_for_the_field_the_words_go_to()
     {
         // A busy CLI moves the caret at once, and takes the Enter that commits the option well
@@ -639,7 +683,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         await AskFormAsync();
         var fieldAt = DateTime.MaxValue;
         var drawAt = DateTime.MaxValue;
-        injector.Shows = $"│ {Feedback} │";
+        injector.Shows = $"❯ {Feedback}";
         injector.Screen = () => FormScreen(DateTime.UtcNow >= fieldAt, DateTime.UtcNow >= drawAt, moved: Moved(), hint: $"e.g. {Feedback}");
         injector.OnInject = () =>
         {
@@ -773,7 +817,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
             }
         }
         return Rows();
-        List<string> Rows() => field >= names.Length ? ["(sent)"] : Framed(message, labels ?? names, field, [$"Field: {names[field]}", $"│ {typed} │"], wrap, marked, colon: !boxes.Contains(names[field]));
+        List<string> Rows() => field >= names.Length ? ["(sent)"] : Framed(message, labels ?? names, field, [$"Field: {names[field]}", .. Input(typed)], wrap, marked, colon: !boxes.Contains(names[field]));
     }
 
     // The fields of the question asked that Copilot draws as a text or number box, headed
@@ -1119,7 +1163,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     {
         // The two "Note" fields read the same on screen: same heading, and both show "tab next"
         // and "shift+tab prev". A repaint while the CLI still showed the first would pass for
-        // the second, and the second's words go into the first.
+        // the second, and the second's words go into the first. Listed for the machine too, so
+        // no client offers what is refused (#510 review, Trust on 8335427d).
         var answer = new { first = "b", one = "for the first note", two = "for the second note", last = "c" };
         string[] names = ["first", "one", "two", "last"];
         await AskFieldsAsync(new
@@ -1134,8 +1179,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
 
-        Assert.Equal("refused", outcome);
-        Assert.Equal("two of this question's fields are headed \"Note\", and the host cannot tell on screen which of them the form is at; answer it at the machine", reason);
+        Assert.Equal(("refused", "this Copilot prompt can only be answered at the machine"), (outcome, reason));
+        Assert.True(source.Get(Id)?.Question is { Id: "q2", AnswerAtMachine: true });
         Assert.Empty(injector.Attempts);
     }
 
@@ -1680,7 +1725,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     // as a lone colon) or holds a line break (the heading split across rows, its colon on the
     // next, while the tab bar's first row still reads as the labels). It is refused before the
     // first key, not found missing once the field before it has been answered (#510 review,
-    // Copilot 5780656913; Trust on 412f1b2d).
+    // Copilot 5780656913; Trust on 412f1b2d), and listed for the machine (Trust on 8335427d).
     [InlineData("string", "   ")]
     [InlineData("enum", "   ")]
     [InlineData("enum", "Pick\n")]
@@ -1697,8 +1742,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
 
-        Assert.Equal("refused", outcome);
-        Assert.Contains("\"note\"", reason);
+        Assert.Equal(("refused", "this Copilot prompt can only be answered at the machine"), (outcome, reason));
+        Assert.True(source.Get(Id)?.Question is { Id: "q2", AnswerAtMachine: true });
         Assert.Empty(injector.Attempts);
     }
 
@@ -1713,8 +1758,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         string[] names = ["first", "second"];
         await AskFieldsAsync(new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, second = new { type = "string", @enum = new[] { "a", "b", "c" } } }, 2, answer);
         injector.Screen = () => Enters() < 1 ? FieldsScreen(names)
-            : shows == "before" ? Framed("Tell me", names, 0, ["Field: first", "│ ok │"])
-            : [.. Framed("Tell me", names, 1, ["Field: second", "│  │"]).Select(r => r == " second:" ? " other:" : r)];
+            : shows == "before" ? Framed("Tell me", names, 0, ["Field: first", .. Input("ok")])
+            : [.. Framed("Tell me", names, 1, ["Field: second", .. Input("")]).Select(r => r == " second:" ? " other:" : r)];
         var ch = await OpenAsync();
 
         var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
