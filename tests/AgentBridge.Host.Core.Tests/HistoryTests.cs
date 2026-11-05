@@ -977,6 +977,73 @@ public class HistoryTests
         return e.ToJsonString();
     }
 
+    // Claude queues a delegate's notice the moment it stops, and delivers it later.
+    static string Queued(string text, int s) =>
+        new JsonObject { ["type"] = "queue-operation", ["operation"] = "enqueue", ["timestamp"] = Copilot.At(s), ["sessionId"] = Id, ["content"] = text }.ToJsonString();
+
+    static string TaskNotice(string status) => $"<task-notification>\n<task-id>a1b2</task-id>\n<status>{status}</status>\n</task-notification>";
+
+    // Found in review of #292: the first run stopped, a message woke the delegate before that run's
+    // notice was delivered, and the second run's notice was then dropped, so only the first run's
+    // "done" was left while the second had failed.
+    static string[] WokenBeforeItsNoticeWasDelivered(bool ownTurn) =>
+    [
+        Claude.User("explore", 1),
+        Claude.Assistant(2, "tool_use", Claude.ToolUse("agent1", "Agent", new JsonObject { ["description"] = "Explore the code", ["prompt"] = "look" })),
+        LaunchedAgent("agent1", "a1b2", "Explore the code", 3),
+        Queued(TaskNotice("completed"), 4),
+        .. ownTurn ? new[] { Claude.Assistant(5, "end_turn", Claude.Text("Started it.")), Claude.User("look again", 6) } : [],
+        Claude.Assistant(7, "tool_use", Claude.ToolUse("wake1", "SendMessage", new JsonObject { ["to"] = "a1b2", ["summary"] = "Again", ["message"] = "Look again." })),
+        Claude.ToolResult("wake1", 8),
+        Notice(TaskNotice("completed"), 9),
+        Queued(TaskNotice("failed"), 10),
+        Notice(TaskNotice("failed"), 11),
+        Claude.Assistant(12, "end_turn", Claude.Text("The second look failed.")),
+    ];
+
+    static (DelegateEventKind, SubagentOutcome?, DateTimeOffset)[] Delegates(HistoryTurn turn) =>
+        [.. turn.Parts.Where(p => p.Delegate is not null).Select(p => (p.Delegate!.Event, p.Delegate.Outcome, p.At))];
+
+    [Fact]
+    public async Task A_claude_delegate_woken_before_its_notice_was_delivered_reports_both_runs_outcomes()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        Fixture.Append(transcript, WokenBeforeItsNoticeWasDelivered(ownTurn: false));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        var page = await source.HistoryAsync(Id, null, 20);
+        Assert.Equal(
+            [(DelegateEventKind.Started, null, Fixture.T0.AddSeconds(3)), (DelegateEventKind.Reported, SubagentOutcome.Done, Fixture.T0.AddSeconds(9)),
+             (DelegateEventKind.Reported, SubagentOutcome.Failed, Fixture.T0.AddSeconds(11))],
+            Delegates(page.Turns!.Single()));
+    }
+
+    [Fact]
+    public async Task A_claude_delegate_woken_in_a_later_turn_reports_both_runs_there_on_whichever_page_it_is_read()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        Fixture.Append(transcript, WokenBeforeItsNoticeWasDelivered(ownTurn: true));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        var whole = await source.HistoryAsync(Id, null, 20);
+        var alone = await source.HistoryAsync(Id, null, 1);
+        Assert.Equal(["explore", "look again"], whole.Turns!.Select(Prompt));
+        Assert.Equal("look again", Prompt(alone.Turns!.Single()));
+        (DelegateEventKind, SubagentOutcome?, DateTimeOffset)[] reports =
+            [(DelegateEventKind.Reported, SubagentOutcome.Done, Fixture.T0.AddSeconds(9)), (DelegateEventKind.Reported, SubagentOutcome.Failed, Fixture.T0.AddSeconds(11))];
+        Assert.Equal(reports, Delegates(whole.Turns![1]));
+        Assert.Equal(reports, Delegates(alone.Turns!.Single()));
+        Assert.Equal([(DelegateEventKind.Started, (SubagentOutcome?)null, Fixture.T0.AddSeconds(3))], Delegates(whole.Turns[0]));
+    }
+
     static string LaunchedAgent(string toolUseId, string agentId, string description, int s)
     {
         var e = JsonNode.Parse(Claude.ToolResult(toolUseId, s))!.AsObject();

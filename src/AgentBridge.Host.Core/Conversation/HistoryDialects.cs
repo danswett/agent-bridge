@@ -156,6 +156,20 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
         if (run.Working || !run.Said) { Report(turn, agent, run, outcome, at); }
     }
 
+    // Claude's notice of a delegate's end, which is the only way Claude says one, and which it
+    // writes once for every run: each is its run's end, reported whatever this turn heard first. A
+    // message can wake the delegate after one run stopped and before that run's notice was
+    // delivered; the next notice then ends the run it started. Spent on the run it came after,
+    // the second notice was dropped, losing the resumed run's report and outcome (found in review
+    // of #292). Live tells the two apart by when each was queued (ClaudeParser.Delivered), since
+    // it shows whether the delegate is running now; a turn need not, and the queue may be in an
+    // earlier turn.
+    public void RunNoticed(TurnBuilder turn, string agent, SubagentOutcome outcome, DateTimeOffset at)
+    {
+        if (!_main.ContainsKey(agent) || RunOf(agent) is not { } run) { return; }
+        Report(turn, agent, run, outcome, at);
+    }
+
     void Report(TurnBuilder turn, string agent, Run run, SubagentOutcome outcome, DateTimeOffset at)
     {
         (run.Working, run.Said) = (false, true);
@@ -393,7 +407,7 @@ internal sealed class ClaudeHistory : HistoryDialect
                         {
                             if (ClaudeParser.Tag(said, "task-id") is { } task)
                             {
-                                context.Noticed(turn, task, ClaudeParser.Tag(said, "status") == "completed" ? SubagentOutcome.Done : SubagentOutcome.Failed, at);
+                                context.RunNoticed(turn, task, ClaudeParser.Tag(said, "status") == "completed" ? SubagentOutcome.Done : SubagentOutcome.Failed, at);
                             }
                             break;
                         }
@@ -435,7 +449,6 @@ internal sealed class ClaudeHistory : HistoryDialect
                                     var input = Json.Get(block, "input");
                                     turn.ToolStarted(id, name, ToolSummary.From(input), at);
                                     if (name == "AskUserQuestion" && input is { } i) { turn.Asked(QuestionMapper.FromClaudeAskUserQuestion(id, i, at), at); }
-                                    if (name == "SendMessage" && input is { ValueKind: JsonValueKind.Object } sent && Json.Str(sent, "to") is { } to) { context.Woken(to); }
                                     break;
                                 }
                         }
