@@ -189,17 +189,18 @@ public sealed partial class SessionView
     // past it rather than staying where it was.
     void FocusBlock(int index, bool forward)
     {
-        var wanted = blocks;
+        var (wanted, target) = (blocks, blocks[index]);
         var direction = forward ? FocusNavigationDirection.Next : FocusNavigationDirection.Previous;
         var waited = 0;
         DispatcherQueue.TryEnqueue(Bring);
 
+        // The response may change while this waits, so the block is found again each time.
         void Bring()
         {
-            if (blocks != wanted || index >= blocks.Count) { return; }
-            if (waited == 0) { ConversationList.ScrollIntoView(blocks[index], ScrollIntoViewAlignment.Leading); }
+            if (blocks != wanted || ConversationKeyboard.Where(blocks, target) is not (>= 0 and var at)) { return; }
+            if (waited == 0) { ConversationList.ScrollIntoView(target, ScrollIntoViewAlignment.Leading); }
             ConversationList.UpdateLayout();
-            if (ConversationList.ContainerFromIndex(index) is not { } container)
+            if (ConversationList.ContainerFromIndex(at) is not { } container)
             {
                 // Not laid out yet: again at the next layout, a few times at most.
                 if (++waited < 5 && DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, Bring)) { return; }

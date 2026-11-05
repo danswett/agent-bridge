@@ -77,6 +77,18 @@ public static class ConversationKeyboard
         return null;
     }
 
+    // Where a block a Tab is on its way to is now: the response may have been cut at its start or
+    // grown since the move was queued, so the move holds the block itself, not its index. -1 once it
+    // is gone.
+    public static int Where(IReadOnlyList<ConversationBlock> blocks, ConversationBlock block)
+    {
+        for (var i = 0; i < blocks.Count; i++)
+        {
+            if (ReferenceEquals(blocks[i], block)) { return i; }
+        }
+        return -1;
+    }
+
     // The ends of a Tab as Passed reads them, from the places of what had focus and what gets it
     // (null outside the conversation's tree: entering from a popup, or leaving for one). A move that
     // went the wrong way wrapped round the window, so it went on to the end (or the start, going

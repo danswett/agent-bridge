@@ -85,22 +85,41 @@ static partial class SelfTest
         return problems.Count > 0 ? string.Join(", ", problems) : null;
     }
 
-    // What a screen reader is given wrong of the response's items: every block, realised or not, a
-    // list item numbered in a set of all the blocks, and every list item a block's, so the header
-    // and the footer are outside the set. Null when it is given all of them right.
-    static string? Listed(ListView list)
+    // What a screen reader is given wrong of the response's items: every block a list item numbered
+    // 1 to N in a set of N, and every list item a block's, so the header and the footer are outside
+    // the set. WinUI numbers an item only once it has a container, so a block not realised yet is
+    // realised first through its peer's VirtualizedItem pattern, as a screen reader moving to it
+    // does. Null when it is given all of them right, with how many blocks were realised that way.
+    static async Task<(string? Problem, int Realised, double Seconds)> Listed(ListView list)
     {
         var count = list.Items.Count;
-        if (count == 0 || FrameworkElementAutomationPeer.CreatePeerForElement(list) is not ItemsControlAutomationPeer peer) { return "a list to read"; }
+        if (count == 0 || FrameworkElementAutomationPeer.CreatePeerForElement(list) is not ItemsControlAutomationPeer peer) { return ("a list to read", 0, 0); }
         var problems = new List<string>();
+        var realised = 0;
+        var walk = System.Diagnostics.Stopwatch.StartNew();
         for (var i = 0; i < count; i++)
         {
             var item = peer.CreateItemAutomationPeer(list.Items[i]);
-            if (item is null || item.GetAutomationControlType() != AutomationControlType.ListItem || item.GetSizeOfSet() != count || item.GetPositionInSet() != i + 1)
+            if (item is null || item.GetAutomationControlType() != AutomationControlType.ListItem) { problems.Add($"block {i + 1} a list item: {item?.GetAutomationControlType().ToString() ?? "no peer"}"); break; }
+            if (list.ContainerFromIndex(i) is null)
             {
-                problems.Add($"block {i + 1} a list item, {i + 1} of {count}: {(item is null ? "no peer" : $"{item.GetAutomationControlType()}, {item.GetPositionInSet()} of {item.GetSizeOfSet()}")}");
+                if (item.GetPattern(PatternInterface.VirtualizedItem) is not IVirtualizedItemProvider virtualised) { problems.Add($"block {i + 1} realisable"); break; }
+                virtualised.Realize();
+                list.UpdateLayout();
+                realised++;
+                // A frame at a time, not Until's 200 ms, so a walk of some 200 blocks stays short
+                // and the list fills its cache ahead between steps.
+                var waited = 0;
+                while (list.ContainerFromIndex(i) is null && ++waited < 300) { await Task.Delay(16); }
+                if (list.ContainerFromIndex(i) is null) { problems.Add($"block {i + 1} realised"); break; }
+            }
+            if (item.GetPositionInSet() != i + 1 || item.GetSizeOfSet() != count)
+            {
+                problems.Add($"block {i + 1} {i + 1} of {count}: {item.GetPositionInSet()} of {item.GetSizeOfSet()}");
                 break;
             }
+            // A hang guard, not a bar: a walk this long is stuck.
+            if (walk.Elapsed > TimeSpan.FromSeconds(30)) { problems.Add($"every block numbered within 30 s: block {i + 1} reached"); break; }
         }
         var listed = (peer.GetChildren() ?? []).Where(c => c.GetAutomationControlType() == AutomationControlType.ListItem).ToList();
         if (listed.FirstOrDefault(c => c is not ItemAutomationPeer { Item: ConversationBlock }) is { } stray)
@@ -116,11 +135,12 @@ static partial class SelfTest
             if (ItemSaid(peer, shown, panel.FirstVisibleIndex, count) is { } wrong) { problems.Add(wrong); }
         }
         else { problems.Add("a block in view"); }
-        return problems.Count > 0 ? string.Join(", ", problems) : null;
+        return (problems.Count > 0 ? string.Join(", ", problems) : null, realised, walk.Elapsed.TotalSeconds);
     }
 
     // What a screen reader can't reach of the response: the last block, off screen and unrealised,
-    // found by its name, realised and brought into view as a reader brings it. Null when it can.
+    // named as no other block is, found by that name, and realised and brought into view through the
+    // peer the search found, as a reader does. Null when it can.
     static async Task<string?> Reachable(ListView list)
     {
         var count = list.Items.Count;
@@ -128,17 +148,20 @@ static partial class SelfTest
         var problems = new List<string>();
         var last = (ConversationBlock)list.Items[count - 1];
         if (list.ContainerFromIndex(count - 1) is not null) { problems.Add("the last block off screen to begin with"); }
-        if (peer.GetPattern(PatternInterface.ItemContainer) is not IItemContainerProvider items || items.FindItemByProperty(null, AutomationElementIdentifiers.NameProperty, last.Name) is null)
+        if (list.Items.Count(b => b is ConversationBlock c && c.Name == last.Name) != 1) { problems.Add("the last block named as no other block is"); }
+        var found = peer.GetPattern(PatternInterface.ItemContainer) is IItemContainerProvider items
+            ? items.FindItemByProperty(null, AutomationElementIdentifiers.NameProperty, last.Name) : null;
+        if ((found is null ? null : new ProviderPeer().Of(found)) is not ItemAutomationPeer foundPeer || !ReferenceEquals(foundPeer.Item, last))
         {
             problems.Add("the last block found by its name");
+            return string.Join(", ", problems);
         }
-        var lastPeer = peer.CreateItemAutomationPeer(last);
-        if (lastPeer?.GetPattern(PatternInterface.VirtualizedItem) is IVirtualizedItemProvider virtualised) { virtualised.Realize(); }
+        if (foundPeer.GetPattern(PatternInterface.VirtualizedItem) is IVirtualizedItemProvider virtualised) { virtualised.Realize(); }
         else { problems.Add("the last block realisable"); }
         if (!await Until(() => list.ContainerFromIndex(count - 1) is ListViewItem, TimeSpan.FromSeconds(5))) { problems.Add("the last block realised"); }
         else
         {
-            if (lastPeer?.GetPattern(PatternInterface.ScrollItem) is IScrollItemProvider scrolled) { scrolled.ScrollIntoView(); }
+            if (foundPeer.GetPattern(PatternInterface.ScrollItem) is IScrollItemProvider scrolled) { scrolled.ScrollIntoView(); }
             await Task.Delay(500);
             if (ItemSaid(peer, list.ContainerFromIndex(count - 1) as ListViewItem, count - 1, count) is { } wrong) { problems.Add(wrong); }
             else if (list.ContainerFromIndex(count - 1) is ListViewItem lastShown && SessionView.Shallowest<ScrollViewer>(list) is { } scroll
@@ -163,6 +186,13 @@ static partial class SelfTest
     }
 
     static string Clipped(string s) => s.Length > 40 ? s[..40] + "…" : s;
+
+    // From the provider a search hands a screen reader back to the peer it stands for, so the check
+    // goes on with what was found. PeerFromProvider is protected: only a peer can ask.
+    sealed class ProviderPeer() : FrameworkElementAutomationPeer(new Border())
+    {
+        public AutomationPeer? Of(IRawElementProviderSimple provider) => PeerFromProvider(provider);
+    }
     // What Tab gets wrong in the response: from the last link or Copy button the list has realised,
     // Tab goes on to the first in the next block that has one, which the list had not realised,
     // and lands in the block, never on its container. The list's cache is cut to the viewport while

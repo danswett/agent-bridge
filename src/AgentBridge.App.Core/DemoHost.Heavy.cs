@@ -111,6 +111,8 @@ public sealed partial class DemoHost
             else if (i % 17 == 8) { blocks.Add($"- the list's divider\n- the inspector's divider\n- the window's edge, case {i}"); items += 3; }
             else { blocks.Add(said[i % said.Length]); items++; }
         }
+        // Said once, so a screen reader that finds the last block by its name finds that block.
+        blocks.Add("That is the whole turn: every pane resized, every test run, nothing left open.");
         return string.Join("\n\n", blocks);
     }
 

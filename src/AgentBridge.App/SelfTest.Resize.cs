@@ -76,10 +76,11 @@ static partial class SelfTest
         check(untabbed is null, $"takes Tab from the last link or Copy button the conversation has drawn to the first in the next block with one, which it realises, inside the block and not onto it{Not(untabbed)}");
         var chrome = list is null ? "measured: the response not drawn" : Contained(list);
         check(chrome is null, $"draws no block's container as a tab stop, selected, filled or with a focus visual of its own{Not(chrome)}");
-        var unlisted = list is null ? "measured: the response not drawn" : Listed(list);
-        check(unlisted is null, $"gives a screen reader every block of the response as a list item, numbered in a set of all the blocks, and the header and footer outside it{Not(unlisted)}");
         var unreachable = list is null ? "measured: the response not drawn" : await Reachable(list);
-        check(unreachable is null, $"finds the response's last block, off screen, by its name, and brings it into view for a screen reader{Not(unreachable)}");
+        check(unreachable is null, $"finds the response's last block, off screen, by its name, which no other block has, and brings it into view for a screen reader{Not(unreachable)}");
+        // After Reachable, which needs the last block off screen to begin with: this walk realises every block.
+        var (unlisted, listRealised, listSeconds) = list is null ? ("measured: the response not drawn", 0, 0d) : await Listed(list);
+        check(unlisted is null, $"gives a screen reader every block of the response as a list item numbered 1 to {list?.Items.Count} of {list?.Items.Count}, each one not yet realised realised first through its automation peer ({listRealised} realised so, in {listSeconds:0.0} s), and the header and footer outside the set{Not(unlisted)}");
         if (card is not null) { card.Delegates.FinishedOpen = false; }
         static string Not(string? wrong) => wrong is null ? "" : $": not {wrong}";
 
@@ -98,6 +99,8 @@ static partial class SelfTest
             ["anchorProblem"] = moved,
             ["readerProblem"] = unreachable,
             ["listProblem"] = unlisted,
+            ["listRealisedByPeer"] = listRealised,
+            ["listWalkSeconds"] = Math.Round(listSeconds, 1),
             ["keysProblem"] = unkeyed,
             ["keysPressedBy"] = pressedBy,
             ["containerProblem"] = chrome,

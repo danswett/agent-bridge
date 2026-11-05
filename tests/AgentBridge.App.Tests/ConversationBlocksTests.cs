@@ -374,6 +374,20 @@ public sealed class ConversationKeyboardTests
     }
 
     [Fact]
+    public void Tab_queued_for_a_block_still_goes_to_that_block_when_the_response_is_cut_at_its_start_before_it_runs()
+    {
+        var shown = new ObservableCollection<ConversationBlock>(Blocks("Plain.\n\n[b](https://a.b)\n\nMore.\n\n[d](https://a.b)"));
+        var queued = shown[ConversationKeyboard.Passed(shown, from: -1, to: shown.Count, forward: true, i => false)!.Value];
+
+        ConversationBlocks.Update(shown, MarkdownModel.Parse("[b](https://a.b)\n\nMore.\n\n[d](https://a.b)"));
+
+        Assert.Equal(0, ConversationKeyboard.Where(shown, queued));
+        Assert.Same(queued, shown[0]);
+        ConversationBlocks.Update(shown, MarkdownModel.Parse("More.\n\n[d](https://a.b)"));
+        Assert.Equal(-1, ConversationKeyboard.Where(shown, queued));
+    }
+
+    [Fact]
     public void Tab_that_wraps_round_the_window_goes_on_to_the_end_of_the_response_first()
     {
         Assert.Equal((2, 5), ConversationKeyboard.Ends(2, -1, 5, forward: true));

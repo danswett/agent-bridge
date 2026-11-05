@@ -727,8 +727,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - The self-test checks that a block stays in place through a live resize and the conversation is
     drawn the same before and after it, that Page Down and Down scroll the text with focus and
     selection left alone, that Tab reaches a block not yet laid out, that no container is a stop or
-    draws chrome, and that every block is a list item numbered in the set
-    ([app-windows.md](../app-windows.md)).
+    draws chrome, that the last block is found by its name, which no other block has, and that every
+    block, realised first through its automation peer as a screen reader realises it, is a list item
+    numbered 1 to N in a set of N ([app-windows.md](../app-windows.md)).
 - **Your messages:** a bubble at the right edge of the conversation's column (card fill,
   platform radius), at most 85% of the column's width, so a short message beside a short reply
   is still at the right (#255).
