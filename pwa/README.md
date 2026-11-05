@@ -1,4 +1,4 @@
-# Agent Bridge PWA
+# The Slipgates web app (PWA)
 
 The phone client: your machines and their live agent sessions, end-to-end encrypted
 through the relay. Plain ES modules and CSS, no framework, no build step, nothing from a
@@ -19,6 +19,12 @@ once, and shows each machine's updates with Check, Install and Check all, per
 [v1-update.md](../docs/protocol/v1-update.md).
 Larger files come next.
 
+The app was called Agent Bridge before it became Slipgates (#538). The app shows the new name
+as soon as it updates, and an installed app takes the new name and icon too, except that an
+installed iPhone/iPad app keeps its old icon until you choose to reinstall it, with the name
+Agent Bridge under it. Apple gives a Home Screen app no way to change either, and reinstalling
+makes it a new device, signed in and approved again, so keeping it is fine.
+
 | Light | Dark | Answering | A permission request | All machines | Needs you |
 |---|---|---|---|---|---|
 | ![Demo mode, light](docs/demo-light.png) | ![Demo mode, dark](docs/demo-dark.png) | ![Answering the worked example's question](docs/answer.png) | ![An approval, answered with a tap](docs/approval.png) | ![Every machine's sessions at once, each row naming its machine](docs/all-machines.png) | ![Needs you: every pending question above the list, an approval answered in place](docs/needs-you-light.png) |
@@ -28,7 +34,7 @@ Larger files come next.
 | File | What it does |
 |---|---|
 | `js/main.js` | Boot and wiring: demo or live, sign-in, the views |
-| `js/brand.js` | The product's name (`BRAND.name`, and `BRAND.shortName` for under a home-screen icon) and the sentences that say it, the one source for every place the app shows it (#538). Storage keys, IndexedDB and cache names, the worker's scope and messages, push subscriptions and the relay protocol are identifiers, not the brand, and never come from it (#541) |
+| `js/brand.js` | The product's name (`BRAND.name`, and `BRAND.shortName` for under a home-screen icon) and the sentences that say it, the one source for every place the app shows it (#538). The name is the brand token, re-exported from `design/brand.js`, which `tools/design-gen` generates from `design/tokens.json` `brand` ([brand.md](../docs/design/brand.md)). Storage keys, IndexedDB and cache names, the worker's scope and messages, push subscriptions and the relay protocol are identifiers, not the brand, and never come from it (#541) |
 | `js/identity.js` | This device's P-256 key, generated non-extractable and kept in IndexedDB; its device id |
 | `js/signin.js` | GitHub device flow through the relay; the stored account |
 | `js/relay.js` | One relay WebSocket: hello, key proof, presence (with the account's offline machines, `known`), routed frames, `forget`. A send on a dead socket throws |
@@ -73,9 +79,9 @@ Larger files come next.
 | `js/ui/*` | The sessions page's panes (#179, ui.md §5.2): each session's two-line row and its view (header, conversation, reply box, and the inspector's Details and Tools; `session-card.js`), facts joined by separators that never start a line and paths cut in the middle (`meta.js`), the row menu (Move up, Move down, Pin), the question and its answer form, the reply box, End session, the Start a session panel (agent-ha-bridge's launch card, without its 255-character prompt), machines list (offline machines after the online ones, with when each was last seen and Forget, each row two lines: name and state, then at most two facts; #213), the machine tabs over the sessions, the usage page, relative times |
 | `js/demo.js` | `?demo=1`, and loaded only then (a dynamic import, so a chunk of its own the live app never fetches): a simulated host speaking the real protocol to the real client, answering, replying, ending and launching sessions and usage included; `?machines=2` adds a second machine, Laptop, and `?machines=3` a read-only shadow, DEV-VM1 (shadow), behind a simulated relay (`DemoConnection`); `?updates=1` a machine whose app found a release, and installs it when asked (`?updateStep=<ms>` per step); `?delegates=1` a session whose delegates are working, the main agent's words apart from theirs |
 | `tools/build-site.mjs` | Assembles the site for Pages: `config.js` with the relay, CSP in the page, the scripts bundled and minified by esbuild into `bundle/` (an entry and the chunks it imports, named by their content's hash; the page preloads the chunks), the bundle listed in `sw.js` for the worker to keep, and `sw.js` stamped with a hash of everything served, so any change reaches an open app as an update (the app then offers Reload). `js/` is copied beside the bundle as it is, the source layout the tests import modules from; the page never loads it. Needs `npm ci` (esbuild). It refuses to build a site that lacks any file `sw.js` keeps, since no release could install from it. Pages runs it without install scripts (`npm ci --ignore-scripts`) in a job that holds no token to publish with; a second job deploys what it made |
-| `tools/brand.mjs` | Writes `js/brand.js`'s name into what can't import it: the page's title, home-screen title, app-bar and navigation labels and each `<span data-brand>`, the manifest's `name` and `short_name`, and `sw.js`'s title for a push without one. `--check` (run by `test/unit/brand.test.mjs`) fails while any of them differs, so renaming is an edit to `js/brand.js` and a run of `node tools/brand.mjs` |
+| `tools/brand.mjs` | Writes `js/brand.js`'s name into what can't import it: the page's title, home-screen title, app-bar and navigation labels and each `<span data-brand>`, the manifest's `name` and `short_name`, and `sw.js`'s title for a push without one. `--check` (run by `test/unit/brand.test.mjs`) fails while any of them differs, so renaming is an edit to `design/tokens.json` `brand`, a run of `node tools/design-gen/generate.mjs`, then `node tools/brand.mjs` |
 | `design/tokens.css`, `design/sprite.svg` | Generated by `tools/design-gen` from `/design` ([design/README.md](../design/README.md)); never edit them. The colour roles and surfaces as `--ab-*` custom properties (light, dark and forced colours), the glyphs and icons as symbols, and `@font-face` for Slipgates Sans and Slipgates Mono, whose WOFF2s and licences (licensed separately under SIL OFL 1.1, not this project's AGPL) `tools/build-site.mjs` copies from `/design/fonts` into the site's `design/fonts/`. `app.css` takes every colour from them |
-| `icon.svg`, `icons/*.png` | The app icon (ui.md §7), generated by `tools/design-gen` too: the favicon and the manifest's `any` icons (the Windows tile), its maskable icons at 192 and 512, and the 180 px `apple-touch-icon`. The offline shell holds them all, and notifications show `icons/icon-192.png` |
+| `icon.svg`, `icons/*.png` | The app icon (ui.md §7, [brand.md](../docs/design/brand.md) §6), generated by `tools/design-gen` too: the favicon and the manifest's `any` icons (the Windows tile), its maskable icons at 192 and 512, its `monochrome` icons at 192 and 512 (the maskable icon's mark alone, white on transparency, for Android's themed icons), and the 180 px `apple-touch-icon`. The offline shell holds them all. Notifications show `icons/icon-192.png`, with `icons/badge-96.png` as the badge Android draws in the status bar (the native 24 px mark, as the Android client's `ic_stat_slipgates`) |
 
 ### Connecting a host
 

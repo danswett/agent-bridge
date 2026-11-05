@@ -72,6 +72,13 @@ test('an answered question replaces its notification quietly, and a finished tur
     [['resolved', `${MACHINE}:s1`, true, false], ['finished', `${MACHINE}:s1`, false, true]]);
 });
 
+test('every notification carries the app icon and the mark as its badge, for Android\'s status bar', async () => {
+  const sw = worker();
+  await sw.fire('push', push(notice('question')));
+  await sw.fire('push', push(undefined));
+  assert.deepEqual(sw.shown.map((n) => [n.icon, n.badge]), [['icons/icon-192.png', 'icons/badge-96.png'], ['icons/icon-192.png', 'icons/badge-96.png']]);
+});
+
 test('a kind from a newer machine is shown as a question', async () => {
   const sw = worker();
   await sw.fire('push', push(notice('reminder')));
