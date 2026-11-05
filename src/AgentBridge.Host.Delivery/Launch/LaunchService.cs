@@ -863,6 +863,7 @@ public sealed partial class LaunchService : ISessionLauncher
                 {
                     p.RegisteredAt ??= now;
                     p.LiveId = id;
+                    Noted(p, id);
                     if (!p.Launcher.RegistersBeforeReady || p.Ready)
                     {
                         log($"launch {Short(p.Key)}: {label} in {p.Where} registered as session {Short(id)} after {(now - p.At).TotalSeconds:0.0} s");
@@ -898,6 +899,7 @@ public sealed partial class LaunchService : ISessionLauncher
                     }
                     p.RegisteredAt ??= options.Time.GetUtcNow();
                     p.LiveId = late;
+                    Noted(p, late);
                     if (!p.Launcher.RegistersBeforeReady || p.Ready)
                     {
                         Decide(p, new LaunchResult(LaunchOutcome.Started) { Session = late, Launched = p.Launched });
@@ -1057,12 +1059,19 @@ public sealed partial class LaunchService : ISessionLauncher
     void Decide(Pending p, LaunchResult result)
     {
         // Before the outcome is told, so the record has it by the time anyone hears of the session.
-        if (result is { Outcome: LaunchOutcome.Started, Session: { } id, Launched: { } launched } && SessionStarted is { } started)
-        {
-            try { started(id, launched); }
-            catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the restore record could not note session {id[..Math.Min(8, id.Length)]}: {e.Message}"); }
-        }
+        if (result is { Outcome: LaunchOutcome.Started, Session: { } id }) { Noted(p, id); }
         if (!p.Decided.TrySetResult(result) && result.Outcome == LaunchOutcome.Started) { p.RegisteredLate = true; }
+    }
+
+    // Once the agent has registered the session, whatever the launch's outcome comes to: one whose
+    // window is never seen ready (Unconfirmed) is still a session this launch started, with what it
+    // was started with. Once per session id.
+    void Noted(Pending p, string id)
+    {
+        if (p.NotedId == id || SessionStarted is not { } started) { return; }
+        p.NotedId = id;
+        try { started(id, p.Launched); }
+        catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the restore record could not note session {id[..Math.Min(8, id.Length)]}: {e.Message}"); }
     }
 
     // agent-ha-bridge's Test-DaemonTrustAwaitingPress: a launched agent asking whether to trust
@@ -1381,6 +1390,8 @@ public sealed partial class LaunchService : ISessionLauncher
         // session once it is live, and who declined to trust the folder.
         public int? Window { get; set; }
         public volatile string? LiveId;
+        // The session the restore record was told of (#780).
+        public string? NotedId;
         public volatile string? Declined;
         // A launcher that registers before its window is ready: whether the last look found it
         // ready, when its session registered, whether its launch has already answered for a

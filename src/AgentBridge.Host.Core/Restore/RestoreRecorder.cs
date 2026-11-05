@@ -184,7 +184,8 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         // What the sessions still live were launched with, so adopting them keeps it.
         lock (gate)
         {
-            foreach (var e in previous?.Sessions ?? [])
+            // Owed ones too: one still being judged when the host stopped may be found running now.
+            foreach (var e in (previous?.Sessions ?? []).Concat((previous?.Owed ?? []).Select(w => w.Entry)))
             {
                 if (e.Launch is { } l && launched.Count < LaunchesKept) { launched.TryAdd(e.Id, l); }
             }
@@ -346,10 +347,24 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         {
             var w = owed[i];
             if (live.TryGetValue(w.Entry.Id, out var e) && e.Gone is null) { owed.RemoveAt(i); continue; }
+            // The source as it is now, not only as its events have told us: a hold that has just
+            // lifted clears before the sessions it found are dispatched here.
+            if (!w.Decided && source.Get(w.Entry.Id) is not null) { owed.RemoveAt(i); continue; }
             if (w.Decided && now - w.At >= OwedFor) { owed.RemoveAt(i); continue; }
             if (w.Decided) { continue; }
-            var verdict = RestoreJudge.Judge(w.Entry, w.Cause, running: false, held: held.Contains(w.Entry.Agent), () => options.Ends.Ended(w.Entry.Agent, w.Entry.Id),
-                endsSettled: options.EndsSettled?.Invoke(w.Entry.Agent) ?? true);
+            var settled = options.EndsSettled?.Invoke(w.Entry.Agent) ?? true;
+            // A Claude or Codex ending is read while discovery is held too, and kept: the intake
+            // prunes an ended registration once its process has gone, which may be before the hold
+            // lifts, and its absence then would read as a death.
+            if (held.Contains(w.Entry.Agent) && settled && w.EndedSeen is null && w.Cause != RestoreCause.Reboot
+                && w.Entry.Agent is AgentKind.Claude or AgentKind.Codex && options.Ends.Ended(w.Entry.Agent, w.Entry.Id) == true)
+            {
+                owed[i] = w = w with { EndedSeen = true };
+            }
+            var seen = w.EndedSeen;
+            var entry = w.Entry;
+            var verdict = RestoreJudge.Judge(entry, w.Cause, running: false, held: held.Contains(entry.Agent), () => seen == true || options.Ends.Ended(entry.Agent, entry.Id) == true,
+                endsSettled: settled);
             switch (verdict)
             {
                 case RestoreVerdict.Ended:
@@ -414,7 +429,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         };
     }
 
-    string Signature() => string.Join(";", owed.Select(w => $"{w.Entry.Id}:{w.Decided}"));
+    string Signature() => string.Join(";", owed.Select(w => $"{w.Entry.Id}:{w.Decided}:{w.EndedSeen}"));
 
     RestoreEntry? From(Session s, DateTimeOffset now)
     {

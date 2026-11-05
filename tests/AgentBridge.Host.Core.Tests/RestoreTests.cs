@@ -328,7 +328,14 @@ public sealed class RestoreTests : IDisposable
         // A sub-agent's prompt after it is not the person typing.
         Fixture.Append(events, Copilot.User("look", 4, agentId: "sub"));
         Assert.True(ended.Ended(AgentKind.Copilot, copilot));
-        Fixture.Append(events, Copilot.User("and again", 5));
+        // Resumed after it shut down, and lost before anything was typed: not the earlier ending.
+        Fixture.Append(events, Copilot.Event("session.resume", new { }, 5));
+        Assert.False(ended.Ended(AgentKind.Copilot, copilot));
+        Fixture.Append(events, Copilot.Event("session.shutdown", new { }, 6));
+        Assert.True(ended.Ended(AgentKind.Copilot, copilot));
+        Fixture.Append(events, Copilot.User("and again", 7));
+        Assert.False(ended.Ended(AgentKind.Copilot, copilot));
+        Fixture.Append(events, Copilot.Event("session.shutdown", new { }, 8), Copilot.Event("session.start", new { }, 9));
         Assert.False(ended.Ended(AgentKind.Copilot, copilot));
 
         Assert.Null(ended.Ended(AgentKind.Claude, claude));
@@ -487,6 +494,60 @@ public sealed class RestoreTests : IDisposable
         File.WriteAllText(Path.Combine(newer, id + ".json"), "{ \"SessionId\": \"" + id + "\", \"Updated\": \"2026-10-28T05:00:00.000Z\", \"Ended\": false }");
 
         Assert.False(new SessionEnds(f.CopilotHome, [older, newer], []).Ended(AgentKind.Claude, id));
+    }
+
+    [Fact]
+    public async Task A_session_still_being_judged_when_the_host_stopped_and_found_running_keeps_what_it_was_launched_with()
+    {
+        var launch = new RestoreLaunch("agency", "Bridge", true, "work", null, null, null, "ask");
+        Previous(Fixture.T0, false, E("a") with { Launch = launch });
+        source.HeldNow = new DiscoveryHeld("the copilot processes could not be listed", [AgentKind.Copilot]);
+        await using (var first = Recorder())
+        {
+            first.Start();
+        }
+        source.HeldNow = null;
+        source.Sessions.Add(S("a"));
+
+        await using var second = Recorder();
+        second.Start();
+
+        Assert.Equal(launch, Assert.Single(Written().Sessions).Launch);
+    }
+
+    [Fact]
+    public async Task A_session_found_as_a_hold_lifts_is_running_before_its_upsert_arrives()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        source.HeldNow = new DiscoveryHeld("the copilot processes could not be listed", [AgentKind.Copilot]);
+        await using var r = Recorder();
+        r.Start();
+
+        // The source found it and lifted the hold; its event has not been dispatched yet.
+        source.Sessions.Add(S("a"));
+        source.HeldNow = null;
+        Time.Advance(RestoreRecorder.JudgeEvery);
+
+        Assert.Null(r.Notice);
+        Assert.Empty(told);
+    }
+
+    [Fact]
+    public async Task An_ending_read_while_discovery_is_held_counts_after_its_registration_is_pruned()
+    {
+        Previous(Fixture.T0, false, E("a", AgentKind.Codex));
+        source.HeldNow = new DiscoveryHeld("the codex processes could not be listed", [AgentKind.Codex]);
+        ends.Of["a"] = true;
+        await using var r = Recorder();
+        r.Start();
+
+        ends.Of.Remove("a");
+        source.HeldNow = null;
+        Time.Advance(RestoreRecorder.JudgeEvery);
+
+        Assert.Null(r.Notice);
+        Assert.Empty(r.Folders()!);
+        Assert.Empty(told);
     }
 
     sealed class Live : ISessionSource

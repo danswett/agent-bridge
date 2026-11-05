@@ -59,7 +59,15 @@ public sealed class RestoreWorktreeUsage(IRestorePending pending, IWorktreeUsage
         if (pending.Folders() is not { } waiting) { return WorktreeUsage.Unknown("the sessions waiting to be restored cannot be read"); }
         var usage = inner?.Read() ?? WorktreeUsage.Unknown("this host has no way to read it");
         if (!usage.Known || waiting.Count == 0) { return usage; }
-        return usage with { Directories = [.. usage.Directories, .. waiting.Select(w => Folders.Physical(w) ?? w)] };
+        // As a live session's: a folder that cannot be resolved (a link that is missing or cannot
+        // be read, or the folder gone) may still be under any worktree, so nothing is known.
+        var physical = new List<string>();
+        foreach (var w in waiting)
+        {
+            if (Folders.Physical(w) is not { } p) { return WorktreeUsage.Unknown("the folder of a session waiting to be restored cannot be resolved"); }
+            physical.Add(p);
+        }
+        return usage with { Directories = [.. usage.Directories, .. physical] };
     }
 }
 

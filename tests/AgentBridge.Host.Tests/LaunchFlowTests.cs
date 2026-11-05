@@ -481,6 +481,23 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Empty(screens.Typed);
     }
 
+    // #780: registered is started, as far as the restore record goes, whether or not its window is
+    // ever seen ready: what it was launched with is kept for it.
+    [Fact]
+    public async Task A_session_whose_window_is_never_seen_ready_is_still_told_to_the_restore_record()
+    {
+        screens.Rows = null;
+        var launcher = Launcher(Config(), readyWait: TimeSpan.FromMilliseconds(300));
+        var told = new List<string>();
+        launcher.SessionStarted += (id, _) => { lock (told) { told.Add(id); } };
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: launcher).HandleAsync;
+        var ch = await OpenAsync();
+
+        var o = await LaunchAsync(ch, new { workspace = "App" });
+
+        Assert.Equal("unconfirmed", o.Outcome_);
+        lock (told) { Assert.Equal([o.Session!], told); }
+    }
     [Fact]
     public async Task A_Copilot_that_registers_but_whose_window_is_not_ready_when_the_wait_ends_is_said_to_have_appeared()
     {

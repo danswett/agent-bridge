@@ -279,6 +279,11 @@ public sealed class WorktreeReclaimerTests : IDisposable
         Assert.True(Directory.Exists(waiting) && Directory.Exists(finished));
         Assert.Contains(logs, l => l.EndsWith("cannot be established (the sessions waiting to be restored cannot be read)", StringComparison.Ordinal));
 
+        // A folder that cannot be resolved may be under any of them.
+        Assert.Equal(0, Reclaim(new RestoreWorktreeUsage(new Pending([Path.Combine(waiting, "src"), Path.Combine(root, "gone")]), nobody)));
+        Assert.True(Directory.Exists(finished));
+        Assert.Contains(logs, l => l.EndsWith("cannot be established (the folder of a session waiting to be restored cannot be resolved)", StringComparison.Ordinal));
+
         Assert.Equal(1, Reclaim(new RestoreWorktreeUsage(new Pending([Path.Combine(waiting, "src")]), nobody)));
         Assert.True(Directory.Exists(waiting));
         Assert.False(Directory.Exists(finished));

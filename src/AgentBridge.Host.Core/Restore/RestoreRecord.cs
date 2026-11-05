@@ -35,7 +35,10 @@ public sealed record RestoreEntry
 // last wrote its record) and when this was found (At). Decided: judged to have died, and offered to
 // restore. Not yet: its agent's discovery was held, so whether it still runs could not be told, and
 // it waits to be judged rather than be read as absent (§6.3, #43).
-public sealed record RestoreOwed(RestoreEntry Entry, RestoreCause Cause, DateTimeOffset? Since, DateTimeOffset At, bool Decided);
+// EndedSeen: its agent was once seen to record a normal ending while it was still being judged,
+// kept because the record of it may be gone by the time it can be judged (the hook intake prunes
+// an ended Codex registration once its process has gone).
+public sealed record RestoreOwed(RestoreEntry Entry, RestoreCause Cause, DateTimeOffset? Since, DateTimeOffset At, bool Decided, bool? EndedSeen = null);
 
 // restore.json, in the profile's folder beside config.json. Boot: when the machine started, as this
 // run of the host read it; a later run on another boot knows the machine restarted. Stopped: the host
@@ -233,7 +236,7 @@ public interface ISessionEnds
 }
 
 // Copilot: its events.jsonl has the main agent's session.shutdown after the last thing the person
-// typed. Claude and Codex: the hook registration (agent-ha-bridge's shape, or this host's intake)
+// typed, and after the last time it was started or resumed. Claude and Codex: the hook registration (agent-ha-bridge's shape, or this host's intake)
 // says Ended, which their SessionEnd hook sets.
 public sealed class SessionEnds(string copilotHome, IReadOnlyList<string> claudeRoots, IReadOnlyList<string> codexRoots) : ISessionEnds
 {
@@ -271,7 +274,8 @@ public sealed class SessionEnds(string copilotHome, IReadOnlyList<string> claude
         // The first line may be cut by the tail, and fails to parse; it is older than what decides.
         foreach (var line in text.Split('\n'))
         {
-            if (!line.Contains("\"user.message\"", StringComparison.Ordinal) && !line.Contains("\"session.shutdown\"", StringComparison.Ordinal)) { continue; }
+            if (!line.Contains("\"user.message\"", StringComparison.Ordinal) && !line.Contains("\"session.shutdown\"", StringComparison.Ordinal)
+                && !line.Contains("\"session.resume\"", StringComparison.Ordinal) && !line.Contains("\"session.start\"", StringComparison.Ordinal)) { continue; }
             try
             {
                 using var doc = JsonDocument.Parse(line);
@@ -279,7 +283,8 @@ public sealed class SessionEnds(string copilotHome, IReadOnlyList<string> claude
                 if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String) { continue; }
                 // A sub-agent's prompt or shutdown is not the session's.
                 if (e.TryGetProperty("agentId", out var agent) && agent.ValueKind == JsonValueKind.String && agent.GetString() is { Length: > 0 }) { continue; }
-                if (type.ValueEquals("user.message")) { ended = false; }
+                // Resumed after it shut down: a run of its own, which an earlier ending says nothing of.
+                if (type.ValueEquals("user.message") || type.ValueEquals("session.resume") || type.ValueEquals("session.start")) { ended = false; }
                 else if (type.ValueEquals("session.shutdown")) { ended = true; }
             }
             catch (JsonException) { }

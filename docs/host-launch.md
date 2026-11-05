@@ -242,7 +242,7 @@ removes that file: what was owed is unknown, and unknown is never read as nothin
 | The machine booted since (boot times more than 2 minutes apart), or on Windows the person's logon is new (a sign-out, or a shutdown with Fast Startup, which keeps the boot time): an empty, volatile key of the profile's, `HKCU\Software\AgentBridge\logon-<hash>`, which Windows drops with the logon and which holds no value (uninstall removes any left behind) | Died: a shutdown or a sign-out ends every session, so an ending written as it went down is the shutdown's |
 | Same boot, and the last run saw it go | Ended under the host's eyes |
 | Same boot, and its agent's endings are not yet all taken in (on a machine migrated from agent-ha-bridge, a Claude or Codex SessionEnd still in the hook intake's spool) | Waits until the intake has drained the spool, then is judged |
-| Same boot, and its agent recorded a normal end | Ended. Copilot: a `session.shutdown` of the main agent after the last `user.message` in its `events.jsonl`. Claude and Codex: its hook registration says `Ended` (their SessionEnd hook) |
+| Same boot, and its agent recorded a normal end | Ended. Copilot: a `session.shutdown` of the main agent after the last `user.message` and the last `session.resume` in its `events.jsonl`. Claude and Codex: its hook registration says `Ended` (their SessionEnd hook), the newest of its roots; an ending read while discovery was held is kept, since the intake may prune the registration before the hold lifts |
 | Otherwise | Died with the host |
 
 The cause is `reboot` across boots or logons; on the same boot, `restart` if the last run wrote `stopped`, else
@@ -261,7 +261,7 @@ are only offered (design G5), and stay owed until the machine takes launches. Wi
 kept owed, and what earlier starts kept owed is let go.
 
 **Worktrees.** The reclaimer keeps the worktree of every session owed or still being judged, as it
-keeps a live session's; one owed without a folder, or a record set aside, keeps every worktree.
+keeps a live session's; one owed without a folder or with one that cannot be resolved, or a record set aside, keeps every worktree.
 
 ## The log
 
