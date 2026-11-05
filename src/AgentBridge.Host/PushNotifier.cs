@@ -370,6 +370,7 @@ public sealed class PushNotifier : IAsyncDisposable
             {
                 if (!sessions.TryGetValue(change.Id, out var t)) { return; }
                 t.Removed = true;
+                Recovered(SignInKeyOf(t.Last));
                 t.Due = t.Shown is { } shown ? new Due(NoticeKind.Resolved, now, shown) : null;
                 if (t.Due is null) { Drop(change.Id); }
             }
@@ -384,6 +385,7 @@ public sealed class PushNotifier : IAsyncDisposable
         var prev = t.Last;
         t.Last = s;
         t.Removed = false;
+        if (SignInKeyOf(prev) is { } was && was != SignInKeyOf(s)) { Recovered(was); }
         // The main agent's answer as it stood before any wait on a delegate began, and whether
         // its turn was running then.
         var baseline = t.MainKey;
@@ -692,13 +694,33 @@ public sealed class PushNotifier : IAsyncDisposable
         SignIns(now);
     }
 
-    // Sessions that need sign-in, by PushNotice.SignInKey. Not one whose sign-in has finished and
-    // is waiting for the session to show it (recovery pending): the person has already acted.
+    // The sign-in notice a session counts toward (PushNotice.SignInKey), or null. Not one whose
+    // sign-in has finished and is waiting for the session to show it (recovery pending): the person
+    // has already acted.
+    static string? SignInKeyOf(Session? s) =>
+        s is { Attention: { Kind: AttentionKind.SignInNeeded, Recovery: not RecoveryState.Pending } a } ? PushNotice.SignInKey(a.Agent ?? s.Agent, a.Account) : null;
+
     Dictionary<string, List<Session>> NeedSignIn() =>
-        sessions.Values.Where(t => !t.Removed && t.Last is { Attention: { Kind: AttentionKind.SignInNeeded, Recovery: not RecoveryState.Pending } })
+        sessions.Values.Where(t => !t.Removed && SignInKeyOf(t.Last) is not null)
             .Select(t => t.Last!)
-            .GroupBy(s => PushNotice.SignInKey(s.Attention!.Agent ?? s.Agent, s.Attention.Account), StringComparer.Ordinal)
+            .GroupBy(s => SignInKeyOf(s)!, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
+    // The last session of a sign-in notice no longer needs it, seen as it changes rather than at the
+    // next pump: a new failure before that pump (one waits on a push in flight) was otherwise the
+    // same incident, held back for the rest of the hour.
+    void Recovered(string? key)
+    {
+        if (key is null || sessions.Values.Any(t => !t.Removed && SignInKeyOf(t.Last) == key)) { return; }
+        ForgetSignIn(key);
+    }
+
+    void ForgetSignIn(string key)
+    {
+        signInSent.Remove(key);
+        store.SignIn(key, null);
+        outbox.RemoveAll(o => o.Kind == NoticeKind.SignIn && o.Session == key);
+    }
 
     // One notice per agent and account at once, again each SignInRepeat while it lasts; one whose
     // sessions are all signed in again (or gone) is forgotten, and anything of it still waiting
@@ -706,12 +728,7 @@ public sealed class PushNotifier : IAsyncDisposable
     void SignIns(DateTimeOffset now)
     {
         var groups = NeedSignIn();
-        foreach (var key in signInSent.Keys.Where(k => !groups.ContainsKey(k)).ToList())
-        {
-            signInSent.Remove(key);
-            store.SignIn(key, null);
-            outbox.RemoveAll(o => o.Kind == NoticeKind.SignIn && o.Session == key);
-        }
+        foreach (var key in signInSent.Keys.Where(k => !groups.ContainsKey(k)).ToList()) { ForgetSignIn(key); }
         foreach (var (key, affected) in groups)
         {
             if (signInSent.TryGetValue(key, out var sent) && now < sent + options.SignInRepeat) { continue; }

@@ -224,7 +224,7 @@ internal sealed class SessionTracker
             WaitingOn = question?.Agent,
             Subagents = subagents,
             SubagentsMore = more,
-            Attention = _state.Attention ?? Stalled(effective, Later(_state.LastEventAt, hintAt), agents + shells > 0, subagents, now),
+            Attention = _state.Attention ?? Stalled(effective, Later(_state.LastEventAt, hintAt), agents + shells > 0, subagents, more, now),
             Activity = new Activity
             {
                 Response = response,
@@ -248,12 +248,15 @@ internal sealed class SessionTracker
     // goes quiet. A 401 that the CLI never writes, or a CLI hung on its own network call, left a
     // session reading working for an hour with nothing to say it had stopped. Never over a
     // question (it is waiting on the person) or another attention; any event clears it.
-    Attention? Stalled(SessionStatus effective, DateTimeOffset? lastEvent, bool background, IReadOnlyList<Subagent>? subagents, DateTimeOffset now)
+    Attention? Stalled(SessionStatus effective, DateTimeOffset? lastEvent, bool background, IReadOnlyList<Subagent>? subagents, int? more, DateTimeOffset now)
     {
         if (effective != SessionStatus.Working || lastEvent is not { } last) { return null; }
         var busy = background || _state.Tools.Current() is not null;
         var after = busy ? _options.NotRespondingBusyAfter : _options.NotRespondingAfter;
         if (now - last < after) { return null; }
+        // Working delegates are listed first; with every listed one working and more left out, one
+        // whose rollout could not be looked at may be the one still writing: never called stalled.
+        if (Discovered.Agent == AgentKind.Codex && more > 0 && subagents is { Count: > 0 } listed && listed.All(a => a.Status == SubagentStatus.Working)) { return null; }
         // A delegate that writes only its own transcript (Claude's beside the session's, Codex's a
         // rollout of its own) leaves the session's quiet while it works: that counts as the
         // session's own event.

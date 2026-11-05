@@ -42,6 +42,20 @@ public sealed class ToastTests
         return AuthState.Attach(Make.Session(id, response: "Done.", turns: 2), JsonDocument.Parse(new System.Text.Json.Nodes.JsonObject { ["attention"] = attention }.ToJsonString()).RootElement);
     }
 
+    // attention.agent is optional: two agents' sign-ins that leave it out are still two toasts, each
+    // named for its session's agent.
+    [Fact]
+    public void Sign_in_toasts_are_grouped_by_the_sessions_own_agent_when_attention_names_none()
+    {
+        var p = Planner();
+        var attention = JsonSerializer.SerializeToElement(new { attention = new { kind = "signInNeeded", account = "octo" } });
+        p.Upsert(AuthState.Attach(Make.Session("s1") with { Agent = AgentKind.Copilot }, attention));
+        p.Upsert(AuthState.Attach(Make.Session("s2") with { Agent = AgentKind.Claude }, attention));
+        p.Tick();
+
+        Assert.Equal(["Claude on Test PC needs sign-in", "Copilot on Test PC needs sign-in"], sink.Shown.Select(t => Xml(t).Descendants("text").First().Value).Order());
+    }
+
     // A recount while the window was in front changed nothing on the toast: it is made once the
     // window is not, quietly, never left saying the old count until the hourly repeat.
     [Fact]

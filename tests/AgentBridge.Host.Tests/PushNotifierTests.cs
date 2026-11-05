@@ -394,6 +394,31 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal(2, SignInsSent());
     }
 
+    // Signed in again and failing again while a push is in flight, before the next pump: a new
+    // incident, notified at once rather than held for the rest of the hour.
+    [Fact]
+    public async Task A_sign_in_that_recovers_and_fails_again_while_a_push_is_in_flight_notifies_again_at_once()
+    {
+        Start();
+        Subscribe(Phone);
+        var first = true;
+        sender.Respond = _ =>
+        {
+            if (first)
+            {
+                first = false;
+                source.Upsert(S("s1", SessionStatus.Idle, response: "Answered.", turns: 2));
+                source.Upsert(S("s1", SessionStatus.Idle, response: "Answered.", turns: 3) with { Attention = SignedOut with { Since = T.AddMinutes(1) } });
+            }
+            return new PushResult(201, null);
+        };
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        await After(TimeSpan.Zero);
+        await After(TimeSpan.Zero);
+
+        Assert.Equal(2, SignInsSent());
+    }
+
     // A notice still waiting for the relay when the host restarted never reached anyone: the next
     // host makes it again rather than counting the hour from it.
     [Fact]

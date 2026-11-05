@@ -290,11 +290,13 @@ public sealed class ToastPlanner
     // previous answer beside it, and nothing on the desktop said every session had stopped (#800 P0).
     void SignIns(DateTimeOffset now)
     {
+        // By the session's own agent, as SignInBanners does: attention.agent is optional, and one that
+        // left it out read as Unknown, merging two agents' sign-ins into one toast.
         var groups = sessions.Values.Select(t => t.Last).OfType<Session>()
             .Select(s => (Session: s, Attention: AuthState.Of(s)))
             .Where(x => AuthState.NeedsSignIn(x.Attention))
-            .GroupBy(x => PushNotice.SignInKey(x.Attention!.Agent, x.Attention.Account), StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => (Agent: g.First().Attention!.Agent, Count: g.Count()), StringComparer.Ordinal);
+            .GroupBy(x => PushNotice.SignInKey(x.Session.Agent, x.Attention!.Account), StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => (Agent: g.First().Session.Agent, Count: g.Count()), StringComparer.Ordinal);
         foreach (var key in signIns.Keys.Where(k => !groups.ContainsKey(k)).ToList())
         {
             signIns.Remove(key);
