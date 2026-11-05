@@ -1445,16 +1445,16 @@ arrives, as a `question`.
 A session must never look healthy while its agent is dead. When an agent stops because its
 sign-in expired, because a turn ended on an error, or because it went silent mid-turn, the row
 says so in words. One sign-in fixes every session for that machine, agent and account, so the
-action lives on the machine, not on each row. The field names here are the clients' proposal on
-#800 and follow whatever the protocol publishes; one adapter file per client maps them.
+action lives on the machine, not on each row. The field names follow Connection's contract
+(`Session.attention`, #818); one adapter file per client maps them.
 
 **Status rules** (they extend §2.2; first match wins, in this order)
 
 | Where in §2.2 | When | Glyph | Status text | Action |
 |---|---|---|---|---|
-| After rule 1 | `status: signInNeeded` | `needs` | "Needs sign-in · *Agent*" (and "· @*account*" when known) | **Sign in**, only with the `agents.signIn` capability; no button without it (A7) |
-| Refines rule 3 | `working` with `notResponding` | `failed` | "Not responding · since *time*" | None; there is nothing safe to press yet |
-| Before rule 4 | Main agent idle, and its last turn ended on `error` | `failed` | "Quota reached", "Rate limited", "Model unavailable", "Network error" or "Agent error", from `error.kind` (an unknown kind reads as "Agent error"), plus "· N delegates still running" when background agents survive the turn | None on the row; the agent's own words go in Details |
+| After rule 1 | `attention.kind: signInNeeded` | `needs` | "Needs sign-in · *Agent*" (and "· @*account*" when known) | **Sign in**, only with the `sessions.signin` capability; no button without it (A7) |
+| Refines rule 3 | `working` with `attention.kind: notResponding` | `failed` | "Not responding · since *time*" | None; there is nothing safe to press yet |
+| Before rule 4 | Main agent idle, and `attention.kind: error` | `failed` | "Not authorised", "Rate limited" or "Agent error", from `attention.errorClass` `auth`, `rate` or `other` (an unknown class reads as "Agent error"; a new class gets its words here first), plus "· N delegates still running" when background agents survive the turn | None on the row; the agent's own words go in Details |
 
 The error rule sits after the question rules and before rules 4 and 5, so background work
 that survives a failed turn never hides the error behind "Delegating".
@@ -1464,10 +1464,10 @@ that survives a failed turn never hides the error behind "Delegating".
 - None of them ever shows "Idle", "Working" or a stale "last active" time. An older client that
   reads an unknown status as idle is the bug this section fixes; the protocol decides whether
   that needs a capability.
-- `error.message` and `recovery.reason` are agent text: shown only in Details, as plain text
+- `attention.message` and the recovery reason are agent text: shown only in Details, as plain text
   through the hidden-text check, never as a link or Markdown.
 
-**Machine banner** (`signIns`, one per machine, agent and account)
+**Machine banner** (one per machine, agent and account, rolled up from the sessions' `attention`)
 
 - The same banner as §6.12's restore notice: an informational banner at the top of the session
   list, below the restore notice for the same machine. One per (machine, agent, account), never
@@ -1490,7 +1490,7 @@ that survives a failed turn never hides the error behind "Delegating".
 | `resumed` | "Signed in · *n* sessions resumed" for 60 s, then gone; or "Recovered by itself" when no person signed in | None |
 | `failed` | "Sign-in failed · *reason*" | Try again (a new request) |
 
-**The sign-in sheet** (`deviceFlow`, only on a person's device)
+**The sign-in sheet** (`signin.code`, only on a person's device)
 
 - Opened by **Sign in** on the banner, the row or the push, and only on a person's press. No
   client starts it on its own.
@@ -1500,7 +1500,7 @@ that survives a failed turn never hides the error behind "Delegating".
   - Line 1: "Open this page and enter the code." The page is the allowlisted URL as plain text
     (for example `github.com/login/device`) with **Open**.
   - The code in the monospace face at the display size, with **Copy**.
-  - "Expires *time*" in Pacific.
+  - "Expires *time*", in the device's own time zone and time format, as every time in the app.
   - Buttons: **Cancel** is the default and the Escape action; Open and Copy are secondary.
     Nothing is copied or opened without a press.
 - **A URL not on the allowlist, or a malformed code:** the sheet shows "This sign-in code
@@ -1538,7 +1538,7 @@ that survives a failed turn never hides the error behind "Delegating".
 
 | Use | Text |
 |---|---|
-| Row | "Needs sign-in · *Agent*"; "Not responding · since *time*"; "Quota reached"; "Rate limited"; "Model unavailable"; "Network error"; "Agent error" |
+| Row | "Needs sign-in · *Agent*"; "Not responding · since *time*"; "Not authorised"; "Rate limited"; "Agent error" |
 | Banner | "*Agent* on *machine* needs sign-in"; "*n* sessions affected"; "Waiting for sign-in · code expires *time*"; "Signed in · *n* sessions resumed"; "Recovered by itself"; "Sign-in failed · *reason*"; "Sign in at the machine · *reason*" |
 | Sheet | "Starting *Agent*'s sign-in on *machine*…"; "Open this page and enter the code."; "Expires *time*"; "Code expired"; "This sign-in code couldn't be shown." |
 | Buttons | "Sign in"; "Show code"; "Open"; "Copy"; "Cancel"; "Try again" |
