@@ -287,6 +287,36 @@ into one folder with one version. An app update is a host update, so they never 
     running or its sessions are not yet read in full (`sessions.synced`), so that it cannot say
     whether they are busy. Just before stopping the host it asks again: `host.status` from the
     host itself, and the processes running from the package.
+  * Those are the machine's refusals, and they don't hold an update silently for ever (#800: a
+    VM's app lost its link to a live host and sat on an old release for ~20 h, one log line
+    saying so). So are sessions never read in full on a connected host. It still checks and
+    downloads behind them (only "Install updates automatically" off stops the checks), and a
+    device's Install waits behind sessions not yet read in full, as before. The six hours run from the first find through
+    them; only the switch turned off restarts them. Once the machine stops refusing an update
+    held that long (the link back, say), it installs as soon as the sessions have been idle for
+    two minutes, or 20 minutes later whatever they are doing (`ReturnGrace`), never at the first
+    tick. A refusal in force is logged again every hour, with the app's link state while the
+    host is the reason. A release held past six hours is told to the owner: the update state the
+    devices see (`waiting`) reads "Needs you: the update to X has waited since T because Y", and
+    the app logs that line at most daily. The wait it shows never names an "installs anyway"
+    time already past.
+  * The link to the host lost (not `Connected`, or no `host.status` on it): before refusing again
+    the app re-attaches, at once and then backing off to every 30 minutes, and logs what it did
+    at most hourly. A connected link is asked for the host's status again. Otherwise, when the
+    host answers on its pipe, the link's attempt under way is ended and a new one started
+    (`HostConnection.Reconnect`, which never runs two attempts at once). The updater never starts
+    a host: whether one runs is the person's, and the app's own start's.
+  * A release check the feed refuses for its rate limit (GitHub's unauthenticated 60 requests an
+    hour per address, which machines behind one address share: a 429, or a 403 whose reason says
+    "rate limit" or when GitHub's free `rate_limit` endpoint shows the limit spent; any other 403
+    is a failure like any other) holds the checks off until GitHub's `Retry-After` or the limit's
+    reset (read from that endpoint, as Velopack's error carries no headers), or otherwise for an
+    hour, then two hours each time, until one succeeds. The next check is made at the hold's end,
+    however recently a press was answered. A press from a device in the meantime is answered with
+    the reason without asking the feed. The reason goes to the devices as the last update's
+    outcome (`failed`), once each time, though never over an update made, or a press answered,
+    in the last day, which the devices may not have seen yet. Velopack's `GithubSource` is given
+    no token, so the checks are unauthenticated.
   * Settings and the automatic updates share one updater, and only the release actually
     downloaded is applied (`IUpdater.Ready`), checked again immediately before the host stops: a
     release replaced since (a check from Settings, or "Include pre-releases" or `feed.txt`
@@ -323,7 +353,7 @@ into one folder with one version. An app update is a host update, so they never 
   release whose download failed is still reported as there, and their downloads take turns
   (Velopack's update lock fails a second rather than waiting): the later one finds the release
   already downloaded. A pressed install's six hours run from no earlier than the press, and any
-  install's from no earlier than installing was last allowed, so turning the switch on hours
+  install's from no earlier than the switch last allowed it (not the machine's refusals), so turning the switch on hours
   after a check found a release still waits for busy sessions. A press within a minute of the last check is answered from it,
   a failed download is not tried again for ten minutes, and the presses taken are remembered
   across restarts (`updateTaken`) so none is carried out twice; the host takes at most three
@@ -615,7 +645,7 @@ reaches the real host or its profile.
   page's choices, every setting and the whole prompt sent, resume, Codex's first prompt,
   busy, failed and Try again, a lost response sent again with the same request, no approved folder,
   profile and context, and a launch on another machine, including one whose machine leaves or drops out; and the app reaching another
-  host through the in-process relay with the host's account), toast plans and activation handling, automatic updates (`AutoUpdaterTests`: when one waits for the sessions, when it goes anyway, a read-only host beside agent-ha-bridge updating like any other, the other profiles it never stops, and the host never left down), host lifecycle with a
+  host through the in-process relay with the host's account), toast plans and activation handling, automatic updates (`AutoUpdaterTests`: when one waits for the sessions, when it goes anyway, a read-only host beside agent-ha-bridge updating like any other, the other profiles it never stops, the host never left down and never started by it, a lost link made again, an update held past six hours told as "Needs you", the 20-minute grace once the host is back, and the rate-limit hold), host lifecycle with a
   fake task scheduler and launcher, the Markdown model and the demo host. Platform-neutral,
   so they run on Linux too.
 * CI (`app` jobs, one for x64 on `windows-latest` and one for Arm64 on `windows-11-arm`) runs
