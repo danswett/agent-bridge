@@ -366,38 +366,42 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         requestedSchema = new { properties = new { pick = new { type = "string", @enum = new[] { "a", "b", "c" } }, days = new { type = "integer", @default = 3 } }, required = new[] { "pick" } },
     }, s);
 
-    async Task AskDaysAsync()
+    // Two fields, so typed field by field (#510): the CLI shows each in turn, and records the
+    // answer once both have taken their Enter.
+    async Task AskDaysAsync(object recorded)
     {
         Fixture.Append(events, AskDays("q2", second++));
         await source.RefreshAsync();
+        injector.Screen = () => FieldsScreen(["pick", "days"]);
+        injector.OnInject = () => { if (Enters() == 2) { Fixture.Append(events, Recorded("q2", recorded)); } };
     }
 
     [Fact]
     public async Task An_answer_that_would_be_added_to_a_pre_filled_default_is_refused_with_nothing_typed_and_the_question_stays_answerable()
     {
-        await AskDaysAsync();
+        await AskDaysAsync(new { pick = "b", days = 3 });
         var ch = await OpenAsync();
 
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b", days = 33 }, question: "q2");
 
         Assert.Equal("refused", outcome);
         Assert.EndsWith("answer at the machine (this field has a pre-filled default)", reason);
+        Assert.Empty(injector.Attempts);
         Assert.Empty(injector.Plans);
         // Nothing typed, so it may still be answered: with the default, left as it is.
-        injector.OnInject = () => Fixture.Append(events, Recorded("q2", new { pick = "b", days = 3 }));
         Assert.Equal("delivered", (await AnswerAsync(ch, new { pick = "b", days = 3 }, question: "q2")).Outcome);
-        var (_, plan) = Assert.Single(injector.Plans);
-        Assert.Equal(new KeySend("", true, AgentBridge.Host.Delivery.Copilot.CopilotPlanner.FieldEnterDelayMs, AgentBridge.Host.Delivery.Copilot.CopilotPlanner.AfterFieldMs), plan.Sends[^1]);
-        Assert.DoesNotContain(plan.Sends, s => s.Text.Contains('3'));
+        // The list's keys, its Enter, then the default's Enter alone: nothing typed into it.
+        Assert.Equal(3, injector.Plans.Count);
+        Assert.True(HasEnterOnly(injector.Plans[^1].Plan) && HeldTo(injector.Plans[^1].Plan, "Field: days"));
+        Assert.DoesNotContain(injector.Plans, p => p.Plan.Sends.Any(s => s.Text.Contains('3')));
     }
 
     [Fact]
     public async Task A_pre_filled_default_kept_is_delivered_once_however_often_the_request_is_resent()
     {
-        await AskDaysAsync();
+        await AskDaysAsync(new { pick = "a", days = 3 });
         var release = new TaskCompletionSource();
         injector.Gate = release.Task;
-        injector.OnInject = () => Fixture.Append(events, Recorded("q2", new { pick = "a", days = 3 }));
         var ch = await OpenAsync();
         var request = Guid.NewGuid().ToString();
 
@@ -408,9 +412,11 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var again = await AnswerAsync(await OpenAsync(), new { pick = "a", days = 3 }, request, "q2");
 
         Assert.Equal(["delivered", "delivered", "delivered"], [(await first).Outcome, (await during).Outcome, again.Outcome]);
-        Assert.Single(injector.Plans);
+        // Typed once: the list's keys, its Enter and the default's Enter, and nothing more.
+        Assert.Equal(3, injector.Plans.Count);
+        Assert.Equal(3, injector.Attempts.Count);
         // Left as it opened: the 3 is never typed, which would make it 33.
-        Assert.DoesNotContain(injector.Plans[0].Plan.Sends, s => s.Text.Contains('3'));
+        Assert.DoesNotContain(injector.Plans, p => p.Plan.Sends.Any(s => s.Text.Contains('3')));
     }
 
     // ---- a form's words and their Enter (#467) ----
@@ -831,6 +837,52 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.DoesNotContain(plans, p => p.Sends.Any(s => s.Text.Contains('3')));
     }
 
+    [Theory]
+    // No words at all: two lists, or a list and a kept default (#700). More than one Enter, so
+    // still field by field, each held to its field and asked again (sec-510 re-review).
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_permission_prompt_opening_after_the_first_field_of_a_form_without_words_gets_nothing_more(bool keptDefault)
+    {
+        object answer = keptDefault ? new { first = "b", days = 3 } : new { first = "b", second = "c" };
+        string[] names = keptDefault ? ["first", "days"] : ["first", "second"];
+        await AskFieldsAsync(keptDefault
+            ? new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, days = new { type = "integer", @default = 3 } }
+            : new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, second = new { type = "string", @enum = new[] { "a", "b", "c" } } },
+            2, answer);
+        var prompt = false;
+        injector.OnInject = () =>
+        {
+            if (prompt || Enters() != 1) { return; }
+            prompt = true;
+            Fixture.Append(events, Copilot.ToolStart("c9", "powershell", new { command = "gh pr checks" }, second++, "helper"),
+                Copilot.Permission("r1", "c9", Copilot.Prompts["commands"], second++));
+        };
+        injector.Screen = () => prompt ? ["Allow Copilot to run this command?", "  ❯ 1. Yes", "    2. No"] : FieldsScreen(names);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        // The first list's keys, then its Enter alone; nothing after it.
+        Assert.Equal(1, Enters());
+        Assert.True(HasEnterOnly(injector.Plans[^1].Plan));
+    }
+
+    [Fact]
+    public async Task A_form_without_words_is_not_typed_at_all_into_a_screen_the_host_cannot_read()
+    {
+        var answer = new { first = "b", second = "c" };
+        await AskFieldsAsync(new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, second = new { type = "string", @enum = new[] { "a", "b", "c" } } }, 2, answer);
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("could not read the session's screen", reason);
+        Assert.Empty(injector.Attempts);
+    }
+
     [Fact]
     public async Task A_permission_prompt_opening_between_two_lists_gets_none_of_the_second_lists_keys()
     {
@@ -977,6 +1029,36 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal(3, injector.Plans.Count);
         Assert.True(end > start, $"inject {start}-{end}");
         Assert.Null(typed);
+    }
+
+    [Fact]
+    public async Task A_late_record_read_by_a_repeat_asking_for_progress_says_when_it_was_recorded_and_confirmed()
+    {
+        // Typed, not recorded within the watch; recorded later. The repeat that finds it is told
+        // when, as the first watch would have said (#510 review).
+        await AskFormAsync();
+        DrawsWords();
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+        var data = new { id = Id, question = "q2", request, fields = FormAnswer, progress = true };
+
+        var (_, first) = await HearAsync(ch, data);
+        Assert.Equal(("unconfirmed", "typed"), (first.GetProperty("outcome").GetString(), Stage(first)));
+        Fixture.Append(events, NowStamped(Recorded("q2", FormAnswer)), Copilot.ToolDone("q2", second++));
+        var (_, again) = await HearAsync(await OpenAsync(), data);
+
+        Assert.Equal("delivered", again.GetProperty("outcome").GetString());
+        var timings = again.GetProperty("timings");
+        Assert.True(timings.TryGetProperty("recorded", out _), timings.GetRawText());
+        Assert.True(timings.TryGetProperty("confirmed", out _), timings.GetRawText());
+    }
+
+    // A transcript line as Copilot writes it now, so its time falls after the request's.
+    static string NowStamped(string line)
+    {
+        var node = System.Text.Json.Nodes.JsonNode.Parse(line)!;
+        node["timestamp"] = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", System.Globalization.CultureInfo.InvariantCulture);
+        return node.ToJsonString();
     }
 
     [Fact]

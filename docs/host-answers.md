@@ -63,7 +63,8 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     reads the same twice running (two reads in a row, not two reads with another between).
     Counted before, a label of the new field reading like the words could pass for them, and
     the same words given to the field before could hide them.
-  * In an answer with words, every field is its own writes, never batched with another's:
+  * In an answer with words, or of more than one field (two lists, a list and a kept
+    default), every field is its own writes, never batched with another's:
     its keys, held to the field they were planned for, then its Enter alone once the screen
     has settled from them (so the change awaited is the form moving on, not an option list's
     highlight repainting). The next field's keys wait for the form to move off the screen the
@@ -74,7 +75,7 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     agent-ha-bridge, the call still unanswered, no other prompt waiting, the process) are made
     again before each write, and once more when the injector holds the typing slot
     (`KeyPlan.Proceed`). A refused write stops everything after it.
-  * It fails closed: an answer with words is not typed at all into a screen the host cannot
+  * It fails closed: such an answer is not typed at all into a screen the host cannot
     read, nor words made only of spaces and line-drawing characters, which leave nothing to
     look for (`refused`, nothing typed); and a field or words that do not show, or a screen
     that does not settle, within 3 s, a screen that changed under a write, or a question no
@@ -83,8 +84,9 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     how #467 happened. What remains: keys reach the CLI in the order they were written, so a
     count taken too early can only send the words' Enter early, behind the words, which is
     reported `typed`, not `delivered`; rows are compared whole, so an animated form would be
-    refused rather than typed into; and an answer without words (option lists only) is typed
-    as one write, rechecked when the injector holds the slot but not held to the screen.
+    refused rather than typed into; and an answer of a single field without words (one list)
+    is one write, rechecked when the injector holds the slot but not held to the screen: its
+    Enter commits the only field there is.
   * An optional text field left
     out is skipped with Enter; an option list cannot be left out, since Enter commits
     whatever its caret is on.

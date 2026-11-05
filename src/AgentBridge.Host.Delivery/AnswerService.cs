@@ -340,7 +340,7 @@ public sealed class AnswerService : ISessionAnswerer
 
         log($"typed into {Short(session.Id)} (pid {pid}): {plan.Keys.Describe()} -> {typed.Status} {typed.Detail}{(held is null ? "" : $"; held before its Enter: {held}")}");
         var seen = new System.Runtime.CompilerServices.StrongBox<DateTimeOffset?>();
-        Task<AnswerResult?> Late() => LateCopilotAsync(transcript, question.Id, from, plan, seen);
+        Task<AnswerResult?> Late() => LateCopilotAsync(transcript, question.Id, from, plan, seen, timeline);
         AnswerResult result;
         if (Settle(typed, attempt) is { } settled) { result = settled; }
         else if (held is not null)
@@ -405,11 +405,17 @@ public sealed class AnswerService : ISessionAnswerer
             return (new InjectionResult(InjectionStatus.NothingTyped,
                 "the answer's words are only spaces and line-drawing characters, which the host cannot pick out on the session's screen to see that the CLI has them before it submits them; change the answer, or answer at the machine"), null);
         }
-        if (!plan.Sends.Any(IsWords)) { return (await TypeAsync(pid, plan with { Proceed = stillAsked }, timeline), null); }
+        // One field and no words (a single list, say) is one write: its Enter commits the only
+        // field there is. Anything with more than one Enter goes field by field, words or not: a
+        // permission prompt opening after the first field's Enter would otherwise take the next
+        // field's walk and Enter, a kept default's Enter (#700) included (sec-510 re-review).
+        var words = plan.Sends.Any(IsWords);
+        if (!words && plan.Sends.Count(s => s.Enter) <= 1) { return (await TypeAsync(pid, plan with { Proceed = stillAsked }, timeline), null); }
         if (await ReadRowsAsync(pid) is null)
         {
-            return (new InjectionResult(InjectionStatus.NothingTyped,
-                "the host could not read the session's screen, which it needs to see typed words before it submits them; answer at the machine"), null);
+            return (new InjectionResult(InjectionStatus.NothingTyped, words
+                ? "the host could not read the session's screen, which it needs to see typed words before it submits them; answer at the machine"
+                : "the host could not read the session's screen, which it needs to type each field of the form only once the form shows it; answer at the machine"), null);
         }
         var pending = new List<KeySend>();
         var typedAny = false;
@@ -614,7 +620,10 @@ public sealed class AnswerService : ISessionAnswerer
     // as ConfirmAsync gives it, so a completion saying the call failed can still be seen; that
     // wait is part of the read, so one resend (a client asks once per reconnect) is enough, and
     // after it the record alone decides, as it does there.
-    async Task<AnswerResult?> LateCopilotAsync(string transcript, string toolCallId, long from, CopilotPlan plan, System.Runtime.CompilerServices.StrongBox<DateTimeOffset?> seen)
+    // A match found here is confirmed on the delivery's own timeline, with the record's time, so
+    // a repeat asking for progress hears when it was recorded and confirmed, as the first watch
+    // would have said (#510 review).
+    async Task<AnswerResult?> LateCopilotAsync(string transcript, string toolCallId, long from, CopilotPlan plan, System.Runtime.CompilerServices.StrongBox<DateTimeOffset?> seen, DeliveryTimeline timeline)
     {
         while (true)
         {
@@ -631,8 +640,9 @@ public sealed class AnswerService : ISessionAnswerer
                     continue;
                 }
             }
+            timeline.Recorded(record.At);
             var (matched, reason) = CopilotVerifier.Check(plan, record);
-            return matched ? new AnswerResult(AnswerOutcome.Delivered) : Unconfirmed($"{reason}; check at the machine", AnswerStage.Recorded);
+            return matched ? Delivered(timeline) : Unconfirmed($"{reason}; check at the machine", AnswerStage.Recorded);
         }
     }
 
@@ -858,17 +868,17 @@ public sealed class AnswerService : ISessionAnswerer
         }
         if (result.Outcome == AnswerOutcome.Unconfirmed)
         {
-            Recheckable(request, () => Task.FromResult(LateClaude(transcript, question.Id, from, plan)));
+            Recheckable(request, () => Task.FromResult(LateClaude(transcript, question.Id, from, plan, timeline)));
         }
         return result;
     }
 
     // A Claude answer reported unconfirmed, read again, as LateCopilot.
-    static AnswerResult? LateClaude(string transcript, string toolUseId, long from, ClaudePlan plan)
+    static AnswerResult? LateClaude(string transcript, string toolUseId, long from, ClaudePlan plan, DeliveryTimeline timeline)
     {
         if (ClaudeTranscript.Since(transcript, toolUseId, from).Answer is not { } record) { return null; }
         var (matched, reason) = ClaudeVerifier.Check(plan, record);
-        return matched ? new AnswerResult(AnswerOutcome.Delivered) : Unconfirmed(reason!, AnswerStage.Recorded);
+        return matched ? Delivered(timeline) : Unconfirmed(reason!, AnswerStage.Recorded);
     }
 
     // Watches the transcript for the call's tool_result. Claude can end on a review screen
