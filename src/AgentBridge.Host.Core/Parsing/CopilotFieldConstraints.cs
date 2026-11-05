@@ -120,14 +120,18 @@ public static class CopilotFieldConstraints
         }
     }
 
-    // A keyword set (not null, which the CLI reads as absent) that is neither `type`, an
-    // annotation nor one of these.
+    // A keyword that is neither `type`, an annotation nor one of these; or any but an annotation
+    // set to null. The CLI reads a null keyword as absent, but to the schema `const: null` allows
+    // only null, and a null elsewhere is no schema at all, so reading it as absent too let a Yes/No
+    // with `const: null` take Yes (Copilot review of #844). An annotation may be null (a null
+    // default opens the Other box, #700).
     static string? Other(JsonElement o, string[] own)
     {
         foreach (var k in o.EnumerateObject())
         {
-            if (k.Value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) { continue; }
-            if (k.Name == "type" || Annotations.Contains(k.Name) || own.Contains(k.Name)) { continue; }
+            if (Annotations.Contains(k.Name)) { continue; }
+            if (k.Value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) { return k.Name; }
+            if (k.Name == "type" || own.Contains(k.Name)) { continue; }
             return k.Name;
         }
         return null;
