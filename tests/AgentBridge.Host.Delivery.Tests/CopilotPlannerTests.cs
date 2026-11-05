@@ -161,7 +161,7 @@ public class CopilotPlannerTests
 
     // #766: Copilot CLI 1.0.105 checks none of a form field's constraints on ask_user, and records
     // whatever is typed, so the host checks them, on what it would type, before any key.
-    static string Schema(string name, string property) =>
+    internal static string Schema(string name, string property) =>
         $$"""{ "message": "m", "requestedSchema": { "properties": { "{{name}}": {{property}} } } }""";
 
     // Refused by the shared check a client also runs, and again by the host's own plan.
@@ -536,44 +536,6 @@ public class CopilotPlannerTests
         Assert.Equal([("a@b.c", true)], Keys(Plan(Schema("t", """{ "type": "string", "format": "email" }"""), Answer(new { t = "a@b.c" }))));
         Assert.Equal("\"t\": must be an email address", Outside(Schema("t", """{ "type": "string", "format": "email" }"""), Answer(new { t = "a@b." })));
     }
-    // Found while checking #844's cost per refresh: an option list's oneOf was matched against its
-    // enum, and uniqueItems checked, each option against every other, on the thread that refreshes
-    // every session. Timed as a ratio, n against 4n (the faster of two runs of each), not against a
-    // wall clock: CI runs under coverage on a shared runner, where 40,000 options read linearly
-    // still ran past a 5 s bound (#844 CI 41983282680). Linear is about 4; each against every other
-    // was about 16.
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void Long_option_lists_are_checked_in_linear_time(bool choice)
-    {
-        string Property(int n)
-        {
-            var numbers = string.Join(", ", Enumerable.Range(0, n));
-            return choice
-                ? $$"""{ "type": "string", "enum": [{{numbers}}], "oneOf": [{{string.Join(", ", Enumerable.Range(0, n).Select(i => $$"""{ "const": {{i}} }"""))}}] }"""
-                : $$"""{ "type": "array", "items": { "enum": [{{numbers}}] }, "uniqueItems": true }""";
-        }
-        double Read(int n)
-        {
-            using var doc = JsonDocument.Parse(Schema("f", Property(n)));
-            var fastest = double.MaxValue;
-            for (var run = 0; run < 2; run++)
-            {
-                var clock = System.Diagnostics.Stopwatch.StartNew();
-                var question = QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0);
-                fastest = Math.Min(fastest, clock.Elapsed.TotalMilliseconds);
-                // A string list of numbers breaks its own type; a checkbox list of distinct ones is answerable.
-                Assert.Equal(choice, question.AnswerAtMachine == true);
-            }
-            return Math.Max(fastest, 1);
-        }
-
-        Read(1_000);
-        var ratio = Read(32_000) / Read(8_000);
-
-        Assert.True(ratio < 10, $"reading 4x the options took {ratio:F1}x as long");
-    }
     // An empty answer is typed as nothing, and Copilot then records no answer at all to a field
     // the form requires; one of only spaces might be recorded trimmed to that, and so might one of
     // control characters, which are typed as spaces though trim() alone keeps them (review of #844).
@@ -939,3 +901,59 @@ public class CopilotPlannerTests
         Assert.False(form.Matches(question with { Fields = [] }));
     }
 }
+
+// Found while checking #844's cost per refresh: an option list's oneOf was matched against its
+// enum, and uniqueItems checked, each option against every other, on the thread that refreshes
+// every session. Timed as a ratio, not against a wall clock: CI runs under coverage on a shared
+// runner, where 40,000 options read linearly still ran past a 5 s bound (#844 CI 41983282680).
+// Then 8,000 against 32,000, the faster of two runs of each, read 12.4x on a runner whose test
+// assemblies ran side by side under coverage (#844 CI 42027418041), against about 4.7 locally.
+// So the gap is wide: 1,000 against 64,000. Measured locally, linear read 85-136x (allocation
+// and cache make the larger list dearer than its count) and a list checked each against every
+// other 1,340-1,450x; at 2,000 against 32,000 the two were 19-39x and 74-145x, too close to
+// split. Bounded at 500; the sizes take turns, the fastest of three runs of each counts, and
+// nothing else in this assembly runs alongside.
+[Collection(nameof(CopilotFormGrowthTests))]
+public class CopilotFormGrowthTests
+{
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Long_option_lists_are_checked_in_linear_time(bool choice)
+    {
+        string Property(int n)
+        {
+            var numbers = string.Join(", ", Enumerable.Range(0, n));
+            return choice
+                ? $$"""{ "type": "string", "enum": [{{numbers}}], "oneOf": [{{string.Join(", ", Enumerable.Range(0, n).Select(i => $$"""{ "const": {{i}} }"""))}}] }"""
+                : $$"""{ "type": "array", "items": { "enum": [{{numbers}}] }, "uniqueItems": true }""";
+        }
+        double Read(JsonDocument doc)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var question = QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0);
+            var elapsed = clock.Elapsed.TotalMilliseconds;
+            // A string list of numbers breaks its own type; a checkbox list of distinct ones is answerable.
+            Assert.Equal(choice, question.AnswerAtMachine == true);
+            return elapsed;
+        }
+
+        using var warm = JsonDocument.Parse(CopilotPlannerTests.Schema("f", Property(500)));
+        using var small = JsonDocument.Parse(CopilotPlannerTests.Schema("f", Property(1_000)));
+        using var large = JsonDocument.Parse(CopilotPlannerTests.Schema("f", Property(64_000)));
+        Read(warm);
+        Read(small);
+        var (fewest, most) = (double.MaxValue, double.MaxValue);
+        for (var run = 0; run < 3; run++)
+        {
+            fewest = Math.Min(fewest, Read(small));
+            most = Math.Min(most, Read(large));
+        }
+        var ratio = most / Math.Max(fewest, 1);
+
+        Assert.True(ratio < 500, $"reading 64x the options took {ratio:F1}x as long");
+    }
+}
+
+[CollectionDefinition(nameof(CopilotFormGrowthTests), DisableParallelization = true)]
+public sealed class CopilotFormGrowthCollection;
