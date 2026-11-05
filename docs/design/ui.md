@@ -741,7 +741,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     selection left alone, that Tab reaches a block not yet laid out, from a Copy button or from a link
     to the link in the next block, brought in at the leading edge, that Tab onto a Copy button in a
     block across the view's bottom edge brings the block's start to the leading edge and onto one in
-    a block wholly in view moves nothing, even with its top near the view's (Tab and Shift+Tab), that
+    a block wholly in view moves nothing, even with its top near the view's (Shift+Tab), that
     Tab onto the first link of a block taller than the
     view brings its start to the leading edge and Shift+Tab onto its last brings that link wholly
     into view at the nearest edge, that no container is a stop or

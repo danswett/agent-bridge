@@ -336,87 +336,84 @@ static partial class SelfTest
         return (null, method);
     }
 
-    // A block wholly in view doesn't move when Tab or Shift+Tab lands on its Copy button, even one
-    // near the view's top edge (ui.md §6.4; B and Copilot 5783106122 on #829): the focus manager pads
-    // a control 20 px each side (BringIntoViewHandler), and the button is 12 px down its block, so
-    // with the block's top within 8 px of the view's the padding alone scrolled it. A code block well
-    // down the response is put 3 px below the top, wholly in view; Shift+Tab is pressed from the
-    // first stop of the block after it with one, then Tab from the last stop of the block before it
-    // with one (each focused with the view held, measured before and after). Copy has a line of code
-    // and the block's bottom padding under it, so no padding reaches past the bottom edge: Tab
-    // forward is checked at the top edge too. Each step is logged; a view that can't be put so
-    // fails with "setup: ...", never skips. Null, and how the keys were pressed, when right.
+    // A block wholly in view doesn't move when Shift+Tab lands on its Copy button, even one near the
+    // view's top edge (ui.md §6.4; B and Copilot 5783106122 on #829): the focus manager pads a
+    // control by the larger of 20 px and its focus visual's overhang each side (BringIntoViewHandler
+    // .cpp:13 and 619-656; 20 for Copy), and the button is 12 px down its block, so with the block's
+    // top within 8 px of the view's the padding alone scrolled it. A code block well down the
+    // response is put 3 px below the top, wholly in view, and Shift+Tab is pressed from the first stop
+    // of the block after it with one (focused with the view held, measured before and after).
+    // Only Shift+Tab: Tab forward onto that Copy comes from a stop above the view, the case waiting
+    // on B and the creative director (6656138093 on #829); and the bottom edge can't be reached at
+    // all, since Copy is 32 px with at least 2 + 18 + 8 = 28 px of its block below it (the row
+    // spacing, a line of code, the box's bottom padding), so a wholly visible block's Copy is never
+    // within 20 px of the view's bottom. Each step is logged; a view that can't be put so fails with
+    // "setup: ...", never skips. Null, and how the keys were pressed, when right.
     static async Task<(string? Problem, string Method)> TabbedNearEdge(MainWindow window, ListView list)
     {
         if (list.ItemsSource is not IList<ConversationBlock> blocks || SessionView.Shallowest<ScrollViewer>(list) is not { } scroll) { return ("setup: a list of blocks with a scroller", "none"); }
         static void Log(string step) => AppLog.Write($"self-test: Copy Tab near the edge, {step}");
         static double Top(UIElement e, UIElement view) => e.TransformToVisual(view).TransformPoint(default).Y;
-        var code = Enumerable.Range(0, blocks.Count).FirstOrDefault(i => i >= 20 && blocks[i].Block is MdCode && Enumerable.Range(0, i).Any(j => blocks[j].Focusable), -1);
-        if (code < 0) { return ("setup: a code block after block 20 with a stop before it", "none"); }
-        var before = Enumerable.Range(0, code).Last(j => blocks[j].Focusable);
-        var after = Enumerable.Range(code + 1, Math.Max(0, blocks.Count - code - 1)).FirstOrDefault(j => blocks[j].Focusable, -1);
-        if (after < 0) { return ($"setup: a block with a stop after block {code + 1}", "none"); }
+        const string key = "Shift+Tab";
+        var code = Enumerable.Range(0, blocks.Count).FirstOrDefault(i => i >= 20 && blocks[i].Block is MdCode, -1);
+        if (code < 0) { return ("setup: a code block after block 20", "none"); }
+        var by = Enumerable.Range(code + 1, Math.Max(0, blocks.Count - code - 1)).FirstOrDefault(j => blocks[j].Focusable, -1);
+        if (by < 0) { return ($"setup: a block with a stop after block {code + 1}", "none"); }
         var method = "none";
-        foreach (var forward in new[] { false, true })
+        list.ScrollIntoView(blocks[code], ScrollIntoViewAlignment.Leading);
+        await Still(scroll);
+        if (list.ContainerFromIndex(code) is not FrameworkElement placed) { return ($"setup: block {code + 1} realised at the leading edge", method); }
+        scroll.ChangeView(null, Math.Max(0, scroll.VerticalOffset + Top(placed, scroll) - 3), null, disableAnimation: true);
+        await Still(scroll);
+        if (list.ContainerFromIndex(code) is not FrameworkElement block || list.ContainerFromIndex(by) is not FrameworkElement leaving) { return ($"setup: blocks {by + 1} and {code + 1} realised", method); }
+        if (FocusManager.FindFirstFocusableElement(block) is not Button copy) { return ($"setup: a Copy button in block {code + 1}", method); }
+        var (top, copyTop) = (Top(block, scroll), Top(copy, scroll));
+        // Wholly in view, and near enough the top that the focus manager's padding would scroll it.
+        if (!ConversationKeyboard.WhollyInView(top, block.ActualHeight, scroll.ViewportHeight) || copyTop - 20 > -0.5) { return ($"setup: for {key}, block {code + 1} wholly in view with its Copy button within 20 px of the view's top: its top {top:0.#} px, Copy's {copyTop:0.#} px, {block.ActualHeight:0.#} px tall in a {scroll.ViewportHeight:0.#} px view", method); }
+        if (FocusManager.FindFirstFocusableElement(leaving) is not { } stop) { return ($"setup: a stop in block {by + 1}", method); }
+        var held = new TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>((_, e) => e.Handled = true);
+        var offsetBefore = scroll.VerticalOffset;
+        bool focused;
+        leaving.BringIntoViewRequested += held;
+        try
         {
-            var key = forward ? "Tab" : "Shift+Tab";
-            var by = forward ? before : after;
-            list.ScrollIntoView(blocks[code], ScrollIntoViewAlignment.Leading);
+            focused = (await FocusManager.TryFocusAsync(stop, FocusState.Keyboard)).Succeeded;
             await Still(scroll);
-            if (list.ContainerFromIndex(code) is not FrameworkElement placed) { return ($"setup: block {code + 1} realised at the leading edge", method); }
-            scroll.ChangeView(null, Math.Max(0, scroll.VerticalOffset + Top(placed, scroll) - 3), null, disableAnimation: true);
-            await Still(scroll);
-            if (list.ContainerFromIndex(code) is not FrameworkElement block || list.ContainerFromIndex(by) is not FrameworkElement leaving) { return ($"setup: blocks {by + 1} and {code + 1} realised", method); }
-            if (FocusManager.FindFirstFocusableElement(block) is not Button copy) { return ($"setup: a Copy button in block {code + 1}", method); }
-            var (top, copyTop) = (Top(block, scroll), Top(copy, scroll));
-            // Wholly in view, and near enough the top that the focus manager's padding would scroll it.
-            if (!ConversationKeyboard.WhollyInView(top, block.ActualHeight, scroll.ViewportHeight) || copyTop - 20 > -0.5) { return ($"setup: for {key}, block {code + 1} wholly in view with its Copy button within 20 px of the view's top: its top {top:0.#} px, Copy's {copyTop:0.#} px, {block.ActualHeight:0.#} px tall in a {scroll.ViewportHeight:0.#} px view", method); }
-            var stop = forward ? FocusManager.FindLastFocusableElement(leaving) : FocusManager.FindFirstFocusableElement(leaving);
-            if (stop is null) { return ($"setup: a stop in block {by + 1}", method); }
-            var held = new TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>((_, e) => e.Handled = true);
-            var offsetBefore = scroll.VerticalOffset;
-            bool focused;
-            leaving.BringIntoViewRequested += held;
-            try
-            {
-                focused = (await FocusManager.TryFocusAsync(stop, FocusState.Keyboard)).Succeeded;
-                await Still(scroll);
-            }
-            finally { leaving.BringIntoViewRequested -= held; }
-            var (offset, topAfter) = (scroll.VerticalOffset, Top(block, scroll));
-            Log($"for {key}, block {code + 1} wholly in view, its top {top:0.#} px before focus and {topAfter:0.#} px after, Copy's {copyTop:0.#} px, focus on the {(forward ? "last" : "first")} stop of block {by + 1}: {(focused ? "taken" : "refused")}, the view at {offsetBefore:0.#} px then {offset:0.#} px");
-            if (!focused || !ReferenceEquals(FocusManager.GetFocusedElement(list.XamlRoot), stop)) { return ($"setup: focus on a stop in block {by + 1}", method); }
-            if (Math.Abs(offset - offsetBefore) > 0.5 || Math.Abs(topAfter - top) > 0.5) { return ($"setup: block {code + 1} left where it was on screen while block {by + 1} took focus: its top {top:0.#} px, then {topAfter:0.#} px", method); }
-
-            // The key, pressed as the keyboard presses it.
-            var seen = false;
-            var heard = new KeyEventHandler((_, e) => seen |= e.Key == VirtualKey.Tab);
-            scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
-            try
-            {
-                method = Press(window.Handle, VirtualKey.Tab, foreground: true, extended: false, shift: !forward);
-                if (!await Until(() => seen, TimeSpan.FromSeconds(2)) && method == "SendInput")
-                {
-                    method = Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false, shift: !forward);
-                    await Until(() => seen, TimeSpan.FromSeconds(2));
-                }
-            }
-            finally
-            {
-                scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard);
-                if (!forward) { Unshift(method); }
-            }
-            if (!seen) { return ($"{key} reaching the conversation ({method})", method); }
-            var landed = await Until(() => BlockOf(list, FocusManager.GetFocusedElement(list.XamlRoot)) == code, TimeSpan.FromSeconds(3));
-            await Still(scroll);
-            var on = FocusManager.GetFocusedElement(list.XamlRoot);
-            var shown = list.ContainerFromIndex(code) as FrameworkElement;
-            var now = shown is null ? double.NaN : Top(shown, scroll);
-            var moved = scroll.VerticalOffset - offset;
-            Log($"{key} pressed by {method}: focus on {on?.GetType().Name ?? "nothing"} in block {(BlockOf(list, on) is { } b ? b + 1 : 0)}, block {code + 1}'s top {now:0.#} px, the view moved {moved:0.#} px");
-            if (!landed || shown is null || !ReferenceEquals(on, FocusManager.FindFirstFocusableElement(shown))) { return ($"{key} from block {by + 1} onto the Copy button of block {code + 1}: on {on?.GetType().Name ?? "nothing"} in {(BlockOf(list, on) is { } to ? $"block {to + 1}" : "no block")}", method); }
-            if (Math.Abs(moved) > 0.5 || Math.Abs(now - topAfter) > 0.5) { return ($"block {code + 1}, wholly in view near the top, left where it was by {key} onto its Copy button: the view moved {moved:0.#} px, its top {topAfter:0.#} px then {now:0.#} px", method); }
         }
+        finally { leaving.BringIntoViewRequested -= held; }
+        var (offset, topAfter) = (scroll.VerticalOffset, Top(block, scroll));
+        Log($"for {key}, block {code + 1} wholly in view, its top {top:0.#} px before focus and {topAfter:0.#} px after, Copy's {copyTop:0.#} px, focus on the first stop of block {by + 1}: {(focused ? "taken" : "refused")}, the view at {offsetBefore:0.#} px then {offset:0.#} px");
+        if (!focused || !ReferenceEquals(FocusManager.GetFocusedElement(list.XamlRoot), stop)) { return ($"setup: focus on a stop in block {by + 1}", method); }
+        if (Math.Abs(offset - offsetBefore) > 0.5 || Math.Abs(topAfter - top) > 0.5) { return ($"setup: block {code + 1} left where it was on screen while block {by + 1} took focus: its top {top:0.#} px, then {topAfter:0.#} px", method); }
+
+        // The key, pressed as the keyboard presses it.
+        var seen = false;
+        var heard = new KeyEventHandler((_, e) => seen |= e.Key == VirtualKey.Tab);
+        scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
+        try
+        {
+            method = Press(window.Handle, VirtualKey.Tab, foreground: true, extended: false, shift: true);
+            if (!await Until(() => seen, TimeSpan.FromSeconds(2)) && method == "SendInput")
+            {
+                method = Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false, shift: true);
+                await Until(() => seen, TimeSpan.FromSeconds(2));
+            }
+        }
+        finally
+        {
+            scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard);
+            Unshift(method);
+        }
+        if (!seen) { return ($"{key} reaching the conversation ({method})", method); }
+        var landed = await Until(() => BlockOf(list, FocusManager.GetFocusedElement(list.XamlRoot)) == code, TimeSpan.FromSeconds(3));
+        await Still(scroll);
+        var on = FocusManager.GetFocusedElement(list.XamlRoot);
+        var shown = list.ContainerFromIndex(code) as FrameworkElement;
+        var now = shown is null ? double.NaN : Top(shown, scroll);
+        var moved = scroll.VerticalOffset - offset;
+        Log($"{key} pressed by {method}: focus on {on?.GetType().Name ?? "nothing"} in block {(BlockOf(list, on) is { } b ? b + 1 : 0)}, block {code + 1}'s top {now:0.#} px, the view moved {moved:0.#} px");
+        if (!landed || shown is null || !ReferenceEquals(on, FocusManager.FindFirstFocusableElement(shown))) { return ($"{key} from block {by + 1} onto the Copy button of block {code + 1}: on {on?.GetType().Name ?? "nothing"} in {(BlockOf(list, on) is { } to ? $"block {to + 1}" : "no block")}", method); }
+        if (Math.Abs(moved) > 0.5 || Math.Abs(now - topAfter) > 0.5) { return ($"block {code + 1}, wholly in view near the top, left where it was by {key} onto its Copy button: the view moved {moved:0.#} px, its top {topAfter:0.#} px then {now:0.#} px", method); }
         return (null, method);
     }
 
