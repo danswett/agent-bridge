@@ -131,13 +131,13 @@ public static class Registrations
         {
             Refusal = $"{path}, on the way to Codex's plugin cache, is a symbolic link or junction, which Codex does not make; it is not followed. Make it a plain folder or file (or delete agent-ha-bridge's cache folder, {install.CodexPluginCache}, and let Codex copy the plugin again) and migrate again",
         };
-        // From codexHome itself down, and any folders between the home and it: a linked .codex
-        // carries every path below it out of the cache, though each still looks contained by
-        // name. Checked before anything below is enumerated or planned.
-        var home = Path.TrimEndingDirectorySeparator(Path.GetFullPath(install.Home));
+        // From the filesystem root down to codexHome, wherever it is (inside the home or a custom
+        // one outside it), then the cache folders below it: a linked .codex, or any linked folder
+        // above it, carries every path below out of the cache, though each still looks contained
+        // by name. Checked before anything below is enumerated or planned.
         var codexHome = Path.TrimEndingDirectorySeparator(Path.GetFullPath(install.CodexHome));
         var folders = new List<string>();
-        for (var up = Path.GetDirectoryName(codexHome); up is not null && up.StartsWith(home + Path.DirectorySeparatorChar, PathCase); up = Path.GetDirectoryName(up)) { folders.Insert(0, up); }
+        for (var up = Path.GetDirectoryName(codexHome); up is not null; up = Path.GetDirectoryName(up)) { folders.Insert(0, up); }
         folders.Add(codexHome);
         foreach (var part in new[] { "plugins", "cache", "agent-ha-bridge", "agent-ha-bridge" }) { folders.Add(Path.Combine(folders[^1], part)); }
         var cache = folders[^1];

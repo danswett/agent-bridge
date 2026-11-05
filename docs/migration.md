@@ -164,7 +164,8 @@ version (#123), so each cached version's `hooks.json` is re-pointed with the sou
 and put back byte for byte by a rollback in the same way. Only that marketplace and plugin
 (agent-ha-bridge's installer registers both as `agent-ha-bridge`) are read, only entries naming
 this installation's hook are changed, and a version with none is not written. A folder or
-`hooks.json` there, or any folder on the way to it from your home, `~\.codex` itself included,
+`hooks.json` there, or any folder on the way to it from the drive's root, `~\.codex` (or a
+custom Codex home, inside your home or not) itself included,
 that is a symbolic link or junction refuses the migration in preflight, before anything is
 written, since Codex makes plain folders and a link could lead the rewrite out of the cache. With no
 cache, as before Codex first loads the plugin, there is nothing to re-point.

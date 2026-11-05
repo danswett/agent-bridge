@@ -455,6 +455,44 @@ public sealed class MigrationTests : MigrationFixture
     }
 
     [Fact]
+    public async Task A_custom_codex_home_outside_the_home_beneath_a_linked_folder_refuses_the_migration_before_anything_is_touched()
+    {
+        // installation.json's codexHome can be anywhere: its own folder is plain, a folder above it
+        // is linked, and it is not under the home, so no check may start from the home's prefix.
+        var outside = Directory.CreateTempSubdirectory("abmigrate-codexhome-").FullName;
+        var target = Path.Combine(outside, "real");
+        var link = Path.Combine(outside, "codex-link");
+        try
+        {
+            Directory.CreateDirectory(target);
+            Directory.Move(_f.CodexHome, Path.Combine(target, "profile"));
+            try { Directory.CreateSymbolicLink(link, target); }
+            catch (Exception e) when (e is UnauthorizedAccessException or IOException) { return; }
+            var codexHome = Path.Combine(link, "profile");
+            var installation = Path.Combine(_f.BridgeHome, "installation.json");
+            var json = FakeAgentHaBridge.Read(installation);
+            json["codexHome"] = codexHome;
+            File.WriteAllText(installation, json.ToJsonString(new() { WriteIndented = true }));
+            var listing = _f.Listing();
+            var outsideBytes = Directory.EnumerateFiles(target, "*", SearchOption.AllDirectories).ToDictionary(f => f, File.ReadAllBytes);
+
+            var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+            Assert.False(report.Ok);
+            Assert.Contains($"{link}, on the way to Codex's plugin cache, is a symbolic link or junction", report.ToString());
+            Assert.Equal(listing, _f.Listing());
+            Assert.Equal(outsideBytes.Keys.Order(), Directory.EnumerateFiles(target, "*", SearchOption.AllDirectories).Order());
+            foreach (var (file, bytes) in outsideBytes) { Assert.Equal(bytes, File.ReadAllBytes(file)); }
+            Assert.Empty(_f.Runtime_.Calls);
+        }
+        finally
+        {
+            if (Directory.Exists(link)) { Directory.Delete(link); }
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task A_hook_file_edited_while_migrated_gets_only_its_own_entries_back()
     {
         await Migrated();
