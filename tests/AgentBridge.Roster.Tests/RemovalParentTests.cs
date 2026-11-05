@@ -80,4 +80,33 @@ public sealed class RemovalParentTests
         var v = w.Verifier("G");
         Assert.Null(RemovalParents.Choose(v, w["+S"].Hash, w.Id("G"), null, [], []));
     }
+
+    // T adds J, and J signs adds on two branches, one gossiped to each host. Signed on the parent
+    // the client chooses, under every host's heads, the removal needs no evidence at either.
+    [Fact]
+    public void A_removal_is_signed_where_every_host_already_is_so_none_needs_evidence()
+    {
+        var w = new World();
+        w.Genesis();
+        w.Add("+T", "G", "T", "G");
+        w.Add("+J", "T", "J", "+T");
+        foreach (var side in new[] { "A", "B" })
+        {
+            var last = "+J";
+            for (var i = 0; i < 6; i++) { w.Add($"+{side}{i}", "J", $"{side}{i}", last); last = $"+{side}{i}"; }
+        }
+        var remover = w.Verifier();
+        var choice = Choose(w, remover, "+T", "G", holders: [["+A5"], ["+B5"], ["+A5", "+B5"]]);
+        Assert.Equal("+T", LabelOf(w, choice.Parent));
+        Assert.Empty(choice.Lacking);
+        Assert.Empty(choice.Unvoidable);
+
+        w.Remove("G-T", "G", "+T", "+T");
+        foreach (var side in new[] { "A", "B" })
+        {
+            var host = w.Verifier([.. w.Labels.Where(l => l is "G" or "+T" or "+J" || l.StartsWith($"+{side}", StringComparison.Ordinal))]);
+            Assert.Equal(Verdict.Accepted, w.Feed(host, "G-T")[0].Verdict);
+            Assert.Equal(["G"], w.Active(host));
+        }
+    }
 }
