@@ -1647,6 +1647,57 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal(1, r.Notice!.Loops);
     }
 
+    // ---- Copilot on #837 at f3f5bdb0 ----
+
+    // The hold lifts before the removal it found reaches the recorder. A stamp due to go in that gap
+    // stays while the source no longer lists the session, so the removal is still a loop.
+    [Fact]
+    public async Task A_restore_stamp_is_kept_while_a_removal_found_as_the_hold_lifts_has_not_arrived()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer();
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => told.Count == 1);
+        source.Upsert(S("a"));
+        source.HeldNow = new DiscoveryHeld("the copilot processes could not be listed", [AgentKind.Copilot]);
+        Time.Advance(RestoreRecorder.LoopWithin + TimeSpan.FromMinutes(1));
+
+        // The source found it gone and lifted the hold; its removal has not been dispatched yet.
+        source.HeldNow = null;
+        source.Sessions.RemoveAll(s => s.Id == "a");
+        Time.Advance(RestoreRecorder.HeldRetry);
+        Assert.NotNull(Assert.Single(Written().Sessions).Restored);
+
+        source.Remove("a");
+        Time.Advance(RestoreRecorder.JudgeEvery);
+        Assert.Equal(1, r.Notice!.Loops);
+    }
+
+    // An earlier restore answered Unconfirmed is seen ready while a retry is under way, and the retry is
+    // refused (the session is running now). The earlier attempt's readiness is kept: shown restored.
+    [Fact]
+    public async Task An_unconfirmed_restore_seen_ready_while_a_refused_retry_is_under_way_is_shown_restored()
+    {
+        var resumer = new Resumer();
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Unconfirmed, "Copilot in App is asking whether to trust the folder; left for a person at the machine") { Session = "s" });
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await r.RestoreAsync(new RestoreAsk { Session = "s", Cause = RestoreCause.Crash, By = "host-signin" })).Outcome);
+        var first = Time.GetUtcNow();
+        Time.Advance(TimeSpan.FromMinutes(1));
+
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Refused, "that session is already running"));
+        resumer.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var retry = r.RestoreAsync(new RestoreAsk { Session = "s", Cause = RestoreCause.Crash, By = "host-signin" });
+        await Until(() => { lock (resumer.Asked) { return resumer.Asked.Count == 2; } });
+        r.SeenReadyLate("s");
+        resumer.Gate.SetResult();
+
+        Assert.Equal(LaunchOutcome.Refused, (await retry).Outcome);
+        Assert.Equal(first, Assert.IsType<SessionRestored>(marks.Of.GetValueOrDefault("s")).At);
+    }
+
     [Fact]
     public async Task What_restored_sessions_lost_is_kept_for_the_push()
     {

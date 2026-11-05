@@ -874,6 +874,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         try
         {
             var result = await ResumeOneAsync(new ResumeAsk(ask.Session, agent, launch, ask.By), cancellationToken);
+            RestoreNotice? ready = null;
             lock (gate)
             {
                 inFlight.Remove(ask.Session);
@@ -900,10 +901,15 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                         // Started nothing: no folder of its own to keep, only an earlier request's.
                         if (hadRequest) { requested[ask.Session] = earlierFolder; }
                         else { requested.Remove(ask.Session); }
+                        // Seen ready while this one was under way: an earlier unconfirmed attempt's
+                        // window, whose stamp and mark are back now. Dropped, that attempt was never
+                        // shown restored nor given Continue (Copilot on #837).
+                        if (late) { ready = ReadyLateLocked(ask.Session); }
                     }
                     ScheduleWriteLocked(Coalesce);
                 }
             }
+            if (ready is not null) { Tell(ready); }
             log($"restore: session {Short(ask.Session)} asked by {ask.By}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}");
             return result;
         }
@@ -924,21 +930,29 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         {
             if (stopped) { return; }
             if (inFlight.Contains(id)) { readyLate.Add(id); return; }
-            if (!unconfirmed.Remove(id, out var u)) { return; }
-            // Another attempt's stamp is not this one's. No stamp at all is: it is taken away once the
-            // session has lived LoopWithin, and a window at folder trust is followed for longer.
-            if ((restoredAt.TryGetValue(id, out var stamp) && stamp != u.Stamp) || (live.TryGetValue(id, out var e) && e.Gone is not null)) { return; }
-            if (u.Queue) { restoredBy[id] = u.Loss; }
-            restoredThisRun.Add(id);
-            RevealLocked(id);
-            BuildNoticeLocked();
-            // The push, if this was all it waited for: a session that registered before its launch
-            // answered took its owed entry and the judging with it, so nothing else would send it.
-            ready = AdvanceLocked(time.GetUtcNow());
-            ScheduleWriteLocked(Coalesce);
-            log($"restore: session {Short(id)} seen ready after all; restored, idle");
+            ready = ReadyLateLocked(id);
         }
         if (ready is not null) { Tell(ready); }
+    }
+
+    // The unconfirmed attempt seen ready: counted and shown restored, if it is still the session's.
+    // The notice to push, if this was all it waited for.
+    RestoreNotice? ReadyLateLocked(string id)
+    {
+        if (!unconfirmed.Remove(id, out var u)) { return null; }
+        // Another attempt's stamp is not this one's. No stamp at all is: it is taken away once the
+        // session has lived LoopWithin, and a window at folder trust is followed for longer.
+        if ((restoredAt.TryGetValue(id, out var stamp) && stamp != u.Stamp) || (live.TryGetValue(id, out var e) && e.Gone is not null)) { return null; }
+        if (u.Queue) { restoredBy[id] = u.Loss; }
+        restoredThisRun.Add(id);
+        RevealLocked(id);
+        BuildNoticeLocked();
+        // The push, if this was all it waited for: a session that registered before its launch
+        // answered took its owed entry and the judging with it, so nothing else would send it.
+        var ready = AdvanceLocked(time.GetUtcNow());
+        ScheduleWriteLocked(Coalesce);
+        log($"restore: session {Short(id)} seen ready after all; restored, idle");
+        return ready;
     }
     // The restored mark, for this host run and at most ShownFor; Continue's words only for one that
     // went mid-turn. Held (the boundary, no badge) from before the launch, and shown once the launch
@@ -1242,6 +1256,10 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                 // still listed is not still live: one that died in the hold, its stamp gone, would
                 // not read as a loop once the hold lifts and it is found gone.
                 if (held.Contains(e.Agent)) { Next(now + HeldRetry); continue; }
+                // Nor while the source no longer lists it: a hold that has just lifted clears before
+                // the removals it found are dispatched here. Its stamp cleared in that gap, the removal
+                // was neither a loop nor its worktree kept (Copilot on #837).
+                if (source.Get(id) is null) { Next(now + HeldRetry); continue; }
                 restoredAt.Remove(id);
                 liveSince.Remove(id);
                 if (e.Restored is not null) { live[id] = e with { Restored = null }; }
