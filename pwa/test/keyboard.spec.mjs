@@ -176,15 +176,14 @@ test.describe('on a desktop', () => {
     expect((await focused(page)).shown, 'a ring on the row').toBe(true);
   });
 
-  test('the list head draws Sort on its first line, before New, as Tab reaches them, and all three on one line where the pane has room (ui.md §9.1 A3)', async ({ page, browserName }) => {
+  test('the list head draws Sort on its first line, before New, as Tab reaches them (ui.md §9.1 A3)', async ({ page, browserName }) => {
     await openDemo(page);
     const sort = page.locator('#session-sort');
     const fresh = page.locator('#list-pane .new-session');
-    const boxes = () => Promise.all([sort, fresh, page.locator('#sessions-h')].map((l) => l.boundingBox()));
+    const [s, n, title] = await Promise.all([sort, fresh, page.locator('#sessions-h')].map((l) => l.boundingBox()));
     // On one line: each one's middle within the other's height.
     const sameLine = (a, b) => Math.abs((a.y + a.height / 2) - (b.y + b.height / 2)) < Math.min(a.height, b.height) / 2;
     // Sort on the title's line, and New after it as a page reads: to its right, or on a line below.
-    const [s, n, title] = await boxes();
     expect({ sortOnFirstLine: sameLine(s, title), newAfterSort: sameLine(s, n) ? s.x + s.width <= n.x : n.y >= s.y + s.height })
       .toEqual({ sortOnFirstLine: true, newAfterSort: true });
     await sort.focus();
@@ -193,10 +192,6 @@ test.describe('on a desktop', () => {
       await page.keyboard.press('Tab');
       await expect(fresh).toBeFocused();
     }
-    // Two lines are the fallback for today's narrow pane: one wide enough keeps the three on one.
-    await page.locator('#sessions').evaluate((e) => { e.style.gridTemplateColumns = '420px minmax(0, 1fr)'; });
-    const [ws, wn, wt] = await boxes();
-    expect({ oneLine: sameLine(ws, wt) && sameLine(ws, wn), sortFirst: ws.x + ws.width <= wn.x }).toEqual({ oneLine: true, sortFirst: true });
   });
 
   test('a session opens from its row with Enter, and its question is answered with Tab, Space and Enter', async ({ page }) => {

@@ -486,13 +486,12 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 @media (min-width: 760px) {
   /* In the list pane: the title and the sort menu, then the count and New. Sort is on the first
      line, before New, so Tab's order, which is the page's, is the order drawn (ui.md §9.1 A3,
-     #371). That is the fallback for a pane (264 to 320 px today) with no room for the title, Sort
-     and New on one line; a pane with room keeps them on one line, Sort still first. */
-  .list-pane { container: list-pane / inline-size; }
+     #371). Design takes this as the fallback for a pane with no room for the title, Sort and New
+     on one line (about 286 px), which is every pane today: its track is at most 320 px, 279 px
+     of head. Making the pane a size container to keep one line in a wider one stopped WebKit
+     pulling the list's scroll back as rows go (needs-you.spec), so a wider pane is left to the
+     change that brings one. */
   .sessions-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title sort" "count actions"; row-gap: var(--ab-space-1); }
-  @container list-pane (min-width: 320px) {
-    .sessions-head { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "title sort actions" "count count count"; }
-  }
   .new-session { min-height: 32px; padding: 0 var(--ab-space-3); border-radius: var(--ab-radius-control); font-size: var(--type-row); }
   .new-session .ab-icon { width: 16px; height: 16px; --ab-icon-stroke: 1.7; }
   .new-session.attention::after { top: -3px; right: -3px; box-shadow: 0 0 0 2px var(--ab-layer); }
