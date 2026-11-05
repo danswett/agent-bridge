@@ -255,6 +255,107 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal((21600, "normal"), (ttl, urgency));
     }
 
+    // #913: each notice says its tier, so a client follows the host's class rather than its own
+    // rules. A resolved notice withdraws one and is none itself.
+    [Fact]
+    public async Task A_question_goes_as_needs_you_its_finished_turn_as_done_and_its_withdrawal_with_no_class()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        notifier.Answered(Laptop, "s1", "q1");
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Postgres it is.", turns: 2));
+        await After(TimeSpan.FromSeconds(3));
+
+        var classes = Received()
+            .Select(r => (Kind(r.Notification), r.Notification.GetProperty("data").TryGetProperty("class", out var c) ? c.GetString() : null))
+            .Distinct().ToList();
+        Assert.Equal(new (string, string?)[] { ("question", "needsYou"), ("resolved", null), ("finished", "done") }, classes);
+    }
+
+    // #913 (the owner's B): a finished turn is Done, which waits and never alerts, on any client.
+    // The question before it still alerts.
+    [Fact]
+    public async Task A_finished_turn_goes_silent_while_a_question_does_not()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Postgres it is.", turns: 2));
+        await After(TimeSpan.FromSeconds(3));
+
+        var silent = Received()
+            .Select(r => (Kind(r.Notification), r.Notification.TryGetProperty("silent", out var s) && s.GetBoolean()))
+            .Where(r => r.Item1 != "resolved").Distinct().ToList();
+        Assert.Equal(new[] { ("question", false), ("finished", true) }, silent);
+    }
+
+    // #913 Q3: a finished push is always done, even for a session whose own class is needsYou at
+    // the time (here it stopped responding as its turn ended), so no client alerts it as finished.
+    [Fact]
+    public async Task A_finished_push_is_never_needs_you_even_when_its_session_is()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(1));
+        var stalled = S("s1", SessionStatus.Idle, response: "Postgres it is.", turns: 2) with
+        {
+            Attention = new Attention { Kind = AttentionKind.NotResponding, Since = T, LastEventAt = T },
+        };
+        Assert.Equal(NotificationClass.NeedsYou, AgentBridge.Host.Core.NotificationClasses.Of(stalled));
+        source.Upsert(stalled);
+        await After(TimeSpan.FromSeconds(3));
+
+        var n = Assert.Single(Received()).Notification;
+        Assert.Equal(("finished", "done"), (Kind(n), n.GetProperty("data").GetProperty("class").GetString()));
+    }
+
+    // #913: sign-in needed and sessions a crash took are needsYou; a planned reboot or restart of
+    // the host is no tier of #913's, so its notice carries none and clients keep today's rules.
+    [Theory]
+    [InlineData(RestoreCause.Crash, "needsYou")]
+    [InlineData(RestoreCause.Reboot, null)]
+    [InlineData(RestoreCause.Restart, null)]
+    public async Task What_a_crash_took_goes_as_needs_you_and_a_reboot_with_no_class(RestoreCause cause, string? expected)
+    {
+        Start();
+        Subscribe(Phone);
+        notifier.NotifyRestore(new RestoreNotice
+        {
+            At = T,
+            Cause = cause,
+            Why = RestoreWhy.Pending,
+            Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login", MidTurn = true }],
+        });
+        await After(TimeSpan.Zero);
+
+        var data = Assert.Single(Received()).Notification.GetProperty("data");
+        Assert.Equal(expected, data.TryGetProperty("class", out var c) ? c.GetString() : null);
+    }
+
+    [Fact]
+    public async Task A_sign_in_notice_goes_as_needs_you()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with
+        {
+            Attention = new Attention { Kind = AttentionKind.SignInNeeded, Since = T, Agent = AgentKind.Copilot, Provider = "github" },
+        });
+        await After(TimeSpan.Zero);
+
+        var n = Assert.Single(Received()).Notification;
+        Assert.Equal(("signIn", "needsYou"), (Kind(n), n.GetProperty("data").GetProperty("class").GetString()));
+    }
+
     [Fact]
     public async Task A_turn_that_carries_on_within_its_delay_is_not_notified_until_it_really_finishes()
     {

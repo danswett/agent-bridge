@@ -58,7 +58,9 @@
                 "userMessage": "List the fixture files",
                 "turnCount": 0,
                 "compactions": 0
-              }
+              },
+              "class": "fyi",
+              "classSince": "2026-10-28T04:00:01.000Z"
             }
           ],
           "revision": 1
@@ -104,7 +106,9 @@
             "userMessage": "List the fixture files",
             "turnCount": 0,
             "compactions": 0
-          }
+          },
+          "class": "fyi",
+          "classSince": "2026-10-28T04:00:01.000Z"
         }
       }
     },
@@ -186,7 +190,9 @@
               "userMessage": "List the fixture files",
               "turnCount": 0,
               "compactions": 0
-            }
+            },
+            "class": "fyi",
+            "classSince": "2026-10-28T04:00:01.000Z"
           }
         },
         {
