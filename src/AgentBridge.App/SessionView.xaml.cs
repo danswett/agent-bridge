@@ -64,7 +64,14 @@ public sealed partial class SessionView : UserControl
         ConversationScroll.AddHandler(PointerExitedEvent, new PointerEventHandler((_, e) => { if (!Touch(e)) { follow.PointerLeft(e.Pointer.PointerId); } }), true);
         ConversationScroll.DirectManipulationStarted += (_, _) => follow.PanStarted();
         ConversationScroll.DirectManipulationCompleted += (_, _) => follow.PanEnded();
+        // The question's answers moved where they are (#491): held again. And a pointer's press on
+        // one reads where they are first, and is dropped if they moved (PointerLets).
+        answers = new AnswerWatch(QuestionCard, () => questionView, OnAnswersMoved);
+        QuestionCard.AddHandler(PointerPressedEvent, new PointerEventHandler(OnQuestionPressed), true);
+        QuestionCard.AddHandler(KeyDownEvent, new KeyEventHandler((_, _) => answers.Own()), true);
     }
+
+    readonly AnswerWatch answers;
 
     readonly ConversationFollow follow = new();
     static bool Touch(PointerRoutedEventArgs e) => e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Touch;
@@ -188,6 +195,8 @@ public sealed partial class SessionView : UserControl
         DetailsFlyout.Card = card;
         ToolsTabList.Card = card;
         if (!attached) { return; }
+        // Another session's answers: measured from where they are drawn, held as they appear.
+        answers.Forget();
         SyncQuestion();
         Bindings.Update();
         Settle();
@@ -205,6 +214,7 @@ public sealed partial class SessionView : UserControl
         if (attached) { return; }
         attached = true;
         if (Card is { } c) { c.PropertyChanged += OnCardChanged; c.Delegates.ReplyWanted += OnReplyWanted; }
+        answers.Start();
         SyncQuestion();
         Bindings.Update();
         Settle();
@@ -220,6 +230,7 @@ public sealed partial class SessionView : UserControl
         if (Card is { } c) { c.PropertyChanged -= OnCardChanged; c.Delegates.ReplyWanted -= OnReplyWanted; }
         // The question goes with the view: its guard's timer has nothing left to let go of.
         guardTimer?.Stop();
+        answers.Stop();
         questionView?.Detach();
         questionView = null;
         QuestionHost.Content = null;
@@ -241,7 +252,12 @@ public sealed partial class SessionView : UserControl
             }
         }
         if (all || e.PropertyName is nameof(SessionCardViewModel.UserMessage) or nameof(SessionCardViewModel.ReceiptText)) { Acknowledge(); }
-        if ((all || e.PropertyName == nameof(SessionCardViewModel.AsksText)) && questionView is not null && Card is { } c) { questionView.Heading = c.AsksText; }
+        if ((all || e.PropertyName == nameof(SessionCardViewModel.AsksText)) && questionView is not null && Card is { } c && questionView.Heading != c.AsksText)
+        {
+            // Who asks, drawn by the app in the question: not the person's typing laid out.
+            answers.NotOwn();
+            questionView.Heading = c.AsksText;
+        }
         if (all || e.PropertyName == nameof(SessionCardViewModel.StatusTone)) { ShowWords(); }
         if (e.PropertyName == nameof(SessionCardViewModel.WantsFocus)) { TakeFocus(); }
     }
@@ -415,8 +431,9 @@ public sealed partial class SessionView : UserControl
         var q = Card?.Question;
         if (questionView is not null && q is not null && ReferenceEquals(questionView.Tag, q)) { return; }
         questionView?.Detach();
-        questionView = q is null ? null : new QuestionView(q, Editing, Card?.AsksText) { Tag = q };
+        questionView = q is null ? null : new QuestionView(q, Editing, Card?.AsksText, answers.Own) { Tag = q };
         QuestionHost.Content = questionView;
+        answers.Forget();
         if (questionView is not null) { GuardAnswer(); }
         QuestionCard.Visibility = Ui.Some(questionView);
     }
@@ -557,6 +574,43 @@ public sealed partial class SessionView : UserControl
 
     // For the self-test: the question's controls, and whether they take a pointer.
     internal UIElement? QuestionShown => questionView;
+
+    // Where the question's answers are moved, with the question still: on screen, held again.
+    void OnAnswersMoved() { if (layout?.ViewingConversation != false) { GuardAnswer(); } }
+
+    // A pointer pressed in the question: on one of its answers, let through only if they are where
+    // they were and the wait has run out (PointerLets). Dropped, the button lets the pointer go, so
+    // no click follows from this press. Let through, what the question lays out next is theirs.
+    void OnQuestionPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (questionView is null || e.OriginalSource is not DependencyObject source || !Motion.Within(source, questionView)) { return; }
+        if (PointerLets(source)) { answers.Own(); return; }
+        (answers.AnswerAt(source) as UIElement)?.ReleasePointerCaptures();
+    }
+
+    // Whether a pointer's press at target goes through (#491, #559's click-time check). On an answer,
+    // where the answers are is read first: one moved since the last read (laid out after an update
+    // in the same task) holds them, and so does a read that fails; either way this press is dropped.
+    // Keys, a gamepad and UI Automation never come here: they act at once.
+    internal bool PointerLets(DependencyObject target)
+    {
+        if (answers.AnswerAt(target) is null) { return true; }
+        try
+        {
+            // Held here as well as by the move's own call: that one holds only a conversation on
+            // screen, and this press is on the question whatever the layout says.
+            if (answers.Check()) { GuardAnswer(); return false; }
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            AppLog.Write($"answers: unreadable as a pointer pressed one ({e.GetType().Name})");
+            GuardAnswer();
+            return false;
+        }
+        if (guard.Accepts(pointer: true, DateTimeOffset.UtcNow)) { return true; }
+        GuardAnswer();
+        return false;
+    }
 
     void GuardAnswer()
     {
