@@ -297,7 +297,8 @@ does.
   - A row's glyph aligns with the row's first line of text, not with its centre.
 - **Keylines (desktop, #771).** A base unit of 4 and a rhythm of 8. Every pane (the list,
   the session, the inspector, and full-page surfaces such as Settings) shares one set:
-  - **K0, the pane inset: 24** from the pane's left and right edges. Headings, body text,
+  - **K0, the pane inset: 24** from the pane's left and right edges (16–20 in the one column
+    below 760, as phones pad). Headings, body text,
     tabs and the edges of cards sit on it.
   - **K1, text after a glyph: K0 + 24.** The glyph sits on K0 and the text 24 after it,
     whatever the glyph's size: a 16 px glyph leaves an 8 px gap, and the 20 px session mark
@@ -345,8 +346,10 @@ Selection survives a resize across breakpoints. #166 has the acceptance criteria
 - **Which session:** the one chosen, or with none chosen yet on a desktop, the first row.
   A phone shows the list until one is chosen.
 - **The inspector's toggle** is remembered on the device.
-- **Keylines at each width** (§5.1): each pane keeps K0 at 24 inside its own edges, whether
-  there are three panes, two or one. When the session pane is wider than the conversation's
+- **Keylines at each width** (§5.1): each pane keeps K0 inside its own edges, whether there
+  are three panes, two or one. K0 is 24 from 760 up, and in the one column below 760 it is
+  §5.1's phone padding, 16–20 (`design/tokens.json`), so a phone has one inset, not two.
+  When the session pane is wider than the conversation's
   centred reading column, the session's header, its tabs and the delegate strip follow that
   column's edges, as the conversation's cards and the reply box (§6.5) already do, so the whole
   pane shares one left edge. K0 is then the column's edge rather than the pane's.
