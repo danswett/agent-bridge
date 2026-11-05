@@ -3,6 +3,7 @@ using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Protocol;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 public sealed class InjectorUncertaintyTests
@@ -17,14 +18,15 @@ public sealed class InjectorUncertaintyTests
         fixture.Processes.Run(AgentKind.Copilot, 100);
         await using var source = new SessionSource(fixture.Options(), fixture.Processes);
         await source.RefreshAsync();
-        var gate = new DeliveryGate();
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
         var injector = new UncertainInjector();
         var replies = new ReplyService(gate, source, fixture.Processes, new NoBridge(), new NoGuard(), injector,
             new ReplyOptions { CopilotHome = fixture.CopilotHome, PlatformSupported = true, PreRead = false });
         var result = await replies.ReplyAsync(new ReplyRequest { Id = id, Request = Guid.NewGuid().ToString(), Text = "continue" });
         Assert.True(injector.Attempted);
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
-        var coordinator = new LifecycleCoordinator(gate, new DepartureConditions());
+        var coordinator = new LifecycleCoordinator(gate, new DepartureConditions(), time: time);
         Assert.Equal(QuietBlockedReason.JournalUncertain,
             (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Reason);
     }
@@ -32,9 +34,10 @@ public sealed class InjectorUncertaintyTests
     [Fact]
     public async Task A_failed_screen_read_leaves_quiet_available_but_a_failed_injection_blocks_it()
     {
-        var gate = new DeliveryGate();
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
         var injector = new GateTrackedInjector(new ThrowingInjector(), gate);
-        var coordinator = new LifecycleCoordinator(gate, new DepartureConditions());
+        var coordinator = new LifecycleCoordinator(gate, new DepartureConditions(), time: time);
         await Assert.ThrowsAsync<Win32Exception>(() => injector.ReadScreenAsync(100));
         using (var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value)
         {

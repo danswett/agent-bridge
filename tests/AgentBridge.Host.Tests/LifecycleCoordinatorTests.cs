@@ -21,8 +21,9 @@ public sealed class LifecycleCoordinatorTests
     [Fact]
     public async Task The_lease_blocks_while_a_delivery_is_in_flight_and_grants_when_quiet()
     {
-        var gate = new DeliveryGate();
-        var coordinator = new LifecycleCoordinator(gate, Conditions());
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
+        var coordinator = new LifecycleCoordinator(gate, Conditions(), time: time);
         using var delivery = gate.TryEnterDelivery();
         Assert.Equal(QuietBlockedReason.DeliveryInFlight,
             (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Reason);
@@ -46,7 +47,8 @@ public sealed class LifecycleCoordinatorTests
         await using var source = new SessionSource(f.Options(), f.Processes);
         await source.RefreshAsync();
         Assert.Equal(SessionStatus.Working, Assert.Single(source.Snapshot()).Status);
-        var coordinator = new LifecycleCoordinator(new DeliveryGate(), Conditions());
+        var time = new FakeTimeProvider();
+        var coordinator = new LifecycleCoordinator(new DeliveryGate(time), Conditions(), time: time);
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value;
         Assert.NotNull(lease);
         Assert.Equal(SessionStatus.Working, source.Get(id)!.Status);
@@ -94,8 +96,9 @@ public sealed class LifecycleCoordinatorTests
     [Fact]
     public async Task Only_a_persons_restart_or_stop_can_use_the_unnegotiated_Legacy_path()
     {
-        var gate = new DeliveryGate();
-        var coordinator = new LifecycleCoordinator(gate, Conditions());
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
+        var coordinator = new LifecycleCoordinator(gate, Conditions(), time: time);
         using var update = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value!;
         Assert.Equal(QuietBlockedReason.AnnounceUnavailable, (await coordinator.AnnouncePlanned(update)).Reason);
         using var restart = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value!;
@@ -110,7 +113,8 @@ public sealed class LifecycleCoordinatorTests
     [Fact]
     public async Task A_forced_recovery_is_refused_with_JournalUncertain_until_the_journal_exists()
     {
-        var coordinator = new LifecycleCoordinator(new DeliveryGate(), Conditions());
+        var time = new FakeTimeProvider();
+        var coordinator = new LifecycleCoordinator(new DeliveryGate(time), Conditions(), time: time);
         Assert.Equal(QuietBlockedReason.JournalUncertain,
             (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.WatchdogRecovery)).Reason);
         foreach (var mode in new[] { DepartureMode.ForcedRecovery, DepartureMode.ExternalRestart, DepartureMode.QueuedInputHandover })
@@ -150,11 +154,12 @@ public sealed class LifecycleCoordinatorTests
     [Fact]
     public async Task A_blocking_condition_aborts_releases_and_cancels_but_still_checks_every_condition_once()
     {
-        var gate = new DeliveryGate();
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
         var transport = new Transport();
         var first = new Condition(DepartureBlocker.AppRunning, () => true);
         var second = new Condition(DepartureBlocker.OtherHostRunning, () => false);
-        var coordinator = new LifecycleCoordinator(gate, Conditions(first, second), transport);
+        var coordinator = new LifecycleCoordinator(gate, Conditions(first, second), transport, time: time);
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value!;
         await coordinator.AnnouncePlanned(lease);
         Assert.Equal(DepartureBlocker.AppRunning, coordinator.CommitDeparture(lease).Kind);
@@ -168,9 +173,10 @@ public sealed class LifecycleCoordinatorTests
     [Fact]
     public async Task A_throwing_condition_aborts_as_ConditionFault_and_releases()
     {
-        var gate = new DeliveryGate();
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
         var condition = new Condition(DepartureBlocker.ChannelChanged, () => throw new IOException("not exported"));
-        var coordinator = new LifecycleCoordinator(gate, Conditions(condition));
+        var coordinator = new LifecycleCoordinator(gate, Conditions(condition), time: time);
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value!;
         await coordinator.AnnouncePlanned(lease);
         Assert.Equal(DepartureBlocker.ConditionFault, coordinator.CommitDeparture(lease).Kind);
@@ -182,7 +188,8 @@ public sealed class LifecycleCoordinatorTests
     [Fact]
     public async Task A_reentrant_condition_is_refused_as_ConditionFault_without_deadlocking()
     {
-        var gate = new DeliveryGate();
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
         LifecycleCoordinator coordinator = null!;
         QuietLease lease = null!;
         var condition = new Condition(DepartureBlocker.TransferInFlight, () =>
@@ -192,7 +199,7 @@ public sealed class LifecycleCoordinatorTests
                 coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart).GetAwaiter().GetResult().Reason);
             return false;
         });
-        coordinator = new LifecycleCoordinator(gate, Conditions(condition));
+        coordinator = new LifecycleCoordinator(gate, Conditions(condition), time: time);
         using var held = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value!;
         lease = held;
         await coordinator.AnnouncePlanned(lease);
@@ -213,15 +220,16 @@ public sealed class LifecycleCoordinatorTests
     [Fact]
     public async Task A_changed_announcement_generation_or_missing_registration_aborts()
     {
-        var gate = new DeliveryGate();
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
         var transport = new Transport();
-        var coordinator = new LifecycleCoordinator(gate, Conditions(), transport);
+        var coordinator = new LifecycleCoordinator(gate, Conditions(), transport, time: time);
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value!;
         await coordinator.AnnouncePlanned(lease);
         transport.Generation++;
         Assert.Equal(DepartureBlocker.AnnounceUnacked, coordinator.CommitDeparture(lease).Kind);
         using (var admitted = gate.TryEnterDelivery()) { Assert.NotNull(admitted); }
-        var unregistered = new LifecycleCoordinator(gate, new DepartureConditions());
+        var unregistered = new LifecycleCoordinator(gate, new DepartureConditions(), time: time);
         using var second = (await unregistered.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value!;
         await unregistered.AnnouncePlanned(second);
         Assert.Equal(DepartureBlocker.ConditionFault, unregistered.CommitDeparture(second).Kind);
@@ -340,7 +348,8 @@ public sealed class LifecycleCoordinatorTests
     [Fact]
     public async Task An_owner_lock_condition_cannot_deadlock_an_owner_thread_waiting_for_the_gate()
     {
-        var gate = new DeliveryGate();
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
         var ownerLock = new object();
         using var ownerHeld = new ManualResetEventSlim();
         using var conditionEntered = new ManualResetEventSlim();
@@ -349,7 +358,7 @@ public sealed class LifecycleCoordinatorTests
             conditionEntered.Set();
             lock (ownerLock) { return false; }
         });
-        var coordinator = new LifecycleCoordinator(gate, Conditions(condition));
+        var coordinator = new LifecycleCoordinator(gate, Conditions(condition), time: time);
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value!;
         await coordinator.AnnouncePlanned(lease);
         // Dedicated threads: a starved pool once kept the commit from starting within the
@@ -381,9 +390,10 @@ public sealed class LifecycleCoordinatorTests
     [InlineData(false)]
     public async Task A_throwing_transport_getter_during_commit_aborts_and_releases(bool generation)
     {
-        var gate = new DeliveryGate();
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
         var transport = new Transport();
-        var coordinator = new LifecycleCoordinator(gate, Conditions(), transport);
+        var coordinator = new LifecycleCoordinator(gate, Conditions(), transport, time: time);
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value!;
         await coordinator.AnnouncePlanned(lease);
         transport.ThrowGeneration = generation;
@@ -400,9 +410,10 @@ public sealed class LifecycleCoordinatorTests
     [InlineData(false)]
     public async Task A_throwing_transport_getter_during_announce_aborts_and_releases(bool generation)
     {
-        var gate = new DeliveryGate();
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
         var transport = new Transport { ThrowGeneration = generation, ThrowNegotiated = !generation };
-        var coordinator = new LifecycleCoordinator(gate, Conditions(), transport);
+        var coordinator = new LifecycleCoordinator(gate, Conditions(), transport, time: time);
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value!;
         Assert.Equal(QuietBlockedReason.ConditionFault, (await coordinator.AnnouncePlanned(lease)).Reason);
         using var admitted = gate.TryEnterDelivery();
@@ -413,7 +424,8 @@ public sealed class LifecycleCoordinatorTests
     [Fact]
     public async Task A_commit_forced_into_aborts_check_point_cannot_strand_the_abort()
     {
-        var coordinator = new LifecycleCoordinator(new DeliveryGate(), Conditions());
+        var time = new FakeTimeProvider();
+        var coordinator = new LifecycleCoordinator(new DeliveryGate(time), Conditions(), time: time);
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value!;
         await coordinator.AnnouncePlanned(lease);
         var commit = new TaskCompletionSource<DepartureResult>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -444,14 +456,15 @@ public sealed class LifecycleCoordinatorTests
     [InlineData(false)]
     public async Task A_connection_change_during_condition_evaluation_invalidates_the_final_commit(bool generation)
     {
-        var gate = new DeliveryGate();
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
         var transport = new Transport();
         var condition = new Condition(DepartureBlocker.ChannelChanged, () =>
         {
             transport.Connection.Publish(generation ? transport.Generation + 1 : transport.Generation, generation);
             return false;
         });
-        var coordinator = new LifecycleCoordinator(gate, Conditions(condition), transport);
+        var coordinator = new LifecycleCoordinator(gate, Conditions(condition), transport, time: time);
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value!;
         await coordinator.AnnouncePlanned(lease);
         Assert.Equal(DepartureBlocker.AnnounceUnacked, coordinator.CommitDeparture(lease).Kind);
@@ -466,10 +479,11 @@ public sealed class LifecycleCoordinatorTests
     [InlineData(false, true)]
     public async Task A_cached_receipt_is_not_reused_after_generation_or_capability_changes(bool generation, bool legacy)
     {
-        var gate = new DeliveryGate();
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
         var transport = new Transport();
         if (legacy) { transport.Connection.Publish(1, false); }
-        var coordinator = new LifecycleCoordinator(gate, Conditions(), transport);
+        var coordinator = new LifecycleCoordinator(gate, Conditions(), transport, time: time);
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, legacy ? DeparturePurpose.RemoteRestart : DeparturePurpose.Update)).Value!;
         Assert.True((await coordinator.AnnouncePlanned(lease)).Succeeded);
         transport.Connection.Publish(generation ? 2 : 1, generation || legacy);

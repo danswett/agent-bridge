@@ -22,9 +22,10 @@ public sealed class DeliveryQuietTests
     [Fact]
     public async Task An_accepted_request_is_fenced_before_its_background_worker_claims_a_session()
     {
-        var gate = new DeliveryGate();
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
         var finish = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var memory = new OutcomeMemory<int>(TimeProvider.System, TimeSpan.FromMinutes(15), gate, () => -1);
+        var memory = new OutcomeMemory<int>(time, TimeSpan.FromMinutes(15), gate, () => -1);
         var key = Guid.NewGuid();
         var request = memory.Once(key, () => finish.Task, _ => { });
         Assert.Null(gate.TryExclude(TimeSpan.FromSeconds(30), out var why));
@@ -43,10 +44,11 @@ public sealed class DeliveryQuietTests
     [Fact]
     public async Task An_accepted_outcome_is_complete_before_its_admission_is_released()
     {
-        var gate = new DeliveryGate();
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
         var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completedAtRelease = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var memory = new OutcomeMemory<int>(TimeProvider.System, TimeSpan.FromMinutes(15), gate, () => -1);
+        var memory = new OutcomeMemory<int>(time, TimeSpan.FromMinutes(15), gate, () => -1);
         Task<int>? request = null;
         gate.AdmissionReleased = () => completedAtRelease.TrySetResult(request!.IsCompleted);
         request = memory.Once(Guid.NewGuid(), () => release.Task, _ => { });
@@ -60,7 +62,8 @@ public sealed class DeliveryQuietTests
     [Fact]
     public async Task A_typing_worker_cannot_be_interrupted_by_a_quiet_grant()
     {
-        var gate = new DeliveryGate();
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
         using var delivery = gate.TryEnterDelivery();
         await gate.WaitToTypeAsync();
         try
