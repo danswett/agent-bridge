@@ -93,7 +93,9 @@ are handled in order, not as one transaction. Ownership is saved first without
 `setupCompleted`; only after the registrations (and Codex's plugin) and `intake.json` are all
 written does setup rewrite the record with `"setupCompleted": true`. Every setup or repair
 first rewrites the record without it, so a failed repair cannot leave an earlier completion
-behind, and a Copilot record kept for another tool's additions after removal loses it too.
+behind. Removal likewise clears it before its first cleanup step and deletes the record only
+after every step succeeded, so a failed or cancelled removal stays owned and incomplete; a
+Copilot record kept for another tool's additions stays without it.
 Readiness reports an owned record without `setupCompleted: true`, including records from
 before this field existed, as incomplete setup needing repair. Completion is setup evidence,
 not evidence that hooks run in a new session.

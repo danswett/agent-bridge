@@ -295,6 +295,13 @@ public sealed class StandaloneHooks(
         Preflight(agent, removing: true);
         output.WriteLine($"{(dryRun ? "Would remove" : "Removing")} only {agent} hooks owned by {profile}.");
         if (dryRun) { return; }
+        // Clear completion before the first cleanup step: a removal that fails or is cancelled
+        // part way (plugin removed but not its marketplace, instructions left behind) must read
+        // as incomplete and keep ownership for Repair, not as a completed setup. Preflight just
+        // verified, under the lock, that this record is this profile's own.
+        var owner = Path.Combine(Home(agent), OwnerFile);
+        var incomplete = Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile });
+        DurableFile.Replace(owner, incomplete, MigrationRecord.Hash(owner));
         if (agent == "codex")
         {
             if (present)
@@ -309,12 +316,10 @@ public sealed class StandaloneHooks(
             else { DurableFile.Replace(path, Bytes(root), before); }
         }
         instructions.Apply(InstructionBackup(agent));
-        var owner = Path.Combine(Home(agent), OwnerFile);
-        // A dedicated Copilot file with somebody else's additions must remain attributable,
-        // otherwise reinstall would have to claim an unowned file or permanently refuse it.
-        if (agent != "copilot" || !File.Exists(path)) { DurableFile.Remove(owner, MigrationRecord.Hash(owner)); }
-        // The retained record no longer describes a completed setup: its registrations are gone.
-        else { DurableFile.Replace(owner, Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile }), MigrationRecord.Hash(owner)); }
+        // Ownership goes only after every cleanup step succeeded. A dedicated Copilot file with
+        // somebody else's additions must remain attributable, otherwise reinstall would have to
+        // claim an unowned file or permanently refuse it; its record stays without completion.
+        if (agent != "copilot" || !File.Exists(path)) { DurableFile.Remove(owner, MigrationRecord.Hash(incomplete)); }
         // Keep the private runtime and binary: sessions already open retain their commands.
         output.WriteLine("Removed. Existing sessions keep their hooks until they end; other settings and Codex hook trust were left alone.");
     }

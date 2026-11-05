@@ -203,7 +203,7 @@ There is deliberately no aggregate "ready" bit.
 
 `hookSetup` is this profile's own setup record for the agent home: `notSetUp` (no ownership
 record), `incomplete` (an owned record without completed setup: an interrupted or failed
-setup or repair, or a record from before completion was recorded; offer Repair),
+setup, repair or removal, or a record from before completion was recorded; offer Repair),
 `completed` (the last setup wrote every registration, Codex's plugin and intake) or
 `unknown` (not determined: older hosts omit the field, a read-only host, unreadable intake
 or ownership records, or another profile's record). Unknown future values read as `unknown`.

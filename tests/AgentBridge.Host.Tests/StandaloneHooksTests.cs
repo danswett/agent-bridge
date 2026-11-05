@@ -1138,6 +1138,46 @@ public sealed class StandaloneHooksTests : IDisposable
     }
 
     [Fact]
+    public async Task A_cancelled_removal_clears_completion_before_its_first_cleanup_step_and_stays_repairable()
+    {
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
+        Assert.True((bool?)Read(Owner("codex"))["setupCompleted"]);
+        using var stop = new CancellationTokenSource();
+        bool? completedAtFirstCleanup = true;
+        codex.OnPluginRemove = () => { completedAtFirstCleanup = (bool?)Read(Owner("codex"))["setupCompleted"]; stop.Cancel(); };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Setup.RemoveAsync("codex", false, TextWriter.Null, stop.Token));
+
+        Assert.Null(completedAtFirstCleanup);
+        Assert.True(codex.Present);
+        Assert.Null(Read(Owner("codex"))["setupCompleted"]);
+        var interrupted = await Readiness("codex");
+        Assert.Equal(HookSetupState.Incomplete, interrupted.HookSetup);
+        Assert.Equal(ReadinessState.Failed, interrupted.Hooks.State);
+    }
+
+    [Fact]
+    public async Task A_removal_that_removes_the_Codex_plugin_but_not_its_marketplace_stays_owned_and_incomplete()
+    {
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
+        codex.FailMarketplace = true;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.RemoveAsync("codex", false, TextWriter.Null));
+
+        Assert.Contains(codex.Calls, c => c.Length > 1 && c[0] == "plugin" && c[1] == "remove");
+        Assert.True(File.Exists(Owner("codex")));
+        Assert.Null(Read(Owner("codex"))["setupCompleted"]);
+        var partial = await Readiness("codex");
+        Assert.Equal(HookSetupState.Incomplete, partial.HookSetup);
+        Assert.Equal(ReadinessState.Failed, partial.Hooks.State);
+
+        codex.FailMarketplace = false;
+        await Setup.RemoveAsync("codex", false, TextWriter.Null);
+        Assert.False(codex.Present);
+        Assert.False(File.Exists(Owner("codex")));
+    }
+
+    [Fact]
     public async Task Codex_marketplace_errors_identify_the_target_without_echoing_private_CLI_output()
     {
         codex.FailMarketplace = true;
@@ -1344,6 +1384,7 @@ public sealed class StandaloneHooksTests : IDisposable
         public bool FailMarketplace;
         public bool FailListing;
         public Action? OnList;
+        public Action? OnPluginRemove;
         public Func<Task>? WaitOnList;
         public string? LegacyMarketplace;
         public readonly List<string[]> Calls = [];
@@ -1361,6 +1402,11 @@ public sealed class StandaloneHooksTests : IDisposable
                 if (LegacyMarketplace is { } legacy) { marketplaces.Add(new JsonObject { ["name"] = legacy, ["root"] = Path.Combine(Root, "missing-legacy") }); }
                 return new CommandResult(true, false, 0,
                     new JsonObject { ["marketplaces"] = marketplaces }.ToJsonString());
+            }
+            if (arguments[1] == "remove")
+            {
+                OnPluginRemove?.Invoke();
+                cancellationToken.ThrowIfCancellationRequested();
             }
             if (arguments[1] == "marketplace")
             {
