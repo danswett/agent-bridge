@@ -17,10 +17,15 @@ public sealed partial class HaConnector
     sealed class SignInNotice
     {
         public required string Tag;
-        // When it last reached a phone or the push service; when sending or withdrawing it is next tried.
+        // When this round first reached a destination; when sending or withdrawing is next tried.
         public DateTimeOffset? SentAt;
         public DateTimeOffset RetryAt;
+        // The phones that hold it, to withdraw it from.
         public HashSet<string> Phones = new(StringComparer.Ordinal);
+        // The destinations this round reached (each phone, and "push:<service>"): only the others are
+        // tried again, so one that took it is not told twice, and one that failed is not left out
+        // for the hour because another took it (found in review).
+        public HashSet<string> Delivered = new(StringComparer.Ordinal);
     }
 
     // By "<agent>:<account digest>". Kept in the ledger, so a restart neither sends one again within
@@ -60,28 +65,56 @@ public sealed partial class HaConnector
             {
                 if (!signIns.TryGetValue(g.Key, out n)) { signIns[g.Key] = n = new SignInNotice { Tag = HaNotify.SignInTag(Slug, AgentWire(g.Agent), g.Account) }; }
             }
-            if ((n.SentAt is { } at && now - at < options.SignInRepeat) || now < n.RetryAt) { continue; }
+            // A round is over an hour after it first reached anyone: the next goes to every destination.
+            lock (gate)
+            {
+                if (n.SentAt is { } at && now - at >= options.SignInRepeat)
+                {
+                    n.SentAt = null;
+                    n.Delivered.Clear();
+                }
+            }
+            var push = Notify.Enabled && HaNotify.Split(Notify.Service) is not null ? "push:" + Notify.Service : null;
+            List<string> phones;
+            lock (gate) { phones = Notify.ButtonsOn ? [.. Notify.AnswerButtonServices.Where(s => !n.Delivered.Contains(s))] : []; }
+            var pushDue = push is not null && !n.Delivered.Contains(push);
+            if ((phones.Count == 0 && !pushDue) || now < n.RetryAt) { continue; }
             var (title, message) = HaNotify.SignIn(options.MachineName, AgentName(g.Agent), g.Names);
-            var took = false;
-            if (Notify.ButtonsOn)
+            var missed = false;
+            // Each destination on record as soon as it has it, the round's time with it: a pass
+            // stopped part-way (cancelled, or agent-ha-bridge starting) must not send it again to one
+            // that took it, after a restart or a resume either (found in review).
+            void Took(string destination)
+            {
+                lock (gate)
+                {
+                    n.Delivered.Add(destination);
+                    n.SentAt ??= now;
+                }
+            }
+            if (phones.Count > 0)
             {
                 var payload = HaNotify.SignInPayload(n.Tag, title, message, options.DashboardUrlPath, options.MachineName,
                     Notify.Icon, Notify.IconColor, Notify.Color, Notify.InterruptionLevel);
-                var sent = await SendAsync("sign-in", Notify.AnswerButtonServices, payload, "sign-in notice", phone =>
+                var sent = await SendAsync("sign-in", phones, payload, "sign-in notice", phone =>
                 {
+                    Took(phone);
                     lock (gate) { n.Phones.Add(phone); }
                     SaveLedger();
                 }, ct);
-                took |= sent.Count > 0;
+                missed |= sent.Count < phones.Count;
             }
-            if (Notify.Enabled) { took |= await TryPushAsync(title, message, ct, $"sign-in push:{Notify.Service}"); }
-            if (took)
+            if (pushDue)
             {
-                lock (gate) { n.SentAt = now; }
-                log($"Home Assistant connector sent a sign-in notice for {AgentName(g.Agent)} ({g.Names.Count} session(s))");
-                SaveLedger();
+                if (await TryPushAsync(title, message, ct, $"sign-in push:{Notify.Service}"))
+                {
+                    Took(push!);
+                    SaveLedger();
+                }
+                else { missed = true; }
             }
-            // Nothing took it: tried again shortly, each failing service said once until it works.
+            if (!missed) { log($"Home Assistant connector sent a sign-in notice for {AgentName(g.Agent)} ({g.Names.Count} session(s))"); }
+            // Those it missed are tried again shortly, each failing service said once until it works.
             else { n.RetryAt = now + options.ButtonsRetry; }
         }
         // Withdrawn once none of its sessions needs a person: signed in, recovered, or ended. A new
@@ -116,7 +149,12 @@ public sealed partial class HaConnector
         var o = new JsonObject();
         foreach (var (key, n) in signIns.OrderBy(x => x.Key, StringComparer.Ordinal))
         {
-            var entry = new JsonObject { ["tag"] = n.Tag, ["phones"] = new JsonArray([.. n.Phones.Order(StringComparer.Ordinal).Select(p => (JsonNode)p)]) };
+            var entry = new JsonObject
+            {
+                ["tag"] = n.Tag,
+                ["phones"] = new JsonArray([.. n.Phones.Order(StringComparer.Ordinal).Select(p => (JsonNode)p)]),
+                ["delivered"] = new JsonArray([.. n.Delivered.Order(StringComparer.Ordinal).Select(p => (JsonNode)p)]),
+            };
             if (n.SentAt is { } at) { entry["sentAt"] = at.ToString("o", System.Globalization.CultureInfo.InvariantCulture); }
             o[key] = entry;
         }
@@ -139,6 +177,13 @@ public sealed partial class HaConnector
                 foreach (var p in phones.EnumerateArray())
                 {
                     if (p.ValueKind == JsonValueKind.String && HaNotify.Split(p.GetString()!) is not null) { n.Phones.Add(p.GetString()!); }
+                }
+            }
+            if (e.TryGetProperty("delivered", out var delivered) && delivered.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var d in delivered.EnumerateArray())
+                {
+                    if (d.ValueKind == JsonValueKind.String && d.GetString() is { Length: > 0 } to) { n.Delivered.Add(to); }
                 }
             }
             signIns[entry.Name] = n;

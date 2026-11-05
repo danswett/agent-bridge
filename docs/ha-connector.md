@@ -713,8 +713,11 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   * **No account, code or URL** is in either one.
   * It is withdrawn from the phones (`clear_notification` by its tag) once none of its sessions
     needs a person: signed in, recovered or ended. A later need is news again.
-  * When it was sent, and which phones hold it, is kept in the connector's state file. A restart
-    within the hour therefore doesn't send it again, and still withdraws it.
+  * When it was sent, which destinations have it and which phones hold it are kept in the
+    connector's state file. A restart within the hour therefore doesn't send it again, and still
+    withdraws it. A destination that missed it (a phone or the push service failing, or a pass
+    stopped part-way) is tried again every 15 s. A destination that took it isn't told twice in
+    the hour, and a failing service is logged once until it works.
   * An error and Not responding send nothing. They show on the status only, as on the clients.
 
 Where stage 5b knowingly differs from the daemon:

@@ -1433,4 +1433,49 @@ public sealed class NotifyTests : IDisposable
             Assert.Equal(1, NoticeClears());
         }
     }
+
+    [Fact]
+    public async Task A_destination_that_missed_the_sign_in_notice_is_tried_again_and_one_that_took_it_is_not_told_twice()
+    {
+        ha.NotifyFailsFor = s => s is Tablet or "notify.notify";
+        await using var c = Connector(Phones with { Enabled = true });
+        Fail(SignInNeeded());
+        await Pass(c);
+        Assert.Single(Notices());
+        Assert.Empty(Notices(Tablet));
+        Assert.Empty(Pushes());
+
+        ha.NotifyFailsFor = null;
+        await Pass(c, 20);
+        Assert.Single(Notices());
+        Assert.Single(Notices(Tablet));
+        Assert.Single(Pushes());
+        await Pass(c, 20);
+        Assert.Single(Notices(Tablet));
+        Assert.Single(Pushes());
+    }
+
+    [Fact]
+    public async Task A_pass_stopped_between_phones_does_not_send_the_sign_in_notice_again_to_the_phone_that_took_it()
+    {
+        // agent-ha-bridge starts just after the first phone took it: the pass stops there.
+        ha.NotifyFailsFor = s =>
+        {
+            if (s == Phone) { daemon = "agent-ha-bridge"; }
+            return false;
+        };
+        await using (var c = Connector(Phones))
+        {
+            Fail(SignInNeeded());
+            await Pass(c);
+            Assert.Single(Notices());
+            Assert.Empty(Notices(Tablet));
+        }
+        ha.NotifyFailsFor = null;
+        daemon = null;
+        await using var again = Connector(Phones);
+        await Pass(again, 60);
+        Assert.Single(Notices());
+        Assert.Single(Notices(Tablet));
+    }
 }
