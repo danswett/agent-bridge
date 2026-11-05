@@ -43,8 +43,9 @@ pause, Enter as a keystroke of its own (a burst is a paste, and Enter inside it 
 submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
 
 * **Free text:** the words, then Enter as a write of its own once they show on screen (as for a form's text field, below).
-* **A form,** field by field in schema order, each committed with its own Enter (120 ms
-  after its keys, 240 ms before the next field):
+* **A form,** field by field in schema order, each committed with its own Enter, a write of
+  its own once the screen has settled from the field's keys (below), 240 ms before the next
+  field:
   * choice and boolean: Up × (N−1) to reach the top row wherever the caret was left (Up
     stops at the first option), then Down to the chosen row. A boolean is a Yes / No list.
   * multi: Up × (N−1) to the top row first, then one walk down the checkbox list, Space
@@ -281,7 +282,7 @@ option, so Enter is never pressed and no option is found by position:
 Bound to the request. The question's id is `<requestId>#<digest>`, the digest a hash of
 the message the client was shown. Immediately before typing, the transcript must show
 that `permission.requested` with no `permission.completed` (and no session abort or
-shutdown) after it, reading exactly as shown (`stale` otherwise), and no `ask_user`
+shutdown, nor, for the main agent's own request, a turn that ended on an error, as the parser's `FailTurn` has it) after it, reading exactly as shown (`stale` otherwise), and no `ask_user`
 waiting (`refused`). A `permission.requested` written again for a request already waiting,
 with what it asks now, replaces that request's question: the one it revises is no longer
 listed or counted, and the request counts as asked again, after the others waiting, both in
@@ -454,10 +455,13 @@ In order, for every answer:
 4. The session's process is still the live agent process; it does not run elevated
    (integrity level High or above, or unreadable, is refused).
 5. One answer is typed at a time across sessions, and its turn is taken before these last
-   checks: agent-ha-bridge again, then the agent's own record: for Copilot, the tool call's
-   start is there and no `human_response.recorded`, `tool.execution_complete` or session
-   abort/shutdown follows it (for a permission prompt, the request as above, then the
-   screen); for Claude, the `AskUserQuestion` `tool_use` is there, in the
+   checks: agent-ha-bridge again, the question still not `answerAtMachine`, then the agent's
+   own record: for Copilot, the tool call's start is there and no `human_response.recorded`,
+   `tool.execution_complete` or session abort/shutdown follows it, it is still among the asks
+   waiting (a turn that ended on an error closes it with nothing on its call), and no other
+   prompt waits (another ask, by its call id, or a permission request: `refused`), all made
+   again before each later write (above) (for a permission prompt, the request as above, then
+   the screen); for Claude, the `AskUserQuestion` `tool_use` is there, in the
    session's own entries, with no `tool_result` or interrupt after it; for Codex, the
    approval marker as above (`stale` otherwise). Identity, never time.
 6. The prompt is claimed in the host's attempt ledger, `answer-attempts.json` in its
@@ -493,8 +497,9 @@ In order, for every answer:
    answer came to be `unconfirmed`, an interrupted injection included. A Copilot record whose
    completion has not followed it gets a second from when a read first found it, as it does
    while first watched, for a completion saying the call failed; after that the record alone
-   decides. That second is waited out within the read, so the one resend a client makes per
-   reconnect settles it.
+   decides. A form's completion found before its structured answer waits for that answer, up
+   to the 15 s a first watch allows, from when a read first found the record. Those waits are
+   made within the read, so the one resend a client makes per reconnect settles it.
    Copilot and Claude; Codex records nothing to read.
 
 Progress and timings work as for replies ([host-replies.md](host-replies.md#progress-and-timings)):
