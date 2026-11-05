@@ -352,16 +352,17 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      run by hand, before checkout, that doesn't ask for the fallback, runs on `main` or a tag,
      or runs `main`'s head or any open pull request's: its checks, `quality-gate` among them,
      land on the commit, and the merge rule reads the latest run per head, so on a pull
-     request's head they would stand in for its own run. (One started there by mistake still
-     leaves a failed run on that head; re-run the pull request's own run.) Each `pwa-ui` leg
-     then takes the Azure mirror off before downloading anything (the action's
-     `force-apt-fallback`; `pwa-e2e` and `spikes-linux` download as before), says in its log
-     that it was forced and not timed out, fails if apt still fetches a package from Azure, and
-     counts the packages that came from `https://archive.ubuntu.com`. The WebKit legs are the
-     proof: one that counts none fails; Chromium's, whose packages the runner may already have,
-     only warns. Read each WebKit leg's count and its `Get:` lines before calling the fallback
-     proven. A run by hand runs every job, as on `main`, but is never a release and writes no
-     cache.
+     request's head they would stand in for its own run. One started there by mistake still
+     leaves a failed CI run on that head, and since the merge rule takes the newest run,
+     re-running the pull request's older run doesn't clear it: stop and report it, and recover
+     only as Quality or Engineering authorizes. Each `pwa-ui` leg then takes the Azure mirror
+     off before downloading anything (the action's `force-apt-fallback`; `pwa-e2e` and
+     `spikes-linux` download as before), says in its log that it was forced and not timed out,
+     fails if apt still fetches a package from Azure, and counts the packages that came from
+     `https://archive.ubuntu.com`. The WebKit legs are the proof: one that counts none fails;
+     Chromium's, whose packages the runner may already have, only warns. Read each WebKit leg's
+     count and its `Get:` lines before calling the fallback proven. A run by hand runs every
+     job, as on `main`, but is never a release and writes no cache.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
