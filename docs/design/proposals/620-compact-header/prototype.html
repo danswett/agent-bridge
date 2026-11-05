@@ -174,6 +174,19 @@
   if (dq === 'ask') { $('dneeds').removeAttribute('hidden'); $('dtab').setAttribute('aria-label', 'Delegates, 2 running, 1 asking'); }
   if (dq === '0') { $('dn').textContent = ''; $('dtab').setAttribute('aria-label', 'Delegates'); }
 
+  // Tabs (APG, automatic activation): one tab stop; Left/Right wrap, Home/End jump, click selects.
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  const select = (i) => tabs.forEach((t, j) => { t.setAttribute('aria-selected', String(j === i)); t.tabIndex = j === i ? 0 : -1; if (j === i) t.focus(); });
+  tabs.forEach((t, i) => {
+    t.addEventListener('click', () => select(i));
+    t.addEventListener('keydown', (e) => {
+      if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      const n = tabs.length, k = { ArrowRight: (i + 1) % n, ArrowLeft: (i - 1 + n) % n, Home: 0, End: n - 1 }[e.key];
+      if (k === undefined) return;
+      e.preventDefault(); select(k);
+    });
+  });
+
   const turns = [
     ['you', 'Can you find out why the witness timer restarts after a resume? It happened twice this morning.'],
     ['who', 'Main agent', '41m ago'],
