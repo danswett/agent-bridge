@@ -49,7 +49,8 @@ The current host connector is compatibility, not that target implemented.
 #317 remains the parent goal, #319 the verified reversible production cutover,
 and #389 cleanup only after replacement. G7 still refuses writer migration.
 [Disposition and dependencies](ha-connector.md#retaining-ha-without-a-legacy-daemon-317)
-retain #322 and preserve held #331/#337/#345 and existing owners. #394's original
+retain #322 and preserve held open drafts #331/#337 and existing owners. #345 closed
+unmerged on 2026-11-05 at 00:59:49 PT, with sources retained. #394's original
 architecture/enrollment proposal at `d9382fd31dc9fad9d34919317bf7a3265de43c18`
 is preserved historical, unadopted evidence, withdrawn from its corrected
 documentation-only scope. #522 is merged design and #534 a draft read profile
@@ -245,7 +246,8 @@ legacy daemon or HA changes. Scope is coordinated on #170.
 
 Historical native publication work under #317, superseded by #387's redirect:
 - #322's merged protocol-1 policy/fence contract and recordings are retained
-  compatibility evidence, not publication enablement. #331/#337/#345 remain held;
+  compatibility evidence, not publication enablement. #331/#337 remain held open
+  drafts; #345 closed unmerged on 2026-11-05 at 00:59:49 PT, with sources retained. The
   [retain/extract/supersede boundaries](ha-connector.md#publisher-work-disposition-387)
   replace the former instruction to continue that stack.
 - #319 still gates writer cutover on the replacement integration/card and

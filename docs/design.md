@@ -184,7 +184,7 @@ in current builds until the replacement and cutover gates pass.
 | **PWA** | Phone/browser, served from GitHub Pages, never from the relay (§8) | Session list/cards, answer, reply, launch, Web Push |
 | **MCP server** (Node, existing) | Launched by MCP clients | Re-targeted from HA REST to the **local host pipe** with a scoped agent token. Tool names stay, with an alias for `ask_via_home_assistant` |
 | **HA compatibility connector** (current, optional) | Host plug-in | **During the transition: wire-compatible** with today's per-machine and per-session MQTT entities and inputs (G9), so the existing dashboard keeps working for migrated machines. Also sends actionable phone notifications and receives taps. **Never** publishes the dashboard, Lovelace resources or the publication policy (G7). Removal is gated by verified replacement/cutover (#319/#389) |
-| **HA integration and companion card** (target, optional) | Separate `danswett/agent-bridge-home-assistant` project, inside HA/browser | A paired encrypted Bridge client. HA owns HA lifecycle, entities, actions and presentation; Bridge owns generic protocol, session logic and host-enforced authorization. #388/#519 own identity/protocol prerequisites; this is not a claim that enrollment or an installable integration is implemented |
+| **HA integration and companion card** (target, optional) | Separate `danswett/agent-bridge-home-assistant` project, inside HA/browser | A paired encrypted Bridge client. HA owns the integration's own lifecycle (setting up and unloading its entry), entities, actions and presentation; Bridge owns generic protocol, session logic, host lifecycle (#805/#874) and host-enforced authorization. #388/#519 own identity/protocol prerequisites; this is not a claim that enrollment or an installable integration is implemented |
 
 ### 3.2 Why a separate host process and not "the app is the daemon"
 
@@ -553,7 +553,7 @@ permission to bypass the roster. Current launch behavior is documented in
 |---|---|
 | `user@` desktop app or host device | read, reply, answer, launch, stop, update, forget, transfer |
 | `user@` phone/PWA | read, reply, answer, stop. Launch allowed, but **Allow-all launches and updates need a confirmation on the phone** (WebAuthn user verification, or Face ID in the native app) |
-| `agent@session` (local, target) | read, reply, launch with `ask` permissions on approved workspaces, subject to owner policy. **No approvals or folder trust**, and no answer grant in v1, update, forget, pairing or allow-all. Only launched/adopted sessions receive the proposed short-lived `AGENT_BRIDGE_TOKEN`; it is not HA-token propagation |
+| `agent@session` (local, target) | read, reply, launch with `ask` permissions on approved workspaces, subject to owner policy. **No `answer` grant in v1; no approvals or folder trust; no stop, transfer, update, forget, settings, pairing or allow-all launches. Never an unattended reply into an allow-all session** ([G3](design/agent-principals.md#12-goals)). Only launched/adopted sessions receive the proposed short-lived `AGENT_BRIDGE_TOKEN`; it is not HA-token propagation |
 | `agent@session` (remote, target, through its host) | The local agent grants, carried as host-signed principals; blocked on the #55 roster and reviewed #519 implementation, not merely account sign-in |
 
 Unchanged local refusals: elevated sessions are not injected into, control characters
@@ -1065,9 +1065,12 @@ deltas for code-only updates applied and restarted in under 13 s.
 3. Workspaces: approved roots, and the `isolate` setting with its worktree limit.
 4. Sign in with GitHub (device flow), create or join an account, pair (§5.4).
    Skippable for **local-only** use.
-5. Optional HA: currently the compatibility connector's URL/token setup;
-   target setup belongs to the separate paired integration, once enrollment,
-   authorization and installation are implemented and verified (#388).
+5. Optional HA: **not in first-run today**. The compatibility connector is configured
+   at the machine through `config.json` `homeAssistant.*` and owner-only
+   `agent-bridge-host ha token set` (#67; [host-config.md](host-config.md)).
+   #258 tracks Settings exposure. Target setup belongs to the separate paired
+   integration, once enrollment, authorization and installation are implemented
+   and verified (#388).
 6. Start the host. Show a live health check (the `agent-ha-bridge status` content in
    the UI).
 
