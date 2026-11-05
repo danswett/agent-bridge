@@ -46,8 +46,11 @@ static partial class SelfTest
     // What moved since Anchor: the block, or any pixel of the column; null when nothing did.
     static async Task<string?> Anchored(ListView list, Shot before, string outFile)
     {
-        await Task.Delay(700);
         if (SessionView.Shallowest<ScrollViewer>(list) is not { } scroll) { return "a scroller"; }
+        // Until the block has been where it was for three looks in a row, 3 s at most, rather than a
+        // fixed wait: the placement is still checked exactly below.
+        var steady = 0;
+        await Until(() => (list.ContainerFromIndex(before.Index) is FrameworkElement b && Math.Abs(b.TransformToVisual(scroll).TransformPoint(default).Y - before.Top) <= 0.5 ? ++steady : steady = 0) >= 3, TimeSpan.FromSeconds(3));
         if (list.ContainerFromIndex(before.Index) is not FrameworkElement block) { return $"block {before.Index} still drawn"; }
         var problems = new List<string>();
         var top = block.TransformToVisual(scroll).TransformPoint(default).Y;
@@ -162,7 +165,9 @@ static partial class SelfTest
         else
         {
             if (foundPeer.GetPattern(PatternInterface.ScrollItem) is IScrollItemProvider scrolled) { scrolled.ScrollIntoView(); }
-            await Task.Delay(500);
+            // Until it is in view, 3 s at most, rather than a fixed wait; still checked below.
+            await Until(() => list.ContainerFromIndex(count - 1) is ListViewItem l && SessionView.Shallowest<ScrollViewer>(list) is { } s
+                && l.TransformToVisual(s).TransformPoint(default).Y is var y && y < s.ViewportHeight && y + l.ActualHeight > 0, TimeSpan.FromSeconds(3));
             if (ItemSaid(peer, list.ContainerFromIndex(count - 1) as ListViewItem, count - 1, count) is { } wrong) { problems.Add(wrong); }
             else if (list.ContainerFromIndex(count - 1) is ListViewItem lastShown && SessionView.Shallowest<ScrollViewer>(list) is { } scroll
                 && lastShown.TransformToVisual(scroll).TransformPoint(default).Y is var top && (top >= scroll.ViewportHeight || top + lastShown.ActualHeight <= 0))

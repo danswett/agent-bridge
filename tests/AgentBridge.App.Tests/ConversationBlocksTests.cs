@@ -132,17 +132,26 @@ public sealed class ConversationBlocksTests
     [Fact]
     public void A_name_longer_than_500_characters_is_cut_at_a_whole_grapheme_with_an_ellipsis_and_the_text_is_kept_whole()
     {
-        // An emoji of three joined by zero-width joiners, and a letter with its accent, across the cut.
-        var family = new string('a', 497) + "\U0001F468\u200D\U0001F469\u200D\U0001F467 and more";
+        // An emoji with its skin tone, and a letter with its accent, across the cut.
+        var toned = new string('a', 497) + "\U0001F44D\U0001F3FD and more";
         var accent = new string('a', 498) + "e\u0301 and more";
 
-        var block = Shown(family)[0];
+        var block = Shown(toned)[0];
 
         Assert.Equal(new string('a', 497) + "…", block.Name);
         Assert.Equal(block.Name, block.ToString());
-        Assert.Equal(family, block.Text);
+        Assert.Equal(toned, block.Text);
         Assert.Equal(new string('a', 498) + "…", ConversationBlocks.NameOf(accent));
-        Assert.All(new[] { family, accent, new string('b', 2000) }, t => Assert.True(ConversationBlocks.NameOf(t).Length <= ConversationBlocks.NameLongest));
+        Assert.All(new[] { toned, accent, new string('b', 2000), new string('\u202E', 600) }, t => Assert.True(ConversationBlocks.NameOf(t).Length <= ConversationBlocks.NameLongest));
+    }
+
+    [Fact]
+    public void Prose_a_heading_a_link_label_a_list_a_quote_and_a_table_are_named_with_hidden_characters_as_their_escapes()
+    {
+        var shown = Shown("# Title\u202Eevil\n\nSee [docs\u200B](https://a.b) here\u2066.\n\n- one\u200F\n\n> quoted\u2067\n\n| A\u00A0B |\n|---|\n| c\u2028d |\n\nA family \U0001F468\u200D\U0001F469");
+
+        Assert.Equal(["Title\\u202Eevil", "See docs\\u200B here\\u2066.", "• one\\u200F", "quoted\\u2067", "A\\u00A0B\nc\\u2028d", "A family \U0001F468\\u200D\U0001F469"], shown.Select(b => b.Name));
+        Assert.Equal("Title\u202Eevil", shown[0].Text);
     }
 
     [Fact]

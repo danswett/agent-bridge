@@ -17,8 +17,9 @@ public sealed class ConversationBlock(MdBlock block)
     public string Text { get; } = ConversationBlocks.TextOf(block);
 
     // The item's name to a screen reader, whether or not the list has realised it, so Narrator's
-    // scan and search reach a block that is off screen (#707): its text, cut to 500 characters at
-    // a whole grapheme (NameOf). The whole text is still read from the item's content.
+    // scan and search reach a block that is off screen (#707): its text with hidden characters as
+    // their escapes, cut to 500 characters at a whole grapheme (NameOf). The whole text is still
+    // read from the item's content.
     public string Name => name ??= ConversationBlocks.NameOf(Text);
     string? name;
 
@@ -32,10 +33,14 @@ public static class ConversationBlocks
 {
     public const int NameLongest = 500;
 
-    // A block's text as its item's name: when longer than NameLongest, cut at the last whole
-    // grapheme that fits with "…" after it, so an emoji or a letter and its accents is never split.
+    // A block's text as its item's name: hidden characters as their escapes (HiddenText.Reveal), as a
+    // code block draws them, so a bidi override or a zero-width character in prose can't make the
+    // name read other than as it runs (#707, B's call); then, when longer than NameLongest, cut at the
+    // last whole grapheme that fits with "…" after it, so an emoji or a letter and its accents is
+    // never split.
     public static string NameOf(string text)
     {
+        text = HiddenText.Reveal(text);
         if (text.Length <= NameLongest) { return text; }
         var end = 0;
         while (end < text.Length)

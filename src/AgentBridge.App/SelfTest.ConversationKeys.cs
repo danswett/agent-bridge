@@ -36,7 +36,7 @@ static partial class SelfTest
         var start = scroll.VerticalOffset;
         var seen = new List<VirtualKey>();
         var heard = new KeyEventHandler((_, e) => seen.Add(e.Key));
-        scroll.AddHandler(UIElement.KeyDownEvent, heard, true);
+        scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
         var methods = new List<string>();
         try
         {
@@ -63,7 +63,7 @@ static partial class SelfTest
         }
         finally
         {
-            scroll.RemoveHandler(UIElement.KeyDownEvent, heard);
+            scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard);
             scroll.ChangeView(null, start, null, disableAnimation: true);
         }
     }

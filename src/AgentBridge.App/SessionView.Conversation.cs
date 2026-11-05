@@ -76,13 +76,14 @@ public sealed partial class SessionView
         scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; panning = true; follow.PanStarted(); };
         scroll.DirectManipulationCompleted += (_, _) => { panning = false; follow.PanEnded(); };
         ConversationList.LayoutUpdated += OnConversationLaidOut;
-        // Below the list, so the keys reach this before the list moves between its items: a key
-        // from a block passes the block's container, which leaves it to the list.
-        scroll.KeyDown += OnReadingKey;
+        // Tunnelling, so the keys reach this before anything inside the list can take them: the list
+        // would move between its items, a child might handle a key first (ui.md §6.4). What has focus
+        // keeps a key it uses (KeyUserOf).
+        scroll.PreviewKeyDown += OnReadingKey;
     }
 
     // The keys that scroll a page scroll the conversation, as its ScrollViewer did (ui.md §6.4),
-    // unless what has focus is a text input or a control that uses the key, though it passed it on.
+    // unless what has focus is a text input or a control that uses the key.
     void OnReadingKey(object sender, KeyRoutedEventArgs e)
     {
         if (ConversationScroll is not { } scroll) { return; }

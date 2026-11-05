@@ -712,8 +712,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     takes it again where it is. With the header at the top, nothing is held.
   - **Accessibility (#707):** a screen reader gets the response as a list, each block a list item
     numbered in the set ("12 of 214"), the header and footer outside it, so its scan and search
-    reach a block that is off screen and bring it into view. An item is named by its text, cut at
-    500 characters at a whole grapheme with "…"; the whole text is read from its content. Its
+    reach a block that is off screen and bring it into view. An item is named by its text, hidden
+    characters as their escapes as a code block draws them, cut at 500 characters at a whole
+    grapheme with "…"; the whole text is read from its content. Its
     control type is said as the system says a list item.
   - **The keyboard reads it as a page, not a list:** the arrow keys scroll a line, Page Up and Page
     Down a viewport, Home and End (Ctrl too) to the top and the end, under reduced motion without
