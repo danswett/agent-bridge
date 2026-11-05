@@ -225,4 +225,37 @@ public sealed class RosterCopyTests
         Assert.All(Enumerable.Range(1, 5), i => Assert.True(v.State.IsVoid(Index(w, v, $"+Y{i}"))));
         Assert.Equal(["C1", "C2", "G"], w.Active(v));
     }
+
+    // H, on a branch where A is absent, adds a copy of A's key and removes it there; G then joins
+    // the branches. The removal names A's id but takes only the copy, so A's own add is never
+    // revoked and A wipes nothing (§6.5). It bars A's add only if H was active where that add was
+    // made (§3.5), and a bar acts through another add, so A then shows "not active".
+    internal static World DuplicateRemoved(bool seenByRemover)
+    {
+        var w = new World();
+        w.Genesis();
+        w.Add("+H", "G", "H", "G");
+        w.Confirm("cH", "G", "+H", "+H");
+        w.Add("+A", "G", "A", seenByRemover ? "cH" : "G");
+        w.Confirm("cA", "G", "+A", "+A");
+        w.Add("+A'", "H", "A", "cH", copy: true);
+        w.Remove("H-A'", "H", "+A'", "+A'");
+        w.Merge("m", "G", ["cA", "H-A'"]);
+        return w;
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_removal_naming_a_devices_id_that_takes_only_a_copy_never_revokes_its_own_add(bool seenByRemover)
+    {
+        var w = DuplicateRemoved(seenByRemover);
+        var v = w.Verifier();
+        Assert.True(v.State.IsRevoked(Index(w, v, "+A'")));
+        Assert.False(v.State.IsRevoked(Index(w, v, "+A")));
+        Assert.Equal(seenByRemover, v.State.IsBarred(Index(w, v, "+A")));
+        Assert.Equal(seenByRemover ? ["G", "H"] : ["A", "G", "H"], w.Active(v));
+        w.Remove("late", "G", "+A'", "m");
+        Assert.Equal(Invalid.Target, w.Feed(v, "late")[0].Reason);
+    }
 }
