@@ -334,7 +334,7 @@ public sealed class AnswerService : ISessionAnswerer
             (plan, from) = (planned, call.ScannedTo);
 
             if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
-            (typed, held) = await TypeWordsApartAsync(session.Id, pid, plan.Keys, StillAsked, timeline);
+            (typed, held) = await TypeWordsApartAsync(session.Id, pid, form, plan.Keys, StillAsked, timeline);
         }
         finally { gate.DoneTyping(); }
 
@@ -395,7 +395,7 @@ public sealed class AnswerService : ISessionAnswerer
     // question no longer asked, stop it there: nothing more is pressed, and the answer is
     // reported typed (not recorded), for the person to finish at the machine. Held says why;
     // null when every key went.
-    async Task<(InjectionResult Result, string? Held)> TypeWordsApartAsync(string sessionId, int pid, KeyPlan plan, Func<string?> stillAsked, DeliveryTimeline? timeline = null)
+    async Task<(InjectionResult Result, string? Held)> TypeWordsApartAsync(string sessionId, int pid, CopilotForm form, KeyPlan plan, Func<string?> stillAsked, DeliveryTimeline? timeline = null)
     {
         // Words that leave nothing to look for once white space and line drawing are set aside
         // could never be seen, so their Enter would never go: refused before any key, for the
@@ -448,17 +448,31 @@ public sealed class AnswerService : ISessionAnswerer
         // off it, and is held to the field it moved to: read at once, a CLI still showing the
         // field just committed would be taken for the next one.
         IReadOnlyList<string>? leaving = null;
+        // The field the next keys are for: one on from each Enter.
+        var at = 0;
+        // Null when the rows keys are about to be held to show the form at that field. A screen
+        // that has settled, or moved on, is not enough: a permission dialog that opens before the
+        // transcript says so is just as steady, and keys held to its rows go into it, an Enter
+        // picking what it highlights (#510 review).
+        string? OffForm(IReadOnlyList<string> rows)
+        {
+            if (CopilotFormScreen.Showing(rows, form, Math.Min(at, form.Fields.Count - 1)) is not { } off) { return null; }
+            log($"the screen of {Short(sessionId)} (pid {pid}) is not the form at its next field: {off}; nothing more is typed");
+            return off;
+        }
         // The field the next keys go to: the one the form moved to, or the screen as it stands
         // before anything has been pressed. Its rows, how often tail shows on it, or why not.
         async Task<(IReadOnlyList<string>? Rows, int Count, string? Why)> NextFieldAsync(string tail)
         {
             if (leaving is null)
             {
-                return await ReadRowsAsync(pid) is { } rows ? (rows, WordsOnScreen.Count(rows, tail), null) : (null, 0, "the session's screen could no longer be read");
+                if (await ReadRowsAsync(pid) is not { } rows) { return (null, 0, "the session's screen could no longer be read"); }
+                return OffForm(rows) is { } off ? (null, 0, off) : (rows, WordsOnScreen.Count(rows, tail), null);
             }
             var moved = await FieldShownAsync(pid, leaving, tail);
-            if (moved.Rows is null) { log($"the next field in {Short(sessionId)} (pid {pid}) did not show: {moved.Why}; nothing more is typed"); }
             leaving = null;
+            if (moved.Rows is null) { log($"the next field in {Short(sessionId)} (pid {pid}) did not show: {moved.Why}; nothing more is typed"); }
+            else if (OffForm(moved.Rows) is { } off) { return (null, 0, off); }
             return moved;
         }
         // One field's keys, which end with the Enter that commits it: held to that field, the keys
@@ -483,10 +497,12 @@ public sealed class AnswerService : ISessionAnswerer
                     log($"the screen of {Short(sessionId)} (pid {pid}) did not settle before the field's Enter: {unsettled}; nothing more is typed");
                     return Stop(unsettled!);
                 }
+                if (OffForm(settled) is { } off) { return Stop(off); }
                 shown = settled;
             }
             if (await WriteAsync([new KeySend("", true, 0, commit.PauseAfterMs, Rows(shown))], last) is { } committed) { return committed; }
             leaving = shown;
+            at++;
             return null;
         }
 
@@ -520,6 +536,7 @@ public sealed class AnswerService : ISessionAnswerer
                     log($"the field the words go to in {Short(sessionId)} (pid {pid}) did not show: {why}; nothing more is typed");
                     return Stop(why!);
                 }
+                if (OffForm(rows) is { } off) { return Stop(off); }
                 (field, before) = (rows, count);
             }
             if (await WriteAsync([send with { Enter = false, EnterDelayMs = 0, PauseAfterMs = 0, Expect = Rows(field) }], false) is { } held) { return held; }
@@ -528,10 +545,12 @@ public sealed class AnswerService : ISessionAnswerer
                 log($"the words typed into {Short(sessionId)} (pid {pid}) did not show on its screen within {options.WordsWait.TotalSeconds:0.#} s; their Enter is not pressed");
                 return (new InjectionResult(InjectionStatus.Typed, "ok"), $"the words did not show on the session's screen within {options.WordsWait.TotalSeconds:0.#} seconds");
             }
+            if (OffForm(showing) is { } away) { return Stop(away); }
             // Seen on screen, they reached the CLI apart from anything after them, so their Enter
             // needs no pause of its own; held to the rows that show them, it goes into nothing else.
             if (await WriteAsync([new KeySend("", true, 0, send.PauseAfterMs, Rows(showing))], i == plan.Sends.Count - 1) is { } entered) { return entered; }
             leaving = showing;
+            at++;
         }
         if (pending.Count == 0) { return (new InjectionResult(InjectionStatus.Typed, "ok"), null); }
         // Keys with no Enter of their own after the last field (none is planned so): held to the

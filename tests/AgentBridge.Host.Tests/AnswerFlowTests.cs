@@ -372,7 +372,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     {
         Fixture.Append(events, AskDays("q2", second++));
         await source.RefreshAsync();
-        injector.Screen = () => FieldsScreen(["pick", "days"]);
+        injector.Screen = () => FieldsScreen(["pick", "days"], message: "How many?");
         injector.OnInject = () => { if (Enters() == 2) { Fixture.Append(events, Recorded("q2", recorded)); } };
     }
 
@@ -454,19 +454,38 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
     // The CLI's screen: the option list, its caret moved once its keys have gone, until it takes
     // an Enter; then the text field, with the words once it has drawn them. Before is what else
-    // the option list shows; hint, what else the text field does.
+    // the option list shows; hint, what else the text field does. Framed as Copilot draws the
+    // form (Framed), so the host can tell it is at that field.
     static List<string> FormScreen(bool field, bool words, string? before = null, bool moved = false, string? hint = null)
     {
+        string[] labels = ["pick", "Feedback (optional)"];
         if (field)
         {
-            List<string> rows = ["Approve the mark?", "Feedback (optional)"];
+            List<string> rows = [];
             if (hint is not null) { rows.Add(hint); }
-            return [.. rows, "╭──────────────╮", words ? $"│ {Feedback} │" : "│              │", "╰──────────────╯"];
+            return Framed("Approve the mark?", labels, 1, [.. rows, "╭──────────────╮", words ? $"│ {Feedback} │" : "│              │", "╰──────────────╯"]);
         }
-        List<string> list = ["Approve the mark?"];
+        List<string> list = [];
         if (before is not null) { list.Add(before); }
-        return [.. list, moved ? "    a" : "  ❯ a", moved ? "  ❯ b" : "    b", "    c"];
+        return Framed("Approve the mark?", labels, 0, [.. list, moved ? "    a" : "  ❯ a", moved ? "  ❯ b" : "    b", "    c"]);
     }
+
+    // Copilot CLI 1.0.105's ask_user form (cli-main.js `MIo`, `Uxn`, `Ft`) at field `at`: its
+    // heading and question between two rules, a tab bar naming every field when there is more
+    // than one, the field's own heading (`<title ?? name>:`) over its body, and the key hints.
+    static List<string> Framed(string message, string[] labels, int at, IEnumerable<string> body)
+    {
+        List<string> hints = ["enter accept"];
+        if (labels.Length > 1 && at < labels.Length - 1) { hints.Add("tab next"); }
+        if (labels.Length > 1 && at > 0) { hints.Add("shift+tab prev"); }
+        hints.AddRange(["ctrl+d decline", "esc cancel"]);
+        List<string> rows = ["────────────────────────", " Copilot needs information.", $" {message}", ""];
+        if (labels.Length > 1) { rows.AddRange([$" {string.Join("   ", labels)}", ""]); }
+        return [.. rows, $" {labels[at]}:", .. body, "", $" {string.Join(" · ", hints)}", "────────────────────────"];
+    }
+
+    // A permission prompt drawn where the form was, as Copilot draws one (docs/host-answers.md).
+    static readonly List<string> PermissionPrompt = ["Allow Copilot to run this command?", "  ❯ 1. Yes", "    2. No"];
 
     static bool HasEnterOnly(KeyPlan plan) => plan.Sends is [{ Text: "", Enter: true }];
 
@@ -654,7 +673,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     // A CLI drawing a form one field at a time, as the keys typed so far leave it: the field it is
     // on (one per Enter it has taken) and what has been typed into that field. An Enter is taken
     // lag after it went; nothing after it is drawn before then.
-    List<string> FieldsScreen(string[] names, TimeSpan lag = default)
+    List<string> FieldsScreen(string[] names, TimeSpan lag = default, string message = "Tell me")
     {
         var field = 0;
         var typed = "";
@@ -673,7 +692,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
             }
         }
         return Rows();
-        List<string> Rows() => ["Answer the form", $"Field: {names[Math.Min(field, names.Length - 1)]}", field >= names.Length ? "(sent)" : $"│ {typed} │"];
+        List<string> Rows() => field >= names.Length ? ["(sent)"] : Framed(message, names, field, [$"Field: {names[field]}", $"│ {typed} │"]);
     }
 
     int Enters() { lock (injector.Plans) { return injector.Plans.Sum(p => p.Plan.Sends.Count(s => s.Enter)); } }
@@ -914,6 +933,76 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal(1, Enters());
         Assert.True(HasEnterOnly(injector.Plans[^1].Plan));
         Assert.DoesNotContain(injector.Plans, p => p.Plan.Sends.Any(s => s.Text == Feedback));
+    }
+
+    // ---- the form, at the field the keys are for, before they are bound (#510 review) ----
+
+    [Fact]
+    public async Task A_permission_prompt_that_opens_before_a_lists_Enter_with_nothing_in_the_transcript_gets_no_Enter()
+    {
+        // The list's keys go, and before its Enter a permission prompt opens whose transcript
+        // entry is not written yet. It reads steady, so it would pass for the list settled, and an
+        // Enter held to its own rows would approve what it highlights.
+        await AskFormAsync();
+        injector.Screen = () => Moved() ? PermissionPrompt : FormScreen(false, false);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        Assert.Contains("permission prompt", result.GetProperty("reason").GetString());
+        // The list's keys alone: no Enter, and nothing after them.
+        Assert.Equal(0, Enters());
+        Assert.Single(injector.Plans);
+        Assert.Empty(injector.Refused);
+    }
+
+    [Theory]
+    // Two lists, or a list then words: the next field's keys are not held to whatever the screen
+    // moved to, but only to the form at that field.
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_permission_prompt_that_opens_between_fields_with_nothing_in_the_transcript_gets_none_of_the_next_fields_keys(bool words)
+    {
+        object answer = words ? new { first = "b", note = Feedback } : new { first = "b", second = "c" };
+        string[] names = words ? ["first", "note"] : ["first", "second"];
+        await AskFieldsAsync(words
+            ? new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, note = new { type = "string" } }
+            : new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, second = new { type = "string", @enum = new[] { "a", "b", "c" } } },
+            2, answer);
+        injector.Screen = () => Enters() >= 1 ? PermissionPrompt : FieldsScreen(names);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        Assert.Contains("permission prompt", result.GetProperty("reason").GetString());
+        // The first list's keys, then its Enter alone; nothing of the next field, not even tried.
+        Assert.Equal(2, injector.Plans.Count);
+        Assert.True(HasEnterOnly(injector.Plans[^1].Plan));
+        Assert.Equal(2, injector.Attempts.Count);
+    }
+
+    [Theory]
+    // The screen shows a form, but not at the field the keys are for: the one before (an Enter
+    // not taken, then a repaint), or with no heading the host can find.
+    [InlineData("before")]
+    [InlineData("unheaded")]
+    public async Task Keys_are_held_only_to_the_form_at_the_field_they_are_for(string shows)
+    {
+        var answer = new { first = "b", second = "c" };
+        string[] names = ["first", "second"];
+        await AskFieldsAsync(new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, second = new { type = "string", @enum = new[] { "a", "b", "c" } } }, 2, answer);
+        injector.Screen = () => Enters() < 1 ? FieldsScreen(names)
+            : shows == "before" ? Framed("Tell me", names, 0, ["Field: first", "│ ok │"])
+            : Framed("Tell me", ["first", "other"], 1, ["Field: second", "│  │"]);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        Assert.Contains("not at the field \"second\"", result.GetProperty("reason").GetString());
+        Assert.Equal(2, injector.Plans.Count);
     }
 
     [Fact]

@@ -13,7 +13,9 @@ public sealed record CopilotOption(string Value, JsonElement Raw);
 
 // One field of Copilot's ask_user prompt, as the keys have to drive it. Checked is the rows
 // a multi-select list opens with ticked (its schema default). Prefill is a text or number
-// field's schema default, which the prompt opens with already typed into it (#662).
+// field's schema default, which the prompt opens with already typed into it (#662). Label is
+// what the prompt heads the field with while it is the one being answered (`title ?? name`,
+// as `<label>:`), null when its title is something the host cannot say how the CLI draws.
 public sealed record CopilotField(
     string Name,
     CopilotFieldKind Kind,
@@ -21,7 +23,8 @@ public sealed record CopilotField(
     IReadOnlyList<int> Checked,
     bool AllowsEmpty,
     JsonElement? Prefill = null,
-    FieldConstraints? Constraints = null);
+    FieldConstraints? Constraints = null,
+    string? Label = null);
 
 // The ask_user prompt read from the tool call's own arguments, the way agent-ha-bridge
 // reads it (Get-DecisionSchemaFields), rather than from the Question a client saw: the
@@ -73,10 +76,18 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
             if (property.Value.ValueKind != JsonValueKind.Object) { return (null, $"the question's field \"{property.Name}\" could not be read"); }
             var (field, problem) = Field(property.Name, property.Value, patterns);
             if (field is null) { return (null, problem); }
-            fields.Add(field);
+            fields.Add(field with { Label = Label(property.Name, property.Value) });
         }
         return (new CopilotForm(fields), null);
     }
+
+    // The field's heading as Copilot CLI 1.0.105 draws it (`Uxn`: `title ?? name`; each field's
+    // component writes it as `<title>:`). A title that is not a string, or an empty one (drawn
+    // as nothing at all), is not a heading the host can look for.
+    static string? Label(string name, JsonElement p) =>
+        !p.TryGetProperty("title", out var title) || title.ValueKind == JsonValueKind.Null ? name
+        : title.ValueKind == JsonValueKind.String && title.GetString() is { Length: > 0 } text ? text
+        : null;
 
     static (CopilotField?, string?) Field(string name, JsonElement p, PatternBudget patterns)
     {

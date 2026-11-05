@@ -230,6 +230,10 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
         bool repeat;
         IDisposable? delivery = null;
         Task<T>? rechecked = null;
+        // A recheck started by this repeat waits for its watch: one that reads the late record
+        // and confirms at once would otherwise confirm before the repeat's arrival is taken, and
+        // its timings say confirmed 0 (#510 review).
+        TaskCompletionSource? watching = null;
         lock (gate)
         {
             Forget();
@@ -244,11 +248,17 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
             {
                 var latest = entry.Rechecked ?? entry.Outcome.Task;
                 // One still reading is the answer to this repeat too; a finished one is read again.
-                rechecked = entry.Rechecked = latest.IsCompletedSuccessfully ? Recheck(recheck, latest.Result) : latest;
+                if (latest.IsCompletedSuccessfully)
+                {
+                    watching = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    rechecked = entry.Rechecked = Recheck(recheck, latest.Result, watching.Task);
+                }
+                else { rechecked = entry.Rechecked = latest; }
             }
         }
         // Outside the lock: a repeat's watch may hear a stage already reached, at once.
         entry.Timeline?.Watch(watch, first: !repeat);
+        watching?.SetResult();
         if (repeat) { return rechecked ?? entry.Rechecked ?? entry.Outcome.Task; }
         _ = Task.Run(async () =>
         {
@@ -272,8 +282,9 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
         }, CancellationToken.None);
         return entry.Outcome.Task;
 
-        async Task<T> Recheck(Func<T, Task<T?>> read, T first)
+        async Task<T> Recheck(Func<T, Task<T?>> read, T first, Task watched)
         {
+            await watched;
             T? later;
             try { later = await read(first); }
             catch (Exception) { later = default; }

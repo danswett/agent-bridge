@@ -75,6 +75,17 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     agent-ha-bridge, the call still unanswered, no other prompt waiting, the process) are made
     again before each write, and once more when the injector holds the typing slot
     (`KeyPlan.Proceed`). A refused write stops everything after it.
+  * The rows a field's keys or Enter are held to must show the form at that field
+    (`CopilotFormScreen`, from 1.0.105's `MIo`, `Uxn` and `Ft`): the form's "… needs
+    information." heading and its "ctrl+d decline" and "esc cancel" hints, the field's own
+    heading (`<title ?? name>:`, on a row of its own; only the field being answered is
+    drawn), its place by the "tab next" and "shift+tab prev" hints when there is more than
+    one field, and no numbered "1. Yes" row of a permission prompt. A screen that has settled
+    or moved on is not enough: a permission prompt that opens before its transcript entry is
+    written reads just as steady, and keys held to its own rows would go into it, the Enter
+    approving what it highlights (#510 review). Anything else stops the answer there, as
+    below. A field whose title is not a non-empty string has no heading to look for, so is
+    never typed into this way.
   * It fails closed: such an answer is not typed at all into a screen the host cannot
     read, nor words made only of spaces and line-drawing characters, which leave nothing to
     look for (`refused`, nothing typed); and a field or words that do not show, or a screen
@@ -84,9 +95,11 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     how #467 happened. What remains: keys reach the CLI in the order they were written, so a
     count taken too early can only send the words' Enter early, behind the words, which is
     reported `typed`, not `delivered`; rows are compared whole, so an animated form would be
-    refused rather than typed into; and an answer of a single field without words (one list)
-    is one write, rechecked when the injector holds the slot but not held to the screen: its
-    Enter commits the only field there is.
+    refused rather than typed into; a form drawn taller than the console's window, its
+    heading or hints scrolled out of sight, is stopped rather than typed into; and an answer
+    of a single field without words (one list) is one write, rechecked when the injector
+    holds the slot but neither held to the screen nor checked against it: its Enter commits
+    the only field there is.
   * An optional text field left
     out is skipped with Enter; an option list cannot be left out, since Enter commits
     whatever its caret is on.
