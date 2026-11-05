@@ -507,9 +507,14 @@ changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
        `diff-coverage.md` in the `coverage-<os>` artifact, naming the commit, the base, the run
        and the artifact it was measured on. Below 80% it adds a warning; nothing fails on it.
        It's **UNAVAILABLE** when there's no report, the report measures no file in the
-       checkout, or the tests didn't pass. It's **NOT APPLICABLE** when no added line is
-       executable. A draft's numbers come from its in-process tests only, as the summary
-       says. Making it required is Phase 4's, and not done.
+       checkout, or the tests didn't pass. It's also UNAVAILABLE, with a warning naming the
+       files, when the report has no entry for a C# file outside `tests/` that the change adds
+       lines to (the untested WinUI app, a project no selected test loads): a file missing from
+       the report isn't one with nothing to cover. The files it does measure are then shown as a
+       subset, with no target. It's **NOT APPLICABLE** when every added line is either one the
+       report lists no code on in a file it measures, or in a file that isn't C# outside
+       `tests/` (docs, scripts, tests). A draft's numbers come from its in-process tests only, as
+       the summary says. Making it required is Phase 4's, and not done.
     2. **A per-project floor, per OS,** that only ratchets up, kept in
        `quality/coverage-floors.json`.
 - **Timing:** every `product` run already records each test's duration (TRX), and the job

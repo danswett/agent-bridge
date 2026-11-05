@@ -9,8 +9,9 @@ namespace AgentBridge.Quality;
 /// <summary>
 /// <c>diff-coverage</c> (quality/README.md §5): how many of the lines a change adds are covered,
 /// read from the Cobertura report CI's product job already writes. It's advisory: a low number
-/// warns and never fails. What it can't measure it says so (UNAVAILABLE), and a change with no
-/// executable line is NOT APPLICABLE, so neither reads as 100%. Only a technical fault (a
+/// warns and never fails. What it can't measure it says so (UNAVAILABLE, including C# outside
+/// tests/ the report has no entry for), and a change with no executable line is NOT APPLICABLE,
+/// so neither reads as 100%. Only a technical fault (a
 /// malformed report or diff, a checkout not at --head) exits non-zero, through Program.Main.
 /// </summary>
 static class DiffCoverageCommand
@@ -24,8 +25,9 @@ static class DiffCoverageCommand
               artifact) can execute, how many ran. The checkout must be at --head, where the
               report was measured. Several reports are unioned: a line is executable if any
               lists it, and covered if any ran it. UNAVAILABLE when a report is missing or holds
-              no file in this checkout, or --tests-outcome isn't success; NOT APPLICABLE when no
-              added line is executable. Below 80% it warns; it never fails on the number.
+              no file in this checkout, --tests-outcome isn't success, or a C# file outside
+              tests/ with added lines isn't in it (a warning naming them); NOT APPLICABLE when
+              no added line is executable. Below 80% it warns; it never fails on the number.
         """;
 
     // quality/README.md §5's diff coverage target. Advisory: it only words the warning.
@@ -353,7 +355,12 @@ enum DiffCoverageStatus { Measured, NotApplicable, Unavailable }
 /// <param name="Measured">False when the report has no entry for the file at all.</param>
 sealed record DiffCoverageFile(string Path, int Added, int Executable, int Covered, IReadOnlyList<int> Uncovered, bool Measured);
 
-sealed record DiffCoverageResult(DiffCoverageStatus Status, string? Reason, IReadOnlyList<DiffCoverageFile> Files, int Executable, int Covered, int Outside)
+/// <param name="Unknown">
+/// Production C# files with added lines that the report doesn't measure. Their lines may or may
+/// not be executable, so they make the whole result UNAVAILABLE, never NOT APPLICABLE or a
+/// percentage of the rest.
+/// </param>
+sealed record DiffCoverageResult(DiffCoverageStatus Status, string? Reason, IReadOnlyList<DiffCoverageFile> Files, int Executable, int Covered, int Outside, IReadOnlyList<string> Unknown)
 {
     public int Added => Files.Sum(f => f.Added);
     public double Percent => Executable == 0 ? 0 : 100.0 * Covered / Executable;
@@ -375,10 +382,10 @@ static class DiffCoverage
     {
         var unmeasured = added.Select(f => new DiffCoverageFile(f.Key, f.Value.Count, 0, 0, [], false)).ToList();
         if (testsOutcome is not null && testsOutcome != "success")
-            return new(DiffCoverageStatus.Unavailable, $"dotnet test ended {testsOutcome}, so the report holds only what ran before that.", unmeasured, 0, 0, 0);
+            return new(DiffCoverageStatus.Unavailable, $"dotnet test ended {testsOutcome}, so the report holds only what ran before that.", unmeasured, 0, 0, 0, []);
         var missing = reports.Where(r => !File.Exists(r)).ToList();
         if (missing.Count > 0)
-            return new(DiffCoverageStatus.Unavailable, $"No coverage report at {string.Join(", ", missing)}.", unmeasured, 0, 0, 0);
+            return new(DiffCoverageStatus.Unavailable, $"No coverage report at {string.Join(", ", missing)}.", unmeasured, 0, 0, 0, []);
         var coverage = new LineCoverage();
         foreach (var report in reports)
             coverage.Read(repoRoot, report);
@@ -412,9 +419,23 @@ static class DiffCoverage
         // A report that measured nothing here (an empty run, another checkout's paths) says
         // nothing about these lines, which would otherwise all read as not executable.
         if (coverage.FileCount == 0)
-            return new(DiffCoverageStatus.Unavailable, $"The report lists no file in this checkout ({coverage.Outside} class entries outside it).", files, 0, 0, coverage.Outside);
-        return new(total == 0 ? DiffCoverageStatus.NotApplicable : DiffCoverageStatus.Measured, null, files, total, covered, coverage.Outside);
+            return new(DiffCoverageStatus.Unavailable, $"The report lists no file in this checkout ({coverage.Outside} class entries outside it).", files, 0, 0, coverage.Outside, []);
+        // A file the report has no entry for isn't a file with no executable line: its assembly
+        // may be one no selected test loads (the WinUI app, a new project). So unless it's
+        // something no test measures anyway, the change's coverage is unknown.
+        var unknown = files.Where(f => !f.Measured && MayBeMeasured(f.Path)).Select(f => f.Path).ToList();
+        if (unknown.Count > 0)
+            return new(DiffCoverageStatus.Unavailable, $"The report doesn't measure {unknown.Count} C# file(s) outside tests/ that this change adds lines to, so its coverage is unknown.", files, total, covered, coverage.Outside, unknown);
+        return new(total == 0 ? DiffCoverageStatus.NotApplicable : DiffCoverageStatus.Measured, null, files, total, covered, coverage.Outside, []);
     }
+
+    /// <summary>
+    /// Whether a file is .NET source a report could measure: C# outside tests/, where the test
+    /// projects and their helpers live (build/coverage.settings.xml leaves the test assemblies
+    /// out). Anything else (scripts, docs, the PWA, tests) a missing entry can't make unknown.
+    /// </summary>
+    internal static bool MayBeMeasured(string path) =>
+        path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && !path.StartsWith("tests/", StringComparison.OrdinalIgnoreCase);
 
     const int MaxRows = 30;
     const int MaxRanges = 12;
@@ -426,10 +447,13 @@ static class DiffCoverage
         sb.AppendLine(CultureInfo.InvariantCulture, $"### Diff coverage, advisory{title}");
         sb.AppendLine();
         var changed = $"{result.Added} added line(s) in {result.Files.Count} file(s)";
+        var subset = result.Executable == 0 ? ""
+            : $" In the files it does measure only, a subset and not this change's coverage, {Percent(result.Percent)} of the {result.Executable} executable added line(s) ran ({result.Covered} covered).";
         sb.AppendLine(result.Status switch
         {
+            DiffCoverageStatus.Unavailable when result.Unknown.Count > 0 => $"**UNAVAILABLE.** {result.Reason} Not measured: {Names(result.Unknown, Code)}.{subset}",
             DiffCoverageStatus.Unavailable => $"**UNAVAILABLE.** {result.Reason} The {changed} are counted neither covered nor uncovered.",
-            DiffCoverageStatus.NotApplicable => $"**NOT APPLICABLE.** None of the {changed} is code the report can run (comments, declarations, files it doesn't measure), so there's nothing to cover.",
+            DiffCoverageStatus.NotApplicable => $"**NOT APPLICABLE.** None of the {changed} is code the report can run (comments and declarations in the files it measures, or files that aren't C# outside tests/), so there's nothing to cover.",
             _ => $"**{Percent(result.Percent)}** of the {result.Executable} executable added line(s) ran ({result.Covered} covered)"
                 + (result.BelowTarget ? $", below the {Percent(DiffCoverageCommand.Target)} target." : $", at or above the {Percent(DiffCoverageCommand.Target)} target."),
         });
@@ -437,7 +461,7 @@ static class DiffCoverage
         sb.AppendLine("Advisory only: nothing fails on it, and no floor applies (quality/README.md §5). Line coverage; branches aren't counted.");
 
         var measured = result.Files.Where(f => f.Measured && f.Executable > 0).ToList();
-        if (result.Status == DiffCoverageStatus.Measured && measured.Count > 0)
+        if ((result.Status == DiffCoverageStatus.Measured || result.Unknown.Count > 0) && measured.Count > 0)
         {
             sb.AppendLine();
             sb.AppendLine("| File | Covered | Executable added | Not run |");
@@ -448,12 +472,12 @@ static class DiffCoverage
                 sb.AppendLine(CultureInfo.InvariantCulture, $"| (+{measured.Count - MaxRows} more) | | | |");
         }
 
-        var notMeasured = result.Files.Where(f => !f.Measured).ToList();
-        if (result.Status != DiffCoverageStatus.Unavailable && notMeasured.Count > 0)
+        var notMeasured = result.Files.Where(f => !f.Measured && !result.Unknown.Contains(f.Path)).ToList();
+        if ((result.Status != DiffCoverageStatus.Unavailable || result.Unknown.Count > 0) && notMeasured.Count > 0)
         {
             sb.AppendLine();
-            sb.AppendLine($"Not counted: {notMeasured.Sum(f => f.Added)} added line(s) in {notMeasured.Count} file(s) the report doesn't measure (scripts, docs, tests, assemblies no test loaded): "
-                + string.Join(", ", notMeasured.Take(10).Select(f => Code(f.Path))) + (notMeasured.Count > 10 ? $" (+{notMeasured.Count - 10} more)." : "."));
+            sb.AppendLine($"Not counted: {notMeasured.Sum(f => f.Added)} added line(s) in {notMeasured.Count} file(s) that aren't C# outside tests/ (scripts, docs, tests) and that the report doesn't measure: "
+                + Names(notMeasured.Select(f => f.Path).ToList(), Code) + ".");
         }
 
         sb.AppendLine();
@@ -467,13 +491,18 @@ static class DiffCoverage
         return sb.ToString();
     }
 
-    /// <summary>A workflow command for the run's annotations: a warning below the target, a notice when unavailable.</summary>
+    /// <summary>A workflow command for the run's annotations: a warning below the target or for unmeasured C#, a notice when otherwise unavailable.</summary>
     public static string? Annotation(DiffCoverageResult result) => result.Status switch
     {
+        DiffCoverageStatus.Unavailable when result.Unknown.Count > 0 => $"::warning title=Diff coverage (advisory)::{Escape($"UNAVAILABLE: {result.Reason} Not measured: {Names(result.Unknown, p => p)}. Advisory: nothing fails on it.")}",
         DiffCoverageStatus.Unavailable => $"::notice title=Diff coverage (advisory)::{Escape($"UNAVAILABLE: {result.Reason}")}",
         DiffCoverageStatus.Measured when result.BelowTarget => $"::warning title=Diff coverage (advisory)::{Escape($"{Percent(result.Percent)} of {result.Executable} executable added lines ran, below the {Percent(DiffCoverageCommand.Target)} target. Advisory: nothing fails on it.")}",
         _ => null,
     };
+
+    // The first ten paths, and how many more.
+    static string Names(IReadOnlyList<string> paths, Func<string, string> format) =>
+        string.Join(", ", paths.Take(10).Select(format)) + (paths.Count > 10 ? $" (+{paths.Count - 10} more)" : "");
 
     // GitHub's escaping for a workflow command's message.
     static string Escape(string message) => message.Replace("%", "%25").Replace("\r", "%0D").Replace("\n", "%0A");

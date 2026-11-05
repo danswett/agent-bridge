@@ -175,7 +175,7 @@ public class DiffCoverageTests
         var markdown = DiffCoverage.Render(result, Identity);
         Assert.Contains("**66.7%** of the 3 executable added line(s) ran (2 covered), below the 80.0% target.", markdown);
         Assert.Contains("| `src/A.cs` | 2 | 3 | 1 |", markdown);
-        Assert.Contains("Not counted: 2 added line(s) in 1 file(s) the report doesn't measure", markdown);
+        Assert.Contains("Not counted: 2 added line(s) in 1 file(s) that aren't C# outside tests/ (scripts, docs, tests) and that the report doesn't measure: `build/x.ps1`.", markdown);
         Assert.Contains("`0123456789abcdef0123456789abcdef01234567`", markdown);
         Assert.Contains("`coverage-ubuntu-latest` of [this run](https://github.com/owner/repo/actions/runs/1/attempts/2)", markdown);
         Assert.StartsWith("::warning title=Diff coverage (advisory)::66.7%25 of 3", DiffCoverage.Annotation(result));
@@ -185,13 +185,46 @@ public class DiffCoverageTests
     [Fact]
     public void No_executable_added_line_is_not_applicable_rather_than_full_coverage()
     {
-        var result = DiffCoverage.Evaluate(Added(("src/A.cs", [5]), ("docs/x.md", [1, 2])), Coverage());
+        // Comments in a measured file, a doc and a test's own source: none of it is code to cover.
+        var result = DiffCoverage.Evaluate(Added(("src/A.cs", [5]), ("docs/x.md", [1, 2]), ("tests/X.Tests/XTests.cs", [1])), Coverage());
 
         Assert.Equal(DiffCoverageStatus.NotApplicable, result.Status);
         Assert.Null(DiffCoverage.Annotation(result));
         var markdown = DiffCoverage.Render(result, Identity);
         Assert.Contains("**NOT APPLICABLE.**", markdown);
         Assert.DoesNotContain("%", markdown);
+    }
+
+    [Fact]
+    public void Production_CSharp_the_report_does_not_measure_is_unknown_not_free_of_executable_lines()
+    {
+        var result = DiffCoverage.Evaluate(Added(("src/App/NewPage.cs", [1, 2, 3]), ("docs/x.md", [1])), Coverage());
+
+        Assert.Equal(DiffCoverageStatus.Unavailable, result.Status);
+        Assert.Equal(["src/App/NewPage.cs"], result.Unknown.ToArray());
+        var markdown = DiffCoverage.Render(result, Identity);
+        Assert.Contains("**UNAVAILABLE.**", markdown);
+        Assert.Contains("Not measured: `src/App/NewPage.cs`.", markdown);
+        Assert.DoesNotContain("NOT APPLICABLE", markdown);
+        Assert.DoesNotContain("%", markdown);
+        Assert.StartsWith("::warning title=Diff coverage (advisory)::UNAVAILABLE: ", DiffCoverage.Annotation(result));
+        Assert.Contains("Not measured: src/App/NewPage.cs.", DiffCoverage.Annotation(result));
+    }
+
+    [Fact]
+    public void Full_coverage_of_the_measured_files_is_only_a_subset_when_other_production_CSharp_is_unmeasured()
+    {
+        var result = DiffCoverage.Evaluate(Added(("src/A.cs", [2, 3]), ("tools/New/Tool.cs", [4])), Coverage());
+
+        Assert.Equal(DiffCoverageStatus.Unavailable, result.Status);
+        Assert.Equal((2, 2), (result.Executable, result.Covered));
+        Assert.False(result.BelowTarget);
+        var markdown = DiffCoverage.Render(result, Identity);
+        Assert.Contains("In the files it does measure only, a subset and not this change's coverage, 100.0% of the 2 executable added line(s) ran (2 covered).", markdown);
+        Assert.Contains("| `src/A.cs` | 2 | 2 |", markdown);
+        Assert.DoesNotContain("**100.0%**", markdown);
+        Assert.DoesNotContain("target", markdown);
+        Assert.StartsWith("::warning title=Diff coverage (advisory)::UNAVAILABLE: ", DiffCoverage.Annotation(result));
     }
 
     [Fact]
