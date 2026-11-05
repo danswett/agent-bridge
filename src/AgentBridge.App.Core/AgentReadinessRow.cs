@@ -2,7 +2,7 @@ using AgentBridge.Local;
 
 namespace AgentBridge.App.Core;
 
-public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = false, bool canInstall = false)
+public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = false, bool canInstall = false, bool canSignIn = false)
 {
     public string Id => agent.Id;
     public string Label => agent.Label;
@@ -11,6 +11,8 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     public bool CanSetUp => canManage && agent.Installation.State == ReadinessState.Working
         && agent.Hooks.State != ReadinessState.Blocked;
     public bool CanRemove => canManage && agent.Hooks.State != ReadinessState.Blocked;
+    public bool CanSignIn => canSignIn && agent.Id is "copilot" or "claude" or "codex"
+        && agent.Installation.State == ReadinessState.Working && agent.Hooks.State != ReadinessState.Blocked;
     public string Installation => agent.Installation.State == ReadinessState.Working
         ? agent.Version is { } version ? $"Installed, version {version}" : "Installed, version not verified"
         : agent.Installation.Detail;
