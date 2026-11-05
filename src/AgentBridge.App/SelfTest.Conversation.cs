@@ -32,7 +32,7 @@ static partial class SelfTest
             {
                 var view = await Choose(window, main, card.Id, "YourMessage");
                 layout.Tab = SessionTab.Conversation;
-                var scroll = view is null ? null : ById<ScrollViewer>(view, "Conversation");
+                var scroll = view is null ? null : ConversationScroller(view);
                 var column = scroll is null ? null : Find<StackPanel>(scroll).FirstOrDefault(s => s.Name == "Conversation");
                 var bubble = view is null ? null : ById<Border>(view, "YourMessage");
                 if (scroll is null || column is null || bubble is null || !await Until(() => bubble.ActualWidth > 0 && scroll.ViewportWidth > 0, TimeSpan.FromSeconds(5)))
@@ -47,7 +47,7 @@ static partial class SelfTest
             // The list narrowed to its narrowest, then halfway back, so the session stays wider than the
             // measure and the column moves.
             if (width is 1440.0 && await Choose(window, main, launched.Id, "YourMessage") is { } shown
-                && ById<ScrollViewer>(shown, "Conversation") is { } scroll2 && Find<StackPanel>(scroll2).FirstOrDefault(s => s.Name == "Conversation") is { } column2
+                && ConversationScroller(shown) is { } scroll2 && Find<StackPanel>(scroll2).FirstOrDefault(s => s.Name == "Conversation") is { } column2
                 && ById<Border>(shown, "YourMessage") is { } bubble2)
             {
                 var divider = window.Sessions.ListDividerView;

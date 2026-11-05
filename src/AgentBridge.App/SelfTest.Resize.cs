@@ -3,6 +3,7 @@ using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 
 namespace AgentBridge.App;
@@ -42,30 +43,37 @@ static partial class SelfTest
         var view = await Choose(window, main, DemoHost.HeavyId, "Response");
         layout.CloseDelegate();
         var card = view?.Card;
+        var list = view is null ? null : ById<ListView>(view, "Conversation");
         // The strip with every delegate in it, the finished ones unfolded, not six and "14 finished".
         if (card is not null) { card.Delegates.FinishedOpen = true; }
         int Delegates() => card?.Delegates.Strip.Count(i => i.IsDelegate) ?? 0;
-        var response = view is null ? null : ById<FrameworkElement>(view, "Response") as MarkdownView;
-        var drawn = card is not null && await Until(() => card.History.Count >= Limits.History && response is { Children.Count: > 0 } && Delegates() >= DemoHost.HeavyDelegates && layout.ShowStrip && layout.ShowInspector, TimeSpan.FromSeconds(10));
+        var drawn = card is not null && list is not null && await Until(() => card.History.Count >= Limits.History && list.Items.Count > 0 && ById<MarkdownView>(view!, "ResponseBlock") is { Children.Count: > 0 } && Delegates() >= DemoHost.HeavyDelegates && layout.ShowStrip && layout.ShowInspector, TimeSpan.FromSeconds(10));
         var data = new Dictionary<string, int>
         {
             ["sessions"] = main.AllCards.Count(),
-            ["responseBlocks"] = response?.Children.Count ?? 0,
+            ["responseBlocks"] = list?.Items.Count ?? 0,
             ["delegateEvents"] = card?.Delegates.Events.Count ?? 0,
             ["toolRows"] = card?.History.Count ?? 0,
             ["delegates"] = Delegates(),
         };
         check(drawn && data["sessions"] > 15 && data["responseBlocks"] + data["delegateEvents"] > 200 && data["delegates"] == DemoHost.HeavyDelegates,
             $"draws a window as heavy as a real one for the resize pass, every delegate in its strip ({string.Join(", ", data.Select(d => $"{d.Value} {d.Key}"))})");
+        // A block in the middle of the response at the top of the conversation, part scrolled past.
+        var anchored = list is null ? null : await Anchor(list, outFile);
         await Task.Delay(700);
         var heavyLimit = SweepBudget - lightTook;
         var (heavy, heavyDone) = await Sweep(window, heavyLimit);
-        if (card is not null) { card.Delegates.FinishedOpen = false; }
 
         // Back where the drag began, the session still chosen and every pane drawn.
         var settled = await Until(() => layout.Mode == PaneMode.Three && main.Selected == card && layout.ShowInspector, TimeSpan.FromSeconds(5));
         check(settled, "keeps the session chosen, with its inspector, through a live resize across every width class");
         await Picture(window.RootElement, Path.ChangeExtension(outFile, ".resize.png"));
+        var moved = list is null || anchored is null ? "measured: the response not drawn" : await Anchored(list, anchored, outFile);
+        check(moved is null, $"keeps the block at the top of the conversation where it was through a live resize, drawn the same before and after{Not(moved)}");
+        var unreachable = list is null ? "measured: the response not drawn" : await Reachable(list);
+        check(unreachable is null, $"gives a screen reader every block of the response as an item of the list, counted, and one off screen found by its text and brought into view{Not(unreachable)}");
+        if (card is not null) { card.Delegates.FinishedOpen = false; }
+        static string Not(string? wrong) => wrong is null ? "" : $": not {wrong}";
 
         var report = new Dictionary<string, object?>
         {
@@ -78,17 +86,23 @@ static partial class SelfTest
             ["lightFinished"] = lightDone,
             ["heavy"] = heavy.Report(),
             ["heavyFinished"] = heavyDone,
+            ["anchorKept"] = moved is null,
+            ["anchorProblem"] = moved,
+            ["readerProblem"] = unreachable,
+            ["captures"] = new[] { Path.GetFileName(Path.ChangeExtension(outFile, ".resize.before.png")), Path.GetFileName(Path.ChangeExtension(outFile, ".resize.after.png")) },
         };
         result["resize"] = report;
         await File.WriteAllTextAsync(Path.ChangeExtension(outFile, ".resize.json"), JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
         string Said(FrameSummary s) => $"p50 {s.P50:0.#} ms, p95 {s.P95:0.#} ms, max {s.Max:0.#} ms, {s.OverLong} over {FrameTimes.Long} ms of {s.Frames}";
-        AppLog.Write($"self-test: resize, light: {Said(light.All)}; heavy: {Said(heavy.All)}");
+        // The p95 in each width class, the creative director's measure (#765), and in the moment of switching.
+        static string ByClass(FrameTimes t) => $"p95 three panes {t.In(PaneMode.Three).P95:0.#} ms, two panes {t.In(PaneMode.Two).P95:0.#} ms, one column {t.In(PaneMode.One).P95:0.#} ms, switching {t.Switching.P95:0.#} ms";
+        AppLog.Write($"self-test: resize, light: {Said(light.All)}; {ByClass(light)}; heavy: {Said(heavy.All)}; {ByClass(heavy)}");
         // The frame times are reported only, a sweep cut short by the hang guard included; the pass
         // fails only when a sweep never reached every width class, so nothing was measured there.
         var crossed = new[] { PaneMode.Three, PaneMode.Two, PaneMode.One }.All(m => light.In(m).Frames > 0 && heavy.In(m).Frames > 0);
         string Cut(string name, bool finished, TimeSpan limit) => finished ? "" : $"; the {name} sweep cut short at {limit.TotalSeconds:0.#} s";
         if (!lightDone || !heavyDone) { AppLog.Write($"self-test: resize, reported, not failed:{Cut("light", lightDone, SweepBudget / 2)}{Cut("heavy", heavyDone, heavyLimit)}"); }
-        check(crossed, $"measures the UI thread's frames through a live resize across the three width classes (heavy: {Said(heavy.All)}; light: {Said(light.All)}{Cut("light", lightDone, SweepBudget / 2)}{Cut("heavy", heavyDone, heavyLimit)})");
+        check(crossed, $"measures the UI thread's frames through a live resize across the three width classes (heavy: {Said(heavy.All)}; {ByClass(heavy)}; light: {Said(light.All)}; {ByClass(light)}{Cut("light", lightDone, SweepBudget / 2)}{Cut("heavy", heavyDone, heavyLimit)})");
     }
 
     // Narrowed a step a frame to the narrowest, then widened to where it began, or as far as it got

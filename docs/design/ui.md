@@ -698,6 +698,22 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   centred in the pane once the pane is wider than the measure, as the PWA's is; it follows the
   pane's width as it changes, a divider being dragged included (§5.2). The scroll bar is at the
   pane's edge, not the column's.
+- **A list of blocks** (#765): the response's top-level blocks (a paragraph, a heading, a list,
+  a table, a code block, a quote, a rule) are the items of a virtualised list, so only those near
+  the viewport are laid out and a live resize re-wraps those alone. Everything else in the column
+  (the question, the receipt, your message and the response's label above; the reasoning, the
+  delegates' events and the current tool below) is the list's header and footer. It draws exactly
+  as one column did: the same reading measure, keylines and spacing, no selection, no item chrome,
+  and no focus visual on an item; focus goes to the links and buttons inside a block, as before.
+  - **The place is kept by the block, not the offset:** the block across the viewport's top edge
+    stays where it was through a change of width (a live resize, a divider dragged), and as blocks
+    are laid out for the first time and their estimated heights are corrected. With the header at
+    the top, nothing is held.
+  - **Accessibility (#707):** a screen reader gets the response as a list, each block an item named
+    by its text and numbered in the set ("12 of 214"), so its scan and search reach a block that is
+    off screen and bring it into view.
+  - The self-test checks that a block stays in place through a live resize and the conversation is
+    drawn the same before and after it ([app-windows.md](../app-windows.md)).
 - **Your messages:** a bubble at the right edge of the conversation's column (card fill,
   platform radius), at most 85% of the column's width, so a short message beside a short reply
   is still at the right (#255).

@@ -245,16 +245,79 @@
 
         <Grid x:Name="TabContent" Grid.Row="2">
             <!-- The conversation (§6.4): the main agent only, at the reading measure, centred in the
-                 pane as the PWA's is; the scroll bar stays at the pane's edge. -->
-            <ScrollViewer
-                x:Name="ConversationScroll"
+                 pane as the PWA's is; the scroll bar stays at the pane's edge. A list, so only the
+                 response's blocks near the viewport are realised and a live resize re-wraps those
+                 alone (#765): each block an item a screen reader counts and reaches off screen (#707),
+                 with no item chrome, selection or focus visual of its own. What comes before the
+                 response is the list's header, what comes after it its footer, each the same column. -->
+            <ListView
+                x:Name="ConversationList"
                 AutomationProperties.AutomationId="Conversation"
+                AutomationProperties.Name="Conversation"
+                Padding="0"
+                SelectionMode="None"
+                IsItemClickEnabled="False"
+                IsTabStop="False"
+                ShowsScrollingPlaceholders="False"
+                TabNavigation="Local"
+                ContainerContentChanging="OnBlockShown"
                 Visibility="{x:Bind local:Ui.Show(Layout.ShowConversation), Mode=OneWay}">
+                <ListView.ItemContainerTransitions>
+                    <TransitionCollection />
+                </ListView.ItemContainerTransitions>
+                <ListView.HeaderTransitions>
+                    <TransitionCollection />
+                </ListView.HeaderTransitions>
+                <ListView.FooterTransitions>
+                    <TransitionCollection />
+                </ListView.FooterTransitions>
+                <ListView.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <ItemsStackPanel ItemsUpdatingScrollMode="KeepItemsInView" CacheLength="2" />
+                    </ItemsPanelTemplate>
+                </ListView.ItemsPanel>
+                <ListView.ItemContainerStyle>
+                    <!-- No chrome: the block as drawn before, focus on the controls inside it. -->
+                    <Style TargetType="ListViewItem">
+                        <Setter Property="IsTabStop" Value="False" />
+                        <Setter Property="UseSystemFocusVisuals" Value="False" />
+                        <Setter Property="Margin" Value="0" />
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="MinWidth" Value="0" />
+                        <Setter Property="MinHeight" Value="0" />
+                        <Setter Property="Background" Value="Transparent" />
+                        <Setter Property="BorderThickness" Value="0" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="VerticalContentAlignment" Value="Stretch" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListViewItem">
+                                    <ContentPresenter
+                                        Content="{TemplateBinding Content}"
+                                        ContentTemplate="{TemplateBinding ContentTemplate}"
+                                        HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                        VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </ListView.ItemContainerStyle>
+                <ListView.ItemTemplate>
+                    <!-- A block, 8 below the one before (the response's own spacing), in the column. -->
+                    <DataTemplate x:DataType="core:ConversationBlock">
+                        <local:ReadingColumn MaxWidth="{StaticResource AbLayoutReadingMax}" HorizontalAlignment="Center" Padding="24,8,24,0">
+                            <local:MarkdownView Reading="True" AutomationProperties.AutomationId="ResponseBlock" Block="{x:Bind Block}" />
+                        </local:ReadingColumn>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+                <ListView.Header>
+                <!-- The pane's width, whatever the header's host gives it, so the column centres in the pane. -->
+                <local:ReadingColumn>
                 <local:ReadingColumn
                     x:Name="Conversation"
                     MaxWidth="{StaticResource AbLayoutReadingMax}"
                     HorizontalAlignment="Center"
-                    Padding="24,8,24,24"
+                    Padding="24,8,24,0"
                     Spacing="24">
 
                     <!-- A question, in the stream, in Needs you colours (§6.4). -->
@@ -308,8 +371,8 @@
                         </Border>
                     </Grid>
 
-                    <!-- The main agent: a label line ("Main agent" only where the host says whose the words are, else the agent's name), then its words; its reasoning behind a disclosure. -->
-                    <StackPanel Spacing="8" Visibility="{x:Bind local:Ui.Show(Card.HasVoice), Mode=OneWay}">
+                    <!-- The main agent: a label line ("Main agent" only where the host says whose the words are, else the agent's name), then its words, the list's items; its reasoning behind a disclosure. -->
+                    <StackPanel Spacing="8" AutomationProperties.AutomationId="Response" Visibility="{x:Bind local:Ui.Show(Card.HasVoice), Mode=OneWay}">
                         <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}">
                             <Run Text="{x:Bind Card.Speaker, Mode=OneWay}" FontWeight="SemiBold" Foreground="{ThemeResource AbText}" /><Run Text="  " /><Run Text="{x:Bind Card.ResponseAgeText, Mode=OneWay}" />
                         </TextBlock>
@@ -326,12 +389,20 @@
                             AutomationProperties.AutomationId="ResponseDropped"
                             Text="The main agent's latest response was left out: too long to send with its delegates."
                             Visibility="{x:Bind local:Ui.Show(Card.ResponseDropped), Mode=OneWay}" />
-                        <local:MarkdownView
-                            x:Name="ResponseView"
-                            Reading="True"
-                            AutomationProperties.AutomationId="Response"
-                            Markdown="{x:Bind Card.Response, Mode=OneWay}" />
                     </StackPanel>
+                </local:ReadingColumn>
+                </local:ReadingColumn>
+                </ListView.Header>
+                <ListView.Footer>
+                <local:ReadingColumn>
+                <local:ReadingColumn
+                    MaxWidth="{StaticResource AbLayoutReadingMax}"
+                    HorizontalAlignment="Center"
+                    Padding="24,0,24,24"
+                    Spacing="24">
+                    <!-- Holds the column's spacing above what follows the response, as a child of one
+                         column did; 8 more where the response has no blocks, as its empty view had. -->
+                    <Border x:Name="FooterLead" Height="0" />
                     <Expander
                         Header="Show reasoning"
                         HorizontalAlignment="Stretch"
@@ -392,7 +463,9 @@
                         </TextBlock>
                     </Grid>
                 </local:ReadingColumn>
-            </ScrollViewer>
+                </local:ReadingColumn>
+                </ListView.Footer>
+            </ListView>
 
             <!-- The Delegates tab (§6.3, §5.2): every delegate, nested under its parent, and one opened
                  from it pushed in its place; a host that can't list them (rule 8), its counts. -->

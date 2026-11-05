@@ -44,26 +44,27 @@ public sealed partial class SessionView : UserControl
         // the new theme's.
         ActualThemeChanged += (_, _) => { words = null; ShowWords(); };
         // Where the person has left the conversation, and whether a finger is on it (ui.md §5.3,
-        // Scroll to a question). Touch through handled events too: the scroller handles them.
-        ConversationScroll.ViewChanged += (_, _) =>
+        // Scroll to a question). Touch through handled events too: the scroller handles them. The
+        // scroller is the conversation list's own, there once its template is (HookConversation).
+        // Hooked once the list's template is there: at Loaded, or at its first layout when it was
+        // collapsed then (nothing chosen yet), since showing it raises no Loaded.
+        ConversationList.Loaded += (_, _) => HookConversation();
+        ConversationList.SizeChanged += (_, e) =>
         {
-            follow.Scrolled(ConversationScroll.VerticalOffset, ConversationScroll.ScrollableHeight);
-            // A question still moving into view is held from the pointer until it has stopped.
-            guard.Scrolled(DateTimeOffset.UtcNow);
+            HookConversation();
+            if (e.PreviousSize.Width != e.NewSize.Width) { KeepAnchor(); }
         };
-        ConversationScroll.AddHandler(PointerPressedEvent, new PointerEventHandler((_, e) =>
+        ConversationList.AddHandler(PointerPressedEvent, new PointerEventHandler((_, e) =>
         {
             if (Touch(e)) { follow.TouchDown(e.Pointer.PointerId); }
             else { follow.Pressed(e.Pointer.PointerId); }
         }), true);
-        ConversationScroll.AddHandler(PointerReleasedEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchUp(e.Pointer.PointerId); } }), true);
-        ConversationScroll.AddHandler(PointerCanceledEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchCanceled(e.Pointer.PointerId); } }), true);
-        ConversationScroll.AddHandler(PointerCaptureLostEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchCanceled(e.Pointer.PointerId); } }), true);
+        ConversationList.AddHandler(PointerReleasedEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchUp(e.Pointer.PointerId); } }), true);
+        ConversationList.AddHandler(PointerCanceledEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchCanceled(e.Pointer.PointerId); } }), true);
+        ConversationList.AddHandler(PointerCaptureLostEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchCanceled(e.Pointer.PointerId); } }), true);
         // A mouse or pen over the conversation holds it as a finger does (#261's guard).
-        ConversationScroll.AddHandler(PointerEnteredEvent, new PointerEventHandler((_, e) => { if (!Touch(e)) { follow.PointerOver(e.Pointer.PointerId); } }), true);
-        ConversationScroll.AddHandler(PointerExitedEvent, new PointerEventHandler((_, e) => { if (!Touch(e)) { follow.PointerLeft(e.Pointer.PointerId); } }), true);
-        ConversationScroll.DirectManipulationStarted += (_, _) => follow.PanStarted();
-        ConversationScroll.DirectManipulationCompleted += (_, _) => follow.PanEnded();
+        ConversationList.AddHandler(PointerEnteredEvent, new PointerEventHandler((_, e) => { if (!Touch(e)) { follow.PointerOver(e.Pointer.PointerId); } }), true);
+        ConversationList.AddHandler(PointerExitedEvent, new PointerEventHandler((_, e) => { if (!Touch(e)) { follow.PointerLeft(e.Pointer.PointerId); } }), true);
         // The question's answers moved where they are (#491): held again. And a pointer's press on
         // one reads where they are first, and is dropped if they moved (PointerLets).
         answers = new AnswerWatch(QuestionCard, () => questionView, OnAnswersMoved);
@@ -205,7 +206,8 @@ public sealed partial class SessionView : UserControl
         Motion.Settle(TabContent);
         ShowWords();
         follow.Reset();
-        ConversationScroll.ChangeView(null, 0, null, disableAnimation: true);
+        ShowResponse(reset: true);
+        ConversationScroll?.ChangeView(null, 0, null, disableAnimation: true);
         TakeFocus();
     }
 
@@ -217,6 +219,7 @@ public sealed partial class SessionView : UserControl
         answers.Start();
         SyncQuestion();
         Bindings.Update();
+        ShowResponse(reset: false);
         Settle();
         words = null;
         ShowWords();
@@ -252,6 +255,7 @@ public sealed partial class SessionView : UserControl
             }
         }
         if (all || e.PropertyName is nameof(SessionCardViewModel.UserMessage) or nameof(SessionCardViewModel.ReceiptText)) { Acknowledge(); }
+        if (all || e.PropertyName is nameof(SessionCardViewModel.Response) or nameof(SessionCardViewModel.HasVoice)) { ShowResponse(reset: false); }
         if ((all || e.PropertyName == nameof(SessionCardViewModel.AsksText)) && questionView is not null && Card is { } c && questionView.Heading != c.AsksText)
         {
             // Who asks, drawn by the app in the question: not the person's typing laid out.

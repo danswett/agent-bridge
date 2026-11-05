@@ -80,7 +80,7 @@ static partial class SelfTest
             Check(Message(form) is { Approval: false }, "draws a question that is not an approval as written");
             var withResponse = main.AllCards.FirstOrDefault(c => c.HasResponse);
             var responding = withResponse is null ? null : await Choose(window, main, withResponse.Id, "Response");
-            Check(responding is not null && await Until(() => ById<FrameworkElement>(responding, "Response") is MarkdownView { Children.Count: > 0 }, TimeSpan.FromSeconds(5)), "renders a response's Markdown");
+            Check(responding is not null && await Until(() => ById<MarkdownView>(responding, "ResponseBlock") is { Children.Count: > 0 }, TimeSpan.FromSeconds(5)), "renders a response's Markdown");
             // Status is a glyph and words (docs/design/ui.md §2.2), the glyph drawn from the generated
             // styles and named as its row reads (§9).
             var glyphs = rows.Select(r => (r.Card, Glyph: ById<StatusGlyphView>(r, "StatusGlyph"))).ToList();
