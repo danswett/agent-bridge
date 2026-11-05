@@ -97,6 +97,10 @@ public sealed class HostConnection : IAsyncDisposable
 
     // Raised on the UI thread: the link, hello, status or usage changed.
     public event Action? Changed;
+    // Raised on the UI thread: signin.code or signin.done (#800, AuthState), by name, with its data
+    // as sent. They come only to the channels in a flow, and are not kept here: a code is the
+    // sheet's for as long as it is open, and no one else's.
+    public event Action<string, JsonElement>? AgentSignIn;
 
     public bool Can(string capability) => Capabilities.Contains(capability);
 
@@ -554,6 +558,8 @@ public sealed class HostConnection : IAsyncDisposable
             RefuseOn(ch);
             throw;
         }
+        // Its attention (#800), which the protocol's record doesn't carry yet, kept beside it.
+        AuthState.Attach(s, data);
         PostSessions(ch, () =>
         {
             Sessions.Upsert(s, exact, ch, seq);
@@ -653,6 +659,13 @@ public sealed class HostConnection : IAsyncDisposable
                 {
                     var d = Received.Read<DiscoveryChanged>(ev.Data);
                     PostSessions(ch, () => Sessions.SetHeld(d.DiscoveryHeld, ch));
+                    break;
+                }
+            case AuthState.CodeEvent or AuthState.DoneEvent:
+                {
+                    var name = ev.Name;
+                    var data = ev.Data.Clone();
+                    PostSessions(ch, () => AgentSignIn?.Invoke(name, data));
                     break;
                 }
             case UsageProtocol.Update:

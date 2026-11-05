@@ -237,7 +237,10 @@ public sealed partial class MainViewModel : Observable
         Action<string> removed = id => OnRemoved(m, id);
         Action synced = () => Synced(m);
         Action changed = () => OnHostChanged(m);
-        Action begun = () => Restale(m);
+        // A snapshot begun or done changes whether this machine's sign-ins can be shown (#800), which
+        // its currency alone doesn't say for this machine.
+        Action begun = () => { Restale(m); SyncNeedsYou(); SyncSignIns(); };
+        Action<string, System.Text.Json.JsonElement> signIn = (ev, data) => OnAgentSignIn(m.Key, ev, data);
         sessions.Upserted += upsert;
         sessions.Removed += removed;
         sessions.Synced += synced;
@@ -246,6 +249,7 @@ public sealed partial class MainViewModel : Observable
         // Its Machines row says "Discovery held" while the hold stands (#788).
         sessions.HeldChanged += SyncMachineRows;
         m.Host.Changed += changed;
+        m.Host.AgentSignIn += signIn;
         // After the machine's own handler (Machine, made before it is added) has unconfirmed its rows.
         m.Host.Gapped += begun;
         unhook[m] = () =>
@@ -257,6 +261,7 @@ public sealed partial class MainViewModel : Observable
             sessions.HeldChanged -= OnHeldChanged;
             sessions.HeldChanged -= SyncMachineRows;
             m.Host.Changed -= changed;
+            m.Host.AgentSignIn -= signIn;
             m.Host.Gapped -= begun;
         };
         Machines.Add(new MachineChoice(m.Key, m.Name));
@@ -411,6 +416,8 @@ public sealed partial class MainViewModel : Observable
         Raise(nameof(FleetNote));
         Raise(nameof(HasFleetNote));
         OnHeldChanged();
+        // Its sign-ins needed (#800) come as a change to the host.
+        SyncSignIns();
     }
 
     // Each machine's readings marked with the machine that took them, merged, and kept between runs
@@ -558,6 +565,8 @@ public sealed partial class MainViewModel : Observable
         Rearrange();
         RefreshLabels();
         Restale(m);
+        SyncNeedsYou();
+        SyncSignIns();
     }
 
     bool Shows(Machine m) => SelectedMachine?.Key is not { } key || key == m.Key;
@@ -581,6 +590,8 @@ public sealed partial class MainViewModel : Observable
             foreach (var c in byId.Values) { c.RefreshTimes(); }
             RefreshEnded();
             RefreshNeedsYou();
+            // A code runs out, and "signed in" goes, with nothing from the machine (#800).
+            SyncSignIns();
             // A machine kept offline says when it was last seen, which moves on.
             if (machines.Any(m => m.Offline)) { SyncMachineRows(); }
             Order.Flush();

@@ -242,6 +242,40 @@ public sealed class ToastTests
         Assert.Equal(["asked", "busy", "wrote"], sink.Shown.Select(n => n.Tag).Order());
     }
 
+    // #800: a 401 ends the turn, the session goes working to idle with its previous answer still
+    // there, and the agent is dead. No "finished" toast quotes that stale answer.
+    [Fact]
+    public void A_turn_that_ended_on_a_sign_in_failure_or_an_error_raises_no_finished_toast()
+    {
+        static Session Stopped(string id, string attention) =>
+            AuthState.Attach(Make.Session(id, response: "Done.", turns: 2), System.Text.Json.JsonDocument.Parse($$"""{"attention":{{attention}}}""").RootElement);
+        var p = Planner();
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working));
+        p.Upsert(Stopped("s1", """{"kind":"signInNeeded","agent":"copilot"}"""));
+        p.Upsert(Make.Session("s2", status: SessionStatus.Working));
+        p.Upsert(Stopped("s2", """{"kind":"error","errorClass":"auth"}"""));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Empty(sink.Shown);
+
+        // The attention comes in the update after the turn ended: the toast due is dropped.
+        p.Upsert(Make.Session("s3", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s3", response: "Done.", turns: 2));
+        p.Upsert(Stopped("s3", """{"kind":"error","errorClass":"rate"}"""));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Empty(sink.Shown);
+
+        // Already up when it comes: withdrawn.
+        p.Upsert(Make.Session("s4", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s4", response: "Done.", turns: 2));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+        p.Upsert(Stopped("s4", """{"kind":"signInNeeded","agent":"copilot"}"""));
+        Assert.Equal([ToastPlanner.Tag("s4", null)], sink.Withdrawn);
+    }
+
     [Fact]
     public void A_finished_turn_whose_main_agent_words_are_gone_when_it_is_due_raises_nothing()
     {
