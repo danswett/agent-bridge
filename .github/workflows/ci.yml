@@ -605,9 +605,11 @@ jobs:
     # Only main's newest commit goes on to publish. GitHub keeps one pending job per concurrency
     # group, cancelling the older pending one when another arrives, so a slow build of an older
     # merge reaching the group could evict a newer one waiting there, then find itself superseded,
-    # leaving the newest merge unpublished. Turned away here, before the group, it never gets there;
+    # leaving the newest merge unpublished. Turned away here, before the group, it rarely gets there;
     # sign asks again once it has signed, since main may move on while it does, and publish goes
-    # by sign's answer. quality-gate must have passed: on main it requires every ci.yml check job
+    # by sign's answer. That narrows the window to the moments between sign's check and publish
+    # entering the group, but does not close it (docs/app-windows.md, Releases and updates).
+    # quality-gate must have passed: on main it requires every ci.yml check job
     # (product, app, the PWA, Home Assistant and spike jobs, light) to have run and succeeded, since
     # a release is what
     # installed copies take within the half hour. That's this workflow's jobs only; CodeQL, perf
@@ -647,7 +649,9 @@ jobs:
     # Signing). Without APP_SIGNING it only says so, on Linux, so publish can need it either way.
     # Either way it ends by asking again whether main is still at this commit: signing takes
     # minutes, and an older run reaching publish's concurrency group after a newer one would evict
-    # the newer one's waiting publish (publish-gate). publish runs only on this job's answer.
+    # the newer one's waiting publish (publish-gate). publish runs only on this job's answer. That
+    # takes the signing minutes out of the window, not the short wait between this check and
+    # publish entering the group, which GitHub's scheduling can still stretch.
     needs: [publish-gate]
     if: needs.publish-gate.outputs.newest == 'true'
     outputs:

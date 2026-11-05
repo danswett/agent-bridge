@@ -371,7 +371,11 @@ connector's Install button on a machine the dashboard drives.
   a slow build of an older merge must not reach the group and evict a newer one. A run whose
   commit main has moved past publishes nothing, and the newer commit's run publishes instead
   (re-run it if it failed). The `sign` job asks again as its last step, since main can move on
-  while it signs, and `publish` runs only on that answer.
+  while it signs, and `publish` runs only on that answer. This narrows the race rather than
+  closing it: if GitHub is slow to start an older run's `publish` after its check passed, a
+  newer commit's run can meanwhile reach the group and wait there, and the older one's arrival
+  cancels it. That newest commit then stays unpublished until the next merge to main, or until
+  its run is re-run.
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
