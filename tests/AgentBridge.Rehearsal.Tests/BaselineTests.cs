@@ -98,6 +98,26 @@ public class BaselineTests
     }
 
     [Fact]
+    public void A_baseline_saved_before_the_cache_was_measured_is_refused_and_says_to_save_one_again_before_migrating()
+    {
+        using var s = Install();
+        s.File(".codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", "{\"hooks\":1}");
+        var captured = BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow);
+        // As the version 1 tool saved it: without the cache, which is unchanged since.
+        var older = captured with { Version = 1, Files = [.. captured.Files.Where(f => !f.Path.Contains("/plugins/cache/", StringComparison.Ordinal))] };
+
+        foreach (var allowed in new[] { new HashSet<string>(), new HashSet<string> { BaselineCapture.Hooks } })
+        {
+            var outcome = BaselineCapture.Judge(older, Again(s, older), allowed);
+
+            Assert.Equal(Verdict.Error, outcome.Verdict);
+            Assert.Contains("Before migrating, save the baseline again", outcome.Detail);
+            Assert.Contains("never measured", outcome.Detail);
+        }
+        Assert.Equal(Verdict.Pass, BaselineCapture.Judge(captured, Again(s, captured), new HashSet<string>()).Verdict);
+    }
+
+    [Fact]
     public void A_baseline_that_filed_codexs_hooks_as_install_is_judged_by_the_current_rule()
     {
         using var s = Install();

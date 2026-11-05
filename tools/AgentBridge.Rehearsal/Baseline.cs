@@ -46,6 +46,11 @@ internal static class BaselineCapture
     public const string Install = "install", Hooks = "hooks", Agents = "agents", Tasks = "tasks";
     public static readonly string[] Categories = [Install, Hooks, Agents, Tasks];
 
+    // 2: Codex's cached copies of agent-ha-bridge's plugin hooks.json are measured too (#123). A
+    // version 1 baseline never hashed them, so against it they would read as added (failing
+    // a strict rollback check) or pass unseen under --allow hooks; neither proves anything.
+    public const int Version = 2;
+
     public static Baseline Capture(Homes homes, ITaskReader tasks, DateTimeOffset now)
     {
         var files = new List<FileEntry>();
@@ -71,7 +76,7 @@ internal static class BaselineCapture
         One(files, homes, Agents, Path.Combine(homes.Home, "Library", "Application Support", "Claude", "claude_desktop_config.json"));
         One(files, homes, Tasks, Path.Combine(homes.Home, "Library", "LaunchAgents", "com.agent-ha-bridge.daemon.plist"));
         var taskList = tasks.Read() ?? throw new IOException("agent-ha-bridge's scheduled tasks could not be read");
-        return new Baseline(1, now, Environment.MachineName, Environment.UserName,
+        return new Baseline(Version, now, Environment.MachineName, Environment.UserName,
             [.. files.OrderBy(f => f.Path, StringComparer.Ordinal)], [.. taskList.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase)]);
     }
 
@@ -159,6 +164,11 @@ internal static class BaselineCapture
     // Passes when nothing changed outside the categories a step allows to change.
     public static Outcome Judge(Baseline before, IReadOnlyList<Difference> diffs, IReadOnlySet<string> allowed)
     {
+        if (before.Version != Version)
+        {
+            return Outcome.Error($"the baseline is version {before.Version}, and this tool measures version {Version} (Codex's cached plugin hooks.json, #123), so it cannot be compared. "
+                + "Before migrating, save the baseline again with this tool. If the machine has already been migrated it is too late: the cache as it was before migrating was never measured, and a baseline saved now does not prove it");
+        }
         var unexpected = diffs.Where(d => !allowed.Contains(d.Category)).ToList();
         var data = new { baseline = before.CapturedAt, unexpected, allowed = diffs.Where(d => allowed.Contains(d.Category)).ToList() };
         if (unexpected.Count == 0)

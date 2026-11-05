@@ -122,23 +122,29 @@ public static class Registrations
     // under its plugin cache, re-pointed as the source is, entry by exact entry, and snapshotted
     // and restored with the rest. Every version folder is planned, since which one Codex loads is
     // Codex's to choose; one with none of this installation's entries is left as it is. The cache
-    // is plain folders and files Codex writes itself, so a symbolic link or junction anywhere in
-    // it (below codexHome) refuses the migration rather than be followed out of it.
+    // is plain folders and files Codex writes itself, so a symbolic link or junction anywhere on
+    // the way to it, codexHome included, refuses the migration rather than be followed out of it.
     public static IReadOnlyList<FilePlan> CodexCache(AgentHaBridgeInstall install, string hook)
     {
-        var cache = install.CodexPluginCache;
         var plans = new List<FilePlan>();
         FilePlan Refused(string path) => new("codex-cache", path, true, [], null, [], [])
         {
-            Refusal = $"{path} in Codex's plugin cache is a symbolic link or junction, which Codex does not make; it is not followed. Make it a plain folder or file (or delete agent-ha-bridge's cache folder and let Codex copy the plugin again) and migrate again",
+            Refusal = $"{path}, on the way to Codex's plugin cache, is a symbolic link or junction, which Codex does not make; it is not followed. Make it a plain folder or file (or delete agent-ha-bridge's cache folder, {install.CodexPluginCache}, and let Codex copy the plugin again) and migrate again",
         };
-        var folder = Path.GetFullPath(install.CodexHome);
-        foreach (var part in new[] { "plugins", "cache", "agent-ha-bridge", "agent-ha-bridge" })
-        {
-            folder = Path.Combine(folder, part);
-            if (!Directory.Exists(folder)) { return plans; }
-            if (new DirectoryInfo(folder).Attributes.HasFlag(FileAttributes.ReparsePoint)) { return [Refused(folder)]; }
-        }
+        // From codexHome itself down, and any folders between the home and it: a linked .codex
+        // carries every path below it out of the cache, though each still looks contained by
+        // name. Checked before anything below is enumerated or planned.
+        var home = Path.TrimEndingDirectorySeparator(Path.GetFullPath(install.Home));
+        var codexHome = Path.TrimEndingDirectorySeparator(Path.GetFullPath(install.CodexHome));
+        var folders = new List<string>();
+        for (var up = Path.GetDirectoryName(codexHome); up is not null && up.StartsWith(home + Path.DirectorySeparatorChar, PathCase); up = Path.GetDirectoryName(up)) { folders.Insert(0, up); }
+        folders.Add(codexHome);
+        foreach (var part in new[] { "plugins", "cache", "agent-ha-bridge", "agent-ha-bridge" }) { folders.Add(Path.Combine(folders[^1], part)); }
+        var cache = folders[^1];
+        // No cache of agent-ha-bridge's plugin (Codex has not loaded it) leaves nothing to re-point,
+        // linked folders or not.
+        if (!Directory.Exists(cache)) { return plans; }
+        if (folders.FirstOrDefault(f => new DirectoryInfo(f).Attributes.HasFlag(FileAttributes.ReparsePoint)) is { } linked) { return [Refused(linked)]; }
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(cache)) + Path.DirectorySeparatorChar;
         foreach (var version in new DirectoryInfo(cache).EnumerateDirectories().OrderBy(d => d.Name, StringComparer.Ordinal))
         {

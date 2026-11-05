@@ -429,8 +429,28 @@ public sealed class MigrationTests : MigrationFixture
         var report = await _f.Migrator().MigrateAsync(dryRun: false);
 
         Assert.False(report.Ok);
-        Assert.Contains("in Codex's plugin cache is a symbolic link or junction", report.ToString());
+        Assert.Contains("is a symbolic link or junction, which Codex does not make", report.ToString());
         Assert.Equal(listing, _f.Listing());
+        Assert.Empty(_f.Runtime_.Calls);
+    }
+
+    [Fact]
+    public async Task A_linked_codex_home_refuses_the_migration_before_anything_is_touched()
+    {
+        // Every cache path below a linked .codex still looks contained by name; the link is the escape.
+        var elsewhere = Path.Combine(_f.Home, "elsewhere-codex");
+        Directory.Move(_f.CodexHome, elsewhere);
+        try { Directory.CreateSymbolicLink(_f.CodexHome, elsewhere); }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException) { Directory.Move(elsewhere, _f.CodexHome); return; }
+        var listing = _f.Listing();
+        var cached = File.ReadAllBytes(Path.Combine(elsewhere, Path.GetRelativePath(_f.CodexHome, _f.CodexCacheHooks())));
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains($"{Path.GetFullPath(_f.CodexHome)}, on the way to Codex's plugin cache, is a symbolic link or junction", report.ToString());
+        Assert.Equal(listing, _f.Listing());
+        Assert.Equal(cached, File.ReadAllBytes(Path.Combine(elsewhere, Path.GetRelativePath(_f.CodexHome, _f.CodexCacheHooks()))));
         Assert.Empty(_f.Runtime_.Calls);
     }
 
