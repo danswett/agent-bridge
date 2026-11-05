@@ -31,20 +31,22 @@ public static partial class CopilotFormScreen
     // them, each below the last.
     public static string? Showing(IReadOnlyList<string> rows, CopilotForm form, int index)
     {
-        if (rows.Any(r => PermissionRow().IsMatch(r)))
-        {
-            return "a permission prompt showed on the session's screen in place of the question's form";
-        }
+        const string Prompted = "a permission prompt showed on the session's screen in place of the question's form";
         const string NotForm = "the session's screen no longer showed the question's form";
         var headed = Enumerable.Range(0, rows.Count).Where(r => Collapse(rows[r]) == Heading).ToList();
-        if (headed.Count != 1) { return NotForm; }
+        if (headed.Count != 1) { return rows.Any(Permission) ? Prompted : NotForm; }
         var at = headed[0] + 1;
-        // The question's first line, or as much of it as the row holds where it wraps.
-        if (FirstLine(form.Message) is { } first)
+        // The whole question, as drawn: its lines, each wrapped onto as many rows as it takes.
+        if (Collapse(form.Message ?? "") is { Length: > 0 } message)
         {
-            at = Next(rows, at);
-            if (at >= rows.Count || Collapse(rows[at]) is not { Length: > 0 } shown || !first.StartsWith(shown, StringComparison.Ordinal)) { return NotForm; }
-            at++;
+            var shown = "";
+            while (shown != message)
+            {
+                if (at >= rows.Count) { return NotForm; }
+                var more = Collapse(shown + " " + rows[at++]);
+                if (!message.StartsWith(more, StringComparison.Ordinal)) { return NotForm; }
+                shown = more;
+            }
         }
         if (index < 0 || index >= form.Fields.Count) { return "the question's form has no such field"; }
         if (form.Fields.Any(f => f.Label is null))
@@ -56,24 +58,35 @@ public static partial class CopilotFormScreen
         var off = $"the form on the session's screen was not at the field \"{label}\"";
         if (form.Fields.Count > 1)
         {
-            var tabs = Collapse(string.Join(' ', form.Fields.Select(f => f.Label)));
+            // Each label as it is, brackets in a title included; the field being answered alone
+            // may be in brackets of the bar's own, where colour is unavailable.
+            var labels = form.Fields.Select(f => f.Label!).ToList();
+            var plain = Collapse(string.Join(' ', labels));
+            var marked = Collapse(string.Join(' ', labels.Select((l, i) => i == index ? $"[{l}]" : l)));
             at = Next(rows, at);
-            if (at >= rows.Count || Collapse(rows[at].Replace('[', ' ').Replace(']', ' ')) != tabs) { return NotForm; }
+            if (at >= rows.Count || Collapse(rows[at]) is var bar && bar != plain && bar != marked) { return NotForm; }
             at++;
         }
         at = Next(rows, at);
         if (at >= rows.Count || Collapse(rows[at]) != Collapse(label) + ":") { return off; }
-        return Hints(rows, at + 1, index, form.Fields.Count) ? null : off;
+        if (Hints(rows, at + 1, index, form.Fields.Count) is not { } end) { return off; }
+        // A permission prompt drawn beside the form, above its heading or below its hints. What
+        // is inside the form (an option, or words typed into a field, reading "1. Yes") is the
+        // form's own.
+        return rows.Take(headed[0]).Concat(rows.Skip(end + 1)).Any(Permission) ? Prompted : null;
     }
+
+    static bool Permission(string row) => PermissionRow().IsMatch(row);
 
     // The form's key hints, below `from`: accept, decline and cancel always, and with more than
     // one field, next and prev as the field's place says. Read from the hints row alone, never
     // from the question or what is typed into the field, either of which may say "tab next".
-    static bool Hints(IReadOnlyList<string> rows, int from, int index, int count)
+    // The hints row's last row, or null when the hints do not say this field.
+    static int? Hints(IReadOnlyList<string> rows, int from, int index, int count)
     {
-        if (HintParts(rows, from) is not { } parts) { return false; }
-        if (!parts.Contains("enter accept") || !parts.Contains("ctrl+d decline") || !parts.Contains("esc cancel")) { return false; }
-        return count <= 1 || (parts.Contains("tab next") == index < count - 1 && parts.Contains("shift+tab prev") == index > 0);
+        if (HintParts(rows, from) is not ({ } parts, var end)) { return null; }
+        if (!parts.Contains("enter accept") || !parts.Contains("ctrl+d decline") || !parts.Contains("esc cancel")) { return null; }
+        return count <= 1 || (parts.Contains("tab next") == index < count - 1 && parts.Contains("shift+tab prev") == index > 0) ? end : null;
     }
 
     // What `Ft` can say under the form (`Uxn`'s hints), each "<key> <action>".
@@ -85,7 +98,7 @@ public static partial class CopilotFormScreen
     // The hints row's parts: the last row below `from` that ends with "esc cancel", the hints'
     // last, and the rows it wrapped from just above it, as far up as every part read is one of
     // the hints. Null when there is no such row.
-    static List<string>? HintParts(IReadOnlyList<string> rows, int from)
+    static (List<string> Parts, int End)? HintParts(IReadOnlyList<string> rows, int from)
     {
         for (var end = rows.Count - 1; end >= from; end--)
         {
@@ -93,7 +106,7 @@ public static partial class CopilotFormScreen
             for (var start = Math.Max(from, end - 3); start <= end; start++)
             {
                 var parts = Collapse(string.Join(' ', rows.Skip(start).Take(end - start + 1))).Split('\u00B7').Select(p => p.Trim()).ToList();
-                if (parts.All(HintItems.Contains)) { return parts; }
+                if (parts.All(HintItems.Contains)) { return (parts, end); }
             }
             return null;
         }
@@ -105,9 +118,6 @@ public static partial class CopilotFormScreen
         while (from < rows.Count && rows[from].Trim().Length == 0) { from++; }
         return from;
     }
-
-    static string? FirstLine(string? message) =>
-        message?.Split('\n').Select(Collapse).FirstOrDefault(l => l.Length > 0);
 
     static string Collapse(string text) => Spaces().Replace(text, " ").Trim();
 

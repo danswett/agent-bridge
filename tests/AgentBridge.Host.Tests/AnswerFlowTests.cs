@@ -481,15 +481,30 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     // Copilot CLI 1.0.105's ask_user form (cli-main.js `MIo`, `Uxn`, `Ft`) at field `at`: its
     // heading and question between two rules, a tab bar naming every field when there is more
     // than one, the field's own heading (`<title ?? name>:`) over its body, and the key hints.
-    static List<string> Framed(string message, string[] labels, int at, IEnumerable<string> body)
+    // The question is drawn line by line, each wrapped at `wrap` columns when given; with
+    // `marked`, the tab bar puts the field being answered in brackets, as it does without colour.
+    static List<string> Framed(string message, string[] labels, int at, IEnumerable<string> body, int wrap = 0, bool marked = false)
     {
         List<string> hints = ["enter accept"];
         if (labels.Length > 1 && at < labels.Length - 1) { hints.Add("tab next"); }
         if (labels.Length > 1 && at > 0) { hints.Add("shift+tab prev"); }
         hints.AddRange(["ctrl+d decline", "esc cancel"]);
-        List<string> rows = ["────────────────────────", " Copilot needs information.", $" {message}", ""];
-        if (labels.Length > 1) { rows.AddRange([$" {string.Join("   ", labels)}", ""]); }
+        List<string> rows = ["────────────────────────", " Copilot needs information.", .. message.Split('\n').SelectMany(line => Wrapped(line, wrap)).Select(l => $" {l}"), ""];
+        if (labels.Length > 1) { rows.AddRange([$" {string.Join("   ", labels.Select((l, i) => marked && i == at ? $"[{l}]" : l))}", ""]); }
         return [.. rows, $" {labels[at]}:", .. body, "", $" {string.Join(" · ", hints)}", "────────────────────────"];
+    }
+
+    // A line as a console `wrap` columns wide breaks it between words; whole when wrap is 0.
+    static IEnumerable<string> Wrapped(string line, int wrap)
+    {
+        if (wrap <= 0) { yield return line; yield break; }
+        var row = "";
+        foreach (var word in line.Split(' '))
+        {
+            if (row.Length > 0 && row.Length + 1 + word.Length > wrap) { yield return row; row = ""; }
+            row = row.Length == 0 ? word : $"{row} {word}";
+        }
+        yield return row;
     }
 
     // A permission prompt drawn where the form was, as Copilot draws one (docs/host-answers.md).
@@ -681,7 +696,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     // A CLI drawing a form one field at a time, as the keys typed so far leave it: the field it is
     // on (one per Enter it has taken) and what has been typed into that field. An Enter is taken
     // lag after it went; nothing after it is drawn before then.
-    List<string> FieldsScreen(string[] names, TimeSpan lag = default, string message = "Tell me")
+    List<string> FieldsScreen(string[] names, TimeSpan lag = default, string message = "Tell me", string[]? labels = null, int wrap = 0, bool marked = false)
     {
         var field = 0;
         var typed = "";
@@ -700,7 +715,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
             }
         }
         return Rows();
-        List<string> Rows() => field >= names.Length ? ["(sent)"] : Framed(message, names, field, [$"Field: {names[field]}", $"│ {typed} │"]);
+        List<string> Rows() => field >= names.Length ? ["(sent)"] : Framed(message, labels ?? names, field, [$"Field: {names[field]}", $"│ {typed} │"], wrap, marked);
     }
 
     int Enters() { lock (injector.Plans) { return injector.Plans.Sum(p => p.Plan.Sends.Count(s => s.Enter)); } }
@@ -912,6 +927,75 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     // ---- a single field, held to the form like any other (#510 review) ----
+
+    [Theory]
+    // What is inside the form reading like a permission prompt's row is the form's own: an
+    // option labelled "1. Yes", or the words "1. Yes" typed into a field.
+    [InlineData("option")]
+    [InlineData("words")]
+    public async Task A_form_that_shows_1_Yes_as_its_own_content_is_not_taken_for_a_permission_prompt(string what)
+    {
+        var option = what == "option";
+        object answer = option ? new { pick = "2. No", note = "fine" } : new { pick = "a", note = "1. Yes" };
+        string[] names = ["pick", "note"];
+        await AskFieldsAsync(new { pick = new { type = "string", @enum = option ? new[] { "1. Yes", "2. No" } : new[] { "a", "b" } }, note = new { type = "string" } }, 2, answer);
+        injector.Screen = () => option && Enters() == 0
+            ? Framed("Tell me", names, 0, ["Field: pick", Moved() ? "    1. Yes" : "  \u276F 1. Yes", Moved() ? "  \u276F 2. No" : "    2. No"])
+            : FieldsScreen(names);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(2, Enters());
+    }
+
+    [Theory]
+    // The whole question is read under the heading, however many rows it takes: lines of its
+    // own, or one line wrapped, over one field or a tab bar.
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    public async Task A_question_drawn_over_several_rows_is_read_whole_before_the_fields(int fields, bool newline)
+    {
+        var message = newline ? "First line of the question\nand its second line" : "This question is long enough that the console wraps it onto more rows";
+        string[] names = fields == 1 ? ["first"] : ["first", "second"];
+        object answer = fields == 1 ? new { first = "b" } : new { first = "b", second = "c" };
+        await AskFieldsAsync(fields == 1
+            ? new { first = new { type = "string", @enum = new[] { "a", "b", "c" } } }
+            : new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, second = new { type = "string", @enum = new[] { "a", "b", "c" } } },
+            fields, answer, message);
+        injector.Screen = () => FieldsScreen(names, message: message, wrap: newline ? 0 : 24);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(fields, Enters());
+    }
+
+    [Theory]
+    // A title with brackets of its own, in the tab bar plain or with the field being answered
+    // in the bar's brackets.
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_tab_bar_naming_a_title_with_brackets_is_read_as_this_forms(bool marked)
+    {
+        var answer = new { first = "b", second = "c" };
+        await AskFieldsAsync(new
+        {
+            first = new { type = "string", title = "Pick [optional]", @enum = new[] { "a", "b", "c" } },
+            second = new { type = "string", @enum = new[] { "a", "b", "c" } },
+        }, 2, answer);
+        injector.Screen = () => FieldsScreen(["first", "second"], labels: ["Pick [optional]", "second"], marked: marked);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(2, Enters());
+    }
 
     [Fact]
     public async Task A_question_with_no_form_schema_is_refused_for_the_machine_with_nothing_typed()

@@ -78,15 +78,17 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
   * The rows a field's keys or Enter are held to must show the form at that field
     (`CopilotFormScreen`, from 1.0.105's `MIo`, `Uxn`, `Da` and `Ft`), each part below the
     last: exactly one "Copilot needs information." row (an MCP server's elicitation is headed
-    with its own name, and may have a field of the same name), the question's own first line
-    (as much of it as the row holds where it wraps), with more than one field the tab bar
-    naming exactly this form's fields in order, the field's own heading (`<title ?? name>:`,
+    with its own name, and may have a field of the same name), the whole question under it
+    (its lines, each wrapped onto as many rows as it takes), with more than one field the tab
+    bar naming exactly this form's fields in order (titles as written, brackets included; the
+    field being answered may be in the bar's own brackets), the field's own heading (`<title ?? name>:`,
     on a row of its own; only the field being answered is drawn), and under it the hints
     row (the last row ending "esc cancel", with the rows it wrapped from, every part one of
     the form's hints): "enter accept", "ctrl+d decline" and "esc cancel", with the field's
     place by "tab next" and "shift+tab prev" when there is more than one, read from that row
     alone, since the question or the words typed may say them too; and no numbered "1. Yes"
-    row of a permission prompt, bare or between a box's sides. An `ask_user` with no form
+    row of a permission prompt, bare or between a box's sides, above the form's heading or
+    below its hints (an option, or words typed, reading "1. Yes" are the form's own). An `ask_user` with no form
     schema is refused, `answer it at the machine`: how 1.0.105 draws one cannot be told from
     its code (its elicitations require a schema), so there is no form to hold the keys to. A screen that has settled
     or moved on is not enough: a permission prompt that opens before its transcript entry is
