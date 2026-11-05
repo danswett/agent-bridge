@@ -261,6 +261,9 @@ public class CopilotPlannerTests
         // A hyphen first or last in a class is itself in both engines, so the class stays checkable.
         Assert.Equal([("a-1", true)], Keys(Plan(Schema("t", """{ "type": "string", "pattern": "^[\\w-]+$" }"""), Answer(new { t = "a-1" }))));
         Assert.Equal([("-b", true)], Keys(Plan(Schema("t", """{ "type": "string", "pattern": "^[-\\w]+$" }"""), Answer(new { t = "-b" }))));
+        // A { that starts no quantifier is a literal after $, and a group repeated is still a group.
+        Assert.Equal([("ab", true)], Keys(Plan(Schema("t", """{ "type": "string", "pattern": "^(?:a|b)+$|${x}" }"""), Answer(new { t = "ab" }))));
+        Assert.Equal([("aa", true)], Keys(Plan(Schema("t", """{ "type": "string", "pattern": "^(a$|a)+$" }"""), Answer(new { t = "aa" }))));
         Assert.Equal("\"t\": does not match the form the question asks for", Outside(Schema("t", """{ "type": "string", "pattern": "^[\\w-]+$" }"""), Answer(new { t = "a\u0130" })));
     }
     [Fact]
@@ -303,6 +306,19 @@ public class CopilotPlannerTests
     [InlineData("""{ "type": "string", "pattern": "^(a|(b))+\\2$" }""")]
     [InlineData("""{ "type": "string", "pattern": "^[\\s-\\uFFFF]+$" }""")]
     [InlineData("""{ "type": "string", "pattern": "\\bword\\b" }""")]
+    // Patterns JavaScript refuses ("Nothing to repeat"): an end or start anchor quantified, which
+    // .NET took, the end even as a lookahead that matched (review of #844).
+    [InlineData("""{ "type": "string", "pattern": "^a$?" }""")]
+    [InlineData("""{ "type": "string", "pattern": "^a${2}" }""")]
+    [InlineData("""{ "type": "string", "pattern": "a$*" }""")]
+    [InlineData("""{ "type": "string", "pattern": "a$+?" }""")]
+    [InlineData("""{ "type": "string", "pattern": "a${1,}" }""")]
+    [InlineData("""{ "type": "string", "pattern": "^?a" }""")]
+    [InlineData("""{ "type": "string", "pattern": "^{1,2}a" }""")]
+    [InlineData("""{ "type": "string", "pattern": "a\\b?" }""")]
+    // A quantified lookahead: JavaScript, but not shown to repeat the same in .NET.
+    [InlineData("""{ "type": "string", "pattern": "(?=a)?a" }""")]
+    [InlineData("""{ "type": "string", "pattern": "(?!b){2}a" }""")]
     // A list of choices with text limits, which its options and Other are not checked against.
     [InlineData("""{ "type": "string", "enum": ["ok", "toolong"], "maxLength": 2 }""")]
     [InlineData("""{ "type": "array", "items": { "enum": ["ok", "toolong"], "maxLength": 2 } }""")]

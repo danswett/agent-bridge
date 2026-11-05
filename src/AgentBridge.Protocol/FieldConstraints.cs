@@ -121,6 +121,14 @@ public sealed partial record FieldConstraints
     // any group, escape or class this cannot vouch for answers at the machine.
     public static bool Readable(string pattern, PatternBudget budget) => Translate(pattern) is { } translated && budget.Compiles(translated);
 
+    // Whether a quantifier starts at i: ?, *, +, or {n}, {n,} or {n,m}. A { that starts none is a
+    // literal in a flagless JavaScript pattern.
+    static bool Quantifier(string pattern, int i) =>
+        i < pattern.Length && (pattern[i] is '?' or '*' or '+' || BoundedQuantifier().IsMatch(pattern.AsSpan(i)));
+
+    [GeneratedRegex(@"\A\{[0-9]+(?:,[0-9]*)?\}", RegexOptions.CultureInvariant)]
+    private static partial Regex BoundedQuantifier();
+
     const string AsciiWord = "a-zA-Z0-9_";
 
     // JavaScript's \s: WhiteSpace and LineTerminator.
@@ -133,6 +141,8 @@ public sealed partial record FieldConstraints
         var inClass = false;
         // Where the open class's members start, after its [ and any ^.
         var classStart = -1;
+        // The open groups, outside classes: whether each is a lookahead.
+        var groups = new Stack<bool>();
         for (var i = 0; i < pattern.Length; i++)
         {
             var c = pattern[i];
@@ -197,10 +207,26 @@ public sealed partial record FieldConstraints
                     break;
                 case '(' when i + 1 < pattern.Length && pattern[i + 1] == '?':
                     if (i + 2 >= pattern.Length || pattern[i + 2] is not (':' or '=' or '!')) { return null; }
+                    groups.Push(pattern[i + 2] is '=' or '!');
                     b.Append("(?").Append(pattern[i + 2]);
                     i += 2;
                     break;
+                case '(':
+                    groups.Push(false);
+                    b.Append(c);
+                    break;
+                // A quantified lookahead is JavaScript (Annex B, which flagless patterns follow),
+                // but .NET is not shown to repeat one, and the captures in it, as JavaScript does.
+                case ')':
+                    if (groups.TryPop(out var lookahead) && lookahead && Quantifier(pattern, i + 1)) { return null; }
+                    b.Append(c);
+                    break;
                 case '.': b.Append(@"[^\n\r\u2028\u2029]"); break;
+                // ^ or $ followed by a quantifier is no JavaScript pattern at all ("Nothing to
+                // repeat"), but .NET takes it, and $ rewritten as a lookahead even means something,
+                // so an invalid constraint was checked as a valid one (review of #844).
+                case '^' when Quantifier(pattern, i + 1): return null;
+                case '$' when Quantifier(pattern, i + 1): return null;
                 case '$': b.Append(@"(?![\s\S])"); break;
                 default: b.Append(c); break;
             }
