@@ -134,7 +134,8 @@ public sealed partial class SessionView
     // the whole list, nothing in it a stop until a block is realised, is held too; whichever comes
     // first holds it. A link is a text element, whose moves raise neither, so those come from the
     // focus manager (OnFocusMoving). A block Tab lands in by itself that isn't wholly in view is
-    // brought in at the leading edge too (Reached); one wholly in view doesn't move.
+    // brought in at the leading edge too (Reached); one wholly in view doesn't move, the focus
+    // manager's own scroll to its stop held (InViewAtTab).
     void OnLeavingBlock(UIElement sender, LosingFocusEventArgs e)
     {
         if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } passed) { e.Cancel = true; FocusBlock(passed.Index, e.Direction == FocusNavigationDirection.Next, passed.Wrapped, e.OldFocusedElement); }
@@ -143,6 +144,19 @@ public sealed partial class SessionView
     void OnReachingBlock(UIElement sender, GettingFocusEventArgs e)
     {
         if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } passed) { e.Cancel = true; FocusBlock(passed.Index, e.Direction == FocusNavigationDirection.Next, passed.Wrapped, e.OldFocusedElement); }
+        else if (!e.Cancel && InViewAtTab(e.NewFocusedElement, e.Direction) is { } kept) { HoldFocusScroll(kept.Container, kept.Source).Leaving(); }
+    }
+
+    // The block a Tab lands in that is wholly in view, so stays where it is (ui.md §6.4), and what
+    // the focus manager's scroll to the stop will come from: it pads a control 20 px each side
+    // (BringIntoViewHandler), so a Copy button within 20 px of the view's edge in a block wholly in
+    // view moved the view (B on #829, Copilot 5783106122). Null for any other move.
+    (UIElement Container, UIElement Source)? InViewAtTab(DependencyObject? to, FocusNavigationDirection direction)
+    {
+        if (direction is not (FocusNavigationDirection.Next or FocusNavigationDirection.Previous) || lettingTabPass || ConversationScroll is not { } scroll) { return null; }
+        if (PlaceOf(to) is not (>= 0 and var at) || at >= blocks.Count || ConversationList.ContainerFromIndex(at) is not FrameworkElement container) { return null; }
+        if (!ConversationKeyboard.WhollyInView(Top(container, scroll), container.ActualHeight, scroll.ViewportHeight)) { return null; }
+        return (to as UIElement ?? (to as TextElement)?.ContentStart?.VisualParent) is { } source ? (container, source) : null;
     }
 
     (int Index, bool Wrapped)? TabPassed(DependencyObject? from, DependencyObject? to, FocusNavigationDirection direction)
@@ -318,10 +332,8 @@ public sealed partial class SessionView
     // Focus on a stop in a block just brought to the leading edge, the focus manager's own scroll to
     // it held back when nothing need move (HoldsFocusScroll): it pads a control 20 px each side
     // (BringIntoViewHandler), so a Copy button 12 px down its block took the block's start 8 px off
-    // the edge (run 41997001156). A link it brings in unpadded, so only as far as it must. Its
-    // request is raised as focus moves but routed later, after the focus has completed, so the hold
-    // waits for that request itself (from the stop, or a link's text) and takes only it; it goes
-    // without one should focus be refused, or move on from the block first.
+    // the edge (run 41997001156). A link it brings in unpadded, so only as far as it must. Held
+    // once (HoldFocusScroll).
     void Land(UIElement container, DependencyObject stop)
     {
         var hold = stop is FrameworkElement e && ConversationScroll is { } s
@@ -334,6 +346,22 @@ public sealed partial class SessionView
             _ = FocusManager.TryFocusAsync(stop, FocusState.Keyboard);
             return;
         }
+        var (release, leaving) = HoldFocusScroll(container, source);
+        FocusManager.TryFocusAsync(stop, FocusState.Keyboard).Completed = (op, status) =>
+        {
+            if (status != AsyncStatus.Completed || !op.GetResults().Succeeded) { DispatcherQueue.TryEnqueue(() => release()); }
+        };
+        // Only once focus has moved: the move itself may raise LosingFocus here.
+        leaving();
+    }
+
+    // The focus manager's scroll to a stop just focused in a block, held back once: its request is
+    // raised as focus moves but routed later, after the focus has completed, so the hold waits for
+    // that request itself (from the stop, or a link's text) and takes only it. Release lets it go
+    // unused (focus refused); Leaving, called once focus is in the block, lets it go should focus
+    // move on from the block first.
+    (Action Release, Action Leaving) HoldFocusScroll(UIElement container, UIElement source)
+    {
         TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>? held = null;
         TypedEventHandler<UIElement, LosingFocusEventArgs>? left = null;
         void Release()
@@ -349,12 +377,7 @@ public sealed partial class SessionView
         };
         left = (_, _) => Release();
         container.BringIntoViewRequested += held;
-        FocusManager.TryFocusAsync(stop, FocusState.Keyboard).Completed = (op, status) =>
-        {
-            if (status != AsyncStatus.Completed || !op.GetResults().Succeeded) { DispatcherQueue.TryEnqueue(Release); }
-        };
-        // Only once focus has moved: the move itself may raise LosingFocus here.
-        container.LosingFocus += left;
+        return (Release, () => container.LosingFocus += left);
     }
 
     // The block across the viewport's top edge, where it starts against that edge, and the offset then.

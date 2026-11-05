@@ -76,6 +76,8 @@ static partial class SelfTest
         check(untabbed is null, $"takes Tab from the last link or Copy button the conversation has drawn to the first in the next block with one, which it realises, inside the block and not onto it{Not(untabbed)}");
         var (unplaced, placedPressedBy) = list is null ? ("measured: the response not drawn", "none") : await TabbedInView(window, list);
         check(unplaced is null, $"takes Tab onto a Copy button in a block across the conversation's bottom edge with the block's start to the leading edge, and onto one in a block wholly in view without moving it ({placedPressedBy}){Not(unplaced)}");
+        var (unedged, edgePressedBy) = list is null ? ("measured: the response not drawn", "none") : await TabbedNearEdge(window, list);
+        check(unedged is null, $"takes Shift+Tab and Tab onto the Copy button of a block wholly in view, its top within 20 px of the conversation's, without moving it ({edgePressedBy}){Not(unedged)}");
         var (untall, tallPressedBy) = list is null ? ("measured: the response not drawn", "none") : await TabbedTall(window, list);
         check(untall is null, $"takes Tab onto the first link of a block taller than the conversation with the block's start to the leading edge, and Shift+Tab onto its last with that link wholly in view at the nearest edge ({tallPressedBy}){Not(untall)}");
         var (unlinked, linkPressedBy) = list is null ? ("measured: the response not drawn", "none") : await TabbedLink(window, list);
@@ -113,6 +115,8 @@ static partial class SelfTest
             ["tabProblem"] = untabbed,
             ["tabInViewProblem"] = unplaced,
             ["tabInViewPressedBy"] = placedPressedBy,
+            ["tabNearEdgeProblem"] = unedged,
+            ["tabNearEdgePressedBy"] = edgePressedBy,
             ["tallTabProblem"] = untall,
             ["tallTabPressedBy"] = tallPressedBy,
             ["linkTabProblem"] = unlinked,
