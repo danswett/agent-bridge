@@ -1,0 +1,22 @@
+{
+  "items": [
+    {"number": 749, "stage": "Building"},
+    {"number": 750},
+    {"number": 728, "stage": "Designing"},
+    {"number": 209, "epic": "1 Trust", "rank": 2},
+    {"number": 220, "epic": "1 Trust"},
+    {"number": 212, "epic": "1 Trust", "status": "In Progress", "rank": 1},
+    {"number": 662, "epic": "1 Trust", "rank": 3},
+    {"number": 690, "epic": "1 Trust", "rank": 4}
+  ],
+  "issues": [
+    {"number": 749, "title": "A renamed Trust tracker", "state": "closed"},
+    {"number": 750, "title": "Daily-use reliability", "state": "open"},
+    {"number": 209, "state": "open", "labels": [{"name": "priority:P0"}]},
+    {"number": 220, "state": "closed"},
+    {"number": 212, "state": "open"},
+    {"number": 662, "state": "open", "labels": [{"name": "status:blocked"}]},
+    {"number": 690, "state": "open"}
+  ],
+  "release": {"tagName": "v0.1.2210", "publishedAt": "2026-11-04T20:00:00Z"}
+}

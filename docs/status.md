@@ -19,6 +19,7 @@ implementation and machine snapshots below retain their stated dates.*
 | [migration.md](migration.md) | `migrate` and `rollback`: what moves and what doesn't |
 | [/quality](../quality/) | The test plan: rings from inner loop to release, and the catalog of every suite |
 | [/ops](../ops/README.md) | Running the live service: the SRE plan, SLOs, alerts, runbooks and incident process (#568) |
+| [Epic dashboard](../tools/epic-dashboard/README.md) | Hourly #755 body refresh (#756 part 1); main-only environment and owner credential setup required |
 | [/AGENTS.md](../AGENTS.md) | How to work in this repository: rules, merge procedure, releases, relay deploys, guards |
 
 ## 1. Goal
