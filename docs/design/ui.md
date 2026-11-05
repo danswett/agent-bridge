@@ -935,18 +935,34 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     "5 delegates · 4 reported back › 1 still working". It shows no working glyph. It expands in
     place to its lines, indented under a rule (Disclosure, §5.3), and is remembered open or
     closed per session.
-    - **The count is live.** "*n* reported back" and "*n* still working" are counted from the
-      delegates' current state, not frozen when the line was drawn, and change in place. A
-      delegate that started in this run and reports back later moves from one count to the
-      other. At 0 still working the link goes, and the line is the button alone.
+    - **The count is live, and never guessed.** Each delegate in the run is in exactly one
+      count, from its entry in `subagents` ([v1-sessions](../protocol/v1-sessions.md#subagent))
+      while it has one:
+      - `status` `working` or `waiting` counts it **still working**. A live entry wins over
+        anything known before, so a background delegate woken again moves back here;
+      - `idle` or `ended` with `outcome` `done` counts it **reported back**, and with `outcome`
+        `failed`, **failed**;
+      - `idle` or `ended` with no `outcome` (the host never saw it end) counts it **ended**.
+
+      Once its entry leaves `subagents` (the host trims finished ones first), the last outcome
+      known for it, or its report-back event, is kept. A delegate the host left out with no
+      outcome known (only `subagentsMore` counts it) is in the total only, never counted as
+      working or as reported back.
+
+      Counts of 0 are left out ("5 delegates · 3 reported back, 1 failed › 1 still working").
+      They change in place as state arrives. At 0 still working the link goes, and the line is
+      the button alone.
     - **Two sibling targets, never one inside the other:** the fold's button, then the "1 still
       working" link after it in the tab order.
     - **The chevron is the button's.** It ends the button's text, inside its target and focus
       ring, and turns as it opens. The link follows after a 12 gap, with its own focus ring.
       Each target meets §9.1 A11's size, and the link's target never covers the chevron.
-    - **The link opens that delegate** where the live status shows it (§6.3): its strip item,
-      or its chip on a phone. If the phone's chips give way to the Delegates tab (#629), it
-      opens the delegate's entry there.
+    - **The link opens a delegate** where the live status shows it (§6.3): its strip item, or
+      its chip on a phone. If the phone's chips give way to the Delegates tab (#629), it opens
+      the delegate's entry there. With one still working, it opens that delegate. With more,
+      "*n* still working" opens the earliest started of them, with the others beside it in
+      the same strip or list, and its accessible name says so ("2 still working, opens the
+      first").
   - **Earlier (D4):** until history loads (below, #292), the events older than the oldest message
     shown fold into one line at the top of the conversation, "Earlier · 4 delegates started, 3
     reported back ›". It expands to their lines, in time order, which don't fold again.

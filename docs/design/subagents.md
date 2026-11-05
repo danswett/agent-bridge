@@ -169,7 +169,7 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
   "Earlier" line until history loads (#292). The strip, the Delegates tab and the chips are
   the only live status, so no conversation line says a delegate is working.
   The one exception is a fold's live "still working" count, taken from the same `subagents`
-  state ([ui.md §6.4](ui.md#64-conversation)).
+  state and never guessed for a delegate the host left out ([ui.md §6.4](ui.md#64-conversation)).
 - **A sub-agent's `name` is its own words.** A prompt-injected sub-agent picks it, so clients
   never show it as sent and never quote it into a reply. They show the safe label of
   [ui.md §6.3](ui.md#63-delegates-84): bidi, zero-width and other invisible characters
