@@ -137,13 +137,18 @@ public static class CopilotFieldConstraints
         return null;
     }
 
-    // An option entry (`{ const, title }`) carrying anything else.
+    // An option entry (`{ const, title }`) carrying anything else. Its own `type` is a limit on its
+    // `const` like any other: `{ const: "a", type: "number" }` is a branch nothing matches, so "a"
+    // was offered and recorded against the schema (Quality's review of #844). One that names the
+    // const's own JSON type says nothing more and is kept; any other sends the field to the machine.
     static string? Entries(JsonElement o, string name)
     {
         if (!Has(o, name, out var list) || list.ValueKind != JsonValueKind.Array) { return null; }
         foreach (var e in list.EnumerateArray())
         {
-            if (e.ValueKind == JsonValueKind.Object && Other(e, ["const"]) is { } k) { return $"{name}.{k}"; }
+            if (e.ValueKind != JsonValueKind.Object) { continue; }
+            if (Other(e, ["const"]) is { } k) { return $"{name}.{k}"; }
+            if (e.TryGetProperty("type", out var type) && !(e.TryGetProperty("const", out var value) && OfType(value, type))) { return $"{name}.type"; }
         }
         return null;
     }

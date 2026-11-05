@@ -393,7 +393,13 @@ public class CopilotPlannerTests
     [InlineData("""{ "type": "string", "const": 5 }""")]
     [InlineData("""{ "type": "string", "enum": [null, "a"] }""")]
     [InlineData("""{ "type": "boolean", "enum": [null] }""")]
-    [InlineData("""{ "type": "array", "items": { "type": "string", "enum": [null, "a"] } }""")]    // A default outside the field's own constraints, which is the only answer it can be given.
+    [InlineData("""{ "type": "array", "items": { "type": "string", "enum": [null, "a"] } }""")]    // An option entry's own type, which its const must match like any other limit (Quality's review
+    // of #844): a dropdown's oneOf, a checkbox list's anyOf with and without items.type.
+    [InlineData("""{ "type": "string", "oneOf": [{ "const": "a", "type": "number" }, { "const": "b" }] }""")]
+    [InlineData("""{ "type": "array", "items": { "type": "string", "anyOf": [{ "const": "a", "type": "integer" }, { "const": "b" }] } }""")]
+    [InlineData("""{ "type": "array", "items": { "anyOf": [{ "const": "a", "type": "integer" }, { "const": "b" }] } }""")]
+    [InlineData("""{ "type": "array", "items": { "anyOf": [{ "const": 1.5, "type": "integer" }] } }""")]
+    [InlineData("""{ "type": "string", "oneOf": [{ "const": "a", "type": ["string", "null"] }] }""")]    // A default outside the field's own constraints, which is the only answer it can be given.
     [InlineData("""{ "type": "integer", "minimum": 5, "default": 3 }""")]
     [InlineData("""{ "type": "string", "maxLength": 2, "default": "none" }""")]
     public void A_field_whose_constraints_cannot_be_checked_exactly_or_whose_default_breaks_them_is_answered_at_the_machine(string property)
@@ -410,7 +416,8 @@ public class CopilotPlannerTests
     // whose options are all their type allows (review of #844).
     [InlineData("""{ "type": "boolean", "default": true, "title": "T", "description": "d" }""")]
     [InlineData("""{ "type": "string", "default": null, "title": null, "description": null }""")]
-    [InlineData("""{ "type": "boolean" }""")]
+    [InlineData("""{ "type": "string", "oneOf": [{ "const": "a", "type": "string" }, { "const": "b", "title": "B" }] }""")]
+    [InlineData("""{ "type": "array", "items": { "anyOf": [{ "const": 1, "type": "integer" }, { "const": 2.5, "type": "number" }] } }""")]    [InlineData("""{ "type": "boolean" }""")]
     [InlineData("""{ "type": "string", "title": "t", "examples": ["x"], "$comment": "c", "maxLength": 9 }""")]
     [InlineData("""{ "title": "untyped text" }""")]
     [InlineData("""{ "type": "number", "title": "n", "minimum": 1, "multipleOf": 0.5 }""")]
