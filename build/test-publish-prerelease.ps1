@@ -158,7 +158,8 @@ function global:vpk {
         $existing = $global:PpReleases | Where-Object tag_name -EQ (Arg '--tag')
         if ($existing -and -not $merge) { $global:LASTEXITCODE = 1; return }
         if (-not $existing) { New-PpRelease (Arg '--tag') $true $true }
-        # The assets go up as vpk sends them, with a releases.<channel>.json of their hashes and sizes.
+        # The assets go up as vpk sends them, with a releases.<channel>.json of their versions,
+        # types, hashes and sizes, as Velopack's VelopackAsset writes them.
         $channel = Arg '--channel'
         $store = Join-Path $scratch 'uploaded' (Arg '--tag')
         New-Item -ItemType Directory -Force $store | Out-Null
@@ -166,7 +167,7 @@ function global:vpk {
             Copy-Item -LiteralPath (Join-Path (Arg '--outputDir') $asset.RelativeFileName) $store -Force
             if ($asset.Type -in 'Full', 'Delta') {
                 $file = Get-Item -LiteralPath (Join-Path $store $asset.RelativeFileName)
-                @{ FileName = $file.Name; Type = $asset.Type; SHA256 = (Get-FileHash -LiteralPath $file.FullName).Hash; Size = $file.Length }
+                [ordered]@{ PackageId = 'AgentBridgeApp'; Version = ($file.Name -replace '^AgentBridgeApp-(\d+\.\d+\.\d+).*-(full|delta)\.nupkg$', '$1'); Type = $asset.Type; FileName = $file.Name; SHA256 = (Get-FileHash -LiteralPath $file.FullName).Hash; Size = $file.Length }
             }
         }
         @{ Assets = @($entries) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $store "releases.$channel.json")
@@ -176,9 +177,11 @@ function global:vpk {
         $global:PpCalls.Add("vpk upload local --channel $channel")
         $assets = @(Get-Content (Join-Path (Arg '--outputDir') "assets.$channel.json") -Raw | ConvertFrom-Json)
         $entries = @($assets | Where-Object { $_.Type -in 'Full', 'Delta' } | ForEach-Object {
-                @{ Version = ($_.RelativeFileName -replace '^AgentBridgeApp-(\d+\.\d+\.\d+).*-(full|delta)\.nupkg$', '$1'); Type = $_.Type; FileName = $_.RelativeFileName } })
+                $file = Get-Item -LiteralPath (Join-Path (Arg '--outputDir') $_.RelativeFileName)
+                [ordered]@{ PackageId = 'AgentBridgeApp'; Version = ($_.RelativeFileName -replace '^AgentBridgeApp-(\d+\.\d+\.\d+).*-(full|delta)\.nupkg$', '$1'); Type = $_.Type; FileName = $_.RelativeFileName; SHA256 = (Get-FileHash -LiteralPath $file.FullName).Hash; Size = $file.Length } })
         if ($global:PpFeedExtra) { $entries += @{ Version = '0.1.600'; Type = 'Full'; FileName = $global:PpFeedExtra } }
         @{ Assets = $entries } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path (Arg '--path') "releases.$channel.json")
+        if ($global:PpTamper) { & $global:PpTamper (Arg '--path') $channel }
     } elseif ($a[0] -eq 'download' -and $a[1] -eq 'github') {
         $global:PpCalls.Add("vpk download github --channel $(Arg '--channel')")
         if ($global:PpDownload -eq 'fail') { $global:LASTEXITCODE = 1; return }
@@ -254,7 +257,7 @@ function New-Package([string]$path, [string]$kind, [string]$machine) {
     $app = Join-Path $stage 'lib' 'app'
     New-Item -ItemType Directory -Force $app | Out-Null
     Copy-Item $global:PpHost[$kind] (Join-Path $app 'agent-bridge-host.dll')
-    foreach ($exe in 'AgentBridge.exe', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'agent-bridge-host-hook.exe', 'Squirrel.exe', 'AgentBridge_ExecutionStub.exe', 'Microsoft.Runtime.dll') {
+    foreach ($exe in 'AgentBridge.exe', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'agent-bridge-host-hook.exe', 'Squirrel.exe', 'Agent Bridge_ExecutionStub.exe', 'Microsoft.Runtime.dll') {
         New-PpExe (Join-Path $app $exe) $machine
     }
     [IO.Compression.ZipFile]::CreateFromDirectory($stage, $path)
@@ -595,7 +598,7 @@ Check "A dry run fails when vpk's feed for a channel lists another channel's pac
     Reset 3
     $global:PpFeedExtra = 'AgentBridgeApp-0.1.600-win-arm64-full.nupkg'
     $threw = $false
-    try { Invoke-Publish '0.1.600' -DryRun -Only 'win' } catch { $threw = $_.Exception.Message -like "*win feed lists what is not this channel's*win-arm64-full.nupkg*" }
+    try { Invoke-Publish '0.1.600' -DryRun -Only 'win' } catch { $threw = $_.Exception.Message -like "*win feed is not this channel's 0.1.600*releases.win.json lists AgentBridgeApp-0.1.600-win-arm64-full.nupkg, which is not this release's*" }
     Assert $threw 'an Arm64 package in the x64 feed was not caught'
 }
 
@@ -629,7 +632,7 @@ foreach ($case in @(
         @{ Name = 'an unsigned NativeAOT injector'; Sign = @{ 'agent-bridge-injector.exe' = 'unsigned' }; Says = '*agent-bridge-injector.exe: NotSigned*' }
         @{ Name = "Velopack's Update.exe signed by another publisher"; Sign = @{ 'Squirrel.exe' = 'other' }; Says = '*Squirrel.exe: signed by CN=Someone Else, not the pinned publisher*' }
         @{ Name = 'a Setup.exe without a timestamp'; Sign = @{ 'AgentBridgeApp-win-arm64-Setup.exe' = 'notimestamp' }; Says = '*AgentBridgeApp-win-arm64-Setup.exe: no timestamp*' }
-        @{ Name = 'a launcher stub whose certificate is not Public Trust'; Sign = @{ 'AgentBridge_ExecutionStub.exe' = 'nopublictrust' }; Says = '*AgentBridge_ExecutionStub.exe: the signer has no 1.3.6.1.4.1.311.97.1.0 EKU*' }
+        @{ Name = 'a launcher stub whose certificate is not Public Trust'; Sign = @{ 'Agent Bridge_ExecutionStub.exe' = 'nopublictrust' }; Says = '*Agent Bridge_ExecutionStub.exe: the signer has no 1.3.6.1.4.1.311.97.1.0 EKU*' }
         @{ Name = 'an unsigned runtime file'; Sign = @{ 'Microsoft.Runtime.dll' = 'unsigned' }; Says = '*Microsoft.Runtime.dll: NotSigned*' }
         @{ Name = 'a portable launcher signed by another publisher'; Sign = @{ 'Agent Bridge.exe' = 'other' }; Says = '*Portable.zip Agent Bridge.exe: signed by CN=Someone Else*' }
     )) {
@@ -656,6 +659,57 @@ Check 'A package missing an executable is refused, not passed for having nothing
     $threw = $false
     try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -RequireSignature -SignerEku $global:PpEku 6>$null } catch { $threw = $_.Exception.Message -like "*has no lib$([IO.Path]::DirectorySeparatorChar)app$([IO.Path]::DirectorySeparatorChar)agent-bridge-host-hook.exe*" }
     Assert $threw 'a package without the hook passed'
+    Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
+}
+
+Check 'A portable zip without its launcher is refused' {
+    Reset 3
+    $global:PpSign = @{}
+    $dirs = @(foreach ($channel in 'win', 'win-arm64') { New-Folder '0.1.600' -Channel $channel })
+    $portable = Join-Path $dirs[1] 'AgentBridgeApp-win-arm64-Portable.zip'
+    $zip = [IO.Compression.ZipFile]::Open($portable, 'Update')
+    $zip.GetEntry('Agent Bridge.exe').Delete()
+    $zip.Dispose()
+    $threw = $false
+    try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -RequireSignature -SignerEku $global:PpEku 6>$null } catch { $threw = $_.Exception.Message -like '*AgentBridgeApp-win-arm64-Portable.zip has no Agent Bridge.exe*' }
+    Assert $threw 'a portable zip without its launcher passed'
+    Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
+}
+
+# What vpk 1.2.161 packs, exactly: a signed executable where it puts none is still refused.
+foreach ($case in @(
+        @{ Name = 'a portable zip with another executable at its root'; File = 'AgentBridgeApp-win-arm64-Portable.zip'; Entry = 'Helper.exe'; Says = '*AgentBridgeApp-win-arm64-Portable.zip has Helper.exe at its root, which vpk does not pack*' }
+        @{ Name = 'a package with a second launcher stub'; File = 'AgentBridgeApp-0.1.600-win-arm64-full.nupkg'; Entry = 'lib/app/Other_ExecutionStub.exe'; Says = '*AgentBridgeApp-0.1.600-win-arm64-full.nupkg has a launcher stub Other_ExecutionStub.exe, not only Agent Bridge_ExecutionStub.exe*' }
+    )) {
+    Check "$($case.Name) is refused" {
+        Reset 3
+        $global:PpSign = @{}
+        $dirs = @(foreach ($channel in 'win', 'win-arm64') { New-Folder '0.1.600' -Channel $channel })
+        $extra = Join-Path $scratch 'extra.exe'
+        New-PpExe $extra 'arm64'
+        $zip = [IO.Compression.ZipFile]::Open((Join-Path $dirs[1] $case.File), 'Update')
+        [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $extra, $case.Entry)
+        $zip.Dispose()
+        $threw = $false
+        try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -RequireSignature -SignerEku $global:PpEku 6>$null } catch { $threw = $_.Exception.Message -like $case.Says; if (-not $threw) { throw "message: $($_.Exception.Message)" } }
+        Assert $threw 'it passed'
+        Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
+    }
+}
+
+Check 'A package whose launcher stub is not named after the pack title is refused' {
+    Reset 3
+    $global:PpSign = @{}
+    $dirs = @(foreach ($channel in 'win', 'win-arm64') { New-Folder '0.1.600' -Channel $channel })
+    $extra = Join-Path $scratch 'extra.exe'
+    New-PpExe $extra 'x64'
+    $zip = [IO.Compression.ZipFile]::Open((Join-Path $dirs[0] 'AgentBridgeApp-0.1.600-full.nupkg'), 'Update')
+    $zip.GetEntry('lib/app/Agent Bridge_ExecutionStub.exe').Delete()
+    [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $extra, 'lib/app/AgentBridgeApp_ExecutionStub.exe')
+    $zip.Dispose()
+    $threw = $false
+    try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -RequireSignature -SignerEku $global:PpEku 6>$null } catch { $threw = $_.Exception.Message -like "*has a launcher stub AgentBridgeApp_ExecutionStub.exe*has no lib$([IO.Path]::DirectorySeparatorChar)app$([IO.Path]::DirectorySeparatorChar)Agent Bridge_ExecutionStub.exe*"; if (-not $threw) { throw "message: $($_.Exception.Message)" } }
+    Assert $threw 'a wrongly named stub passed'
     Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
 }
 
@@ -690,6 +744,41 @@ Check "A draft whose feed lists another package stays a draft" {
     try { Invoke-Publish '0.1.600' -Sign } catch { $threw = $_.Exception.Message -like '*releases.win.json lists AgentBridgeApp-0.1.599-full.nupkg, which is not this release*' }
     Assert $threw 'a feed with a stranger was published'
     Assert (-not (Published)) 'published'
+}
+
+# An installed copy picks a package by its feed entry's pack id, version and type, so the hash and
+# size of the right file under the wrong ones is no use to it. Checked before anything goes up
+# (the dry run's vpk upload local) and in the draft, downloaded back.
+function Get-PpFullEntry($json) { @($json.Assets | Where-Object FileName -EQ 'AgentBridgeApp-0.1.600-full.nupkg')[0] }
+foreach ($case in @(
+        @{ Name = 'a package with no version'; Edit = { param($j) (Get-PpFullEntry $j).PSObject.Properties.Remove('Version') }; Says = "AgentBridgeApp-0.1.600-full.nupkg's version is '', not 0.1.600" }
+        @{ Name = 'a package another version'; Edit = { param($j) (Get-PpFullEntry $j).Version = '0.1.599' }; Says = "AgentBridgeApp-0.1.600-full.nupkg's version is '0.1.599', not 0.1.600" }
+        @{ Name = 'a full package typed as a delta'; Edit = { param($j) (Get-PpFullEntry $j).Type = 'Delta' }; Says = "AgentBridgeApp-0.1.600-full.nupkg's type is 'Delta', not Full" }
+        @{ Name = "a package another app's id"; Edit = { param($j) (Get-PpFullEntry $j).PackageId = 'SomeoneElsesApp' }; Says = "AgentBridgeApp-0.1.600-full.nupkg's package id is 'SomeoneElsesApp', not AgentBridgeApp" }
+        @{ Name = 'a package twice'; Edit = { param($j) $j.Assets += (Get-PpFullEntry $j).PSObject.Copy() }; Says = 'lists AgentBridgeApp-0.1.600-full.nupkg more than once' }
+    )) {
+    Check "A feed that gives $($case.Name) fails the dry run and leaves the draft a draft" {
+        $global:PpFeedEdit = $case.Edit
+        $tamper = {
+            param($store, $channel)
+            if ($channel -ne 'win') { return }
+            $feed = Join-Path $store "releases.$channel.json"
+            $json = Get-Content $feed -Raw | ConvertFrom-Json
+            & $global:PpFeedEdit $json
+            $json | ConvertTo-Json -Depth 4 | Set-Content $feed
+        }
+        Reset 3
+        $global:PpTamper = $tamper
+        $threw = $false
+        try { Invoke-Publish '0.1.600' -DryRun -Only 'win' } catch { $threw = $_.Exception.Message -like "*vpk's win feed is not this channel's 0.1.600*releases.win.json*$($case.Says)*"; if (-not $threw) { throw "dry run: $($_.Exception.Message)" } }
+        Assert $threw 'the dry run passed it'
+        Reset 3
+        $global:PpTamper = $tamper
+        $threw = $false
+        try { Invoke-Publish '0.1.600' -Sign } catch { $threw = $_.Exception.Message -like "*left a draft, not published*releases.win.json*$($case.Says)*"; if (-not $threw) { throw "draft: $($_.Exception.Message)" } }
+        Assert $threw 'it was published'
+        Assert (-not (Published)) 'published'
+    }
 }
 
 Check 'Signing required with no publisher to pin refuses before reading the repository' {

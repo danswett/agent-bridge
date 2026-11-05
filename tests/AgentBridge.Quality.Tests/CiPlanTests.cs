@@ -224,7 +224,7 @@ public class CiPlanTests
     }
 
     [Theory]
-    [InlineData("publish", "[publish-gate, sign]", "needs.publish-gate.outputs.newest == 'true'", null)]
+    [InlineData("publish", "[publish-gate, sign]", "needs.sign.outputs.newest == 'true'", null)]
     [InlineData("publish", "[publish-gate]", "needs.publish-gate.outputs.newest == 'true'", "ci.yml delivery job publish must need exactly [publish-gate, sign]")]
     [InlineData("publish", "[plan]", "github.event_name == 'push'", "ci.yml delivery job publish must need exactly [publish-gate, sign]")]
     [InlineData("publish", "[publish-gate, sign]", "always() && needs.publish-gate.outputs.newest == 'true'", "ci.yml publish" + IfProblem)]

@@ -370,7 +370,8 @@ connector's Install button on a machine the dashboard drives.
   now: GitHub keeps one waiting job per concurrency group and cancels the older waiting one, so
   a slow build of an older merge must not reach the group and evict a newer one. A run whose
   commit main has moved past publishes nothing, and the newer commit's run publishes instead
-  (re-run it if it failed).
+  (re-run it if it failed). The `sign` job asks again as its last step, since main can move on
+  while it signs, and `publish` runs only on that answer.
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
@@ -421,7 +422,7 @@ connector's Install button on a machine the dashboard drives.
 * **Pull requests** prove it without publishing: each app job runs the same script with
   `-DryRun` on its own folder, which checks the folder and its delta against the latest release
   as above, has vpk read it into a scratch feed (`vpk upload local`) that must list that
-  channel's packages and nothing else,
+    channel's packages once each, with this pack id, version, type, size and hash, and nothing else,
   and prints what it would upload, publish and prune against the real releases (in the job
   summary too), writing nothing.
 * **Release builds only.** The app job packs with `pack-app.ps1 -Release` exactly when the run
@@ -513,8 +514,10 @@ only notes that on Linux and `publish` takes the `app` jobs' unsigned packages, 
   of the version it just packed: `Setup.exe`; in the full package, every `.exe`, `.dll` and
   `.node`, which must include `AgentBridge.exe`, `agent-bridge-host.exe`,
     `agent-bridge-hostw.exe`, the NativeAOT `agent-bridge-host-hook.exe` and
-    `agent-bridge-injector.exe`, the updater (`Squirrel.exe`) and exactly one launcher stub; and in
-    `Portable.zip`, the same executables under `current\`, `Update.exe` and every `.exe` at its root. Each must have a valid Authenticode signature. Ours (`AgentBridge*`,
+    `agent-bridge-injector.exe`,     the updater (`Squirrel.exe`) and the one launcher stub vpk names after
+        the pack title, `lib\app\Agent Bridge_ExecutionStub.exe`; and in `Portable.zip`, the same
+        executables under `current\` and, at its root, exactly `Update.exe` and the launcher
+        `Agent Bridge.exe`. Each must have a valid Authenticode signature. Ours (`AgentBridge*`,
   `agent-bridge*`, the updater, the stub, the launcher and `Setup.exe`) must be signed by the
   pinned publisher: a certificate with the code-signing EKU, Artifact Signing's Public Trust EKU
   and the owner's own identity EKU (`1.3.6.1.4.1.311.97.x.y.z.w`, which the owner's validated
@@ -525,7 +528,8 @@ only notes that on Linux and `publish` takes the `app` jobs' unsigned packages, 
   again, and that both have the same signer, before anything is created. Then, with the draft's
   assets uploaded and before it is published, it downloads each architecture's full and delta
   packages, `Setup.exe`, `Portable.zip` and feed back from the draft, compares their SHA-256 with
-  what it checked, checks the feed lists only those packages with their sizes and hashes, and
+  what it checked, checks the feed lists only those packages, once each, with this pack id,
+  version and type (full or delta), their sizes and hashes, and
   checks the signatures once more. Any difference leaves the release a draft.
 * Authenticode covers the executables and `Setup.exe`. The `.nupkg` packages (full and delta) are
   zip files and carry no Authenticode signature: their integrity is the feed's SHA-256 and size,

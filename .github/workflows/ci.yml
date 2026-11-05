@@ -605,9 +605,11 @@ jobs:
     # Only main's newest commit goes on to publish. GitHub keeps one pending job per concurrency
     # group, cancelling the older pending one when another arrives, so a slow build of an older
     # merge reaching the group could evict a newer one waiting there, then find itself superseded,
-    # leaving the newest merge unpublished. Turned away here, before the group, it never gets there.
-    # quality-gate must have passed: on main it requires every ci.yml check job (product, app, the
-    # PWA, Home Assistant and spike jobs, light) to have run and succeeded, since a release is what
+    # leaving the newest merge unpublished. Turned away here, before the group, it never gets there;
+    # sign asks again once it has signed, since main may move on while it does, and publish goes
+    # by sign's answer. quality-gate must have passed: on main it requires every ci.yml check job
+    # (product, app, the PWA, Home Assistant and spike jobs, light) to have run and succeeded, since
+    # a release is what
     # installed copies take within the half hour. That's this workflow's jobs only; CodeQL, perf
     # and the relay workflow run apart and don't hold a release. Needing quality-gate, rather than
     # a second copy of its list, keeps the two from drifting apart (#512); the catalog check fails
@@ -643,8 +645,13 @@ jobs:
     # signature again, before uploading and in the draft. Only main's newest commit after every
     # check passed (publish-gate), and only once the owner has set APP_SIGNING (docs/app-windows.md,
     # Signing). Without APP_SIGNING it only says so, on Linux, so publish can need it either way.
+    # Either way it ends by asking again whether main is still at this commit: signing takes
+    # minutes, and an older run reaching publish's concurrency group after a newer one would evict
+    # the newer one's waiting publish (publish-gate). publish runs only on this job's answer.
     needs: [publish-gate]
     if: needs.publish-gate.outputs.newest == 'true'
+    outputs:
+      newest: ${{ steps.head.outputs.newest }}
     # Only a signing run enters the `signing` environment, the one subject the signing identity's
     # federated credential trusts (repo:danswett/agent-bridge:environment:signing), deployable from
     # main only. Without it this job's OIDC token signs in nowhere.
@@ -744,15 +751,31 @@ jobs:
           path: out/app-arm64/releases
           if-no-files-found: error
           retention-days: 30
+      - name: Still main's newest commit
+        # Last, so as close to publish's concurrency group as this job gets. A failed read fails
+        # the job, and so holds publish back.
+        id: head
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(gh api "repos/${{ github.repository }}/git/ref/heads/main" --jq .object.sha)
+          if [ "$head" = "${{ github.sha }}" ]; then
+            echo "newest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "newest=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::main has moved on to $head; that commit's own run publishes"
+          fi
 
   publish:
     # Every push to main becomes a GitHub pre-release, which installed copies update from
     # (docs/app-windows.md, "Releases and updates"): the app jobs' packages, x64's and Arm64's in
     # one release, once the product's tests pass on every system. Never a pull request and never
     # a fork, and the only job here that can write to the repository. With APP_SIGNING, the
-    # packages are the sign job's, signed, and never the app jobs' unsigned ones.
+    # packages are the sign job's, signed, and never the app jobs' unsigned ones. Only when sign,
+    # after signing, still found main at this commit (publish-gate).
     needs: [publish-gate, sign]
-    if: needs.publish-gate.outputs.newest == 'true'
+    if: needs.sign.outputs.newest == 'true'
     runs-on: windows-latest
     permissions:
       contents: write

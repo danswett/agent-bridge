@@ -110,37 +110,29 @@ function Test-AppReleaseSignature([string]$Dir, [string]$Channel, [string]$Versi
         $full = Join-Path $Work 'full'
         [IO.Compression.ZipFile]::ExtractToDirectory((Join-Path $Dir $names.Full), $full)
         $app = Join-Path 'lib' 'app'
-        $required = @($AppSigningAppExecutables + 'Squirrel.exe' | ForEach-Object { Join-Path $app $_ })
-        $stubs = @(Get-ChildItem -LiteralPath (Join-Path $full $app) -Filter '*_ExecutionStub.exe' -ErrorAction SilentlyContinue)
-        if ($stubs.Count -ne 1) { $problems.Add("$($names.Full) has $($stubs.Count) launcher stubs, not one") }
+        # vpk names the launcher stub, and the portable zip's launcher, after --packTitle, which
+        # pack-app.ps1 gives as $AppProductName (GetStubBaseName and GetStubFileName in Velopack
+        # 1.2.161's WindowsPackCommandRunner): exactly that stub, and no other.
+        $stub = "$($AppProductName)_ExecutionStub.exe"
+        $required = @($AppSigningAppExecutables + 'Squirrel.exe' + $stub | ForEach-Object { Join-Path $app $_ })
+        $stubs = @(Get-ChildItem -LiteralPath (Join-Path $full $app) -Filter '*_ExecutionStub.exe' -ErrorAction SilentlyContinue | Where-Object Name -CNE $stub)
+        foreach ($s in $stubs) { $problems.Add("$($names.Full) has a launcher stub $($s.Name), not only $stub") }
         foreach ($p in @(Get-AppTreeProblem $full $names.Full $Eku -Required $required)) { if ($p) { $problems.Add($p) } }
 
-        # The portable zip: Update.exe and the launcher at its root, the app under current/.
+        # The portable zip: exactly Update.exe and the launcher at its root, the app under current/.
+        # A zip without the launcher has no way to start the app; one with another executable
+        # there is not what vpk packs.
         $portable = Join-Path $Work 'portable'
         [IO.Compression.ZipFile]::ExtractToDirectory((Join-Path $Dir $names.Portable), $portable)
-        $rootExes = @(Get-ChildItem -LiteralPath $portable -Filter '*.exe' -File | ForEach-Object Name)
-        $required = @('Update.exe') + @($AppSigningAppExecutables | ForEach-Object { Join-Path 'current' $_ })
-        foreach ($p in @(Get-AppTreeProblem $portable $names.Portable $Eku -Required $required -Owned $rootExes)) { if ($p) { $problems.Add($p) } }
+        $rootFiles = @('Update.exe', "$AppProductName.exe")
+        foreach ($f in Get-ChildItem -LiteralPath $portable -File | Where-Object { $_.Extension -in $AppSigningPeExtensions -and $_.Name -cnotin $rootFiles }) {
+            $problems.Add("$($names.Portable) has $($f.Name) at its root, which vpk does not pack")
+        }
+        $required = $rootFiles + @($AppSigningAppExecutables | ForEach-Object { Join-Path 'current' $_ })
+        foreach ($p in @(Get-AppTreeProblem $portable $names.Portable $Eku -Required $required)) { if ($p) { $problems.Add($p) } }
     } finally {
         if (Test-Path $Work) { Remove-Item $Work -Recurse -Force }
     }
     $signer = if (-not $problems.Count) { (Get-AuthenticodeSignature -LiteralPath $setup).SignerCertificate.Subject }
     [pscustomobject]@{ Problems = @($problems); Signer = $signer }
-}
-
-# A downloaded releases.<channel>.json against the files downloaded beside it: every entry one of
-# $Files (name to path), each of whose SHA256 and size it records, and every package in it. This,
-# not Authenticode, is what an installed copy checks a full or delta package by.
-function Get-AppFeedProblem([string]$FeedPath, [hashtable]$Files) {
-    $feed = Get-Content -LiteralPath $FeedPath -Raw | ConvertFrom-Json
-    $listed = @{}
-    foreach ($asset in @($feed.Assets)) {
-        $name = [string]$asset.FileName
-        if (-not $Files.ContainsKey($name)) { "$(Split-Path $FeedPath -Leaf) lists $name, which is not this release's"; continue }
-        $listed[$name] = $true
-        $file = Get-Item -LiteralPath $Files[$name]
-        if ([string]$asset.SHA256 -ne (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash) { "$(Split-Path $FeedPath -Leaf): ${name}'s SHA256 is not the file's" }
-        if ([long]$asset.Size -ne $file.Length) { "$(Split-Path $FeedPath -Leaf): ${name}'s size is not the file's" }
-    }
-    foreach ($name in $Files.Keys) { if (-not $listed.ContainsKey($name)) { "$(Split-Path $FeedPath -Leaf) does not list $name" } }
 }

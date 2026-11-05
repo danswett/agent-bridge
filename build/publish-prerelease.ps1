@@ -224,17 +224,17 @@ if ($publishing) {
 if ($DryRun) {
     # vpk itself reads each folder, through the same build-assets file the GitHub upload reads,
     # into a scratch feed beside it: the nearest a pull request can come to uploading. Each
-    # channel's feed must list its own packages and nothing else: it is all its copies read.
+    # channel's feed must list its own packages, as an installed copy picks and checks them, and
+    # nothing else: it is all its copies read.
     foreach ($b in $builds) {
         Reset-Work
         & vpk upload local --outputDir $b.Dir --channel $b.Channel --path $work | Out-Host
         if ($LASTEXITCODE) { throw "vpk upload local failed: vpk cannot upload the $($b.Channel) folder" }
-        $feed = Get-Content (Join-Path $work "releases.$($b.Channel).json") -Raw | ConvertFrom-Json
-        if (-not ($feed.Assets | Where-Object { $_.Version -eq $Version -and $_.Type -eq 'Full' })) { throw "vpk's $($b.Channel) feed has no full package of $Version" }
-        if ((Test-Path $b.DeltaPath) -and -not ($feed.Assets | Where-Object { $_.Version -eq $Version -and $_.Type -eq 'Delta' })) { throw "vpk's $($b.Channel) feed has no delta of $Version" }
-        $stray = @($feed.Assets | Where-Object { $_.FileName -notin $b.Expected.Full, $b.Expected.Delta } | ForEach-Object FileName)
-        if ($stray) { throw "vpk's $($b.Channel) feed lists what is not this channel's $Version`: $($stray -join ', ')" }
-        Write-Plan "the $($b.Channel) feed lists $(@($feed.Assets.FileName) -join ', ')"
+        $feedPath = Join-Path $work "releases.$($b.Channel).json"
+        $types = @('Full') + @(if (Test-Path $b.DeltaPath) { 'Delta' })
+        $problems = @(Get-AppFeedProblem $feedPath $b.Channel $Version $b.Dir $types | Where-Object { $_ })
+        if ($problems) { throw "vpk's $($b.Channel) feed is not this channel's $Version`:`n  $($problems -join "`n  ")" }
+        Write-Plan "the $($b.Channel) feed lists $(@((Get-Content $feedPath -Raw | ConvertFrom-Json).Assets.FileName) -join ', ')"
     }
     Remove-Item $work -Recurse -Force
 }
@@ -288,9 +288,8 @@ if ($publishing) {
                     if (-not (Test-Path -LiteralPath $downloaded)) { "the draft has no $name"; continue }
                     if ((Get-FileHash -LiteralPath $downloaded).Hash -ne (Get-FileHash -LiteralPath (Join-Path $b.Dir $name)).Hash) { "the draft's $name is not the file checked" }
                 }
-                $packages = @{ $b.Expected.Full = Join-Path $dir $b.Expected.Full }
-                if (Test-Path $b.DeltaPath) { $packages[$b.Expected.Delta] = Join-Path $dir $b.Expected.Delta }
-                if (Test-Path (Join-Path $dir $feedName)) { Get-AppFeedProblem (Join-Path $dir $feedName) $packages } else { "the draft has no $feedName" }
+                $types = @('Full') + @(if (Test-Path $b.DeltaPath) { 'Delta' })
+                if (Test-Path (Join-Path $dir $feedName)) { Get-AppFeedProblem (Join-Path $dir $feedName) $b.Channel $Version $dir $types } else { "the draft has no $feedName" }
                 (Test-AppReleaseSignature $dir $b.Channel $Version $SignerEku (Join-Path $work 'draft-signatures')).Problems
             }
             $problems = @($problems | Where-Object { $_ })

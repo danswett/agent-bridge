@@ -386,7 +386,8 @@ suites:
     select: always
     # Every merge to main: only main's newest commit passes the gate, then the x64 and Arm64
     # packages become one GitHub pre-release, which installed copies update from. With
-    # APP_SIGNING, the sign job packs and signs them first (#734; docs/app-windows.md, Signing).
+    # APP_SIGNING, the sign job packs and signs them first (#734; docs/app-windows.md, Signing);
+    # either way it asks again whether main is still at this commit, and publish runs only on yes.
     platforms: [win-x64, win-arm64]
     runner: hosted
     command: see ci.yml publish-gate, sign and publish (main only)
