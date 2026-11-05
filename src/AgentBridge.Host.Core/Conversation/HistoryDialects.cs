@@ -339,6 +339,9 @@ internal abstract class HistoryDialect
 
 internal sealed class CopilotHistory : HistoryDialect
 {
+    // The error that ended the turn being read, as CopilotParser keeps it for its notice (#846).
+    string? _turnError;
+
     public override TurnMarks Marks => TurnMarks.Copilot;
 
     public override HistoryPrompt? Start(JsonElement e) =>
@@ -348,7 +351,8 @@ internal sealed class CopilotHistory : HistoryDialect
         Has(line, "\"assistant.message\""u8) || Has(line, "\"tool.execution_start\""u8) || Has(line, "\"tool.execution_complete\""u8)
         || Has(line, "\"permission.requested\""u8) || Has(line, "\"permission.completed\""u8) || Has(line, "\"human_response.recorded\""u8)
         || Has(line, "\"subagent.started\""u8) || Has(line, "\"subagent.completed\""u8) || Has(line, "\"subagent.failed\""u8)
-        || Has(line, "\"agent_idle\""u8) || Has(line, "\"abort\""u8) || Has(line, "\"session.shutdown\""u8) || Has(line, "\"user.message\""u8);
+        || Has(line, "\"agent_idle\""u8) || Has(line, "\"abort\""u8) || Has(line, "\"session.shutdown\""u8) || Has(line, "\"user.message\""u8)
+        || Has(line, "\"session.error\""u8) || Has(line, "\"assistant.turn_start\""u8);
 
     public override void Apply(JsonElement e, DateTimeOffset at, TurnBuilder turn, HistoryContext context)
     {
@@ -358,7 +362,15 @@ internal sealed class CopilotHistory : HistoryDialect
         {
             case "assistant.message" when agent is null:
                 if (Text.NonBlank(Json.Str(data, "reasoningText")) is { } reasoning) { turn.Reasoning(reasoning, at); }
-                if (Text.NonBlank(Json.Str(data, "content")) is { } content) { turn.Response(content, at); }
+                // As activity shows it: the CLI's turn-error notice as the host's sentence for the
+                // error that ended the turn, none of its words (#840, #841, #846).
+                if (CopilotParser.MainText(data, _turnError) is { } content) { turn.Response(content, at); }
+                break;
+            case "session.error" when agent is null:
+                if (AgentErrors.Copilot(data, at) is { } failure) { _turnError = failure.Message; }
+                break;
+            case "assistant.turn_start" when agent is null:
+                _turnError = null;
                 break;
             // A delegate's first message is its prompt; a later one wakes it for another run.
             case "user.message" when agent is not null:

@@ -72,6 +72,45 @@ public class HistoryTests
     static string Scheduled(string text, int s, string source) =>
         Copilot.Event("user.message", new { content = text, source, attachments = Array.Empty<object>(), delivery = "idle" }, s);
 
+    // Found rebasing #686 onto #841: activity shows the CLI's turn-error notice redacted (#840),
+    // but history read the same message's content as written, so an earlier turn's notice showed
+    // what the latest turn's hid.
+    [Fact]
+    public async Task An_earlier_turns_error_notice_reads_as_activity_showed_it_when_it_was_the_latest()
+    {
+        await using var s = new Copilot_();
+        const string Notice = "\u26A0\uFE0F Turn error: Failed: GITHUB_TOKEN=fake-value-1 at https://example.invalid/x";
+        var live = await s.After(Copilot.User("go", 1), Copilot.Event("assistant.message", new { messageId = "m2", content = Notice }, 2));
+        await s.After(Copilot.User("again", 3), Copilot.Assistant("fine", 4));
+
+        var earlier = (await s.Page(limit: 2)).Turns![0];
+
+        var shown = earlier.Parts.Single(p => p.Kind == HistoryPartKind.Response).Text;
+        Assert.Equal(live.Activity.Response, shown);
+        Assert.DoesNotContain("fake-value-1", shown);
+        Assert.DoesNotContain("example.invalid", shown);
+    }
+
+    // Found rebasing #686 onto #846: activity shows the notice as the host's sentence for the
+    // error that ended the turn, so history reads that turn's error too, or a rate limit read as
+    // the generic error once it was no longer the latest.
+    [Fact]
+    public async Task An_earlier_turns_error_notice_names_the_error_its_turn_ended_with()
+    {
+        await using var s = new Copilot_();
+        var live = await s.After(Copilot.User("go", 1), Copilot.TurnStart(2),
+            Copilot.Event("session.error", new { errorType = "session", message = "Turn error: too many requests", statusCode = 429 }, 3),
+            Copilot.Event("assistant.message", new { messageId = "m4", content = "\u26A0\uFE0F Turn error: too many requests" }, 4));
+        await s.After(Copilot.User("again", 5), Copilot.TurnStart(6), Copilot.Assistant("fine", 7));
+
+        var earlier = (await s.Page(limit: 2)).Turns![0];
+
+        var shown = earlier.Parts.Single(p => p.Kind == HistoryPartKind.Response).Text;
+        Assert.Equal(live.Activity.Response, shown);
+        Assert.NotEqual("\u26A0\uFE0F Turn error: Copilot stopped with an error.", shown);
+        Assert.DoesNotContain("too many requests", shown);
+    }
+
     [Fact]
     public async Task A_session_pages_back_oldest_first_to_the_start_of_the_session()
     {

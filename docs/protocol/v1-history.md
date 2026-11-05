@@ -332,7 +332,7 @@ turn was the latest, with the same `from`.
 | | Copilot `events.jsonl` | Claude `<id>.jsonl` | Codex rollout |
 |---|---|---|---|
 | A turn starts | `user.message` of the main agent (no `agentId`) with text, whose `data.source` is not `memory`, `system` or `skill-…`. `from` and `label` from `data.source` (#489) | A `user` entry, not a sidechain's, meta or a compaction summary, with text and no `tool_result`, that is not a task notification Claude marked as one or "[Request interrupted by user…]" | `event_msg` `user_message`, or `item_completed` `UserMessage`, with text |
-| `response` | `assistant.message` `content`, main agent's | `assistant` `text` blocks | `agent_message`; `item_completed` `AgentMessage`; an assistant `message` response item; `task_complete`'s `last_agent_message`. Codex writes a reply in more than one of these: the same text is one part |
+| `response` | `assistant.message` `content`, main agent's, the CLI's turn-error notice shown as `activity.response` shows it: the host's sentence for the error its turn ended with, none of its words (#846) | `assistant` `text` blocks | `agent_message`; `item_completed` `AgentMessage`; an assistant `message` response item; `task_complete`'s `last_agent_message`. Codex writes a reply in more than one of these: the same text is one part |
 | `reasoning` | `assistant.message` `reasoningText`, main agent's | `thinking` blocks | `agent_reasoning`; a `reasoning` response item's `summary`; `Reasoning` `summary_text` (only when the user asked for summaries); one part per summary, the same text once |
 | `tool` | `tool.execution_start` and `_complete`, main agent's | `tool_use`, ended by its `tool_result` | `exec_command_*`, `patch_apply_*`, `mcp_tool_call_*`, `CommandExecution`, function, custom, shell and web search calls |
 | `question` (form) | `ask_user`'s `tool.execution_start`, a delegate's too (with its `agent`, as live; the delegate's call is no `tool` part); `answered` at `human_response.recorded` (its content is the `answer`) or the call's end; `cancelled` when the delegate asking aborts, shuts down or fails, or its synchronous `task` call returns, or any of these ends a synchronous delegate it was started by (as far up as a background one), as live | `AskUserQuestion`'s `tool_use`; `answered` at its `tool_result` (its text is the `answer`) | none: Codex asks nothing as a form |
@@ -398,6 +398,9 @@ from the bytes as written.
   received), delegates' own words, hook or usage records, paths of transcripts, or anything from
   another session. Approvals keep `CopilotPermission`'s rendering, drawn as written and escaped.
   The prompt is the one text longer than in `activity` (8 KiB, not 2 KiB), to the same principals.
+  A text `activity` redacts is redacted alike here: Copilot's turn-error notice is read through
+  the same function for both, with the error its own turn read, so it shows the host's sentence
+  for that error and none of the notice's words (#846).
 * **Relay.** The op rides the existing end-to-end channel, so the relay sees only its size. Its
   request is at most 512 bytes and its result one message (at most 48 KiB of JSON, deflated when
   both sides offer it), so it needs no new frame kind or limit. A page costs a host at most the

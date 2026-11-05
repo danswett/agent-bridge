@@ -577,9 +577,13 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     // every client, HA and a finished push: it is shown as the host's sentence for the error that
     // ended the turn (AgentErrors.Template), as attention.message is, and none of its words
     // (#846). Redacting them was a blocklist that missed a new shape every round (#840, #841).
-    string? MainText(JsonElement data) =>
+    string? MainText(JsonElement data) => MainText(data, _turnError);
+
+    // History reads it too (HistoryDialects), with the error its own turn read, so an earlier
+    // turn's notice reads as the latest's did.
+    internal static string? MainText(JsonElement data, string? turnError) =>
         TurnErrorNotice(data)
-            ? TurnErrorNoticeText + " " + (_turnError ?? AgentErrors.Template(AttentionKind.Error, ErrorClass.Other, null, AgentKind.Copilot))
+            ? TurnErrorNoticeText + " " + (turnError ?? AgentErrors.Template(AttentionKind.Error, ErrorClass.Other, null, AgentKind.Copilot))
             : Text.NonBlank(Json.Str(data, "content"));
 
     static bool Asked(JsonElement data) => Json.Arr(data, "toolRequests") is { } requests && requests.GetArrayLength() > 0;
