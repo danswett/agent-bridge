@@ -108,7 +108,7 @@ public sealed class AnswerService : ISessionAnswerer
         this.options = options;
         this.log = log ?? (_ => { });
         this.gate = gate ?? new DeliveryGate();
-        requests = new OutcomeMemory<AnswerResult>(options.Time, options.RememberFor);
+        requests = new OutcomeMemory<AnswerResult>(options.Time, options.RememberFor, this.gate, Busy);
         ledger = new AttemptLedger(options.AttemptLedgerPath, options.Time);
     }
 

@@ -117,7 +117,7 @@ public sealed class ReplyService : ISessionReplier
         this.log = log ?? (_ => { });
         this.gate = gate ?? new DeliveryGate();
         this.attachments = attachments;
-        requests = new OutcomeMemory<ReplyResult>(options.Time, options.RememberFor);
+        requests = new OutcomeMemory<ReplyResult>(options.Time, options.RememberFor, this.gate, Busy);
         if (options.PreRead && options.PlatformSupported)
         {
             source.Changed += OnSessionChanged;
