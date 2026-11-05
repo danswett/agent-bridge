@@ -71,7 +71,9 @@ second snapshot the first's changes as the state to restore; the second is refus
      started since the file was last written is known to hold them: one started before (or
      whose start cannot be told) may still hold the PowerShell entries the installer replaced,
      so it refuses too, until those sessions end. The same holds for Codex's Go hook entries
-     left in place when this product's hook path has a space. (After a rollback, a session holding the
+     left in place when this product's hook path has a space; only a file (source or cached
+     copy) holding this installation's own native entry counts, not one holding only a person's
+     hooks or another installation's. (After a rollback, a session holding the
      host's hook spools too, to the daemon, which takes the same spool);
    * a hook settings file is there but cannot be read as JSON: whether it holds
      agent-ha-bridge's entries, and a session started with them, cannot be told;

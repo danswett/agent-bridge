@@ -179,7 +179,7 @@ public static class Registrations
         {
             var changes = new List<EntryChange>();
             if (hook.Any(char.IsWhiteSpace) || root["hooks"] is not JsonObject hooks) { return changes; }
-            var native = $"{install.GoHook} codex hook {install.CodexHookScript}";
+            var native = CodexNative(install);
             var pwsh = CodexPowerShell(install);
             foreach (var (eventName, list) in hooks)
             {
@@ -205,13 +205,17 @@ public static class Registrations
             // Left alone, an entry that runs agent-ha-bridge's PowerShell directly would go on
             // writing registrations and approval markers (and to Home Assistant) beside the host.
             // Only the Go hook's entries hand their events to whoever takes the spool.
-            if (CodexRunsPowerShell(install, path))
+            if (CodexRuns(install, path, CodexPowerShell(install)))
             {
                 return plan with
                 {
                     Refusal = $"Codex runs agent-ha-bridge's PowerShell hook directly ({path}), and cannot run this product's hook from a path with a space ({hook}), so it would go on running beside the host. Install the app where its path has no space, or let agent-ha-bridge register Codex through its native hook, and migrate again",
                 };
             }
+            // Only a file holding this installation's own native entry keeps agent-ha-bridge's hook
+            // (and has its write time weighed against running sessions); one with only a person's
+            // hooks, or another installation's, holds nothing of this one's to keep.
+            if (!CodexRuns(install, path, CodexNative(install))) { return plan; }
             return plan with { KeptGoHook = true, Notes = [.. plan.Notes, $"Codex's hooks are left on agent-ha-bridge's: Codex cannot run a command whose path has a space ({hook}); they spool to the host while it runs and fall back to PowerShell when it does not"] };
         }
         if (plan.Changes.Count > 0)
@@ -256,15 +260,17 @@ public static class Registrations
 
     static string CodexPowerShell(AgentHaBridgeInstall install) => $"pwsh -NoProfile -ExecutionPolicy Bypass -File {install.CodexHookScript}";
 
-    static bool CodexRunsPowerShell(AgentHaBridgeInstall install, string path)
+    static string CodexNative(AgentHaBridgeInstall install) => $"{install.GoHook} codex hook {install.CodexHookScript}";
+
+    // Whether path's Codex hooks hold an entry running exactly this command.
+    static bool CodexRuns(AgentHaBridgeInstall install, string path, string expected)
     {
         try
         {
             if (JsonNode.Parse(Decode(File.ReadAllBytes(path)), documentOptions: Lenient) is not JsonObject { } root || root["hooks"] is not JsonObject hooks) { return false; }
-            var pwsh = CodexPowerShell(install);
             return hooks.Select(e => e.Value).OfType<JsonArray>().SelectMany(g => g.OfType<JsonObject>())
                 .Select(g => g["hooks"]).OfType<JsonArray>().SelectMany(h => h.OfType<JsonObject>())
-                .Any(h => Text(h["command"]) is { } command && SameCommand(command, pwsh));
+                .Any(h => Text(h["command"]) is { } command && SameCommand(command, expected));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return false; }
     }

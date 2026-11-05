@@ -820,6 +820,47 @@ public sealed class MigrationTests : MigrationFixture
         Assert.Empty(_f.Runtime_.Calls);
     }
 
+    // Only a cached copy holding this installation's own native entry keeps it, and has its write
+    // time weighed against running Codex sessions; a newer one holding nothing of this
+    // installation's must not refuse a session that started after every one of its own was written.
+    [Theory]
+    [InlineData("only a person's", false)]
+    [InlineData("another installation's", false)]
+    [InlineData("none", false)]
+    [InlineData("this installation's", true)]
+    public async Task A_newer_cached_copy_is_weighed_against_a_running_Codex_only_when_it_holds_this_installations_native_hook(string entries, bool refused)
+    {
+        var spaced = Path.Combine(_f.Home, "App Data", "bin");
+        var source = FakeAgentHaBridge.Read(_f.CodexHooks);
+        var native = (string)source["hooks"]!.AsObject().First().Value![0]!["hooks"]![0]!["command"]!;
+        JsonObject Hooks(params string[] commands) => new()
+        {
+            ["hooks"] = new JsonObject
+            {
+                ["Stop"] = new JsonArray(new JsonObject { ["hooks"] = new JsonArray([.. commands.Select(c => (JsonNode)new JsonObject { ["type"] = "command", ["command"] = c })]) }),
+            },
+        };
+        var newer = _f.CodexCacheHooks("2.0.0");
+        Directory.CreateDirectory(Path.GetDirectoryName(newer)!);
+        File.WriteAllText(newer, (entries switch
+        {
+            "only a person's" => Hooks("C:\\mine\\stop.cmd"),
+            "another installation's" => Hooks(native.Replace(".agent-ha-bridge", ".agent-ha-bridge-other", StringComparison.Ordinal)),
+            "none" => new JsonObject { ["hooks"] = new JsonObject() },
+            _ => Hooks("C:\\mine\\stop.cmd", native),
+        }).ToJsonString());
+        // Written after the running session started; everything of this installation's before.
+        var started = DateTimeOffset.UtcNow.AddMinutes(1);
+        File.SetLastWriteTimeUtc(newer, started.AddMinutes(10).UtcDateTime);
+        _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Codex] = 1;
+        _f.Runtime_.AgentsStarted[AgentBridge.Protocol.AgentKind.Codex] = started;
+
+        var report = await _f.Migrator(hookFolder: spaced).MigrateAsync(dryRun: true);
+
+        Assert.Equal(!refused, report.Ok);
+        Assert.Equal(refused, report.ToString().Contains($"Codex's hooks ({newer}) were last written after", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Hooks_that_run_agent_ha_bridges_PowerShell_directly_are_not_re_pointed_while_a_session_that_started_with_them_runs()
     {
