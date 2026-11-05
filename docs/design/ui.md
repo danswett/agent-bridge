@@ -430,7 +430,7 @@ easing in, its duration out, and how far it travels.
 | Activity dot | A row's trailing edge (§6.1) | The session updates while its row isn't open; the row is opened | The 6 px dot fades in, and later fades out. It never pulses, grows or repeats. The title's weight changes at once | `activityDot`: standard, decelerate; fast out | The same on every platform | Instant |
 | Selection | The list's 3×16 Bridge pill; the rail's pill | Choosing a row or a destination | The pill slides from the old row to the new one when both are on screen, and fades in when the old one isn't. The row's fill changes at once | `selection`: standard, standard | Windows: `NavigationView`'s own pill on the rail, and the same motion on the list. Apple: the system's selection | Instant |
 | Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
-| Send and Answer | The reply box; a question card | Send, Answer, Approve once, Deny | Your message shows at once as your bubble, rising 12 as it fades in. An answer's outcome fades in on the card. While the request is in flight, the button shows the platform's progress ring, which stops with the request. Nothing waits for the motion to finish | `acknowledge`: standard, decelerate; small | Windows: `ProgressRing`. PWA: the answer's ring. Apple: `ProgressView`. Android: `CircularProgressIndicator` | Cross-fade; the ring is still |
+| Send and Answer | The reply box; a question card | Send, Send answer, Approve once, Deny | Your message shows at once as your bubble, rising 12 as it fades in. An answer's outcome fades in on the card. While the request is in flight, the button that sent it (never an option, #773) shows the platform's progress ring, which stops with the request. Nothing waits for the motion to finish | `acknowledge`: standard, decelerate; small | Windows: `ProgressRing`. PWA: the answer's ring. Apple: `ProgressView`. Android: `CircularProgressIndicator` | Cross-fade; the ring is still |
 | Toast and banner | In-app toasts; banners such as a host going offline | The event it reports | It slides 12 in from its edge and fades in, then leaves the same way, quicker | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens. PWA: the tokens on the banner coming in; a leaving one's space closes at once, and a copy of it, which nothing can find or tap, goes back the way it came. System notifications are each OS's own | Cross-fade |
 | Sheet | The delegate sheet on iOS (§6.3), and any phone sheet | Opening a delegate; dragging between detents; dismissing | The sheet rises from the bottom edge and the scrim fades in. While dragged it follows the finger with no easing, and on release it settles at the nearest detent | `sheet`: emphasis, decelerate; standard out | iOS: `.sheet` with `.presentationDetents([.medium, .large])` and the system's spring. Android: `ModalBottomSheet`. PWA: the tokens on transform | Cross-fade at the detent. A drag still follows the finger |
 | Menu and flyout | The row menu, Sort, the overflow menu, flyouts | A click, a long press, Shift+F10 or the menu key | It fades in and settles 4 from its anchor. Choosing an item acts at once, and the menu fades out | `menu`: fast, decelerate; fast out; nudge | Windows: `MenuFlyout`'s own. PWA: the tokens, on a popover where supported. Apple and Android: the system menus | Instant |
@@ -807,7 +807,93 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Questions** (#253): in the stream, as a card in Needs you colours. It is the one place a
   question's words are drawn, and the one place in the app it is answered. The header reads
   "Main agent asks" or "Delegate *name* asks". Then come the question and the platform's own
-  radio, checkbox and text controls, with Answer in Bridge, or Approve once (Bridge) and Deny.
+  radio, checkbox and text controls, with Send answer in Bridge, or Approve once (Bridge) and
+  Deny, as "Answering" says below.
+  - **Answering** (the owner's decision in #773): every question is answered the same way on
+    every client. The person chooses or types first, then presses one **Send answer**. Nothing
+    sends on a tap: not an option, not Yes or No, and not a lone single choice.
+    - **One control per field type, the platform's own:**
+
+      | Field | Control | Selected |
+      |---|---|---|
+      | Single choice | A radio list, one option per row | The platform's checked radio |
+      | Multiple choice | Checkboxes | The platform's checked box |
+      | Yes or no | A two-option radio group, Yes then No, on one line | The platform's checked radio |
+      | Text | The platform's multi-line text field | — |
+      | Number | The platform's text field with a numeric keyboard | — |
+      | Other… | The last radio or checkbox in its list; choosing it, or typing in it, reveals and fills a text field under it | As its list |
+
+      The option the agent recommends keeps its place at the top of the list and carries a
+      plain "Recommended" tag after its label (meta style, `text2`). It is never filled with
+      Bridge, bordered with it or set in bold. A default the host sends is pre-selected, and
+      has no tag of its own. A field's head is its title, then "Required" when it is required.
+      It has no type hint ("Choose one", "Choose any", "Yes or no", "Text answer", "Number"),
+      since the control already says that.
+    - **An optional single choice or Yes or no can go back to unanswered:** once one of its
+      options is selected, a host default included, a plain "Clear" link follows the group on
+      its last line, and pressing it unchecks the group. It is absent while nothing is
+      selected and on a required field, and is named "Clear *title*". Pressing it moves focus
+      to the group's first option, without selecting it, before Clear goes (A4).
+    - **One primary per card:** Send answer is the only button with Bridge's fill. A selected
+      option is the platform's checked control and never takes the accent fill, so it never
+      reads as a button that would act.
+    - **The footer row** is the card's last row. Send answer is right-aligned, at the same
+      right edge as the reply box's Send (§6.5), with its label as written: "Send answer" on
+      every client, Apple included. The answer's progress and outcome line (§6.5's receipt)
+      sits left of it on the same row, and wraps to the line below when the card is narrower
+      than both, with Send answer staying right. Try again, when an answer failed, takes Send
+      answer's place on the row.
+    - **Send answer is shown whenever the card can be answered here, and never disabled.**
+      Pressing it with a required field unanswered, or a value the host would refuse, sends
+      nothing: focus moves to the first such field, the field shows its inline error ("Choose
+      an option", "Enter a number"), and the error is said once (§9.2). It is absent where
+      the card can't be answered here (`answerAtMachine`, `truncated`, resolved, a
+      collaborator's read-only view, §6.7) and while a sent answer's outcome forbids sending
+      another (§6.5). While its machine is away it stays, disabled, as §6.1's controls do. Why
+      visible and not hidden until complete: the rule that a button which doesn't apply is
+      absent, not disabled (A7), is about actions that do nothing in the current state, and
+      an open question's Send answer always applies. Hidden until complete, the card's only
+      action would be missing on arrival, nobody could find out what was missing, and the
+      card would grow a row under the person's finger as they finished. Pressing it to learn
+      what's missing is WCAG 3.3.1's error identification.
+    - **While an answer goes,** §6.5's receipt runs on Send answer, as on the reply box's Send:
+      its ring, then its check, then the exception-only line. What was chosen or typed stays
+      selected and read-only (the fields keep their values and focus, A4) until the outcome.
+      Busy and refused make the fields editable again, with Send answer back. Not confirmed
+      and stale keep them read-only, with no Send answer. Failed keeps them read-only, with
+      Try again, which resends the same request, so the same answer, never a new one.
+      Focus is never dropped as these change (A4). Send answer keeps focus through its ring
+      and check. If focus is on Send answer when it changes: when Try again takes its place,
+      focus moves to Try again, and when it goes with nothing in its place (not confirmed,
+      stale), focus moves to the card's heading, whose description is the outcome line. If
+      focus is anywhere else, it stays there, so an outcome arriving later never takes it.
+    - **Keyboard:** Tab walks the fields in order, then Send answer (A3). Arrows move and
+      select within a radio group, Yes and No included, and Space checks a checkbox. Enter in
+            an answer field (a radio, a checkbox or a one-line field) sends, as pressing Send
+            answer does, so an incomplete answer shows what's missing rather than sending. In a
+            multi-line text field, Enter is a new line and Ctrl+Enter (⌘↩ on Apple) sends. On
+            anything else in the card, a link in the question or Clear, Enter keeps its own action
+            and sends nothing.
+    - **Spacing** (§5.1): 16 inside the card, 16 between fields, 8 between a field's head and
+      its control, and 16 above the footer row. Each option row is at least the target height
+            (A11: 44 on touch, 32 with a pointer) and grows with a label that wraps or is scaled
+            up (§4.1), never clipping it, with 8 between a control and its label. The
+      Windows grid audit (#771) may refine these keylines; this section follows it when it
+      does.
+    - **Approvals are unchanged:** one press of Approve once (Bridge) or Deny answers, with
+      nothing to choose first. They sit right-aligned in the same footer row, Deny then
+      Approve once at the right edge, with the receipt line to their left.
+    - **Each client:**
+      - The Windows app and the PWA draw it as above.
+      - Apple: `Picker` with `.radioGroup` on macOS and an inline (checkmark) list on iOS for
+        single choice and yes or no, `Toggle` with `.checkbox` on macOS and a checkmark row on
+        iOS for multiple choice, and `TextField` for text and numbers. Send answer is the
+        section's trailing, `.borderedProminent` button.
+      - Android, when it comes: `RadioButton` rows, `Checkbox` rows, an outlined `TextField`,
+        and a filled `Button` for Send answer at the end of the row.
+      - Home Assistant: a `select` per field and the Send answer button, which is already
+        choose-then-send, so its card stays as it is. An approval there keeps Approve and
+        Deny, each its own press.
   - **One card per question id:** an update to the same question changes its card in place,
     and never adds a second.
   - **An approval is drawn as it runs,** since Approve once allows all of it: exactly as
@@ -926,6 +1012,13 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   stands in its place (§6.7).
 - **Controls:** Attach, then Send (Bridge, icon only, with a tooltip naming the shortcut:
   Ctrl+Enter, or ⌘↩ on Apple).
+- **Send answer shares Send's edge and receipt** (#773): a question card's Send answer, and an
+  approval's Approve once, end at the same right edge as Send, and show the same in-flight and
+  outcome states as Send: its ring, its check and the exception-only line, with the same quiet
+  window and announcements (the owner's #600 decision). The states #600 gave a tapped option
+  (its ring on the option, the option kept pressed, "one attempt per prompt") belong to Send
+  answer instead, as §6.4's "While an answer goes" says: the ring is on Send answer, and the
+  chosen value stays selected and read-only. No client draws a ring on an option.
 - **Platform styling:**
   - Windows and the PWA: a card with a 2 px Bridge bottom edge.
   - macOS: a capsule field.
@@ -1136,9 +1229,11 @@ question, as choosing its row does.
   right-to-left characters get on its card (§6.4, #165, #220). Windows toasts, Web Push and the
   Apple notifications (#260) follow this, and a button on a toast an older build left in
   Notification Center only opens.
-- **Other questions keep their buttons** where the platform has them and they fit: the options
-  of a single choice, or a text box and Send. Each still checks, before sending, that the
-  question is the one shown.
+- **Other questions never answer on a tap** (#773): a notification offers no option buttons.
+  A question that is one text field keeps a text box and Send answer where the platform has
+  them, since typing then sending is the card's own pattern; it still checks, before sending,
+  that the question is the one shown. Every other question's notification only opens its
+  card.
 - The count each platform shows is Needs you's N (§6.1).
 - **Collaborators (#519):** their sessions are never notified, badged or counted. A message
   from an external agent held for you is counted in N but **never pushed on its own**, unlike
@@ -1311,6 +1406,10 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   answered", "No longer waiting" and "Answer at the machine"; in Tools and the delegate
   inspector, "Waiting on you" and "Asks you". "Answered" only for an answer this device sent
   and the host confirmed.
+- **Answer words (#773):** "Send answer" (sentence case on every client, Apple included),
+  "Recommended", "Required" and "Other…"; a field's inline error says what to do: "Choose an
+  option", "Choose at least one", "Choose Yes or No", "Enter a number", "Enter an answer". No
+  type hints ("Choose one", "Yes or no"): the control says it.
 - **A question's words** appear in the conversation only, never on a row, in Needs you, in
   Tools, in the inspector or in a menu.
 - **Numbers before nouns:** "3 delegates", "1 background command".
@@ -1411,6 +1510,17 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
     and Highlight and HighlightText when pressed). The `needs` glyph is Highlight with
     HighlightText ink, swapped on the pressed toggle's Highlight fill so its disc still shows.
     The Tools link is a system hyperlink.
+- **A question card (#773):** each field is named for its title. A required field says so
+  where the role supports it: on a radio group (`radiogroup` with `aria-required`) and on a
+  text or number field (`required`; `IsRequiredForForm` on Windows, on the radio list or the
+  text box). A required multiple choice is a group whose accessible description includes
+  "Required", and no checkbox is itself marked required, since that would require every
+  option. A radio group, Yes and No included, is one tab stop with arrows inside it. "Recommended" is part of its option's
+  name ("Use the cache, Recommended"). Send answer is named "Send answer"; Approve once and
+  Deny as Needs you says. Pressing Send answer with something missing moves focus to the first
+  field missing, whose error is its accessible description and is said once, assertively
+  (A6). While an answer goes, its controls are read-only, not disabled, so they keep focus
+  and say their value (A4).
 
 ## 10. Mock-up index
 
