@@ -53,7 +53,7 @@ public sealed class SignInTests
         var factory = new Factory();
         var runner = new PrivateSignInRunner(factory, time);
         var received = new List<PrivateSignInCode>();
-        var running = runner.RunAsync(new("fixture-store", AgentKind.Copilot, null), (value, _) => { received.Add(value); return Task.FromResult(true); }, CancellationToken.None);
+        var running = runner.RunAsync(new("fixture-store", AgentKind.Copilot, null), (value, _) => { received.Add(value); return Task.FromResult(true); }, CancellationToken.None, () => true);
         await factory.Started.Task.WaitAsync(Patience);
         factory.Process.OutputPipe.Put(Frame(time, code, uri));
         factory.Process.Complete();
@@ -78,7 +78,7 @@ public sealed class SignInTests
         var time = new FakeTimeProvider();
         var factory = new Factory();
         var runner = new PrivateSignInRunner(factory, time);
-        var running = runner.RunAsync(new("store", AgentKind.Copilot, null), (_, _) => Task.FromResult(true), CancellationToken.None);
+        var running = runner.RunAsync(new("store", AgentKind.Copilot, null), (_, _) => Task.FromResult(true), CancellationToken.None, () => true);
         await factory.Started.Task.WaitAsync(Patience);
         var p = factory.Process;
         if (variant == "duplicate") { p.OutputPipe.Put("{\"kind\":\"code\",\"kind\":\"code\"}\n"); }
@@ -111,7 +111,7 @@ public sealed class SignInTests
         var factory = new Factory();
         var shown = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var runner = new PrivateSignInRunner(factory, time) { CodeWait = TimeSpan.FromSeconds(2) };
-        var running = runner.RunAsync(new("store", AgentKind.Copilot, null), (_, _) => { shown.TrySetResult(); return Task.FromResult(true); }, CancellationToken.None);
+        var running = runner.RunAsync(new("store", AgentKind.Copilot, null), (_, _) => { shown.TrySetResult(); return Task.FromResult(true); }, CancellationToken.None, () => true);
         await factory.Started.Task.WaitAsync(Patience);
         if (issueCode)
         {
@@ -128,7 +128,7 @@ public sealed class SignInTests
     {
         var factory = new Factory();
         var time = new FakeTimeProvider();
-        var running = new PrivateSignInRunner(factory, time).RunAsync(new("store", AgentKind.Copilot, null), (_, _) => Task.FromResult(true), CancellationToken.None);
+        var running = new PrivateSignInRunner(factory, time).RunAsync(new("store", AgentKind.Copilot, null), (_, _) => Task.FromResult(true), CancellationToken.None, () => true);
         await factory.Started.Task.WaitAsync(Patience);
         factory.Process.ErrorPipe.Put("synthetic private diagnostics never leave the runner");
         factory.Process.OutputPipe.Put(Frame(time));
@@ -144,7 +144,7 @@ public sealed class SignInTests
     {
         var factory = new Factory { ThrowStart = !stderr };
         var running = new PrivateSignInRunner(factory, new FakeTimeProvider()).RunAsync(
-            new("store", AgentKind.Copilot, null), (_, _) => Task.FromResult(true), CancellationToken.None);
+            new("store", AgentKind.Copilot, null), (_, _) => Task.FromResult(true), CancellationToken.None, () => true);
         if (stderr)
         {
             await factory.Started.Task.WaitAsync(Patience);
@@ -246,6 +246,36 @@ public sealed class SignInTests
         Assert.DoesNotContain(phone.Events, e => e.Name == AgentSignIn.Done);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Authority_is_rechecked_after_source_state_wait_and_at_queued_factory_launch(bool queued)
+    {
+        await using var h = await Harness.CreateAsync();
+        h.Factory.QueueStart = queued;
+        if (!queued)
+        {
+            h.States.After = state =>
+            {
+                if (state == RecoveryState.SigningIn) { h.Authority.Denial = "revoked"; }
+            };
+        }
+        var phone = h.Phone();
+        await h.Start(phone).Then(phone);
+        if (queued)
+        {
+            await h.Factory.Started.Task.WaitAsync(Patience);
+            h.Authority.Denial = "revoked";
+            h.Factory.ReleaseLaunch.TrySetResult();
+            await h.Factory.Checked.Task.WaitAsync(Patience);
+        }
+        else { Assert.Equal(0, h.Factory.Starts); }
+        await h.Service.SweepAsync();
+        Assert.Equal(0, h.Factory.Launches);
+        Assert.Equal(0, h.Recovery.Resumes);
+        Assert.Equal(0, h.Service.CodesHeld);
+    }
+
     [Fact]
     public async Task Revocation_is_detected_even_after_the_channel_closes_and_regrant_cannot_reattach_the_old_code()
     {
@@ -296,11 +326,11 @@ public sealed class SignInTests
         var factory = new Factory { DelayStart = true };
         var runner = new PrivateSignInRunner(factory, time) { Limit = TimeSpan.FromSeconds(2) };
         var target = new SignInTarget("store", AgentKind.Copilot, null);
-        var running = runner.RunAsync(target, (_, _) => Task.FromResult(true), CancellationToken.None);
+        var running = runner.RunAsync(target, (_, _) => Task.FromResult(true), CancellationToken.None, () => true);
         await factory.Started.Task.WaitAsync(Patience);
         time.Advance(TimeSpan.FromSeconds(3));
         Assert.Equal(SignInOutcome.Expired, await running.WaitAsync(Patience));
-        Assert.Equal(SignInOutcome.Refused, await runner.RunAsync(target, (_, _) => Task.FromResult(true), CancellationToken.None));
+        Assert.Equal(SignInOutcome.Refused, await runner.RunAsync(target, (_, _) => Task.FromResult(true), CancellationToken.None, () => true));
         Assert.Equal(1, factory.Starts);
         factory.Delayed.TrySetResult(factory.Process);
         await factory.Process.Disposing.Task.WaitAsync(Patience);
@@ -393,19 +423,30 @@ public sealed class SignInTests
         await h.Source.RefreshAsync();
         h.Resolver.Ids = [Id, OtherId];
         h.Recovery.ModelEvidence = true;
+        h.Recovery.Result = new([Id], [OtherId]);
         var phone = h.Phone();
-        await h.Start(phone).Then(phone);
+        var request = Guid.NewGuid();
+        await h.Start(phone, request).Then(phone);
         Fixture.Append(h.Events, Copilot.Assistant("first model reply", 3));
         await h.Source.RefreshAsync();
         await h.Service.SweepAsync();
         Assert.Null(h.Source.Get(Id)!.Attention);
         Assert.Equal(RecoveryState.Pending, h.Source.Get(OtherId)!.Attention!.Recovery);
         Assert.Empty(phone.Events);
+        phone.Close();
+        var reattached = h.Phone();
+        await h.Start(reattached, request).Then(reattached);
         Fixture.Append(other, Copilot.Assistant("second model reply", 4));
         await h.Source.RefreshAsync();
         await h.Service.SweepAsync();
         Assert.Null(h.Source.Get(OtherId)!.Attention);
-        Assert.Equal("signedIn", (await phone.Done.Task.WaitAsync(Patience)).GetProperty("outcome").GetString());
+        var done = await reattached.Done.Task.WaitAsync(Patience);
+        Assert.Equal("signedIn", done.GetProperty("outcome").GetString());
+        Assert.Equal(Id, Assert.Single(done.GetProperty("resumed").EnumerateArray()).GetString());
+        Assert.Equal(OtherId, Assert.Single(done.GetProperty("continue").EnumerateArray()).GetString());
+        var receipt = h.Phone();
+        await h.Start(receipt, request).Then(receipt);
+        Assert.Equal(done.GetRawText(), (await receipt.Done.Task.WaitAsync(Patience)).GetRawText());
     }
 
     static string AuthError(int second) => Copilot.Event("session.error", new { errorType = "authorization",
@@ -435,6 +476,7 @@ public sealed class SignInTests
         public FakeTimeProvider Time => Fixture.Time;
         public string Events = "";
         public SessionSource Source = null!;
+        public StateSource States = null!;
         public Factory Factory { get; } = new();
         public List<string> Logs { get; } = [];
         public Authority Authority { get; } = new();
@@ -452,7 +494,8 @@ public sealed class SignInTests
             await h.Source.RefreshAsync();
             Assert.Equal(AttentionKind.SignInNeeded, h.Source.Get(Id)!.Attention!.Kind);
             h.Resolver = new(h.Source);
-            h.Service = new(h.Source, h.Authority, h.Resolver, h.Recovery, new(h.Factory, h.Time), () => h.ReadOnly, h.Time) { Enabled = true };
+            h.States = new(h.Source);
+            h.Service = new(h.States, h.Authority, h.Resolver, h.Recovery, new(h.Factory, h.Time), () => h.ReadOnly, h.Time) { Enabled = true };
             return h;
         }
         public Phone Phone(string device = "phone") => new(device);
@@ -468,11 +511,31 @@ public sealed class SignInTests
         public SignInGrant? Current(IProtocolChannel channel) => Denial is null && channel is Phone p ? new(p.PeerId, Binding) : null;
         public bool StillCurrent(SignInGrant grant) => Denial is null && grant.Binding == Binding;
     }
+    sealed class StateSource(ISessionSource inner) : ISessionSource
+    {
+        public Action<RecoveryState>? After;
+        public long Revision => inner.Revision;
+        public event EventHandler<SessionChange>? Changed { add => inner.Changed += value; remove => inner.Changed -= value; }
+        public IReadOnlyList<Session> Snapshot() => inner.Snapshot();
+        public SessionList List(string? cursor = null) => inner.List(cursor);
+        public Session? Get(string id) => inner.Get(id);
+        public SessionSubscription Subscribe() => inner.Subscribe();
+        public Task RefreshAsync(CancellationToken cancellationToken = default) => inner.RefreshAsync(cancellationToken);
+        public Task StartAsync(CancellationToken cancellationToken = default) => inner.StartAsync(cancellationToken);
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public async Task SetSignInRecoveryAsync(string id, DateTimeOffset errorAt, string generation, RecoveryState state,
+            bool begin = false, CancellationToken cancellationToken = default)
+        {
+            await inner.SetSignInRecoveryAsync(id, errorAt, generation, state, begin, cancellationToken);
+            After?.Invoke(state);
+        }
+    }
     sealed class Resolver(SessionSource source) : ISignInContextResolver
     {
         public string Store = "fixture-store";
         public string? Account;
         public string[] Ids = [Id];
+        public SignInTarget? ResolveTarget(AgentKind agent, string? account) => new(Store, agent, Account);
         public SignInContext? Resolve(AgentKind agent, string? account) => source.Get(Id)?.Attention is not null
             ? new(new(Store, agent, Account), Ids.Select(id => new SignInFailure(id, source.Get(id)!.Attention!.Since)).ToArray()) : null;
     }
@@ -480,12 +543,13 @@ public sealed class SignInTests
     {
         public bool ModelEvidence;
         public int Resumes;
+        public SignInResume Result = new([], []);
         public Task<bool> HasModelEvidenceAsync(SignInTarget target, CancellationToken ct) => Task.FromResult(ModelEvidence);
         public Task<SignInResume> ResumeAsync(SignInContext context, Func<bool> authorize, CancellationToken ct)
         {
             Assert.True(authorize());
             ++Resumes;
-            return Task.FromResult(new SignInResume([], []));
+            return Task.FromResult(Result);
         }
     }
     sealed class Phone(string id) : IProtocolChannel
@@ -513,15 +577,29 @@ public sealed class SignInTests
     {
         public bool DelayStart;
         public bool ThrowStart;
+        public bool QueueStart;
+        public int Launches;
+        public TaskCompletionSource ReleaseLaunch { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Checked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<IPrivateSignInProcess> Delayed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Process Process { get; } = new();
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int Starts;
-        public Task<IPrivateSignInProcess> StartAsync(SignInTarget target, CancellationToken ct)
+        public Task<IPrivateSignInProcess> StartAsync(SignInTarget target, Func<bool> authorize, CancellationToken ct)
         {
             ++Starts; Started.TrySetResult();
             if (ThrowStart) { throw new IOException("synthetic private diagnostics"); }
-            return DelayStart ? Delayed.Task : Task.FromResult<IPrivateSignInProcess>(Process);
+            if (DelayStart) { return Delayed.Task; }
+            return LaunchAsync();
+            async Task<IPrivateSignInProcess> LaunchAsync()
+            {
+                if (QueueStart) { await ReleaseLaunch.Task.WaitAsync(ct); }
+                Checked.TrySetResult();
+                if (!authorize()) { throw new InvalidOperationException("sign-in launch is no longer authorized"); }
+                ct.ThrowIfCancellationRequested();
+                ++Launches;
+                return Process;
+            }
         }
     }
     sealed class Process : IPrivateSignInProcess

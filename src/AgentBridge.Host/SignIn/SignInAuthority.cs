@@ -33,6 +33,7 @@ internal interface ISignInContextResolver
     // Must resolve the effective credential store and account from host/agent-owned state.
     // No production implementation is registered until the entrypoint decision.
     SignInContext? Resolve(AgentKind agent, string? account);
+    SignInTarget? ResolveTarget(AgentKind agent, string? account);
 }
 
 internal sealed record SignInResume(IReadOnlyList<string> Resumed, IReadOnlyList<string> Continue);

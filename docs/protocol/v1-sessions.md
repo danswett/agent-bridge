@@ -1205,6 +1205,8 @@ The framework's request/event contract (not yet offered to clients) is:
   serializes that store, binds UUID receipts to target and authenticated device generation,
   and starts only after returning the response. A matching explicit request can reattach
   the same person key/generation and replay its unexpired code; a reconnect alone cannot.
+  Terminal receipts precede active-failure validation, so the original requester can
+  retrieve `signin.done` after real model proof clears attention.
 * `signin.code {flow, agent, userCode, verificationUri, expiresAt}` is sent only to
   explicit, still-authorized participants over their encrypted channels, never the
   session feed, hello, push, HA, transcript, log or a prompt. The code is uppercase ASCII
@@ -1217,6 +1219,8 @@ The framework's request/event contract (not yet offered to clients) is:
   `signedIn | expired | cancelled | failed | refused` and never carries private output.
   Cancel, expiry, revocation/G5 and shutdown purge the retained code and abort the
   contained helper. Slots/receipts, participants, output, waits and cleanup are bounded.
+  Launch authorization is checked after source-state waits and again by the factory
+  at the actual launch, including after any queue.
 * Current pinned **person**, session-read **and** write authority are all required.
   A self-claimed `app`/`pwa` kind is insufficient even when the transitional trust
   enforcement switch is off. Service/host roles, revoked/regranted generations,

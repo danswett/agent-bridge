@@ -38,6 +38,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
         public bool Ending;
         public bool Silent;
         public bool Automatic;
+        public SignInResume? Resume;
         public DateTimeOffset? AloneSince;
     }
 
@@ -122,7 +123,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
                 var candidate = await recovery.HasModelEvidenceAsync(context.Target, flow.Stop.Token).WaitAsync(CheckLimit, time, flow.Stop.Token);
                 if (!candidate || !CanPrepare(flow)) { await EndAsync(flow, SignInOutcome.Failed); return false; }
                 await StateAsync(context, flow.Id, RecoveryState.Pending, ct: flow.Stop.Token);
-                await recovery.ResumeAsync(context, () => CanPrepare(flow), flow.Stop.Token).WaitAsync(CheckLimit, time, flow.Stop.Token);
+                flow.Resume = await recovery.ResumeAsync(context, () => CanPrepare(flow), flow.Stop.Token).WaitAsync(CheckLimit, time, flow.Stop.Token);
                 return true; // Pending, not recovered; no event or notification claims otherwise.
             }
             catch (Exception) { await EndAsync(flow, SignInOutcome.Failed); return false; }
@@ -156,11 +157,11 @@ internal sealed class AgentSignInService : IAsyncDisposable
             }
             account = name;
         }
-        SignInContext? context;
-        try { context = resolver.Resolve(AgentKind.Copilot, account); }
+        SignInTarget? target;
+        try { target = resolver.ResolveTarget(AgentKind.Copilot, account); }
         catch (Exception) { return Refused(); }
-        if (context is null || context.Target.Agent != AgentKind.Copilot || string.IsNullOrEmpty(context.Target.Store)
-            || (account is not null && account != context.Target.Account) || !Latest(context)) { return Refused(); }
+        if (target is null || target.Agent != AgentKind.Copilot || string.IsNullOrEmpty(target.Store)
+            || account is not null && account != target.Account) { return Refused(); }
         lock (gate)
         {
             Trim();
@@ -169,27 +170,31 @@ internal sealed class AgentSignInService : IAsyncDisposable
             string outcome;
             if (requests.TryGetValue((grant, request), out var prior))
             {
-                if (prior.Target != context.Target) { return Refused(); }
+                if (prior.Target != target) { return Refused(); }
                 flow = prior.Flow;
                 outcome = flow.Done is null ? "busy" : "started";
             }
             else
             {
                 if (requests.Count >= MaxRequests) { return new StartResult("refused", Reason: "too many recent sign-in requests"); }
-                if (active.TryGetValue(context.Target.Store, out var existing))
+                if (active.TryGetValue(target.Store, out var existing))
                 {
-                    if (existing.Context.Target != context.Target || existing.Ending || !CanBind(existing, grant)) { return new StartResult("refused", Reason: "this credential store is busy"); }
+                    if (existing.Context.Target != target || existing.Ending || !Compatible(existing.Context) || !CanBind(existing, grant)) { return new StartResult("refused", Reason: "this credential store is busy"); }
                     flow = existing;
                     outcome = "busy";
                 }
                 else
                 {
                     if (active.Count >= MaxFlows) { return new StartResult("refused", Reason: "too many sign-ins are pending"); }
+                    SignInContext? context;
+                    try { context = resolver.Resolve(AgentKind.Copilot, account); }
+                    catch (Exception) { return Refused(); }
+                    if (context is null || context.Target != target || !Latest(context)) { return Refused(); }
                     flow = new(context, time.GetUtcNow(), time, Limit);
                     active.Add(context.Target.Store, flow);
                     outcome = "started";
                 }
-                requests.Add((grant, request), new(context.Target, flow));
+                requests.Add((grant, request), new(target, flow));
             }
             // Nothing starts or emits a code before the response reaches this requester.
             return new ChannelReply(new StartResult(outcome, flow.Id), _ => AttachAsync(flow, channel, grant));
@@ -251,12 +256,14 @@ internal sealed class AgentSignInService : IAsyncDisposable
             {
                 flow.Silent = true;
                 await StateAsync(flow.Context, flow.Id, RecoveryState.Pending, ct: flow.Stop.Token);
-                await recovery.ResumeAsync(flow.Context, () => HasParticipant(flow) && CanPrepare(flow), flow.Stop.Token).WaitAsync(CheckLimit, time, flow.Stop.Token);
+                flow.Resume = await recovery.ResumeAsync(flow.Context, () => HasParticipant(flow) && CanPrepare(flow), flow.Stop.Token).WaitAsync(CheckLimit, time, flow.Stop.Token);
                 // A candidate is never called recovered. Sweep waits for the parser's model-proof gate.
                 return;
             }
             await StateAsync(flow.Context, flow.Id, RecoveryState.SigningIn, ct: flow.Stop.Token);
-            var result = await runner.RunAsync(flow.Context.Target, (code, _) => ShowAsync(flow, code), flow.Stop.Token);
+            if (!HasParticipant(flow) || !CanPrepare(flow)) { await EndAsync(flow, SignInOutcome.Cancelled); return; }
+            var result = await runner.RunAsync(flow.Context.Target, (code, _) => ShowAsync(flow, code), flow.Stop.Token,
+                () => HasParticipant(flow) && CanPrepare(flow));
             if (result == SignInOutcome.SignedIn)
             {
                 if (!HasParticipant(flow) || !Compatible(flow.Context)) { await EndAsync(flow, SignInOutcome.Cancelled); return; }
@@ -399,9 +406,9 @@ internal sealed class AgentSignInService : IAsyncDisposable
                 {
                     await EndAsync(flow, SignInOutcome.Cancelled); continue;
                 }
-                if (flow.Silent && flow.Context.Failures.All(f => source.Get(f.Id) is { Attention: null }))
+                if (flow.Silent && flow.Completed.Task.IsCompleted && flow.Context.Failures.All(f => source.Get(f.Id) is { Attention: null }))
                 {
-                    await EndAsync(flow, SignInOutcome.SignedIn); continue;
+                    await EndAsync(flow, SignInOutcome.SignedIn, flow.Resume); continue;
                 }
                 if (!Compatible(flow.Context)) { await EndAsync(flow, SignInOutcome.Failed); }
             }

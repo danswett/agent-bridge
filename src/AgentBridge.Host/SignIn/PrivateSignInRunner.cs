@@ -12,7 +12,8 @@ internal enum SignInOutcome { SignedIn, Expired, Cancelled, Failed, Refused }
 // factory is supplied until the auth entrypoint, fixtures and side effects are approved.
 internal interface IPrivateSignInProcessFactory
 {
-    Task<IPrivateSignInProcess> StartAsync(SignInTarget target, CancellationToken ct);
+    // Recheck authorize at the actual launch, including after any factory queue.
+    Task<IPrivateSignInProcess> StartAsync(SignInTarget target, Func<bool> authorize, CancellationToken ct);
 }
 
 internal interface IPrivateSignInProcess : IAsyncDisposable
@@ -47,7 +48,8 @@ internal sealed class PrivateSignInRunner(IPrivateSignInProcessFactory factory, 
     const int TotalBytes = 32 * 1024;
     static readonly UTF8Encoding Utf8 = new(false, true);
 
-    public async Task<SignInOutcome> RunAsync(SignInTarget target, Func<PrivateSignInCode, CancellationToken, Task<bool>> show, CancellationToken ct)
+    public async Task<SignInOutcome> RunAsync(SignInTarget target, Func<PrivateSignInCode, CancellationToken, Task<bool>> show,
+        CancellationToken ct, Func<bool> authorize)
     {
         lock (gate) { if (stores.Count >= 8 || !stores.Add(target.Store)) { return SignInOutcome.Refused; } }
         var deadline = time.GetUtcNow() + Limit;
@@ -60,7 +62,8 @@ internal sealed class PrivateSignInRunner(IPrivateSignInProcessFactory factory, 
         var outcome = SignInOutcome.Failed;
         try
         {
-            starting = factory.StartAsync(target, token);
+            if (token.IsCancellationRequested || !authorize()) { return SignInOutcome.Refused; }
+            starting = factory.StartAsync(target, authorize, token);
             process = await starting.WaitAsync(token);
             var read = ReadAsync(process, show, budget, deadline, token);
             var drain = DrainAsync(process.Error, token);
