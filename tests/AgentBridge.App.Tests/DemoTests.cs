@@ -28,4 +28,43 @@ public sealed class DemoTests
         await Wait.UntilAsync(() => choice.Question is null && choice.HasReceipt, "the question to be answered");
         Assert.Equal("Your answer: Delivered. The session has your answer.", choice.ReceiptText);
     }
+
+    [Fact]
+    public async Task Heavy_sessions_added_reach_the_window_and_the_heavy_one_gives_its_whole_tool_history()
+    {
+        await using var demo = DemoHost.Start();
+        await using var connection = new HostConnection(ct => LocalClient.ConnectAsync(demo.Endpoint, TimeSpan.FromSeconds(1), ct), new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, new LockedDispatcher()), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel());
+        connection.Start();
+        await Wait.UntilAsync(() => main.Sessions.Count == DemoHost.Examples().Count, "every demo session");
+
+        await demo.AddHeavyAsync();
+
+        await Wait.UntilAsync(() => main.Sessions.Count == DemoHost.Examples().Count + DemoHost.HeavySessions, "the heavy sessions");
+        var heavy = await connection.ReadAsync<Session>(Ops.SessionGet, new { id = DemoHost.HeavyId }, TimeSpan.FromSeconds(5));
+        Assert.Equal(Limits.History, heavy.Activity.History?.Count);
+    }
+}
+
+// The self-test's live-resize pass (#765) needs a window as heavy as a real one: more than 15
+// sessions, a conversation of over 200 items, a full tool history and a strip of delegates, all
+// within what a host may send.
+public sealed class HeavyDemoTests
+{
+    [Fact]
+    public void The_heavy_demo_is_as_heavy_as_a_real_window_and_within_what_a_host_may_send()
+    {
+        var sessions = DemoHost.Heavy(DateTimeOffset.UtcNow);
+        var heavy = sessions.Single(s => s.Id == DemoHost.HeavyId);
+        var blocks = MarkdownModel.Parse(heavy.Activity.Response);
+        var items = blocks.Sum(b => b is MdList list ? list.Items.Count : 1);
+
+        Assert.True(DemoHost.Examples().Count + sessions.Count > 15);
+        Assert.True(items >= 200, $"{items} items");
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(heavy.Activity.Response!) <= Limits.Response);
+        Assert.Equal(Limits.History, heavy.Activity.History!.Count);
+        Assert.InRange(heavy.Subagents!.Count, 9, Limits.Subagents);
+        Assert.Same(heavy, SessionBudget.Fit(heavy));
+        Assert.DoesNotContain(sessions.Select(s => s.Id), DemoHost.Examples().Select(s => s.Id).Contains);
+    }
 }

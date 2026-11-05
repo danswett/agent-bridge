@@ -353,6 +353,9 @@ static partial class SelfTest
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
             await Write(outFile, result, checks, failures, "high contrast");
             await CheckHighContrast(window, Check, outFile, result);
+            // Last, as it adds sessions every check above counts without (#765).
+            await Write(outFile, result, checks, failures, "live resize");
+            await MeasureResize(window, main, demo, Check, outFile, result);
         }
         catch (Exception e)
         {

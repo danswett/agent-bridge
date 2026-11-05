@@ -9,7 +9,7 @@ namespace AgentBridge.App.Core;
 // its own, answering every op as a cooperative host would. For trying the app without a host
 // or agents, for screenshots, and for CI's check that the published app starts and draws
 // cards. It never touches the real host, its profile or any session.
-public sealed class DemoHost : IAsyncDisposable
+public sealed partial class DemoHost : IAsyncDisposable
 {
     readonly LocalServer server;
     readonly Dictionary<string, Session> sessions = new(StringComparer.Ordinal);
@@ -212,7 +212,7 @@ public sealed class DemoHost : IAsyncDisposable
                     {
                         if (!sessions.TryGetValue(id, out var s)) { return Done(new { missing = true }); }
                         if (data.TryGetProperty("agent", out var agent) && agent.GetString() is { } a) { return Done(DelegateDetail(s, a, now)); }
-                        return Done(s with { Activity = s.Activity with { History = History(now) } });
+                        return Done(s with { Activity = s.Activity with { History = s.Activity.History ?? History(now) } });
                     }
                 }
             case Ops.SessionAnswer:
