@@ -141,7 +141,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 {
                     Answered(data, Json.Time(e, "timestamp"));
                     var reasoning = Text.NonBlank(Json.Str(data, "reasoningText"));
-                    var content = Text.NonBlank(Json.Str(data, "content"));
+                    var content = MainText(data);
                     if (reasoning is not null) { S.OwnReasoning = Limits.KeepEnd(reasoning, Limits.Reasoning).Text; }
                     if (content is not null) { (S.OwnResponse, S.OwnResponseCut) = Limits.KeepEnd(content, Limits.Response); }
                     if (reasoning is not null || content is not null) { S.OwnAt = Json.Time(e, "timestamp"); }
@@ -398,7 +398,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 {
                     Answered(data, at);
                     S.Model = Text.NonBlank(Json.Str(data, "model")) ?? S.Model;
-                    S.MainSaid(Text.NonBlank(Json.Str(data, "content")), Text.NonBlank(Json.Str(data, "reasoningText")), at);
+                    S.MainSaid(MainText(data), Text.NonBlank(Json.Str(data, "reasoningText")), at);
                     // The CLI's notice of the error that ended the turn is written after it, and
                     // starts nothing: read as a reply, it set the session working again for good.
                     if (TurnErrorNotice(data)) { break; }
@@ -536,6 +536,11 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         var content = Text.NonBlank(Json.Str(data, "content"));
         if ((Asked(data) || (content is not null && !TurnErrorNotice(data))) && at is { } t && t > attention.Since) { S.Attention = null; }
     }
+
+    // The main agent's text as shown. The CLI's turn-error notice carries the error's own words,
+    // which are redacted as attention.message is (#840); a model's reply is the model's.
+    static string? MainText(JsonElement data) =>
+        TurnErrorNotice(data) ? AgentErrors.Shown(Json.Str(data, "content")) : Text.NonBlank(Json.Str(data, "content"));
 
     static bool Asked(JsonElement data) => Json.Arr(data, "toolRequests") is { } requests && requests.GetArrayLength() > 0;
 

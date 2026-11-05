@@ -406,6 +406,38 @@ public class AttentionTests
             AgentErrors.Shown("Cannot read \"C:\\Users\\Example Person\\.copilot\\private.json\" or '/home/Example Person/.copilot/x.json' now"));
     }
 
+    // #839: matching stops at 4 KiB, and a token cut there is too short for its pattern.
+    [Fact]
+    public void A_message_over_4_KiB_is_cut_before_a_word_the_limit_splits_never_through_it()
+    {
+        var lead = "Authorization error." + new string(' ', 4084 - 20);
+        var token = "gh" + "p_ABCDEFGH" + new string('Z', 40);
+
+        var shown = AgentErrors.Shown(lead + token + " more");
+
+        Assert.Equal("Authorization error.", shown);
+    }
+
+    [Fact]
+    public void A_message_over_4_KiB_is_never_cut_through_an_emoji()
+    {
+        var shown = AgentErrors.Shown("Error." + new string(' ', 4095 - 6) + "\U0001F600 more");
+
+        Assert.Equal("Error.", shown);
+    }
+
+    // #840: the CLI's notice carries the error's own words into activity.response.
+    [Fact]
+    public async Task The_clis_turn_error_notice_is_shown_redacted()
+    {
+        await using var s = new Session_();
+
+        var session = await s.After(Copilot.User("Go", 1), Copilot.TurnStart(2), Error(new { errorType = "session", message = "Turn error: boom" }, 3),
+            Copilot.Event("assistant.message", new { messageId = "m4", content = "\u26A0\uFE0F Turn error: token=abc123secret at C:\\Users\\mona\\x.log" }, 4));
+
+        Assert.Equal("\u26A0\uFE0F Turn error: [token] at [path]", session.Activity.Response);
+    }
+
     [Fact]
     public void An_error_message_is_cut_to_its_limit_and_a_blank_one_is_none()
     {

@@ -50,7 +50,7 @@ internal static partial class AgentErrors
     internal static string? Shown(string? message)
     {
         if (Text.NonBlank(message) is not { } text) { return null; }
-        if (text.Length > Scanned) { text = text[..Scanned]; }
+        if (text.Length > Scanned) { text = Cut(text); }
         try
         {
             foreach (var (pattern, mark) in Redactions) { text = pattern.Replace(text, mark); }
@@ -58,6 +58,16 @@ internal static partial class AgentErrors
         }
         catch (RegexMatchTimeoutException) { return null; }
         return text.Length == 0 ? null : Limits.KeepStart(text, Limits.AttentionMessage);
+    }
+
+    // The words wholly within Scanned, cut at whitespace (#839): a token cut short no longer
+    // matches its pattern ("ghp_" and eight characters slipped through), and a cut through an
+    // emoji left half of it. One word filling the whole span is none at all.
+    static string Cut(string text)
+    {
+        var end = Scanned;
+        while (end > 0 && !char.IsWhiteSpace(text[end])) { end--; }
+        return text[..end];
     }
 
     // In this order: a keyed secret's quoted value may be a link, and taking the link first left
