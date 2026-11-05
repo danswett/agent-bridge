@@ -201,7 +201,7 @@ Per session:
 
 | Entity (pinned id) | Discovery topic | State / attributes |
 |---|---|---|
-| `sensor.<node>_status` | `homeassistant/sensor/<node>/status/config` | `working`, `waiting`, `idle`, `agents` (idle, background agents running), `shell` (idle, background commands running) or `ending`; attributes `session`, `machine`, `process_id`, `updated`, and only when non-empty or non-zero `model`, `background_agents`, `background_shells`, `compactions` (`Add-DaemonTuningAttributes`) |
+| `sensor.<node>_status` | `homeassistant/sensor/<node>/status/config` | `working`, `waiting`, `idle`, `agents` (idle, background agents running), `shell` (idle, background commands running) or `ending`; while the host sets the session's `attention` (#800, below), the clients' words instead: `Needs sign-in`, `Signed in · waiting for the session to confirm`, `Agent error` (`Not authorised` or `Rate limited` by class), `Not responding`. Attributes `session`, `machine`, `process_id`, `updated`, and only when non-empty or non-zero `model`, `background_agents`, `background_shells`, `compactions` (`Add-DaemonTuningAttributes`), and `attention` while it is set |
 | `sensor.<node>_activity` | `homeassistant/sensor/<node>/activity/config` | a line, cut to 255 with `...`: `Running: <tool>`, the reply's first line, `Thinking`, or `Idle`; attributes `session`, `machine`, `verbose`, `updated`, `driver`, `history` (12 deep, 24 with Detailed activity), and the card text as `Add-DaemonCardText` lays it out: `response` (to 6000 characters, then `_(truncated - see terminal)_`) with `response_kind` `text` or `reasoning`, and for an agent that does not interleave its thinking, `reasoning` (to 4000). Added, only for a session with sub-agents: `subagents` and `subagents_more` (below) |
 
 Both carry the device block (`identifiers: [<node>]`, `name`, `manufacturer: AI CLI bridge`,
@@ -222,6 +222,27 @@ How the host's `Session` maps to what the daemon kept, where the two differ:
   (`Get-BridgeThoughtLine`, ported and fixture-checked), the reply's first line.
 * `driver` is `human` until an answer from the card sets it (stage 2, below); replies and
   launches set it from stages 3 and 5.
+* **Attention** (#800, [v1-sessions.md](protocol/v1-sessions.md#attention)). The host keeps a
+  session's `status` truthful: `idle` after a turn that ended on a 401 or an agent error, with the
+  turn before's reply still beside it. On its own, that read on the card as an idle session that
+  had answered. While `Session.attention` is set, the status sensor's state is the clients'
+  words for it, in the order of their status rules (`StatusRules`, `AuthState.ErrorWords`): the
+  session's own question still reads `waiting`, then `Needs sign-in` (or `Signed in · waiting for
+  the session to confirm` while recovery is `pending`), then a delegate's question `waiting`, then
+  `Not responding`, then `working`, then the error's words (`Not authorised` for `auth`,
+  `Rate limited` for `rate`, otherwise `Agent error`). An `ending` session still reads `ending`.
+    The card shows the state as written.
+  The status attributes gain `attention`:
+  `{kind, error_class?, provider?, message?, since}`, with `kind` one of `sign_in_needed`, `error`
+  or `not_responding`. `error_class` is only for an error. `provider` is only for a sign-in, and
+  only when it is `github`, `anthropic` or `openai`. `message` is the host's own sentence
+  (`AgentErrors.Template`, never the agent's words), on one line, within 300 characters, with its
+  template markup broken. It never carries the account, a sign-in code or a URL. A value the
+  connector doesn't know makes no claim, as on the clients: an unknown kind is an error, and an
+  unknown class is `other`. A session without attention publishes exactly the daemon's attributes.
+  End session still judges the session by its own status, so one idle after a failed turn ends at
+  one press, as the host ends it. The shadow shows these as differences from agent-ha-bridge,
+  which has no attention.
 * **Sub-agents** ([design/subagents.md](design/subagents.md) §7, #175). The host's top-level
   `response` and `reasoning` are the latest writer's, a delegate's included, as on
   agent-ha-bridge's card. The connector publishes the **main agent's own** instead: `own`'s
@@ -670,6 +691,31 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   questions included, exactly as the daemon's hooks send them (`Fixtures/ha-notify.json`),
   so on that path a delegate's question is treated as the session's are and neither
   replaces the other; the answer buttons are where the newer replaces the older.
+  **A turn that ended on an error or a failed sign-in is not a finished turn** (#800; the
+  host's Web Push rule, #845). Its session is idle beside the turn before's reply, and pushing
+  that reply was the owner's "replies with the last turn as if alive". No finished push goes
+  while `attention` is `signInNeeded` or `error` (or a kind not known here). That includes one
+  already waiting its 3 s when the attention arrives. The reply is taken as told, so it isn't
+  pushed later either. The next turn that does finish is pushed as ever.
+* **Needs sign-in** (#800), through the same two channels as a question's Needs you, mirroring
+  the host's `signIn` push (§3 of #800's
+  [6646501884](https://github.com/danswett/agent-bridge/issues/800#issuecomment-6646501884)):
+  * There is **one per machine, agent and account**, never one per session. It goes on the first
+    pass after the first of its sessions needs a person to sign in: kind `signInNeeded`, and not
+    while recovery is `pending`. The pass runs each second, well inside the owner's 60 s. It goes
+    again **at most hourly** while any of its sessions still needs it.
+  * It goes to every phone in `answerButtons.services`, with no actions. The tag is
+    `bridge_signin_<slug>_<agent>_<first 8 hex of SHA-256(account)>`, with the question's
+    icon, colour and interruption level, the subtitle `<machine> - needs sign-in`, and the
+    dashboard to open. When `notifications.enabled` is on, it also goes on `notifications.service`.
+  * Title: `<machine> · Copilot needs sign-in`. Message: `2 sessions: <name>, <name>`, naming three
+    at most.
+  * **No account, code or URL** is in either one.
+  * It is withdrawn from the phones (`clear_notification` by its tag) once none of its sessions
+    needs a person: signed in, recovered or ended. A later need is news again.
+  * When it was sent, and which phones hold it, is kept in the connector's state file. A restart
+    within the hour therefore doesn't send it again, and still withdraws it.
+  * An error and Not responding send nothing. They show on the status only, as on the clients.
 
 Where stage 5b knowingly differs from the daemon:
 
@@ -680,6 +726,7 @@ Where stage 5b knowingly differs from the daemon:
 | Until migrate re-points the hooks, a machine whose agent-ha-bridge hooks still run may push a question twice | Both would be sending; `migrate` moves the hooks to the host, and nothing runs agent-ha-bridge's hooks after it |
 | The host's own Web Push (`push.*`) notifies the app's phones as well | A different channel, with its own settings; turn one off if both reach the same phone |
 | A tap must name an action its notification offered; a withdrawal that failed is retried, across a restart too | Beyond parity: the daemon reads the index off any action's suffix, and forgets a withdrawal whether or not it arrived |
+| A session that needs sign-in, or whose turn ended on an error, gets no finished push. Sign-in gets a notice of its own (#800) | The daemon has no attention, and the agent's stop hook pushed the turn before's reply as if the session were alive |
 ### Stage 6: update buttons
 
 The machine row's update entity, and its **Install Bridge Update** and **Check for Bridge
