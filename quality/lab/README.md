@@ -35,6 +35,7 @@ Where this file and those comments disagree, the comments win and this file is f
 | Lab cost and age alerts (`infra/modules/monitoring.bicep`) | **Unbuilt** | SRE |
 | Dogfood's checks (#736) | Consume this same lab, never a second lab or runner | Dogfood |
 | Admission of lab evidence | Quality alone | Quality |
+| Audio-endpoint acceptance (§12) | **Unbuilt**: future and capability-qualified; no lab machine has a proven audio endpoint | Platform |
 
 The catalog's `lab-e2e-simulated` stays `planned` and `lab-e2e-agents` stays `partial` (the
 shadow soak, not this lab) until a scenario runs here.
@@ -240,3 +241,105 @@ or placeholder subscription, an unknown role and a malformed run id are refused;
 refuses before any Azure call, listing what's missing, run registration included. The
 registration stub and its receipt check sit behind that refusal, so no offline check reaches
 them without editing the script; they are reviewed, not tested.
+
+## 12. Future acceptance: toast audio on a proven endpoint (#754)
+
+Engineering's [decision on #792](https://github.com/danswett/agent-bridge/pull/792#issuecomment-6650134565)
+let #792 (every toast silent) land without a runtime OS check. Its runtime acceptance is the
+owner's check on #754 after the pre-release installs, and Client Experience reverts #792 if a
+toast dings. That decision also asked for audio-endpoint checks like this one in the lab, once
+it is up. This section is that check, specified only:
+
+- No runner, scenario, script or resource for it exists, and nothing here has run.
+- No lab machine is known to have an audio endpoint.
+- It is not a prerequisite for #792 or its admission. It doesn't change §3's v1 or v2 steps,
+  and it doesn't change their bar.
+- It grants no VM, resource, spend or runtime permission. It adds no second lab, no extra VM
+  and no audio hardware.
+
+**Where it may run.** Only on this lab's isolated Windows 11 machines: `win-x64` and native
+`win-arm64` (§4). It runs in the interactive desktop session the toasts appear in, and only
+where that session has a working audio endpoint, shown by the control below.
+
+These never count as a target:
+
+- the owner's machines, or VM4 or any other development VM;
+- a session that has an endpoint only while someone's RDP connection is attached;
+- a machine with no render endpoint at all, which is what an Azure VM has unless its image
+  provides one.
+
+How a lab image gets an endpoint, in S0, with no extra VM, hardware or spend, is unproven.
+Until it is proven, every case below is `skipped`.
+
+**What isn't proof of silence.** None of these shows that a toast is silent:
+
+- a muted or zero-volume endpoint;
+- notifications turned off, or the per-app "Play a sound when a notification arrives" setting
+  turned off;
+- a capture that wasn't shown to hear anything;
+- the toast XML, or a unit test.
+
+None of them is a fix either. Muting the machine or the app is never how silence is reached.
+Each run checks these settings are at their defaults before the cases and again after them.
+
+**The control, before and after the cases.** These checks use the same endpoint and session as
+the cases.
+
+1. **Before:** the default render endpoint is present and active, not muted, and above zero
+   volume. Notifications and the per-app sound setting are on.
+2. **Before:** a control toast from a lab-only app identity (never the product's) uses Windows'
+   default notification sound. The loopback capture of that endpoint detects it above a set
+   threshold. The capture records what the endpoint plays, never a microphone.
+3. **After:** the same control toast is detected again.
+
+If either control fails, the cases between them prove nothing.
+
+**The cases.** The cut's own installed build (§6) raises each one. The cases are:
+
+- Question;
+- the same Question replaced under its tag, and shown again;
+- Finished;
+- Updated;
+- Outcome.
+
+Each case passes only when all of the following hold:
+
+- **Visible as normal:** the toast appears on screen and in Action Center, as it does today.
+  Its actions are present and work: an answer or reply reaches the relay test client.
+- **No sound:** the capture holds nothing above the threshold from the toast being raised
+  until it settles.
+- **No custom sound:** the toast carries no sound of its own.
+
+**Outcomes.** These use §7's and §8's vocabulary, with each case as its own step, named
+`audio-<case>`, beside the coverage version's steps.
+
+| What happened | The step's outcome |
+|---|---|
+| The control passed before and after, the toast was visible as normal, and it made no sound | `pass` |
+| The control passed both times, and the toast made a sound, didn't show or its actions failed | `fail` |
+| No endpoint, an endpoint only through RDP, or a control that failed before or after | `skipped`, with `detail` beginning `unverified:` and the reason |
+
+A `skipped` audio step is unverified audio coverage. It is never a pass, and it never
+satisfies this acceptance. The XML and unit tests can't stand in for it either.
+
+The `audio-` steps are capability-qualified. They count toward the run's top-level `outcome`
+(§8) only on a machine whose control passed. Without a proven endpoint they neither fail nor
+pass the run, and they never excuse a v1 or v2 step.
+
+The relay-churn and lost-VM rules of §8 still make the whole run `invalid`, audio steps
+included.
+
+**Evidence.** Each audio step records:
+
+- the OS build, role and architecture, and the session's endpoint capability: present or not,
+  and both controls' results;
+- the cut and artifact identity (§7 `source` and `build`);
+- the case, and what was seen and heard: whether the toast and its actions were seen, and the
+  peak captured level against the threshold.
+
+Only that redacted record is kept, under §9. It never includes:
+
+- raw audio;
+- the owner's environment or accounts;
+- credentials;
+- anything recorded from a microphone.
