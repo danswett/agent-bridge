@@ -280,19 +280,25 @@ Until it is proven, every case below is `skipped`.
 - the toast XML, or a unit test.
 
 None of them is a fix either. Muting the machine or the app is never how silence is reached.
-Each run checks these settings are at their defaults before the cases and again after them.
 
 **The control, before and after the cases.** These checks use the same endpoint and session as
-the cases.
+the cases. The control toast comes from a lab-only identity, so it can't show what the
+product's own settings are; the settings are checked separately, by name.
 
-1. **Before:** the default render endpoint is present and active, not muted, and above zero
-   volume. Notifications and the per-app sound setting are on.
+1. **Baseline, before the product first runs:** the settings below are set from a controlled
+   fixture and recorded. They are:
+   - the default render endpoint: which one it is, present and active, not muted, above zero
+     volume;
+   - the session's system-sounds volume and mute;
+   - notifications on, with no Do Not Disturb or Focus;
+   - the product's own app identity: its notifications on, and its "Play a sound when a
+     notification arrives" on.
 2. **Before:** a control toast from a lab-only app identity (never the product's) uses Windows'
    default notification sound. The loopback capture of that endpoint detects it above a set
    threshold. The capture records what the endpoint plays, never a microphone.
-3. **After:** the same control toast is detected again.
-
-If either control fails, the cases between them prove nothing.
+3. **Recheck, after each case and after the last:** every setting in step 1 still has its
+   baseline value.
+4. **After:** the same control toast is detected again.
 
 **The cases.** The cut's own installed build (§6) raises each one. The cases are:
 
@@ -309,21 +315,30 @@ Each case passes only when all of the following hold:
 - **No sound:** the capture holds nothing above the threshold from the toast being raised
   until it settles.
 - **No custom sound:** the toast carries no sound of its own.
+- **Controls and settings held:** both controls passed, and every recheck found step 1's
+  settings at their baseline.
 
 **Outcomes.** These use §7's and §8's vocabulary, with each case as its own step, named
-`audio-<case>`, beside the coverage version's steps.
+`audio-<case>`, beside the coverage version's steps. The rows are read in order, and the first
+that applies to a step decides it.
 
-| What happened | The step's outcome |
-|---|---|
-| The control passed before and after, the toast was visible as normal, and it made no sound | `pass` |
-| The control passed both times, and the toast made a sound, didn't show or its actions failed | `fail` |
-| No endpoint, an endpoint only through RDP, or a control that failed before or after | `skipped`, with `detail` beginning `unverified:` and the reason |
+| What happened | Audio steps | Run's `outcome` (§8) |
+|---|---|---|
+| Before any case: no endpoint, an endpoint only through RDP, or a baseline or before-control that failed | Each `skipped`, with `detail` beginning `unverified:` and the reason | Unaffected: the coverage version's steps decide |
+| A recheck found any setting of step 1 changed from its baseline, whatever changed it | Each `fail`, with `detail` beginning `settings changed:` and the setting | `fail` |
+| A case made a sound, didn't show, or its actions failed | That step `fail` | `fail` |
+| The after-control failed, and settings were unchanged | Steps already `fail` stay `fail`. The rest are `skipped`, with `detail` beginning `invalid:` | `invalid` (§8: no evidence, at most one diagnosed retry), or `fail` if a step failed |
+| Both controls passed, settings were unchanged at every recheck, and the toast showed, its actions worked and it made no sound | `pass` | As the other steps decide |
 
-A `skipped` audio step is unverified audio coverage. It is never a pass, and it never
-satisfies this acceptance. The XML and unit tests can't stand in for it either.
+Missing an endpoint is not a sound regression, and a changed setting is not a claim about what
+changed it. Either way, the silence isn't credited. Only the first row is `skipped` as
+unverified coverage, and only for what was known before any case ran. A failure after the
+cases started is never hidden as a clean `skipped`.
 
-The `audio-` steps are capability-qualified. They count toward the run's top-level `outcome`
-(§8) only on a machine whose control passed. Without a proven endpoint they neither fail nor
+No `skipped` audio step is ever a pass, and none satisfies this acceptance. The XML and unit
+tests can't stand in for it either.
+
+The `audio-` steps are capability-qualified. Without a proven endpoint they neither fail nor
 pass the run, and they never excuse a v1 or v2 step.
 
 The relay-churn and lost-VM rules of §8 still make the whole run `invalid`, audio steps
@@ -333,6 +348,9 @@ included.
 
 - the OS build, role and architecture, and the session's endpoint capability: present or not,
   and both controls' results;
+- each setting of step 1 by name, with its baseline value and its value at every recheck, as
+  plain values such as on, off, muted or a volume percentage. No raw registry export, account
+  identifier or user path is recorded;
 - the cut and artifact identity (§7 `source` and `build`);
 - the case, and what was seen and heard: whether the toast and its actions were seen, and the
   peak captured level against the threshold.
