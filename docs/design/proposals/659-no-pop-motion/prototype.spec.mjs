@@ -218,6 +218,33 @@ test('a return to the top that the reader interrupts ends there: later calls kee
   await expect(page.locator('#pill')).toHaveAccessibleName(/^↑\s*1\s*new$/);
 });
 
+test('a second call arriving while the pill fades in only changes its count: the fade carries on, never jumping to shown', async ({ page }) => {
+  // The second call comes 120 ms into the pill's entrance, frozen there in the frame the first
+  // call showed it, so a slow engine can't finish the entrance first.
+  await page.evaluate(() => new Promise((resolve) => {
+    document.getElementById('tools').scrollTop = 200;
+    window.proto.addTool();
+    requestAnimationFrame(() => { for (const a of document.getAnimations()) { a.pause(); a.currentTime = 120; } resolve(); });
+  }));
+  await expect(page.locator('#pill')).toBeVisible();
+  const at120 = await opacity(page, '#pill');
+  expect(at120).toBeLessThan(1);
+  await page.evaluate(() => new Promise((resolve) => {
+    window.proto.addTool();
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+  await expect(page.locator('#pill')).toHaveAccessibleName(/^↑\s*2\s*new$/);
+  expect(Math.abs(await opacity(page, '#pill') - at120)).toBeLessThan(0.001);
+  let last = at120;
+  for (const t of [130, 145, 160, 167]) {
+    await page.evaluate((ms) => { for (const a of document.getElementById('pill').getAnimations()) { a.currentTime = ms; } }, t);
+    const o = await opacity(page, '#pill');
+    expect(o).toBeGreaterThanOrEqual(last - 0.001);
+    last = o;
+  }
+  expect(last).toBeCloseTo(1, 2);
+});
+
 test('a session row leaving fades where it was as the row below eases up into its place', async ({ page }) => {
   const below = await page.locator('#rows > .row').nth(2).getAttribute('data-row');
   await clickAndFreeze(page, '#row-end', 40);
@@ -227,6 +254,38 @@ test('a session row leaving fades where it was as the row below eases up into it
   expect(ghost).toBeLessThan(1);
   expect(await page.locator('#rows > .ghost').getAttribute('aria-hidden')).toBe('true');
   expect(await ty(page, `#rows > [data-row="${below}"]`)).toBeGreaterThan(1);
+});
+
+// How far the element's bottom sits below the bottom its panel clips at (positive is clipped).
+const clippedBy = (page, selector) => page.evaluate((s) => {
+  const el = document.querySelector(s);
+  const panel = el.closest('.panel');
+  const clip = panel.getBoundingClientRect().bottom - parseFloat(getComputedStyle(panel).borderBottomWidth);
+  return el.getBoundingClientRect().bottom - clip;
+}, selector);
+
+test('the last session row ending stays whole as it fades: its panel keeps its height until the fade is done', async ({ page }) => {
+  // End a row has the second row go, so with two left it is the last.
+  while (await page.locator('#rows > .row:not(.ghost)').count() > 2) {
+    await page.click('#row-end');
+    await page.evaluate(() => { for (const a of document.getAnimations()) { a.finish(); } });
+  }
+  await clickAndFreeze(page, '#row-end', 0);
+  for (const t of [0, 20, 40, 60, 80]) {
+    await freezeAt(page, t);
+    expect(await opacity(page, '#rows > .ghost')).toBeGreaterThan(0);
+    expect(await clippedBy(page, '#rows > .ghost')).toBeLessThanOrEqual(0.5);
+  }
+});
+
+test('the bottom session row easing up into a gap is never clipped by its panel on the way', async ({ page }) => {
+  const bottom = await page.locator('#rows > .row').last().getAttribute('data-row');
+  await clickAndFreeze(page, '#row-end', 0);
+  expect(await ty(page, `#rows > [data-row="${bottom}"]`)).toBeGreaterThan(1);
+  for (let t = 0; t <= 160; t += 20) {
+    await freezeAt(page, t);
+    expect(await clippedBy(page, `#rows > [data-row="${bottom}"]`)).toBeLessThanOrEqual(0.5);
+  }
 });
 
 test('Needs you arrives as one insertion with its first entry, and its count cross-fades as the next comes', async ({ page }) => {

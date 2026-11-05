@@ -333,6 +333,9 @@ function depart(container, els, { dy = 0, dur = T.itemOut } = {}) {
     Object.assign(g.style, { top: `${el.offsetTop + new DOMMatrix(cs.transform).m42}px`, left: `${el.offsetLeft}px`, width: `${el.offsetWidth}px`, margin: '0' });
     return g;
   });
+  // The container is measured as drawn (a hold in flight included) before it shrinks.
+  const was = container.offsetHeight;
+  holds.get(container)?.cancel();
   flip(container, () => {
     els.forEach((e) => e.remove());
     container.prepend(...ghosts);
@@ -344,6 +347,7 @@ function depart(container, els, { dy = 0, dur = T.itemOut } = {}) {
       g.style.left = `${parseFloat(g.style.left) + g.drawn.left - now.left}px`;
     }
   }, { gapFade: true });
+  hold(container, was, dur);
   for (const g of ghosts) {
     const to = dy && !S.reduced ? { opacity: 0, transform: `translateY(${dy}px)` } : { opacity: 0 };
     const a = g.animate([{ opacity: Number(g.dataset.from), transform: 'translateY(0)' }, to],
@@ -351,6 +355,24 @@ function depart(container, els, { dy = 0, dur = T.itemOut } = {}) {
     a.onfinish = () => g.remove();
     a.oncancel = () => g.remove();
   }
+}
+// The panel clips what overflows it, so a container that shrank at once cut off the copy of
+// its last item mid-fade, and the bottom row mid-move. It keeps the height it was drawn at
+// until the copy has faded, then closes over the rest of the shift, never above the rows still
+// easing up into the gap (they are further along their own ease than this closes).
+// Under reduced motion it holds for the cross-fade and then closes at once.
+const holds = new WeakMap();
+function hold(container, was, fade) {
+  const now = container.offsetHeight;
+  if (today() || was - now < 0.5) { return; }
+  // Everything here is border-box, so min-height is the height as drawn.
+  const from = `${was}px`;
+  const to = `${now}px`;
+  const a = S.reduced
+    ? container.animate([{ minHeight: from }, { minHeight: from }], { duration: T.cross })
+    : container.animate([{ minHeight: from }, { minHeight: from, offset: fade / T.shift, easing: E.std }, { minHeight: to }], { duration: T.shift });
+  a.id = 'hold';
+  holds.set(container, a);
 }
 function arrive(container, els, place) {
   flip(container, () => place(els));
@@ -448,25 +470,45 @@ function flushTools() {
 }
 const pill = $('pill');
 const pillText = (n) => (n > 99 ? '99+' : String(n));
+// The pill's own entrance or exit. A call arriving while it fades in only changes the count:
+// restarting (or cancelling) the entrance snapped it to fully shown. One arriving while it
+// fades out turns it back from the opacity it has reached, never from 0 or 1.
+let pillExit = null;
 function showPill(n) {
   const was = fresh;
   fresh = n;
-  pill.getAnimations().forEach((a) => a.cancel());
   if (pill.hidden) {
+    pill.getAnimations().forEach((a) => a.cancel());
     pill.querySelector('.v').textContent = pillText(n);
     pill.hidden = false;
     fadeIn(pill);
-  } else if (n !== was) {
-    setValue($('pill-n'), pillText(n));
+    return;
   }
+  if (pillExit) {
+    const from = Number(getComputedStyle(pill).opacity);
+    const exit = pillExit;
+    pillExit = null;
+    exit.onfinish = null;
+    exit.cancel();
+    if (!today() && from < 1) {
+      pill.animate([{ opacity: from }, { opacity: 1 }], S.reduced
+        ? { duration: T.cross * (1 - from), easing: 'linear' }
+        : { duration: T.itemIn * (1 - from), easing: E.dec });
+    }
+  }
+  if (n !== was) { setValue($('pill-n'), pillText(n)); }
 }
 function hidePill() {
-  if (pill.hidden) { return; }
+  if (pill.hidden || pillExit) { return; }
   fresh = 0;
-  const done = () => { pill.hidden = true; delete $('pill-n').dataset.at; };
+  const done = () => { pillExit = null; pill.hidden = true; delete $('pill-n').dataset.at; };
   if (today()) { done(); return; }
-  const a = pill.animate([{ opacity: 1 }, { opacity: 0 }], S.reduced ? { duration: T.cross } : { duration: T.itemOut, easing: E.acc });
-  a.onfinish = done;
+  const from = Number(getComputedStyle(pill).opacity);
+  pill.getAnimations().forEach((a) => a.cancel());
+  pillExit = pill.animate([{ opacity: from }, { opacity: 0 }], S.reduced ? { duration: T.cross } : { duration: T.itemOut, easing: E.acc });
+  pillExit.onfinish = done;
+  const exit = pillExit;
+  exit.oncancel = () => { if (pillExit === exit) { pillExit = null; } };
 }
 pill.addEventListener('click', () => { returning = true; toolList.scrollTo({ top: 0, behavior: S.reduced || today() ? 'auto' : 'smooth' }); hidePill(); });
 toolList.addEventListener('scroll', () => { if (atTop()) { returning = false; hidePill(); trim(); } }, { passive: true });
