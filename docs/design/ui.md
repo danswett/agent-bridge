@@ -1073,7 +1073,7 @@ up / Repair and Remove connection. You can't tell whether anything is needed. No
 | Not set up | `needs` | "Not set up" | **Set up** |
 | Needs repair | `failed`, Danger | Names what failed ("Hooks changed outside Slipgates") | **Repair hooks** |
 | Managed elsewhere | `failed`, Danger | Names the owner ("Hooks managed by policy") | None |
-| Setting up (while it runs) | `working`, Active | "Setting up…" | Hidden while it runs |
+| Setting up (while it runs) | `working`, Active | "Setting up…" | The pressed verb (Set up or Repair hooks) stays, busy (A4) |
 | Not installed | None | One quiet line in text3: "*Agent* · not installed" (D7) | None |
 
 - **Ready needs evidence** (D2), the same rule as §6.8's Working. An agent is Ready when either:
@@ -1116,7 +1116,13 @@ joins `tokens.json` with the implementation, measured like the other roles (§3)
 - **Remove bridge integration…** is a subtle button in Danger's text colour. It asks for
   confirmation, naming the agent and saying what stays (the CLI, its sign-in and its sessions).
   Cancel is the default. "Remove connection" is no longer on the card.
-- No verb is drawn disabled: a verb that doesn't apply is hidden.
+- No verb is drawn disabled: a verb that doesn't apply is hidden. The one exception is A4's
+  busy verb: while its request runs, the pressed verb stays in place, focusable, with its
+  ring, says it's busy, and ignores presses.
+- **When the outcome lands** (here and on the host card below), the busy verb gives way to the
+  new state's verb. If focus was on it, focus moves to that verb, or to the card's headline
+  when the new state has none (Ready, Managed elsewhere). If focus was elsewhere, it stays
+  there. Stop… returns focus from its confirmation to Stop…, which is then the busy verb.
 
 **The host** (D6) is a card spanning the full width above the agents:
 
@@ -1124,7 +1130,7 @@ joins `tokens.json` with the implementation, measured like the other roles (§3)
 |---|---|---|
 | Running | `done` in `ready`, "Running · since 2:58 PM" | **Restart**, **Stop…** |
 | Stopped | `idle`, Neutral, "Stopped" | **Start** |
-| Starting or stopping | `working`, Active | Hidden while it runs |
+| Starting or stopping | `working`, Active | The pressed verb (Start, Stop… or Restart) stays, busy (A4); the others are hidden |
 
 - **Stop…** asks for confirmation (sessions on this machine stop reporting). Cancel is the default.
 - The process id, the version and the profile move into the host card's Details.
