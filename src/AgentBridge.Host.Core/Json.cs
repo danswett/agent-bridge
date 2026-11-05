@@ -17,40 +17,67 @@ internal static class Json
 
     public static string? Str(JsonElement e, string name) => Get(e, name) is { ValueKind: JsonValueKind.String } v ? v.GetString() : null;
 
-    // Whether every string and property name in a record can be read as text. One holding half a
-    // surrogate pair ("\uD800") is valid JSON that parses, but GetString and Name then throw
-    // InvalidOperationException (Received.Text says the same): a record like that is unreadable,
-    // as one that is not JSON is, and costs that record, never the session or a history request
-    // (found in review of #292).
-    public static bool Decodable(JsonElement e)
+    // A record's bytes with every escaped half of a surrogate pair ("\uD800" with no "\uDC00" after
+    // it, or a "\uDC00" alone) written as "\uFFFD", the replacement character, as a text decoder
+    // reads it. JSON allows them, and .NET parses them, but GetString and a property's Name then
+    // throw InvalidOperationException. Node writes them when it cuts a tool's output by UTF-16
+    // units mid-emoji, so they turn up in fields nobody reads, and refusing the record lost a
+    // tool's end and a question's answer with it (found in review of #292). The same six bytes;
+    // the original is returned when there is nothing to repair, and a turn's id is always hashed
+    // from the original. Bytes that are not UTF-8 (a raw surrogate, a character cut short) parse
+    // as well, and throw the same way when read, so a line holding any is first decoded with the
+    // replacement character for each, as any text decoder would.
+    public static ReadOnlyMemory<byte> Repaired(ReadOnlyMemory<byte> line)
     {
-        try
+        if (!System.Text.Unicode.Utf8.IsValid(line.Span))
         {
-            switch (e.ValueKind)
-            {
-                case JsonValueKind.String:
-                    _ = e.GetString();
-                    return true;
-                case JsonValueKind.Object:
-                    foreach (var p in e.EnumerateObject())
-                    {
-                        _ = p.Name;
-                        if (!Decodable(p.Value)) { return false; }
-                    }
-                    return true;
-                case JsonValueKind.Array:
-                    foreach (var item in e.EnumerateArray())
-                    {
-                        if (!Decodable(item)) { return false; }
-                    }
-                    return true;
-                default:
-                    return true;
-            }
+            line = System.Text.Encoding.UTF8.GetBytes(System.Text.Encoding.UTF8.GetString(line.Span));
         }
-        catch (InvalidOperationException) { return false; }
+        var span = line.Span;
+        if (span.IndexOf("\\ud"u8) < 0 && span.IndexOf("\\uD"u8) < 0) { return line; }
+        byte[]? copy = null;
+        var i = span.IndexOf((byte)'\\');
+        while (i >= 0 && i + 1 < span.Length)
+        {
+            var next = i + 2;
+            if (span[i + 1] == 'u' && Unit(span, i) is { } unit)
+            {
+                next = i + 6;
+                if (unit is >= 0xD800 and <= 0xDBFF && i + 12 <= span.Length && span[i + 6] == '\\' && span[i + 7] == 'u' && Unit(span, i + 6) is >= 0xDC00 and <= 0xDFFF)
+                {
+                    next = i + 12;
+                }
+                else if (unit is >= 0xD800 and <= 0xDFFF)
+                {
+                    copy ??= line.ToArray();
+                    "FFFD"u8.CopyTo(copy.AsSpan(i + 2));
+                }
+            }
+            var after = next < span.Length ? span[next..].IndexOf((byte)'\\') : -1;
+            i = after < 0 ? -1 : next + after;
+        }
+        return copy is null ? line : copy;
     }
 
+    // The code unit of the \uXXXX escape at `at`, if its four digits are hex.
+    static int? Unit(ReadOnlySpan<byte> s, int at)
+    {
+        if (at + 6 > s.Length) { return null; }
+        var unit = 0;
+        for (var k = at + 2; k < at + 6; k++)
+        {
+            var digit = s[k] switch
+            {
+                >= (byte)'0' and <= (byte)'9' => s[k] - '0',
+                >= (byte)'a' and <= (byte)'f' => s[k] - 'a' + 10,
+                >= (byte)'A' and <= (byte)'F' => s[k] - 'A' + 10,
+                _ => -1,
+            };
+            if (digit < 0) { return null; }
+            unit = unit * 16 + digit;
+        }
+        return unit;
+    }
     public static int? Int(JsonElement e, string name) => Get(e, name) switch
     {
         { ValueKind: JsonValueKind.Number } v when v.TryGetInt32(out var i) => i,

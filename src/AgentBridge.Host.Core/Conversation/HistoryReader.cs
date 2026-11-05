@@ -550,25 +550,23 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             }
         }
 
-        // A record whose text .NET cannot decode is unreadable, as one that is not JSON is: a string
-        // or property name holding half a surrogate pair ("\uD800") is valid JSON that parses, but
-        // GetString and Name throw InvalidOperationException, which failed the whole request and
-        // left every older turn unreachable (found in review of #292; Received.Text is the same).
+        // Half a surrogate pair ("\uD800") is read as the replacement character (Json.Repaired), as
+        // the live parser reads it: it threw when its text was read, which failed the whole request
+        // and left every older turn unreachable (found in review of #292).
         static JsonDocument? Parse(ReadOnlyMemory<byte> line)
         {
             try
             {
-                var doc = JsonDocument.Parse(line, new JsonDocumentOptions { MaxDepth = 256 });
-                if (doc.RootElement.ValueKind == JsonValueKind.Object && Json.Decodable(doc.RootElement)) { return doc; }
+                var doc = JsonDocument.Parse(Json.Repaired(line), new JsonDocumentOptions { MaxDepth = 256 });
+                if (doc.RootElement.ValueKind == JsonValueKind.Object) { return doc; }
                 doc.Dispose();
                 return null;
             }
             catch (JsonException) { return null; }
         }
 
-        // Text inside a record's text can be JSON too (a tool's arguments, a question's schema),
-        // and the same half surrogate pair there throws only when a dialect reads it: that record
-        // is unreadable in its turn, as one Parse refuses is, never the request's failure.
+        // A backstop: a record whose text still can't be read (InvalidOperationException from a
+        // getter) is unreadable in its turn, as one Parse refuses is, never the request's failure.
         static bool Decoding(Action read)
         {
             try

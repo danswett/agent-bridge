@@ -28,6 +28,8 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
         {
             _line = line;
             try { Count(d.RootElement); }
+            // A backstop: text that still can't be read costs this record, never the session.
+            catch (InvalidOperationException) { Unreadable(line.Span); }
             finally { _line = default; }
         }
         else { Unreadable(line.Span); }
@@ -91,6 +93,11 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
         _line = line;
         bool visible;
         try { visible = Apply(d.RootElement, at); }
+        catch (InvalidOperationException)
+        {
+            Unreadable(line.Span);
+            visible = true;
+        }
         finally { _line = default; }
         S.Observe(at, before, visible);
     }
@@ -110,17 +117,13 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
 
     protected DateTimeOffset Now(DateTimeOffset? at) => at ?? Time.GetUtcNow();
 
-    // A record whose text can't be decoded (Json.Decodable) is read as one that is not JSON, as
-    // history reads it: it left the session unlisted, and must not give a turn an id here that
-    // history can't (found in review of #292).
+    // Half a surrogate pair ("\uD800") is read as the replacement character (Json.Repaired), as
+    // history reads it: reading its text threw, which left the session unlisted (found in review
+    // of #292). The turn's id is still hashed from the line as written (_line).
     static JsonDocument? TryParse(ReadOnlyMemory<byte> line)
     {
-        JsonDocument doc;
-        try { doc = JsonDocument.Parse(line, new JsonDocumentOptions { MaxDepth = 256 }); }
+        try { return JsonDocument.Parse(Json.Repaired(line), new JsonDocumentOptions { MaxDepth = 256 }); }
         catch (JsonException) { return null; }
-        if (Json.Decodable(doc.RootElement)) { return doc; }
-        doc.Dispose();
-        return null;
     }
 
     protected static byte[] Marker(string text) => System.Text.Encoding.UTF8.GetBytes(text);

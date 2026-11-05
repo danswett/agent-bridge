@@ -325,7 +325,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         try
         {
             // Exactly one JSON value from its first brace, whatever braces its strings hold.
-            var reader = new Utf8JsonReader(System.Text.Encoding.UTF8.GetBytes(text, start, close - start));
+            var reader = new Utf8JsonReader(Json.Repaired(System.Text.Encoding.UTF8.GetBytes(text, start, close - start)).Span);
             using var doc = JsonDocument.ParseValue(ref reader);
             if (doc.RootElement.ValueKind == JsonValueKind.Object && Text.NonBlank(Json.Str(doc.RootElement, "agent_path")) is { } agent
                 && Json.Get(doc.RootElement, "status") is { } status)
@@ -333,7 +333,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                 State(agent, status, at, notice: true);
             }
         }
-        catch (JsonException) { return false; }
+        catch (Exception x) when (x is JsonException or InvalidOperationException) { return false; }
         return S.Background.Version != before;
     }
 
@@ -472,13 +472,13 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         if (close < 0 || start < 0 || start > close) { return null; }
         try
         {
-            var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(text, start, close - start));
+            var reader = new Utf8JsonReader(Json.Repaired(Encoding.UTF8.GetBytes(text, start, close - start)).Span);
             using var doc = JsonDocument.ParseValue(ref reader);
             if (doc.RootElement.ValueKind != JsonValueKind.Object || Text.NonBlank(Json.Str(doc.RootElement, "agent_path")) is not { } agent
                 || Json.Get(doc.RootElement, "status") is not { } status || StopOf(status) is not { } outcome) { return null; }
             return (agent, outcome);
         }
-        catch (JsonException) { return null; }
+        catch (Exception x) when (x is JsonException or InvalidOperationException) { return null; }
     }
 
     // A sub-agent's status as a notice or a wait reports it, as history reads it: how its run

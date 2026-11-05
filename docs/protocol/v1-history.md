@@ -360,13 +360,14 @@ an answer (the user interrupted, the session shut down, another prompt started) 
 yet, or one that can't be found, is `unavailable` ("this session's transcript can't be found"); one
 that can't be opened or read part-way is `unavailable` ("this session's transcript can't be read");
 a line in a turn that isn't JSON is skipped and the turn marked `truncated`, and a turn-starting
-line that isn't is an `unreadable` turn with `partial` on its page. A record that is JSON but whose
-text can't be decoded (a string or name holding half a surrogate pair, `"\uD800"`) is read the same
-way, as a line that isn't JSON: that record, never the request, and live alike; JSON nested in a
-record's text that can't be decoded is read as JSON that isn't is: a tool's arguments as text, a
-question's schema as no fields. Live `activity.turn` is then
+line that isn't is an `unreadable` turn with `partial` on its page. Live `activity.turn` is then
 absent until the next prompt the host can read, so nothing after that line is drawn under the
 prompt before it.
+
+Half a surrogate pair escaped in a record (`"\uD800"`, as Node writes when it cuts a tool's
+output mid-emoji), and bytes that are not UTF-8, are read as the replacement character (U+FFFD),
+live and here alike, so the record and everything it carries is kept; a turn's id is still hashed
+from the bytes as written.
 
 ## Security and authorization
 

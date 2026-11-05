@@ -148,10 +148,10 @@ internal static class QuestionMapper
             var text = v.GetString() ?? "";
             try
             {
-                using var doc = JsonDocument.Parse(text);
+                using var doc = JsonDocument.Parse(Json.Repaired(System.Text.Encoding.UTF8.GetBytes(text)));
                 return ChoiceList(doc.RootElement);
             }
-            // JSON whose text can't be decoded (Json.Decodable) is read as text, as JSON that isn't.
+            // Half a surrogate pair is the replacement character (Json.Repaired); a backstop reads text that still can't be decoded as JSON that isn't.
             catch (Exception e) when (e is JsonException or InvalidOperationException) { return string.IsNullOrWhiteSpace(text) ? [] : [text]; }
         }
         if (v.ValueKind != JsonValueKind.Array) { return []; }
@@ -172,7 +172,7 @@ internal static class QuestionMapper
         {
             try
             {
-                using var doc = JsonDocument.Parse(schema.GetString() ?? "");
+                using var doc = JsonDocument.Parse(Json.Repaired(System.Text.Encoding.UTF8.GetBytes(schema.GetString() ?? "")));
                 return SchemaForm(doc.RootElement);
             }
             catch (Exception e) when (e is JsonException or InvalidOperationException) { return ([], true); }

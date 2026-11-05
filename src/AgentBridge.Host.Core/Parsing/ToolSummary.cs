@@ -60,10 +60,10 @@ internal static class ToolSummary
             {
                 try
                 {
-                    using var doc = JsonDocument.Parse(raw);
+                    using var doc = JsonDocument.Parse(Json.Repaired(System.Text.Encoding.UTF8.GetBytes(raw)));
                     return From(doc.RootElement);
                 }
-                // Text that is JSON but can't be decoded (Json.Decodable) is summarised as text.
+                // A backstop: text that still can't be decoded is summarised as text.
                 catch (Exception e) when (e is JsonException or InvalidOperationException) { }
             }
             return Cut(raw);
