@@ -47,10 +47,25 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
         lock (gate) { cache = null; }
     }
 
-    IEnumerable<ResumeEntry> Copilot()
+    // One session by its id, whatever its age, uncached: a restore after a reboot (#780) names the
+    // session it wants, and Read keeps only the newest ScanLimit of each agent, which an older one
+    // falls outside.
+    public ResumeEntry? Find(string id, IReadOnlyCollection<string> agents)
+    {
+        if (!Guid.TryParseExact(id, "D", out _)) { return null; }
+        var found = Enumerable.Empty<ResumeEntry>();
+        if (agents.Contains("claude")) { found = found.Concat(Claude(id)); }
+        if (agents.Contains("codex")) { found = found.Concat(Codex(id)); }
+        if (agents.Contains("copilot")) { found = found.Concat(Copilot(id)); }
+        return found.FirstOrDefault(e => string.Equals(e.Id, id, StringComparison.OrdinalIgnoreCase));
+    }
+
+    // Only: the one session's, read whatever its age.
+    IEnumerable<ResumeEntry> Copilot(string? only = null)
     {
         var root = Path.Combine(copilotHome, "session-state");
-        foreach (var dir in Newest(SafeDirectories(root), CopilotActivity))
+        var dirs = SafeDirectories(root).Where(d => only is null || string.Equals(Path.GetFileName(d), only, StringComparison.OrdinalIgnoreCase));
+        foreach (var dir in Newest(dirs, CopilotActivity, only is null))
         {
             var id = Path.GetFileName(dir);
             if (!Guid.TryParseExact(id, "D", out _)) { continue; }
@@ -101,12 +116,13 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
         return events > folder ? events : folder;
     }
 
-    IEnumerable<ResumeEntry> Claude()
+    IEnumerable<ResumeEntry> Claude(string? only = null)
     {
         var projects = Path.Combine(claudeHome, "projects");
         // Only each project folder's own files: subagent transcripts live in folders below.
-        var files = SafeDirectories(projects).SelectMany(d => SafeFiles(d, "*.jsonl", recurse: false));
-        foreach (var file in Newest(files, File.GetLastWriteTimeUtc))
+        var files = SafeDirectories(projects).SelectMany(d => SafeFiles(d, "*.jsonl", recurse: false))
+            .Where(f => only is null || string.Equals(Path.GetFileNameWithoutExtension(f), only, StringComparison.OrdinalIgnoreCase));
+        foreach (var file in Newest(files, File.GetLastWriteTimeUtc, only is null))
         {
             var id = Path.GetFileNameWithoutExtension(file);
             if (!Guid.TryParseExact(id, "D", out _)) { continue; }
@@ -135,7 +151,7 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
         }
     }
 
-    IEnumerable<ResumeEntry> Codex()
+    IEnumerable<ResumeEntry> Codex(string? only = null)
     {
         var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var index = Path.Combine(codexHome, "session_index.jsonl");
@@ -146,8 +162,10 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
                 if (Parse(line) is { } r && Str(r, "id") is { } id && Str(r, "thread_name") is { Length: > 0 } name) { names[id] = name; }
             }
         }
-        var files = SafeFiles(Path.Combine(codexHome, "sessions"), "rollout-*.jsonl", recurse: true);
-        foreach (var file in Newest(files, File.GetLastWriteTimeUtc))
+        // A rollout's name ends with its session's id.
+        var files = SafeFiles(Path.Combine(codexHome, "sessions"), "rollout-*.jsonl", recurse: true)
+            .Where(f => only is null || Path.GetFileNameWithoutExtension(f).EndsWith(only, StringComparison.OrdinalIgnoreCase));
+        foreach (var file in Newest(files, File.GetLastWriteTimeUtc, only is null))
         {
             string id = "", folder = "", prompt = "";
             foreach (var line in FileEnds(file))
@@ -212,7 +230,7 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
         return b.ToString();
     }
 
-    static IEnumerable<string> Newest(IEnumerable<string> paths, Func<string, DateTime> written)
+    static IEnumerable<string> Newest(IEnumerable<string> paths, Func<string, DateTime> written, bool limited = true)
     {
         var list = new List<(string Path, DateTime At)>();
         foreach (var p in paths)
@@ -220,7 +238,7 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
             try { list.Add((p, written(p))); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }
-        return list.OrderByDescending(x => x.At).Take(ScanLimit).Select(x => x.Path);
+        return list.OrderByDescending(x => x.At).Take(limited ? ScanLimit : int.MaxValue).Select(x => x.Path);
     }
 
     static IEnumerable<string> SafeDirectories(string root)

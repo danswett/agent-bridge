@@ -1154,6 +1154,211 @@ public sealed class RestoreTests : IDisposable
         await Until(() => real.Get(Id)!.Restored is null);
     }
 
+    // A whole turn can start and end between two reads: Continue goes all the same, once the
+    // transcript holds a prompt it did not when the mark was first shown.
+    [Fact]
+    public async Task Continue_goes_after_a_whole_turn_that_starts_and_ends_between_two_reads()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999998";
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var real = f.Source();
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2));
+        await real.RefreshAsync();
+        real.Mark(Id, new SessionRestored { At = Fixture.T0.AddSeconds(5), Cause = RestoreCause.Reboot, MidTurn = true, Continue = "carry on" });
+        await Until(() => real.Get(Id)?.Restored is not null);
+
+        Fixture.Append(events, Copilot.TurnEnd(3), Copilot.User("carry on", 10), Copilot.TurnStart(11), Copilot.Assistant("done", 12), Copilot.TurnEnd(13));
+        await real.RefreshAsync();
+
+        var after = real.Get(Id)!;
+        Assert.NotEqual(SessionStatus.Working, after.Status);
+        Assert.Equal(((bool?)null, (string?)null), (after.Restored!.MidTurn, after.Restored.Continue));
+    }
+
+    // A question the interrupted run left waiting went with it: the restored session is not shown
+    // asking it (questionLost says it went). One asked after the restore is shown.
+    [Fact]
+    public async Task A_question_left_by_the_interrupted_run_is_not_shown_as_asked_but_one_asked_after_the_restore_is()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999997";
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var real = f.Source();
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 3));
+        await real.RefreshAsync();
+        Assert.Equal(SessionStatus.Waiting, real.Get(Id)!.Status);
+
+        real.Mark(Id, new SessionRestored { At = Fixture.T0.AddSeconds(5), Cause = RestoreCause.Reboot, QuestionLost = true });
+        await Until(() => real.Get(Id)?.Restored is not null);
+        var lost = real.Get(Id)!;
+        Assert.Equal((SessionStatus.Idle, (Question?)null), (lost.Status, lost.Question));
+
+        Fixture.Append(events, Copilot.User("again", 10), Copilot.TurnStart(11), Copilot.Permission("r2", "c2", Copilot.Prompts["commands"], 12));
+        await real.RefreshAsync();
+        var asked = real.Get(Id)!;
+        Assert.Equal(SessionStatus.Waiting, asked.Status);
+        Assert.NotNull(asked.Question);
+    }
+
+    // ---- #837 review: the restore lifecycle ----
+
+    // The restore's stamp is written down before its launch: a session that registers and then dies
+    // with the host reads as a loop at the next start, never restored again.
+    [Fact]
+    public async Task A_restore_is_stamped_in_the_record_before_its_launch_so_one_that_dies_with_the_host_is_not_restored_again()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using var first = Recorder(resumer: resumer);
+        first.Start();
+        await Until(() => resumer.Asked.Count == 1);
+        Assert.NotNull(Assert.Single(Written().Owed).Restored);
+
+        // It registers while its launch is still being followed, and the record is written...
+        source.Upsert(S("a"));
+        Time.Advance(RestoreRecorder.Coalesce);
+        Assert.NotNull(Assert.Single(Written().Sessions).Restored);
+        // ...and the machine goes down with it before the launch returns.
+        source.Sessions.Clear();
+        var again = new Resumer();
+        await using var second = Recorder(resumer: again);
+        second.Start();
+
+        Assert.Empty(again.Asked);
+        Assert.Equal((0, 1), (second.Notice!.Restored, second.Notice.Loops));
+        resumer.Gate!.SetResult();
+    }
+
+    [Fact]
+    public async Task A_restore_that_registers_then_fails_stays_offered_as_one_that_died_again()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Failed, "Copilot in App closed before it started; start it at the machine to see why"));
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => resumer.Asked.Count == 1);
+
+        source.Upsert(S("a"));
+        source.Remove("a");
+        resumer.Gate!.SetResult();
+        await Until(() => Logged("could not be restored"));
+        Time.Advance(RestoreRecorder.JudgeEvery);
+
+        Assert.Equal(["a"], r.Notice!.Offered.Select(o => o.Id));
+        Assert.Equal(1, r.Notice.Loops);
+        Assert.Single(r.Folders()!);
+    }
+
+    // Restored, then gone within ten minutes while the host runs: judged as at a start. One that died
+    // is offered as a loop and kept owed (its worktree too); one its agent ended normally is not.
+    [Fact]
+    public async Task A_restored_session_that_dies_while_the_host_runs_is_offered_as_a_loop_and_one_ended_normally_is_not()
+    {
+        Previous(Fixture.T0, false, E("a"), E("b"));
+        var resumer = new Resumer();
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => told.Count == 1);
+        source.Upsert(S("a"));
+        source.Upsert(S("b"));
+        Time.Advance(TimeSpan.FromMinutes(5));
+
+        ends.Of["b"] = true;
+        source.Remove("a");
+        source.Remove("b");
+        Time.Advance(RestoreRecorder.JudgeEvery);
+
+        Assert.Equal(["a"], r.Notice!.Offered.Select(o => o.Id));
+        Assert.Equal(1, r.Notice.Loops);
+        Time.Advance(RestoreRecorder.GoneKept);
+        Assert.Equal(["a"], Written().Owed.Select(w => w.Entry.Id));
+        Assert.Equal(["/work/repo"], r.Folders()!);
+        Assert.Equal(2, resumer.Asked.Count);
+    }
+
+    // A restart within GoneKept of that death: the session is carried as owed, not read as ended
+    // under the last run's eyes. And the notice keeps the reboot it was restored from as its cause.
+    [Fact]
+    public async Task A_restored_session_that_died_while_the_host_ran_stays_offered_across_a_quick_restart_and_the_reboot_stays_the_cause()
+    {
+        Previous(Fixture.T0.AddDays(-1), false, E("a"));
+        var resumer = new Resumer();
+        await using (var first = Recorder(resumer: resumer))
+        {
+            first.Start();
+            await Until(() => told.Count == 1);
+            source.Upsert(S("a"));
+            source.Remove("a");
+            Time.Advance(RestoreRecorder.JudgeEvery);
+
+            Assert.Equal(RestoreCause.Reboot, first.Notice!.Cause);
+            Assert.Equal(["a"], first.Notice.Offered.Select(o => o.Id));
+        }
+
+        await using var second = Recorder(resumer: resumer);
+        second.Start();
+
+        Assert.Equal(["a"], second.Notice!.Offered.Select(o => o.Id));
+        Assert.Single(second.Folders()!);
+        Assert.Single(resumer.Asked);
+    }
+
+    // A restore that waits at folder trust for longer than ten minutes keeps its stamp until it has
+    // been seen live that long: one that registers late and dies at once is not restored again.
+    [Fact]
+    public async Task A_restore_still_waiting_to_register_after_ten_minutes_keeps_its_stamp()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer();
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Unconfirmed, "Copilot in App is asking whether to trust the folder; left for a person at the machine") { Session = "a" });
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => told.Count == 1);
+
+        Time.Advance(RestoreRecorder.LoopWithin + TimeSpan.FromMinutes(5));
+        source.Upsert(S("a"));
+        Time.Advance(RestoreRecorder.Coalesce);
+
+        Assert.NotNull(Assert.Single(Written().Sessions).Restored);
+    }
+
+    // The host stopping while a restore waits its turn: it starts nothing.
+    [Fact]
+    public async Task A_restore_waiting_its_turn_when_the_host_stops_starts_nothing()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => resumer.Asked.Count == 1);
+
+        var queued = r.RestoreAsync(new RestoreAsk { Session = "x", Cause = RestoreCause.Crash, By = "host-signin" });
+        var stopping = r.DisposeAsync().AsTask();
+        var refused = await queued.WaitAsync(TimeSpan.FromSeconds(5));
+        resumer.Gate!.SetResult();
+        await stopping;
+
+        Assert.Equal((LaunchOutcome.Refused, "the host is stopping"), (refused.Outcome, refused.Reason));
+        Assert.Equal(["a"], resumer.Asked.Select(x => x.Id));
+    }
+
+    [Fact]
+    public async Task What_restored_sessions_lost_is_kept_for_the_push()
+    {
+        Previous(Fixture.T0, false, E("a", turn: RestoreTurn.Working), E("b"), E("c", question: true));
+        var resumer = new Resumer();
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => told.Count == 1);
+
+        var lost = r.RestoredLosses();
+        Assert.Equal(["a", "c"], lost.Select(x => x.Id).Order(StringComparer.Ordinal));
+        Assert.True(lost.Single(x => x.Id == "a").MidTurn);
+        Assert.True(lost.Single(x => x.Id == "c").QuestionLost);
+    }
+
     [Fact]
     public async Task A_session_an_earlier_run_restored_stays_offered_when_the_clock_is_set_back_before_its_restore()
     {

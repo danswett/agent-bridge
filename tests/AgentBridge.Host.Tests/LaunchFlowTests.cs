@@ -395,6 +395,39 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Empty(starter.Specs);
     }
 
+    // The resume list reads only the newest 200 sessions of each agent; a restore names its session,
+    // and finds it whatever its age.
+    [Fact]
+    public async Task A_restore_finds_its_session_past_the_newest_two_hundred()
+    {
+        const string Old = "7a7a7a7a-7a7a-4a7a-8a7a-7a7a7a7a7a7a";
+        Resumable(Old, app, "Long ago");
+        Directory.SetLastWriteTimeUtc(Path.Combine(f.CopilotHome, "session-state", Old), DateTime.UtcNow.AddYears(-1));
+        for (var i = 0; i < ResumableStore.ScanLimit; i++) { Resumable(Guid.NewGuid().ToString(), app, $"Newer {i}"); }
+
+        var o = await Launcher(Config()).ResumeAsync(new ResumeAsk(Old, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+
+        Assert.Equal((LaunchOutcome.Started, Old), (o.Outcome, o.Session));
+    }
+
+    // A setting a launch left to the agent is left to it on restore, though the machine has a default
+    // of its own now; a session started by hand gets the machine's.
+    [Fact]
+    public async Task A_restore_leaves_to_the_agent_what_its_launch_left_to_the_agent()
+    {
+        const string Ours = "7b7b7b7b-7b7b-4b7b-8b7b-7b7b7b7b7b7b";
+        const string Hand = "7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c";
+        Resumable(Ours, app, "Launched here");
+        Resumable(Hand, app, "By hand");
+        var launcher = Launcher(Config(c => c with { Agents = new Dictionary<string, AgentConfig> { ["copilot"] = new() { Model = "gpt-6.1-sol" } } }));
+
+        await launcher.ResumeAsync(new ResumeAsk(Ours, AgentKind.Copilot, new RestoreLaunch("copilot", "App", null, null, null, null, null, LaunchProtocol.Ask), RestoreRecorder.RestorePrincipal));
+        await launcher.ResumeAsync(new ResumeAsk(Hand, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+
+        Assert.Equal(["--session-id", Ours, "--banner"], starter.Specs[0].Arguments);
+        Assert.Equal(["--session-id", Hand, "--banner", "--model", "gpt-6.1-sol"], starter.Specs[1].Arguments);
+    }
+
     [Fact]
     public async Task A_resent_launch_gets_the_first_outcome_and_starts_nothing_more()
     {

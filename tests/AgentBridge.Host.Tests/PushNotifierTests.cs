@@ -200,6 +200,21 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal("3 sessions were restored, idle.\n1 more went with it.\n1 died again soon after a restore, so it wasn't restored again.\nResume them from Launch.", n.GetProperty("body").GetString());
     }
 
+    // Restored or not, a turn cut short and a question nobody answered are said.
+    [Fact]
+    public async Task What_restored_sessions_lost_is_said_when_every_session_was_restored()
+    {
+        Start();
+        Subscribe(Phone);
+
+        notifier.NotifyRestore(new RestoreNotice { At = T, Cause = RestoreCause.Reboot, Why = RestoreWhy.Pending, Restored = 2 },
+            [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login", MidTurn = true }, new RestoreSession { Id = "s2", Agent = AgentKind.Claude, QuestionLost = true }]);
+        await After(TimeSpan.Zero);
+
+        var (_, n, _, _, _) = Assert.Single(Received());
+        Assert.Equal("2 sessions were restored, idle.\nMid-turn: Fix the login.\nA question went unanswered in Claude session.", n.GetProperty("body").GetString());
+    }
+
     [Fact]
     public async Task A_question_answered_at_the_machine_before_its_delay_is_never_notified()
     {

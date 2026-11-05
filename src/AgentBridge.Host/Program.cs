@@ -399,7 +399,7 @@ async Task<int> ServeAsync(HostHandover handover)
         ReadOnly = () => ReadOnlyReason() ?? (settings.Launch.Enabled ? null : "launching is turned off (launch.enabled)") ?? g5.Recent(),
         Log = Log,
     });
-    if (push is not null) { restore.NoticeReady += push.NotifyRestore; }
+    if (push is { } notifier) { restore.NoticeReady += n => notifier.NotifyRestore(n, restore.RestoredLosses()); }
     // Each agent's allowance, asked at the pace its sessions set, and never more often than
     // the idle pace while agent-ha-bridge is asking the same vendors for this user; further Copilot
     // accounts at the idle pace. None at all when usage.publish is off: no vendor is asked, and

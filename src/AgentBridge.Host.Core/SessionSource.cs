@@ -35,7 +35,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     readonly Dictionary<string, (DateTimeOffset ErrorAt, string Generation, RecoveryState State)> _recovery = new(StringComparer.Ordinal);
     // Sessions restored after a reboot or a crash (#780, RestoreRecorder), with their mark. Set before
     // the session registers, too: shown from its first upsert. Under _gate.
-    readonly Dictionary<string, SessionRestored> _restoreMarks = new(StringComparer.Ordinal);
+    readonly Dictionary<string, RestoreMarkState> _restoreMarks = new(StringComparer.Ordinal);
     // Who drives each session (Session.Driver), shared with the Home Assistant connector; null for
     // a source that does not say.
     readonly SessionDrivers? _drivers;
@@ -841,8 +841,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     {
         lock (_gate)
         {
-            if (mark is null ? !_restoreMarks.Remove(id) : _restoreMarks.TryGetValue(id, out var was) && was == mark) { return; }
-            if (mark is not null) { _restoreMarks[id] = mark; }
+            if (mark is null ? !_restoreMarks.Remove(id) : _restoreMarks.TryGetValue(id, out var was) && was.Mark == mark) { return; }
+            if (mark is not null) { _restoreMarks[id] = new RestoreMarkState(mark); }
             if (!_entries.ContainsKey(id)) { return; }
         }
         _ = Task.Run(() => RecommitDriverAsync(id));
@@ -882,13 +882,20 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         {
             endingSince = _ending.TryGetValue(full.Id, out var at) ? at : null;
             // Continue is for a session that went mid-turn and has not been given a turn since:
-            // once a turn starts after the restore (Continue pressed, any reply, or typed at the
-            // machine), it goes. A turn the transcript still shows from before the restore does not.
-            if (_restoreMarks.TryGetValue(full.Id, out var mark) && mark.MidTurn == true && full.Status == SessionStatus.Working && full.StatusSince > mark.At)
+            // once a prompt arrives after the restore (Continue pressed, any reply, or typed at the
+            // machine), it goes, whether that turn is still running when this looks or has already
+            // ended or come to a question. Counted against the prompts the transcript held when the
+            // mark was first shown, so the interrupted turn it still shows does not count.
+            restored = null;
+            if (_restoreMarks.TryGetValue(full.Id, out var state))
             {
-                _restoreMarks[full.Id] = mark = mark with { MidTurn = null, Continue = null };
+                state.Prompts ??= entry.Tracker.Prompts;
+                if (state.Mark.MidTurn == true && (entry.Tracker.Prompts > state.Prompts || (full.Status == SessionStatus.Working && full.StatusSince > state.Mark.At)))
+                {
+                    state.Mark = state.Mark with { MidTurn = null, Continue = null };
+                }
+                restored = state.Mark;
             }
-            restored = mark;
         }
         (DriverKind? Kind, string? Principal) driver = (null, null);
         var agentsPrompt = false;
@@ -929,7 +936,18 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             }
         }
         if (endingSince is { } since) { shown = shown with { Status = SessionStatus.Ending, StatusSince = since }; }
-        if (restored is not null) { shown = shown with { Restored = restored }; }
+        if (restored is not null)
+        {
+            shown = shown with { Restored = restored };
+            // A question or approval the interrupted run left waiting went with it (questionLost says
+            // so): the resumed agent is not asking it, so it is not shown as asked. One asked after
+            // the restore is. Replies still read the transcript first, and refuse while it holds an
+            // unanswered ask: typing into a question the agent may still show would answer it.
+            if (shown.Status == SessionStatus.Waiting && shown.StatusSince < restored.At && (shown.Question is null || shown.Question.AskedAt < restored.At))
+            {
+                shown = shown with { Question = null, WaitingOn = null, Status = SessionStatus.Idle, StatusSince = restored.At };
+            }
+        }
         if (_drivers is not null)
         {
             shown = shown with { Driver = driver.Kind, DriverPrincipal = driver.Principal };
@@ -1125,4 +1143,12 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         _stop.Dispose();
         _pass.Dispose();
     }
+}
+
+// A restored session's mark (#780), and how many prompts its transcript held when the mark was first
+// shown: Continue goes once there is one more.
+sealed class RestoreMarkState(SessionRestored mark)
+{
+    public SessionRestored Mark { get; set; } = mark;
+    public int? Prompts { get; set; }
 }

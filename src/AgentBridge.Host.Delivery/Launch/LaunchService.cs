@@ -440,6 +440,23 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return candidates;
     }
 
+    // One stored session by its id for a restore: among the candidates, else read by its id alone,
+    // whatever its age (ResumableStore.Find), under the launcher that resumes it here. Never one
+    // whose agent's discovery is held.
+    async Task<ResumeEntry?> FindAsync(IReadOnlyDictionary<string, string> executables, string id, CancellationToken ct)
+    {
+        bool Same(ResumeEntry e) => string.Equals(e.Id, id, StringComparison.OrdinalIgnoreCase);
+        if ((await CandidatesAsync(executables, ct)).FirstOrDefault(Same) is { } listed) { return listed; }
+        var kinds = new HashSet<string>(StringComparer.Ordinal);
+        if (executables.ContainsKey("claude")) { kinds.Add("claude"); }
+        if (executables.ContainsKey("codex")) { kinds.Add("codex"); }
+        var copilotLauncher = executables.ContainsKey("copilot") ? "copilot" : executables.ContainsKey("agency") ? "agency" : null;
+        if (copilotLauncher is not null) { kinds.Add("copilot"); }
+        if (await Task.Run(() => resumable.Find(id, kinds), ct) is not { } found) { return null; }
+        if (found.Agent == AgentKind.Copilot) { found = found with { Launcher = copilotLauncher! }; }
+        return source.Held is { } held && held.Agents.Contains(found.Agent) ? null : found;
+    }
+
     // "<summary> - <folder>", the agent named when the list holds more than one kind, cut to 120
     // characters, as agent-ha-bridge labels its resume list.
     public static string Title(ResumeEntry e, bool prefixed)
@@ -527,10 +544,13 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             Request = key.ToString("D"),
             Resume = ask.Id,
             Agent = l?.Launcher,
-            Profile = l?.Profile,
-            Model = l?.Model,
-            Effort = l?.Effort,
-            Context = l?.Context,
+            // For one this host launched, a setting it left out was the agent's own (""), not the
+            // machine's default, which may have changed since; one started by hand gets the
+            // machine's defaults (null).
+            Profile = l is null ? null : l.Profile ?? "",
+            Model = l is null ? null : l.Model ?? "",
+            Effort = l is null ? null : l.Effort ?? "",
+            Context = l is null ? null : l.Context ?? "",
             Permissions = l?.Permissions == LaunchProtocol.AllowAll ? LaunchProtocol.AllowAll : LaunchProtocol.Ask,
         };
         return requests.Once(key, () => RunAsync(request, key, ask.By, restoring: true), result =>
@@ -545,7 +565,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         var resume = resolved.Resumable.FirstOrDefault(e => string.Equals(e.Id, r.Resume, StringComparison.OrdinalIgnoreCase));
         var agentId = r.Agent is { } named && Launchers.Find(named) is { } l && resolved.Executables.ContainsKey(l.Id) && (resume is null || l.Kind == resume.Agent) ? named : null;
         var agent = resolved.Options.Agents.FirstOrDefault(a => a.Id == (agentId ?? resume?.Launcher));
-        static string? Keep(string? value, IReadOnlyList<string>? offered) => value is not null && offered?.Contains(value, StringComparer.Ordinal) == true ? value : null;
+        static string? Keep(string? value, IReadOnlyList<string>? offered) => value is "" || value is not null && offered?.Contains(value, StringComparer.Ordinal) == true ? value : null;
         return r with
         {
             Agent = agentId,
@@ -587,7 +607,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 // Found among every stored session, not only the newest resumeCount; Settle and
                 // StartAsync still check its folder and that it is not running.
                 if (!resolved.Resumable.Any(e => string.Equals(e.Id, restoreId, StringComparison.OrdinalIgnoreCase))
-                    && (await CandidatesAsync(resolved.Executables, CancellationToken.None)).FirstOrDefault(e => string.Equals(e.Id, restoreId, StringComparison.OrdinalIgnoreCase)) is { } found)
+                    && await FindAsync(resolved.Executables, restoreId, CancellationToken.None) is { } found)
                 {
                     resolved = resolved with { Resumable = [.. resolved.Resumable, found] };
                 }
