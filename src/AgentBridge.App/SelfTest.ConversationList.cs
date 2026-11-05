@@ -269,10 +269,14 @@ static partial class SelfTest
             || SessionView.Shallowest<ScrollViewer>(list) is not { } scroll) { return ("setup: a list of blocks with a scroller", "none"); }
         static bool Linked(ConversationBlock block) => block.Block is MdParagraph p && p.Inlines.Any(i => i is MdLink);
         static void Log(string step) => AppLog.Write($"self-test: link Tab, {step}");
+        // The end of the run the list has realised from the view's first block on, as Tabbed finds
+        // it: a block kept far off, such as one an earlier check left focused, is not part of it.
         int End()
         {
-            var end = -1;
-            for (var i = 0; i < blocks.Count; i++) { if (list.ContainerFromIndex(i) is not null) { end = i; } }
+            list.UpdateLayout();
+            var end = panel.FirstVisibleIndex;
+            if (end < 0 || list.ContainerFromIndex(end) is null) { return -1; }
+            while (end + 1 < blocks.Count && list.ContainerFromIndex(end + 1) is not null) { end++; }
             return end;
         }
         // The view at an offset and laid out there, waited for a frame at a time, not Until's 200 ms,
@@ -300,6 +304,8 @@ static partial class SelfTest
                 if (!Linked(blocks[a]) || !Linked(blocks[a + 1]) || Linked(blocks[a - 1])) { continue; }
                 tries++;
                 list.ScrollIntoView(blocks[a], ScrollIntoViewAlignment.Leading);
+                await Still(scroll);
+                list.UpdateLayout();
                 if (!await Until(() => list.ContainerFromIndex(a) is FrameworkElement, TimeSpan.FromSeconds(2)) || list.ContainerFromIndex(a) is not FrameworkElement placed)
                 {
                     setup = $"setup: block {a + 1} realised when scrolled to";
@@ -326,6 +332,9 @@ static partial class SelfTest
                     if (end > a) { high = middle; } else { low = middle; }
                 }
                 var spot = kept ?? low;
+                // The search only proposes an offset. A -1 or stale end from End() during it at worst
+                // misleads it, and the place is checked again here: unless block a is the last
+                // realised and a+1 is not, this is a "setup:" failure, and Tab is never pressed.
                 var last = await At(spot);
                 Log($"block {a + 1} the last realised at {spot:0.#} px: {last + 1} is, block {a + 2} {(list.ContainerFromIndex(a + 1) is null ? "not realised" : "realised")}");
                 if (last != a || list.ContainerFromIndex(a + 1) is not null || list.ContainerFromIndex(a) is not FrameworkElement shown)
