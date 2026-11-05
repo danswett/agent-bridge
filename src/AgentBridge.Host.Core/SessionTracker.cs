@@ -224,7 +224,7 @@ internal sealed class SessionTracker
             WaitingOn = question?.Agent,
             Subagents = subagents,
             SubagentsMore = more,
-            Attention = _state.Attention,
+            Attention = _state.Attention ?? Stalled(effective, Later(_state.LastEventAt, hintAt), agents + shells > 0, now),
             Activity = new Activity
             {
                 Response = response,
@@ -243,6 +243,28 @@ internal sealed class SessionTracker
             },
         };
     }
+
+    // Not responding (#800): still working, and nothing at all written for longer than a turn ever
+    // goes quiet. A 401 that the CLI never writes, or a CLI hung on its own network call, left a
+    // session reading working for an hour with nothing to say it had stopped. Never over a
+    // question (it is waiting on the person) or another attention; any event clears it.
+    Attention? Stalled(SessionStatus effective, DateTimeOffset? lastEvent, bool background, DateTimeOffset now)
+    {
+        if (effective != SessionStatus.Working || lastEvent is not { } last) { return null; }
+        var busy = background || _state.Tools.Current() is not null;
+        if (now - last < (busy ? _options.NotRespondingBusyAfter : _options.NotRespondingAfter)) { return null; }
+        var agent = Discovered.Agent;
+        return new Attention
+        {
+            Kind = AttentionKind.NotResponding,
+            Since = last,
+            Agent = agent,
+            Message = AgentErrors.Template(AttentionKind.NotResponding, null, null, agent),
+            LastEventAt = last,
+        };
+    }
+
+    static DateTimeOffset? Later(DateTimeOffset? a, DateTimeOffset? b) => a is null ? b : b is null ? a : a > b ? a : b;
 
     // Which prompt the session's userMessage is, for the driver (#489): its record where the parser
     // knows it, beside its words, so the same words sent again are another prompt.

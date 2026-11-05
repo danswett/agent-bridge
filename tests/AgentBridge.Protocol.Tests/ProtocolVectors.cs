@@ -527,6 +527,7 @@ public static class ProtocolVectors
         f.Record<PushNoticeData>(Host)
             .Valid("question", data)
             .Valid("finished", data with { Kind = NoticeKind.Finished, Question = null })
+            .Valid("sign-in", SignInData)
             .Reads("an-unknown-kind-reads-as-a-question", $$"""{"v":1,"kind":"celebrate","machine":"{{MachineId}}","session":"{{SessionId}}","at":"2026-10-28T04:22:43.182Z"}""");
         var notification = new PushNotification
         {
@@ -535,9 +536,16 @@ public static class ProtocolVectors
         };
         f.Record<PushNotification>(Host)
             .Valid("question", notification)
-            .Valid("resolved", notification with { Silent = true, Body = "Answered", Data = data with { Kind = NoticeKind.Resolved } });
+            .Valid("resolved", notification with { Silent = true, Body = "Answered", Data = data with { Kind = NoticeKind.Resolved } })
+            .Valid("sign-in", new PushNotification
+            {
+                Title = "Copilot on DEV-VM1 needs sign-in", Body = "3 sessions affected", Tag = PushNotice.Tag(MachineId, PushNotice.SignInKey(AgentKind.Copilot, null)), Data = SignInData,
+                Navigate = PushNotice.SignInNavigate("https://danswett.github.io/agent-bridge/", MachineId, AgentKind.Copilot),
+            });
         f.Record<PushMessage>(Host).Valid("question", new PushMessage { Notification = notification });
     }
+
+    static PushNoticeData SignInData => new() { Kind = NoticeKind.SignIn, Machine = MachineId, Session = SessionId, Agent = AgentKind.Copilot, Sessions = 3, At = T0 };
 
     // ---- launching ----
 

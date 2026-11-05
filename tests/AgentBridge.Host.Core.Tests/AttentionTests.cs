@@ -503,4 +503,59 @@ public class AttentionTests
 
         Assert.Equal("\u26A0\uFE0F Turn error: Copilot stopped with an error.", session.Activity.Response);
     }
+
+    // C (#800, 6646501884 §1): the Not responding watchdog. The fixture's clock reads an hour after
+    // T0, so these transcripts are written at that hour.
+    const int Now = 3600;
+
+    static async Task<(Fixture F, string Events, AgentBridge.Host.Core.SessionSource Source)> Watched()
+    {
+        var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        var source = f.Source(stalledAfter: TimeSpan.FromMinutes(10));
+        await source.RefreshAsync();
+        return (f, events, source);
+    }
+
+    static async Task<Session> Read((Fixture F, string Events, AgentBridge.Host.Core.SessionSource Source) w, TimeSpan after, params string[] lines)
+    {
+        w.F.Time.Advance(after);
+        Fixture.Append(w.Events, lines);
+        await w.Source.RefreshAsync();
+        return w.Source.Get(Id)!;
+    }
+
+    [Fact]
+    public async Task A_working_session_silent_for_ten_minutes_reads_not_responding_until_it_writes_anything_again()
+    {
+        var w = await Watched();
+        using var __ = w.F;
+        await using var _ = w.Source;
+        Assert.Null((await Read(w, TimeSpan.Zero, Copilot.User("Carry on", Now), Copilot.TurnStart(Now))).Attention);
+        Assert.Null((await Read(w, TimeSpan.FromMinutes(10) - TimeSpan.FromSeconds(1))).Attention);
+
+        var stalled = await Read(w, TimeSpan.FromSeconds(1));
+
+        Assert.Equal(SessionStatus.Working, stalled.Status);
+        var at = Fixture.T0.AddSeconds(Now);
+        Assert.Equal(new Attention { Kind = AttentionKind.NotResponding, Since = at, Agent = AgentKind.Copilot, Message = "Copilot isn't responding.", LastEventAt = at }, stalled.Attention);
+        // A model call changes nothing a client shows, and is still the CLI at work.
+        Assert.Null((await Read(w, TimeSpan.Zero, Copilot.Event("model.model_call_started", new { kind = "model_call_started" }, Now + 601))).Attention);
+    }
+
+    [Fact]
+    public async Task A_session_running_a_tool_reads_not_responding_only_after_thirty_minutes_and_an_idle_one_never()
+    {
+        var w = await Watched();
+        using var __ = w.F;
+        await using var _ = w.Source;
+        await Read(w, TimeSpan.Zero, Copilot.User("Run the build", Now), Copilot.TurnStart(Now), Copilot.ToolStart("c1", "powershell", new { command = "dotnet build" }, Now));
+        Assert.Null((await Read(w, TimeSpan.FromMinutes(30) - TimeSpan.FromSeconds(1))).Attention);
+        Assert.Equal(AttentionKind.NotResponding, (await Read(w, TimeSpan.FromSeconds(1))).Attention?.Kind);
+
+        var idle = await Read(w, TimeSpan.Zero, Copilot.ToolDone("c1", Now + 1800), Copilot.Assistant("Built.", Now + 1800), Copilot.TurnEnd(Now + 1800));
+        Assert.Equal((SessionStatus.Idle, (AttentionKind?)null), (idle.Status, idle.Attention?.Kind));
+        Assert.Null((await Read(w, TimeSpan.FromHours(2))).Attention);
+    }
 }

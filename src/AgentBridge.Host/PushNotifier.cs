@@ -53,6 +53,10 @@ public sealed record PushOptions
     // the latest kept, and goes only if the session is still idle then. 88% of pushes were
     // finished, ~9 an hour from one host, each waking a phone (#610).
     public TimeSpan FinishedCollapse { get; init; } = TimeSpan.FromMinutes(10);
+    // A sign-in notice (#800) goes as soon as a session needs sign-in, and again this often while
+    // any of that machine's sessions for the agent and account still does; never once per session.
+    public TimeSpan SignInRepeat { get; init; } = TimeSpan.FromHours(1);
+    public TimeSpan SignInTtl { get; init; } = TimeSpan.FromHours(6);
 }
 
 // Notifies the account's phones (Web Push, through the relay) when a session asks a
@@ -68,6 +72,10 @@ public sealed record PushOptions
 //   resolved  a question that was notified is no longer pending (answered anywhere, or the
 //             session ended): its notification is replaced, as agent-ha-bridge clears it
 //             (Clear-DaemonAnswerButtons), except on the device that answered it.
+//   signIn    sessions of this machine need sign-in (#800 P0): one per agent and account, as soon
+//             as the first does, then at most every SignInRepeat while any still does. A turn that
+//             ended on a 401 is idle with the previous turn's answer, and nothing else told the
+//             owner that every session on the machine had stopped.
 //
 // A finished turn is not notified to a device on screen now (Watching), which sees it, and is
 // collapsed to one per session and device per FinishedCollapse, until the device answers or
@@ -96,6 +104,8 @@ public sealed class PushNotifier : IAsyncDisposable
     readonly Dictionary<(string Session, string Question), string> answeredBy = [];
     // When each device was last sent a finished notice per session, for FinishedCollapse.
     readonly Dictionary<(string Device, string Session), DateTimeOffset> finishedSent = [];
+    // When each sign-in notice (PushNotice.SignInKey) was last made, while its sessions still need sign-in.
+    readonly Dictionary<string, DateTimeOffset> signInSent = new(StringComparer.Ordinal);
     readonly Queue<DateTimeOffset> recent = new();
     readonly SemaphoreSlim wake = new(0);
     IPushSender? sender;
@@ -162,6 +172,8 @@ public sealed class PushNotifier : IAsyncDisposable
         var now = this.time.GetUtcNow();
         lock (gate)
         {
+            // When each sign-in notice last went, before a restart: still due only hourly.
+            foreach (var (key, at) in store.SignIns) { signInSent[key] = at; }
             // What is already true when the host starts is the baseline: a turn that finished
             // before is not news. A question already pending is notified, as agent-ha-bridge's
             // daemon does after a restart, since nothing else would ever tell the phone.
@@ -216,6 +228,8 @@ public sealed class PushNotifier : IAsyncDisposable
                 if (dropped > 0) { log($"signed in to another account: dropped {dropped} push subscription(s)"); }
                 outbox.Clear();
                 shownOn.Clear();
+                // The new account's devices have heard nothing yet.
+                signInSent.Clear();
             }
             sender = next;
             broken = null;
@@ -606,6 +620,7 @@ public sealed class PushNotifier : IAsyncDisposable
     {
         var times = new List<DateTimeOffset>();
         times.AddRange(sessions.Values.Where(t => t.Due is not null).Select(t => t.Due!.At));
+        times.AddRange(signInSent.Values.Select(sent => sent + options.SignInRepeat));
         if (sender is { Connected: true } s && s != broken)
         {
             // A notice held back by the rate limit is ready only once the window has room:
@@ -661,6 +676,77 @@ public sealed class PushNotifier : IAsyncDisposable
                     }
             }
             if (t.Removed && t.Due is null) { Drop(id); }
+        }
+        SignIns(now);
+    }
+
+    // Sessions that need sign-in, by PushNotice.SignInKey. Not one whose sign-in has finished and
+    // is waiting for the session to show it (recovery pending): the person has already acted.
+    Dictionary<string, List<Session>> NeedSignIn() =>
+        sessions.Values.Where(t => !t.Removed && t.Last is { Attention: { Kind: AttentionKind.SignInNeeded, Recovery: not RecoveryState.Pending } })
+            .Select(t => t.Last!)
+            .GroupBy(s => PushNotice.SignInKey(s.Attention!.Agent ?? s.Agent, s.Attention.Account), StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
+    // One notice per agent and account at once, again each SignInRepeat while it lasts; one whose
+    // sessions are all signed in again (or gone) is forgotten, and anything of it still waiting
+    // withdrawn, so the next failure notifies at once.
+    void SignIns(DateTimeOffset now)
+    {
+        var groups = NeedSignIn();
+        foreach (var key in signInSent.Keys.Where(k => !groups.ContainsKey(k)).ToList())
+        {
+            signInSent.Remove(key);
+            store.SignIn(key, null);
+            outbox.RemoveAll(o => o.Kind == NoticeKind.SignIn && o.Session == key);
+        }
+        foreach (var (key, affected) in groups)
+        {
+            if (signInSent.TryGetValue(key, out var sent) && now < sent + options.SignInRepeat) { continue; }
+            // With no device to tell, nothing has been said: the first to subscribe hears it.
+            if (!store.All.Any(MayNotify)) { continue; }
+            signInSent[key] = now;
+            store.SignIn(key, now);
+            EnqueueSignIn(key, affected, now);
+        }
+    }
+
+    void EnqueueSignIn(string key, List<Session> affected, DateTimeOffset now)
+    {
+        var latest = affected.MaxBy(s => s.Attention!.Since)!;
+        var agent = latest.Attention!.Agent ?? latest.Agent;
+        foreach (var sub in store.All)
+        {
+            if (!MayNotify(sub)) { continue; }
+            var count = affected.Count;
+            var message = PushNotice.Fit(new PushMessage
+            {
+                Notification = new PushNotification
+                {
+                    // ui.md §6.13: no account, code, URL or agent text, only the agent's name, the
+                    // machine's and a count. The question sound (owner, 2026-11-04): it blocks every
+                    // one of these sessions as a question would, so not silent.
+                    Title = $"{AgentName(agent)} on {machine.Name} needs sign-in",
+                    Body = count == 1 ? "1 session affected" : $"{count} sessions affected",
+                    Navigate = PushNotice.SignInNavigate(sub.App, machine.Id, agent),
+                    Tag = PushNotice.Tag(machine.Id, key),
+                    Data = new PushNoticeData { Kind = NoticeKind.SignIn, Machine = machine.Id, Session = latest.Id, Agent = agent, Sessions = count, At = now },
+                },
+            });
+            outbox.RemoveAll(o => o.Device == sub.Device && o.Session == key);
+            outbox.Add(new Outgoing
+            {
+                Device = sub.Device,
+                Session = key,
+                Kind = NoticeKind.SignIn,
+                Plain = PushNotice.Serialize(message),
+                Ttl = (int)options.SignInTtl.TotalSeconds,
+                Urgency = "high",
+                Topic = PushNotice.Topic(machine.Id, key),
+                Created = now,
+                NotBefore = now,
+                Grant = sub.Grant,
+            });
         }
     }
 

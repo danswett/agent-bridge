@@ -116,7 +116,7 @@ public sealed class ToastPlanner
 
     // The agent stopped on an error, or needs sign-in (#800, ui.md §6.13): its turn didn't finish, so
     // there is no "finished" toast quoting the answer from before it. Errors get no notice of their
-    // own; a sign-in's is the host's push.
+    // own; a sign-in's is the toast per agent and account below (SignIns), as the host's push.
     static bool Stopped(Session s) => AuthState.Of(s)?.Kind is AuthState.Error or AuthState.SignInNeeded;
 
     // Which prompt's turn the session is on: turnCount is the prompts sent, less one while a turn is
@@ -220,6 +220,8 @@ public sealed class ToastPlanner
         foreach (var (id, t) in sessions) { if (t.Shown is not null) { finished.Add(id); } }
         foreach (var id in finished) { sink.Withdraw(TagOf(id)); }
         finished.Clear();
+        foreach (var key in signIns.Keys) { sink.Withdraw(Tag(key, MachineKey)); }
+        signIns.Clear();
         sessions.Clear();
     }
 
@@ -272,6 +274,40 @@ public sealed class ToastPlanner
                 t.FinishedTurn = PromptOf(s);
                 sink.Show(new ToastNotice(TagOf(id), ToastXml.Finished(s, MachineName(), MachineKey), Quiet()));
             }
+        }
+        SignIns(now);
+    }
+
+    public static readonly TimeSpan SignInRepeat = TimeSpan.FromHours(1);
+
+    // Sign-in toasts up or made (#800, ui.md §6.13), by agent and account: when last raised, and for
+    // how many sessions.
+    readonly Dictionary<string, (DateTimeOffset At, int Count)> signIns = new(StringComparer.Ordinal);
+
+    // One toast per agent and account of the machine while any of its sessions needs sign-in, as the
+    // host's signIn push: at once, then again at most hourly; a change in how many sessions it stops
+    // replaces it quietly; withdrawn once none does. A turn that ended on a 401 is idle with the
+    // previous answer beside it, and nothing on the desktop said every session had stopped (#800 P0).
+    void SignIns(DateTimeOffset now)
+    {
+        var groups = sessions.Values.Select(t => t.Last).OfType<Session>()
+            .Select(s => (Session: s, Attention: AuthState.Of(s)))
+            .Where(x => AuthState.NeedsSignIn(x.Attention))
+            .GroupBy(x => PushNotice.SignInKey(x.Attention!.Agent, x.Attention.Account), StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => (Agent: g.First().Attention!.Agent, Count: g.Count()), StringComparer.Ordinal);
+        foreach (var key in signIns.Keys.Where(k => !groups.ContainsKey(k)).ToList())
+        {
+            signIns.Remove(key);
+            sink.Withdraw(Tag(key, MachineKey));
+        }
+        foreach (var (key, (agent, count)) in groups)
+        {
+            var known = signIns.TryGetValue(key, out var was);
+            var due = !known || now >= was.At + SignInRepeat;
+            if (!due && was.Count == count) { continue; }
+            signIns[key] = (due ? now : was.At, count);
+            if (!Enabled() || WindowActive()) { continue; }
+            sink.Show(new ToastNotice(Tag(key, MachineKey), ToastXml.SignIn(agent, count, MachineName(), MachineKey), Quiet() || !due));
         }
     }
 
@@ -370,6 +406,12 @@ public static partial class ToastXml
         var preview = Plain(ToastPlanner.MainResponse(s), 300);
         return End(Start(Args(machineKey, ("action", "open"), ("session", s.Id)), Title(s), $"{Machine(machine)}finished", preview));
     }
+
+    // Sessions on a machine need sign-in (ui.md §6.13): its words, and nothing of the account, code,
+    // URL or the agent's own text. A click opens the app.
+    public static string SignIn(AgentKind agent, int sessions, string? machine, string? machineKey = null) =>
+        End(Start(Args(machineKey, ("action", "open")), $"{AuthState.AgentName(agent)} on {(string.IsNullOrEmpty(machine) ? "this machine" : machine)} needs sign-in",
+            sessions == 1 ? "1 session affected" : $"{sessions} sessions affected", null));
 
     // The first start after an update (AutoUpdater.Announce): what changed, from the release's
     // notes. A click opens the app.
