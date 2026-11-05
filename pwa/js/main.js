@@ -134,13 +134,14 @@ function takeLink() {
 }
 
 // Opens the session a notification was about, with its question ready to answer: on its own
-// machine, shown alone or with every other. Its answers take focus only once that machine
-// takes them (#269: not while its list is still being confirmed), and only while the session
+// machine, shown alone or with every other. Its question takes focus only once that machine
+// takes answers (#269: not while its list is still being confirmed), and only while the session
 // is still the one shown.
-// Focus goes to an answer only for the question the notification was about, and only if the
-// person has not moved focus since: a tap choice sends on Enter or Space, and while the machine
-// was held the question could have been answered at the machine and another asked, which a
-// focus moved later would have them approve unseen (#269 security review).
+// Focus goes to the question's heading, never an answer: a tap choice sends on Enter or Space,
+// so a key pressed as the page came up would answer a question nobody had read (#484). And only
+// for the question the notification was about, and only if the person has not moved focus
+// since: while the machine was held the question could have been answered at the machine and
+// another asked (#269 security review).
 function focusLinked() {
   if (!linked || !page?.hosts.shows(linked.host)) { return; }
   const card = page.view.card(linked.host, linked.session);
@@ -165,13 +166,13 @@ function focusLinked() {
   const now = document.activeElement;
   if (now && now !== document.body && now !== left) { return; }
   if (!question || card.session?.question?.id !== question) { return; }
-  // The question's answer controls, not a code block's Copy button in its message: Enter on
-  // a notification's question must answer it, not copy the command it shows.
-  const el = card.view;
-  const target = el.querySelector('.question-slot button:not([disabled]):not(.md-copy), .question-slot input:not([disabled]), .question-slot textarea:not([disabled])');
-  target?.focus({ preventScroll: true });
+  // Read first by a screen reader, and Tab from it reaches the answers.
+  const target = card.view.querySelector('.question-slot .question-head');
+  if (!target) { return; }
+  target.tabIndex = -1;
+  target.focus({ preventScroll: true });
   // Brought into sight as Needs you brings a question, so its answers wait before a click counts.
-  if (target) { card.revealQuestion('auto', target); }
+  card.revealQuestion('auto', target);
 }
 
 // A tap on a notification while the app is open: the worker says where to go.

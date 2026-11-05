@@ -1503,7 +1503,9 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
     on every machine", or "Needs you, 1 on ULTRA, 3 on every machine" with a machine chosen.
   - A change in N is announced once, politely ("3 need you"), at most every 5 s, and not while
     the person types in the reply box.
-  - The question's heading (level 3) is where focus lands, and its accessible description is
+  - The question's heading (level 3) is where focus lands, from a waiting row, a toast or a
+    notification alike, never one of its answers: an approval's first is Approve once, which a
+    stray Enter or Space would press unread (#484). Its accessible description is
     the question's first line. Approve once and Deny are named for their session and machine
     ("Approve once: *title* on *machine*").
   - In high contrast, the toggle takes the system's button colours (ButtonFace and ButtonText,

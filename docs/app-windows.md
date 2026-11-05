@@ -549,7 +549,8 @@ it, where no toast would be raised now), and its card rebuilds its controls: not
 what it said is kept, what was typed stays on the card, and an answer that failed to go is not
 offered again ("The question changed since, so answer it again"). A finished turn raises a toast with the start of the main agent's own response, never a delegate's (it can be turned
 off on its own). A click opens the app on that session, waiting for it to arrive if the
-click is what started the app. Nothing is raised while the app's window is in front.
+click is what started the app, with keyboard focus in it: on its question's heading if it
+has one, never on an answer such as Approve once (#484), or else its reply box. Nothing is raised while the app's window is in front.
 Toasts go quietly into Notification Center, without popping up, while Windows says the
 person is busy (Focus Assist, presentation mode, a full-screen app). Every toast is silent
 (`<audio silent="true"/>`, added where `ToastXml` closes each toast, so one put up again
