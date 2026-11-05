@@ -30,7 +30,8 @@ public sealed record CopilotField(
 // reads it (Get-DecisionSchemaFields), rather than from the Question a client saw: the
 // keys depend on things a Question does not carry (which rows open ticked, whether an
 // empty list is an answer, the older `choices` format).
-public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
+// Message is the question the prompt shows over its fields, as asked.
+public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields, string? Message = null)
 {
     // Null with a reason when the prompt cannot be driven by keys from here.
     public static (CopilotForm? Form, string? Problem) Read(JsonElement arguments)
@@ -42,21 +43,25 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
             // takes words only in a box Enter does not submit, and no current build writes it.
             return (null, "this question uses an older Copilot format the host cannot answer; answer it at the machine");
         }
+        var message = arguments.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() : null;
         if (!arguments.TryGetProperty("requestedSchema", out var schema) || schema.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
         {
-            return (new CopilotForm([]), null);
+            return (new CopilotForm([], message), null);
         }
         if (schema.ValueKind == JsonValueKind.String)
         {
             try
             {
                 using var doc = JsonDocument.Parse(schema.GetString() ?? "");
-                return Schema(doc.RootElement.Clone());
+                return Asked(Schema(doc.RootElement.Clone()), message);
             }
             catch (JsonException) { return (null, "the question's form could not be read"); }
         }
-        return Schema(schema);
+        return Asked(Schema(schema), message);
     }
+
+    static (CopilotForm?, string?) Asked((CopilotForm? Form, string? Problem) read, string? message) =>
+        read.Form is { } form ? (form with { Message = message }, null) : read;
 
     static (CopilotForm?, string?) Schema(JsonElement schema)
     {

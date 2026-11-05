@@ -63,8 +63,8 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     reads the same twice running (two reads in a row, not two reads with another between).
     Counted before, a label of the new field reading like the words could pass for them, and
     the same words given to the field before could hide them.
-  * In an answer with words, or of more than one field (two lists, a list and a kept
-    default), every field is its own writes, never batched with another's:
+  * Every answer, a single list or Yes/No included, goes field by field, each field its own
+    writes, never batched with another's:
     its keys, held to the field they were planned for, then its Enter alone once the screen
     has settled from them (so the change awaited is the form moving on, not an option list's
     highlight repainting). The next field's keys wait for the form to move off the screen the
@@ -76,11 +76,15 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     again before each write, and once more when the injector holds the typing slot
     (`KeyPlan.Proceed`). A refused write stops everything after it.
   * The rows a field's keys or Enter are held to must show the form at that field
-    (`CopilotFormScreen`, from 1.0.105's `MIo`, `Uxn` and `Ft`): the form's "… needs
-    information." heading and its "ctrl+d decline" and "esc cancel" hints, the field's own
-    heading (`<title ?? name>:`, on a row of its own; only the field being answered is
-    drawn), its place by the "tab next" and "shift+tab prev" hints when there is more than
-    one field, and no numbered "1. Yes" row of a permission prompt. A screen that has settled
+    (`CopilotFormScreen`, from 1.0.105's `MIo`, `Uxn`, `Da` and `Ft`), each part below the
+    last: exactly one "Copilot needs information." row (an MCP server's elicitation is headed
+    with its own name, and may have a field of the same name), the question's own first line
+    (as much of it as the row holds where it wraps), with more than one field the tab bar
+    naming exactly this form's fields in order, the field's own heading (`<title ?? name>:`,
+    on a row of its own; only the field being answered is drawn), and under it the
+    "ctrl+d decline" and "esc cancel" hints, with the field's place by "tab next" and
+    "shift+tab prev" when there is more than one; and no numbered "1. Yes" row of a
+    permission prompt, bare or between a box's sides. A screen that has settled
     or moved on is not enough: a permission prompt that opens before its transcript entry is
     written reads just as steady, and keys held to its own rows would go into it, the Enter
     approving what it highlights (#510 review). Anything else stops the answer there, as
@@ -96,10 +100,8 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     count taken too early can only send the words' Enter early, behind the words, which is
     reported `typed`, not `delivered`; rows are compared whole, so an animated form would be
     refused rather than typed into; a form drawn taller than the console's window, its
-    heading or hints scrolled out of sight, is stopped rather than typed into; and an answer
-    of a single field without words (one list) is one write, rechecked when the injector
-    holds the slot but neither held to the screen nor checked against it: its Enter commits
-    the only field there is.
+    heading or hints scrolled out of sight, is stopped rather than typed into, and so is a
+    form whose tab bar is too wide to name every field.
   * An optional text field left
     out is skipped with Enter; an option list cannot be left out, since Enter commits
     whatever its caret is on.

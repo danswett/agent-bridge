@@ -55,6 +55,11 @@ public sealed class AnswerOptions
 
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromMilliseconds(250);
 
+    // How often the screen is read while a form's field settles or shows; PollInterval unless
+    // set. Every form answer waits on the screen now (#510), so a transcript watched slowly need
+    // not make the keys slow too.
+    public TimeSpan? ScreenPollInterval { get; init; }
+
     // How long typed words are given to show on a Copilot session's screen. Not shown by then,
     // their Enter is never pressed, and the person finishes the answer at the machine (#467).
     public TimeSpan WordsWait { get; init; } = TimeSpan.FromSeconds(3);
@@ -405,12 +410,12 @@ public sealed class AnswerService : ISessionAnswerer
             return (new InjectionResult(InjectionStatus.NothingTyped,
                 "the answer's words are only spaces and line-drawing characters, which the host cannot pick out on the session's screen to see that the CLI has them before it submits them; change the answer, or answer at the machine"), null);
         }
-        // One field and no words (a single list, say) is one write: its Enter commits the only
-        // field there is. Anything with more than one Enter goes field by field, words or not: a
-        // permission prompt opening after the first field's Enter would otherwise take the next
-        // field's walk and Enter, a kept default's Enter (#700) included (sec-510 re-review).
+        // Every answer goes field by field, a single list or Yes/No included, words or not: each
+        // field's keys held to the form at that field, then its Enter alone, held to the form
+        // as it settled. A permission prompt that opens before its transcript entry is written
+        // reads as steady as the form, and a lone list's walk and Enter written blind would go
+        // into it, the Enter approving what it highlights (sec-510 re-review, #510 review).
         var words = plan.Sends.Any(IsWords);
-        if (!words && plan.Sends.Count(s => s.Enter) <= 1) { return (await TypeAsync(pid, plan with { Proceed = stillAsked }, timeline), null); }
         if (await ReadRowsAsync(pid) is null)
         {
             return (new InjectionResult(InjectionStatus.NothingTyped, words
@@ -436,6 +441,10 @@ public sealed class AnswerService : ISessionAnswerer
                 case InjectionStatus.Typed:
                     typedAny = true;
                     return null;
+                // Nothing typed yet, for a reason of the injector's own (an elevated session, say):
+                // said as the injector says it, as any other answer refused there is.
+                case InjectionStatus.NothingTyped when !typedAny && result.Detail != Windows.WorkerInjector.ScreenChanged:
+                    return (result, null);
                 case InjectionStatus.NothingTyped:
                     log($"typing into {Short(sessionId)} (pid {pid}) stopped before {(sends is [{ Text: "", Enter: true }] ? "an Enter" : "its next keys")}: {result.Detail}");
                     return Stop(result.Detail == Windows.WorkerInjector.ScreenChanged ? "the session's screen changed before the next key could go" : result.Detail);
@@ -456,7 +465,7 @@ public sealed class AnswerService : ISessionAnswerer
         // picking what it highlights (#510 review).
         string? OffForm(IReadOnlyList<string> rows)
         {
-            if (CopilotFormScreen.Showing(rows, form, Math.Min(at, form.Fields.Count - 1)) is not { } off) { return null; }
+            if (CopilotFormScreen.Showing(rows, form, Math.Min(at, Math.Max(0, form.Fields.Count - 1))) is not { } off) { return null; }
             log($"the screen of {Short(sessionId)} (pid {pid}) is not the form at its next field: {off}; nothing more is typed");
             return off;
         }
@@ -593,7 +602,7 @@ public sealed class AnswerService : ISessionAnswerer
             {
                 return (null, $"the session's screen did not settle within {options.WordsWait.TotalSeconds:0.#} seconds");
             }
-            await Task.Delay(options.PollInterval, options.Time);
+            await Task.Delay(options.ScreenPollInterval ?? options.PollInterval, options.Time);
         }
     }
 
@@ -616,7 +625,7 @@ public sealed class AnswerService : ISessionAnswerer
             {
                 return (null, 0, $"the field the words go to did not show on the session's screen within {options.WordsWait.TotalSeconds:0.#} seconds");
             }
-            await Task.Delay(options.PollInterval, options.Time);
+            await Task.Delay(options.ScreenPollInterval ?? options.PollInterval, options.Time);
         }
     }
 
@@ -629,7 +638,7 @@ public sealed class AnswerService : ISessionAnswerer
         {
             if (await ReadRowsAsync(pid) is { } rows && WordsOnScreen.Count(rows, tail) > before) { return rows; }
             if (options.Time.GetElapsedTime(started) >= options.WordsWait) { return null; }
-            await Task.Delay(options.PollInterval, options.Time);
+            await Task.Delay(options.ScreenPollInterval ?? options.PollInterval, options.Time);
         }
     }
 

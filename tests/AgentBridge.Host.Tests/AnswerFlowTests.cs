@@ -19,7 +19,11 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
     readonly Fixture f = new();
     readonly FakeProbe probe = new();
-    readonly FakeInjector injector = new();
+    // The CLI showing q1's form (Ask) unless a test draws another: every answer goes only into
+    // the form at its field, as the screen shows it (#510 review).
+    readonly FakeInjector injector = new() { Screen = () => WhichOne };
+
+    static readonly List<string> WhichOne = Framed("Which one?", ["pick"], 0, ["  \u276F a", "    b", "    c"]);
     TestRelay relay = null!;
     SessionSource source = null!;
     Device host = null!;
@@ -153,15 +157,18 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [Fact]
     public async Task An_answer_the_transcript_then_records_is_delivered_after_typing_exactly_the_planned_keys()
     {
-        injector.OnInject = () => Fixture.Append(events, Recorded("q1", new { pick = "b" }));
+        injector.OnInject = () => { if (Enters() == 1) { Fixture.Append(events, Recorded("q1", new { pick = "b" })); } };
         var ch = await OpenAsync();
 
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
 
         Assert.Equal(("delivered", (string?)null), (outcome, reason));
-        var (pid, plan) = Assert.Single(injector.Plans);
-        Assert.Equal(100, pid);
-        Assert.Equal([(KeyPlan.Up + KeyPlan.Up + KeyPlan.Down, true)], plan.Sends.Select(s => (s.Text, s.Enter)));
+        // The walk, held to the form at its field, then its Enter alone, held to the form as it
+        // settled (#510 review).
+        Assert.Equal(2, injector.Plans.Count);
+        Assert.All(injector.Plans, p => Assert.Equal(100, p.Pid));
+        Assert.Equal([(KeyPlan.Up + KeyPlan.Up + KeyPlan.Down, false)], injector.Plans[0].Plan.Sends.Select(s => (s.Text, s.Enter)));
+        Assert.True(HasEnterOnly(injector.Plans[1].Plan) && HeldTo(injector.Plans[1].Plan, "pick:"));
     }
 
     [Fact]
@@ -192,7 +199,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     {
         var ch = await OpenAsync();
 
-        injector.OnInject = () => Fixture.Append(events, Recorded("q1", new { pick = "c" }));
+        injector.OnInject = () => { if (Enters() == 1) { Fixture.Append(events, Recorded("q1", new { pick = "c" })); } };
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("different answer", reason);
@@ -206,7 +213,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("did not record an answer", reason);
         Assert.DoesNotContain("at the machine", reason);
-        Assert.Equal(2, injector.Plans.Count);
+        // Each typed once: its walk, then its Enter alone.
+        Assert.Equal(4, injector.Plans.Count);
     }
 
     [Fact]
@@ -893,12 +901,68 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     {
         var answer = new { first = "b", second = "c" };
         await AskFieldsAsync(new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, second = new { type = "string", @enum = new[] { "a", "b", "c" } } }, 2, answer);
+        injector.Screen = () => null;
         var ch = await OpenAsync();
 
         var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
 
         Assert.Equal("refused", outcome);
         Assert.Contains("could not read the session's screen", reason);
+        Assert.Empty(injector.Attempts);
+    }
+
+    // ---- a single field, held to the form like any other (#510 review) ----
+
+    [Fact]
+    public async Task A_single_list_is_not_typed_at_all_into_a_screen_the_host_cannot_read()
+    {
+        injector.Screen = () => null;
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("could not read the session's screen", reason);
+        Assert.Empty(injector.Attempts);
+    }
+
+    [Fact]
+    public async Task A_permission_prompt_that_opens_before_a_single_lists_Enter_gets_no_Enter()
+    {
+        // The most common answer: one list. Its walk goes held to the form; a prompt opening
+        // before its Enter, its transcript entry not written yet, gets nothing more.
+        injector.Screen = () => injector.Plans.Count > 0 ? PermissionPrompt : WhichOne;
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, new { pick = "b" }, Guid.NewGuid().ToString(), "q1");
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        Assert.Contains("permission prompt", result.GetProperty("reason").GetString());
+        Assert.Equal(0, Enters());
+        var walk = Assert.Single(injector.Plans).Plan;
+        Assert.True(HeldTo(walk, "pick:"));
+    }
+
+    [Theory]
+    // Not this question's form: an MCP server's elicitation with a field of the same name, the
+    // same heading over another question, or a permission prompt drawn inside a box's sides.
+    [InlineData("mcp")]
+    [InlineData("question")]
+    [InlineData("boxed")]
+    public async Task A_single_list_is_typed_only_into_this_questions_own_form(string shows)
+    {
+        injector.Screen = () => shows switch
+        {
+            "mcp" => [.. WhichOne.Select(r => r.Replace("Copilot needs information.", "github needs information."))],
+            "question" => [.. WhichOne.Select(r => r.Replace("Which one?", "Which branch?"))],
+            _ => ["\u256D\u2500\u2500\u2500\u2500\u256E", "\u2502 Allow Copilot to run this command? \u2502", "\u2502 \u276F 1. Yes \u2502", "\u2502   2. No (Esc) \u2502", "\u2570\u2500\u2500\u2500\u2500\u256F", .. WhichOne],
+        };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains(shows == "boxed" ? "permission prompt" : "no longer showed the question's form", reason);
         Assert.Empty(injector.Attempts);
     }
 
@@ -995,7 +1059,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         await AskFieldsAsync(new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, second = new { type = "string", @enum = new[] { "a", "b", "c" } } }, 2, answer);
         injector.Screen = () => Enters() < 1 ? FieldsScreen(names)
             : shows == "before" ? Framed("Tell me", names, 0, ["Field: first", "│ ok │"])
-            : Framed("Tell me", ["first", "other"], 1, ["Field: second", "│  │"]);
+            : [.. Framed("Tell me", names, 1, ["Field: second", "│  │"]).Select(r => r == " second:" ? " other:" : r)];
         var ch = await OpenAsync();
 
         var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
@@ -1154,6 +1218,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     public async Task An_answer_with_words_is_not_typed_at_all_into_a_screen_the_host_cannot_read()
     {
         await AskFormAsync();
+        injector.Screen = () => null;
         var ch = await OpenAsync();
 
         var (outcome, reason) = await AnswerAsync(ch, FormAnswer, question: "q2");
