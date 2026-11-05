@@ -53,10 +53,12 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
     public const int MaxAdds = 512;
     public const int MaxEntries = 4096;
 
-    // The generation's caps as this verifier applies them: always MaxAdds and MaxEntries, except in
-    // tests that fill a smaller cap rather than write thousands of entries.
+    // The generation's caps and the evidence limits as this verifier applies them: always the
+    // constants, except in tests that fill a smaller cap rather than write thousands of entries.
     internal int AddCap { get; init; } = MaxAdds;
     internal int EntryCap { get; init; } = MaxEntries;
+    internal int EvidenceSignerCap { get; init; } = EvidencePerSigner;
+    internal int EvidenceCap { get; init; } = EvidenceTotal;
     public const int MaxActive = 64;
     public const int SignerBudget = 64;
     public const int RenamesPerAdd = 8;
@@ -142,7 +144,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             // Kept aside, in case a removal in this or a later offer needs it as evidence.
             if (body.Op != EntryOp.Remove || overCap)
             {
-                if (_refusedCandidates.Count >= 2 * EvidenceTotal) { return new(e.Hash, Verdict.Refused, reason ?? Invalid.Evidence); }
+                if (_refusedCandidates.Count >= 2 * EvidenceCap) { return new(e.Hash, Verdict.Refused, reason ?? Invalid.Evidence); }
                 var c = Commit(e, parents, before, facts);
                 _candidate.Set(c.Index);
                 _refusedCandidates[c.Index] = reason ?? Invalid.Evidence;
@@ -242,9 +244,9 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
         }
         foreach (var (s, n) in bySigner)
         {
-            if (n > EvidencePerSigner || _evidenceBySigner.GetValueOrDefault(s) + n > EvidencePerSigner) { return false; }
+            if (n > EvidenceSignerCap || _evidenceBySigner.GetValueOrDefault(s) + n > EvidenceSignerCap) { return false; }
         }
-        return _evidence + evidence.Count <= EvidenceTotal;
+        return _evidence + evidence.Count <= EvidenceCap;
     }
 
     // The history state of a set of parents: computed from all their ancestors, quarantine ignored.

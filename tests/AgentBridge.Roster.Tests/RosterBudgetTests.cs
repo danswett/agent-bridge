@@ -85,4 +85,83 @@ public sealed class RosterBudgetTests
         Assert.All(offered.SkipLast(1), o => Assert.Equal(Verdict.Accepted, o.Verdict));
         Assert.Equal(Invalid.Cap, offered[^1].Reason);
     }
+
+    [Fact]
+    public void The_evidence_limits_are_256_per_signer_and_1024_in_all_however_a_test_shrinks_them()
+    {
+        Assert.Equal((256, 1024), (RosterVerifier.EvidencePerSigner, RosterVerifier.EvidenceTotal));
+        var v = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => TimeSpan.Zero);
+        Assert.Equal((RosterVerifier.EvidencePerSigner, RosterVerifier.EvidenceTotal), (v.EvidenceSignerCap, v.EvidenceCap));
+    }
+
+    // §10's subtree that spreads its over-budget entries two to a signer, scaled down: J1 to J3,
+    // which confirmed T added, each rename themselves twice past the eight an add allows, all on
+    // one line, and G removes T on it, needing all six as evidence.
+    internal static World SpreadOverBudget()
+    {
+        var w = new World();
+        w.Genesis();
+        w.Add("+T", "G", "T", "G");
+        w.Confirm("cT", "G", "+T", "+T");
+        w.Add("+J1", "T", "J1", "cT");
+        w.Add("+J2", "T", "J2", "+J1");
+        w.Add("+J3", "T", "J3", "+J2");
+        var last = "+J3";
+        foreach (var (from, to) in new[] { (0, RosterVerifier.RenamesPerAdd), (RosterVerifier.RenamesPerAdd, RosterVerifier.RenamesPerAdd + 2) })
+        {
+            for (var j = 1; j <= 3; j++)
+            {
+                for (var n = from; n < to; n++) { w.Rename($"J{j}.{n}", $"J{j}", $"+J{j}", last, $"J{j} {n}"); last = $"J{j}.{n}"; }
+            }
+        }
+        w.Remove("G-T", "G", "+T", last);
+        return w;
+    }
+
+    [Theory]
+    [InlineData(0, 0, true)]
+    [InlineData(0, 5, false)]
+    [InlineData(1, 0, false)]
+    public void A_removal_brings_evidence_only_within_the_verifiers_per_signer_and_total_limits(int perSigner, int total, bool applies)
+    {
+        var w = SpreadOverBudget();
+        var v = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now)
+        {
+            EvidenceSignerCap = perSigner > 0 ? perSigner : RosterVerifier.EvidencePerSigner,
+            EvidenceCap = total > 0 ? total : RosterVerifier.EvidenceTotal,
+        };
+        var offered = w.Feed(v, [.. w.Labels]);
+        Assert.Equal(6, offered.Count(o => o.Reason == Invalid.Budget));
+        Assert.Equal(applies ? null : Invalid.Evidence, offered[^1].Reason);
+        Assert.Equal(applies ? ["G"] : ["G", "J1", "J2", "J3", "T"], w.Active(v));
+    }
+
+    // With room for two evidence entries: T removes J1, bringing J1's two over-budget renames, and
+    // its removal of J2, which needs one more, is refused. G's removal of T, signed on the line
+    // before any of them, needs none and applies.
+    [Fact]
+    public void Once_a_host_has_used_its_evidence_a_removal_signed_on_the_common_parent_needs_none()
+    {
+        var w = new World();
+        w.Genesis();
+        w.Add("+T", "G", "T", "G");
+        w.Confirm("cT", "G", "+T", "+T");
+        w.Add("+J1", "T", "J1", "cT");
+        w.Add("+J2", "T", "J2", "+J1");
+        var last = "+J2";
+        for (var n = 0; n < RosterVerifier.RenamesPerAdd + 2; n++) { w.Rename($"J1.{n}", "J1", "+J1", last, $"J1 {n}"); last = $"J1.{n}"; }
+        w.Remove("T-J1", "T", "+J1", last);
+        last = "T-J1";
+        for (var n = 0; n < RosterVerifier.RenamesPerAdd + 1; n++) { w.Rename($"J2.{n}", "J2", "+J2", last, $"J2 {n}"); last = $"J2.{n}"; }
+        w.Remove("T-J2", "T", "+J2", last);
+        w.Remove("G-T", "G", "+T", "+J2");
+        var v = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now) { EvidenceCap = 2 };
+        var offered = w.Feed(v, [.. w.Labels]);
+        var at = w.Labels.ToList();
+        // Above its evidence, which is never applied, and applied as a removal there is.
+        Assert.Equal(Verdict.Quarantined, offered[at.IndexOf("T-J1")].Verdict);
+        Assert.Equal(Invalid.Evidence, offered[at.IndexOf("T-J2")].Reason);
+        Assert.Equal(Verdict.Accepted, offered[at.IndexOf("G-T")].Verdict);
+        Assert.Equal(["G"], w.Active(v));
+    }
 }
