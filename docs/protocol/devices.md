@@ -9,7 +9,7 @@ machines seen online.
 **Status: R1a, R1b and R1c.** R1a is the encoding: framing, ids, entries, their strict parsing,
 presence assertions and the values enrollment computes. R1b is the acceptance rule and state in C#
 (design §3.3 to §3.5). R1c ports the rule to the PWA and adds vetoes, person commands and head
-attestations in both. R1d stores signing keys (TPM, DPAPI, WebCrypto). It is a library only: nothing in the host, the relay or a client uses it yet
+attestations in both. R1d keeps signing keys (TPM, DPAPI, WebCrypto). It is a library only: nothing in the host, the relay or a client uses it yet
 (slices R2 to R5).
 
 | Implementation | Where |
@@ -336,6 +336,28 @@ acknowledgement) is always there, empty when there are none. A signed command's 
 body's JSON bytes, and this input begins with its own label, so neither ever verifies as the
 other. The library takes the raw ECDH secret, which the caller's key store computes.
 
+## Signing keys
+
+A person's device's `sign` key (design §3.2) is its own ECDSA P-256 key, beside its ECDH device
+key, kept where it cannot be copied (#55 R1d). Every signature it makes is minimal DER with a low
+S: the platforms sign in IEEE P1363 (`r ‖ s`), and S is replaced by n − S when it is the high one.
+
+| Where | Store |
+|---|---|
+| Windows (the app) | `RosterSigningKeys` in `src/AgentBridge.Transport`: the TPM (Platform Crypto Provider, `ECDSA_P256`, per user, not exportable) when it can sign with P-256, else a software key encrypted to the user with DPAPI. A key never moves between them; a TPM key that cannot be opened means enrolling again. Forgetting the device deletes the TPM key itself |
+| PWA | `pwa/js/roster/signing-key.js`: a WebCrypto key generated non-extractable, usable only to sign, kept in IndexedDB beside the device key |
+| Apple clients | The Secure Enclave, with slice A1 |
+
+`RosterSigningKeyTests` (in `tests/AgentBridge.Transport.Tests`) and
+`pwa/test/unit/roster-signing-key.test.mjs` check the DPAPI and WebCrypto stores on every run. The
+TPM test runs only on a machine whose TPM can sign with P-256. GitHub's runners have none, so after
+a change here check it by hand on a Windows machine with a TPM 2.0:
+
+```powershell
+dotnet test tests/AgentBridge.Transport.Tests -c Release --filter "FullyQualifiedName~RosterSigningKeyTests"
+# A_TPM_signing_key_… must pass, not be skipped. Then no test key may be left in the TPM:
+certutil -user -csp "Microsoft Platform Crypto Provider" -key | Select-String agent-bridge-roster-sign
+```
 ## Vectors
 
 [vectors/roster.json](vectors/roster.json) holds fixed test keys (`d`, `public`, `device`) and:
