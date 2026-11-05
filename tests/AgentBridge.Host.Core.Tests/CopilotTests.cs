@@ -420,6 +420,30 @@ public class CopilotTests
         Assert.Null(alone.AnswerAtMachine);
     }
 
+    // A warning of nothing but white space draws nothing: the same command with one, beside one
+    // without, would be drawn the same, so the first is answered at the machine. Counted as a part,
+    // it made the two compare unlike, and the screen read for one approved the other (Copilot review
+    // 5781252068 of #769). Spaces outside ASCII (no-break, ideographic) are already refused, as
+    // characters not drawn as written (CopilotDialogs.Unsafe).
+    [Theory]
+    [InlineData(" ")]
+    [InlineData("\n")]
+    [InlineData("  \n \n  ")]
+    public async Task A_permission_beside_the_same_command_with_a_warning_of_white_space_alone_is_answered_at_the_machine(string warning)
+    {
+        await using var s = new Session_();
+        var plain = Copilot.Prompts["commands"].DeepClone().AsObject();
+        plain["fullCommandText"] = "npm test";
+        var warned = Copilot.Prompts["commands"].DeepClone().AsObject();
+        warned["fullCommandText"] = "npm test  ";
+        warned["warning"] = warning;
+
+        var crowded = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", plain, 2), Copilot.Permission("r2", "c2", warned, 3))).Question!;
+
+        Assert.Equal((true, 2), (crowded.AnswerAtMachine == true, crowded.Waiting));
+        Assert.StartsWith("r1#", crowded.Id);
+    }
+
     // Another waiting request that would be drawn the same (here, the same command with a trailing
     // space, which is not drawn) cannot be told from it on screen, so the first is answered at the
     // machine until that one ends; a distinct one beside it changes nothing (Copilot review of #769).

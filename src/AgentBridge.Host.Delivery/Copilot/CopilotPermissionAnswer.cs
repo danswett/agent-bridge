@@ -275,9 +275,11 @@ public static class CopilotPermissionScreen
         return top >= 0 && Edged(rows[top], '\u256D', '\u256E', mid => mid.All(c => c == '\u2500')) ? (top, left, right) : null;
     }
 
-    // Whether the frame holds exactly this dialog above its options.
-    static bool Shows(IReadOnlyList<string> rows, (int Top, int Left, int Right) frame, int options, CopilotDialog dialog)
+    // Whether the frame holds exactly this dialog above its options, as a screen can show it
+    // (CopilotDialogs.Visible: a text part's blank rows are not told from the gaps between parts).
+    static bool Shows(IReadOnlyList<string> rows, (int Top, int Left, int Right) frame, int options, CopilotDialog drawn)
     {
+        var dialog = CopilotDialogs.Visible(drawn);
         var mids = Enumerable.Range(frame.Top + 1, options - frame.Top - 1).Select(r => rows[r].TrimEnd()[(frame.Left + 1)..frame.Right]).ToList();
         var i = 0;
         var title = new List<string>();

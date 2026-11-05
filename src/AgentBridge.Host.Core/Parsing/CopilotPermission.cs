@@ -76,12 +76,38 @@ public sealed record CopilotDialogPart(bool Boxed, IReadOnlyList<string> Lines);
 // be typed (SessionTracker), and types only then (CopilotPermissionScreen).
 public static class CopilotDialogs
 {
-    // Whether two dialogs could draw the same: every part alike once all white space is gone. A
-    // box wraps a long line hard at its width, so one line on two rows reads like two lines, and
-    // trailing white space is not drawn.
-    public static bool Alike(CopilotDialog a, CopilotDialog b) =>
-        Squeeze(a.Title) == Squeeze(b.Title) && Squeeze(a.Question) == Squeeze(b.Question) && a.Body.Count == b.Body.Count
-        && a.Body.Zip(b.Body).All(p => p.First.Boxed == p.Second.Boxed && Squeeze(string.Concat(p.First.Lines)) == Squeeze(string.Concat(p.Second.Lines)));
+    // Whether two dialogs could draw the same: as a screen shows them (Visible), every part alike
+    // once all white space is gone. A box wraps a long line hard at its width, so one line on two
+    // rows reads like two lines, and trailing white space is not drawn.
+    public static bool Alike(CopilotDialog a, CopilotDialog b)
+    {
+        var (x, y) = (Visible(a), Visible(b));
+        return Squeeze(x.Title) == Squeeze(y.Title) && Squeeze(x.Question) == Squeeze(y.Question) && x.Body.Count == y.Body.Count
+            && x.Body.Zip(y.Body).All(p => p.First.Boxed == p.Second.Boxed && Squeeze(string.Concat(p.First.Lines)) == Squeeze(string.Concat(p.Second.Lines)));
+    }
+
+    // The dialog as a screen can show it, which is how it is read there (CopilotPermissionScreen)
+    // and compared with others (Alike): a part drawn as text is the runs of its rows between blank
+    // ones, each read as a part of its own, and one of nothing but white space draws nothing at all.
+    // Counted as written, a warning of white space alone made two requests that draw the same, one
+    // with it and one without, compare unlike, and the screen read for one approved the other
+    // (Copilot review of #769). A box is drawn with its edges whatever it holds, so is kept as it is.
+    public static CopilotDialog Visible(CopilotDialog dialog) => dialog with
+    {
+        Body = [.. dialog.Body.SelectMany(p => p.Boxed ? [p] : Runs(p.Lines.Count > 0 ? p.Lines[0] : "").Select(run => new CopilotDialogPart(false, [run])))],
+    };
+
+    // Text's runs of lines that are not blank, each joined back together.
+    static IEnumerable<string> Runs(string text)
+    {
+        var run = new List<string>();
+        foreach (var line in text.Split('\n'))
+        {
+            if (line.Trim().Length > 0) { run.Add(line); continue; }
+            if (run.Count > 0) { yield return string.Join('\n', run); run.Clear(); }
+        }
+        if (run.Count > 0) { yield return string.Join('\n', run); }
+    }
 
     // Text that could draw a part of Copilot's own frame (a line-drawing character), be drawn
     // other than as given (a tab), or hide what is drawn (ShownText.Misleads).

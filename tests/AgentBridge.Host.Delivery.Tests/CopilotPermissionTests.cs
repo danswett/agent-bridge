@@ -244,6 +244,43 @@ public sealed class CopilotPermissionTests : IDisposable
         }
     }
 
+    // Two requests that draw the same are never told apart by the screen, whichever is drawn: a
+    // warning of white space alone draws only blank rows, which the screen read skips, and a
+    // warning's blank line reads as the gap between two parts. Compared as written, either pair
+    // compared unlike, and the screen drawing one was read as the other's, so answering one approved
+    // the other (Copilot review 5781252068 of #769).
+    [Fact]
+    public void Requests_that_draw_the_same_are_never_told_apart_by_the_screen_whichever_is_drawn()
+    {
+        const string Q = "Do you want to run this command?";
+        CopilotPermissionScreen.Crowd Crowd(AgentBridge.Host.Core.Parsing.CopilotDialog mine, AgentBridge.Host.Core.Parsing.CopilotDialog theirs) =>
+            new(mine, ["npm test"], [new CopilotPermissionScreen.Other("shell, request r2", ["npm test"], theirs)]);
+        var plain = new AgentBridge.Host.Core.Parsing.CopilotDialog("Run the tests", [new(true, ["npm test"])], Q);
+        foreach (var warning in (string[])[" ", "\n", "\u00A0", "  \n \n  "])
+        {
+            var warned = new AgentBridge.Host.Core.Parsing.CopilotDialog("Run the tests", [new(false, [warning]), new(true, ["npm test  "])], Q);
+            var drawn = CopilotScreen.Dialog("Run the tests", [(false, [" "]), (true, ["npm test  "])], Q, CopilotScreen.ShellOptions);
+            Assert.True(AgentBridge.Host.Core.Parsing.CopilotDialogs.Alike(plain, warned));
+            Assert.Contains("would be drawn the same", CopilotPermissionScreen.Locate(drawn, approve: true, ["npm test"], Crowd(plain, warned)).Problem);
+            Assert.Contains("would be drawn the same", CopilotPermissionScreen.Locate(CopilotScreen.Shell("Run the tests", "npm test"), approve: true, ["npm test"], Crowd(warned, plain)).Problem);
+        }
+
+        // A warning with a blank line in it reads as two parts.
+        var split = new AgentBridge.Host.Core.Parsing.CopilotDialog("Run the tests", [new(false, ["Heads up"]), new(false, ["it runs"]), new(true, ["npm test"])], Q);
+        var joined = new AgentBridge.Host.Core.Parsing.CopilotDialog("Run the tests", [new(false, ["Heads up\n\nit runs"]), new(true, ["npm test"])], Q);
+        Assert.True(AgentBridge.Host.Core.Parsing.CopilotDialogs.Alike(split, joined));
+        var screen = CopilotScreen.Dialog("Run the tests", [(false, ["Heads up"]), (false, ["it runs"]), (true, ["npm test"])], Q, CopilotScreen.ShellOptions);
+        Assert.Contains("would be drawn the same", CopilotPermissionScreen.Locate(screen, approve: true, ["npm test"], Crowd(split, joined)).Problem);
+        Assert.Contains("would be drawn the same", CopilotPermissionScreen.Locate(screen, approve: true, ["npm test"], Crowd(joined, split)).Problem);
+
+        // Beside one drawn otherwise, the one with a warning of white space is found on its own screen.
+        var warnedAlone = new AgentBridge.Host.Core.Parsing.CopilotDialog("Run the tests", [new(false, [" "]), new(true, ["npm test"])], Q);
+        var other = new AgentBridge.Host.Core.Parsing.CopilotDialog("Run the linter", [new(true, ["npm run lint"])], Q);
+        var (choice, problem) = CopilotPermissionScreen.Locate(CopilotScreen.Dialog("Run the tests", [(false, [" "]), (true, ["npm test"])], Q, CopilotScreen.ShellOptions), approve: true, ["npm test"], Crowd(warnedAlone, other));
+        Assert.Null(problem);
+        Assert.Equal("1", choice!.Key);
+    }
+
     // The shape seen in #690: a read of one file outside the session's paths, offering read-only
     // access to its directory, described from its request and found in Copilot's dialog for it.
     [Fact]
