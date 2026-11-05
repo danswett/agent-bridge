@@ -257,7 +257,10 @@ its prompt and its **last** 8 MiB, `truncated` set, and what it skipped counted 
 `parts` nor `partsMore`). A turn whose prompt is more than 256 MiB before the cursor ends the
 history there, with `start.limited`. A transcript line longer than 32 MiB is not read, as the tail
 does not; one whose first 4 KiB carry a turn's bytes is an `unreadable` turn, which is all the
-live parser can see of it too. A host reads at most two pages at once; a further request waits
+live parser can see of it too. Within a turn, a delegate's end withdraws the questions of the
+synchronous delegates below it, passing over at most 262,144 of them in the turn (64 times the
+4,096 delegates a read keeps); past that, an end withdraws only its own delegate's questions and
+the turn is `truncated`. A host reads at most two pages at once; a further request waits
 its turn.
 
 The worst case for one request, every budget spent: it **parses** at most 72 MiB, the 32 MiB above

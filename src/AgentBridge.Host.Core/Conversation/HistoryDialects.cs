@@ -50,7 +50,18 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
         public int Allowed = 1;
     }
 
-    public void TurnBegins() => _runs.Clear();
+    public void TurnBegins()
+    {
+        _runs.Clear();
+        _walked = 0;
+    }
+
+    // How many delegates EndTurnOf may pass over in one turn. A delegate's end walks every
+    // synchronous one below it, and ended again and again it walked them again: 60,000 ends of one
+    // with 4,096 below it took 31 s for one turn (review of #686). Past this, an end withdraws only
+    // its own delegate's questions and the turn says it was read in part.
+    const int WalkBudget = 64 * Keep;
+    int _walked;
 
     public bool RemoteApproval { get; } = remoteApproval;
     // The session's own thread (Codex), from its first record.
@@ -209,6 +220,11 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
                 if (!_children.TryGetValue(parent, out var children)) { continue; }
                 foreach (var child in children)
                 {
+                    if (++_walked > WalkBudget)
+                    {
+                        turn.Truncated = true;
+                        return;
+                    }
                     if (!_sync.Contains(child) || !seen.Add(child)) { continue; }
                     turn.Withdrawn(child, at);
                     next.Add(child);

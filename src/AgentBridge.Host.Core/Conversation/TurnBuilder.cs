@@ -15,7 +15,10 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
     // without visiting every part: rescanning them all, 2,000 responses and 2,000 aborts were four
     // million visits (review of #686). An index is dropped once settled, so each is visited once.
     readonly List<int> _running = [];
-    readonly List<int> _unanswered = [];
+    // The main agent's questions apart from the delegates' (by agent, in _askedBy), so its turn
+    // failing visits only its own: held together, every error passed over every delegate's
+    // question still pending, quadratic in a turn of many of each (review of #686).
+    readonly List<int> _unansweredMain = [];
     readonly Dictionary<string, List<int>> _askedBy = new(StringComparer.Ordinal);
     string _record = id;
     int _index;
@@ -127,12 +130,12 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
         if (_questions.ContainsKey(question.Id)) { return; }
         Add(Blank(HistoryPartKind.Question, at) with { Question = question, Outcome = QuestionOutcome.Unknown });
         _questions[question.Id] = _parts.Count - 1;
-        _unanswered.Add(_parts.Count - 1);
         if (question.Agent is { } agent)
         {
             if (!_askedBy.TryGetValue(agent, out var asked)) { _askedBy[agent] = asked = []; }
             asked.Add(_parts.Count - 1);
         }
+        else { _unansweredMain.Add(_parts.Count - 1); }
     }
 
     // How a question ended. Only the first outcome counts: an approval's tool call starting after
@@ -176,13 +179,11 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
             if (_parts[i].Tool is { Status: ToolStatus.Running } tool) { _parts[i] = _parts[i] with { Tool = tool with { Status = ToolStatus.Failed, EndedAt = at } }; }
         }
         _running.Clear();
-        _unanswered.RemoveAll(i =>
+        foreach (var i in _unansweredMain)
         {
-            if (_parts[i] is not { Outcome: QuestionOutcome.Unknown } p) { return true; }
-            if (p.Question?.Agent is not null) { return false; }
-            _parts[i] = p with { Outcome = QuestionOutcome.Cancelled, AnsweredAt = at };
-            return true;
-        });
+            if (_parts[i] is { Outcome: QuestionOutcome.Unknown } p) { _parts[i] = p with { Outcome = QuestionOutcome.Cancelled, AnsweredAt = at }; }
+        }
+        _unansweredMain.Clear();
     }
 
     // The turn was interrupted or the agent shut down: nothing is running and nothing is asked any more.
@@ -192,12 +193,12 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
         {
             if (_parts[i].Tool is { Status: ToolStatus.Running } tool) { _parts[i] = _parts[i] with { Tool = tool with { Status = ToolStatus.Failed, EndedAt = at } }; }
         }
-        foreach (var i in _unanswered)
+        foreach (var i in _unansweredMain.Concat(_askedBy.Values.SelectMany(asked => asked)))
         {
             if (_parts[i] is { Outcome: QuestionOutcome.Unknown } p) { _parts[i] = p with { Outcome = QuestionOutcome.Cancelled, AnsweredAt = at }; }
         }
         _running.Clear();
-        _unanswered.Clear();
+        _unansweredMain.Clear();
         _askedBy.Clear();
     }
 

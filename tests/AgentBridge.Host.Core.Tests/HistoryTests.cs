@@ -1645,3 +1645,84 @@ public class HistoryTests
         if (agent != "claude") { Assert.Contains(turns.SelectMany(t => t.Parts), p => p.Delegate is { Event: DelegateEventKind.Started }); }
     }
 }
+
+// Found in review of #686: a main-agent error visited every delegate question still pending, so a
+// turn of many of each was quadratic within its 8 MiB, and the per-turn question cap is applied
+// only when the turn is built. Timed as a ratio, n against 64n, the fastest of three of each in
+// turns, in a collection nothing else runs alongside: linear reads about 64, each error passing over
+// every delegate question about 4,096 (#844's growth test, the same way).
+[Collection(nameof(TurnBuilderGrowthTests))]
+public class TurnBuilderGrowthTests
+{
+    static double Settle(int n)
+    {
+        var turn = new TurnBuilder("t", Fixture.T0, null);
+        for (var i = 0; i < n; i++)
+        {
+            turn.Asked(new Question { Id = "d" + i, Kind = QuestionKind.Approval, Message = "Push?", AskedAt = Fixture.T0, Agent = "agent-d" }, Fixture.T0);
+        }
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        for (var i = 0; i < n; i++)
+        {
+            turn.Asked(new Question { Id = "m" + i, Kind = QuestionKind.Approval, Message = "Push?", AskedAt = Fixture.T0 }, Fixture.T0);
+            turn.Failed(Fixture.T0);
+        }
+        var elapsed = clock.Elapsed.TotalMilliseconds;
+        // The delegate's questions are still the person's; each of the main agent's was cancelled.
+        Assert.True(turn.Pending("d0") && turn.Pending("d" + (n - 1)));
+        Assert.False(turn.Pending("m0") || turn.Pending("m" + (n - 1)));
+        return elapsed;
+    }
+
+    // Found in the same review: a delegate's end walks the synchronous delegates below it, and the
+    // same delegate ended again and again walked them again. n below it and n ends, 64 against
+    // 4,096 (Keep holds no more): walking them all each time reads about 4,096, bounded about 64.
+    static double EndAgain(int n)
+    {
+        var parents = Enumerable.Range(0, n).ToDictionary(i => "c" + i, _ => "R");
+        var sync = Enumerable.Range(0, n).Select(i => "c" + i).ToHashSet();
+        var context = new HistoryContext(new Dictionary<string, string?>(), new Dictionary<string, string>(), false, null, sync, parents);
+        var turn = new TurnBuilder("t", Fixture.T0, null);
+        turn.Asked(new Question { Id = "q", Kind = QuestionKind.Approval, Message = "Push?", AskedAt = Fixture.T0, Agent = "c" + (n - 1) }, Fixture.T0);
+        context.TurnBegins();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        for (var i = 0; i < n; i++) { context.EndTurnOf(turn, "R", Fixture.T0); }
+        var elapsed = clock.Elapsed.TotalMilliseconds;
+        // The first end still withdrew what was asked below it.
+        Assert.False(turn.Pending("q"));
+        return elapsed;
+    }
+
+    [Fact]
+    public void A_delegate_ended_again_and_again_walks_those_below_it_a_bounded_number_of_times()
+    {
+        EndAgain(32);
+        var (fewest, most) = (double.MaxValue, double.MaxValue);
+        for (var run = 0; run < 3; run++)
+        {
+            fewest = Math.Min(fewest, EndAgain(64));
+            most = Math.Min(most, EndAgain(4_096));
+        }
+        var ratio = most / Math.Max(fewest, 1);
+
+        Assert.True(ratio < 500, $"ending 64x the delegates 64x as often took {ratio:F1}x as long");
+    }
+
+    [Fact]
+    public void Repeated_errors_beside_many_delegate_questions_settle_in_linear_time()
+    {
+        Settle(500);
+        var (fewest, most) = (double.MaxValue, double.MaxValue);
+        for (var run = 0; run < 3; run++)
+        {
+            fewest = Math.Min(fewest, Settle(1_000));
+            most = Math.Min(most, Settle(64_000));
+        }
+        var ratio = most / Math.Max(fewest, 1);
+
+        Assert.True(ratio < 500, $"settling 64x the questions took {ratio:F1}x as long");
+    }
+}
+
+[CollectionDefinition(nameof(TurnBuilderGrowthTests), DisableParallelization = true)]
+public sealed class TurnBuilderGrowthCollection;
