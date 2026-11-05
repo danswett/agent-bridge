@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #592: Touch: the long press that lifts, and what it must not break</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/592-reorder.md). Each frame is a Proposal-592-Frame. -->
+<div style="width: 1692px; height: 880px; box-sizing: border-box; padding: 32px; background: {{t.bg}}; color: {{t.text}}; font-family: 'Segoe UI Variable Text', system-ui, -apple-system, Roboto, sans-serif; overflow: hidden">
+  <div style="display: flex; align-items: center; gap: 12px">
+    <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.bridge}}; background: {{t.tag}}">#592 · Decided (owner, 2026-11-04)</span>
+    <span style="font-size: 12px; color: {{t.text2}}">{{t.name}}</span>
+  </div>
+  <h1 style="margin: 10px 0 2px; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 22px; line-height: 28px; font-weight: 600">Touch: the long press that lifts, and what it must not break</h1>
+  <p style="margin: 0 0 28px; font-size: 13px; line-height: 18px; color: {{t.text2}}">A hold lifts the card; a swipe still scrolls; a hold and release still opens the menu. The grip stays visible and explains itself when tapped.</p>
+  <div style="display: flex; gap: 28px; align-items: flex-start">
+    <sc-for list="{{frames}}" as="fr">
+      <dc-import name="Proposal-592-Frame" theme="{{theme}}" f="{{fr}}" hint-size="300px,760px"></dc-import>
+    </sc-for>
+
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":1692,"height":880}}'>
+const THEMES = {
+  dark: { bg: '#1B1E21', text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', text3: 'rgba(255,255,255,.54)', bridge: '#2DD4BF', tag: 'rgba(45,212,191,.14)', stroke: 'rgba(255,255,255,.12)', name: 'Dark' },
+  light: { bg: '#E6E9EC', text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', text3: 'rgba(0,0,0,.58)', bridge: '#0B7A6E', tag: 'rgba(11,122,110,.12)', stroke: 'rgba(0,0,0,.12)', name: 'Light' },
+};
+// Slots: { h } a group header, { r } a session row, { gap } the landing gap, { ph } an empty-group placeholder.
+// trace: n draws a dashed outline where a neighbour was n slots further on, before it eased.
+const P = { h: 'Pinned' }, S = { h: 'Sessions' };
+const rows = (ids, extra) => ids.split('').map(r => Object.assign({ r }, (extra || {})[r] || {}));
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const rest = [P, ...rows('ab'), S, ...rows('cdefghij', { c: { st: 'sel' } })];
+    const frames = [
+      { label: '1 · Tap the grip', slots: rest, ptr: { at: 4, dx: 12, ring: 0 }, toast: 'Press and hold a session to move it. Or use Move up and Move down in its menu.',
+        notes: ['On touch the grip stays visible, in Text 3, so moving is discoverable. Tapping it explains instead of doing nothing; holding it for 150 ms lifts, since it never scrolls.'] },
+      { label: '2 · A swipe still scrolls', slots: rest, scroll: 48, ptr: { at: 6, dx: 232, dy: 20, ring: 0.2, up: true },
+        notes: ['Moving more than 10 px before the hold completes is a scroll: the press and the sink are cancelled and nothing lifts. touch-action: pan-y keeps that scroll native.'] },
+      { label: '3 · Hold', slots: [P, ...rows('ab'), S, ...rows('cdefghij', { c: { st: 'sink' } })], ptr: { at: 4, dx: 232, ring: 0.78 },
+        notes: ['iOS 500 ms, UIKit’s drag-lift delay. Android 400 ms, ViewConfiguration’s long-press timeout. The card sinks over the hold and lifts with a haptic tick.'] },
+      { label: '4 · Hold, then release', slots: rest, menu: { at: 4, items: ['Move up', 'Move down', 'Pin'] },
+        notes: ['Releasing a hold without moving opens the card’s menu, as a long press does today. Moving after the lift drags instead, so one gesture serves both.'] },
+      { label: '5 · Nothing else answers the hold', slots: [P, ...rows('ab'), S, { gap: true }, ...rows('defghij')], lift: { r: 'c', at: 4, sel: true }, ptr: { at: 4, dx: 232, ring: 1 },
+        notes: ['No iOS callout or loupe, no Android text selection, no tap highlight and no system context menu: the card sets -webkit-touch-callout: none, user-select: none and prevents contextmenu.'] },
+    ];
+    return { t: THEMES[theme], theme, frames: frames.map(f => Object.assign({ grip: 'all' }, f)) };
+  }
+}
+</script>
+</body>
+</html>

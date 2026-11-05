@@ -1,0 +1,1133 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>Reorder prototype · #592</title>
+<!--
+  #592 · Decided (owner, 2026-11-04).
+  One self-contained file: no dependencies, no network. Open it in a browser, on a phone too.
+  It implements the behaviour in docs/design/proposals/592-reorder.md; it is not product code.
+-->
+<style>
+:root {
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
+  --ease: cubic-bezier(0.33, 0, 0.67, 1);
+  --decel: cubic-bezier(0, 0, 0, 1);
+  --nb: 167ms; --settle: 167ms; --lift: 83ms; --press: 83ms;
+  --lift-scale: 1.02;
+  --lift-shadow: 0 8px 16px rgba(0,0,0,.28), 0 0 2px rgba(0,0,0,.24);
+  --tap: 44px;
+}
+[data-theme="dark"] {
+  --shell: #202326; --layer: #272A2E; --card: #2F3338;
+  --stroke: rgba(255,255,255,.07); --stroke2: rgba(255,255,255,.12);
+  --subtle: rgba(255,255,255,.05); --selected: rgba(255,255,255,.07);
+  --text: #FFFFFF; --text2: rgba(255,255,255,.72); --text3: rgba(255,255,255,.54);
+  --bridge: #2DD4BF; --needs: #FFB224; --active: #4C9AFF; --agent: #A78BFA; --danger: #FF6B6B; --neutral: #8B949E;
+  --ink: #14100A; --knock: #272A2E; --bridge-on: #062621;
+  --tint: color-mix(in srgb, var(--card) 95%, var(--bridge));
+}
+[data-theme="light"] {
+  --shell: #EEF0F2; --layer: #F9F9F9; --card: #FFFFFF;
+  --stroke: rgba(0,0,0,.07); --stroke2: rgba(0,0,0,.12);
+  --subtle: rgba(0,0,0,.03); --selected: rgba(0,0,0,.05);
+  --text: #1A1A1A; --text2: rgba(0,0,0,.62); --text3: rgba(0,0,0,.58);
+  --bridge: #0B7A6E; --needs: #B87700; --active: #0B63E5; --agent: #6D4AE0; --danger: #C9302C; --neutral: #6E7781;
+  --ink: #14100A; --knock: #F9F9F9; --bridge-on: #FFFFFF;
+  --tint: color-mix(in srgb, var(--card) 96%, var(--bridge));
+}
+/* A stand-in for Windows' Night sky contrast theme, for screens that can't switch to the real one. */
+.hc {
+  --shell: #000; --layer: #000; --card: #000; --stroke: #A6A6A6; --stroke2: #FFF; --subtle: #000; --selected: #000;
+  --text: #FFF; --text2: #FFF; --text3: #A6A6A6; --bridge: #D6B4FD; --needs: #FFF; --active: #FFF; --agent: #FFF;
+  --danger: #FFF; --neutral: #FFF; --ink: #000; --knock: #000; --tint: #000; --hl: #D6B4FD; --bridge-on: #000;
+}
+.rm { --nb: 0ms !important; --settle: 0ms !important; --lift: 0ms !important; --press: 0ms !important; }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: var(--font); font-size: 14px; line-height: 20px; color: var(--text); background: var(--shell);
+  -webkit-text-size-adjust: 100%;
+}
+button { font: inherit; color: inherit; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.banner {
+  position: relative; z-index: 50; text-align: center; font-size: 12px; line-height: 16px; padding: 6px 12px;
+  padding-top: max(6px, env(safe-area-inset-top)); color: var(--text2); background: var(--layer); border-bottom: 1px solid var(--stroke);
+}
+.banner b { color: var(--bridge); font-weight: 600; }
+
+.app {
+  display: flex; flex-direction: column; margin: 0 auto; width: 100%; max-width: 760px;
+  height: calc(100dvh - 29px - env(safe-area-inset-top)); background: var(--layer);
+}
+@media (min-width: 800px) {
+  .app { height: min(760px, calc(100dvh - 60px)); margin-top: 16px; border-radius: 8px; border: 1px solid var(--stroke); overflow: clip; }
+}
+.bar {
+  position: relative; z-index: 40; flex: none; display: flex; align-items: center; gap: 8px; min-height: 56px;
+  padding: 8px 8px 8px 16px; background: var(--layer); border-bottom: 1px solid var(--stroke);
+}
+.bar h1 { flex: 1; margin: 0; font-size: 20px; line-height: 28px; font-weight: 600; }
+.tool {
+  display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); min-width: var(--tap); justify-content: center;
+  padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--text2); cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.tool:hover { background: var(--subtle); color: var(--text); }
+.tool svg { width: 16px; height: 16px; flex: none; }
+
+/* The list is its own scroll container. Rows and headers are laid out by script, so the
+   prototype can simulate every insertion and move neighbours with one transition. */
+.list {
+  position: relative; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;   overscroll-behavior: contain; scrollbar-gutter: stable;  -webkit-overflow-scrolling: touch;
+}
+.content { position: relative; margin: 0; }
+.content ul { list-style: none; margin: 0; padding: 0; }
+.list-group {
+  position: absolute; left: 0; top: 0; margin: 0; padding: 12px 12px 4px; font-size: 12px; line-height: 16px; font-weight: 600;
+  color: var(--text2); transition: transform var(--nb) var(--ease), opacity var(--nb) var(--ease), color var(--press) var(--ease);
+}
+.list-group.off { opacity: 0; visibility: hidden; }
+.list-group .cue { display: none; margin-left: 6px; font-weight: 400; }
+.list-group.target { color: var(--bridge); }
+.list-group.target .cue { display: inline; }
+
+.slot {
+  position: absolute; left: 0; top: 0; will-change: transform;
+  transition: transform var(--nb) var(--ease);
+}
+.slot.moving { z-index: 2; }
+.face {
+  position: relative; border-radius: 4px; background: transparent;
+  transition: transform var(--lift) var(--decel), box-shadow var(--lift) var(--decel), background-color var(--press) var(--ease), border-radius var(--lift) var(--decel);
+}
+.row-main {
+  display: grid; grid-template-columns: 16px 20px minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: 8px;
+  align-items: center; width: 100%; min-height: 56px; padding: 8px 12px 8px 4px; border: 0; background: transparent;
+  text-align: left; border-radius: inherit; cursor: default;
+  touch-action: pan-y; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+  -webkit-user-drag: none; -webkit-tap-highlight-color: transparent;
+}
+.row-main:focus { outline: none; }
+.row-main:focus-visible { outline: 2px solid var(--bridge); outline-offset: -2px; }
+@media (hover: hover) { .slot:hover .face { background: var(--subtle); } }
+.slot.pressed .face { background: var(--selected); }
+.slot.sel .face { background: var(--selected); }
+.slot.sel .face::before {
+  content: ""; position: absolute; left: 0; top: 50%; width: 3px; height: 16px; margin-top: -8px; border-radius: 2px; background: var(--bridge);
+}
+.grip {
+  grid-column: 1; grid-row: 1 / span 2; align-self: stretch; display: flex; align-items: center; justify-content: center;
+  margin: -8px -4px -8px -4px; padding: 0 4px; width: 24px; color: var(--text3); cursor: grab; touch-action: none;
+}
+.grip svg { width: 8px; height: 14px; }
+@media (hover: hover) and (pointer: fine) {
+  .grip { opacity: 0; transition: opacity var(--press) var(--ease); }
+  .slot:hover .grip, .row-main:focus-visible .grip, .slot.lifted .grip { opacity: 1; }
+}
+.glyph { grid-column: 2; grid-row: 1 / span 2; width: 20px; height: 20px; }
+.glyph svg { display: block; width: 20px; height: 20px; }
+.c-active { color: var(--active); } .c-needs { color: var(--needs); } .c-neutral { color: var(--neutral); }
+.c-danger { color: var(--danger); } .c-agent { color: var(--agent); }
+.row-title { grid-column: 3; grid-row: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unread .row-title { font-weight: 600; }
+.row-facts { grid-column: 3 / span 2; grid-row: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; color: var(--text2); }
+.row-age { grid-column: 4; grid-row: 1; font-size: 12px; color: var(--text2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chip {
+  grid-column: 4; grid-row: 1; display: none; align-items: center; gap: 4px; padding: 0 8px; height: 20px; border-radius: 10px;
+  font-size: 12px; line-height: 16px; font-weight: 600; color: var(--bridge-on); background: var(--bridge);
+}
+.chip svg { width: 12px; height: 12px; }
+.slot.crossing .chip, .slot.outside .chip { display: inline-flex; }
+.slot.crossing .row-age, .slot.outside .row-age { visibility: hidden; }
+.slot.outside .chip { color: var(--text2); background: var(--subtle); }
+
+/* Other sorts have no grip and no drag, and reserve no column for it (ui.md §6.1): the glyph
+   sits 12 from the edge, where it is without the grip. */
+.sorted .grip { display: none; }
+.sorted .row-main { grid-template-columns: 0 20px minmax(0, 1fr) auto; }
+
+/* The lifted card: it follows the pointer outside the list's clip, above rows and headers, below the bar. */
+.slot.lifted, .slot.settling { position: fixed; z-index: 30; }
+.slot.lifted { transition: none; }
+.slot.ending { opacity: 0; transition: opacity 83ms var(--ease); pointer-events: none; }
+.slot.settling { transition: transform var(--settle) var(--ease); }
+.slot.lifted .face {
+  transform: scale(var(--lift-scale)); box-shadow: var(--lift-shadow); background: var(--tint);
+  border-radius: 8px; outline: 1px solid var(--stroke2); outline-offset: -1px;
+}
+.slot.lifted .grip { color: var(--text); cursor: grabbing; }
+.slot.sel.lifted .face { background-image: linear-gradient(var(--selected), var(--selected)); }
+.slot.settling .face { transition: transform var(--settle) var(--ease), box-shadow var(--settle) var(--ease), border-radius var(--settle) var(--ease); }
+/* The hold before a touch lift: the card sinks a little for the length of the press. */
+.slot.sinking .face { transform: scale(0.985); transition-property: transform, background-color; transition-timing-function: linear, var(--ease); }
+
+.rm .slot.lifted .face { transform: none; box-shadow: none; outline: 2px solid var(--bridge); outline-offset: -2px; background: var(--card); }
+.rm .slot.sinking .face { transform: none; }
+.hc .slot.lifted .face, .hc .slot.sel .face { box-shadow: none; outline: 2px solid var(--hl); outline-offset: -2px; }
+.hc .slot.lifted .face { transform: scale(var(--lift-scale)); }
+.rm.hc .slot.lifted .face { transform: none; }
+.hc .slot.sel .face::before { background: var(--hl); }
+.hc .chip { background: transparent; outline: 1px solid var(--hl); color: var(--text); }
+
+.socket {
+  position: absolute; left: 0; top: 0; border-radius: 8px; background: var(--subtle); box-shadow: inset 0 0 0 1px var(--stroke);
+  display: none; transition: transform var(--nb) var(--ease);
+}
+.socket.on { display: block; }
+.hc .socket { background: transparent; box-shadow: none; outline: 1px dashed var(--text3); outline-offset: -1px; }
+.empty {
+  position: absolute; left: 0; top: 0; display: none; align-items: center; justify-content: center; border-radius: 8px;
+  font-size: 12px; color: var(--text3); outline: 1px dashed var(--stroke2); outline-offset: -1px;
+}
+.empty.on { display: flex; }
+
+body.dragging, body.dragging * { cursor: grabbing !important; -webkit-user-select: none; user-select: none; }
+
+@media (forced-colors: active) {
+  .slot.lifted .face, .slot.sel .face { box-shadow: none; outline: 2px solid Highlight; outline-offset: -2px; }
+  .slot.sel .face::before { background: Highlight; forced-color-adjust: none; }
+  .socket { outline: 1px dashed GrayText; outline-offset: -1px; }
+  .list-group.target { color: Highlight; }
+  .chip { outline: 1px solid CanvasText; }
+}
+
+/* Menu, toast, tune panel */
+.menu {
+  position: fixed; z-index: 60; min-width: 200px; padding: 4px; border-radius: 8px; background: var(--card);
+  border: 1px solid var(--stroke2); box-shadow: 0 8px 16px rgba(0,0,0,.18);
+}
+.menu button {
+  display: flex; width: 100%; align-items: center; min-height: 40px; padding: 0 12px; border: 0; border-radius: 4px; background: transparent;
+  text-align: left; cursor: pointer;
+}
+.menu button:hover, .menu button:focus-visible { background: var(--subtle); outline: none; }
+.menu button[aria-disabled="true"] { color: var(--text3); }
+.toast {
+  position: fixed; z-index: 70; left: 50%; bottom: calc(76px + env(safe-area-inset-bottom)); transform: translate(-50%, 8px); max-width: min(92vw, 420px);
+  padding: 10px 14px; border-radius: 8px; background: var(--card); border: 1px solid var(--stroke2); box-shadow: 0 8px 16px rgba(0,0,0,.18);
+  font-size: 13px; line-height: 18px; opacity: 0; pointer-events: none; transition: opacity 167ms var(--ease), transform 167ms var(--ease);
+}
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+/* Under reduced motion the hint doesn't slide; it only fades. */
+.rm .toast, .rm .toast.on { transform: translate(-50%, 0); transition: opacity 167ms var(--ease); }
+.tune {
+  position: fixed; z-index: 55; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); max-width: min(360px, calc(100vw - 24px));
+  border-radius: 8px; background: var(--card); border: 1px solid var(--stroke2); box-shadow: 0 8px 16px rgba(0,0,0,.18);
+  font-size: 13px; line-height: 18px;
+}
+.tune summary { list-style: none; cursor: pointer; padding: 10px 14px; min-height: var(--tap); display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.tune summary::-webkit-details-marker { display: none; }
+.tune summary::after { content: "▴"; margin-left: auto; color: var(--text3); }
+.tune[open] summary::after { content: "▾"; }
+.tune .body { padding: 0 14px 12px; max-height: min(64vh, 560px); overflow: auto; }
+.tune label.range { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; margin: 10px 0; }
+.tune label.range input { grid-column: 1 / -1; width: 100%; accent-color: var(--bridge); }
+.tune output { color: var(--text2); font-variant-numeric: tabular-nums; }
+.tune fieldset { border: 0; margin: 10px 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.tune legend { padding: 0; margin-bottom: 4px; color: var(--text2); width: 100%; }
+.tune .note { color: var(--text3); font-size: 12px; margin: 6px 0; }
+.tune .row { display: flex; gap: 8px; margin-top: 10px; }
+.tune .btn {
+  min-height: 36px; padding: 0 12px; border-radius: 4px; border: 1px solid var(--stroke2); background: var(--layer); cursor: pointer;
+}
+.tune .btn.primary { background: var(--bridge); color: var(--bridge-on); border-color: transparent; font-weight: 600; }
+.tune textarea { width: 100%; margin-top: 8px; font: 12px/16px ui-monospace, Consolas, monospace; color: var(--text); background: var(--layer); border: 1px solid var(--stroke2); border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="banner"><b>#592</b> · Decided (owner, 2026-11-04) · prototype</div>
+<main class="app" id="app">
+  <header class="bar">
+    <h1 id="title">Sessions</h1>
+    <button class="tool" id="sort" type="button" aria-haspopup="false" title="Sort">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10M5 8h6M7 12h2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>
+      <span id="sort-label">Your order</span>
+    </button>
+    <button class="tool" id="theme" type="button" aria-label="Switch to light theme">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm0 1.5v10a5 5 0 0 1 0-10Z" fill="currentColor"/></svg>
+    </button>
+  </header>
+  <div class="list" id="list" role="region" aria-labelledby="title">
+    <div class="content" id="content">
+      <h3 class="list-group" id="h-pinned" data-g="pinned">Pinned<span class="cue">· drop to pin</span></h3>
+      <ul id="ul-pinned" aria-labelledby="h-pinned"></ul>
+      <div class="empty" data-g="pinned">Drop here to keep it pinned</div>
+      <h3 class="list-group" id="h-sessions" data-g="sessions">Sessions<span class="cue">· drop to unpin</span></h3>
+      <ul id="ul-sessions" aria-labelledby="h-sessions"></ul>
+      <div class="empty" data-g="sessions">Drop here to unpin</div>
+      <div class="socket" id="socket" aria-hidden="true"></div>
+    </div>
+  </div>
+</main>
+<p class="sr" id="hint-move">Alt plus Up or Down arrow moves it. Shift plus F10 opens its menu.</p>
+<div class="sr" id="live" aria-live="polite" aria-atomic="true"></div>
+<div class="toast" id="toast" role="status"></div>
+<div class="menu" id="menu" role="menu" aria-label="Session" hidden>
+  <button type="button" role="menuitem" data-act="up">Move up</button>
+  <button type="button" role="menuitem" data-act="down">Move down</button>
+  <button type="button" role="menuitem" data-act="pin">Pin</button>
+</div>
+<details class="tune" id="tune">
+  <summary>Tune</summary>
+  <div class="body">
+    <p class="note">Touch: press and hold a session, then drag. Mouse: drag the grip, or drag the card a few pixels. Keyboard: Alt+↑/↓. Esc cancels.</p>
+    <label class="range"><span>Lift scale</span><output id="o-liftScale"></output><input type="range" id="liftScale" min="1" max="1.06" step="0.005"></label>
+    <label class="range"><span>Shadow strength</span><output id="o-shadow"></output><input type="range" id="shadow" min="0" max="2" step="0.1"></label>
+    <label class="range"><span>Long press (ms)</span><output id="o-longPressMs"></output><input type="range" id="longPressMs" min="250" max="800" step="10"></label>
+    <label class="range"><span>Neighbours (ms)</span><output id="o-neighbourMs"></output><input type="range" id="neighbourMs" min="0" max="400" step="1"></label>
+    <label class="range"><span>Drop settle (ms)</span><output id="o-settleMs"></output><input type="range" id="settleMs" min="0" max="400" step="1"></label>
+    <label class="range"><span>Lift (ms)</span><output id="o-liftMs"></output><input type="range" id="liftMs" min="0" max="300" step="1"></label>
+    <p class="note" id="lp-note"></p>
+    <fieldset><legend>Theme</legend>
+      <label><input type="radio" name="theme" value="dark"> Dark</label>
+      <label><input type="radio" name="theme" value="light"> Light</label>
+      <label><input type="checkbox" id="hc"> High contrast (simulated)</label>
+    </fieldset>
+    <fieldset><legend>Motion</legend>
+      <label><input type="radio" name="motion" value="system"> System</label>
+      <label><input type="radio" name="motion" value="reduce"> Reduce</label>
+      <label><input type="radio" name="motion" value="full"> Full</label>
+    </fieldset>
+    <fieldset><legend>Columns</legend>
+      <label><input type="radio" name="columns" value="1"> One</label>
+      <label><input type="radio" name="columns" value="2"> Two (wide grid)</label>
+    </fieldset>
+    <fieldset><legend>Feel</legend>
+      <label><input type="checkbox" id="haptic"> Haptic tick at lift (Android)</label>
+    </fieldset>
+    <fieldset><legend>Simulate</legend>
+      <label><input type="checkbox" id="sim-end"> The held session ends 1.5 s after the lift (reload to bring it back)</label>
+    </fieldset>
+    <div class="row">
+      <button class="btn primary" type="button" id="copy">Copy values</button>
+      <button class="btn" type="button" id="reset">Reset</button>
+    </div>
+    <textarea id="values" rows="7" readonly aria-label="Values"></textarea>
+  </div>
+</details>
+
+<script>
+'use strict';
+(() => {
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+
+// ---- Platform norms -------------------------------------------------------------------
+const UA = navigator.userAgent;
+const IOS = /iPhone|iPad|iPod/.test(UA) || (/Macintosh/.test(UA) && navigator.maxTouchPoints > 1);
+const ANDROID = /Android/.test(UA);
+const PLATFORM_LP = IOS ? 500 : ANDROID ? 400 : 500;   // UILongPressGestureRecognizer 0.5 s; Android 12+ 400 ms
+
+const TOUCH_SLOP = 10;    // moving this far before the lift means "scroll", not "drag"
+const MOUSE_SLOP = 4;     // SM_CXDRAG: a mouse or pen lifts the card body after this much travel
+const GRIP_HOLD = 150;    // a touch on the grip lifts after this hold, or on a 4 px move
+const OUTSIDE = 32;       // releasing this far outside the list cancels
+const VMAX = 1000;        // auto-scroll speed at the edge, px/s
+
+const DEFAULTS = {
+  liftScale: 1.02, shadow: 1, longPressMs: PLATFORM_LP, neighbourMs: 167, settleMs: 167, liftMs: 83,
+  haptic: true, columns: 1, theme: matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark',
+  motion: 'system', hc: false,
+};
+const cfg = { ...DEFAULTS };
+
+// ---- Demo data ------------------------------------------------------------------------
+const TOP = 'M42.872 8.625C43.472 8.625 43.679 8.91 43.494 9.481L42.506 12.519C42.321 13.09 41.928 13.375 41.328 13.375L26 13.375C22.919 13.375 19.809 14.264 17.461 16.321C15.473 18.062 14.286 20.445 14.233 23.101C14.25 23.7 13.958 24 13.358 24L10.399 24C9.799 24 9.494 23.7 9.483 23.1C9.536 19.09 11.298 15.421 14.296 12.778C17.522 9.935 21.741 8.625 26 8.625L42.872 8.625Z';
+const BOT = 'M5.128 39.375C4.528 39.375 4.321 39.09 4.506 38.519L5.494 35.481C5.679 34.91 6.072 34.625 6.672 34.625L22 34.625C25.081 34.625 28.191 33.736 30.539 31.679C32.527 29.938 33.714 27.555 33.767 24.899C33.75 24.3 34.042 24 34.642 24L37.601 24C38.201 24 38.506 24.3 38.517 24.9C38.464 28.91 36.702 32.579 33.704 35.222C30.478 38.065 26.259 39.375 22 39.375L5.128 39.375Z';
+const CHECK = 'M46.1 40.5A5.6 5.6 0 0 1 34.9 40.5A5.6 5.6 0 0 1 46.1 40.5ZM37.324 41.256L39.164 43.096A0.8 0.8 0 0 0 40.311 43.08L43.781 39.41A0.8 0.8 0 0 0 42.619 38.31L39.714 41.383L38.456 40.124A0.8 0.8 0 0 0 37.324 41.256Z';
+const FAIL_TOP = 'M42.477 9.761C43.07 9.668 43.319 9.917 43.225 10.51L42.726 13.665C42.632 14.257 42.288 14.601 41.696 14.694L26.556 17.092C23.513 17.574 20.58 18.939 18.583 21.337C16.892 23.369 16.093 25.908 16.456 28.539C16.566 29.128 16.325 29.47 15.732 29.564L12.81 30.027C12.217 30.121 11.868 29.872 11.764 29.282C11.189 25.313 12.355 21.413 14.903 18.334C17.644 15.021 21.607 13.067 25.813 12.401L42.477 9.761Z';
+const NEEDS_S = 'M37.965 12.623C38.409 12.623 38.562 12.834 38.425 13.256L37.695 15.504C37.558 15.926 37.267 16.138 36.823 16.138L25.48 16.138C23.2 16.138 20.898 16.795 19.161 18.317C17.69 19.606 16.812 21.369 16.773 23.334C16.785 23.778 16.569 24 16.125 24L13.936 24C13.492 24 13.265 23.778 13.257 23.334C13.296 20.367 14.601 17.652 16.819 15.696C19.206 13.592 22.328 12.623 25.48 12.623L37.965 12.623ZM10.035 35.378C9.591 35.378 9.438 35.166 9.575 34.744L10.305 32.496C10.442 32.074 10.733 31.863 11.177 31.863L22.52 31.863C24.8 31.863 27.102 31.205 28.839 29.683C30.31 28.394 31.188 26.631 31.227 24.666C31.215 24.222 31.431 24 31.875 24L34.064 24C34.508 24 34.735 24.222 34.743 24.666C34.704 27.633 33.399 30.348 31.181 32.304C28.794 34.408 25.672 35.378 22.52 35.378L10.035 35.378Z';
+const DELEG_S = 'M36.455 13.853C36.851 13.853 36.988 14.041 36.866 14.417L36.214 16.423C36.092 16.799 35.833 16.988 35.437 16.988L25.32 16.988C23.287 16.988 21.234 17.574 19.684 18.932C18.372 20.081 17.589 21.654 17.554 23.406C17.565 23.802 17.373 24 16.977 24L15.024 24C14.628 24 14.426 23.802 14.419 23.406C14.453 20.76 15.617 18.338 17.596 16.594C19.724 14.717 22.509 13.853 25.32 13.853L36.455 13.853ZM11.545 34.148C11.149 34.148 11.012 33.959 11.134 33.583L11.786 31.577C11.908 31.201 12.167 31.013 12.563 31.013L22.68 31.013C24.713 31.013 26.766 30.426 28.316 29.068C29.628 27.919 30.411 26.346 30.446 24.594C30.435 24.198 30.627 24 31.023 24L32.976 24C33.372 24 33.574 24.198 33.581 24.594C33.547 27.24 32.383 29.662 30.404 31.406C28.276 33.283 25.491 34.148 22.68 34.148L11.545 34.148Z';
+const svg = (inner) => `<svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">${inner}</svg>`;
+const GLYPH = {
+  idle:       ['c-neutral', svg(`<path d="${TOP}${BOT}" fill="currentColor"/>`)],
+  working:    ['c-active',  svg(`<path d="${TOP}" fill="currentColor"/><path d="${BOT}" fill="currentColor" fill-opacity=".3"/>`)],
+  needs:      ['c-needs',   svg(`<rect x="1" y="1" width="46" height="46" rx="11" fill="currentColor"/><path d="${NEEDS_S}" fill="var(--ink)"/>`)],
+  delegating: ['c-active',  svg(`<path d="${DELEG_S}" fill="currentColor"/><circle cx="24" cy="3.5" r="3.4" fill="currentColor"/><circle cx="41.754" cy="34.25" r="3.4" fill="currentColor"/><circle cx="6.246" cy="34.25" r="3.4" fill="currentColor"/>`)],
+  finished:   ['c-neutral', svg(`<path d="${TOP}${BOT}${CHECK}" fill="currentColor"/>`)],
+  failed:     ['c-danger',  svg(`<path d="${FAIL_TOP}${BOT}" fill="currentColor"/>`)],
+  driven:     ['c-agent',   svg(`<path d="${TOP}" fill="currentColor" fill-opacity=".3"/><path d="${BOT}" fill="currentColor"/><rect x="36.65" y="36.65" width="7.2" height="7.2" rx="1.55" transform="rotate(45 40.25 40.25)" fill="currentColor" stroke="var(--knock)" stroke-width="1.3"/>`)],
+};
+const WORDS = { idle: 'Idle', working: 'Working', needs: 'Needs you', delegating: 'Delegating to 2 agents', finished: 'Finished', failed: 'Failed', driven: 'Working · Driven by an agent' };
+const ICON_PIN = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 1.5h4l-.6 4 2.6 2.4V9.5H8.75V14L8 14.75 7.25 14V9.5H4V7.9l2.6-2.4z" fill="currentColor"/></svg>';
+const ICON_X = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+const ICON_GRIP = '<svg viewBox="0 0 8 14" aria-hidden="true"><g fill="currentColor"><circle cx="1.5" cy="1.5" r="1.25"/><circle cx="6.5" cy="1.5" r="1.25"/><circle cx="1.5" cy="7" r="1.25"/><circle cx="6.5" cy="7" r="1.25"/><circle cx="1.5" cy="12.5" r="1.25"/><circle cx="6.5" cy="12.5" r="1.25"/></g></svg>';
+
+const sessions = [
+  ['a', 'Release notes for 1.33',        'ULTRA',   'working',    '2m',  true,  false],
+  ['b', 'Fix the flaky pairing test',    'DEV-VM1', 'needs',      '5m',  true,  true],
+  ['c', 'Dashboard card polish',         'ULTRA',   'idle',       '12m', false, false],
+  ['d', 'Usage poller retries',          'DEV-VM1', 'delegating', '18m', false, false],
+  ['e', 'First-run guide for the docs',  'ULTRA',   'finished',   '25m', false, true],
+  ['f', 'Upgrade Playwright',            'DEV-VM1', 'failed',     '40m', false, false],
+  ['g', 'Refactor the session store',    'ULTRA',   'working',    '1h',  false, false],
+  ['h', 'Triage open issues',            'ULTRA',   'driven',     '1h',  false, false],
+  ['i', 'Notification copy review',      'DEV-VM1', 'idle',       '2h',  false, false],
+  ['j', 'Accessibility audit',           'ULTRA',   'finished',   '3h',  false, false],
+  ['k', 'Export the theme tokens',       'DEV-VM1', 'working',    '4h',  false, false],
+  ['l', 'Release checklist',             'ULTRA',   'idle',       'Mon', false, false],
+];
+const items = {};
+for (const [key, title, machine, state, age, pinned, unread] of sessions) items[key] = { key, title, machine, state, age, pinned, unread };
+let order = sessions.map((s) => s[0]);
+let selected = 'c';
+let sorted = false;
+
+// ---- DOM ------------------------------------------------------------------------------
+const app = $('#app'), list = $('#list'), content = $('#content'), socket = $('#socket');
+const hdr = { pinned: $('#h-pinned'), sessions: $('#h-sessions') };
+const ul = { pinned: $('#ul-pinned'), sessions: $('#ul-sessions') };
+const empty = { pinned: $('.empty[data-g="pinned"]'), sessions: $('.empty[data-g="sessions"]') };
+const live = $('#live'), toast = $('#toast'), menu = $('#menu');
+const els = new Map();
+
+function buildRow(s) {
+  const li = document.createElement('li');
+  li.className = 'slot';
+  li.dataset.key = s.key;
+  const [cls, glyph] = GLYPH[s.state];
+  li.innerHTML = `<div class="face"><button class="row-main" type="button" aria-describedby="hint-move" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown">`
+    + `<span class="grip" aria-hidden="true">${ICON_GRIP}</span>`
+    + `<span class="glyph ${cls}">${glyph}</span>`
+    + `<span class="row-title"></span><span class="row-age"></span><span class="chip" aria-hidden="true"></span>`
+    + `<span class="row-facts"></span></button></div>`;
+  $('.row-title', li).textContent = s.title;
+  $('.row-age', li).textContent = s.age;
+  $('.row-facts', li).textContent = `${s.machine} · ${WORDS[s.state]}`;
+  li.classList.toggle('unread', s.unread);
+  return li;
+}
+for (const key of order) els.set(key, buildRow(items[key]));
+
+// ---- Layout ---------------------------------------------------------------------------
+const M = { pad: 4, rh: 56, hh: 32, gapY: 2, gapX: 8, groupGap: 4 };
+const anyPinned = () => order.some((k) => items[k].pinned);
+const groupName = (gid) => (gid === 'pinned' ? 'Pinned' : 'Sessions');
+function groupsNow() {
+  return [{ id: 'pinned', keys: order.filter((k) => items[k].pinned) }, { id: 'sessions', keys: order.filter((k) => !items[k].pinned) }];
+}
+function columns() { return Math.max(1, Number(cfg.columns) || 1); }
+
+// preview: a held card's layout. Only it shows the empty group's drop placeholder.
+function layout(groups, showHeaders, preview) {
+  const cols = columns();
+  const W = content.clientWidth - 2 * M.pad;
+  const gapY = cols > 1 ? 8 : M.gapY;
+  const cw = (W - M.gapX * (cols - 1)) / cols;
+  const pos = new Map(), heads = new Map(), empties = new Map();
+  let y = M.pad;
+  const gs = showHeaders ? groups : [{ id: 'sessions', keys: groups.flatMap((g) => g.keys) }];
+  for (const g of gs) {
+    if (showHeaders) { heads.set(g.id, y); y += M.hh; }
+    if (g.keys.length === 0) {
+      if (showHeaders && preview) { empties.set(g.id, { x: M.pad, y, w: W, h: M.rh }); y += M.rh + gapY + M.groupGap; }
+      continue;
+    }
+    g.keys.forEach((k, i) => {
+      const c = i % cols, r = Math.floor(i / cols);
+      pos.set(k, { x: M.pad + c * (cw + M.gapX), y: y + r * (M.rh + gapY), w: cw, h: M.rh, gid: g.id, i, n: g.keys.length });
+    });
+    y += Math.ceil(g.keys.length / cols) * (M.rh + gapY) + M.groupGap;
+  }
+  return { pos, heads, empties, height: y + M.pad + 72 };
+}
+
+let headersShown = anyPinned();
+function apply(L, skip) {
+  for (const [k, li] of els) {
+    if (k === skip) continue;
+    const p = L.pos.get(k);
+    if (!p) continue;
+    li.style.width = p.w + 'px';
+    li.style.transform = `translate3d(${p.x}px, ${p.y}px, 0)`;
+  }
+  for (const gid of ['pinned', 'sessions']) {
+    const y = L.heads.get(gid);
+    if (y !== undefined) hdr[gid].style.transform = `translate3d(0, ${y}px, 0)`;
+    hdr[gid].classList.toggle('off', y === undefined);
+    const e = L.empties.get(gid);
+    empty[gid].classList.toggle('on', !!e);
+    if (e) Object.assign(empty[gid].style, { width: e.w + 'px', height: e.h + 'px', transform: `translate3d(${e.x}px, ${e.y}px, 0)` });
+  }
+  content.style.height = L.height + 'px';
+}
+
+function syncDom() {
+  const focused = document.activeElement;
+  for (const grp of groupsNow()) {
+    grp.keys.forEach((k, i) => {
+      const el = els.get(k);
+      if (ul[grp.id].children[i] !== el) ul[grp.id].insertBefore(el, ul[grp.id].children[i] || null);
+    });
+  }
+  for (const [k, li] of els) {
+    li.classList.toggle('sel', k === selected);
+    $('.row-main', li).setAttribute('aria-current', k === selected ? 'true' : 'false');
+  }
+  if (focused && focused !== document.activeElement && document.contains(focused)) focused.focus({ preventScroll: true });
+}
+
+function measure() {
+  const first = els.values().next().value;
+  if (first && first.offsetHeight) M.rh = first.offsetHeight;
+  if (hdr.sessions.offsetHeight) M.hh = hdr.sessions.offsetHeight;
+}
+
+function relayout(instant) {
+  if (instant) content.classList.add('instant');
+  const was = instant ? [...els.values(), hdr.pinned, hdr.sessions].map((el) => [el, el.style.transition]) : [];
+  if (instant) for (const [el] of was) el.style.transition = 'none';
+  headersShown = anyPinned();
+  apply(layout(groupsNow(), headersShown));
+  if (instant) { void content.offsetHeight; for (const [el, t] of was) el.style.transition = t; content.classList.remove('instant'); }
+}
+
+// ---- Settings -------------------------------------------------------------------------
+const mqReduce = matchMedia('(prefers-reduced-motion: reduce)');
+const reduced = () => cfg.motion === 'reduce' || (cfg.motion === 'system' && mqReduce.matches);
+function shadowFor(theme, s) {
+  const [a, b] = theme === 'light' ? [0.14, 0.12] : [0.28, 0.24];
+  if (s <= 0) return 'none';
+  const r = (v) => Math.round(v * 100) / 100;
+  return `0 ${r(8 * s)}px ${r(16 * s)}px rgba(0,0,0,${r(Math.min(1, a * s))}), 0 0 ${r(2 * s)}px rgba(0,0,0,${r(Math.min(1, b * s))})`;
+}
+function applyCfg() {
+  const root = document.documentElement;
+  root.dataset.theme = cfg.theme;
+  root.classList.toggle('hc', !!cfg.hc);
+  root.classList.toggle('rm', reduced());
+  root.style.setProperty('--lift-scale', cfg.liftScale);
+  root.style.setProperty('--lift-shadow', shadowFor(cfg.theme, cfg.shadow));
+  root.style.setProperty('--nb', cfg.neighbourMs + 'ms');
+  root.style.setProperty('--settle', cfg.settleMs + 'ms');
+  root.style.setProperty('--lift', cfg.liftMs + 'ms');
+  $('#theme').setAttribute('aria-label', cfg.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+  for (const id of ['liftScale', 'shadow', 'longPressMs', 'neighbourMs', 'settleMs', 'liftMs']) {
+    $('#' + id).value = cfg[id];
+    $('#o-' + id).textContent = id === 'liftScale' ? Number(cfg[id]).toFixed(3) : id === 'shadow' ? `${Number(cfg[id]).toFixed(1)}×` : `${cfg[id]}`;
+  }
+  for (const r of $$('input[name="theme"]')) r.checked = r.value === cfg.theme;
+  for (const r of $$('input[name="motion"]')) r.checked = r.value === cfg.motion;
+  for (const r of $$('input[name="columns"]')) r.checked = Number(r.value) === Number(cfg.columns);
+  $('#hc').checked = !!cfg.hc;
+  $('#haptic').checked = !!cfg.haptic;
+  $('#lp-note').textContent = `This device's default long press: ${PLATFORM_LP} ms (${IOS ? 'iOS' : ANDROID ? 'Android' : 'other'}). Reduced motion is ${reduced() ? 'on' : 'off'}.`;
+  $('#values').value = JSON.stringify(values(), null, 2);
+}
+function values() {
+  return {
+    proposal: 592, liftScale: Number(cfg.liftScale), shadowStrength: Number(cfg.shadow),
+    longPressMs: Number(cfg.longPressMs), neighbourMs: Number(cfg.neighbourMs), settleMs: Number(cfg.settleMs),
+    liftMs: Number(cfg.liftMs), haptic: !!cfg.haptic,
+  };
+}
+for (const id of ['liftScale', 'shadow', 'longPressMs', 'neighbourMs', 'settleMs', 'liftMs']) {
+  $('#' + id).addEventListener('input', (e) => { cfg[id] = Number(e.target.value); applyCfg(); });
+}
+for (const r of $$('input[name="theme"]')) r.addEventListener('change', () => { cfg.theme = r.value; applyCfg(); });
+for (const r of $$('input[name="motion"]')) r.addEventListener('change', () => { cfg.motion = r.value; applyCfg(); });
+for (const r of $$('input[name="columns"]')) r.addEventListener('change', () => { cancelDrag(true); cfg.columns = Number(r.value); applyCfg(); measure(); relayout(true); });
+$('#hc').addEventListener('change', (e) => { cfg.hc = e.target.checked; applyCfg(); });
+$('#haptic').addEventListener('change', (e) => { cfg.haptic = e.target.checked; applyCfg(); });
+mqReduce.addEventListener?.('change', applyCfg);
+$('#theme').addEventListener('click', () => { cfg.theme = cfg.theme === 'dark' ? 'light' : 'dark'; applyCfg(); });
+$('#reset').addEventListener('click', () => {
+  cancelDrag(true);
+  Object.assign(cfg, DEFAULTS); applyCfg(); measure(); relayout(true);
+  try { localStorage.removeItem(HINT_SEEN); } catch { /* storage blocked */ }
+});
+$('#copy').addEventListener('click', async () => {
+  const text = JSON.stringify(values(), null, 2);
+  const ta = $('#values');
+  ta.value = text;
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; } catch { /* falls back below */ }
+  if (!ok) { ta.focus(); ta.select(); try { ok = document.execCommand('copy'); } catch { ok = false; } }
+  showToast(ok ? 'Values copied.' : 'Select the values below and copy them.');
+});
+$('#sort').addEventListener('click', () => {
+  cancelDrag(true);
+  sorted = !sorted;
+  $('#sort-label').textContent = sorted ? 'Recent' : 'Your order';
+  app.classList.toggle('sorted', sorted);
+  showToast(sorted ? 'Sorted by Recent. Switch back to Your order to move sessions.' : 'Your order. Drag a session to move it.');
+  firstHint();
+});
+
+// ---- Speech ---------------------------------------------------------------------------
+let sayTimer = 0;
+function say(text, delay = 0) {
+  clearTimeout(sayTimer);
+  sayTimer = setTimeout(() => { live.textContent = ''; requestAnimationFrame(() => { live.textContent = text; }); }, delay);
+}
+let toastTimer = 0;
+const HINT = 'Press and hold a session to move it. Or use Move up and Move down in its menu.';
+const HINT_SEEN = 'p592-move-hint-seen';
+// D5: the hint shows once by itself, the first time a touch user sees the list in Your order
+// with at least 2 sessions to move; a flag on the device stops it after that. Tapping the grip
+// shows it every time. Where storage is blocked the list can't be in Your order (ui.md §6.1).
+function firstHint() {
+  if (sorted || order.length < 2 || !matchMedia('(pointer: coarse)').matches) return;
+  try { if (localStorage.getItem(HINT_SEEN)) return; localStorage.setItem(HINT_SEEN, '1'); } catch { return; }
+  showToast(HINT);
+}
+function showToast(text) {
+  toast.textContent = text;
+  toast.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('on'), 4000);
+}
+
+// ---- Gesture --------------------------------------------------------------------------
+let g = null;           // the gesture in progress
+let suppressClick = false;   // swallows the click that ends a lift, a hold or a grip tap
+let lastPointer = '';   // the type of the latest press, for events that don't carry one
+let rehit = null;       // the card a press during the settle resolved to; its click goes there
+
+// The card whose committed place is under a point, and whether the point is on its grip (the
+// first 24 of the card, the grip's hit area, ui.md §9), from the layout, not the drawn cards.
+function slotAt(cx, cy) {
+  const cr = content.getBoundingClientRect();
+  const x = cx - cr.left, y = cy - cr.top;
+  for (const [key, p] of layout(groupsNow(), headersShown).pos) {
+    if (x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h) return { key, onGrip: !sorted && x - p.x < 24 };
+  }
+  return null;
+}
+// Ends a settle at once. The order is already committed; this only finishes the drawing.
+function settleNow() { if (g && g.phase === 'settling') { clearTimeout(g.settleTimer); g.finishNow(); relayout(true); } }
+
+function locate(groups, key, showHeaders) {
+  const gs = showHeaders ? groups : [{ id: 'sessions', keys: groups.flatMap((x) => x.keys) }];
+  for (const grp of gs) { const i = grp.keys.indexOf(key); if (i >= 0) return { gid: grp.id, i, n: grp.keys.length }; }
+  return null;
+}
+function groupsWith(cand) {
+  const base = g.show ? g.groups0 : [{ id: 'sessions', keys: g.groups0.flatMap((x) => x.keys) }];
+  return base.map((grp) => {
+    const keys = grp.keys.filter((k) => k !== g.key);
+    if (grp.id === cand.gid) keys.splice(cand.i, 0, g.key);
+    return { id: grp.id, keys };
+  });
+}
+const same = (a, b) => a && b && a.gid === b.gid && a.i === b.i;
+
+content.addEventListener('pointerdown', (e) => {
+  // The order was committed at release, so a press during the settle acts on the card now in
+  // that place: the settle is finished, and the press is resolved against the committed layout
+  // rather than e.target, which was hit-tested against cards still sliding there.
+  let li = null, onGrip = false;
+  rehit = null;
+  if (g && g.phase === 'settling' && e.isPrimary) {
+    settleNow();
+    const at = slotAt(e.clientX, e.clientY);
+    if (at) { li = els.get(at.key); onGrip = at.onGrip; rehit = { li, onGrip }; }
+  } else if (e.target.closest) {
+    li = e.target.closest('.slot');
+    onGrip = !!e.target.closest('.grip');
+  }
+  if (g || !e.isPrimary || e.button !== 0) return;
+  if (!li) return;
+  closeMenu(false);
+  suppressClick = false;
+  const lr = li.getBoundingClientRect();
+  g = { id: e.pointerId, type: e.pointerType, key: li.dataset.key, li, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY,
+        px: e.clientX - lr.left, py: e.clientY - lr.top, phase: 'pending', onGrip, timer: 0 };
+  li.classList.add('pressed');
+  if (e.pointerType === 'touch') {
+    if (sorted) { g.timer = setTimeout(() => pressMenu(), cfg.longPressMs); return; }
+    if (onGrip) { g.timer = setTimeout(lift, GRIP_HOLD); return; }
+    if (!reduced()) {
+      const face = $('.face', li);
+      face.style.transitionDuration = `${cfg.longPressMs}ms, var(--press)`;
+      li.classList.add('sinking');
+    }
+    g.timer = setTimeout(lift, cfg.longPressMs);
+  } else {
+    if (onGrip && !sorted) { e.preventDefault(); lift(); }
+  }
+});
+
+function endPress() {
+  if (!g) return;
+  clearTimeout(g.timer);
+  g.li.classList.remove('pressed', 'sinking');
+  $('.face', g.li).style.transitionDuration = '';
+}
+function abort() { endPress(); g = null; }
+
+function pressMenu() {
+  const key = g.key;
+  endPress();
+  g = null;
+  suppressClick = true;
+  openMenu(key);
+}
+
+window.addEventListener('pointermove', (e) => {
+  if (!g || e.pointerId !== g.id) return;
+  g.x = e.clientX; g.y = e.clientY;
+  if (g.phase === 'pending') {
+    const d = Math.hypot(g.x - g.sx, g.y - g.sy);
+    if (g.type === 'touch') {
+      if (g.onGrip && !sorted && d > MOUSE_SLOP) lift(true);
+      else if (d > TOUCH_SLOP) { abort(); rehit = null; } // the finger moved first: let the list scroll; no click follows
+    } else if (d > MOUSE_SLOP) {
+      if (sorted) abort(); else lift(true);
+    }
+  } else if (g.phase === 'lifted') {
+    track();
+  }
+});
+
+window.addEventListener('pointerup', (e) => {
+  if (!g || e.pointerId !== g.id) return;
+  if (g.phase === 'pending') {
+    const tapGrip = g.onGrip && g.type === 'touch' && !sorted;
+    abort();
+    if (tapGrip) { suppressClick = true; showToast(HINT); }
+  } else if (g.phase === 'lifted') {
+    drop(false);
+  }
+});
+
+window.addEventListener('pointercancel', (e) => {
+  if (!g || e.pointerId !== g.id) return;
+  if (g.phase === 'pending') { abort(); return; }
+  if (g.phase !== 'lifted') return;
+  // Once lifted, a touch drag is kept alive by the touch events below: a browser that sends
+  // pointercancel because it began a pan still delivers touchmove, and a real interruption
+  // (a call, a system gesture) follows with touchcancel, which cancels.
+  if (g.type === 'touch') { g.viaTouch = true; return; }
+  drop(true);
+});
+
+// The drag belongs to one finger: a second finger (a pinch) cancels it, and after the handover
+// only that finger's touches move or drop the card.
+const ownTouch = (list) => (g.touchId === undefined ? list[0] : [...list].find((t) => t.identifier === g.touchId));
+document.addEventListener('touchstart', (e) => {
+  if (!g || g.type !== 'touch') return;
+  if (e.touches.length > 1) { if (g.phase === 'lifted') drop(true); else if (g.phase === 'pending') abort(); return; }
+  if (g.touchId === undefined) g.touchId = e.changedTouches[0].identifier;
+}, { passive: true });
+document.addEventListener('touchmove', (e) => {
+  if (!g) return;
+  if (g.phase === 'lifted' || g.phase === 'settling' || (g.phase === 'pending' && g.onGrip)) {
+    if (e.cancelable) e.preventDefault();
+    const t = g.viaTouch && g.phase === 'lifted' && ownTouch(e.touches);
+    if (t) { g.x = t.clientX; g.y = t.clientY; track(); }
+  }
+}, { passive: false });
+document.addEventListener('touchend', (e) => { if (g && g.viaTouch && g.phase === 'lifted' && ownTouch(e.changedTouches)) drop(false); });
+document.addEventListener('touchcancel', (e) => { if (g && g.viaTouch && g.phase === 'lifted' && ownTouch(e.changedTouches)) drop(true); });
+document.addEventListener('contextmenu', (e) => {
+  // A right press during the settle was resolved against the committed layout, like a click:
+  // the menu belongs to the card now in that place, not the one still sliding under the pointer.
+  // Only a menu on the list itself: a hit left by a press that scrolled instead must not open
+  // a card's menu for a right-click elsewhere on the page.
+  const hit = rehit && content.contains(e.target) ? rehit : null;
+  rehit = null;
+  const li = hit ? hit.li : e.target.closest && e.target.closest('.slot');
+  // Touch is judged from the gesture: a touch-first device with a mouse attached still reports
+  // (pointer: coarse), and its right-click must open the menu. The query is only a last resort.
+  const type = e.pointerType || lastPointer;
+  const touch = type ? type === 'touch' : matchMedia('(pointer: coarse)').matches;
+  if (g || (li && touch)) { e.preventDefault(); return; }
+  if (li) { e.preventDefault(); openMenu(li.dataset.key, e.clientX, e.clientY); }
+});
+document.addEventListener('pointerdown', (e) => { lastPointer = e.pointerType; }, true);
+content.addEventListener('dragstart', (e) => e.preventDefault());
+content.addEventListener('click', (e) => {
+  if (suppressClick) { suppressClick = false; rehit = null; e.preventDefault(); e.stopPropagation(); return; }
+  const hit = rehit;
+  rehit = null;
+  const li = hit ? hit.li : e.target.closest('.slot');
+  if (!li || (hit ? hit.onGrip : e.target.closest('.grip'))) return;
+  // Enter or Space on a card fading out after its session ended still clicks it; it's gone.
+  if (!items[li.dataset.key]) return;
+  selected = li.dataset.key;
+  syncDom();
+  // The press focused the card that was sliding under it; keys must act on the one now there.
+  if (hit) $('.row-main', li).focus({ preventScroll: true });
+}, true);
+
+function lift(moved = false) {
+  if (!g || g.phase !== 'pending') return;
+  endPress();
+  const li = g.li;
+  const r = li.getBoundingClientRect();
+  // The grab point is where the press began on the card: a body drag lifts only after crossing the
+  // slop, and measuring from there would leave the card that far behind the pointer for the whole
+  // drag. It is kept relative to the card, so a scroll before the lift doesn't shift it.
+  g.offX = g.px; g.offY = g.py; g.w = r.width; g.h = r.height; g.x0 = r.left;
+  g.show = headersShown;
+  g.groups0 = groupsNow();
+  g.origin = locate(g.groups0, g.key, g.show);
+  g.candidate = g.origin;
+  g.phase = 'lifted'; g.armed = false; g.lx = g.x; g.ly = g.y; g.acc = 0; g.outside = false;
+  li.style.transition = 'none';
+  li.style.width = g.w + 'px';
+  li.style.transform = `translate3d(${columns() > 1 ? g.x - g.offX : r.left}px, ${g.y - g.offY}px, 0)`;
+  li.classList.add('lifted');
+  if (g.type !== 'touch') { try { content.setPointerCapture(g.id); } catch { /* the pointer may already be gone */ } }
+  void li.offsetWidth;
+  li.style.transition = '';
+  placeSocket(true);
+  document.body.classList.add('dragging');
+  suppressClick = true;
+  // A lift made by moving already has the pointer away from the press: arm it and find the
+  // landing slot now, so a release on the very next event drops where the card is drawn.
+  let where = '';
+  if (moved) { g.armed = true; where = pick(true); }
+  if (g.type === 'touch' && cfg.haptic && navigator.vibrate) { try { navigator.vibrate(10); } catch { /* not allowed */ } }
+  const s = items[g.key];
+  say(`Picked up ${s.title}, position ${g.origin.i + 1} of ${g.origin.n} in ${groupName(g.origin.gid)}.${where ? ' ' + where : ''}`);
+  g.raf = requestAnimationFrame(tick);
+  if ($('#sim-end').checked) { const k = g.key; g.endTimer = setTimeout(() => endSession(k), 1500); }
+}
+
+// A host ending a session (ui.md §6.1 Cancel). If it is the held card, the move is cancelled: the
+// card fades out where it is and the others close the gap with reorder (instant when reduced).
+// Any other departure is the list's own update, so its neighbours jump (§5.3 Arriving and leaving).
+function endSession(key) {
+  if (!items[key]) return;
+  if (g && g.phase === 'settling') settleNow();
+  if (g && g.phase === 'pending') abort();
+  const held = !!(g && g.phase === 'lifted' && g.key === key);
+  const title = items[key].title;
+  let deferred = [];
+  if (held) {
+    deferred = g.deferred || [];
+    cancelAnimationFrame(g.raf); clearTimeout(g.endTimer);
+    try { content.releasePointerCapture(g.id); } catch { /* already released */ }
+    g = null;
+    document.body.classList.remove('dragging');
+    socket.classList.remove('on');
+    hdr.pinned.classList.remove('target'); hdr.sessions.classList.remove('target');
+  } else if (g && g.phase === 'lifted') {
+    // The list's own updates wait until the drop (§4): another session ending is drawn then.
+    (g.deferred ||= []).push(key);
+    return;
+  }
+  // Ends queued during the drag leave with the held card, in the same relayout, so its gap
+  // still closes with reorder rather than being snapped by their instant ones.
+  removeKeys([key, ...deferred]);
+  syncDom();
+  relayout(!held);
+  if (held) say(`${title} ended. Move cancelled.`);
+}
+
+function removeKeys(keys) {
+  let hadFocus = false;
+  for (const k of keys) {
+    if (!items[k]) continue;
+    const el = els.get(k);
+    if (el.contains(document.activeElement)) hadFocus = true;
+    order = order.filter((x) => x !== k);
+    delete items[k];
+    els.delete(k);
+    el.classList.add('ending');
+    setTimeout(() => el.remove(), 120);
+  }
+  if (selected && !items[selected]) selected = order[0];
+  // Focus left on a departing card would be lost when it's removed; it moves to the selected one.
+  if (hadFocus && selected && els.get(selected)) $('.row-main', els.get(selected)).focus({ preventScroll: true });
+}
+
+function placeSocket(instant) {
+  const L = layout(groupsWith(g.candidate), g.show, true);
+  const p = L.pos.get(g.key);
+  if (instant) socket.style.transition = 'none';
+  Object.assign(socket.style, { width: p.w + 'px', height: p.h + 'px', transform: `translate3d(${p.x}px, ${p.y}px, 0)` });
+  socket.classList.add('on');
+  if (instant) { void socket.offsetWidth; socket.style.transition = ''; }
+  apply(L, g.key);
+  return p;
+}
+
+function track() {
+  // In one column the card moves vertically only; the raw g.x still drives the outside test.
+  const tx = columns() > 1 ? g.x - g.offX : g.x0;
+  g.li.style.transform = `translate3d(${tx}px, ${g.y - g.offY}px, 0)`;
+  if (!g.armed && Math.hypot(g.x - g.lx, g.y - g.ly) > MOUSE_SLOP) g.armed = true;
+  pick();
+}
+
+function pick(quiet = false) {
+  const lr = list.getBoundingClientRect();
+  const outside = g.x < lr.left - OUTSIDE || g.x > lr.right + OUTSIDE || g.y < lr.top - OUTSIDE || g.y > lr.bottom + OUTSIDE;
+  let cand = g.origin;
+  if (!outside) {
+    const cr = content.getBoundingClientRect();
+    const cx = g.x - g.offX + g.w / 2 - cr.left, cy = g.y - g.offY + g.h / 2 - cr.top;
+    const base = g.show ? g.groups0 : [{ id: 'sessions', keys: g.groups0.flatMap((x) => x.keys) }];
+    let best = Infinity;
+    for (const grp of base) {
+      const n = grp.keys.filter((k) => k !== g.key).length;
+      for (let i = 0; i <= n; i++) {
+        const c = { gid: grp.id, i };
+        const p = layout(groupsWith(c), g.show, true).pos.get(g.key);
+        const d = Math.hypot(p.x + p.w / 2 - cx, p.y + p.h / 2 - cy);
+        if (d < best - (same(c, g.candidate) ? -1 : 1)) { best = d; cand = c; }
+      }
+    }
+  }
+  const crossing = !outside && g.show && cand.gid !== g.origin.gid;
+  g.li.classList.toggle('crossing', crossing);
+  g.li.classList.toggle('outside', outside);
+  const chip = $('.chip', g.li);
+  if (outside) chip.innerHTML = `${ICON_X}<span>Cancel</span>`;
+  else if (crossing) chip.innerHTML = `${ICON_PIN}<span>${cand.gid === 'pinned' ? 'Pin' : 'Unpin'}</span>`;
+  hdr.pinned.classList.toggle('target', crossing && cand.gid === 'pinned');
+  hdr.sessions.classList.toggle('target', crossing && cand.gid === 'sessions');
+  // Quiet (from lift) returns the announcement for the caller to fold into its own.
+  let msg = '';
+  if (outside !== g.outside) { g.outside = outside; if (outside) msg = 'Release to cancel.'; if (msg && !quiet) say(msg, 200); }
+  if (!same(cand, g.candidate)) {
+    g.candidate = cand;
+    placeSocket(false);
+    const n = groupsWith(cand).find((x) => x.id === cand.gid).keys.length;
+    if (!outside) {
+      msg = crossing ? `${groupName(cand.gid)}, position ${cand.i + 1} of ${n}. Drops as ${cand.gid === 'pinned' ? 'pinned' : 'unpinned'}.`
+                     : `Position ${cand.i + 1} of ${n}.`;
+      if (!quiet) say(msg, 500);
+    }
+  }
+  return msg;
+}
+
+function tick(t) {
+  if (!g || g.phase !== 'lifted') return;
+  const dt = Math.min(0.05, (t - (g.t || t)) / 1000);
+  g.t = t;
+  if (g.armed && !g.outside) {
+    const lr = list.getBoundingClientRect();
+    const zone = Math.max(40, Math.min(80, lr.height * 0.1));
+    let v = 0;
+    const top = lr.top + zone - g.y, bottom = g.y - (lr.bottom - zone);
+    if (top > 0) v = -VMAX * Math.min(1, top / zone) ** 2;
+    else if (bottom > 0) v = VMAX * Math.min(1, bottom / zone) ** 2;
+    if (v) {
+      g.acc += v * dt;
+      const step = Math.trunc(g.acc);
+      if (step) {
+        g.acc -= step;
+        const before = list.scrollTop;
+        list.scrollTop = before + step;
+        if (list.scrollTop !== before) pick();
+      }
+    } else g.acc = 0;
+  }
+  g.raf = requestAnimationFrame(tick);
+}
+// A settle aims at a viewport position fixed at the drop; once the list scrolls it would land off
+// the gap and jump, so it finishes at once (the order is already committed; the settle is only drawn).
+list.addEventListener('scroll', () => {
+  if (g && g.phase === 'lifted') pick();
+  else if (g && g.phase === 'settling') settleNow();
+}, { passive: true });
+
+function drop(cancel) {
+  if (!g || g.phase !== 'lifted') return;
+  cancelAnimationFrame(g.raf);
+  clearTimeout(g.endTimer);
+  const holdOnly = g.type === 'touch' && !g.armed && !cancel;
+  if (cancel || g.outside || holdOnly) { g.candidate = g.origin; }
+  // The order is committed here, at release (ui.md §6.1). The settle below is only drawn, so a
+  // key, a menu or a press during it acts on the new order and can't be overwritten by it.
+  const moved = !same(g.candidate, g.origin);
+  if (moved) {
+    const gs = groupsWith(g.candidate);
+    if (g.show) {
+      order = [...gs[0].keys, ...gs[1].keys];
+      items[g.key].pinned = g.candidate.gid === 'pinned';
+    } else order = gs[0].keys;
+  }
+  // Sessions that ended during the drag leave now, before the target is measured, so the card
+  // settles where it stays instead of jumping again when they go.
+  removeKeys(g.deferred || []);
+  g.deferred = [];
+  // The settle aims at the final layout: an emptied Pinned closes, and its header and the drag's
+  // placeholders go, so the card and its neighbours arrive where they stay.
+  headersShown = anyPinned();
+  const L = layout(groupsNow(), headersShown);
+  const p = L.pos.get(g.key);
+  Object.assign(socket.style, { width: p.w + 'px', height: p.h + 'px', transform: `translate3d(${p.x}px, ${p.y}px, 0)` });
+  apply(L, g.key);
+  const cr = content.getBoundingClientRect();
+  const li = g.li;
+  g.phase = 'settling';
+  li.classList.remove('lifted', 'crossing', 'outside');
+  li.classList.add('settling');
+  hdr.pinned.classList.remove('target'); hdr.sessions.classList.remove('target');
+  li.style.transform = `translate3d(${cr.left + p.x}px, ${cr.top + p.y}px, 0)`;
+  const wasOutside = g.outside;
+  const done = () => finish(cancel || wasOutside, holdOnly, p, moved);
+  const ms = reduced() ? 0 : Number(cfg.settleMs);
+  if (ms <= 0) done(); else { g.finishNow = done; g.settleTimer = setTimeout(done, ms + 20); }
+}
+
+function finish(cancelled, holdOnly, p, moved) {
+  const li = g.li, key = g.key, cand = g.candidate, origin = g.origin;
+  li.style.transition = 'none';
+  li.classList.remove('settling');
+  li.style.transform = `translate3d(${p.x}px, ${p.y}px, 0)`;
+  socket.classList.remove('on');
+  for (const e of Object.values(empty)) e.classList.remove('on');
+  const focused = document.activeElement;
+  syncDom();
+  void li.offsetWidth;
+  li.style.transition = '';
+  g = null;
+  document.body.classList.remove('dragging');
+  relayout(false);
+  if (focused && focused !== document.activeElement && document.contains(focused)) focused.focus({ preventScroll: true });
+  if (holdOnly) { openMenu(key); return; }
+  const at = locate(groupsNow(), key, headersShown);
+  if (cancelled || !moved) say(`${cancelled ? 'Cancelled. ' : ''}Back at position ${at.i + 1} of ${at.n}.`);
+  else if (cand.gid !== origin.gid) say(`${cand.gid === 'pinned' ? 'Pinned' : 'Unpinned'}. Position ${at.i + 1} of ${at.n} in ${groupName(at.gid)}.`);
+  else say(`Moved to position ${at.i + 1} of ${at.n} in ${groupName(at.gid)}.`);
+}
+
+function cancelDrag(silent) {
+  if (!g) return;
+  if (g.phase === 'settling') { settleNow(); return; }
+  if (g.phase === 'pending') { abort(); return; }
+  // A silent cancel comes from a resize or a Columns change, whose relayout follows at once and
+  // would redraw the still-fixed card in list coordinates mid-settle, so the settle ends here.
+  if (g.phase === 'lifted') { drop(true); if (silent) { settleNow(); clearTimeout(sayTimer); } }
+}
+// Before a key or menu changes the order, any gesture ends: a held card is put back (announced
+// as a cancel) and its settle finished, so its drop can't rebuild the order from a stale snapshot.
+function quiesce() {
+  if (g && g.phase === 'lifted') drop(true);
+  settleNow();
+  if (g && g.phase === 'pending') abort();
+}
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && g && g.phase === 'lifted') { e.preventDefault(); drop(true); } });
+window.addEventListener('blur', () => cancelDrag(false));
+document.addEventListener('visibilitychange', () => { if (document.hidden) cancelDrag(false); });
+let lastW = 0;
+new ResizeObserver(() => {
+  const w = content.clientWidth;
+  if (w === lastW) return;
+  lastW = w;
+  cancelDrag(true);
+  measure(); relayout(true);
+}).observe(list);
+
+// ---- Keyboard and menu ----------------------------------------------------------------
+function move(key, delta) {
+  quiesce();
+  // A session that ended during the drag was drawn until the drop; quiescing removed it.
+  if (!items[key]) return;
+  if (sorted) { showToast('Switch to Your order to move sessions.'); return; }
+  const gs = headersShown ? groupsNow() : [{ id: 'sessions', keys: order.slice() }];
+  const grp = gs.find((x) => x.keys.includes(key));
+  const i = grp.keys.indexOf(key), j = i + delta;
+  if (j < 0 || j >= grp.keys.length) { say(j < 0 ? `Top of ${groupName(grp.id)}.` : `End of ${groupName(grp.id)}.`); return; }
+  [grp.keys[i], grp.keys[j]] = [grp.keys[j], grp.keys[i]];
+  order = headersShown ? [...gs[0].keys, ...gs[1].keys] : gs[0].keys;
+  const li = els.get(key);
+  li.classList.add('moving');
+  setTimeout(() => li.classList.remove('moving'), (reduced() ? 0 : cfg.neighbourMs) + 30);
+  const focused = document.activeElement;
+  syncDom();
+  relayout(false);
+  if (focused && document.activeElement !== focused) focused.focus({ preventScroll: true });
+  reveal(key);
+  say(`Moved to position ${j + 1} of ${grp.keys.length} in ${groupName(grp.id)}.`);
+}
+// Scrolls the list so the card's new place is in view (block: 'nearest'), from the layout
+// rather than the card's rectangle, which is still sliding there.
+function reveal(key) {
+  const p = layout(groupsNow(), headersShown).pos.get(key);
+  if (!p) return;
+  const top = content.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop + p.y;
+  if (top < list.scrollTop) list.scrollTop = top;
+  else if (top + p.h > list.scrollTop + list.clientHeight) list.scrollTop = top + p.h - list.clientHeight;
+}
+function togglePin(key) {
+  quiesce();
+  if (!items[key]) return;
+  const s = items[key];
+  s.pinned = !s.pinned;
+  order = order.filter((k) => k !== key);
+  if (s.pinned) { const lastPinned = order.reduce((a, k, i) => (items[k].pinned ? i : a), -1); order.splice(lastPinned + 1, 0, key); }
+  else { const firstRest = order.findIndex((k) => !items[k].pinned); order.splice(firstRest < 0 ? order.length : firstRest, 0, key); }
+  syncDom(); relayout(false);
+  $('.row-main', els.get(key)).focus({ preventScroll: true });
+  say(s.pinned ? 'Pinned.' : 'Unpinned.');
+}
+
+content.addEventListener('keydown', (e) => {
+  const li = e.target.closest('.slot');
+  if (!li) return;
+  suppressClick = false;
+  if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); move(li.dataset.key, e.key === 'ArrowUp' ? -1 : 1); }
+  else if ((e.shiftKey && e.key === 'F10') || e.key === 'ContextMenu') { e.preventDefault(); openMenu(li.dataset.key); }
+});
+
+let menuKey = null;
+function openMenu(key, x, y) {
+  // A row fading out after its session ended can still hold focus or a pointer: it has no menu.
+  if (!items[key] || !els.get(key)) return;
+  menuKey = key;
+  const r = els.get(key).getBoundingClientRect();
+  $('[data-act="pin"]', menu).textContent = items[key].pinned ? 'Unpin' : 'Pin';
+  for (const b of $$('[data-act="up"], [data-act="down"]', menu)) b.setAttribute('aria-disabled', sorted ? 'true' : 'false');
+  menu.hidden = false;
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  const left = Math.min(window.innerWidth - mw - 8, Math.max(8, x ?? r.left + 16));
+  let top = y ?? r.bottom - 8;
+  if (top + mh > window.innerHeight - 8) top = Math.max(8, (y ?? r.top) - mh);
+  Object.assign(menu.style, { left: left + 'px', top: top + 'px' });
+  $('button', menu).focus({ preventScroll: true });
+}
+function closeMenu(refocus) {
+  if (menu.hidden) return;
+  menu.hidden = true;
+  if (refocus && menuKey && els.get(menuKey)) $('.row-main', els.get(menuKey)).focus({ preventScroll: true });
+  menuKey = null;
+}
+menu.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || !menuKey) return;
+  const key = menuKey, act = b.dataset.act;
+  if (b.getAttribute('aria-disabled') === 'true') { showToast('Switch to Your order to move sessions.'); return; }
+  closeMenu(true);
+  if (act === 'up') move(key, -1); else if (act === 'down') move(key, 1); else if (act === 'pin') togglePin(key);
+});
+menu.addEventListener('keydown', (e) => {
+  const bs = $$('button', menu), i = bs.indexOf(document.activeElement);
+  if (e.key === 'Escape') { e.preventDefault(); closeMenu(true); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); bs[(i + 1) % bs.length].focus(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); bs[(i - 1 + bs.length) % bs.length].focus(); }
+  else if (e.key === 'Tab') closeMenu(false);
+});
+document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(false); }, true);
+
+// ---- Start ----------------------------------------------------------------------------
+applyCfg();
+syncDom();
+measure();
+relayout(true);
+lastW = content.clientWidth;
+firstHint();
+
+// A small hook for the proposal's Playwright checks; not part of the design.
+window.__reorder = {
+  cfg, order: () => order.slice(), pinned: () => order.filter((k) => items[k].pinned),
+  end: (key) => endSession(key),
+  phase: () => (g ? g.phase : 'idle'), live: () => live.textContent, set: (o) => { Object.assign(cfg, o); applyCfg(); measure(); relayout(true); },
+};
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #592: Reorder on Windows: the card lifts instead of a drag ghost</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/592-reorder.md). Each frame is a Proposal-592-Frame. -->
+<div style="width: 2376px; height: 820px; box-sizing: border-box; padding: 32px; background: {{t.bg}}; color: {{t.text}}; font-family: 'Segoe UI Variable Text', system-ui, -apple-system, Roboto, sans-serif; overflow: hidden">
+  <div style="display: flex; align-items: center; gap: 12px">
+    <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.bridge}}; background: {{t.tag}}">#592 · Decided (owner, 2026-11-04)</span>
+    <span style="font-size: 12px; color: {{t.text2}}">{{t.name}}</span>
+  </div>
+  <h1 style="margin: 10px 0 2px; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 22px; line-height: 28px; font-weight: 600">Reorder on Windows: the card lifts instead of a drag ghost</h1>
+  <p style="margin: 0 0 28px; font-size: 13px; line-height: 18px; color: {{t.text2}}">The same five moments with a mouse in the WinUI app. The drag ghost and its caption go; the card lifts and the others make room.</p>
+  <div style="display: flex; gap: 28px; align-items: flex-start">
+    <sc-for list="{{frames}}" as="fr">
+      <dc-import name="Proposal-592-Frame" theme="{{theme}}" f="{{fr}}" hint-size="300px,760px"></dc-import>
+    </sc-for>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":2376,"height":820}}'>
+const THEMES = {
+  dark: { bg: '#1B1E21', text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', text3: 'rgba(255,255,255,.54)', bridge: '#2DD4BF', tag: 'rgba(45,212,191,.14)', stroke: 'rgba(255,255,255,.12)', name: 'Dark' },
+  light: { bg: '#E6E9EC', text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', text3: 'rgba(0,0,0,.58)', bridge: '#0B7A6E', tag: 'rgba(11,122,110,.12)', stroke: 'rgba(0,0,0,.12)', name: 'Light' },
+};
+// Slots: { h } a group header, { r } a session row, { gap } the landing gap, { ph } an empty-group placeholder.
+// trace: n draws a dashed outline where a neighbour was n slots further on, before it eased.
+const P = { h: 'Pinned' }, S = { h: 'Sessions' };
+const rows = (ids, extra) => ids.split('').map(r => Object.assign({ r }, (extra || {})[r] || {}));
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const rest = [P, ...rows('ab'), S, ...rows('cdefgh', { c: { st: 'sel' } })];
+    const frames = [
+      { label: '1 · Rest', slots: rest, ptr: { kind: 'mouse', at: 6, dx: 220, dy: 30 },
+        notes: ['With a mouse the grip is hidden until the pointer is over the card.'] },
+      { label: '2 · Hover the grip', slots: [P, ...rows('ab'), S, ...rows('cdefgh', { c: { st: 'sel', hover: true } })], ptr: { kind: 'mouse', at: 4, dx: 10, dy: 24 },
+        notes: ['Cursor: grab. Pressing the grip lifts at once. Pressing the card lifts after 4 px of movement, so a click still opens the session.'] },
+      { label: '3 · Lifted', slots: [P, ...rows('ab'), S, { gap: true }, ...rows('defgh')], lift: { r: 'c', at: 4, sel: true }, ptr: { kind: 'mouse', at: 4, dx: 10, dy: 24 },
+        notes: ['No drag ghost and no “Move below” caption: the card itself lifts, with scale 1.02, Composition DropShadow and the tint. Cursor: grabbing.'] },
+      { label: '4 · Dragging, neighbours part', slots: [P, ...rows('ab'), S, ...rows('def', { d: { trace: 1 }, e: { trace: 1 }, f: { trace: 1 } }), { gap: true }, ...rows('gh')], lift: { r: 'c', at: 7, dy: -20, sel: true }, ptr: { kind: 'mouse', at: 7, dx: 10, dy: 4 },
+        notes: ['The card tracks the pointer 1:1. The cards it passes ease up one row with reorder (167 ms). It stays above the rows and below the title bar.'] },
+      { label: '5 · Release, settle', slots: [P, ...rows('ab'), S, ...rows('def'), { gap: true }, ...rows('gh')], lift: { r: 'c', at: 7, dy: -5, scale: 1.006, shadow: 0.3, sel: true }, ptr: { kind: 'mouse', at: 7, dx: 10, dy: 18 },
+        notes: ['It settles into the gap (reorder) and lowers. Narrator: “Moved to position 4 of 10 in Sessions.”'] },
+    ];
+    return { t: THEMES[theme], theme, frames: frames.map(f => Object.assign({ kind: 'desktop', grip: 'hover', w: 440, h: 560 }, f)) };
+  }
+}
+</script>
+</body>
+</html>
