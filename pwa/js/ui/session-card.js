@@ -879,14 +879,14 @@ export class SessionCard {
     e.events.hidden = lines.length === 0;
     if (drawn) { items.forEach((li, i) => { if (!drawn.has(lines[i].key) && !drawn.has(was(lines[i]))) { enter(li, 'listItem'); } }); }
     if (!had || document.activeElement === had) { return; }
-    // Its line went into a closed fold: to the fold's button. Its name moved to a line of its own:
-    // to its name there.
+    // Its line went into a closed fold: to the fold's button. Its name still drawn, in its line or
+    // one of its own it moved to: to its name there. Else to what its line has left.
     const key = (where.key && lines.find((l) => was(l) === where.key)?.key) ?? where.key;
     const li = key ? [...e.events.querySelectorAll('li.delegate-event')].find((x) => x.dataset.key === key) : null;
-    const byId = (root) => (where.id ? [...root.querySelectorAll('.delegate-link')].find((b) => b.dataset.id === where.id) : null);
+    const byId = (root) => (where.id ? [...root.querySelectorAll('li.delegate-event .delegate-link')].find((b) => b.dataset.id === where.id) : null);
     const target = had === e.foldToggle || had === e.foldWorking ? (fold ? e.foldToggle : null)
       : (fold && !st.open) ? e.foldToggle
-        : (li && (byId(li) ?? (where.more ? li.querySelector('.delegate-more') : null) ?? li.querySelector('.delegate-link'))) ?? byId(e.events);
+        : (li && byId(li)) ?? byId(e.events) ?? (li && ((where.more ? li.querySelector('.delegate-more') : null) ?? li.querySelector('.delegate-link')));
     target?.focus({ preventScroll: true });
   }
 

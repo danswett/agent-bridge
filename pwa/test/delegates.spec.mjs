@@ -836,6 +836,19 @@ test.describe('at three panes', () => {
     await expect(lint).toBeFocused();
   });
 
+  test('a name focused in a shared start line keeps focus when its delegate reports back on a line of its own, not another name left there', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    const shared = c.locator('.delegate-events .delegate-event[data-kind="shared"]');
+    await shared.locator('.delegate-link[data-id="demo-agent-suite"]').focus();
+    await change(page, 'demo-agent-suite', { status: 'ended', outcome: 'done', endedAt: later() });
+    const own = c.locator('.delegate-events .delegate-event[data-key="d|demo-agent-suite"] .delegate-link[data-id="demo-agent-suite"]');
+    await expect(own).toBeVisible();
+    await expect(own).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-suite');
+  });
+
   test('while a delegate holds the inspector the session\'s Tools are not fetched, and they are once it lets go', async ({ page }) => {
     await openDemo(page);
     const c = card(page);
