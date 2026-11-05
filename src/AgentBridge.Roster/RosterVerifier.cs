@@ -145,7 +145,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             if (body.Op != EntryOp.Remove || overCap)
             {
                 if (_refusedCandidates.Count >= 2 * EvidenceCap) { return new(e.Hash, Verdict.Refused, reason ?? Invalid.Evidence); }
-                var c = Commit(e, parents, before, facts);
+                var c = Commit(e, parents, before, facts, candidate: true);
                 _candidate.Set(c.Index);
                 _refusedCandidates[c.Index] = reason ?? Invalid.Evidence;
                 return new(e.Hash, Verdict.Refused, reason ?? Invalid.Evidence);
@@ -183,7 +183,9 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
         return new(e.Hash, Quarantined()[node.Index] ? Verdict.Quarantined : Verdict.Accepted);
     }
 
-    RosterNode Commit(Entry e, int[] parents, RosterState before, Facts facts)
+    // A candidate (kept aside, not accepted) is no parent's child until it is admitted as evidence:
+    // counted, its parent stopped being a head and a refused rename left the roster with none.
+    RosterNode Commit(Entry e, int[] parents, RosterState before, Facts facts, bool candidate = false)
     {
         var node = _g.Add(e, parents);
         node.Signer = e.Body.Op == EntryOp.Genesis ? node.Index : facts.Signer;
@@ -206,7 +208,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             node.Takes = takes;
         }
         _children.Add(0);
-        if (!_candidate[node.Index] && !parents.Any(p => _candidate[p]))
+        if (!candidate && !parents.Any(p => _candidate[p]))
         {
             foreach (var p in parents) { _children[p]++; }
         }

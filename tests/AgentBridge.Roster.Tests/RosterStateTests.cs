@@ -411,4 +411,20 @@ public sealed class RosterStateTests
         Assert.Equal(Invalid.Budget, offered[^1].Reason);
         Assert.All(offered.SkipLast(1), o => Assert.Equal(Verdict.Accepted, o.Verdict));
     }
+
+    // Found porting the rule to the PWA (R1c): an entry kept aside counted as its parent's child,
+    // so the roster was left with no head at all.
+    [Fact]
+    public void An_entry_refused_for_a_budget_and_kept_aside_leaves_its_parent_a_head()
+    {
+        var w = Line();
+        var last = "cB";
+        for (var i = 0; i < 9; i++) { w.Rename($"n{i}", "G", "+B", last, $"Name {i}"); last = $"n{i}"; }
+        var v = w.Verifier();
+        Assert.Equal([w["n7"].Hash], v.Heads);
+        w.Rename("nA", "G", "+A", "n7", "Attic");
+        Assert.Equal(Verdict.Accepted, w.Feed(v, "nA")[0].Verdict);
+        Assert.Equal([w["nA"].Hash], v.Heads);
+    }
 }
+
