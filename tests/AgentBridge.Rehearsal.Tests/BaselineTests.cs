@@ -216,12 +216,36 @@ public class BaselineTests
         Assert.Contains("which homes a migration would rewrite cannot be told", e.Message);
     }
 
-    [Fact]
-    public async Task Baseline_save_given_a_recorded_home_that_is_not_a_valid_path_records_an_error_for_its_step_and_writes_no_baseline()
+    [Theory]
+    [InlineData("home", "\\uD800")]
+    [InlineData("copilotHome", "\\uDC00")]
+    [InlineData("claudeHome", "\\uD800")]
+    [InlineData("codexHome", "\\uDC00")]
+    public void A_recorded_home_holding_half_a_surrogate_pair_is_refused_naming_it(string name, string escape)
+    {
+        using var s = Install();
+        s.File(".agent-ha-bridge/installation.json", Recording(name, Path.Combine(s.Root, "bad"), escape + "home"));
+
+        var e = Assert.Throws<IOException>(() => BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow));
+
+        Assert.Contains($"has a {name} that is not readable text", e.Message);
+        Assert.Contains("which homes a migration would rewrite cannot be told", e.Message);
+    }
+
+    // A home as installation.json text, with JSON escapes appended as written (no serializer
+    // will write half a surrogate pair).
+    static string Recording(string name, string path, string escapedTail) =>
+        $"{{\"{name}\":{System.Text.Json.JsonSerializer.Serialize(path)[..^1]}{escapedTail}\"}}";
+
+    [Theory]
+    [InlineData("\\u0000", "not a valid path")]
+    [InlineData("\\uD800", "not readable text")]
+    [InlineData("\\uDC00", "not readable text")]
+    public async Task Baseline_save_given_a_recorded_home_that_is_not_a_valid_path_records_an_error_for_its_step_and_writes_no_baseline(string escape, string why)
     {
         using var s = Install();
         using var run = new Scratch();
-        s.File(".agent-ha-bridge/installation.json", System.Text.Json.JsonSerializer.Serialize(new { codexHome = Path.Combine(s.Root, "bad\0home") }));
+        s.File(".agent-ha-bridge/installation.json", Recording("codexHome", Path.Combine(s.Root, "bad"), escape + "home"));
         var file = Path.Combine(run.Root, "base.json");
 
         var code = await Program.Main(["baseline", "save", "--home", s.Root, "--out", file, "--step", "B-01", "--evidence", Path.Combine(run.Root, "evidence")]);
@@ -230,7 +254,7 @@ public class BaselineTests
         Assert.False(File.Exists(file));
         using var step = System.Text.Json.JsonDocument.Parse(Assert.Single(File.ReadAllLines(Path.Combine(run.Root, "evidence", "steps", "B-01.jsonl"))));
         Assert.Equal("error", step.RootElement.GetProperty("verdict").GetString());
-        Assert.Contains("has a codexHome that is not a valid path", step.RootElement.GetProperty("detail").GetString());
+        Assert.Contains($"has a codexHome that is {why}", step.RootElement.GetProperty("detail").GetString());
     }
 
     [Fact]

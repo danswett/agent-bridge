@@ -114,14 +114,17 @@ internal static class BaselineCapture
         string? Folder(string name)
         {
             if (!record.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null) { return null; }
-            if (value.ValueKind != JsonValueKind.String || value.GetString() is not { } path || !Path.IsPathFullyQualified(path))
-            {
-                throw Unclear($"has a {name} that is not a full path");
-            }
+            if (value.ValueKind != JsonValueKind.String) { throw Unclear($"has a {name} that is not a full path"); }
+            string path;
+            // Known to be a string, so this throws only when its escapes are not text, such as
+            // half a surrogate pair (\uD800 alone), which JsonDocument.Parse lets through.
+            try { path = value.GetString()!; }
+            catch (InvalidOperationException e) { throw Unclear($"has a {name} that is not readable text ({e.Message})", e); }
+            if (!Path.IsPathFullyQualified(path)) { throw Unclear($"has a {name} that is not a full path"); }
             // Normalised, so a file it shares with another home is named alike from both. A full
-            // path can still be no path at all (it holds a NUL, say), and that is refused too.
+            // path can still be no path at all (it holds a NUL, or is too long), and that is refused too.
             try { return Path.GetFullPath(path); }
-            catch (ArgumentException e) { throw Unclear($"has a {name} that is not a valid path ({e.Message})", e); }
+            catch (Exception e) when (e is ArgumentException or PathTooLongException) { throw Unclear($"has a {name} that is not a valid path ({e.Message})", e); }
         }
         var home = Folder("home") ?? Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(homes.BridgeHome)))!;
         return homes with
