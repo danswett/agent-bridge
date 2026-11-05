@@ -37,6 +37,9 @@ public sealed partial class InFlightRing : UserControl
         AutomationProperties.SetAccessibilityView(ring, AccessibilityView.Raw);
         Loaded += (_, _) => { Listen(); Apply(); };
         Unloaded += (_, _) => { if (!IsLoaded) { Unlisten(); } };
+        // A held ring's colour follows a theme or contrast switch made while it is shown: read once,
+        // it kept the last palette's text3 or GrayText (#625, Copilot 4485379205).
+        ActualThemeChanged += (_, _) => Apply();
         Apply();
     }
 
@@ -58,7 +61,7 @@ public sealed partial class InFlightRing : UserControl
         ring.IsIndeterminate = Active && !Still && MotionCatalogue.Loops(settings.AnimationsEnabled);
         ring.IsActive = Active;
         // In a contrast theme, GrayText (ui.md §9): a held request never looks active.
-        if (Still) { ring.Foreground = new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast ? new Microsoft.UI.Xaml.Media.SolidColorBrush(settings.UIElementColor(Windows.UI.ViewManagement.UIElementType.GrayText)) : Ui.Brush("AbText3"); }
+        if (Still) { ring.Foreground = new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast ? new Microsoft.UI.Xaml.Media.SolidColorBrush(SystemColours.Of(Windows.UI.ViewManagement.UIElementType.GrayText)) : Ui.Brush("AbText3"); }
         else { ring.ClearValue(Control.ForegroundProperty); }
     }
 
@@ -67,6 +70,7 @@ public sealed partial class InFlightRing : UserControl
         if (listening) { return; }
         listening = true;
         settings.AnimationsEnabledChanged += OnAnimationsChanged;
+        SystemColours.Changed += OnColoursChanged;
     }
 
     void Unlisten()
@@ -74,9 +78,14 @@ public sealed partial class InFlightRing : UserControl
         if (!listening) { return; }
         listening = false;
         settings.AnimationsEnabledChanged -= OnAnimationsChanged;
+        SystemColours.Changed -= OnColoursChanged;
     }
 
     // Raised off the UI thread.
     void OnAnimationsChanged(Windows.UI.ViewManagement.UISettings sender, Windows.UI.ViewManagement.UISettingsAnimationsEnabledChangedEventArgs args) =>
         DispatcherQueue.TryEnqueue(() => { if (IsLoaded) { Apply(); } });
+
+    // Raised off the UI thread too; applied after XAML's own handling of the change.
+    void OnColoursChanged() =>
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { if (IsLoaded) { Apply(); } });
 }

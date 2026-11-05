@@ -405,3 +405,26 @@ public sealed class Receipt : IDisposable
         if (h.Voices.Count > 0) { h.Voices[^1].announce(text, h.PendingUrgent); }
     }
 }
+
+// Whether a receipt line's announcement, queued to be raised on a later dispatcher turn
+// (ReceiptMarkView), is still the line's when that turn comes. A line is reused: a session switch
+// rebinds it, hushed, to the next card's last announcement, and a callback that held only the line
+// then raised LiveRegionChanged for that card's old news, as if it had just happened (#625,
+// Copilot 4485379160). Each change of the line's announcement and each unload starts a new
+// generation, and a queued announcement is raised only in its own.
+public sealed class ReceiptAnnouncer
+{
+    int generation;
+
+    // The line's announcement changed: the ticket of the one to raise, or null when nothing is to be
+    // said (no words, or what was said before: the line not drawn yet, or rebound under a hush).
+    public int? Changed(string said, bool loaded, bool hushed)
+    {
+        generation++;
+        return said.Length > 0 && loaded && !hushed ? generation : null;
+    }
+
+    public void Unloaded() => generation++;
+
+    public bool Raise(int ticket, bool loaded) => loaded && ticket == generation;
+}

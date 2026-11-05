@@ -166,7 +166,7 @@ public sealed class QuestionView : StackPanel
         // Motion makes that the cross-fade alone.
         var fade = drawn && vm.StatusText.Length > 0 && vm.StatusText != status.Text;
         status.Text = vm.StatusText;
-        status.Foreground = Ui.ReceiptBrush(vm.StatusTone);
+        ReceiptMarkView.SetTone(status, vm.StatusTone);
         receipt.Visibility = Ui.Show(vm.StatusText.Length > 0 || vm.InFlight);
         if (fade) { Motion.Enter(status, "Acknowledge"); }
         // Heard as it changes, not as the card is first drawn with what was said before.
@@ -210,7 +210,7 @@ public sealed class QuestionView : StackPanel
         var panel = new StackPanel { Spacing = 6 };
         foreach (var o in f.Options)
         {
-            var b = new Button { HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+            var b = new OptionButton { HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch };
             var label = new TextBlock { Text = o.Label, TextWrapping = TextWrapping.Wrap };
             b.Content = WithRing(label, trailing: true);
             if (o.Recommended || (vm.Approval && o.Tone == "allow")) { b.Style = (Style)Application.Current.Resources["AccentButtonStyle"]; }
@@ -227,6 +227,8 @@ public sealed class QuestionView : StackPanel
                 // prompt's one attempt. Busy or refused typed nothing, so all are enabled again, none
                 // pressed (QuestionViewModel.CanAnswer, SentValue). A press on it does nothing (Click).
                 b.IsEnabled = vm.CanAnswer || sent;
+                // Heard as pressed, as it is drawn (OptionButton): an enabled button that does nothing otherwise.
+                b.Pressed = sent;
                 // Its ring and check say it goes; the ✓ marks which option went once they are done.
                 label.Text = sent && !vm.InFlight && !vm.SendCheck ? $"✓ {o.Label}" : o.Label;
                 Ring(b, sent && vm.InFlight, sent && vm.SendCheck, vm.StatusMark == ReceiptMark.Still);

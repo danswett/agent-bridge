@@ -361,7 +361,7 @@
                             local:ReceiptMarkView.Urgent="{x:Bind Card.ReceiptAnnouncementUrgent, Mode=OneWay}"
                             local:ReceiptMarkView.Announcement="{x:Bind Card.ReceiptAnnouncement, Mode=OneWay}"
                             Text="{x:Bind Card.ReceiptText, Mode=OneWay}"
-                            Foreground="{x:Bind local:Ui.ReceiptBrush(Card.ReceiptTone), Mode=OneWay}"
+                            local:ReceiptMarkView.Tone="{x:Bind Card.ReceiptTone, Mode=OneWay}"
                             Visibility="{x:Bind local:Ui.Show(Card.HasReceipt), Mode=OneWay}" />
                     </Grid>
 
@@ -811,7 +811,7 @@
                         local:ReceiptMarkView.Urgent="{x:Bind Card.Reply.AnnouncementUrgent, Mode=OneWay}"
                         local:ReceiptMarkView.Announcement="{x:Bind Card.Reply.Announcement, Mode=OneWay}"
                         Text="{x:Bind Card.Reply.StatusText, Mode=OneWay}"
-                        Foreground="{x:Bind local:Ui.ReceiptBrush(Card.Reply.StatusTone), Mode=OneWay}" />
+                        local:ReceiptMarkView.Tone="{x:Bind Card.Reply.StatusTone, Mode=OneWay}" />
                 </Grid>
             </local:ReadingColumn>
         </ScrollViewer>

@@ -99,6 +99,10 @@ static partial class SelfTest
     // The width an option's label is laid out at, beside the room kept for its ring (WithRing).
     static double LabelWidth(Button? b) => b?.Content is Grid { Children: [_, _, FrameworkElement label, ..] } ? label.ActualWidth : -1;
 
+        // Whether a screen reader hears an option as pressed (OptionButton's Toggle pattern): only the
+        // answer that went, while it stands.
+        static ToggleState? Heard(Button? b) => b is null ? null : (FrameworkElementAutomationPeer.CreatePeerForElement(b)?.GetPattern(PatternInterface.Toggle) as IToggleProvider)?.ToggleState;
+
         try
         {
             // A reply: Send's ring in the quiet window, Still sending… once 3 s pass with nothing
@@ -156,6 +160,8 @@ static partial class SelfTest
                 var unconfirmed = await Until(() => tq.StatusText.StartsWith("Sent, but not confirmed", StringComparison.Ordinal), TimeSpan.FromSeconds(5));
                 check(unconfirmed && !tq.CanAnswer && ById<Button>(tapView, "Option:fixes") is { IsEnabled: true } && ById<Button>(tapView, "Option:docs") is { IsEnabled: false },
                     $"keeps the tapped option pressed and the others disabled once unconfirmed ({pass}: \"{tq.StatusText}\")");
+                check(Heard(ById<Button>(tapView, "Option:fixes")) == ToggleState.On && Heard(ById<Button>(tapView, "Option:docs")) == ToggleState.Off,
+                    $"has a screen reader hear the tapped option as pressed once unconfirmed, and the others not ({pass}: {Heard(ById<Button>(tapView, "Option:fixes"))}, {Heard(ById<Button>(tapView, "Option:docs"))})");
                 await Draw("tap-unconfirmed");
             }
             else { check(false, $"opens the gallery's tap question ({pass})"); }
@@ -168,6 +174,8 @@ static partial class SelfTest
                 var stale = await Until(() => sq.StatusText.StartsWith("Already answered or gone", StringComparison.Ordinal), TimeSpan.FromSeconds(5));
                 check(stale && !sq.CanAnswer && ById<Button>(staleView, "Option:docs") is { IsEnabled: true } && ById<Button>(staleView, "Option:fixes") is { IsEnabled: false },
                     $"keeps the tapped option pressed and the others disabled once stale ({pass}: \"{sq.StatusText}\")");
+                check(Heard(ById<Button>(staleView, "Option:docs")) == ToggleState.On && Heard(ById<Button>(staleView, "Option:fixes")) == ToggleState.Off,
+                    $"has a screen reader hear the tapped option as pressed once stale, and the others not ({pass}: {Heard(ById<Button>(staleView, "Option:docs"))}, {Heard(ById<Button>(staleView, "Option:fixes"))})");
                 await Draw("tap-stale");
             }
             else { check(false, $"opens the gallery's stale question ({pass})"); }
@@ -184,6 +192,8 @@ static partial class SelfTest
                 if (ById<Button>(busyView, "Option:docs") is { } docs) { Press(docs); }
                 var refused = await Until(() => busyCard.Question is { CanAnswer: true } q && q.StatusText.StartsWith("The machine refused", StringComparison.Ordinal) && ById<Button>(busyView, "Option:fixes") is { IsEnabled: true }, TimeSpan.FromSeconds(8));
                 check(refused, $"offers every option again after refused ({pass}: \"{busyCard.Question?.StatusText}\")");
+                check(Heard(ById<Button>(busyView, "Option:fixes")) == ToggleState.Off && Heard(ById<Button>(busyView, "Option:docs")) == ToggleState.Off,
+                    $"has a screen reader hear no option as pressed after refused ({pass})");
                 await Draw("tap-refused");
             }
             else { check(false, $"opens the gallery's busy question ({pass})"); }

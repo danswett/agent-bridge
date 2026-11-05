@@ -20,9 +20,10 @@ public static class Ui
 
     // A reply's or an answer's receipt (ui.md §6.5, decided on #617): its stalls and waits, and
     // You answered, in text2; the exceptions in their own tone. In a contrast theme every word is
-    // the window's text (§9).
+    // the window's text (§9), read from the system as it is now: the line is painted again as
+    // Windows' colours change (ReceiptMarkView.Tone), maybe before XAML's own resources follow.
     public static Brush ReceiptBrush(Tone tone) =>
-        new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast ? Brush("AbText")
+        new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast ? new SolidColorBrush(SystemColours.Of(Windows.UI.ViewManagement.UIElementType.WindowText))
         : tone == Tone.Progress ? Brush("AbText2")
         : ToneBrush(tone);
 

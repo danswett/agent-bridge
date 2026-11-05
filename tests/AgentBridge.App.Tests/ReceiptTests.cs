@@ -360,6 +360,44 @@ public sealed class ReceiptTests
         Assert.Equal("ok\\u202Egnp.exe", ReceiptWords.AnsweredValue(text, new AnswerRequest { Id = "s1", Question = "q1", Request = "r", Text = "ok\u202Egnp.exe" }));
     }
 
+    [Fact]
+    public void An_announcement_queued_before_a_hushed_rebind_to_another_session_is_not_raised()
+    {
+        var line = new ReceiptAnnouncer();
+        var queued = line.Changed("Reply delivered", loaded: true, hushed: false);
+        Assert.Null(line.Changed("Answer refused", loaded: true, hushed: true));
+        Assert.False(line.Raise(queued!.Value, loaded: true));
+    }
+
+    [Fact]
+    public void Only_the_latest_of_two_queued_announcements_is_raised()
+    {
+        var line = new ReceiptAnnouncer();
+        var first = line.Changed("Sent", loaded: true, hushed: false);
+        var second = line.Changed("Reply delivered", loaded: true, hushed: false);
+        Assert.False(line.Raise(first!.Value, loaded: true));
+        Assert.True(line.Raise(second!.Value, loaded: true));
+    }
+
+    [Fact]
+    public void An_announcement_queued_before_its_line_unloads_is_not_raised_even_once_the_line_is_back()
+    {
+        var line = new ReceiptAnnouncer();
+        var queued = line.Changed("Reply delivered", loaded: true, hushed: false);
+        Assert.False(line.Raise(queued!.Value, loaded: false));
+        line.Unloaded();
+        Assert.False(line.Raise(queued.Value, loaded: true));
+    }
+
+    [Fact]
+    public void A_line_drawn_with_what_was_said_before_or_cleared_queues_nothing_and_a_new_announcement_is_raised()
+    {
+        var line = new ReceiptAnnouncer();
+        Assert.Null(line.Changed("Reply delivered", loaded: false, hushed: false));
+        Assert.Null(line.Changed("", loaded: true, hushed: false));
+        Assert.True(line.Raise(line.Changed("Reply failed", loaded: true, hushed: false)!.Value, loaded: true));
+    }
+
     static AnswerRequest Answer(Question q, string value) => new()
     {
         Id = "s1", Question = q.Id, Request = "r",

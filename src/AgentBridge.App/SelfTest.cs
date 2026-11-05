@@ -976,6 +976,10 @@ static partial class SelfTest
     // middle of this method.
     static async Task CheckHighContrast(MainWindow window, MainViewModel main, DemoHost demo, DemoHost remote, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
     {
+        // A receipt line already on screen as the switch is made, and not bound again after it: it
+        // follows the switch by itself (#625, Copilot 4485379205). The passes below draw anew.
+        var line = ById<TextBlock>(window.Sessions.SessionPaneView, "ReplyStatus") is { IsLoaded: true } l ? l : null;
+        var inkBefore = (line?.Foreground as SolidColorBrush)?.Color.ToString();
         var failedRow = await ShowFailedAgentRow(window, main);
         var contrast = await HighContrastPass.BeginAsync();
         result["highContrast"] = contrast.How;
@@ -995,6 +999,15 @@ static partial class SelfTest
             // Only a pass that turned it on is a transition: on already, the line was drawn in it.
             if (contrast.TurnedOn) { await CheckAgentRowRepainted(window, main, failedRow, check); }
             else if (main.Settings is { } drawn) { await drawn.CheckAgentsAsync(); }
+            if (line is { IsLoaded: true })
+            {
+                var windowText = Application.Current.Resources.TryGetValue("SystemColorWindowTextColor", out var w) && w is Windows.UI.Color text ? text.ToString() : null;
+                var followed = await Until(() => (line.Foreground as SolidColorBrush)?.Color.ToString() == windowText, TimeSpan.FromSeconds(5));
+                var inkAfter = (line.Foreground as SolidColorBrush)?.Color.ToString();
+                result["receiptInkAcrossContrast"] = $"{inkBefore} -> {inkAfter}";
+                check(followed, $"repaints a receipt line on screen in the window's text as high contrast turns on ({inkBefore} -> {inkAfter}, wanted {windowText})");
+            }
+            else { result["receiptInkAcrossContrast"] = "no receipt line on screen"; }
             var hcBroken = await DrawPages(window, "HighContrast", outFile, check);
             check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
             await PictureYoursInHighContrast(window, check, outFile);
