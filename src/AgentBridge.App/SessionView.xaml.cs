@@ -262,18 +262,22 @@ public sealed partial class SessionView : UserControl
         if (e.PropertyName == nameof(SessionCardViewModel.WantsFocus)) { TakeFocus(); }
     }
 
-    // Opened from Needs you (SessionCardViewModel.WantsFocus): keyboard focus into the question, or
-    // the reply box when there is none, so the next Tab is in the session and not back in the lane.
-    // A question with nothing to press (one answered at the machine) has the session's own first
-    // control instead. Tried again after each layout pass while the pane is still hidden (one
-    // column, before the layout changes), and cleared only once it lands (it was once cleared by a
-    // row the list had hidden), or once the pane is shown with nothing to take it.
+    // Opened from Needs you or a toast (SessionCardViewModel.WantsFocus): keyboard focus on the
+    // question's heading, or the reply box when there is none, so the next Tab is in the session
+    // and not back in the lane. Never on the question's first control: an approval's is Approve
+    // once, and the next Enter or Space answered it before the person had read the command
+    // (#484). Tried again after each layout pass while the pane is still hidden (one column,
+    // before the layout changes), and cleared only once it lands (it was once cleared by a row
+    // the list had hidden), or once the pane is shown with nothing to take it. The heading is
+    // focused programmatically, so its ring shows only if a key brought it there, not after a
+    // click on a toast (ui.md A12).
     bool focusPending;
     void TakeFocus()
     {
         if (!attached || Card is not { WantsFocus: true } c) { return; }
         var shown = Visibility == Visibility.Visible && ActualWidth > 0 && ActualHeight > 0;
-        var target = (questionView is not null ? FocusManager.FindFirstFocusableElement(questionView) as Control : null)
+        var heading = questionView?.HeadingTarget;
+        var target = heading
             ?? (ReplyBox is { IsEnabled: true, Visibility: Visibility.Visible } ? ReplyBox : null)
             ?? FocusManager.FindFirstFocusableElement(this) as Control;
         if (target is null && shown)
@@ -282,7 +286,7 @@ public sealed partial class SessionView : UserControl
             if (focusPending) { focusPending = false; LayoutUpdated -= OnFocusLayout; }
             return;
         }
-        if (target is not null && target.Focus(FocusState.Keyboard))
+        if (target is not null && (target == heading ? questionView!.FocusHeading(FocusState.Programmatic) : target.Focus(FocusState.Keyboard)))
         {
             c.WantsFocus = false;
             // One scroll for the question: focus inside it brings the whole card into view, heading

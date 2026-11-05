@@ -367,7 +367,8 @@ test.describe('notifications', () => {
 
   test('a notification\'s link opens its machine and session with the question ready, and so does a tap while the app is open', async ({ page }) => {
     const t = new Date().toISOString();
-    // A command in the message gets a Copy button; focus still goes to the answers.
+    // A command in the message gets a Copy button; focus goes to neither it nor an answer, which
+    // Enter or Space would send unread (#484), but to the question's heading.
     const question = (id) => ({ id: `q-${id}`, kind: 'form', message: 'Which one?\n\n```\ngit push\n```', askedAt: t, fields: [{ name: 'answer', type: 'choice', options: [{ value: 'a' }, { value: 'b' }] }] });
     for (const id of ['linked-1', 'linked-2']) {
       await host.upsert({ id, agent: 'copilot', title: id, status: 'waiting', statusSince: t, updatedAt: t, activity: {}, question: question(id) });
@@ -376,9 +377,10 @@ test.describe('notifications', () => {
     await page.goto(`${appUrl}?host=${host.deviceId}&session=linked-1&question=q-linked-1`);
     await expect(card(page, 'linked-1')).toHaveClass(/linked/, { timeout: 30000 });
     await expect(card(page, 'linked-1').locator('.question-message .md-copy')).toHaveCount(1);
-    await expect(card(page, 'linked-1').locator('.question-slot button:not(.md-copy)').first()).toBeFocused();
+    await expect(card(page, 'linked-1').locator('.question-slot .question-head')).toBeFocused();
+    expect(await page.evaluate(() => document.activeElement?.closest('button, input, textarea') ?? null)).toBeNull();
     expect(new URL(page.url()).search).toBe('');
-    // Focus is on its answers for a screen reader, with no ring drawn on them, or around the
+    // Focus is on its question for a screen reader, with no ring drawn on it, or around the
     // session's header (A12, #373): nothing a key moved.
     await expectNoRing(card(page, 'linked-1'));
 
@@ -394,7 +396,7 @@ test.describe('notifications', () => {
     await page.evaluate((url) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
       `${appUrl}?host=${host.deviceId}&session=linked-2&question=q-linked-2`);
     await expect(card(page, 'linked-2')).toHaveClass(/linked/);
-    await expect(card(page, 'linked-2').locator('.question-slot button:not(.md-copy)').first()).toBeFocused();
+    await expect(card(page, 'linked-2').locator('.question-slot .question-head')).toBeFocused();
     await expect(page.locator('#search')).toHaveValue('');
     // Though keys were pressed (the search), what the tap brought draws no ring.
     await expectNoRing(card(page, 'linked-2'));
@@ -484,12 +486,12 @@ test.describe('notifications', () => {
     expect(await page.evaluate(() => !!document.activeElement?.closest('.question-slot'))).toBe(false);
   });
 
-  test('a notification\'s question, its list whole, takes no click for a moment as its answer takes focus', async ({ page }) => {
+  test('a notification\'s question, its list whole, takes no click for a moment as it takes focus', async ({ page }) => {
     await host.upsert(asking('held-5', 'q-held-f', 'Approve F?'));
     const release = await heldOpen(page, 'held-5', 'q-held-f');
     // Longer than the wait that opening it began, so what holds a click now began with the focus.
     try { await page.waitForTimeout(700); } finally { release(); }
-    // Read on every frame: the moment an answer has focus, its question is holding clicks back.
+    // Read on every frame: the moment its heading has focus, its question is holding clicks back.
     const at = await page.waitForFunction(() => {
       const a = document.activeElement;
       return a?.closest('.question-slot') ? { arriving: a.closest('.question')?.hasAttribute('data-arriving') ?? false } : null;

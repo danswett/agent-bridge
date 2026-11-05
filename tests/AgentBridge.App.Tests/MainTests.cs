@@ -400,6 +400,24 @@ public sealed class MainTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_session_a_toast_opens_takes_keyboard_focus_whether_it_is_there_already_or_arrives_later()
+    {
+        // As Needs you's open does: the session view puts it on the question's heading, never on
+        // an answer (#484). A search or the list opening one asks for none.
+        await SnapshotAsync();
+        ui.Post(() => main.Open(null, "asking", focus: true));
+        Assert.True(TestUi.Read(() => Card("asking").WantsFocus));
+
+        ui.Post(() => main.Open(null, "later", focus: true));
+        await host.SendAsync(Events.SessionUpsert, Make.Session("later", updated: Make.T0.AddMinutes(5)));
+        await Wait.UntilAsync(() => TestUi.Read(() => main.Selected?.Id == "later"), "the session to open");
+        Assert.True(TestUi.Read(() => Card("later").WantsFocus));
+
+        ui.Post(() => main.Open("old"));
+        Assert.False(TestUi.Read(() => Card("old").WantsFocus));
+    }
+
+    [Fact]
     public async Task Search_finds_sessions_holding_every_word_typed_in_their_title_repository_or_branch_titles_starting_with_it_first()
     {
         await SnapshotAsync();
