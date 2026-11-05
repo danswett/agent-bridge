@@ -16,7 +16,7 @@ using Windows.Storage.Streams;
 namespace AgentBridge.App;
 
 // The conversation as a list (#765): the block at the top of the viewport stays there through a
-// live resize, the conversation drawn the same before the drag and after it, and a screen reader is
+// live resize, the conversation drawn alike before the drag and after it, and a screen reader is
 // given every block as an item of the list, one off screen included (#707).
 static partial class SelfTest
 {
@@ -43,7 +43,9 @@ static partial class SelfTest
         return new Shot(index, top, pixels, width, height);
     }
 
-    // What moved since Anchor: the block, or any pixel of the column; null when nothing did.
+    // What moved since Anchor: the block's place in the layout (within 0.5 DIP), the proof; or the
+    // column drawn differently beyond anti-aliasing (PictureDifference), the backup. Null when
+    // neither did.
     static async Task<string?> Anchored(ListView list, Shot before, string outFile)
     {
         if (SessionView.Shallowest<ScrollViewer>(list) is not { } scroll) { return "a scroller"; }
@@ -64,26 +66,9 @@ static partial class SelfTest
             var measure = Math.Min(list.ActualWidth, (double)Application.Current.Resources["AbLayoutReadingMax"]);
             var from = (int)Math.Floor((list.ActualWidth - measure) / 2 * scale);
             var to = (int)Math.Ceiling(Math.Min((list.ActualWidth + measure) / 2, list.ActualWidth - 16) * scale);
-            // Anti-aliased edges may be drawn a step or two apart from one frame to the next (arm64's
-            // software rasteriser drew two edge pixels of the same text 1 apart in alpha), so a pixel
-            // differs only when a channel is more than Tolerance apart: a block moved by even a pixel
-            // differs by far more along every edge of its text.
-            const int Tolerance = 8;
-            var differ = 0;
-            var largest = 0;
-            for (var y = 0; y < height; y++)
-            {
-                for (var x = Math.Max(0, from); x < Math.Min(width, to); x++)
-                {
-                    var i = (y * width + x) * 4;
-                    var most = 0;
-                    for (var c = 0; c < 4; c++) { most = Math.Max(most, Math.Abs(pixels[i + c] - before.Pixels[i + c])); }
-                    largest = Math.Max(largest, most);
-                    if (most > Tolerance) { differ++; }
-                }
-            }
-            if (differ > 0) { problems.Add($"{differ} pixels of the column drawn differently, by up to {largest} in a channel"); }
-            else if (largest > 0) { AppLog.Write($"self-test: resize, the column drawn the same within {Tolerance} a channel (by up to {largest})"); }
+            var difference = PictureDifference.Of(before.Pixels, pixels, width, height, from, to);
+            AppLog.Write($"self-test: resize, {difference.Differing} pixels of the column more than {PictureDifference.Tolerance} apart in a channel, by up to {difference.Largest}");
+            if (!difference.Alike) { problems.Add($"{difference.Differing} pixels of the column more than {PictureDifference.Tolerance} apart in a channel (up to {PictureDifference.MostDiffering} allowed), by up to {difference.Largest} in a channel (up to {PictureDifference.Glaring} allowed)"); }
         }
         return problems.Count > 0 ? string.Join(", ", problems) : null;
     }

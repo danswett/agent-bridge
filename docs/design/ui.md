@@ -731,7 +731,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     block's container is
     a stop, and in high contrast it has no fill: the block draws in the system's colours.
   - The self-test checks that a block stays in place through a live resize and the conversation is
-    drawn the same before and after it, that Page Down and Down scroll the text with focus and
+    drawn alike before and after it (a renderer's noise aside), that Page Down and Down scroll the text with focus and
     selection left alone, that Tab reaches a block not yet laid out, that no container is a stop or
     draws chrome, that the last block is found by its name, which no other block has, and that every
     block, found and realised as a screen reader does it (FindItemByProperty, then Realize), is a

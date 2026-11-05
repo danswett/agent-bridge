@@ -69,7 +69,7 @@ static partial class SelfTest
         check(settled, "keeps the session chosen, with its inspector, through a live resize across every width class");
         await Picture(window.RootElement, Path.ChangeExtension(outFile, ".resize.png"));
         var moved = list is null || anchored is null ? "measured: the response not drawn" : await Anchored(list, anchored, outFile);
-        check(moved is null, $"keeps the block at the top of the conversation where it was through a live resize, drawn the same before and after{Not(moved)}");
+        check(moved is null, $"keeps the block at the top of the conversation where it was through a live resize, drawn alike before and after{Not(moved)}");
         var (unkeyed, pressedBy) = list is null ? ("measured: the response not drawn", "none") : await Keyed(window, list);
         check(unkeyed is null, $"scrolls the conversation's text with Page Down and Down pressed on a link in it, focus left where it was and nothing selected ({pressedBy}){Not(unkeyed)}");
         var untabbed = list is null ? "measured: the response not drawn" : await Tabbed(list);
