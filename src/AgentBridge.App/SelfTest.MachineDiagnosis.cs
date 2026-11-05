@@ -41,17 +41,69 @@ static partial class SelfTest
             if (ById<CheckBox>(Row()!, "MachineDiagnosisReviewed") is { } reviewed) { reviewed.IsChecked = true; }
             var button = ById<Button>(Row()!, from);
             await Until(() => button is { IsEnabled: true }, TimeSpan.FromSeconds(2));
-            TrayIcon.SetForegroundWindow(window.Handle);
+            // Observation only (#838: on Arm64 CI the Escape was sent and the report stayed open):
+            // where the key went, logged to app.log, with nothing the check does changed.
+            using var trace = new EscapeTrace(window, from);
+            trace.Note($"before foreground: open {Open()}");
+            var foreground = TrayIcon.SetForegroundWindow(window.Handle);
+            trace.Note($"SetForegroundWindow returned {foreground}");
             var focused = button?.Focus(FocusState.Keyboard) == true && await Until(() => ReferenceEquals(FocusManager.GetFocusedElement(window.RootElement.XamlRoot), button), TimeSpan.FromSeconds(2));
+            trace.Note($"before Escape: focused {focused}, open {Open()}");
             var sent = focused && PressEscape();
+            trace.Note($"Escape sent {sent}");
             var closed = sent && await Until(() => !Open(), TimeSpan.FromSeconds(5));
+            trace.Note($"after Escape: closed {closed}, open {Open()}");
             var diagnose = Row() is { } row ? ById<Button>(row, "DiagnoseMachine") : null;
             var back = closed && await Until(() => diagnose is not null && ReferenceEquals(FocusManager.GetFocusedElement(window.RootElement.XamlRoot), diagnose), TimeSpan.FromSeconds(2));
+            trace.Note($"after refocus: on the row's Diagnose {back}, Diagnose found {diagnose is not null}");
             var name = FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is FrameworkElement f ? AutomationProperties.GetAutomationId(f) : null;
             check(focused && sent && closed && back,
                 $"closes the diagnosis on Escape from {from} and puts focus back on that row's Diagnose (focused {focused}, sent {sent}, closed {closed}, focus on {name})");
         }
     }
+
+    // Each step of one Escape check, to app.log: time since it began, the foreground window and
+    // whether it is the app's, what XAML has focused, and each key the window's root saw (its
+    // handled ones too). It changes no focus, window or key; it only looks.
+    sealed class EscapeTrace : IDisposable
+    {
+        readonly MainWindow window;
+        readonly string from;
+        readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+        readonly KeyEventHandler onKey;
+        readonly List<string> keys = [];
+
+        public EscapeTrace(MainWindow window, string from)
+        {
+            this.window = window;
+            this.from = from;
+            onKey = (_, e) => keys.Add($"{e.Key} at +{clock.ElapsedMilliseconds}ms from {Describe(e.OriginalSource)} handled {e.Handled}");
+            window.RootElement.AddHandler(UIElement.KeyDownEvent, onKey, true);
+        }
+
+        public void Note(string step)
+        {
+            var foreground = GetForegroundWindow();
+            GetWindowThreadProcessId(foreground, out var pid);
+            var focus = Describe(FocusManager.GetFocusedElement(window.RootElement.XamlRoot));
+            AppLog.Write($"self-test: escape trace {from} +{clock.ElapsedMilliseconds}ms: {step}; foreground 0x{foreground:X} (the app's window {foreground == window.Handle}, the app's process {pid == Environment.ProcessId}), focus on {focus}, root keys [{string.Join("; ", keys)}]");
+        }
+
+        public void Dispose() => window.RootElement.RemoveHandler(UIElement.KeyDownEvent, onKey);
+
+        static string Describe(object? element) => element switch
+        {
+            null => "nothing",
+            FrameworkElement f => $"{f.GetType().Name} {AutomationProperties.GetAutomationId(f)}",
+            _ => element.GetType().Name,
+        };
+    }
+
+    [LibraryImport("user32.dll")]
+    private static partial nint GetForegroundWindow();
+
+    [LibraryImport("user32.dll")]
+    private static partial uint GetWindowThreadProcessId(nint hwnd, out uint processId);
 
     // Escape, down and up, as the keyboard sends it.
     static unsafe bool PressEscape()
