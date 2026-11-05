@@ -8,8 +8,9 @@ on:
     # ready_for_review on top of the defaults: a draft runs only the fast ring (the plan job), so
     # marking it ready must run the PR gate on the same head without waiting for another push.
     types: [opened, synchronize, reopened, ready_for_review]
-  # By hand, only to prove pwa-ui's apt fallback on a branch (quality/README.md §4.7). A run by
-  # hand is never a release (APP_RELEASE), writes no cache and, like main, runs every job.
+  # By hand, only to prove pwa-ui's apt fallback, on a commit of its own (quality/README.md
+  # §4.7); the plan job refuses anything else. A run by hand is never a release (APP_RELEASE),
+  # writes no cache and, like main, runs every job.
   workflow_dispatch:
     inputs:
       force-apt-fallback:
@@ -51,6 +52,9 @@ jobs:
     # the selection could be silently wrong.
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read # a run by hand checks its commit is no open pull request's head
     outputs:
       # 'true' when every gated job and step runs whatever the selector says: on main, and on a
       # ready pull request that changes what decides selection (the whole-ring step below).
@@ -70,17 +74,35 @@ jobs:
       product-os: ${{ steps.whole-ring.outputs.whole-ring == 'true' && '["ubuntu-latest","windows-latest","windows-11-arm"]' || steps.select.outputs.product-os }}
       test-filter: ${{ steps.select.outputs.test-filter }}
     steps:
-      # force-apt-fallback proves pwa-ui's fallback on a branch. Asked for on main, which
-      # publishes, or on a tag, it fails the run here, before any job starts, rather than being
-      # ignored.
-      - name: force-apt-fallback only on a branch other than main
-        if: github.event_name == 'workflow_dispatch' && inputs.force-apt-fallback
+      # A run by hand exists only to prove pwa-ui's apt fallback (force-apt-fallback), and its
+      # checks, quality-gate among them, land on the commit it runs: on an open pull request's
+      # head they would stand in for that pull request's own run (the merge rule reads the latest
+      # run per head). So it must ask for the fallback, on a branch other than main (which
+      # publishes), at a commit that is neither main's head nor any open pull request's. Anything
+      # else fails here, before checkout, and every job after the plan is skipped. Push and pull
+      # request runs skip this step, so they make no API call.
+      - name: A run by hand is a fallback proof on a commit of its own
+        if: github.event_name == 'workflow_dispatch'
         env:
+          FORCE: ${{ inputs.force-apt-fallback }}
           REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          fail() { echo "::error title=force-apt-fallback::$1"; exit 1; }
+          [ "$FORCE" = true ] || fail "a run by hand is only for force-apt-fallback=true"
           if [ "$REF" = refs/heads/main ] || [ "${REF#refs/heads/}" = "$REF" ]; then
-            echo "::error title=force-apt-fallback::only on a branch other than main, not $REF"; exit 1
+            fail "only on a branch other than main, not $REF"
           fi
+          main=$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha) || fail "couldn't read main's head"
+          [[ "$main" =~ ^[0-9a-f]{40}$ ]] || fail "couldn't read main's head"
+          [ "$SHA" != "$main" ] || fail "$SHA is main's head; prove on a new commit of its own"
+          gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" --jq '.[].head.sha' > "$RUNNER_TEMP/pr-heads" || fail "couldn't list the open pull requests"
+          while read -r head; do
+            [[ "$head" =~ ^[0-9a-f]{40}$ ]] || fail "couldn't read the open pull requests' heads"
+            [ "$head" != "$SHA" ] || fail "$SHA is an open pull request's head; prove on a new commit of its own"
+          done < "$RUNNER_TEMP/pr-heads"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
@@ -1031,7 +1053,8 @@ jobs:
       # left after five minutes for Canonical's HTTPS archive (#799; the action's download.sh says
       # how). The install below then finds them all downloaded; it, and the packages, are as before.
       # force-apt-fallback (workflow_dispatch, a branch only; quality/README.md §4.7) skips the five
-      # minutes and takes that fallback before any package is downloaded, to prove it once. It is
+      # minutes and takes that fallback before any package is downloaded, to prove it once; the
+      # WebKit legs are the proof, so one that downloads nothing from Canonical fails. It is
       # false on every push and pull request run, which run the action exactly as before.
       - name: Download Playwright's system packages
         uses: ./.github/actions/playwright-system-packages

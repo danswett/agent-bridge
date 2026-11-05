@@ -343,17 +343,25 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `https://archive.ubuntu.com` (main run 41927187905 lost a WebKit shard to that mirror at
      100 kB/s, and main run 41952998347 `pwa-e2e`). Each of those jobs gets 35 minutes, so a
      fallback download still leaves time for the tests; the browsers' own download, on a cache
-     miss, is unchanged. To prove that
-     fallback once on a branch, without waiting for a slow mirror:
-     `gh workflow run ci.yml --ref <branch> -f force-apt-fallback=true`. Each `pwa-ui` leg then
-     takes the Azure mirror off before downloading anything (the action's `force-apt-fallback`;
-     `pwa-e2e` and `spikes-linux` download as before), says in its log that it was forced and not
-     timed out, fails if apt still fetches a package from Azure, and counts the packages that
-     came from `https://archive.ubuntu.com` (a leg with none, everything already installed,
-     warns that it proves nothing; the WebKit legs are the proof). Use a
-     throwaway branch with no pull request: a run by hand runs every job, as on `main`, and
-     posts its checks on the branch's head. Asked for on `main` or a tag, the plan job fails
-     the run before anything starts; a run by hand is never a release and writes no cache.
+     miss, is unchanged. To prove that fallback once without waiting for a slow mirror, once this
+     `workflow_dispatch` trigger is on `main` (until then a branch's run by hand may not
+     start): make a new commit of its own on a throwaway branch from `main` (an empty one,
+     `git commit --allow-empty`, with the usual trailers), push the branch, never open a pull
+     request at that commit, and run
+     `gh workflow run ci.yml --ref <branch> -f force-apt-fallback=true`. The plan job fails any
+     run by hand, before checkout, that doesn't ask for the fallback, runs on `main` or a tag,
+     or runs `main`'s head or any open pull request's: its checks, `quality-gate` among them,
+     land on the commit, and the merge rule reads the latest run per head, so on a pull
+     request's head they would stand in for its own run. (One started there by mistake still
+     leaves a failed run on that head; re-run the pull request's own run.) Each `pwa-ui` leg
+     then takes the Azure mirror off before downloading anything (the action's
+     `force-apt-fallback`; `pwa-e2e` and `spikes-linux` download as before), says in its log
+     that it was forced and not timed out, fails if apt still fetches a package from Azure, and
+     counts the packages that came from `https://archive.ubuntu.com`. The WebKit legs are the
+     proof: one that counts none fails; Chromium's, whose packages the runner may already have,
+     only warns. Read each WebKit leg's count and its `Get:` lines before calling the fallback
+     proven. A run by hand runs every job, as on `main`, but is never a release and writes no
+     cache.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,

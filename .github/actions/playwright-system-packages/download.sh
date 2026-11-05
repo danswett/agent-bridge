@@ -19,8 +19,9 @@
 # PLAYWRIGHT_APT_FORCE_FALLBACK=true (the action's force-apt-fallback, which ci.yml sets only in
 # pwa-ui on a run by hand that asks for it; quality/README.md §4.7) skips the five minutes and takes
 # this fallback before any package is downloaded, to prove it once. Its log says it was forced, not
-# timed out, and how many packages came from https://archive.ubuntu.com; a leg with none
-# (everything already installed) says it proves nothing. A forced download also fails if apt still
+# timed out, and how many packages came from https://archive.ubuntu.com. The WebKit legs are the
+# proof, so a webkit download with none fails; any other, whose packages the runner may already
+# have, only warns that it proves nothing. A forced download also fails if apt still
 # fetches a package from Azure after it was taken off the list. Unset or anything but true, every
 # line that runs is the same as without it.
 #
@@ -69,10 +70,12 @@ if [ "$force" = true ] || [ "$rc" -eq 124 ]; then
       echo "::error::apt still fetched packages from azure.archive.ubuntu.com after it was taken off $mirrors"; exit 1
     fi
     n=$(grep -c '^Get:[0-9]* https://archive\.ubuntu\.com/ubuntu' "$got" || true)
-    if [ "$n" -eq 0 ]; then
-      echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: nothing was downloaded from https://archive.ubuntu.com, so this leg proves nothing about the fallback"
-    else
+    if [ "$n" -gt 0 ]; then
       echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: $n packages downloaded from https://archive.ubuntu.com"
+    elif [[ " $* " == *" webkit "* ]]; then
+      echo "::error title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: nothing was downloaded from https://archive.ubuntu.com, so this WebKit leg is no proof of the fallback"; exit 1
+    else
+      echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::force-apt-fallback: nothing was downloaded from https://archive.ubuntu.com, so this leg proves nothing about the fallback"
     fi
   else
     sudo apt-get install -y --download-only --no-install-recommends "${pkgs[@]}"
