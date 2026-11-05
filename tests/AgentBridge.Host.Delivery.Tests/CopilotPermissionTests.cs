@@ -523,6 +523,36 @@ public sealed class CopilotPermissionTests : IDisposable
     }
 
     [Fact]
+    public void A_turn_ended_by_an_error_retires_the_main_agents_prompts_and_never_a_delegates()
+    {
+        // As SessionState.FailTurn has it (Copilot 5784408127): the main agent's asks and
+        // permission requests end with its turn; a delegate's, stamped or attributed by its tool
+        // call, are still the person's to answer. A model call's or a hook's error, and a
+        // delegate's own, end nothing.
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 1),
+            Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2),
+            Copilot.ToolStart("c2", "powershell", new { command = "ls" }, 3, agentId: "helper"),
+            Copilot.Permission("r2", "c2", Copilot.Prompts["commands"], 4),
+            Copilot.Permission("r3", "c3", Copilot.Prompts["read"], 5, agentId: "helper"),
+            Copilot.ToolStart("q8", "ask_user", new { message = "?" }, 6, agentId: "helper"));
+        var watch = new CopilotPermissionWatch(events, "r2");
+        Assert.Equal((3, 2), (watch.Read().PendingPermissions, watch.Read().PendingAsks));
+
+        Fixture.Append(events, Copilot.Event("session.error", new { errorType = "model_call", message = "retrying" }, 7),
+            Copilot.Event("session.error", new { errorType = "hook", message = "x" }, 8),
+            Copilot.Event("session.error", new { errorType = "authorization", statusCode = 401 }, 9, agentId: "helper"));
+        var survived = watch.Read();
+        Assert.Equal((3, 2), (survived.PendingPermissions, survived.PendingAsks));
+
+        Fixture.Append(events, Copilot.Event("session.error", new { errorType = "authorization", statusCode = 401, remediation = "sign_in" }, 10));
+        var ended = watch.Read();
+        Assert.Equal((2, "r2"), (ended.PendingPermissions, ended.Request?.RequestId));
+        Assert.Equal(["q8"], ended.Asks!);
+        Assert.Null(CopilotPermissionTranscript.Before(events, "r1").Request);
+    }
+
+    [Fact]
     public void A_transcript_shorter_than_what_was_read_is_read_again_from_its_start()
     {
         var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);

@@ -81,8 +81,14 @@ public static class CopilotPermissionTranscript
 // from the start.
 public sealed class CopilotPermissionWatch(string path, string requestId)
 {
-    // In the order asked, each with the request as recorded: a Dictionary does not keep that order once one is removed.\n    readonly List<(string Id, JsonElement Data)> permissions = [];
+    // In the order asked, each with the request as recorded (a Dictionary does not keep that order
+    // once one is removed) and the agent asking it, null for the main agent's own: as the parser
+    // attributes it, stamped or by the tool call it is for (CopilotParser.Permission).
+    readonly List<(string Id, JsonElement Data, string? Agent)> permissions = [];
     readonly Dictionary<string, string?> asks = new(StringComparer.Ordinal);
+    // Delegates' tool calls by id, from their stamped starts, to attribute a permission written
+    // without a stamp, as the parser's tool history does; dropped once the call completes.
+    readonly Dictionary<string, string> tools = new(StringComparer.Ordinal);
     // Delegates by the task call that started them, and whether they run in the background, as
     // the session's parser keeps them (BackgroundWork): a delegate's failure is written by its
     // task call before CLI 1.0.10x stamped it with the delegate's id, and a task (synchronous)
@@ -101,6 +107,7 @@ public sealed class CopilotPermissionWatch(string path, string requestId)
             permissions.Clear();
             asks.Clear();
             delegates.Clear();
+            tools.Clear();
             to = 0;
         }
         if (Jsonl.Lines(path, to, skipFirst: false, Line) is not { } end) { return new CopilotPermissionState(false, null, 0, 0, 0); }
@@ -134,26 +141,33 @@ public sealed class CopilotPermissionWatch(string path, string requestId)
         var ending = bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.resume\""u8) >= 0;
         var answer = asks.Count > 0 && (bytes.IndexOf("\"type\":\"tool.execution_complete\""u8) >= 0 || bytes.IndexOf("\"type\":\"human_response.recorded\""u8) >= 0);
         var delegated = bytes.IndexOf("\"type\":\"subagent."u8) >= 0;
-        if (!ask && !permission && !ending && !answer && !delegated) { return; }
+        var errored = bytes.IndexOf("\"type\":\"session.error\""u8) >= 0;
+        var tool = !ask && bytes.IndexOf("\"type\":\"tool.execution_"u8) >= 0 && (tools.Count > 0 || bytes.IndexOf("\"agentId\""u8) >= 0);
+        if (!ask && !permission && !ending && !answer && !delegated && !errored && !tool) { return; }
         if (CopilotPrompts.Parse(bytes) is not { } e) { return; }
         using (e.Doc)
         {
             var data = e.Data;
             switch (e.Type)
             {
-                case "tool.execution_start" when CopilotPrompts.Str(data, "toolName") == "ask_user" && CopilotPrompts.Str(data, "toolCallId") is { } id:
-                    asks[id] = e.AgentId;
+                case "tool.execution_start" when CopilotPrompts.Str(data, "toolCallId") is { } id:
+                    if (CopilotPrompts.Str(data, "toolName") == "ask_user") { asks[id] = e.AgentId; }
+                    if (e.AgentId is { } agent) { tools[id] = agent; }
                     break;
                 case "tool.execution_complete" or "human_response.recorded" when CopilotPrompts.Str(data, "toolCallId") is { } id:
                     asks.Remove(id);
+                    if (e.Type == "tool.execution_complete") { tools.Remove(id); }
                     // A task delegate's call returning ends it (BackgroundWork.TaskCallDone); a
                     // background delegate's returns as it starts (Copilot 4479871616).
                     if (e.Type == "tool.execution_complete" && delegates.TryGetValue(id, out var task) && !task.Background) { Retire(task.Agent); }
                     break;
                 case "permission.requested" when CopilotPrompts.Str(data, "requestId") is { } id:
-                    permissions.RemoveAll(p => p.Id == id);
-                    permissions.Add((id, data.Clone()));
-                    break;
+                    {
+                        var by = e.AgentId ?? (CopilotPrompts.Str(data, "toolCallId") is { } call ? tools.GetValueOrDefault(call) : null);
+                        permissions.RemoveAll(p => p.Id == id);
+                        permissions.Add((id, data.Clone(), by));
+                        break;
+                    }
                 case "permission.completed" when CopilotPrompts.Str(data, "requestId") is { } id:
                     permissions.RemoveAll(p => p.Id == id);
                     break;
@@ -163,6 +177,14 @@ public sealed class CopilotPermissionWatch(string path, string requestId)
                     break;
                 case "abort" or "session.shutdown":
                     Retire(e.AgentId!);
+                    break;
+                // The main agent's turn ended on an error (SessionState.FailTurn): its own asks and
+                // permission requests end with it, a delegate's stay, as the parser has them. Kept,
+                // one left by an earlier turn refused every later answer in the session (Copilot
+                // 5784408127). A delegate's own error, and one the turn survives, end nothing.
+                case "session.error" when e.AgentId is null && CopilotTurnErrors.EndsTurn(data):
+                    foreach (var id in asks.Where(a => a.Value is null).Select(a => a.Key).ToList()) { asks.Remove(id); }
+                    permissions.RemoveAll(p => p.Agent is null);
                     break;
                 case "subagent.started" when e.AgentId is { } started && CopilotPrompts.Str(data, "toolCallId") is { } call:
                     delegates[call] = (started, CopilotPrompts.Str(data, "executionMode") == "background");
@@ -174,7 +196,9 @@ public sealed class CopilotPermissionWatch(string path, string requestId)
         }
     }
 
-    string? Delegate(JsonElement data) => CopilotPrompts.Str(data, "toolCallId") is { } call && delegates.TryGetValue(call, out var started) ? started.Agent : null;
+    string? Delegate(JsonElement data) => Delegate(CopilotPrompts.Str(data, "toolCallId"));
+
+    string? Delegate(string? call) => call is not null && delegates.TryGetValue(call, out var started) ? started.Agent : null;
 }
 
 // Where on the session's screen the prompt's answers are, read from the rows themselves. The

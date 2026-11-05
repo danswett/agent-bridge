@@ -1313,6 +1313,26 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_question_asked_after_a_turn_ended_on_an_error_is_answered_though_that_turn_left_prompts_waiting()
+    {
+        // The turn ended on an error with q1 and a permission request still open, as the session
+        // listing ends them (SessionState.FailTurn). Kept waiting by the answer path, they refused
+        // every later answer in the session (Copilot 5784408127).
+        Fixture.Append(events, Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], second++),
+            Copilot.Event("session.error", new { errorType = "server", statusCode = 500 }, second++),
+            Copilot.User("try again", second++), AskForm("q2", second++));
+        await source.RefreshAsync();
+        Assert.Equal("q2", source.Get(Id)?.Question?.Id);
+        DrawsWords();
+        injector.OnInject = () => { if (Submits(injector.Plans[^1].Plan)) { Fixture.Append(events, Recorded("q2", FormAnswer)); } };
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
     public async Task A_check_that_fails_after_the_first_write_leaves_the_answer_typed_unconfirmed_and_read_back_later()
     {
         // Thrown on, it reached the catch that says nothing was typed, and the answer was never
