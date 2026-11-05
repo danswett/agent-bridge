@@ -22,7 +22,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     // The host manager's start and stop timeouts, on a clock that never moves: they wait for the
     // fake host however slow the runner, as HostManagerTests' held stop does (#425). On the wall
     // clock a stall like #909's 7.4 s ran a 2 s stop or 5 s start out with the host on its way.
-    // No test here needs one to run out; a host that never comes ends at --blame-hang.
+    // A host that never comes ends at --blame-hang; a test that needs a wait to run out (a usage
+    // probe's, #238) advances this clock itself.
     readonly FakeTimeProvider held = new(Make.T0);
     readonly List<string> log = [];
     readonly string app = Path.Combine(Path.GetTempPath(), "abu-" + Guid.NewGuid().ToString("N")[..8]);
@@ -214,7 +215,12 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await StartAsync();
         host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
 
-        var busy = await Assert.ThrowsAsync<HostBusyException>(() => manager.StopAsync());
+        // The manager's clock never moves (held), so its wait is run out by hand: the deadline is
+        // set before the first hold is asked, and is past once the clock goes beyond ProbeWait.
+        var stopping = manager.StopAsync();
+        await Wait.UntilAsync(() => host.Sent(HostOps.ProbeHold).Count >= 1, "the first hold");
+        held.Advance(manager.ProbeWait + TimeSpan.FromSeconds(1));
+        var busy = await Assert.ThrowsAsync<HostBusyException>(() => stopping);
 
         Assert.Contains("Codex's app-server is still finishing", busy.Message, StringComparison.Ordinal);
         Assert.Empty(host.Sent(HostOps.Stop));
