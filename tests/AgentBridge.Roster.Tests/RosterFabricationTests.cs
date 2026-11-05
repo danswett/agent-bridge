@@ -132,7 +132,7 @@ public sealed class RosterFabricationTests
     // and K's removal revokes D, E's add is not its ancestor, so E is void because of it, and a
     // shield protects only what descends from the person's removal (rank 1 here, so §3.5's own
     // guarantee says a rank-2 pair on D's side can reach a device junior to D). Raised with the
-    // Trust lead (devices.md, open questions); this test pins what the rules give until decided.
+    // Trust lead, who decided (2026-11-04) that §3.5 governs and the bullet is an erratum (devices.md).
     [Fact]
     public void A_partial_cascade_by_one_device_does_not_save_its_kept_devices_from_a_fabricated_pair()
     {

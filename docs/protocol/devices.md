@@ -302,6 +302,7 @@ Decided by A, Trust lead, 2026-11-04, where the design left them open:
 | How many entries refused for a cap or budget a verifier keeps aside as possible evidence | 2,048, twice the evidence it can admit; past that they are refused and dropped |
 | Whether a held device's renames are held | Held: see **Names** above |
 | What "distinct heads" means for a merge's parents | No parent an ancestor of another |
+| §10's "partial cascade with a fabricated pair", whose bullet keeps E and E2 active | §3.5 governs, and the bullet is a design erratum (to be fixed after #391 lands): J's and K's removal also revokes D and E's add is not its ancestor, so E and E2 are void until enrolled again. A recovery of a device that approved others needs a cosigner, as the client asks |
 
 ## Open questions
 
@@ -320,4 +321,3 @@ check to change:
 | The origin an assertion must name | Exactly `https://` + `rpId` |
 | The challenge role for person commands and vetoes | Decided in R1c |
 | How the QR identifies N's `sign` key when N shows it | Decided with R3 |
-| §10's "partial cascade with a fabricated pair": the bullet keeps E and E2 active; §3.5 voids E, since J's and K's removal revokes D and E's add is not its ancestor, and the person's rank-1 removal shields only its descendants | §3.5's rules, which the other §10 scenarios also follow; asked of the Trust lead |
