@@ -4,6 +4,7 @@ using AgentBridge.Hooks;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Discovery;
 using AgentBridge.Host.Core.Intake;
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 using Xunit;
 
@@ -425,6 +426,32 @@ public sealed class IntakeTests : IDisposable
         Assert.Equal(("Needs approval: " + command[..297] + "...", "shell", command, false), (marker.Question, marker.Tool, marker.Command, marker.CommandCut));
         var cut = ApprovalMarkerRead.Read(Path.Combine(_f.CodexRegistrations, "x2.json"), "x2");
         Assert.Equal((HookHandlers.CommandMax, true), (cut.Command!.Length, cut.CommandCut));
+    }
+
+    [Fact]
+    public void A_Codex_approval_whose_tool_input_holds_more_than_the_command_records_none_and_is_held_at_the_machine()
+    {
+        // The hook fires for MCP tools too: `host` decides where the command runs, and a card that
+        // showed only the command offered Approve once for it (#338).
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "mcp__ssh__exec", tool_input = new { host = "prod-db", command = "systemctl restart app" } }, 50, 60);
+        Spooled("0002", "codex", "hook", new { session_id = "x2", hook_event_name = "PermissionRequest", tool_name = "Bash", tool_input = new { command = "make deploy", workdir = "/srv/prod" } }, 50, 60);
+        Spooled("0003", "codex", "hook", new { session_id = "x3", hook_event_name = "PermissionRequest", tool_name = "Bash", tool_input = new { command = "git push", description = "Push the branch" } }, 50, 60);
+        intake.Pass();
+
+        foreach (var (id, tool) in new[] { ("x1", "mcp__ssh__exec"), ("x2", "Bash") })
+        {
+            var marker = ApprovalMarkerRead.Read(Path.Combine(_f.CodexRegistrations, $"{id}.json"), id);
+            Assert.Equal(ApprovalMarkerState.Present, marker.State);
+            Assert.Equal(($"Needs approval: {tool}", tool, (string?)null), (marker.Question, marker.Tool, marker.Command));
+            var q = QuestionMapper.CodexApproval(marker.DecisionId, marker.Tool, marker.Command, marker.CommandCut, marker.Question, DateTimeOffset.UnixEpoch, atMachine: false);
+            Assert.True(q.AnswerAtMachine);
+        }
+        // Only the command and the agent's words about it: the command is the whole of what runs.
+        var whole = ApprovalMarkerRead.Read(Path.Combine(_f.CodexRegistrations, "x3.json"), "x3");
+        Assert.Equal(("Bash", "git push"), (whole.Tool, whole.Command));
+        Assert.Null(QuestionMapper.CodexApproval(whole.DecisionId, whole.Tool, whole.Command, whole.CommandCut, whole.Question, DateTimeOffset.UnixEpoch, atMachine: false).AnswerAtMachine);
     }
 
     [Fact]

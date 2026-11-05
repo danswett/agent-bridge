@@ -783,7 +783,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     command in one block (`ApprovalShape.IsFencedCommand`). An older host sent the hook's
     300-character preview in prose, cut short of what runs with nothing marking it `truncated`,
     so every card answers that at the machine (#209). One a host had to cut is marked `truncated`,
-    and every card says part of it is missing before it judges the shape.
+    and every card says part of it is missing before it judges the shape. The Mac, iPhone and iPad
+    app does not check the shape yet, so it answers every Codex approval at the machine until it
+    does.
   - **`answerAtMachine`:** the whole question, no controls, and one line in Needs you's text
     colour: "Answer at the machine · *machine*". A prompt that reached the device cut short
     (`truncated`) can't be answered from here either, as before. Leaving the session is never

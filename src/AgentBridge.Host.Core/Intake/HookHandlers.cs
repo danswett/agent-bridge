@@ -139,7 +139,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
             case "PermissionRequest":
                 (status, approval) = ("waiting", true);
                 activity = $"Needs approval: {Str(e, "tool_name") ?? ""}";
-                asked = Command(e);
+                asked = ApprovedCommand(e);
                 if (asked is { Length: > 0 }) { activity = $"Needs approval: {Cut(asked, 300)}"; }
                 break;
             case "PreToolUse":
@@ -545,6 +545,28 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
     static string? Command(JsonElement e) =>
         e.ValueKind == JsonValueKind.Object && e.TryGetProperty("tool_input", out var input) && input.ValueKind == JsonValueKind.Object
             ? Json.Str(input, "command") : null;
+
+    // The command an approval runs, recorded only when it is the whole of what is approved: the
+    // shell's or apply_patch's tool_input holding a command and nothing else but its description,
+    // which is the agent's words about it and changes nothing that runs. The hook fires for MCP tools
+    // too, whose tool_input is the tool's own arguments: `mcp__ssh__exec {host, command}` showed only
+    // the command, and Approve once ran it on a host nobody saw (#338). Anything else records none,
+    // and its approval is held at the machine (QuestionMapper.CodexApproval).
+    static readonly HashSet<string> CommandTools = new(["Bash", "shell", "apply_patch"], StringComparer.Ordinal);
+    static readonly HashSet<string> CommandKeys = new(["command", "description"], StringComparer.Ordinal);
+
+    static string? ApprovedCommand(JsonElement e)
+    {
+        if (e.ValueKind != JsonValueKind.Object || Str(e, "tool_name") is not { } tool || !CommandTools.Contains(tool)) { return null; }
+        if (!e.TryGetProperty("tool_input", out var input) || input.ValueKind != JsonValueKind.Object) { return null; }
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var p in input.EnumerateObject())
+        {
+            // A repeated or unknown key is something else in what runs.
+            if (!CommandKeys.Contains(p.Name) || !names.Add(p.Name)) { return null; }
+        }
+        return input.TryGetProperty("command", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
+    }
 
     static string Cut(string text, int max) => text.Length > max ? text[..(max - 3)] + "..." : text;
 

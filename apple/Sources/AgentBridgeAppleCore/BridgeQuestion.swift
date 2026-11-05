@@ -125,6 +125,12 @@ public struct BridgeQuestion: Identifiable, Sendable, Equatable {
         if isApproval, sessionAgent == "copilot", !capabilities.contains("sessions.approve") {
             return "Remote approval is turned off on this machine. Answer at the machine."
         }
+        // This app does not yet check a Codex approval's shape as the browser and Windows apps do
+        // (#209): an older host sends a cut preview of the command, unmarked, which Approve once
+        // would run whole. Until it does, every Codex approval is answered at the machine.
+        if isApproval, sessionAgent == "codex" {
+            return "Codex approvals can only be answered at the machine from this app for now."
+        }
         if answerAtMachine {
             return "This prompt can only be answered at the machine."
         }
