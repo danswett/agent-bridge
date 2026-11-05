@@ -41,6 +41,10 @@ export const ALL = 'all';
 // (#50) still has it, with when it was last seen. The Windows app keeps them as long.
 export const OFFLINE_KEEP_MS = 15 * 60 * 1000;
 
+// What a machine's channels going says: the app put away, or the relay lost.
+const RESTING = 'Paused while the app is in the background.';
+const DROPPED = 'The relay connection dropped; reconnecting.';
+
 // One machine shown: its channel and what it has said.
 export class HostLink {
   client = null;
@@ -105,12 +109,16 @@ export class HostSession {
     Object.assign(this, { connection, me, storage, makeClient, makeStore, maxOpening, retryMs, reopenMs, maxRetryMs, keepOfflineMs, now });
     connection.on('ready', () => this.#pump());
     connection.on('presence', () => this.#onPresence());
-    connection.on('lost', (e) => this.#detachAll(e?.resting ? 'Paused while the app is in the background.' : 'The relay connection dropped; reconnecting.', e?.resting === true));
-    // Back from a rest, the relay itself failing to come back is a drop after all.
+    connection.on('lost', (e) => this.#detachAll(e?.resting ? RESTING : DROPPED, e?.resting === true));
+    // Back from a rest, the relay itself failing to come back is a drop after all, and is said as
+    // one: a single machine's note would otherwise go on blaming the background while it retries.
     connection.on('state', ({ state } = {}) => {
       if (!['reconnecting', 'signed-out', 'replaced', 'stopped'].includes(state)) { return; }
       let changed = false;
-      for (const link of this.#links.values()) { if (link.rested) { link.rested = false; changed = true; } }
+      for (const link of this.#links.values()) {
+        if (state === 'reconnecting' && link.error === RESTING) { link.error = DROPPED; changed = true; }
+        if (link.rested) { link.rested = false; changed = true; }
+      }
       if (changed) { this.#emit(); }
     });
     // The sessions on screen, from every machine shown, as one list.

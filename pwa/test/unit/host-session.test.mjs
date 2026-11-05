@@ -1059,6 +1059,7 @@ test('back from a rest, the relay failing to come back turns its machines to rec
   const before = changes;
   connection.emit('state', { state: 'reconnecting' });
   assert.deepEqual(hosts.staleOf('a'), { reason: 'reconnecting', since: null });
+  assert.equal(hosts.link('a').error, 'The relay connection dropped; reconnecting.', 'no longer blamed on the background');
   assert.ok(changes > before, 'whoever draws it hears so');
 });
 
