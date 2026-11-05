@@ -2,6 +2,7 @@ using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -16,6 +17,11 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     readonly FakeTasks tasks = new();
     readonly FakeProcesses processes = new();
     readonly FakeTimeProvider time = new(Make.T0);
+    // The host manager's start and stop timeouts, on a clock that never moves: they wait for the
+    // fake host however slow the runner, as HostManagerTests' held stop does (#425). On the wall
+    // clock a stall like #909's 7.4 s ran a 2 s stop or 5 s start out with the host on its way.
+    // No test here needs one to run out; a host that never comes ends at --blame-hang.
+    readonly FakeTimeProvider held = new(Make.T0);
     readonly List<string> log = [];
     readonly string app = Path.Combine(Path.GetTempPath(), "abu-" + Guid.NewGuid().ToString("N")[..8]);
     AppPreferences prefs = new();
@@ -73,11 +79,13 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Directory.CreateDirectory(app);
         File.WriteAllText(Path.Combine(app, OperatingSystem.IsWindows() ? "agent-bridge-host.exe" : "agent-bridge-host"), "");
         File.WriteAllText(Path.Combine(app, OperatingSystem.IsWindows() ? "agent-bridge-hostw.exe" : "agent-bridge-hostw"), "");
-        host.On(HostOps.Stop, data =>
+        // Stops once its answer has gone, as the real host does (HostControl), rather than a guessed
+        // 50 ms after it.
+        host.On(HostOps.Stop, data => new ChannelReply(new { stopping = true }, ch =>
         {
-            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+            _ = Task.Run(() => host.StopAsync());
+            return Task.CompletedTask;
+        }));
         return Task.CompletedTask;
     }
 
@@ -95,6 +103,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             StopTimeout = TimeSpan.FromSeconds(2),
             Poll = TimeSpan.FromMilliseconds(50),
             Elevated = () => false,
+            Time = held,
         };
         auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Status is not null && connection.Sessions.All.Count == sessions.Length && connection.Sessions.Complete, "the connection");
@@ -429,18 +438,20 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Single(host.Sent(HostOps.Stop));
     }
 
-    // A host slow to go: its pipe still answers for a while after it was asked to stop. Completes
-    // when it has been asked.
-    Task SlowToStop()
+    // A host slow to go: its pipe still answers after it was asked to stop, until the test lets it
+    // go. It went by itself 400 ms on, which a stalled runner could reach before the test's step
+    // meant to come between. Asked completes when it has been asked.
+    (Task Asked, Action LetGo) HeldStop()
     {
         var asked = new TaskCompletionSource();
+        var go = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         host.On(HostOps.Stop, data =>
         {
             asked.TrySetResult();
-            _ = Task.Run(async () => { await Task.Delay(400); await host.StopAsync(); });
+            _ = Task.Run(async () => { await go.Task; await host.StopAsync(); });
             return new { stopping = true };
         });
-        return asked.Task;
+        return (asked.Task, () => go.TrySetResult());
     }
 
     [Fact]
@@ -449,15 +460,18 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     {
         await StartAsync();
         processes.OnStart = () => host.Start();
-        var stopAsked = SlowToStop();
+        var (stopAsked, letGo) = HeldStop();
         await auto.TickAsync();
         time.Advance(AutoUpdater.IdleFor);
 
         var tick = Task.Run(auto.TickAsync);
         await stopAsked;
         // What App.Quit does on its way out, at the worst moment (off the test's own context, which
-        // the fake host's pipe loops run on).
-        await Task.Run(() => manager.Quit(TimeSpan.FromSeconds(10), log.Add));
+        // the fake host's pipe loops run on): it takes the stop under way, then waits for it.
+        var quit = Task.Run(() => manager.Quit(TimeSpan.FromSeconds(10), log.Add));
+        await Wait.UntilAsync(() => !manager.UpdateUnderWay, "the quit to begin");
+        letGo();
+        await quit;
         await tick;
 
         Assert.False(updater.Applied);
@@ -472,7 +486,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     public async Task Update_and_restart_pressed_while_the_automatic_update_installs_is_refused_and_leaves_it_alone()
     {
         await StartAsync();
-        var stopAsked = SlowToStop();
+        var (stopAsked, letGo) = HeldStop();
         await auto.TickAsync();
         time.Advance(AutoUpdater.IdleFor);
 
@@ -481,6 +495,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         // Settings' Update and restart, meanwhile.
         var second = false;
         await Assert.ThrowsAsync<UpdateUnderWayException>(() => manager.StopAndApplyAsync(() => second = true, () => second = true));
+        letGo();
         await tick;
 
         Assert.False(second);
@@ -556,8 +571,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         prefs = prefs with { UpdatedFrom = "0.1.0", UpdateNotes = "Offline machines and **Forget**" };
         updater.InstalledVersion = "0.2.0";
 
-        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, toasts, log.Add);
-        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, toasts, log.Add);
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, toasts, log.Add, time);
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, toasts, log.Add, time);
 
         var toast = Assert.Single(toasts.Shown);
         Assert.Contains($"{Product.Name} updated to 0.2.0", toast.Xml);
@@ -572,7 +587,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var toasts = new Toasts();
         prefs = prefs with { UpdatedFrom = "0.1.0" };
 
-        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, toasts, log.Add);
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, toasts, log.Add, time);
 
         Assert.Empty(toasts.Shown);
         Assert.Null(prefs.UpdatedFrom);
@@ -707,9 +722,10 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await Wait.UntilAsync(() => Reports().Any(r => r.Taken?.Contains(Press) == true) && Reports().Any(r => r.State.Available == "0.2.0"), "the check reported");
         Assert.Equal(1, updater.Checks);
         // The host's status again with the ask still in it (the report not yet applied there): it
-        // is not asked for twice.
+        // is not asked for twice. Once the connection holds that status, the reporter has read it.
+        var before = TestUi.Read(() => connection.Status);
         await host.SendAsync(HostOps.StatusEvent, host.Status);
-        await Task.Delay(300);
+        await Wait.UntilAsync(() => !ReferenceEquals(connection.Status, before), "the status again");
         Assert.Equal(1, updater.Checks);
         Assert.Single(log, l => l == "update: check asked for");
     }

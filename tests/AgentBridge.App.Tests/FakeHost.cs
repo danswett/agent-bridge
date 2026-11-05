@@ -449,31 +449,55 @@ sealed class HoldingDispatcher : IUiDispatcher
 
 static class Wait
 {
+    // How often the condition is looked at.
+    public static readonly TimeSpan Look = TimeSpan.FromMilliseconds(20);
+    // The wall clock's only part: a watchdog this many patiences long, so a wait whose every look
+    // is starved still ends, and loudly, well before --blame-hang's 5 min ends the whole run.
+    public const int Watchdog = 6;
+
     // The condition is read under the UI gate, so it never sees a posted action part-way through.
     // why: what was seen instead, said when it times out.
-    public static async Task UntilAsync(Func<bool> done, string what, TimeSpan? patience = null, Func<string>? why = null)
+    public static Task UntilAsync(Func<bool> done, string what, TimeSpan? patience = null, Func<string>? why = null) =>
+        UntilAsync(done, what, patience, why, TimeProvider.System, () => Task.Delay(Look));
+
+    // Patience is counted in looks (patience / Look of them), not read off the wall clock. On a
+    // starved runner the process can go unscheduled for seconds: a 7.4 s gap between two looks
+    // took most of a 10 s deadline, and the connection the test waited for, held up by the same
+    // stall, came after it (#909). On Windows CI several tests have timed out within the same few
+    // milliseconds (#465). A gap like that says the test could not run, not that what it waited
+    // for never came, so it now costs one look. Each look takes at least Look, so no wait ends
+    // sooner than it did on the wall clock.
+    // clock and nextLook: a test of this helper stands in for the wall clock and the pause.
+    internal static async Task UntilAsync(Func<bool> done, string what, TimeSpan? patience, Func<string>? why, TimeProvider clock, Func<Task> nextLook)
     {
-        var deadline = DateTime.UtcNow + (patience ?? FakeHost.Patience);
-        var last = DateTime.UtcNow;
+        var limit = patience ?? FakeHost.Patience;
+        var allowed = (int)Math.Ceiling(limit / Look);
+        var began = clock.GetTimestamp();
+        var last = began;
         var longest = TimeSpan.Zero;
+        var looks = 0;
         while (!TestUi.Read(done))
         {
-            var now = DateTime.UtcNow;
-            if (now - last > longest) { longest = now - last; }
+            var now = clock.GetTimestamp();
+            var gap = clock.GetElapsedTime(last, now);
+            if (gap > longest) { longest = gap; }
             last = now;
-            // On Windows CI several tests have timed out within the same few milliseconds (#465):
-            // a gap of seconds between two looks says the test itself could not run (the pool or
-            // its UI thread held), not that what it waited for never came.
-            if (now > deadline)
+            looks++;
+            var elapsed = clock.GetElapsedTime(began, now);
+            var watchdog = elapsed > limit * Watchdog;
+            if (looks >= allowed || watchdog)
             {
-                throw TimedOut(what, longest, why is null ? null : TestUi.Read(why));
+                var bound = watchdog
+                    ? $"the watchdog's {(limit * Watchdog).TotalSeconds:F0} s of wall time ran out after {looks} of {allowed} looks"
+                    : $"{looks} looks in {elapsed.TotalSeconds:F1} s";
+                throw TimedOut(what, longest, why is null ? null : TestUi.Read(why), bound);
             }
-            await Task.Delay(20);
+            await nextLook();
         }
     }
 
-    internal static TimeoutException TimedOut(string what, TimeSpan longest, string? details) =>
-        new($"timed out waiting for {what} (longest gap between looks {longest.TotalMilliseconds:F0} ms; "
+    internal static TimeoutException TimedOut(string what, TimeSpan longest, string? details, string? bound = null) =>
+        new($"timed out waiting for {what} ({(bound is null ? "" : bound + "; ")}longest gap between looks {longest.TotalMilliseconds:F0} ms; "
             + $"pool threads {ThreadPool.ThreadCount}, queued {ThreadPool.PendingWorkItemCount}){(details is null ? "" : $": {details}")}");
 }
 
