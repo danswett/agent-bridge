@@ -29,25 +29,29 @@ public sealed class FrameTimes
 
     public Dictionary<string, FrameSummary> Report() => new()
     {
-        ["all"] = All,
-        ["threePanes"] = In(PaneMode.Three),
-        ["twoPanes"] = In(PaneMode.Two),
-        ["oneColumn"] = In(PaneMode.One),
-        ["switching"] = Switching,
+        ["all"] = All.Rounded(),
+        ["threePanes"] = In(PaneMode.Three).Rounded(),
+        ["twoPanes"] = In(PaneMode.Two).Rounded(),
+        ["oneColumn"] = In(PaneMode.One).Rounded(),
+        ["switching"] = Switching.Rounded(),
     };
 }
 
-// Percentiles by nearest rank, so each is a frame that was drawn. Meets: #765's bar.
+// Percentiles by nearest rank, so each is a frame that was drawn. Meets: #765's bar, decided on
+// the intervals as measured, never on a rounded p95.
 public sealed record FrameSummary(int Frames, double P50, double P95, double Max, int OverBudget, int OverLong)
 {
-    public bool Meets => Frames > 0 && P95 <= FrameTimes.Budget && OverLong == 0;
+    public bool Meets { get; init; } = Frames > 0 && P95 <= FrameTimes.Budget && OverLong == 0;
 
     public static FrameSummary Of(IEnumerable<double> intervals)
     {
         var sorted = intervals.Order().ToArray();
         if (sorted.Length == 0) { return new FrameSummary(0, 0, 0, 0, 0, 0); }
         double Rank(double p) => sorted[Math.Max(0, (int)Math.Ceiling(p * sorted.Length) - 1)];
-        return new FrameSummary(sorted.Length, Math.Round(Rank(0.5), 2), Math.Round(Rank(0.95), 2), Math.Round(sorted[^1], 2),
+        return new FrameSummary(sorted.Length, Rank(0.5), Rank(0.95), sorted[^1],
             sorted.Count(ms => ms > FrameTimes.Budget), sorted.Count(ms => ms > FrameTimes.Long));
     }
+
+    // To the hundredth for the report, keeping whether it met the bar as measured.
+    public FrameSummary Rounded() => this with { P50 = Math.Round(P50, 2), P95 = Math.Round(P95, 2), Max = Math.Round(Max, 2) };
 }

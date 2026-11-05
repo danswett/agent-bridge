@@ -43,6 +43,16 @@ public sealed class FrameTimesTests
     }
 
     [Fact]
+    public void A_run_of_frames_just_over_budget_misses_the_bar_even_where_its_p95_rounds_to_the_budget()
+    {
+        var s = FrameSummary.Of(Enumerable.Repeat(16.704, 100));
+
+        Assert.Equal(100, s.OverBudget);
+        Assert.False(s.Meets);
+        Assert.Equal((16.7, false), (s.Rounded().P95, s.Rounded().Meets));
+    }
+
+    [Fact]
     public void No_frames_measured_never_meets_the_bar()
     {
         Assert.False(new FrameTimes().All.Meets);
