@@ -17,7 +17,11 @@ namespace AgentBridge.App;
 static partial class SelfTest
 {
     const double SweepWide = 1560, SweepNarrow = 400, SweepStep = 8, SweepHeight = 900;
-    static readonly TimeSpan SweepLongest = TimeSpan.FromSeconds(20);
+    // Each sweep's limit, by its steps: 120 ms a step, half as long again as a step takes with the
+    // heavy window on CI's arm64 runner (~86 ms), and within the 180 s the whole self-test has
+    // (build/app-self-test.ps1). A sweep slower than that is cut short and fails the check.
+    const int SweepSteps = 2 * (int)((SweepWide - SweepNarrow) / SweepStep);
+    static readonly TimeSpan SweepLongest = TimeSpan.FromMilliseconds(SweepSteps * 120);
 
     static async Task MeasureResize(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
     {
