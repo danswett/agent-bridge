@@ -423,7 +423,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     public async Task A_yes_or_no_question_whose_default_is_text_is_refused_for_either_answer_and_nothing_is_typed(bool answer)
     {
         // Copilot opens it on its Other row with "yes" typed in: walked from there, Yes recorded No
-        // and No reopened Other (#768).
+        // and No reopened Other (#768). The refusal says which field, and why (#812 review).
         Fixture.Append(events, Recorded("q1", new { pick = "a" }), Copilot.ToolDone("q1", second++),
             Copilot.ToolStart("q2", "ask_user", new { message = "Go?", requestedSchema = new { properties = new { ok = new { type = "boolean", @default = "yes" } } } }, second++));
         await source.RefreshAsync();
@@ -432,7 +432,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var (outcome, reason) = await AnswerAsync(ch, new { ok = answer }, question: "q2");
 
         Assert.Equal("refused", outcome);
-        Assert.Contains("at the machine", reason);
+        Assert.Equal("\"ok\" has a default that is not Yes or No (a text default opens it on its Other row); answer it at the machine", reason);
         Assert.Empty(injector.Plans);
     }
 
