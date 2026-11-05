@@ -286,13 +286,19 @@ function fadeIn(el, { dur = T.itemIn, dy = 0 } = {}) {
 // continues on decelerate so it doesn't stall.
 const shifts = new WeakMap();
 let shiftCount = 0;
+// Children are measured from their panel's top as drawn, so a panel still easing (it moved with
+// a list above it) is neither counted in a child's move nor added to it a second time.
 function drawn(container) {
   const m = new Map();
   for (const k of container.children) {
     if (k.classList.contains('ghost') || !k.getClientRects().length) { continue; }
-    m.set(k, k.getBoundingClientRect().top);
+    m.set(k, k.getBoundingClientRect().top - base(container));
   }
   return m;
+}
+function base(container) {
+  const p = container.closest('.panel');
+  return p ? p.getBoundingClientRect().top : 0;
 }
 // gapFade: under reduced motion, a leaving item's gap closes with a cross-fade instead of at
 // once: the children that moved fade in where they now are, with no travel (Arriving and
@@ -308,11 +314,10 @@ function flip(container, mutate, { gapFade = false, hold = 0 } = {}) {
     shifts.delete(k);
   }
   // What is below the list moves with it: the panels after it, and the card's own bottom edge.
+  // A panel whose place the change doesn't move keeps easing as it was, untouched.
   const panels = new Map();
   for (const p of document.querySelectorAll('main > .panel')) {
-    panels.set(p, p.getBoundingClientRect().top);
-    shifts.get(p)?.cancel();
-    shifts.delete(p);
+    panels.set(p, { top: p.getBoundingClientRect().top, at: p.offsetTop });
   }
   const panel = container.closest('.panel');
   const capDrawn = panel ? cardOverhang(panel) : 0;
@@ -328,7 +333,7 @@ function flip(container, mutate, { gapFade = false, hold = 0 } = {}) {
   let any = false;
   for (const k of container.children) {
     if (!before.has(k) || !k.getClientRects().length) { continue; }
-    const dy = before.get(k) - k.getBoundingClientRect().top;
+    const dy = before.get(k) - (k.getBoundingClientRect().top - base(container));
     if (Math.abs(dy) < 0.5) { continue; }
     if (S.reduced) {
       const f = k.animate([{ opacity: 0 }, { opacity: 1 }], { duration: T.cross, easing: 'linear' });
@@ -344,10 +349,15 @@ function flip(container, mutate, { gapFade = false, hold = 0 } = {}) {
   }
   if (any) { shiftCount += 1; }
   if (S.reduced) { return; }
-  for (const [p, top] of panels) {
+  for (const [p, { top, at }] of panels) {
+    if (Math.abs(p.offsetTop - at) < 0.5) { continue; }
+    const a0 = shifts.get(p);
+    const was = a0?.playState === 'running';
+    a0?.cancel();
+    shifts.delete(p);
     const dy = top - p.getBoundingClientRect().top;
     if (Math.abs(dy) < 0.5) { continue; }
-    const a = p.animate([{ transform: `translateY(${dy}px)` }, { transform: 'translateY(0)' }], { duration: T.shift, easing: E.std });
+    const a = p.animate([{ transform: `translateY(${dy}px)` }, { transform: 'translateY(0)' }], { duration: T.shift, easing: was ? E.dec : E.std });
     a.id = 'shift';
     shifts.set(p, a);
   }

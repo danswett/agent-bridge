@@ -349,6 +349,38 @@ test('Needs you arrives as one insertion with its first entry, and its count cro
   expect(count).toEqual({ copies: 2, now: '2' });
 });
 
+test('a conversation line added while its panel still eases after a session row left never jumps: the lines carry on with the panel', async ({ page }) => {
+  // One column, so the conversation panel sits below the session rows and moves with them.
+  await page.setViewportSize({ width: 600, height: 900 });
+  const { frames, panelMoved } = await page.evaluate(() => new Promise((resolve) => {
+    const panel = document.getElementById('conv').closest('.panel');
+    const lines = [...document.getElementById('conv').children].filter((k) => k.id !== 'now' && k.getClientRects().length);
+    const frames = [];
+    const sample = () => frames.push({ panel: panel.getBoundingClientRect().top, lines: lines.map((k) => k.getBoundingClientRect().top) });
+    const top0 = panel.offsetTop;
+    document.getElementById('row-end').click();
+    const t0 = performance.now();
+    let added = false;
+    const tick = () => {
+      sample();
+      const t = performance.now() - t0;
+      if (!added && t >= 80) { added = true; document.getElementById('event-add').click(); }
+      if (t < 400) { requestAnimationFrame(tick); return; }
+      resolve({ frames, panelMoved: top0 - panel.offsetTop });
+    };
+    requestAnimationFrame(tick);
+  }));
+  expect(panelMoved).toBeGreaterThan(1);
+  for (let i = 1; i < frames.length; i += 1) {
+    const step = Math.abs(frames[i].panel - frames[i - 1].panel);
+    frames[i].lines.forEach((top, j) => {
+      const d = top - frames[i - 1].lines[j];
+      expect(d).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(d)).toBeLessThanOrEqual(step + 1);
+    });
+  }
+});
+
 test('Show reasoning eases its space open and shut, with the lines below moving each way', async ({ page }) => {
   await clickAndFreeze(page, '#disc', 60);
   
