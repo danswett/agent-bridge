@@ -61,7 +61,14 @@ sealed class FakeHost : IAsyncDisposable
         On(HostOps.Status, _ => Status);
         On(UsageProtocol.Subscribe, _ => UsageReport.Empty);
         On(UsageProtocol.Get, _ => UsageReport.Empty);
+        On(Barrier, _ => new { });
     }
+
+    // A request answered by nothing but its answer, for a test to send after what it watches.
+    // A channel serves its requests in the order they come (LocalChannel's read loop starts each
+    // handler as it reads it), so once this one is answered, every request the app wrote before
+    // it has reached the host: a test can say "nothing was asked" without sleeping first.
+    public const string Barrier = "test.barrier";
 
     public string Folder => folder;
     public LocalEndpoint Endpoint => LocalEndpoint.For(folder);
