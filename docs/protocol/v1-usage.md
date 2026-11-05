@@ -240,7 +240,10 @@ refresh and locking, and runs no model turn.
   last bars after a sign-out. `claude auth logout` (Claude Code 2.1.317) also removes
   `oauthAccount` and `cachedUsageUtilization` from `.claude.json`, so a host remembers, in its
   profile (`<profile>/usage-claude-account.json`), the account key of the last account it saw signed
-  in there (the digest above, nothing else) and when it found it gone. A `.claude.json` that reads
+  in there (the digest above), the path of the `.claude.json` it read it from, and when it found it
+  gone. The remembered key holds only for that same file: a profile started against another Claude
+  home remembers nothing from the first, so its missing account is never taken for the first's
+  sign-out. A `.claude.json` that reads
   well and names no account is then that sign-out failure under the remembered key, timed when it
   was first found, kept across host restarts, with neither auth status nor a probe run, until an
   account appears again: the same one clears it, and another replaces the remembered key with no

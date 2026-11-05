@@ -162,13 +162,28 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
         if (probes?.ClaudeAccountSeen is not { } path) { return; }
         using var document = UsageRead.Json(path, 4096);
         if (document is null || document.RootElement.ValueKind != JsonValueKind.Object) { return; }
+        // Remembered for one Claude home's account file only. A bridge profile can be started
+        // against another home (CLAUDE_CONFIG_DIR, --claude-home), and that home's missing account
+        // is not the remembered one's sign-out: reused there, it published a false sign-out for an
+        // account still signed in elsewhere (#238 review). A file naming no home, or another, is as
+        // none ever seen.
+        if (UsageRead.String(document.RootElement, "accountFile") is not { Length: > 0 } file || options.ClaudeAccountPath is not { Length: > 0 } current
+            || !ProbeEnvironment.Same(file, current))
+        {
+            return;
+        }
         seenKey = UsageRead.String(document.RootElement, "accountKey") is { Length: > 0 and <= 128 } key ? key : null;
         goneAt = seenKey is null ? null : UsageRead.Instant(document.RootElement, "signedOutAt");
         seenText = SeenJson(seenKey, goneAt);
     }
 
-    static string SeenJson(string? key, DateTimeOffset? gone) =>
-        JsonSerializer.Serialize(new Dictionary<string, string?> { ["accountKey"] = key, ["signedOutAt"] = gone?.ToString("O", System.Globalization.CultureInfo.InvariantCulture) });
+    string SeenJson(string? key, DateTimeOffset? gone) =>
+        JsonSerializer.Serialize(new Dictionary<string, string?>
+        {
+            ["accountFile"] = options.ClaudeAccountPath is { Length: > 0 } file ? Path.GetFullPath(file) : null,
+            ["accountKey"] = key,
+            ["signedOutAt"] = gone?.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+        });
 
     // Under gate. Written whole and moved into place; a write that fails is kept in memory and tried
     // again at the next change.

@@ -54,7 +54,11 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
             {
                 ending = true;
                 pace.Release();
-                nextDue = null;
+                // Due at once, so the monitor wakes for the probe this allows: beside agent-ha-bridge
+                // the pace stays idle, so a session opening does not bring the next ask forward, and
+                // with no wake the probe waited out the idle interval (#238 review). The monitor's
+                // MinimumGap still spaces the asks.
+                nextDue = clock.GetUtcNow();
             }
             wasOpen = sessionOpen;
         }

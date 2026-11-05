@@ -205,6 +205,26 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task An_account_remembered_from_one_Claude_home_is_never_a_sign_out_in_another()
+    {
+        // #238 review: the remembered account belongs to the bridge profile, which can be started
+        // against another Claude home; that home's missing account published a false sign-out for
+        // one still signed in at the first.
+        ClaudeSaved(Now.AddMinutes(-1));
+        ClaudeScript();
+        Assert.Null((await new ClaudeUsageCollector(Options(), time, Probes(seen: Seen), Log).CollectAsync())!.Error);
+
+        var other = Path.Combine(f.Root, "other-claude", ".claude.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(other)!);
+        File.WriteAllText(other, """{"numStartups":3,"theme":"dark"}""");
+        Assert.Null(await new ClaudeUsageCollector(Options(claudeAccount: other), time, Probes(seen: Seen), Log).CollectAsync());
+
+        // Back at the first home, a real logout there is still that account's sign-out.
+        ClaudeLoggedOut();
+        Assert.Equal(ClaudeUsageCollector.SignedOutError, (await new ClaudeUsageCollector(Options(), time, Probes(seen: Seen), Log).CollectAsync())!.Error);
+    }
+
+    [Fact]
     public async Task The_account_seen_here_and_its_sign_out_are_remembered_across_a_host_restart()
     {
         ClaudeSaved(Now.AddMinutes(-1));
@@ -1519,6 +1539,30 @@ public sealed class UsageProbeTests : IDisposable
         if (then == "reading") { Assert.Equal((23.0, (string?)null), (codexEntry.Windows[0].Percent, codexEntry.Error)); }
         else { Assert.Equal(CodexUsageProbe.SignedOutError, codexEntry.Error); }
         Assert.False(gone);
+    }
+
+    [Fact]
+    public async Task A_Codex_session_after_a_sign_out_wakes_the_monitor_for_its_probe_though_agent_ha_bridge_keeps_the_idle_pace()
+    {
+        // #238 review: beside agent-ha-bridge the pace stays idle, so the session opening changed
+        // nothing the monitor looks at, and the probe it allowed waited out the 15-minute interval.
+        CodexUsed();
+        AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        var sessions = new FakeSessions();
+        var monitor = new UsageMonitor([codex], sessions, Options(), time, agentHaBridge: () => "agent-ha-bridge's daemon is running", log: Log);
+        await monitor.PassAsync();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        await monitor.PassAsync();
+        Assert.Equal(CodexUsageProbe.SignedOutError, Assert.Single(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex).Error);
+        var started = launcher.Started.Count;
+
+        // Past the probe's own gap since the last one, still short of the monitor's idle interval
+        // since its last ask: only the wake brings the probe now.
+        time.Advance(Now + Options().ProbeIdle - time.GetUtcNow());
+        sessions.Open(AgentKind.Codex);
+        await monitor.PassAsync();
+        await Until(() => launcher.Started.Count == started + 1);
     }
 
     [Fact]
