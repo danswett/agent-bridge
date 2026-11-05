@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json.Nodes;
 using AgentBridge.HomeAssistant;
 using Microsoft.Extensions.Time.Testing;
@@ -107,14 +108,214 @@ public sealed class UpdateTests : IDisposable
         return (recorded.Single(p => p.Topic == HaContract.UpdateStateTopic(Slug)), recorded.Single(p => p.Topic == HaContract.UpdateAttributesTopic(Slug)));
     }
 
-    void AssertMoment(string name)
+    // A recorded moment as the daemon published it. Where this host adds its check line to the notes
+    // (#819: no newer release shown, nothing running), the expected notes are the recorded ones
+    // plus exactly that line: nothing else may differ, and nothing is taken out of what was sent.
+    void AssertMoment(HaConnector c, string name, bool checkLine)
     {
         var (state, attributes) = Moment(name);
-        Contract.Equal(state, new Published(state.Topic, ha.Retained[state.Topic], true));
+        if (checkLine)
+        {
+            var expected = state.Json!.AsObject();
+            expected["release_summary"] = WithCheckLine(expected["release_summary"]!.GetValue<string>(), c);
+            Contract.AssertJson(expected, State);
+        }
+        else { Contract.Equal(state, new Published(state.Topic, ha.Retained[state.Topic], true)); }
         Contract.Equal(attributes, new Published(attributes.Topic, ha.Retained[attributes.Topic], true));
     }
 
+    string Notes => State["release_summary"]!.GetValue<string>();
+
+    // The line this host adds (#819), written out here rather than taken from the connector, so a
+    // change to its words or to which times it gives fails these tests.
+    static string CheckLine(HaUpdateCheckHealth h) => h.Outcome == HaUpdateCheckOutcome.NotYetAnswered
+        ? $"{HaUpdateCheckLabel.Lead} latest release unknown, not answered yet since this host started (begun {Utc(h.LastAttemptAt)})."
+        : $"{HaUpdateCheckLabel.Lead} last begun {Utc(h.LastAttemptAt)}; last succeeded {(h.LastSuccessAt is null ? "not since this host started" : Utc(h.LastSuccessAt))}.";
+
+    // The daemon's notes followed by exactly the line this host adds.
+    static string WithCheckLine(string notes, HaConnector c) =>
+        notes.Length == 0 ? CheckLine(c.UpdateCheckHealth) : $"{notes}\n\n{CheckLine(c.UpdateCheckHealth)}";
+
+    static string Utc(DateTimeOffset? at) => at!.Value.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", System.Globalization.CultureInfo.InvariantCulture);
+
     static UpdateRelease Release(string version = "0.2.0") => new(version, Fixture["notes"]!.GetValue<string>(), Releases);
+
+    // GitHub's answer over its rate limit: what the daemon's recorded "rate limited" was.
+    static HttpRequestException RateLimited() => new("rate limited", null, HttpStatusCode.TooManyRequests);
+
+    // A failure of a type no class covers, whose name and text both carry a secret: neither may
+    // reach the entity, the log or the health.
+    sealed class Tok3nS3cr3tCanaryException(string message) : Exception(message);
+
+    const string Canary = "Tok3nS3cr3tCanary";
+
+    void AssertNothingLeaked(HaConnector c, params string[] secrets)
+    {
+        var published = ha.Retained[HaContract.UpdateStateTopic(Slug)] + "\n" + ha.Retained[HaContract.UpdateAttributesTopic(Slug)];
+        var health = c.UpdateCheckHealth.ToString();
+        lock (log)
+        {
+            foreach (var secret in secrets)
+            {
+                Assert.DoesNotContain(secret, published, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(log, m => m.Contains(secret, StringComparison.OrdinalIgnoreCase));
+                Assert.DoesNotContain(secret, health, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task A_check_that_failed_shows_its_class_and_never_the_text_of_the_exception()
+    {
+        updates.CheckFails = new IOException("feed at C:\\Users\\someone\\feed.txt?token=s3cr3t unreadable",
+            new HttpRequestException("proxy said: account someone@example.com blocked"));
+        await using var c = await Ready();
+        Assert.False(State.ContainsKey("latest_version"));
+        var health = c.UpdateCheckHealth;
+        Assert.Equal(HaUpdateCheckOutcome.Failed, health.Outcome);
+        Assert.Equal(HaUpdateCheckFailure.Unreachable, health.FailureClass);
+        Assert.Null(health.LastSuccessAt);
+        Assert.NotNull(health.LastFailureAt);
+        Assert.True(health.LastFailureAt >= health.LastAttemptAt);
+        Assert.Null(health.Latest);
+        // A host whose first check failed has never succeeded, and says so in words.
+        Assert.Equal($"The latest release could not be established: the release feed could not be reached\n\n{HaUpdateCheckLabel.Lead} last begun {Utc(health.LastAttemptAt)}; last succeeded not since this host started.", Notes);
+        AssertNothingLeaked(c, "s3cr3t", "someone", "feed.txt", "proxy said");
+    }
+
+    [Fact]
+    public async Task A_failure_of_no_known_kind_is_a_fixed_word_and_never_its_type_name_or_text()
+    {
+        updates.CheckFails = new Tok3nS3cr3tCanaryException($"{Canary} C:\\secret\\path https://x/?token=abc");
+        await using var c = await Ready();
+        var health = c.UpdateCheckHealth;
+        Assert.Equal(HaUpdateCheckOutcome.Failed, health.Outcome);
+        Assert.Equal(HaUpdateCheckFailure.CheckFailed, health.FailureClass);
+        Assert.Equal($"The latest release could not be established: the check failed\n\n{CheckLine(health)}", Notes);
+        AssertNothingLeaked(c, Canary, "C:\\secret", "token=abc", "https://x/");
+    }
+
+    [Fact]
+    public async Task A_check_that_found_nothing_newer_is_current_with_its_times_and_not_an_error()
+    {
+        await using var c = await Ready();
+        var health = c.UpdateCheckHealth;
+        Assert.Equal(HaUpdateCheckOutcome.Current, health.Outcome);
+        Assert.Equal(HaUpdateCheckNotServed.None, health.NotServed);
+        Assert.Null(health.FailureClass);
+        Assert.Null(health.LastFailureAt);
+        Assert.NotNull(health.LastAttemptAt);
+        Assert.True(health.LastSuccessAt >= health.LastAttemptAt);
+        Assert.Equal("0.1.0", health.Latest);
+        Assert.Equal("0.1.0", State["latest_version"]!.GetValue<string>());
+        // The notes of a current host say when its check last ran and last succeeded.
+        Assert.Equal($"{HaUpdateCheckLabel.Lead} last begun {Utc(health.LastAttemptAt)}; last succeeded {Utc(health.LastSuccessAt)}.", Notes);
+
+        updates.CheckFails = RateLimited();
+        await Pass(c, TimeSpan.FromMinutes(31).TotalSeconds);
+        await Pass(c);
+        var failed = c.UpdateCheckHealth;
+        Assert.Equal(HaUpdateCheckOutcome.Failed, failed.Outcome);
+        Assert.Equal(HaUpdateCheckFailure.RateLimited, failed.FailureClass);
+        // The last success stays when it was, so a stale feed is not read as a healthy one; the
+        // attempt and the failure are the later check's.
+        Assert.Equal(health.LastSuccessAt, failed.LastSuccessAt);
+        Assert.True(failed.LastAttemptAt > failed.LastSuccessAt);
+        Assert.True(failed.LastFailureAt >= failed.LastAttemptAt);
+        Assert.Equal($"The latest release could not be established: rate limited\n\n{HaUpdateCheckLabel.Lead} last begun {Utc(failed.LastAttemptAt)}; last succeeded {Utc(health.LastSuccessAt)}.", Notes);
+
+        updates.CheckFails = null;
+        await Pass(c, TimeSpan.FromMinutes(6).TotalSeconds);
+        await Pass(c);
+        var again = c.UpdateCheckHealth;
+        Assert.Equal(HaUpdateCheckOutcome.Current, again.Outcome);
+        Assert.Null(again.FailureClass);
+        Assert.True(again.LastSuccessAt > failed.LastAttemptAt);
+        Assert.Equal(CheckLine(again), Notes);
+
+        updates.Newer = Release();
+        await Pass(c, TimeSpan.FromMinutes(31).TotalSeconds);
+        await Pass(c);
+        var found = c.UpdateCheckHealth;
+        Assert.Equal(HaUpdateCheckOutcome.Newer, found.Outcome);
+        Assert.Equal("0.2.0", found.Latest);
+        // A newer release's notes are its own: no line laid over them.
+        Assert.DoesNotContain(HaUpdateCheckLabel.Lead, Notes, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Before_its_first_check_answers_a_host_says_the_latest_is_unknown_rather_than_current()
+    {
+        updates.CheckGate = new TaskCompletionSource<UpdateRelease?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var c = await Ready();
+        // The entity shows the installed version as latest meanwhile (an entity without one reads
+        // unavailable); its notes and the health say the latest is unknown and nothing succeeded.
+        Assert.Equal("0.1.0", State["latest_version"]!.GetValue<string>());
+        var health = c.UpdateCheckHealth;
+        Assert.Equal(HaUpdateCheckOutcome.NotYetAnswered, health.Outcome);
+        Assert.Null(health.LastSuccessAt);
+        Assert.Null(health.LastFailureAt);
+        Assert.Equal($"{HaUpdateCheckLabel.Lead} latest release unknown, not answered yet since this host started (begun {Utc(health.LastAttemptAt)}).", Notes);
+        Assert.DoesNotContain("current", Notes, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("succeeded", Notes, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_host_with_checks_off_says_so_rather_than_current()
+    {
+        await using var c = await Ready(check: false);
+        var health = c.UpdateCheckHealth;
+        Assert.Equal(HaUpdateCheckOutcome.NotServed, health.Outcome);
+        Assert.Equal(HaUpdateCheckNotServed.ChecksOff, health.NotServed);
+        Assert.Null(health.LastAttemptAt);
+        Assert.Null(health.Latest);
+        Assert.Equal("", Notes);
+    }
+
+    [Fact]
+    public async Task A_host_its_updater_cannot_update_says_so_rather_than_current()
+    {
+        updates.Installed = null;
+        await using var c = await Ready();
+        Assert.Equal(HaUpdateCheckNotServed.NoUpdater, c.UpdateCheckHealth.NotServed);
+        Assert.Equal(0, updates.Checks);
+        Assert.Equal("", Notes);
+    }
+
+    [Theory]
+    // 403 is a refusal, not a rate limit: GitHub gives it for both, and which it was is not known.
+    [InlineData(HttpStatusCode.TooManyRequests, HaUpdateCheckFailure.RateLimited, "rate limited")]
+    [InlineData(HttpStatusCode.Forbidden, HaUpdateCheckFailure.Refused, "the release feed refused the request (HTTP 403)")]
+    [InlineData(HttpStatusCode.BadGateway, HaUpdateCheckFailure.HttpError, "the release feed answered HTTP 502")]
+    public void A_failed_check_is_classed_by_the_feeds_HTTP_answer(HttpStatusCode status, string expected, string words)
+    {
+        var wrapped = new AggregateException(new InvalidOperationException("Velopack: x", new HttpRequestException("raw", null, status)));
+        Assert.Equal((expected, words), HaUpdateCheckFailure.Classify(wrapped));
+    }
+
+    [Fact]
+    public void A_failed_check_is_classed_by_kind_and_anything_else_is_one_fixed_word()
+    {
+        const string TimedOut = "the request timed out";
+        Assert.Equal((HaUpdateCheckFailure.TimedOut, TimedOut), HaUpdateCheckFailure.Classify(null));
+        Assert.Equal((HaUpdateCheckFailure.TimedOut, TimedOut), HaUpdateCheckFailure.Classify(new TimeoutException("x")));
+        Assert.Equal((HaUpdateCheckFailure.TimedOut, TimedOut), HaUpdateCheckFailure.Classify(new TaskCanceledException("x")));
+        Assert.Equal((HaUpdateCheckFailure.TimedOut, TimedOut), HaUpdateCheckFailure.Classify(new OperationCanceledException("x")));
+        Assert.Equal(HaUpdateCheckFailure.Unreachable, HaUpdateCheckFailure.Classify(new HttpRequestException("x")).Class);
+        Assert.Equal(HaUpdateCheckFailure.Unreachable, HaUpdateCheckFailure.Classify(new System.Net.Sockets.SocketException()).Class);
+        Assert.Equal(HaUpdateCheckFailure.Unreadable, HaUpdateCheckFailure.Classify(new System.Text.Json.JsonException("x")).Class);
+        Assert.Equal(HaUpdateCheckFailure.Unreadable, HaUpdateCheckFailure.Classify(new InvalidDataException("x")).Class);
+        foreach (var other in new Exception[]
+        {
+            new InvalidOperationException("C:\\secret\\path"),
+            new Tok3nS3cr3tCanaryException(Canary),
+            new AggregateException(new Tok3nS3cr3tCanaryException(Canary)),
+            new Exception(Canary, new Tok3nS3cr3tCanaryException(Canary)),
+        })
+        {
+            Assert.Equal((HaUpdateCheckFailure.CheckFailed, "the check failed"), HaUpdateCheckFailure.Classify(other));
+        }
+    }
 
     [Fact]
     public void The_entity_and_its_buttons_are_the_daemons_at_every_moment_of_an_update()
@@ -211,7 +412,7 @@ public sealed class UpdateTests : IDisposable
         // Never withdrawn on the way: Home Assistant would drop the entity, and the dashboard's id with it.
         foreach (var button in HaContract.UpdateButtonConfigs(Slug, Machine)) { Assert.DoesNotContain(ha.Log, p => p.Topic == button.Topic && p.Payload.Length == 0); }
         Assert.Contains(Button("install_update"), c.WatchedEntities());
-        AssertMoment("available");
+        AssertMoment(c, "available", checkLine: false);
         Assert.Equal(1, updates.Checks);
     }
 
@@ -236,7 +437,7 @@ public sealed class UpdateTests : IDisposable
         await Pass(c, TimeSpan.FromMinutes(2).TotalSeconds);
         Assert.Equal(2, updates.Checks);
 
-        updates.CheckFails = new HttpRequestException("rate limited");
+        updates.CheckFails = RateLimited();
         await Pass(c, TimeSpan.FromMinutes(31).TotalSeconds);
         await Pass(c);
         Assert.Equal(3, updates.Checks);
@@ -268,7 +469,7 @@ public sealed class UpdateTests : IDisposable
         await Press(c, "check_updates");
         await Pass(c);
         Assert.False(State.ContainsKey("latest_version"));
-        Assert.Equal("The latest release could not be established: the request timed out", State["release_summary"]!.GetValue<string>());
+        Assert.Equal(WithCheckLine("The latest release could not be established: the request timed out", c), Notes);
         updates.CheckCancels = false;
         await Pass(c, TimeSpan.FromMinutes(6).TotalSeconds);
         await Pass(c);
@@ -292,7 +493,7 @@ public sealed class UpdateTests : IDisposable
     [Fact]
     public async Task A_check_that_could_not_reach_the_feed_still_says_so_after_agent_ha_bridge_had_the_machine()
     {
-        updates.CheckFails = new HttpRequestException("rate limited");
+        updates.CheckFails = RateLimited();
         await using var c = await Ready();
         Assert.False(State.ContainsKey("latest_version"));
         daemon = "agent-ha-bridge's daemon (pid 4321)";
@@ -301,7 +502,7 @@ public sealed class UpdateTests : IDisposable
         await Pass(c);
         Assert.True(c.Started);
         Assert.False(State.ContainsKey("latest_version"));
-        Assert.Equal("The latest release could not be established: rate limited", State["release_summary"]!.GetValue<string>());
+        Assert.Equal(WithCheckLine("The latest release could not be established: rate limited", c), Notes);
     }
 
     [Fact]
@@ -325,11 +526,11 @@ public sealed class UpdateTests : IDisposable
     public async Task A_check_that_cannot_reach_the_feed_says_why_and_is_not_called_a_failed_update()
     {
         updates.ReleasesUrl = null;
-        updates.CheckFails = new HttpRequestException("rate limited");
+        updates.CheckFails = RateLimited();
         await using var c = await Ready();
         await Press(c, "check_updates");
         await Pass(c);
-        AssertMoment("unknown");
+        AssertMoment(c, "unknown", checkLine: true);
         Assert.Empty(ha.NotifiedNow());
     }
 
@@ -342,7 +543,7 @@ public sealed class UpdateTests : IDisposable
         await Press(c, "check_updates");
         await Pass(c);
         Assert.Equal(2, updates.Checks);
-        AssertMoment("current");
+        AssertMoment(c, "current", checkLine: true);
         await Pass(c, TimeSpan.FromMinutes(9).TotalSeconds);
         Assert.Equal("current", Stage);
         await Pass(c, TimeSpan.FromMinutes(2).TotalSeconds);
@@ -370,7 +571,7 @@ public sealed class UpdateTests : IDisposable
         await Press(c, "check_updates");
         await Pass(c);
         Assert.Equal("current", Stage);
-        updates.CheckFails = new HttpRequestException("rate limited");
+        updates.CheckFails = RateLimited();
         await Press(c, "check_updates");
         await Pass(c);
         Assert.Equal("", Stage);

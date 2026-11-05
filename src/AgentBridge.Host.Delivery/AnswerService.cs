@@ -97,18 +97,23 @@ public sealed class AnswerService : ISessionAnswerer
 
     // gate: the one the host's ReplyService shares, so an answer and a reply never type into
     // one session at once; a service of its own when none is given (tests).
-    public AnswerService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
+    // Test-only compatibility overload; production must pass the shared gate explicitly.
+    internal AnswerService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
         IConsoleInjector injector, AnswerOptions options, Action<string>? log = null, DeliveryGate? gate = null)
+        : this(gate ?? new DeliveryGate(), source, processes, probe, guard, injector, options, log) { }
+
+    public AnswerService(DeliveryGate gate, ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
+        IConsoleInjector injector, AnswerOptions options, Action<string>? log = null)
     {
         this.source = source;
         this.processes = processes;
         this.probe = probe;
         this.guard = guard;
-        this.injector = injector;
+        this.injector = new GateTrackedInjector(injector, gate);
         this.options = options;
         this.log = log ?? (_ => { });
-        this.gate = gate ?? new DeliveryGate();
-        requests = new OutcomeMemory<AnswerResult>(options.Time, options.RememberFor);
+        this.gate = gate ?? throw new ArgumentNullException(nameof(gate));
+        requests = new OutcomeMemory<AnswerResult>(options.Time, options.RememberFor, this.gate, Busy);
         ledger = new AttemptLedger(options.AttemptLedgerPath, options.Time);
     }
 

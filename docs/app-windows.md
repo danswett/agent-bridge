@@ -300,6 +300,39 @@ into one folder with one version. An app update is a host update, so they never 
     every start does, with the host's logon task at sign-in behind that.
   * Only the app's own timer starts it, or a person's press on another of their devices (below),
     so nothing an agent can reach does. A development copy and the demo never update.
+* **Host-only convergence** (#819, not yet running): the owner chose that the host keep itself
+  current without the app, and that the app's Restart to update stay a person's choice. Its
+  decision is `HostConvergence` (`AgentBridge.Host`), one pass from the host's existing check
+  that applies only the newest release eligible for this copy's channel and architecture,
+  verified, and only when #580/#581's `ReleaseEligibility.Evaluate` allows it (a halt list that
+  can't be read is `halt-list-unavailable`, never up to date; not newer is up to date). It then
+  uses #805's `LifecycleCoordinator` (#874, not merged): `TryAcquireQuiet` for purpose `Update`
+  within 0–10 s (default 5), `AnnouncePlanned`, then `CommitDeparture`. The commit checks the
+  four conditions registered for `Update` once, under the fence: `AppRunning`,
+  `OtherHostRunning`, `ChannelChanged` and `TransferInFlight`. If those pass, it turns the lease
+  into the guard the apply receives. The host keeps that guard until it exits, even when the
+  apply fails, and never applies a second time. It never asks whether every session is idle:
+  #805's closed reasons (`typing`, `delivery-in-flight`, `journal-uncertain`, …) alone say when.
+  A refusal after the announcement goes through #805's abort, and the pass reports whether the
+  matching cancel was `sent` or `cancel-unsent`. A relay that reconnects or changes capability
+  between the announcement and the commit is `announce-unacked`, and its cancel `cancel-unsent`
+  because #805 sends a cancel only on the connection that heard the plan. A relay that hasn't
+  negotiated the planned state is `announce-unavailable`: only a person's press may go ahead on it.
+
+  It is not constructed by the host yet, and every seam without an owner's implementation is a
+  named block, never a fallback:
+  * Until all four conditions are supplied, the pass reports `conditions-incomplete`. The App
+    and other-host snapshots come from Daily and the channel from #451's selection. A transfer
+    snapshot comes from its owner. None of the four exists yet.
+  * Eligibility, the coordinator and an apply that leaves the app and other profiles' hosts
+    running each have their own block word.
+
+  Its checks come from #709's shared discovery and #719's source-bound check, so it is wired
+  only after both land. The host's `ApplyAndRestart` (`HostUpdates`, behind Home Assistant's
+  Install) is not that apply. While the app is open the pass reports `app-running` and waits
+  (`HostConvergenceTests`), and such a machine does not converge until that changes. That and
+  every other block must reach the machine's report and #755's Fleet row as a reason, never
+  counted as converged; nothing carries it there yet.
 * **From another device** (#51, [v1-update.md](protocol/v1-update.md)): the PWA and the app on
   another machine show this machine's updates and ask for a check, or for the latest release to
   be installed now. The app here does it, through the same `AutoUpdater` (`UpdateReporter`

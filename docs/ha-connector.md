@@ -708,12 +708,40 @@ device.
   Home Assistant shows an update. A check that cannot reach the feed leaves `latest_version`
   out, with `The latest release could not be established: <why>` in the notes, and is tried
   again after five minutes: not `failed`, because a check that could not be made is not a
-  failed update (agent-ha-bridge #92). So does a check that has not answered within two
+  failed update (agent-ha-bridge #92). `<why>` is a class of failure, never the exception's own
+  text, which can carry a feed URL, a local path or a proxy's words and travels through MQTT to
+  every dashboard (#819): `the request timed out`, `rate limited` (HTTP 429), `the release feed
+  refused the request (HTTP 403)`, `the release feed answered HTTP <n>`, `the release feed could
+  not be reached`, `the release feed's answer could not be read`, or, for any other failure, `the check failed`:
+  never the failure's type name, which whoever wrote it chose and could carry anything. The log
+  says the same. So does a check that has not answered within two
   minutes or whose request timed out, and a configured `feed.txt` that cannot be read:
   it is never taken for GitHub, which would be another channel. A press of Check that finds
   nothing newer says `current`, `Checked just now; <version> is the latest release.` for ten
   minutes, until a check finds a newer one. A press while a check is already under way gets a
   check of its own once that one is done, so "just now" is never an earlier check's answer.
+* **Check health (#819).** Without more, the entity cannot tell a check that found nothing newer
+  from one never made: before the first answer it shows the version installed as latest, and
+  Home Assistant's `last_changed` is no evidence of a check (an unchanged payload is not
+  published again, and a retained one can be old). So while a served entity shows no newer
+  release and no install is running, its notes (`release_summary`, an existing field; no new
+  key, entity, topic or discovery) end with one line about this host's Home Assistant
+  connector's own check: `This host's Home Assistant update check: latest release unknown, not
+  answered yet since this host started (begun <UTC time>).` until the first answer (meanwhile
+  `latest_version` stays the version installed only so the entity is not unavailable at every
+  start: it is no claim the host is current, nor that any check succeeded), then `… last begun <UTC time>; last
+  succeeded <UTC time | not since this host started>.`, after the failure's words when it
+  failed. A check that found nothing newer stays current (`latest_version` the version
+  installed), never an error; a newer release's notes are left as they are. The line is about
+  that one probe, not the machine's update health as a whole, the app's checks or a cached
+  discovery's, nor SRE's presence. A host that does not check publishes as before. The same
+  facts are kept as `UpdateCheckHealth` (outcome `NotServed` with why, `NotYetAnswered`,
+  `Current`, `Newer` or `Failed`; times of the last begun, successful and failed check; the
+  failure's class) for a status surface to read; which one host health source carries it to the
+  relay and the Fleet row is SRE's (#755, #801). Beyond parity: the daemon's notes had no such
+  line; the contract tests compare against the recorded notes plus exactly the expected line,
+  never with lines removed. The install's own failure (below) still shows its exception's text:
+  a known gap (#819), kept out of any health record.
 * **Install.** A press shows `checking` at once (`in_progress`, the spinner), then looks for the
   newest release again, downloads it (`downloading` with `update_percentage`), records the
   attempt in the connector's state file (an attempt that cannot be recorded is not handed

@@ -1,0 +1,70 @@
+using System.ComponentModel;
+using AgentBridge.Host;
+using AgentBridge.Host.Core;
+using AgentBridge.Host.Delivery;
+using AgentBridge.Protocol;
+using Xunit;
+
+public sealed class InjectorUncertaintyTests
+{
+    [Fact]
+    public async Task An_injector_exception_converted_to_a_reply_result_still_blocks_departure_before_admission_is_released()
+    {
+        using var fixture = new Fixture();
+        const string id = "77777777-7777-4777-8777-777777777777";
+        var events = fixture.CopilotSession(id, 100);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
+        fixture.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = new SessionSource(fixture.Options(), fixture.Processes);
+        await source.RefreshAsync();
+        var gate = new DeliveryGate();
+        var injector = new UncertainInjector();
+        var replies = new ReplyService(gate, source, fixture.Processes, new NoBridge(), new NoGuard(), injector,
+            new ReplyOptions { CopilotHome = fixture.CopilotHome, PlatformSupported = true, PreRead = false });
+        var result = await replies.ReplyAsync(new ReplyRequest { Id = id, Request = Guid.NewGuid().ToString(), Text = "continue" });
+        Assert.True(injector.Attempted);
+        Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
+        var coordinator = new LifecycleCoordinator(gate, new DepartureConditions());
+        Assert.Equal(QuietBlockedReason.JournalUncertain,
+            (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Reason);
+    }
+
+    [Fact]
+    public async Task A_failed_screen_read_leaves_quiet_available_but_a_failed_injection_blocks_it()
+    {
+        var gate = new DeliveryGate();
+        var injector = new GateTrackedInjector(new ThrowingInjector(), gate);
+        var coordinator = new LifecycleCoordinator(gate, new DepartureConditions());
+        await Assert.ThrowsAsync<Win32Exception>(() => injector.ReadScreenAsync(100));
+        using (var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value)
+        {
+            Assert.NotNull(lease);
+        }
+        await Assert.ThrowsAsync<Win32Exception>(() => injector.InjectAsync(100, null!));
+        Assert.Equal(QuietBlockedReason.JournalUncertain,
+            (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Reason);
+    }
+
+    sealed class ThrowingInjector : IConsoleInjector
+    {
+        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default) =>
+            throw new Win32Exception("worker termination could not be confirmed");
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) =>
+            throw new Win32Exception("screen worker cleanup failed");
+    }
+
+    sealed class NoBridge : IAgentHaBridgeProbe { public string? Active() => null; }
+    sealed class NoGuard : ITargetGuard { public string? Refuse(int processId) => null; }
+    sealed class UncertainInjector : IConsoleInjector
+    {
+        public bool Attempted { get; private set; }
+        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
+        {
+            Attempted = true;
+            throw new Win32Exception("worker termination could not be confirmed");
+        }
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ConsoleScreen(["● Done.", "", "╻▄▄▄▄▄▄▄▄", "┃", "╹▀▀▀▀▀▀▀▀",
+                " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"], null));
+    }
+}
