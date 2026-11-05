@@ -122,12 +122,12 @@ public sealed partial class SessionView
     // first holds it.
     void OnLeavingBlock(UIElement sender, LosingFocusEventArgs e)
     {
-        if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } passed) { e.Cancel = true; FocusBlock(passed.Index, e.Direction == FocusNavigationDirection.Next, passed.Wrapped); }
+        if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } passed) { e.Cancel = true; FocusBlock(passed.Index, e.Direction == FocusNavigationDirection.Next, passed.Wrapped, e.OldFocusedElement); }
     }
 
     void OnReachingBlock(UIElement sender, GettingFocusEventArgs e)
     {
-        if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } passed) { e.Cancel = true; FocusBlock(passed.Index, e.Direction == FocusNavigationDirection.Next, passed.Wrapped); }
+        if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } passed) { e.Cancel = true; FocusBlock(passed.Index, e.Direction == FocusNavigationDirection.Next, passed.Wrapped, e.OldFocusedElement); }
     }
 
     (int Index, bool Wrapped)? TabPassed(DependencyObject? from, DependencyObject? to, FocusNavigationDirection direction)
@@ -199,10 +199,13 @@ public sealed partial class SessionView
     // The block brought into view at the leading edge and laid out, then focus on its first stop (or
     // last, going back), as the keyboard had put it there. Should it hold none after all, Tab goes on
     // from where it was; should it not be realised even after a few frames of layout, Tab goes on
-    // past it rather than staying where it was.
-    void FocusBlock(int index, bool forward, bool wrapped)
+    // past it rather than staying where it was. Held for this session, with focus where the Tab left
+    // it (cancelled, it stays there): should either change before it runs, it does nothing (Resume).
+    void FocusBlock(int index, bool forward, bool wrapped, DependencyObject? focusedThen)
     {
         var target = blocks[index];
+        var heldIn = Card?.Id;
+        var leftFrom = PlaceOf(focusedThen) is { } p && p >= 0 && p < blocks.Count ? blocks[p] : null;
         var direction = forward ? FocusNavigationDirection.Next : FocusNavigationDirection.Previous;
         var waited = 0;
         ConversationBlock? brought = null;
@@ -210,11 +213,14 @@ public sealed partial class SessionView
 
         // The response may change while this waits, even to a new list of blocks, so the block is
         // found again each time; one replaced as the reply streams in gives way to the block Tab now
-        // stops in (Held).
+        // stops in (Held). Another session shown since, or focus moved other than with a replaced
+        // block, and it does nothing.
         void Bring()
         {
-            var from = PlaceOf(XamlRoot is { } r ? FocusManager.GetFocusedElement(r) as DependencyObject : null);
-            if (ConversationKeyboard.Held(blocks, target, from, forward, i => ConversationList.ContainerFromIndex(i) is not null, wrapped) is not { } at)
+            var focused = XamlRoot is { } r ? FocusManager.GetFocusedElement(r) : null;
+            var move = ConversationKeyboard.Resume(heldIn, Card?.Id, focusedThen, leftFrom, focused, blocks, target, PlaceOf(focused as DependencyObject), forward, i => ConversationList.ContainerFromIndex(i) is not null, wrapped);
+            if (move.Dropped) { return; }
+            if (move.Block is not { } at)
             {
                 PassOn();
                 return;

@@ -105,6 +105,20 @@ public static class ConversationKeyboard
         return -1;
     }
 
+    // What a held Tab does when it runs (#829): nothing at all once another session's conversation is
+    // shown, or once focus has moved from where the Tab left it (a click, a session's own focus);
+    // otherwise as Held says, however the list was replaced since. Focus taken from a block the
+    // reply has since replaced (leftFrom, null for anywhere outside the list) went with the block,
+    // so that isn't a move. Block is where to bring focus; null with Dropped false, Tab goes on
+    // from where focus is.
+    public readonly record struct HeldMove(bool Dropped, int? Block);
+
+    public static HeldMove Resume(string? heldIn, string? shownIn, object? focusedThen, ConversationBlock? leftFrom, object? focusedNow, IReadOnlyList<ConversationBlock> blocks, ConversationBlock target, int? from, bool forward, Func<int, bool> realised, bool wrapped = false) =>
+        heldIn is null || heldIn != shownIn
+            || (focusedThen is not null && !ReferenceEquals(focusedThen, focusedNow) && (leftFrom is null || Where(blocks, leftFrom) >= 0))
+            ? new(true, null)
+            : new(false, Held(blocks, target, from, forward, realised, wrapped));
+
     // Where a held Tab goes once it runs: to its block wherever that now is; or, the block gone
     // (a reply's last block is replaced as it streams in), to the block a Tab from `from`, where
     // focus still is, now stops in first, should that be one the list has not realised. Null when

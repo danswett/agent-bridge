@@ -32,7 +32,10 @@ static partial class SelfTest
     static async Task<Shot?> Anchor(ListView list, string outFile)
     {
         if (list.Items.Count < 3 || SessionView.Shallowest<ScrollViewer>(list) is not { } scroll) { return null; }
-        var index = list.Items.Count / 2;
+        // In the middle of the response before its run of linked paragraphs (DemoHost.HeavyLinkedRun):
+        // the block it always was.
+        var index = (list.Items.Count - DemoHost.HeavyLinkedRun) / 2;
+        if (index < 1) { return null; }
         list.ScrollIntoView(list.Items[index], ScrollIntoViewAlignment.Leading);
         if (!await Until(() => list.ContainerFromIndex(index) is FrameworkElement { ActualHeight: > 0 }, TimeSpan.FromSeconds(5))) { return null; }
         await Task.Delay(300);
@@ -258,17 +261,21 @@ static partial class SelfTest
     // A link is a text element in its block's text, not a control (#829): in the window itself, Tab
     // pressed on the last link of the last block the list has realised goes to the first link of the
     // next block, which it had not, and brings that block in at the leading edge, numbered in its
-    // set. The precondition is built from what the list has realised, never from a placement in
-    // DIP, since the list realises a little past the view even with no cache: the view is searched
-    // for the furthest place where a linked block is the last realised and the linked block after it
-    // is not. Should that not come about, the check fails with "setup: ...", never skips. Each step
-    // is logged, so a failure says which one. Null, and how Tab was pressed, when right.
+    // set. Where the list ends what it realises is its own business, so the response ends with a run
+    // of linked paragraphs longer than twice the most it was seen to realise from a view's top
+    // (DemoHost.HeavyLinkedRun): with the run's first block at the top of the view, the last block
+    // realised and the one after it are both in the run, wherever the list stops. Should they not be,
+    // the check fails with "setup: ...", never skips. Each step is logged, so a failure says which.
+    // Null, and how Tab was pressed, when right.
     static async Task<(string? Problem, string Method)> TabbedLink(MainWindow window, ListView list)
     {
         if (list.ItemsPanelRoot is not ItemsStackPanel panel || list.ItemsSource is not IList<ConversationBlock> blocks
             || SessionView.Shallowest<ScrollViewer>(list) is not { } scroll) { return ("setup: a list of blocks with a scroller", "none"); }
         static bool Linked(ConversationBlock block) => block.Block is MdParagraph p && p.Inlines.Any(i => i is MdLink);
         static void Log(string step) => AppLog.Write($"self-test: link Tab, {step}");
+        const int Run = DemoHost.HeavyLinkedRun;
+        var start = Enumerable.Range(0, Math.Max(0, blocks.Count - Run + 1)).FirstOrDefault(s => Enumerable.Range(s, Run).All(i => Linked(blocks[i])), -1);
+        if (start < 0) { return ($"setup: a run of {Run} linked blocks in the response", "none"); }
         // The end of the run the list has realised from the view's first block on, as Tabbed finds
         // it: a block kept far off, such as one an earlier check left focused, is not part of it.
         int End()
@@ -279,133 +286,75 @@ static partial class SelfTest
             while (end + 1 < blocks.Count && list.ContainerFromIndex(end + 1) is not null) { end++; }
             return end;
         }
-        // The view at an offset and laid out there, waited for a frame at a time, not Until's 200 ms,
-        // as the search below moves it a dozen times or so.
-        async Task<int> At(double offset)
-        {
-            var to = Math.Clamp(offset, 0, scroll.ScrollableHeight);
-            scroll.ChangeView(null, to, null, disableAnimation: true);
-            for (var frames = 0; frames < 60 && Math.Abs(scroll.VerticalOffset - to) >= 0.5; frames++) { await Task.Delay(16); }
-            list.UpdateLayout();
-            await Task.Delay(16);
-            return End();
-        }
         // Focus taken by the link without the view moving to it, so taking it realises nothing more.
         var held = new TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>((_, e) => e.Handled = true);
         var cache = panel.CacheLength;
-        var setup = "setup: two linked blocks in a row past the first screen";
         try
         {
             panel.CacheLength = 0;
+            // To the top first, then to the run: a jump that far keeps nothing realised on the way.
+            scroll.ChangeView(null, 0, null, disableAnimation: true);
+            await Still(scroll);
             await Task.Delay(500);
-            var tries = 0;
-            for (var a = 25; a + 1 < blocks.Count && tries < 3; a++)
+            list.ScrollIntoView(blocks[start], ScrollIntoViewAlignment.Leading);
+            await Still(scroll);
+            var a = End();
+            Log($"the run of {Run} linked blocks from block {start + 1} at the top of the view: block {panel.FirstVisibleIndex + 1} first in view, block {a + 1} the last realised, block {a + 2} {(a >= 0 && a + 1 < blocks.Count && list.ContainerFromIndex(a + 1) is null ? "not realised" : "realised or none")}");
+            if (a < start || a + 1 >= start + Run) { return ($"setup: the last block realised and the next in the run of linked blocks {start + 1} to {start + Run}: block {a + 1} the last realised", "none"); }
+            if (list.ContainerFromIndex(a + 1) is not null || list.ContainerFromIndex(a) is not FrameworkElement shown) { return ($"setup: block {a + 1} realised and block {a + 2} not", "none"); }
+            if (FocusManager.FindLastFocusableElement(shown) is not Hyperlink link) { return ($"setup: a link last in block {a + 1}, not {FocusManager.FindLastFocusableElement(shown)?.GetType().Name ?? "nothing"}", "none"); }
+            bool focused;
+            shown.BringIntoViewRequested += held;
+            try
             {
-                if (!Linked(blocks[a]) || !Linked(blocks[a + 1]) || Linked(blocks[a - 1])) { continue; }
-                tries++;
-                list.ScrollIntoView(blocks[a], ScrollIntoViewAlignment.Leading);
+                focused = (await FocusManager.TryFocusAsync(link, FocusState.Keyboard)).Succeeded;
                 await Still(scroll);
-                list.UpdateLayout();
-                if (!await Until(() => list.ContainerFromIndex(a) is FrameworkElement, TimeSpan.FromSeconds(2)) || list.ContainerFromIndex(a) is not FrameworkElement placed)
-                {
-                    setup = $"setup: block {a + 1} realised when scrolled to";
-                    Log(setup);
-                    continue;
-                }
-                // From a's top at the view's top, where a+1 is realised, up to well above, where a is
-                // not: the furthest offset at which a is the last block realised, to within 1 DIP.
-                var high = scroll.VerticalOffset + placed.TransformToVisual(scroll).TransformPoint(default).Y;
-                var low = Math.Max(0, high - scroll.ViewportHeight - 600);
-                var (lowEnd, highEnd) = (await At(low), await At(high));
-                if (lowEnd >= a || highEnd <= a)
-                {
-                    setup = $"setup: block {a + 1} unrealised at {low:0} px ({lowEnd + 1} the last realised) and block {a + 2} realised at {high:0} px ({highEnd + 1})";
-                    Log(setup);
-                    continue;
-                }
-                double? kept = null;
-                while (high - low > 1)
-                {
-                    var middle = (low + high) / 2;
-                    var end = await At(middle);
-                    if (end == a) { kept = middle; }
-                    if (end > a) { high = middle; } else { low = middle; }
-                }
-                var spot = kept ?? low;
-                // The search only proposes an offset. A -1 or stale end from End() during it at worst
-                // misleads it, and the place is checked again here: unless block a is the last
-                // realised and a+1 is not, this is a "setup:" failure, and Tab is never pressed.
-                var last = await At(spot);
-                Log($"block {a + 1} the last realised at {spot:0.#} px: {last + 1} is, block {a + 2} {(list.ContainerFromIndex(a + 1) is null ? "not realised" : "realised")}");
-                if (last != a || list.ContainerFromIndex(a + 1) is not null || list.ContainerFromIndex(a) is not FrameworkElement shown)
-                {
-                    setup = $"setup: block {a + 1} the last realised, block {a + 2} not: at {spot:0.#} px block {last + 1} is the last";
-                    continue;
-                }
-                if (FocusManager.FindLastFocusableElement(shown) is not Hyperlink link) { return ($"setup: a link last in block {a + 1}, not {FocusManager.FindLastFocusableElement(shown)?.GetType().Name ?? "nothing"}", "none"); }
-                bool focused;
-                shown.BringIntoViewRequested += held;
-                try
-                {
-                    focused = (await FocusManager.TryFocusAsync(link, FocusState.Keyboard)).Succeeded;
-                    await Still(scroll);
-                }
-                finally { shown.BringIntoViewRequested -= held; }
-                Log($"focus on the last link of block {a + 1}: {(focused ? "taken" : "refused")}, the view at {scroll.VerticalOffset:0.#} px, block {a + 2} {(list.ContainerFromIndex(a + 1) is null ? "not realised" : "realised")}");
-                if (!focused || !ReferenceEquals(FocusManager.GetFocusedElement(list.XamlRoot), link))
-                {
-                    setup = $"setup: focus on the last link of block {a + 1}";
-                    continue;
-                }
-                if (list.ContainerFromIndex(a + 1) is not null)
-                {
-                    setup = $"setup: block {a + 2} not realised with the link in block {a + 1} focused";
-                    continue;
-                }
-
-                // Tab, pressed as the keyboard presses it.
-                var seen = false;
-                var heard = new KeyEventHandler((_, e) => seen |= e.Key == VirtualKey.Tab);
-                scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
-                string method;
-                try
-                {
-                    method = Press(window.Handle, VirtualKey.Tab, foreground: true, extended: false);
-                    if (!await Until(() => seen, TimeSpan.FromSeconds(2)) && method == "SendInput")
-                    {
-                        method = Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false);
-                        await Until(() => seen, TimeSpan.FromSeconds(2));
-                    }
-                }
-                finally { scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard); }
-                Log($"Tab pressed by {method}, {(seen ? "seen" : "not seen")} at the conversation");
-                if (!seen) { return ($"Tab reaching the conversation ({method})", method); }
-
-                object? container = null;
-                var landed = await Until(() =>
-                {
-                    var f = FocusManager.GetFocusedElement(list.XamlRoot);
-                    if (f is ListViewItem or ListView) { container = f; return true; }
-                    return f is Hyperlink && BlockOf(list, f) == a + 1;
-                }, TimeSpan.FromSeconds(3));
-                await Still(scroll);
-                var on = FocusManager.GetFocusedElement(list.XamlRoot);
-                Log($"focus on {on?.GetType().Name ?? "nothing"} in block {(BlockOf(list, on) is { } at ? at + 1 : 0)}");
-                if (container is not null) { return ($"focus on a block's container: {container.GetType().Name}", method); }
-                if (!landed) { return ($"Tab from the link in block {a + 1} to the link in block {a + 2}: it went to {(BlockOf(list, on) is { } to ? $"block {to + 1}" : on?.GetType().Name ?? "nothing")}", method); }
-                if (list.ContainerFromIndex(a + 1) is not FrameworkElement realised) { return ($"block {a + 2} realised", method); }
-                if (!ReferenceEquals(on, FocusManager.FindFirstFocusableElement(realised))) { return ($"Tab into block {a + 2} on its first link, not {on?.GetType().Name ?? "nothing"}", method); }
-                var peer = FrameworkElementAutomationPeer.CreatePeerForElement(list) as ItemsControlAutomationPeer;
-                var item = peer?.CreateItemAutomationPeer(blocks[a + 1]);
-                var (position, size) = (item?.GetPositionInSet() ?? -1, item?.GetSizeOfSet() ?? -1);
-                var top = realised.TransformToVisual(scroll).TransformPoint(default).Y;
-                Log($"block {a + 2} realised, {position} of {size}, its top {top:0.#} px from the view's");
-                if (position != a + 2 || size != blocks.Count) { return ($"block {a + 2} numbered {a + 2} of {blocks.Count}: {position} of {size}", method); }
-                if (Math.Abs(top) > 1.5) { return ($"block {a + 2} in view at the leading edge: its top {top:0.#} px from the view's", method); }
-                return (null, method);
             }
-            Log(setup);
-            return (setup, "none");
+            finally { shown.BringIntoViewRequested -= held; }
+            Log($"focus on the last link of block {a + 1}: {(focused ? "taken" : "refused")}, the view at {scroll.VerticalOffset:0.#} px, block {a + 2} {(list.ContainerFromIndex(a + 1) is null ? "not realised" : "realised")}");
+            if (!focused || !ReferenceEquals(FocusManager.GetFocusedElement(list.XamlRoot), link)) { return ($"setup: focus on the last link of block {a + 1}", "none"); }
+            if (list.ContainerFromIndex(a + 1) is not null) { return ($"setup: block {a + 2} not realised with the link in block {a + 1} focused", "none"); }
+
+            // Tab, pressed as the keyboard presses it.
+            var seen = false;
+            var heard = new KeyEventHandler((_, e) => seen |= e.Key == VirtualKey.Tab);
+            scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
+            string method;
+            try
+            {
+                method = Press(window.Handle, VirtualKey.Tab, foreground: true, extended: false);
+                if (!await Until(() => seen, TimeSpan.FromSeconds(2)) && method == "SendInput")
+                {
+                    method = Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false);
+                    await Until(() => seen, TimeSpan.FromSeconds(2));
+                }
+            }
+            finally { scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard); }
+            Log($"Tab pressed by {method}, {(seen ? "seen" : "not seen")} at the conversation");
+            if (!seen) { return ($"Tab reaching the conversation ({method})", method); }
+
+            object? container = null;
+            var landed = await Until(() =>
+            {
+                var f = FocusManager.GetFocusedElement(list.XamlRoot);
+                if (f is ListViewItem or ListView) { container = f; return true; }
+                return f is Hyperlink && BlockOf(list, f) == a + 1;
+            }, TimeSpan.FromSeconds(3));
+            await Still(scroll);
+            var on = FocusManager.GetFocusedElement(list.XamlRoot);
+            Log($"focus on {on?.GetType().Name ?? "nothing"} in block {(BlockOf(list, on) is { } at ? at + 1 : 0)}");
+            if (container is not null) { return ($"focus on a block's container: {container.GetType().Name}", method); }
+            if (!landed) { return ($"Tab from the link in block {a + 1} to the link in block {a + 2}: it went to {(BlockOf(list, on) is { } to ? $"block {to + 1}" : on?.GetType().Name ?? "nothing")}", method); }
+            if (list.ContainerFromIndex(a + 1) is not FrameworkElement realised) { return ($"block {a + 2} realised", method); }
+            if (!ReferenceEquals(on, FocusManager.FindFirstFocusableElement(realised))) { return ($"Tab into block {a + 2} on its first link, not {on?.GetType().Name ?? "nothing"}", method); }
+            var peer = FrameworkElementAutomationPeer.CreatePeerForElement(list) as ItemsControlAutomationPeer;
+            var item = peer?.CreateItemAutomationPeer(blocks[a + 1]);
+            var (position, size) = (item?.GetPositionInSet() ?? -1, item?.GetSizeOfSet() ?? -1);
+            var top = realised.TransformToVisual(scroll).TransformPoint(default).Y;
+            Log($"block {a + 2} realised, {position} of {size}, its top {top:0.#} px from the view's");
+            if (position != a + 2 || size != blocks.Count) { return ($"block {a + 2} numbered {a + 2} of {blocks.Count}: {position} of {size}", method); }
+            if (Math.Abs(top) > 1.5) { return ($"block {a + 2} in view at the leading edge: its top {top:0.#} px from the view's", method); }
+            return (null, method);
         }
         finally { panel.CacheLength = cache; }
     }

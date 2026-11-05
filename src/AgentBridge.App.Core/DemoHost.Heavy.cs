@@ -13,6 +13,11 @@ public sealed partial class DemoHost
     public const int HeavyDelegates = 20;
     // The blocks of the heavy session's response that the conversation draws (a list's items each).
     public const int HeavyBlocks = 210;
+    // The run of linked paragraphs the heavy response ends with, before its last block. The self-test's
+    // link Tab check needs the end of what the list has realised to fall inside it wherever the list
+    // ends that, so it is longer than twice the most the list was seen to realise from a view's top
+    // in CI: some 1,750 DIP, or 55 such paragraphs (#829).
+    public const int HeavyLinkedRun = 110;
 
     // Added to the sessions already listed, and sent to every window listening, at once.
     public async Task AddHeavyAsync()
@@ -113,6 +118,8 @@ public sealed partial class DemoHost
             else if (i % 17 == 8) { blocks.Add($"- the list's divider\n- the inspector's divider\n- the window's edge, case {i}"); items += 3; }
             else { blocks.Add(said[i % said.Length]); items++; }
         }
+        // After the blocks the other checks use, so none of those moves; short, to keep within Limits.Response.
+        for (var n = 1; n <= HeavyLinkedRun; n++) { blocks.Add($"[Run {n}](https://github.com)."); }
         // Said once, so a screen reader that finds the last block by its name finds that block.
         blocks.Add("That is the whole turn: every pane resized, every test run, nothing left open.");
         return string.Join("\n\n", blocks);

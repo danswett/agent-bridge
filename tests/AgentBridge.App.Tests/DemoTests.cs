@@ -67,4 +67,20 @@ public sealed class HeavyDemoTests
         Assert.Same(heavy, SessionBudget.Fit(heavy));
         Assert.DoesNotContain(sessions.Select(s => s.Id), DemoHost.Examples().Select(s => s.Id).Contains);
     }
+
+    [Fact]
+    public void The_heavy_response_ends_with_a_run_of_linked_paragraphs_after_the_blocks_it_had_before()
+    {
+        var heavy = DemoHost.Heavy(DateTimeOffset.UtcNow).Single(s => s.Id == DemoHost.HeavyId);
+        var blocks = MarkdownModel.Parse(heavy.Activity.Response);
+        static bool Linked(MdBlock b) => b is MdParagraph p && p.Inlines.Any(i => i is MdLink);
+        var run = blocks.Skip(blocks.Count - 1 - DemoHost.HeavyLinkedRun).Take(DemoHost.HeavyLinkedRun).ToList();
+
+        Assert.Equal(DemoHost.HeavyLinkedRun, run.Count);
+        Assert.All(run, b => Assert.True(Linked(b)));
+        Assert.False(Linked(blocks[blocks.Count - 2 - DemoHost.HeavyLinkedRun]));
+        Assert.False(Linked(blocks[^1]));
+        // The 193 blocks the resize pass's other checks used, so the block in their middle is the same.
+        Assert.Equal(193, blocks.Count - DemoHost.HeavyLinkedRun);
+    }
 }

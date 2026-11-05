@@ -439,6 +439,58 @@ public sealed class ConversationKeyboardTests
     }
 
     [Fact]
+    public void A_session_change_drops_the_queued_Tab_and_it_moves_no_focus()
+    {
+        var before = Blocks("Plain.\n\n[b](https://a.b)\n\nMore.\n\n[d](https://a.b)");
+        var held = before[3];
+        var focus = new object();
+        // The next session's response has a block Held would bring in from where focus now is.
+        var shown = new ObservableCollection<ConversationBlock>(Blocks("[x](https://a.b)\n\nOther.\n\n[y](https://a.b)"));
+
+        Assert.Equal(2, ConversationKeyboard.Held(shown, held, from: 0, forward: true, i => i < 1));
+        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume("a", "b", focus, before[1], focus, shown, held, from: 0, forward: true, i => i < 1));
+        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume("a", "b", focus, before[1], new object(), shown, held, from: 0, forward: true, i => true));
+        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume(null, "b", null, null, focus, shown, held, from: 0, forward: true, i => i < 1));
+    }
+
+    [Fact]
+    public void A_queued_Tab_does_nothing_once_focus_has_moved_from_where_the_Tab_left_it()
+    {
+        var shown = Blocks("Plain.\n\n[b](https://a.b)\n\nMore.\n\n[d](https://a.b)");
+
+        // From a link still shown, and from outside the list (the reply box, say).
+        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume("a", "a", new object(), shown[1], new object(), shown, shown[3], from: 1, forward: true, i => i < 2));
+        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume("a", "a", new object(), null, new object(), shown, shown[3], from: -1, forward: true, i => i < 2));
+        // With nothing focused when the Tab was held, there is nowhere it could have moved from.
+        Assert.Equal(new ConversationKeyboard.HeldMove(false, 3), ConversationKeyboard.Resume("a", "a", null, null, new object(), shown, shown[3], from: 1, forward: true, i => i < 2));
+    }
+
+    [Fact]
+    public void A_reset_within_the_same_session_still_lands_the_queued_Tab_on_the_held_block()
+    {
+        var before = Blocks("Plain.\n\n[b](https://a.b)\n\nStill [writ](https://a.b)");
+        var held = before[2];
+        // The same session's list made again from its response: every block a new one, and the
+        // link the Tab left from gone with its block, so focus is somewhere else.
+        var shown = new ConversationItems(Blocks("Plain.\n\n[b](https://a.b)\n\nStill [writ](https://a.b)ing"));
+
+        Assert.Equal(new ConversationKeyboard.HeldMove(false, 2), ConversationKeyboard.Resume("a", "a", new object(), before[1], new object(), shown, held, from: 1, forward: true, i => i < 2));
+        Assert.Equal(new ConversationKeyboard.HeldMove(false, null), ConversationKeyboard.Resume("a", "a", new object(), before[1], new object(), shown, held, from: 1, forward: true, i => true));
+    }
+
+    [Fact]
+    public void A_queued_Shift_Tab_from_a_link_the_streaming_reply_replaces_still_lands_on_the_held_block()
+    {
+        var shown = new ObservableCollection<ConversationBlock>(Blocks("[a](https://a.b)\n\nPlain.\n\nStill [writ](https://a.b)"));
+        var (held, leftFrom) = (shown[0], shown[2]);
+
+        ConversationBlocks.Update(shown, MarkdownModel.Parse("[a](https://a.b)\n\nPlain.\n\nStill [writ](https://a.b)ing"));
+
+        Assert.Same(held, shown[0]);
+        Assert.NotSame(leftFrom, shown[2]);
+        Assert.Equal(new ConversationKeyboard.HeldMove(false, 0), ConversationKeyboard.Resume("a", "a", new object(), leftFrom, new object(), shown, held, from: null, forward: false, i => false));
+    }
+    [Fact]
     public void Reading_keys_wait_for_the_way_back_up_when_what_has_focus_may_use_them_and_are_taken_on_the_way_down_otherwise()
     {
         Assert.True(ConversationKeyboard.TakenEarly(ReadingKey.PageDown, inSelectableText: false));

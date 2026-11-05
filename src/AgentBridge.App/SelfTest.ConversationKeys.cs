@@ -20,8 +20,9 @@ static partial class SelfTest
     static async Task<(string? Problem, string Method)> Keyed(MainWindow window, ListView list)
     {
         if (SessionView.Shallowest<ScrollViewer>(list) is not { } scroll || list.ItemsPanelRoot is not ItemsStackPanel { FirstVisibleIndex: >= 0 } panel) { return ("a scroller with blocks in view", "none"); }
-        // Room above and below for a page each way, from a block in the middle.
-        var middle = list.Items.Count / 2;
+        // Room above and below for a page each way, from a block in the middle of the response
+        // before its run of linked paragraphs (DemoHost.HeavyLinkedRun): the block it always was.
+        var middle = (list.Items.Count - DemoHost.HeavyLinkedRun) / 2;
         list.ScrollIntoView(list.Items[middle], ScrollIntoViewAlignment.Leading);
         await Task.Delay(500);
         if (scroll.ScrollableHeight - scroll.VerticalOffset < scroll.ViewportHeight + ConversationKeyboard.Line * 2) { return ($"a page below to scroll to: {scroll.ScrollableHeight - scroll.VerticalOffset:0} px of {scroll.ViewportHeight:0}", "none"); }
