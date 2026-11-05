@@ -248,6 +248,23 @@ function Uploads { @($global:PpCalls | Where-Object { $_ -like 'vpk upload githu
 function Deletes { @($global:PpCalls | Where-Object { $_ -like 'gh api -X DELETE*' }) }
 function CallIndex([string]$like) { $global:PpCalls.FindIndex({ param($c) $c -like $like }) }
 
+. (Join-Path $PSScriptRoot 'validate-halt-list.ps1')
+foreach ($invalid in @(
+    @{ Name = 'A string schema version is refused'; Json = '{"v":"1","halted":[]}' },
+    @{ Name = 'A decimal schema version is refused'; Json = '{"v":1.0,"halted":[]}' },
+    @{ Name = 'An extra halt policy property is refused'; Json = '{"v":1,"halted":[],"extra":false}' },
+    @{ Name = 'A halted version with a trailing newline is refused'; Json = '{"v":1,"halted":["0.1.600\n"]}' }
+)) {
+    Check $invalid.Name {
+        New-Item -ItemType Directory -Force $scratch | Out-Null
+        $file = Join-Path $scratch 'invalid-halts.json'
+        [IO.File]::WriteAllText($file, $invalid.Json)
+        $threw = $false
+        try { Assert-ReleaseHaltList $file } catch { $threw = $true }
+        Assert $threw 'publisher accepted a policy that the client rejects'
+    }
+}
+
 # --- Publishing.
 Check 'A new version goes up as a draft, then is published as a pre-release of the commit with assets.win.json beside it' {
     Reset 3

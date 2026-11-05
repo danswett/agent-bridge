@@ -105,8 +105,13 @@ public sealed class StopService : ISessionStopper
 
     sealed record Arm(string Token, int ProcessId, DateTimeOffset StartedAt, DateTimeOffset At);
 
-    public StopService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, IConsoleInjector injector,
+    // Test-only compatibility overload; production must pass the shared gate explicitly.
+    internal StopService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, IConsoleInjector injector,
         IProcessControl control, StopOptions options, Action<string>? log = null, DeliveryGate? gate = null)
+        : this(gate ?? new DeliveryGate(), source, processes, probe, injector, control, options, log) { }
+
+    public StopService(DeliveryGate gate, ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, IConsoleInjector injector,
+        IProcessControl control, StopOptions options, Action<string>? log = null)
     {
         this.source = source;
         this.processes = processes;
@@ -115,7 +120,7 @@ public sealed class StopService : ISessionStopper
         this.control = control;
         this.options = options;
         this.log = log ?? (_ => { });
-        this.gate = gate ?? new DeliveryGate();
+        this.gate = gate ?? throw new ArgumentNullException(nameof(gate));
         requests = new OutcomeMemory<StopResult>(options.Time, options.RememberFor, this.gate, Busy);
     }
 

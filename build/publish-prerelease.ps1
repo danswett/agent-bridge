@@ -35,15 +35,8 @@ $ReleasesDir = @($ReleasesDir | ForEach-Object { [IO.Path]::GetFullPath($_) })
 $work = Join-Path (Split-Path $ReleasesDir[0]) 'publish-work'
 $mode = if ($DryRun) { 'dry run: ' } else { '' }
 $haltsPath = Join-Path $PSScriptRoot '..' 'ops' 'halts.json'
-$halts = Get-Content $haltsPath -Raw | ConvertFrom-Json
-if ($halts.v -ne 1 -or $halts.halted -isnot [array] -or $halts.halted.Count -gt 1024 -or (Get-Item $haltsPath).Length -gt 65536) {
-    throw 'ops/halts.json is not a bounded v1 halt list'
-}
-foreach ($haltedVersion in $halts.halted) {
-    if ($haltedVersion -isnot [string] -or $haltedVersion -cnotmatch '^0\.1\.(0|[1-9][0-9]{0,18})$') {
-        throw 'ops/halts.json contains an invalid version'
-    }
-}
+. (Join-Path $PSScriptRoot 'validate-halt-list.ps1')
+Assert-ReleaseHaltList $haltsPath
 
 function Invoke-Gh {
     # gh reports a failure on stderr and a nonzero exit; unchecked, it would read as no releases.

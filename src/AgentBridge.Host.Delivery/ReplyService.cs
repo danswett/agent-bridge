@@ -104,9 +104,14 @@ public sealed class ReplyService : ISessionReplier
     readonly ConcurrentDictionary<string, byte> preReading = new(StringComparer.Ordinal);
     readonly AttachmentStore? attachments;
 
-    public ReplyService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
+    // Test-only compatibility overload; production must pass the shared gate explicitly.
+    internal ReplyService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
         IConsoleInjector injector, ReplyOptions options, Action<string>? log = null, DeliveryGate? gate = null,
         AttachmentStore? attachments = null)
+        : this(gate ?? new DeliveryGate(), source, processes, probe, guard, injector, options, log, attachments) { }
+
+    public ReplyService(DeliveryGate gate, ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
+        IConsoleInjector injector, ReplyOptions options, Action<string>? log = null, AttachmentStore? attachments = null)
     {
         this.source = source;
         this.processes = processes;
@@ -115,7 +120,7 @@ public sealed class ReplyService : ISessionReplier
         this.injector = injector;
         this.options = options;
         this.log = log ?? (_ => { });
-        this.gate = gate ?? new DeliveryGate();
+        this.gate = gate ?? throw new ArgumentNullException(nameof(gate));
         this.attachments = attachments;
         requests = new OutcomeMemory<ReplyResult>(options.Time, options.RememberFor, this.gate, Busy);
         if (options.PreRead && options.PlatformSupported)

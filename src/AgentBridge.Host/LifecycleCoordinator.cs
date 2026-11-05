@@ -153,33 +153,44 @@ public sealed class LifecycleCoordinator
     public async Task<QuietResult<PlannedStateReceipt>> AnnouncePlanned(QuietLease lease, CancellationToken cancellationToken = default)
     {
         PlannedStateMessage? message = null;
+        CancellationWork? cancel = null;
+        QuietBlockedReason? checkFailure = null;
         lock (state)
         {
             if (RejectReentry()) { return QuietResult<PlannedStateReceipt>.Blocked(QuietBlockedReason.ConditionFault); }
-            if (!Current(lease) || lease.Committed) { return QuietResult<PlannedStateReceipt>.Blocked(QuietBlockedReason.LeaseExpired); }
-            if (cancellationToken.IsCancellationRequested) { return QuietResult<PlannedStateReceipt>.Blocked(QuietBlockedReason.Cancelled); }
-            if (lease.Receipt is { } receipt) { return QuietResult<PlannedStateReceipt>.Granted(receipt); }
-            if (lease.Sent) { return QuietResult<PlannedStateReceipt>.Blocked(QuietBlockedReason.AnnounceUnacked); }
-            lease.Generation = transport.Generation;
-            if (!transport.Negotiated)
+            try
             {
-                if (lease.Purpose is DeparturePurpose.RemoteRestart or DeparturePurpose.RemoteStop)
+                if (!Current(lease) || lease.Committed) { checkFailure = QuietBlockedReason.LeaseExpired; }
+                else if (cancellationToken.IsCancellationRequested) { checkFailure = QuietBlockedReason.Cancelled; }
+                else if (lease.Receipt is { } receipt) { return QuietResult<PlannedStateReceipt>.Granted(receipt); }
+                else if (lease.Sent) { checkFailure = QuietBlockedReason.AnnounceUnacked; }
+                else
                 {
-                    lease.Receipt = new PlannedStateReceipt(lease.Transition, true, lease.Generation);
-                    return QuietResult<PlannedStateReceipt>.Granted(lease.Receipt);
+                    lease.Generation = transport.Generation;
+                    if (!transport.Negotiated)
+                    {
+                        if (lease.Purpose is DeparturePurpose.RemoteRestart or DeparturePurpose.RemoteStop)
+                        {
+                            lease.Receipt = new PlannedStateReceipt(lease.Transition, true, lease.Generation);
+                            return QuietResult<PlannedStateReceipt>.Granted(lease.Receipt);
+                        }
+                        checkFailure = QuietBlockedReason.AnnounceUnavailable;
+                    }
+                    else
+                    {
+                        var (reason, seconds) = Plan(lease.Purpose);
+                        lease.Sent = true;
+                        message = new PlannedStateMessage(lease.Transition, ++sequence, "planned", reason, seconds);
+                    }
                 }
             }
-            else
-            {
-                var (reason, seconds) = Plan(lease.Purpose);
-                lease.Sent = true;
-                message = new PlannedStateMessage(lease.Transition, ++sequence, "planned", reason, seconds);
-            }
+            catch { checkFailure = QuietBlockedReason.ConditionFault; }
+            if (checkFailure is not null) { cancel = EndLease(lease); }
         }
-        if (message is null)
+        Dispatch(cancel);
+        if (checkFailure is { } failed)
         {
-            Release(lease);
-            return QuietResult<PlannedStateReceipt>.Blocked(QuietBlockedReason.AnnounceUnavailable);
+            return QuietResult<PlannedStateReceipt>.Blocked(failed);
         }
         var failure = QuietBlockedReason.AnnounceUnacked;
         try
@@ -188,7 +199,7 @@ public sealed class LifecycleCoordinator
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, cancellationToken);
             var token = linked.Token;
             var started = time.GetTimestamp();
-            var sending = Task.Run(() => transport.SendAsync(message, token));
+            var sending = Task.Run(() => transport.SendAsync(message!, token));
             var accepted = await sending.WaitAsync(AnnounceTimeout, time, token).ConfigureAwait(false);
             lock (state)
             {
@@ -204,8 +215,7 @@ public sealed class LifecycleCoordinator
         }
         catch (OperationCanceledException) { failure = cancellationToken.IsCancellationRequested ? QuietBlockedReason.Cancelled : QuietBlockedReason.AnnounceUnacked; }
         catch (TimeoutException) { }
-        catch (Exception e) when (e is IOException or InvalidOperationException or HttpRequestException or System.Net.WebSockets.WebSocketException)
-        { failure = QuietBlockedReason.AnnounceUnavailable; }
+        catch (Exception) { failure = QuietBlockedReason.ConditionFault; }
         Release(lease);
         return QuietResult<PlannedStateReceipt>.Blocked(failure);
     }
@@ -217,32 +227,35 @@ public sealed class LifecycleCoordinator
         lock (state)
         {
             if (RejectReentry()) { return DepartureResult.Abort(DepartureBlocker.ConditionFault); }
-            if (lease.Committed) { return DepartureResult.Abort(DepartureBlocker.ConditionFault); }
-            if (!Current(lease))
+            try
             {
-                cancel = EndLease(lease);
-                result = DepartureResult.Abort(DepartureBlocker.ConditionFault);
-            }
-            else
-            {
-                DepartureBlocker? blocked = null;
-                reentryFault = false;
-                var committed = lease.Fence.TryCommit(fenceBlocker =>
+                if (!Current(lease) || lease.Committed || !lease.Fence.TryBeginCommit(out var fenceBlocker))
                 {
-                    blocked = fenceBlocker switch
+                    result = DepartureResult.Abort(DepartureBlocker.ConditionFault);
+                }
+                else
+                {
+                    DepartureBlocker? blocked = fenceBlocker switch
                     {
                         DeliveryGate.Blocker.JournalUncertain => DepartureBlocker.JournalUncertain,
                         DeliveryGate.Blocker.Typing => DepartureBlocker.Typing,
                         DeliveryGate.Blocker.DeliveryInFlight => DepartureBlocker.DeliveryInFlight,
                         _ => null,
                     };
-                    var receipt = lease.Receipt;
-                    if (receipt is null || transport.Generation != receipt.Generation
-                        || (receipt.Legacy ? transport.Negotiated : !transport.Negotiated)) { blocked ??= DepartureBlocker.AnnounceUnacked; }
                     if (!conditions.TryGetValue(lease.Purpose, out var registered)) { blocked = DepartureBlocker.ConditionFault; }
+                    reentryFault = false;
                     evaluatingConditions = true;
                     try
                     {
+                        // The exclusion stays closed/Committing, but no gate lock is held
+                        // while reading transport or owner snapshots.
+                        try
+                        {
+                            var receipt = lease.Receipt;
+                            if (receipt is null || transport.Generation != receipt.Generation
+                                || (receipt.Legacy ? transport.Negotiated : !transport.Negotiated)) { blocked ??= DepartureBlocker.AnnounceUnacked; }
+                        }
+                        catch { blocked = DepartureBlocker.ConditionFault; }
                         foreach (var (kind, condition) in registered ?? [])
                         {
                             try { if (condition.IsBlocking()) { blocked ??= kind; } }
@@ -251,19 +264,16 @@ public sealed class LifecycleCoordinator
                     }
                     finally { evaluatingConditions = false; }
                     if (reentryFault) { blocked = DepartureBlocker.ConditionFault; }
-                    return blocked is null;
-                });
-                if (committed)
-                {
-                    lease.Committed = true;
-                    result = DepartureResult.Commit(new DepartureGuard(lease));
-                }
-                else
-                {
-                    cancel = EndLease(lease);
-                    result = DepartureResult.Abort(blocked ?? DepartureBlocker.ConditionFault);
+                    if (blocked is null && lease.Fence.TryCommit())
+                    {
+                        lease.Committed = true;
+                        result = DepartureResult.Commit(new DepartureGuard(lease));
+                    }
+                    else { result = DepartureResult.Abort(blocked ?? DepartureBlocker.ConditionFault); }
                 }
             }
+            catch { result = DepartureResult.Abort(DepartureBlocker.ConditionFault); }
+            if (!result.Committed) { cancel = EndLease(lease); }
         }
         Dispatch(cancel);
         return result;
@@ -294,14 +304,19 @@ public sealed class LifecycleCoordinator
     sealed record CancellationWork(QuietLease Lease, PlannedStateMessage? Message, CancellationOutcome? Immediate);
 
     // Called with state held; no transport send/callback occurs until Dispatch after unlocking.
-    CancellationWork? EndLease(QuietLease lease)
+    CancellationWork? EndLease(QuietLease? lease)
     {
-        if (!ReferenceEquals(lease.Owner, this) || lease.Committed || lease.CancelScheduled) { return null; }
+        if (lease is null || !ReferenceEquals(lease.Owner, this) || lease.Committed || lease.CancelScheduled) { return null; }
         lease.Disposed = true;
         lease.CancelScheduled = true;
-        lease.Fence.Dispose();
+        try { lease.Fence.Dispose(); }
+        catch { return new(lease, null, CancellationOutcome.CancelUnsent); }
         if (!lease.Sent) { return new(lease, null, CancellationOutcome.NotRequired); }
-        if (transport.Generation != lease.Generation) { return new(lease, null, CancellationOutcome.CancelUnsent); }
+        try
+        {
+            if (transport.Generation != lease.Generation) { return new(lease, null, CancellationOutcome.CancelUnsent); }
+        }
+        catch { return new(lease, null, CancellationOutcome.CancelUnsent); }
         lease.Cancelling();
         return new(lease, new PlannedStateMessage(lease.Transition, ++sequence, "cancelled"), null);
     }

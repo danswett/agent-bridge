@@ -331,6 +331,77 @@ public sealed class LifecycleCoordinatorTests
         Assert.Equal(CancellationOutcome.Sent, await lease.Cancellation.WaitAsync(TimeSpan.FromSeconds(2)));
     }
 
+    [Fact]
+    public async Task An_owner_lock_condition_cannot_deadlock_an_owner_thread_waiting_for_the_gate()
+    {
+        var gate = new DeliveryGate();
+        var ownerLock = new object();
+        using var ownerHeld = new ManualResetEventSlim();
+        using var conditionEntered = new ManualResetEventSlim();
+        Task<IDisposable?>? admission = null;
+        var condition = new Condition(DepartureBlocker.TransferInFlight, () =>
+        {
+            conditionEntered.Set();
+            lock (ownerLock) { return false; }
+        });
+        var coordinator = new LifecycleCoordinator(gate, Conditions(condition));
+        using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value!;
+        await coordinator.AnnouncePlanned(lease);
+        var owner = Task.Run(() =>
+        {
+            lock (ownerLock)
+            {
+                ownerHeld.Set();
+                if (!conditionEntered.Wait(TimeSpan.FromSeconds(3))) { return false; }
+                admission = Task.Run(gate.TryEnterDelivery);
+                // A broken implementation times out, releases ownerLock and fails rather
+                // than leaving a deadlocked helper in the test process.
+                return admission.Wait(TimeSpan.FromSeconds(2));
+            }
+        });
+        Assert.True(ownerHeld.Wait(TimeSpan.FromSeconds(3)));
+        var committing = Task.Run(() => coordinator.CommitDeparture(lease));
+        Assert.True((await committing.WaitAsync(TimeSpan.FromSeconds(5))).Committed);
+        Assert.True(await owner.WaitAsync(TimeSpan.FromSeconds(5)));
+        using var admitted = await admission!;
+        Assert.Null(admitted);
+        Assert.Equal(1, condition.Calls);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_throwing_transport_getter_during_commit_aborts_and_releases(bool generation)
+    {
+        var gate = new DeliveryGate();
+        var transport = new Transport();
+        var coordinator = new LifecycleCoordinator(gate, Conditions(), transport);
+        using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value!;
+        await coordinator.AnnouncePlanned(lease);
+        transport.ThrowGeneration = generation;
+        transport.ThrowNegotiated = !generation;
+        Assert.Equal(DepartureBlocker.ConditionFault, coordinator.CommitDeparture(lease).Kind);
+        using var admitted = gate.TryEnterDelivery();
+        Assert.NotNull(admitted);
+        Assert.Equal(generation ? CancellationOutcome.CancelUnsent : CancellationOutcome.Sent,
+            await lease.Cancellation.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_throwing_transport_getter_during_announce_aborts_and_releases(bool generation)
+    {
+        var gate = new DeliveryGate();
+        var transport = new Transport { ThrowGeneration = generation, ThrowNegotiated = !generation };
+        var coordinator = new LifecycleCoordinator(gate, Conditions(), transport);
+        using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value!;
+        Assert.Equal(QuietBlockedReason.ConditionFault, (await coordinator.AnnouncePlanned(lease)).Reason);
+        using var admitted = gate.TryEnterDelivery();
+        Assert.NotNull(admitted);
+        Assert.Equal(CancellationOutcome.NotRequired, await lease.Cancellation.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
     sealed class Condition(DepartureBlocker kind, Func<bool> blocking) : IDepartureCondition
     {
         public DepartureBlocker Kind => kind;
@@ -340,8 +411,15 @@ public sealed class LifecycleCoordinatorTests
 
     sealed class Transport : IPlannedStateTransport
     {
-        public bool Negotiated => true;
-        public long Generation { get; set; } = 1;
+        long generation = 1;
+        public bool ThrowGeneration { get; set; }
+        public bool ThrowNegotiated { get; set; }
+        public bool Negotiated => ThrowNegotiated ? throw new NotSupportedException("snapshot fault") : true;
+        public long Generation
+        {
+            get => ThrowGeneration ? throw new NotSupportedException("snapshot fault") : generation;
+            set => generation = value;
+        }
         public List<PlannedStateMessage> Messages { get; } = [];
         public TaskCompletionSource CancelCalled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource PlannedCalled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

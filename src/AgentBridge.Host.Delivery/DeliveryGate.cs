@@ -45,7 +45,7 @@ public sealed class DeliveryGate
         }
     }
 
-    public Exclusion? TryExclude(TimeSpan lifetime, out Blocker blocker)
+    internal Exclusion? TryExclude(TimeSpan lifetime, out Blocker blocker)
     {
         if (lifetime <= TimeSpan.Zero || lifetime > TimeSpan.FromSeconds(30)) { throw new ArgumentOutOfRangeException(nameof(lifetime)); }
         lock (state)
@@ -60,7 +60,7 @@ public sealed class DeliveryGate
 
     void Expire()
     {
-        if (exclusion is { Committed: false } held && time.GetElapsedTime(held.Started) >= held.Lifetime)
+        if (exclusion is { Committed: false, Committing: false } held && time.GetElapsedTime(held.Started) >= held.Lifetime)
         {
             exclusion = null;
             // Never call a host/transport callback while holding the delivery lock.
@@ -68,14 +68,15 @@ public sealed class DeliveryGate
         }
     }
 
-    public sealed class Exclusion : IDisposable
+    internal sealed class Exclusion : IDisposable
     {
         readonly DeliveryGate owner;
         readonly ITimer timer;
         internal long Started { get; }
         internal TimeSpan Lifetime { get; }
         internal bool Committed { get; private set; }
-        public event Action? Expired;
+        internal bool Committing { get; private set; }
+        internal event Action? Expired;
         internal void NotifyExpired() => Expired?.Invoke();
 
         internal Exclusion(DeliveryGate owner, TimeSpan lifetime)
@@ -86,36 +87,48 @@ public sealed class DeliveryGate
             timer = owner.time.CreateTimer(_ => { lock (owner.state) { owner.Expire(); } }, null, lifetime, Timeout.InfiniteTimeSpan);
         }
 
-        public bool IsCurrent
+        internal bool IsCurrent
         {
             get { lock (owner.state) { owner.Expire(); return ReferenceEquals(owner.exclusion, this); } }
         }
 
-        public bool TryCommit(Func<Blocker?, bool> allow)
+        internal bool TryBeginCommit(out Blocker? blocker)
         {
             lock (owner.state)
             {
                 owner.Expire();
-                if (!ReferenceEquals(owner.exclusion, this) || Committed) { return false; }
-                Blocker? blocker = owner.uncertain ? Blocker.JournalUncertain : owner.isTyping ? Blocker.Typing
+                blocker = owner.uncertain ? Blocker.JournalUncertain : owner.isTyping ? Blocker.Typing
                     : owner.deliveries > 0 || !owner.sessions.IsEmpty ? Blocker.DeliveryInFlight : null;
-                var accepted = allow(blocker);
-                owner.Expire();
-                if (!accepted || owner.uncertain || !ReferenceEquals(owner.exclusion, this))
-                {
-                    if (ReferenceEquals(owner.exclusion, this)) { owner.exclusion = null; }
-                    return false;
-                }
-                Committed = true;
+                if (!ReferenceEquals(owner.exclusion, this) || Committed || Committing) { return false; }
+                Committing = true;
                 return true;
             }
         }
 
-        public void Dispose()
+        internal bool TryCommit()
         {
-            lock (owner.state) { if (ReferenceEquals(owner.exclusion, this)) { owner.exclusion = null; } }
+            lock (owner.state)
+            {
+                if (!ReferenceEquals(owner.exclusion, this) || !Committing || Committed
+                    || owner.uncertain || owner.isTyping || owner.deliveries > 0 || !owner.sessions.IsEmpty
+                    || owner.time.GetElapsedTime(Started) >= Lifetime) { return false; }
+                Committed = true;
+                Committing = false;
+                return true;
+            }
+        }
+
+        internal void Dispose()
+        {
+            lock (owner.state)
+            {
+                if (Committed) { return; }
+                if (ReferenceEquals(owner.exclusion, this)) { owner.exclusion = null; }
+            }
             timer.Dispose();
         }
+
+        void IDisposable.Dispose() => Dispose();
     }
 
     // Takes the session for this request, or false while another request holds it.

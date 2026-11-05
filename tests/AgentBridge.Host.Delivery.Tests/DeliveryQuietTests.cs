@@ -5,6 +5,18 @@ using Xunit;
 public sealed class DeliveryQuietTests
 {
     [Fact]
+    public void A_committed_exclusion_cannot_be_released_even_through_IDisposable()
+    {
+        var gate = new DeliveryGate(new FakeTimeProvider());
+        using var exclusion = gate.TryExclude(TimeSpan.FromSeconds(30), out _)!;
+        Assert.True(exclusion.TryBeginCommit(out _));
+        Assert.True(exclusion.TryCommit());
+        exclusion.Dispose();
+        ((IDisposable)exclusion).Dispose();
+        Assert.Null(gate.TryEnterDelivery());
+    }
+
+    [Fact]
     public async Task An_accepted_request_is_fenced_before_its_background_worker_claims_a_session()
     {
         var gate = new DeliveryGate();

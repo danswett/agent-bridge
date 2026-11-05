@@ -35,7 +35,7 @@ must not add an `AutoUpdater.IdleFor`/whole-session idle test or another fence.
 | `LifecycleCoordinator(DeliveryGate, DepartureConditions, IPlannedStateTransport?, TimeProvider?)` | Freezes/copies the composition-time conditions. Not a grant of remote authority. |
 | `TryAcquireQuiet(TimeSpan maxWait, DeparturePurpose purpose, CancellationToken, DepartureMode)` | `Task<QuietResult<QuietLease>>`; default-wait overload takes purpose only. Wait 0–10 s, default 5. Returns `Value` or typed `Reason`, never a free-text error. |
 | `AnnouncePlanned(QuietLease, CancellationToken)` | `Task<QuietResult<PlannedStateReceipt>>`; five seconds for durable acceptance, inside the lease lifetime. |
-| `CommitDeparture(QuietLease)` | `DepartureResult`: `Guard` on commit, otherwise closed `Kind`. In one critical section under the delivery fence, rechecks fence/receipt and evaluates every registered condition exactly once. No call-site delegate or condition list. |
+| `CommitDeparture(QuietLease)` | `DepartureResult`: `Guard` on commit, otherwise closed `Kind`. Checks/marks `Committing` under the gate lock, evaluates snapshots under the coordinator lock only, then re-takes the gate lock to commit the same exclusion. No call-site delegate or condition list. |
 | `Abort(QuietLease)` | Before commitment only: releases locally, then sends bounded cancellation outside every internal lock. Returns observable `CancellationOutcome`; a committed lease cannot be released. |
 | `QuietLease.Dispose()` | Non-awaiting abort fallback while provisional. It cannot release an already committed guard. |
 
@@ -50,8 +50,10 @@ The separate, closed `DepartureBlocker` set for commit/conditions is exactly:
 `DeliveryInFlight`, `Typing`, `AnnounceUnacked`, `JournalUncertain`,
 `AppRunning`, `OtherHostRunning`, `ChannelChanged`, `TransferInFlight`,
 `ConditionFault`. `IDepartureCondition` exposes `Kind` and synchronous
-`bool IsBlocking()`: no I/O or side effects, reading only its owner's in-memory
+`bool IsBlocking()`: lock-free and non-blocking, with no I/O or side effects, reading only its owner's in-memory
 snapshot refreshed outside the fence. Kinds are validated/captured at registration.
+No owner or transport getter runs while the delivery gate lock is held.
+The `Committing` exclusion still refuses new work while those reads occur.
 All conditions run exactly once, even if an earlier one blocks/throws; throws
 and re-entrant coordinator calls become `ConditionFault`, never a deadlock or
 authority to leave. Missing registration also fails closed with `ConditionFault`.
@@ -138,6 +140,27 @@ an empty array. Change this canonical file through review to halt/roll forward.
 The publisher uploads it as `halts.json` alongside every release, **before**
 publishing the draft, shared across architectures. This is a sensitive build
 change. Existing clients are not switched to a new policy in this slice.
+
+**Limitation:** a policy embedded in a build's commit cannot retroactively halt
+the release that just shipped with it. Changing `ops/halts.json` through the
+normal build/publish path produces a newer release; it is not an emergency
+halt of the current newest release.
+
+**Current emergency path (manual, not performed by this PR):** the owner, or a
+session with release-write authority assigned that maintenance task, may
+re-upload a **validated** `halts.json` asset to the numerically newest published
+`v0.1.<run>` release. The staged file must be named `halts.json`. Add the affected version, validate with the same client
+schema (`. build\validate-halt-list.ps1; Assert-ReleaseHaltList <file>`), then
+replace that release's `halts.json` asset with `gh release upload <tag> <file>
+--clobber --repo danswett/agent-bridge`. Re-read the newest tag before/after the
+upload to detect a racing publication, and verify the resulting asset and
+GitHub SHA-256 digest; do not report the halt effective if a newer unmodified
+policy won the race. Keep the prior validated policy for audit/repair, without
+removing existing halts. Review/land the same change to canonical
+`ops/halts.json` so the next build does not overwrite the emergency policy with
+an older list; until then monitor/reapply if publication advances. A reviewed no-build upload workflow is a separate
+Platform-owned follow-up; this PR does not grant live release-write permission
+or execute an upload.
 
 `GitHubHaltListSource(HttpClient)` reads the existing repository's release API,
 selects the numerically newest non-draft `v0.1.<run>` among its newest 100 releases,

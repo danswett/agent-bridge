@@ -6,7 +6,8 @@ public enum DepartureBlocker { DeliveryInFlight, Typing, AnnounceUnacked, Journa
 public interface IDepartureCondition
 {
     DepartureBlocker Kind { get; }
-    // Synchronous, no I/O or side effects: read the owner's already-refreshed memory snapshot.
+    // Lock-free, synchronous and non-blocking, with no I/O or side effects:
+    // read the owner's already-refreshed memory snapshot; never acquire an owner lock.
     bool IsBlocking();
 }
 
