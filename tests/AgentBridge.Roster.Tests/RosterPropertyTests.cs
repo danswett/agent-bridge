@@ -37,6 +37,20 @@ public sealed class RosterPropertyTests
         ["wiping-kept"] = () => RosterPrecedenceTests.Wiping(personKeeps: true),
         ["rank-one-against-two"] = RosterPrecedenceTests.RankOneAgainstTwo,
         ["yielding"] = RosterPrecedenceTests.Yielding,
+        ["monotone"] = RosterForkTests.Monotone,
+        ["old-head-removal"] = RosterForkTests.OldHeadRemoval,
+        ["person-removes-cosigners"] = RosterForkTests.PersonRemovesCosigners,
+        ["genesis-recovery"] = RosterForkTests.GenesisRecovery,
+        ["hidden-heads"] = RosterForkTests.HiddenHeads,
+        ["concurrent-renames"] = () => RosterForkTests.ConcurrentRenames(supersede: true),
+        ["copy-renames"] = RosterForkTests.CopyRenames,
+        ["two-fork-removals"] = RosterForkTests.TwoForkRemovals,
+        ["replacement-key"] = RosterForkTests.ReplacementKey,
+        ["held-add-taken"] = () => RosterForkTests.HeldAdd(keep: false),
+        ["held-add-kept"] = () => RosterForkTests.HeldAdd(keep: true),
+        ["genesis-self-removal"] = () => RosterForkTests.SelfRemovalAfterRecovery(genesis: true),
+        ["senior-self-removal"] = () => RosterForkTests.SelfRemovalAfterRecovery(genesis: false),
+        ["void-confirm"] = RosterForkTests.VoidConfirm,
     };
 
     // The labels in a random order in which every entry still follows its parents.
