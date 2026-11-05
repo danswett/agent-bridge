@@ -290,14 +290,17 @@ public sealed class AnswerService : ISessionAnswerer
         // Why the question can no longer be typed into, or null: the last checks before the first
         // key, made again before each later write of a plan typed in parts (TypeWordsApartAsync).
         // Between them the host waits on the screen, and the person may answer at the machine,
-        // or a permission prompt open over the form, in the meantime.
+        // or a permission prompt open over the form, in the meantime. The prompts waiting are kept
+        // up to date from what the transcript gains, not read again from its start each time
+        // (Copilot 4478363669): these checks run with the typing slot every session shares held.
+        var waiting = new CopilotPermissionWatch(transcript, "");
         string? StillAsked()
         {
             if (probe.Active() is { } active) { return active; }
             if (source.Get(session.Id)?.Question?.Id != question.Id) { return "the session is no longer asking that question"; }
             var now = CopilotTranscript.Find(transcript, question.Id);
             if (now.Arguments is null || now.Answer is not null || now.SessionEnded) { return "the question was answered or closed while the answer was being typed"; }
-            var prompts = CopilotPermissionTranscript.Before(transcript, "");
+            var prompts = waiting.Read();
             if (!prompts.Readable) { return "the session's transcript could no longer be read"; }
             if (prompts.PendingPermissions > 0) { return "Copilot opened another prompt while the answer was being typed"; }
             return Target(session, AgentKind.Copilot)?.Reason;
@@ -325,7 +328,7 @@ public sealed class AnswerService : ISessionAnswerer
             // Keys go to whichever prompt the CLI shows, and a permission dialog (a sub-agent's,
             // say) can be shown over this question, which is the one listed (#173). Read just
             // before typing, since the host's view may be a pass behind.
-            var prompts = CopilotPermissionTranscript.Before(transcript, "");
+            var prompts = waiting.Read();
             if (!prompts.Readable) { return Refused("the session's transcript could not be read, so nothing is typed; answer at the machine"); }
             if (prompts.PendingPermissions > 0)
             {
@@ -538,7 +541,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (commit.Text.Length > 0) { first.Add(commit with { Enter = false, EnterDelayMs = 0, PauseAfterMs = 0 }); }
             if (first.Count > 0)
             {
-                first[0] = first[0] with { Expect = Rows(shown) };
+                first[0] = first[0] with { Expect = Rows(shown), Checks = Below(shown) };
                 if (await WriteAsync(first, false) is { } stopped) { return stopped; }
                 var (settled, unsettled) = await SettledAsync(pid);
                 if (settled is null)
@@ -549,7 +552,7 @@ public sealed class AnswerService : ISessionAnswerer
                 if (OffForm(settled) is { } off) { return Stop(off); }
                 shown = settled;
             }
-            if (await WriteAsync([new KeySend("", true, 0, commit.PauseAfterMs, Rows(shown))], last) is { } committed) { return committed; }
+            if (await WriteAsync([new KeySend("", true, 0, commit.PauseAfterMs, Rows(shown), Below(shown))], last) is { } committed) { return committed; }
             leaving = shown;
             at++;
             (progress.Taken, progress.Partway) = (at, false);
@@ -577,7 +580,7 @@ public sealed class AnswerService : ISessionAnswerer
                 // Other's walk, which has no Enter: held to the list it walks, and the words wait
                 // for the change it makes, Other opening.
                 var shown = field;
-                pending[0] = pending[0] with { Expect = Rows(shown) };
+                pending[0] = pending[0] with { Expect = Rows(shown), Checks = Below(shown) };
                 if (await WriteAsync(pending, false) is { } walked) { return walked; }
                 pending = [];
                 var (rows, count, why) = await FieldShownAsync(pid, shown, tail);
@@ -589,7 +592,7 @@ public sealed class AnswerService : ISessionAnswerer
                 if (OffForm(rows) is { } off) { return Stop(off); }
                 (field, before) = (rows, count);
             }
-            if (await WriteAsync([send with { Enter = false, EnterDelayMs = 0, PauseAfterMs = 0, Expect = Rows(field) }], false) is { } held) { return held; }
+            if (await WriteAsync([send with { Enter = false, EnterDelayMs = 0, PauseAfterMs = 0, Expect = Rows(field), Checks = Below(field) }], false) is { } held) { return held; }
             if (await AwaitOnScreenAsync(pid, tail, before) is not { } showing)
             {
                 log($"the words typed into {Short(sessionId)} (pid {pid}) did not show on its screen within {options.WordsWait.TotalSeconds:0.#} s; their Enter is not pressed");
@@ -598,7 +601,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (OffForm(showing) is { } away) { return Stop(away); }
             // Seen on screen, they reached the CLI apart from anything after them, so their Enter
             // needs no pause of its own; held to the rows that show them, it goes into nothing else.
-            if (await WriteAsync([new KeySend("", true, 0, send.PauseAfterMs, Rows(showing))], i == plan.Sends.Count - 1) is { } entered) { return entered; }
+            if (await WriteAsync([new KeySend("", true, 0, send.PauseAfterMs, Rows(showing), Below(showing))], i == plan.Sends.Count - 1) is { } entered) { return entered; }
             leaving = showing;
             at++;
             (progress.Taken, progress.Partway) = (at, false);
@@ -608,7 +611,7 @@ public sealed class AnswerService : ISessionAnswerer
         // field they go to, like any other.
         var (rest, _, gone) = await NextFieldAsync("");
         if (rest is null) { return Stop(gone!); }
-        pending[0] = pending[0] with { Expect = Rows(rest) };
+        pending[0] = pending[0] with { Expect = Rows(rest), Checks = Below(rest) };
         return await WriteAsync(pending, true) ?? (new InjectionResult(InjectionStatus.Typed, "ok"), null);
     }
 
@@ -616,6 +619,14 @@ public sealed class AnswerService : ISessionAnswerer
 
     // The rows of a screen as a send holds to them.
     static List<ScreenRow> Rows(IReadOnlyList<string> rows) => [.. rows.Select((text, row) => new ScreenRow(row, text))];
+
+    // And nothing under them: every row below the last one read is blank when the key goes, as
+    // the worker checks in the same read (ScreenCheck.BlankFrom). Held to the rows read alone, a
+    // console that grew after the read, a permission prompt drawn in the rows it gained, passed:
+    // OffForm had already looked, the transcript may not yet say so, and the Enter that commits
+    // the field would pick what the prompt highlights (#510 review, Copilot 4478363609; #843's
+    // bottom anchor).
+    static List<ScreenRowCheck> Below(IReadOnlyList<string> rows) => [new(rows.Count, ScreenCheck.BlankFrom, [])];
 
     // Nothing typed by a later part of a plan whose earlier part went is not nothing typed.
     static InjectionResult AfterPart(InjectionResult result, bool typedAny) =>

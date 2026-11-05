@@ -69,12 +69,16 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     has settled from them (so the change awaited is the form moving on, not an option list's
     highlight repainting). The next field's keys wait for the form to move off the screen the
     Enter was pressed on. Each write is held to those rows (`KeySend.Expect`): the injector
-    types nothing of it unless they still read exactly so, in the same attach, just before
-    its first key, since a permission prompt can open over the form at any moment and Enter
-    picks whatever it highlights (sec-510). The last checks before typing (step 5:
-    agent-ha-bridge, the call still unanswered, no other prompt waiting, the process) are made
-    again before each write, and once more when the injector holds the typing slot
-    (`KeyPlan.Proceed`). A refused write stops everything after it.
+    types nothing of it unless they still read exactly so, and every row below them is blank
+    (`ScreenCheck.BlankFrom`: a console that grew after the read, with a prompt in the rows it
+    gained, is refused), in the same attach, just before its first key, since a permission
+    prompt can open over the form at any moment and Enter picks whatever it highlights
+    (sec-510, Copilot 4478363609). The last checks before typing (step 5: agent-ha-bridge, the
+    call still unanswered, no other prompt waiting, the process) are made again before each
+    write, and once more when the injector holds the typing slot (`KeyPlan.Proceed`); the
+    prompts waiting are kept up to date from what the transcript has gained since the last
+    check (`CopilotPermissionWatch`), not read from its start each time with that slot held.
+    A refused write stops everything after it.
   * The rows a field's keys or Enter are held to must show the form at that field
     (`CopilotFormScreen`, from 1.0.105's `MIo`, `Uxn`, `Da` and `Ft`), each part below the
     last: exactly one "Copilot needs information." row (an MCP server's elicitation is headed

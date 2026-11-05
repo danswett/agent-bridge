@@ -27,61 +27,7 @@ public static class CopilotPermissionTranscript
     // until the session's own abort, shutdown or resume in a new CLI. ask_user calls are counted as CopilotInput
     // counts them, since either kind of prompt holding the session's input changes what a key
     // typed now would answer.
-    public static CopilotPermissionState Before(string path, string requestId)
-    {
-        // In the order asked: a Dictionary's enumeration order is not kept once one is removed.
-        var permissions = new List<(string Id, JsonElement Data)>();
-        var asks = new Dictionary<string, string?>(StringComparer.Ordinal);
-        if (Jsonl.Lines(path, 0, skipFirst: false, Line) is not { } to)
-        {
-            return new CopilotPermissionState(false, null, 0, 0, 0);
-        }
-        // Completed edits can carry entire files: format and hash only what is still waiting.
-        var pending = permissions.Select(p => (p.Id, Prompt: CopilotPermission.Describe(p.Data))).ToList();
-        var at = pending.FindIndex(p => p.Id == requestId);
-        return new CopilotPermissionState(true, at < 0 ? null : pending[at].Prompt, pending.Count, asks.Count, to)
-        {
-            Others = [.. pending.Where(p => p.Id != requestId)],
-            First = at == 0,
-        };
-
-        void Line(ReadOnlySpan<byte> bytes, long start)
-        {
-            var ask = bytes.IndexOf("\"type\":\"tool.execution_start\""u8) >= 0 && bytes.IndexOf("\"ask_user\""u8) >= 0;
-            var permission = bytes.IndexOf("\"type\":\"permission."u8) >= 0;
-            var ending = bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.resume\""u8) >= 0;
-            var answer = asks.Count > 0 && (bytes.IndexOf("\"type\":\"tool.execution_complete\""u8) >= 0 || bytes.IndexOf("\"type\":\"human_response.recorded\""u8) >= 0);
-            if (!ask && !permission && !ending && !answer) { return; }
-            if (CopilotPrompts.Parse(bytes) is not { } e) { return; }
-            using (e.Doc)
-            {
-                var data = e.Data;
-                switch (e.Type)
-                {
-                    case "tool.execution_start" when CopilotPrompts.Str(data, "toolName") == "ask_user" && CopilotPrompts.Str(data, "toolCallId") is { } id:
-                        asks[id] = e.AgentId;
-                        break;
-                    case "tool.execution_complete" or "human_response.recorded" when CopilotPrompts.Str(data, "toolCallId") is { } id:
-                        asks.Remove(id);
-                        break;
-                    case "permission.requested" when CopilotPrompts.Str(data, "requestId") is { } id:
-                        permissions.RemoveAll(p => p.Id == id);
-                        permissions.Add((id, data.Clone()));
-                        break;
-                    case "permission.completed" when CopilotPrompts.Str(data, "requestId") is { } id:
-                        permissions.RemoveAll(p => p.Id == id);
-                        break;
-                    case "abort" or "session.shutdown" or "session.resume" when e.AgentId is null:
-                        asks.Clear();
-                        permissions.Clear();
-                        break;
-                    case "abort" or "session.shutdown":
-                        foreach (var id in asks.Where(a => a.Value == e.AgentId).Select(a => a.Key).ToList()) { asks.Remove(id); }
-                        break;
-                }
-            }
-        }
-    }
+    public static CopilotPermissionState Before(string path, string requestId) => new CopilotPermissionWatch(path, requestId).Read();
 
     public static CopilotPermissionResult Since(string path, string requestId, long from)
     {
@@ -118,6 +64,82 @@ public static class CopilotPermissionTranscript
                 var result = e.Data.TryGetProperty("result", out var r) && r.ValueKind == JsonValueKind.Object ? r : default;
                 kind = CopilotPrompts.Str(result, "kind") ?? "";
                 feedback = CopilotPrompts.Str(result, "feedback") is { Length: > 0 };
+            }
+        }
+    }
+}
+
+// The same reading, kept up to date: each Read takes in only the lines the transcript has
+// gained since the last, from the line boundary that one stopped at, with the requests and
+// asks still waiting carried over. A form's answer is checked before every write, twice (by
+// the host, then by the injector once it holds the typing slot every session shares); read
+// from the start each time, those checks grew with the transcript and held up every other
+// session's typing behind them (#510 review, Copilot 4478363669). A transcript shorter than
+// what was read is not the one that was read (Copilot only appends to it), and is read again
+// from the start.
+public sealed class CopilotPermissionWatch(string path, string requestId)
+{
+    // In the order asked, each with the request as recorded: a Dictionary does not keep that order once one is removed.\n    readonly List<(string Id, JsonElement Data)> permissions = [];
+    readonly Dictionary<string, string?> asks = new(StringComparer.Ordinal);
+    long to;
+
+    // The bytes the last Read took in.
+    public long LastRead { get; private set; }
+
+    public CopilotPermissionState Read()
+    {
+        LastRead = 0;
+        if (to > 0 && Jsonl.Length(path) < to)
+        {
+            permissions.Clear();
+            asks.Clear();
+            to = 0;
+        }
+        if (Jsonl.Lines(path, to, skipFirst: false, Line) is not { } end) { return new CopilotPermissionState(false, null, 0, 0, 0); }
+        (LastRead, to) = (end - to, end);
+        // Completed edits can carry entire files: format and hash only what is still waiting.
+        var pending = permissions.Select(p => (p.Id, Prompt: CopilotPermission.Describe(p.Data))).ToList();
+        var at = pending.FindIndex(p => p.Id == requestId);
+        return new CopilotPermissionState(true, at < 0 ? null : pending[at].Prompt, pending.Count, asks.Count, to)
+        {
+            Others = [.. pending.Where(p => p.Id != requestId)],
+            First = at == 0,
+        };
+    }
+
+    void Line(ReadOnlySpan<byte> bytes, long start)
+    {
+        var ask = bytes.IndexOf("\"type\":\"tool.execution_start\""u8) >= 0 && bytes.IndexOf("\"ask_user\""u8) >= 0;
+        var permission = bytes.IndexOf("\"type\":\"permission."u8) >= 0;
+        var ending = bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.resume\""u8) >= 0;
+        var answer = asks.Count > 0 && (bytes.IndexOf("\"type\":\"tool.execution_complete\""u8) >= 0 || bytes.IndexOf("\"type\":\"human_response.recorded\""u8) >= 0);
+        if (!ask && !permission && !ending && !answer) { return; }
+        if (CopilotPrompts.Parse(bytes) is not { } e) { return; }
+        using (e.Doc)
+        {
+            var data = e.Data;
+            switch (e.Type)
+            {
+                case "tool.execution_start" when CopilotPrompts.Str(data, "toolName") == "ask_user" && CopilotPrompts.Str(data, "toolCallId") is { } id:
+                    asks[id] = e.AgentId;
+                    break;
+                case "tool.execution_complete" or "human_response.recorded" when CopilotPrompts.Str(data, "toolCallId") is { } id:
+                    asks.Remove(id);
+                    break;
+                case "permission.requested" when CopilotPrompts.Str(data, "requestId") is { } id:
+                    permissions.RemoveAll(p => p.Id == id);
+                    permissions.Add((id, data.Clone()));
+                    break;
+                case "permission.completed" when CopilotPrompts.Str(data, "requestId") is { } id:
+                    permissions.RemoveAll(p => p.Id == id);
+                    break;
+                case "abort" or "session.shutdown" or "session.resume" when e.AgentId is null:
+                    asks.Clear();
+                    permissions.Clear();
+                    break;
+                case "abort" or "session.shutdown":
+                    foreach (var id in asks.Where(a => a.Value == e.AgentId).Select(a => a.Key).ToList()) { asks.Remove(id); }
+                    break;
             }
         }
     }

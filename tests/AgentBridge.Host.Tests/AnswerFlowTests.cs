@@ -779,6 +779,50 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains(injector.Plans[^1].Plan.Sends, s => s.Text == Feedback);
     }
 
+    // Each of the form's four writes in turn: the list's keys, its Enter, the words, their Enter.
+    public static TheoryData<int> FormWrites => [0, 1, 2, 3];
+
+    [Theory]
+    [MemberData(nameof(FormWrites))]
+    public async Task A_permission_prompt_in_rows_the_console_gains_after_the_last_read_gets_none_of_the_write_held_above_it(int write)
+    {
+        // The window grows after the host has read it (OffForm passed), and a permission prompt
+        // is drawn in the rows it gained, every row read before unchanged, before the transcript
+        // says so. Held to those rows alone, the write went, and the Enter that commits a field
+        // picked what the prompt highlights (#510 review, Copilot 4478363609).
+        await AskFormAsync();
+        var grown = false;
+        injector.Screen = () => grown ? [.. FormScreen(Picked(), WordsTyped(), moved: Moved()), .. PermissionPrompt] : FormScreen(Picked(), WordsTyped(), moved: Moved());
+        injector.Holding = plan => { if (injector.Attempts.Count == write + 1) { grown = true; } };
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        Assert.Equal(write == 0 ? "refused" : "unconfirmed", result.GetProperty("outcome").GetString());
+        Assert.Contains("screen changed", result.GetProperty("reason").GetString());
+        Assert.Same(injector.Attempts[write], Assert.Single(injector.Refused));
+        Assert.Equal(write, injector.Plans.Count);
+    }
+
+    [Theory]
+    [MemberData(nameof(FormWrites))]
+    public async Task A_permission_prompt_drawn_below_the_form_once_a_write_has_gone_gets_none_of_the_next(int write)
+    {
+        // The same prompt drawn just after one of the writes went: the host's own read before the
+        // next write sees it below the form (CopilotFormScreen), and nothing more is attempted.
+        await AskFormAsync();
+        var grown = false;
+        injector.Screen = () => grown ? [.. FormScreen(Picked(), WordsTyped(), moved: Moved()), .. PermissionPrompt] : FormScreen(Picked(), WordsTyped(), moved: Moved());
+        injector.Sent = (plan, i) => { if (injector.Attempts.Count == write + 1 && i == plan.Sends.Count - 1) { grown = true; } };
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        Assert.NotEqual("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(write + 1, injector.Attempts.Count);
+        Assert.Equal(write + 1, injector.Plans.Count);
+    }
+
     [Fact]
     public async Task Two_option_lists_then_words_each_go_held_to_the_field_they_were_planned_for()
     {
@@ -1699,20 +1743,33 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         public readonly List<KeyPlan> Attempts = [];
         // Runs once a plan has the typing slot, before the worker's last checks.
         public Action<KeyPlan>? Holding;
+        // Runs once each of a plan's sends has gone, before the next one's checks.
+        public Action<KeyPlan, int>? Sent;
 
         public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
         {
             lock (Plans) { Attempts.Add(plan); }
             await Gate;
             Holding?.Invoke(plan);
-            // The worker's checks, in its order: the question once it holds the slot, then the
-            // screen as it reads in the same attach, just before the first key. Plans holds only
+            // The worker's checks, in its order: the question once it holds the slot, then, for
+            // each send, the screen as it reads in the same attach just before that send's first
+            // key: its rows (Expect), read as the worker reads them, and what its Checks say,
+            // blank rows under them included (#510 review, Copilot 4478363609). Plans holds only
             // what got past them, so the screen read here is still the one before this plan's keys.
             string? refusal = plan.Proceed?.Invoke() is { } stop ? $"stopped before typing: {stop}" : null;
-            if (refusal is null && plan.Sends.Count > 0 && plan.Sends[0].Expect is { Count: > 0 } expect
-                && (Screen() is not { } screen || expect.Any(e => e.Row >= screen.Count || screen[e.Row].TrimEnd() != e.Text.TrimEnd())))
+            for (var i = 0; refusal is null && i < plan.Sends.Count; i++)
             {
-                refusal = AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChanged;
+                var send = plan.Sends[i];
+                if ((send.Expect is { Count: > 0 } || send.Checks is { Count: > 0 })
+                    && (Screen() is not { } screen
+                        || (send.Expect ?? []).Any(e => e.Row >= screen.Count || Worker.Read(screen[e.Row]) != Worker.Read(e.Text))
+                        || (send.Checks ?? []).Any(c => !c.Passes([.. screen.Select(Worker.Read)]))))
+                {
+                    if (i > 0) { return new InjectionResult(InjectionStatus.Interrupted, AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChangedPartway); }
+                    refusal = AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChanged;
+                    break;
+                }
+                Sent?.Invoke(plan, i);
             }
             if (refusal is not null)
             {

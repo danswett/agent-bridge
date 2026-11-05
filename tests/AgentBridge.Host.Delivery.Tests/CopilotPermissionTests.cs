@@ -424,6 +424,59 @@ public sealed class CopilotPermissionTests : IDisposable
     }
 
     [Fact]
+    public void Prompts_kept_up_to_date_are_read_from_what_the_transcript_gained_not_from_its_start()
+    {
+        // A form's answer checks before every write, with the typing slot every session shares
+        // held: each check takes in only the lines added since the last (Copilot 4478363669).
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, [.. Enumerable.Range(0, 2000).Select(i => Copilot.ToolStart($"t{i}", "powershell", new { command = $"echo {i}" }, i))]);
+        var watch = new CopilotPermissionWatch(events, "r1");
+
+        var all = watch.Read();
+        Assert.Equal((true, 0, 0), (all.Readable, all.PendingPermissions, all.PendingAsks));
+        Assert.Equal(new FileInfo(events).Length, watch.LastRead);
+
+        long Added(Action append)
+        {
+            var before = new FileInfo(events).Length;
+            append();
+            return new FileInfo(events).Length - before;
+        }
+        var opened = Added(() => Fixture.Append(events, Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2001), Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 2002)));
+        var waiting = watch.Read();
+        Assert.Equal(("r1", 1, 1), (waiting.Request?.RequestId, waiting.PendingPermissions, waiting.PendingAsks));
+        Assert.Equal(opened, watch.LastRead);
+        Assert.Equal(new FileInfo(events).Length, waiting.ScannedTo);
+
+        Assert.Equal(1, watch.Read().PendingPermissions);
+        Assert.Equal(0, watch.LastRead);
+
+        var closed = Added(() => Fixture.Append(events, Copilot.PermissionDone("r1", "c1", "approved", 2003)));
+        var done = watch.Read();
+        Assert.Equal((null, 0, 1), (done.Request, done.PendingPermissions, done.PendingAsks));
+        Assert.Equal(closed, watch.LastRead);
+        // The same as a reading from the start.
+        var whole = CopilotPermissionTranscript.Before(events, "r1");
+        Assert.Equal((whole.Request, whole.PendingPermissions, whole.PendingAsks, whole.ScannedTo), (done.Request, done.PendingPermissions, done.PendingAsks, done.ScannedTo));
+    }
+
+    [Fact]
+    public void A_transcript_shorter_than_what_was_read_is_read_again_from_its_start()
+    {
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 1), Copilot.Permission("r2", "c2", Copilot.Prompts["read"], 2));
+        var watch = new CopilotPermissionWatch(events, "r1");
+        Assert.Equal(2, watch.Read().PendingPermissions);
+
+        File.WriteAllText(events, "");
+        Fixture.Append(events, Copilot.Permission("r3", "c3", Copilot.Prompts["read"], 3));
+
+        var again = watch.Read();
+        Assert.Equal((null, 1), (again.Request, again.PendingPermissions));
+        Assert.Equal(new FileInfo(events).Length, watch.LastRead);
+    }
+
+    [Fact]
     public void The_answer_is_read_from_the_requests_own_completion_after_the_point_read_before_typing()
     {
         var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
