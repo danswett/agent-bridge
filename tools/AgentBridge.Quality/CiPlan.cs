@@ -49,6 +49,9 @@ static partial class CiPlan
     [GeneratedRegex(@"^needs\.quality-gate\.outputs\.app == 'success'$")]
     private static partial Regex AppBuilt();
     const string AppResult = "${{ needs.app.result }}";
+    const string ConcurrencyGroup =
+        "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}";
+    const string CancelInProgress = "${{ github.event_name == 'pull_request' }}";
     // The only shape a suite-gated step's if: may take: guards that hold in the whole ring too
     // (the runner's OS, not cancelled), then a disjunction of exactly the whole-ring bypass and the
     // suite tests. A substring check passed `... || contains(...)) && contains(...)`, which the
@@ -93,6 +96,14 @@ static partial class CiPlan
             Add("ci.yml has no plan job");
             return problems;
         }
+
+        // Main's push runs coalesce in ci-main, never cancelled once running, and only first
+        // attempts join it: a re-run there could take a waiting push run's place, so that push's
+        // commit would go untested (quality/README.md §4.7).
+        if (Child(root, "concurrency") is not YamlMappingNode concurrency
+            || Normalize(Scalar(concurrency, "group") ?? "") != ConcurrencyGroup
+            || Normalize(Scalar(concurrency, "cancel-in-progress") ?? "") != CancelInProgress)
+            Add($"ci.yml's concurrency isn't group {ConcurrencyGroup} with cancel-in-progress {CancelInProgress}");
 
         // Jobs gated on the plan: an if: that reads the plan's true or false for a job. Exactly one
         // shape, so the whole ring runs it whatever the plan says, and quality-gate can tell from

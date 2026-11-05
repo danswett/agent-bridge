@@ -22,16 +22,19 @@ permissions:
   contents: read
 
 # A newer push to a pull request cancels that pull request's older run: only the latest head's
-# result counts, and a superseded run only holds runners other work is queued for. Pushes to main
-# share one group, ci-main, and are never cancelled once running: at most one runs and one waits,
-# a newer waiting run (or a re-run) cancelling the one waiting before it starts (merge-rule passes
-# over such a run, quality/README.md §4.9). GitHub promises no order between them, so nothing
-# here relies on one: each run plans from the last commit main's CI passed on, so a replaced
-# run's changes are tested with a later one (the plan job), and publish's own checks keep
-# releases in version order (publish-gate). A run by hand is grouped by its own run id, never
-# cancelled.
+# result counts, and a superseded run only holds runners other work is queued for. First attempts
+# of pushes to main share one group, ci-main, and are never cancelled once running: at most one of
+# them runs and one waits, a newer waiting push run cancelling the one waiting before it starts
+# (re-runs, below, run beside them). GitHub promises no order
+# between them, so nothing here relies on one: each run plans from the last commit main's CI
+# passed on, so a replaced run's changes are tested with a later one (the plan job), merge-rule
+# passes over a replaced run only when the newest run's commit builds on its commit, and
+# otherwise blocks until it's re-run (quality/README.md §4.9), and publish's own checks keep
+# releases in version order (publish-gate). A re-run (attempt 2 on) never joins ci-main, so it
+# can't take a waiting push run's place: like a run by hand, it's grouped by its own run id,
+# never cancelled.
 concurrency:
-  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:

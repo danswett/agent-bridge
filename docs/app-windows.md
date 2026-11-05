@@ -475,8 +475,9 @@ connector's Install button on a machine the dashboard drives.
   request or a fork. It
   is the only job with `contents: write`, and runs one at a time (concurrency group
   `publish-prerelease`), and publishes each version once and never one older than any already
-  out, so release order doesn't rest on the order main's CI runs go in (concurrency group
-  `ci-main`, which GitHub doesn't promise): a run publishes even after `main` has moved on, and
+  out, so release order doesn't rest on the order main's CI runs go in (first attempts share
+  concurrency group `ci-main`, whose order GitHub doesn't promise, and a re-run has a group of
+  its own): a run publishes even after `main` has moved on, and
   one that reaches `publish` after a newer release publishes nothing (re-run a failed run to
   publish it, while no newer one has).
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github

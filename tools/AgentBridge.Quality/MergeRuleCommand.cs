@@ -411,13 +411,18 @@ static class MergeRuleCommand
 
     /// <summary>
     /// The base branch's CI: its workflow's newest finished push run there, at its latest attempt
-    /// (one REST call). A newer run still going doesn't count, so main stays red until the fix's
-    /// run passes; but a finished run being re-run (attempt 2 on) does, as not green, since its
+    /// (one REST call, and a compare when it passed). A newer run still going doesn't count, so
+    /// main stays red until the fix's run passes; but a finished run being re-run (attempt 2 on)
+    /// does, as not green, since its
     /// attempt before was newer than any older run's, and is almost always red: no one re-runs a
-    /// green main. One exception: a run cancelled before any job started, with a newer run after
-    /// it, was a pending run that main's CI concurrency group replaced with the newer one; it
-    /// tested nothing, so it's passed over. No finished run, or one that can't be read, fails
-    /// closed, and so does a cancelled run whose jobs can't be read.
+    /// green main. One exception: a run cancelled before any job started, whose commit the newest
+    /// run's commit builds on, was a pending run that main's CI concurrency group replaced with a
+    /// newer one; it tested nothing, and the newest run, planned from the last commit main's CI
+    /// passed on, tests its change, so it's passed over. A newest run on an older commit proves no
+    /// such thing, since GitHub doesn't promise runs enter the group in push order; nor does a
+    /// passed run vouch for a later commit whose older run by id hasn't passed. No finished
+    /// run, or one that can't be read, fails closed, and so does a cancelled run whose jobs, or
+    /// whose place in the newest run's history, can't be read.
     /// </summary>
     static MainFact ReadMain(Session session, out string log)
     {
@@ -441,10 +446,16 @@ static class MergeRuleCommand
                     var conclusion = run.GetProperty("conclusion").GetString() ?? "without a result";
                     // i > 0: only a run with a newer one after it can have been replaced; the newest
                     // cancelled, or a re-run attempt cancelled, could hide a real result.
-                    if (conclusion == "cancelled" && i > 0 && attempt == 1 && NeverStarted(session, id))
+                    if (conclusion == "cancelled" && i > 0 && attempt == 1 && NeverStarted(session, id)
+                        && BuildsOn(session, runs[0].GetProperty("head_sha").GetString() ?? "", run.GetProperty("head_sha").GetString() ?? ""))
                     {
                         replaced.Add($"{id} on {sha}");
                         continue;
+                    }
+                    if (conclusion == "success" && Unvouched(session, run, runs.Skip(i + 1)) is { } unvouched)
+                    {
+                        log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {sha} ended success, but {unvouched}.";
+                        return new MainFact("failure", unvouched);
                     }
                     log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {sha} ended {conclusion}."
                         + (replaced.Count > 0 ? $" Passed over run(s) {string.Join(", ", replaced)}: cancelled before starting, replaced by a newer run." : "");
@@ -482,6 +493,46 @@ static class MergeRuleCommand
                 job.TryGetProperty("runner_id", out var runner)
                 && (runner.ValueKind == JsonValueKind.Null || (runner.ValueKind == JsonValueKind.Number && runner.GetInt64() == 0))
                 && job.TryGetProperty("steps", out var steps) && steps.ValueKind == JsonValueKind.Array && steps.GetArrayLength() == 0);
+    }
+
+    /// <summary>
+    /// Whether commit <paramref name="newer"/> has <paramref name="older"/> in its history (or is
+    /// it), from GitHub's compare. Anything but two full commit ids isn't proof.
+    /// </summary>
+    static bool BuildsOn(Session session, string newer, string older)
+    {
+        static bool IsSha(string sha) => sha.Length == 40 && sha.All(char.IsAsciiHexDigitLower);
+        if (!IsSha(newer) || !IsSha(older))
+            return false;
+        if (newer == older)
+            return true;
+        using var doc = session.Rest($"repos/{session.Slug}/compare/{older}...{newer}?per_page=1");
+        return doc.RootElement.GetProperty("status").GetString() is "ahead" or "identical";
+    }
+
+    /// <summary>
+    /// Why a passed run doesn't vouch for main, or null if it does: a run older by id, on a commit
+    /// after the passed run's, that hasn't passed. GitHub doesn't promise runs are created in push
+    /// order, so the newest run can be on an older commit than one whose run was replaced, failed
+    /// or is being re-run, which the passed run never tested. Main's commits after the passed
+    /// run's come from one compare; one that can't list them all isn't proof.
+    /// </summary>
+    static string? Unvouched(Session session, JsonElement passed, IEnumerable<JsonElement> older)
+    {
+        var config = session.Config;
+        var sha = passed.GetProperty("head_sha").GetString() ?? "";
+        using var doc = session.Rest($"repos/{session.Slug}/compare/{Uri.EscapeDataString(sha)}...{Uri.EscapeDataString(config.Base)}?per_page=100");
+        var root = doc.RootElement;
+        var commits = root.GetProperty("commits");
+        if (root.GetProperty("status").GetString() is not ("ahead" or "identical")
+            || root.GetProperty("total_commits").GetInt32() != commits.GetArrayLength())
+            return $"{config.Base}'s commits after CI {MergeRule.Short(sha)} can't all be listed: waiting for {config.Base}'s CI";
+        var after = commits.EnumerateArray().Select(c => c.GetProperty("sha").GetString()).ToHashSet(StringComparer.Ordinal);
+        foreach (var run in older)
+            if (after.Contains(run.GetProperty("head_sha").GetString() ?? "")
+                && !(run.GetProperty("status").GetString() == "completed" && run.GetProperty("conclusion").GetString() == "success"))
+                return $"{config.Base}'s CI hasn't passed on {MergeRule.Short(run.GetProperty("head_sha").GetString() ?? "")}, a commit after CI {MergeRule.Short(sha)}: waiting for {config.Base} to be green";
+        return null;
     }
 
     // REST names a bot "app[bot]" and GraphQL "app"; read both the GraphQL way.

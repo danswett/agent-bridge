@@ -269,10 +269,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    `quality/plan.ps1`: ring 1 on a pull request and on `main`, and on a draft the fast ring
    (`-FastRing`: ring 0, Linux only, §2).
 
-   **Main, at most one run at a time.** Pushes to `main` share the concurrency group `ci-main`,
-   which never cancels a run in progress: at most one runs and one waits, and a newer waiting run
-   (or a re-run of an old one) cancels the one waiting before it starts (the merge rule passes
-   over such a run, item 9). GitHub promises no order between them, and nothing relies on one.
+   **Main: first attempts coalesce, re-runs run apart.** First attempts of pushes to `main` share
+   the concurrency group `ci-main`, which never cancels a run in progress: at most one of them
+   runs and one waits, and a newer waiting push run cancels the one waiting before it starts. A
+   re-run (attempt 2 on) never joins `ci-main` but gets its own run-id group, like a run by hand,
+   so it runs beside them and can't take a waiting push run's place and leave that push's commit
+   untested (#938's review). GitHub promises no
+   order between push runs, and nothing relies on one: the merge rule passes over a replaced
+   run only when the newest run's commit builds on its commit, and otherwise, or when the newest
+   run itself was replaced, holds main not green until that run is re-run (item 9).
    So a main run's change is everything since the last commit main's CI
    passed on: the plan reads `ci.yml`'s passed push runs on `main` (the newest 100, through the
    `actions: read` token), takes the newest whose commit is an ancestor of this one, fetches
@@ -455,9 +460,12 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      being re-run counts as not green (its last finished attempt was almost always red). A run
      cancelled while still pending, replaced in `ci-main` by a newer push before any job of it
      started (a first attempt with a newer run listed, whose jobs, every one read, have no
-     runner and no steps), tested nothing, so it is passed over for the finished run before it,
-     red or green; any other cancelled run, or one whose jobs can't be read, still counts as not
-     green. While it
+     runner and no steps, and whose commit the newest run's commit builds on, by GitHub's
+     compare), tested nothing, and the newest run tests its change, so it is passed over for the
+     finished run before it, red or green; any other cancelled run (the newest included), or one
+     whose jobs or compare can't be read, still counts as not green: re-run it. A run that passed
+     doesn't vouch for a later commit (by main's compare from it) whose run, older by id since
+     runs aren't promised to be created in push order, hasn't passed. While it
      isn't green, every pull request fails, its description starting `Main is red (CI <sha>)`;
      main unread, or with no finished run, fails closed. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from the merge coordinator, since labels take triage

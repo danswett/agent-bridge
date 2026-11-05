@@ -1047,7 +1047,64 @@ public class MergeRuleTests
             Assert.Equal([$"{Head} {state} merge-rule {description} "], empty.Posted);
             Assert.Equal([$"{Head} {state} merge-rule {description} "], unpicked.Posted);
             Assert.Contains("repos/danswett/agent-bridge/actions/runs/6/jobs?per_page=100", empty.RestPaths);
+            Assert.Contains($"repos/danswett/agent-bridge/compare/{"c6".PadRight(40, '0')}...{"c7".PadRight(40, '0')}?per_page=1", empty.RestPaths);
             Assert.Contains($"Main: ci.yml run 5 (attempt 1) on c500000 ended {before}. Passed over run(s) 6 on c600000", output.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // The newest run covers a replaced run's commit only if it builds on it: GitHub doesn't promise
+    // pushes enter main's concurrency group in order, so a newest run on an older or diverged
+    // commit (the replaced commit then never tested), or a compare that can't be read, blocks.
+    [Theory]
+    [InlineData("""{"status": "ahead"}""", "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("""{"status": "identical"}""", "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("""{"status": "behind"}""", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData("""{"status": "diverged"}""", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(null, "error", "Couldn't read main's CI: gh: HTTP 502")]
+    public void A_replaced_main_run_is_passed_over_only_when_the_newest_run_builds_on_its_commit(string? compare, string state, string description)
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns((7, "queued", null, 1), (6, "completed", "cancelled", 1), (5, "completed", "success", 1)), mainJobs: MainJobs(), mainCompare: compare);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Equal([$"{Head} {state} merge-rule {description} "], github.Posted);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // A passed run vouches only for main up to its own commit: an older run by id on a later
+    // commit (runs created out of push order) that was replaced, failed or is being re-run blocks
+    // until it passes, and so do main's later commits that can't all be listed.
+    [Theory]
+    [InlineData("completed", "cancelled", 1, true, "ahead", 1, "failure", "Main's CI hasn't passed on c600000, a commit after CI c700000: waiting for main to be green")]
+    [InlineData("completed", "failure", 1, true, "ahead", 1, "failure", "Main's CI hasn't passed on c600000, a commit after CI c700000: waiting for main to be green")]
+    [InlineData("in_progress", null, 2, true, "ahead", 1, "failure", "Main's CI hasn't passed on c600000, a commit after CI c700000: waiting for main to be green")]
+    [InlineData("completed", "success", 2, true, "ahead", 1, "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("completed", "cancelled", 1, false, "identical", 0, "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("completed", "cancelled", 1, true, "ahead", 101, "failure", "Main's commits after CI c700000 can't all be listed: waiting for main's CI")]
+    [InlineData("completed", "cancelled", 1, false, "diverged", 0, "failure", "Main's commits after CI c700000 can't all be listed: waiting for main's CI")]
+    [InlineData("completed", "cancelled", 1, true, null, 1, "error", "Couldn't read main's CI: gh: HTTP 502")]
+    public void A_passed_main_run_does_not_vouch_for_a_later_commit_whose_older_run_has_not_passed(string status, string? conclusion, int attempt, bool later, string? compare, int total, string state, string description)
+    {
+        var commits = new[] { new { sha = "c6".PadRight(40, '0') } }.Take(later ? 1 : 0);
+        var after = compare is null ? null : JsonSerializer.Serialize(new { status = compare, total_commits = total, commits });
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns((7, "completed", "success", 1), (6, status, conclusion, attempt), (5, "completed", "success", 1)), mainAfter: after);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Equal([$"{Head} {state} merge-rule {description} "], github.Posted);
+            Assert.Contains($"repos/danswett/agent-bridge/compare/{"c7".PadRight(40, '0')}...main?per_page=100", github.RestPaths);
         }
         finally
         {
@@ -1059,6 +1116,8 @@ public class MergeRuleTests
     // one a runner picked up, the newest run, a re-run, or one whose jobs can't be read or are cut
     // short could hide a real failure, so it still blocks, whether the run before it passed or
     // failed (a red main stays red: the newest finished run cancelled, nothing newer, run 5 red).
+    // The newest run cancelled pending, by whatever took its place, never tested its commit: it
+    // blocks until it's re-run.
     [Theory]
     [InlineData(7L, 1, "[[12,0]]", "success", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
     [InlineData(7L, 1, "[[null,3]]", "success", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
@@ -1410,7 +1469,7 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainCompare = """{"status": "ahead"}""", string? mainAfter = """{"status": "identical", "total_commits": 0, "commits": []}""") : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -1440,6 +1499,12 @@ public class MergeRuleTests
                 return failMain ? throw new InvalidOperationException("gh: HTTP 502") : JsonDocument.Parse(mainRuns ?? MainRuns((1, "completed", "success", 1)));
             if (path.Contains("/actions/runs/", StringComparison.Ordinal))
                 return JsonDocument.Parse(mainJobs ?? throw new InvalidOperationException("gh: HTTP 502"));
+            // Main's commits after a passed run's, then two of main's commits compared, not a pull
+            // request's head against main.
+            if (path.Contains("...main?", StringComparison.Ordinal))
+                return JsonDocument.Parse(mainAfter ?? throw new InvalidOperationException("gh: HTTP 502"));
+            if (path.Contains("/compare/", StringComparison.Ordinal) && !path.Contains("/compare/main...", StringComparison.Ordinal))
+                return JsonDocument.Parse(mainCompare ?? throw new InvalidOperationException("gh: HTTP 502"));
             if (failStatuses && path.Contains("/statuses", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 502");
             return JsonDocument.Parse(path.Contains("/statuses", StringComparison.Ordinal)

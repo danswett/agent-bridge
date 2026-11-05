@@ -4,6 +4,9 @@ public class CiPlanTests
 {
     // ci.yml's wiring to the plan as the repository has it, cut down to two gated jobs.
     const string Wired = """
+        concurrency:
+          group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
+          cancel-in-progress: ${{ github.event_name == 'pull_request' }}
         jobs:
           plan:
             outputs:
@@ -52,6 +55,27 @@ public class CiPlanTests
         "its if: must be [runner.os == 'Windows|Linux|macOS' && ][!cancelled() && ](env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), '...') || ...)";
 
     static IEnumerable<string> Check(string yaml) => CiPlan.Check(Fixture.Catalog(), yaml).Select(p => p.Message);
+
+    // Only main's first-attempt push runs share ci-main, never cancelled once running: a re-run
+    // there could take a waiting push run's place and leave its commit untested (#938's review).
+    [Theory]
+    [InlineData(" && github.run_attempt == '1'", "", false)]
+    [InlineData("github.run_attempt == '1'", "github.run_attempt != ''", false)]
+    [InlineData("'ci-main' ||", "'ci-main-' ||", false)]
+    [InlineData("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", "cancel-in-progress: true", false)]
+    [InlineData("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", "cancel-in-progress: false", false)]
+    [InlineData("concurrency:", "x-concurrency:", false)]
+    [InlineData("'1' && 'ci-main'", "'1'   &&  'ci-main'", true)]
+    public void Ci_concurrency_keeps_reruns_out_of_ci_main_and_never_cancels_its_runs(string from, string to, bool fine)
+    {
+        Assert.Contains(from, Wired, StringComparison.Ordinal);
+        var problems = Check(Wired.Replace(from, to, StringComparison.Ordinal));
+        string[] expected = fine ? [] : [
+            "ci.yml's concurrency isn't group ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}"
+            + " with cancel-in-progress ${{ github.event_name == 'pull_request' }}"];
+
+        Assert.Equal(expected, problems);
+    }
 
     [Fact]
     public void The_wired_fixture_has_no_problems_so_each_test_below_shows_one_drift()
