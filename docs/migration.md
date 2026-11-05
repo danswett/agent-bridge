@@ -178,9 +178,11 @@ A rehearsal baseline (`agent-bridge-rehearsal baseline save`) hashes these cache
 in the Codex home (and Copilot and Claude homes) agent-ha-bridge's `installation.json` records,
 which are the ones a migration rewrites, whatever `CODEX_HOME` or `--home` says. A record that
 cannot say which homes they are (not a JSON object, or a home that is not a full path) is
-refused with an error rather than guessed at. Save the baseline with the current rehearsal
+refused with an error rather than guessed at. A recorded home inside `~/.agent-ha-bridge` is
+measured once, as that agent's file. Save the baseline with the current rehearsal
 tool **before migrating**. One saved by an older tool, which never measured the cache, or
-(version 2) may have measured another Codex home's, is refused by `baseline compare` with an
+(version 2) may have measured another Codex home's, or which holds one file twice, is refused by
+`baseline compare` with an
 error rather than compared; save it again before migrating. If the machine is already migrated,
 that is too late: the cache as it was before migrating was never measured, and a baseline saved
 now does not prove it.

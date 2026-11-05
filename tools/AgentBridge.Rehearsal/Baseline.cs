@@ -81,8 +81,16 @@ internal static class BaselineCapture
         One(files, homes, Tasks, Path.Combine(homes.Home, "Library", "LaunchAgents", "com.agent-ha-bridge.daemon.plist"));
         var taskList = tasks.Read() ?? throw new IOException("agent-ha-bridge's scheduled tasks could not be read");
         return new Baseline(Version, now, Environment.MachineName, Environment.UserName,
-            [.. files.OrderBy(f => f.Path, StringComparer.Ordinal)], [.. taskList.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase)]);
+            [.. Distinct(files).OrderBy(f => f.Path, StringComparer.Ordinal)], [.. taskList.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase)]);
     }
+
+    static readonly StringComparer PathCase = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    // A recorded home can sit inside another one measured, as a codexHome under bridgeHome does,
+    // so one file can be found twice: it is measured once, filed by the later, agent-specific
+    // look (its cached hooks.json is a hook, not part of the install).
+    static IEnumerable<FileEntry> Distinct(List<FileEntry> files) =>
+        files.Select((f, at) => (f, at)).GroupBy(e => e.f.Path, PathCase).Select(g => g.MaxBy(e => e.at).f);
 
     // The agents' homes as agent-ha-bridge's installation.json records them, read as a migration
     // reads them (AgentHaBridgeInstall.Read): codexHome, copilotHome and claudeHome, else under
@@ -110,7 +118,8 @@ internal static class BaselineCapture
             {
                 throw Unclear($"has a {name} that is not a full path");
             }
-            return path;
+            // Normalised, so a file it shares with another home is named alike from both.
+            return Path.GetFullPath(path);
         }
         var home = Folder("home") ?? Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(homes.BridgeHome)))!;
         return homes with
@@ -220,8 +229,18 @@ internal static class BaselineCapture
         return Outcome.Fail($"{unexpected.Count} change(s) outside {outside}: {string.Join("; ", unexpected.Take(5).Select(d => $"{d.Path} {d.Change}"))}", data);
     }
 
-    public static Baseline Load(string file) =>
-        JsonSerializer.Deserialize<Baseline>(File.ReadAllText(file), Evidence.Json) ?? throw new IOException($"{file} is not a baseline");
+    public static Baseline Load(string file)
+    {
+        var baseline = JsonSerializer.Deserialize<Baseline>(File.ReadAllText(file), Evidence.Json) ?? throw new IOException($"{file} is not a baseline");
+        // An earlier version 3 tool measured a file inside two recorded homes twice; which of its
+        // hashes, and which filing, is the one to compare cannot be told.
+        if (baseline.Files.GroupBy(f => f.Path, PathCase).FirstOrDefault(g => g.Count() > 1) is { } twice)
+        {
+            throw new IOException($"{file} holds {twice.Key} {twice.Count()} times, so it cannot be compared. Before migrating, save the baseline again with this tool. "
+                + "If the machine has already been migrated it is too late: a baseline saved now does not prove the files as they were before migrating");
+        }
+        return baseline;
+    }
 
     public static void Save(Baseline baseline, string file)
     {

@@ -141,6 +141,49 @@ public class BaselineTests
         Assert.Equal(Verdict.Fail, BaselineCapture.Judge(before, diffs, new HashSet<string>()).Verdict);
     }
 
+    [Fact]
+    public void A_codex_home_recorded_inside_agent_ha_bridges_folder_is_measured_once_as_codexs_and_compares_after_saving()
+    {
+        using var s = Install();
+        using var saved = new Scratch();
+        var codexHome = Path.Combine(s.Root, ".agent-ha-bridge", "codex-profile");
+        s.File(".agent-ha-bridge/installation.json", System.Text.Json.JsonSerializer.Serialize(new { codexHome }));
+        s.File(".agent-ha-bridge/codex-profile/config.toml", "x = 1");
+        var cached = s.File(".agent-ha-bridge/codex-profile/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", "{\"hooks\":1}");
+        var file = Path.Combine(saved.Root, "base.json");
+        BaselineCapture.Save(BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow), file);
+        var before = BaselineCapture.Load(file);
+
+        var hook = Assert.Single(before.Files, f => f.Path.EndsWith("/1.0.0/hooks.json", StringComparison.Ordinal));
+        Assert.Equal(("~/.agent-ha-bridge/codex-profile/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", BaselineCapture.Hooks), (hook.Path, hook.Category));
+        Assert.Equal(BaselineCapture.Agents, Assert.Single(before.Files, f => f.Path == "~/.agent-ha-bridge/codex-profile/config.toml").Category);
+        Assert.Empty(Again(s, before));
+
+        File.WriteAllText(cached, "{\"hooks\":2}");
+        var diffs = Again(s, before);
+
+        var d = Assert.Single(diffs);
+        Assert.Equal((hook.Path, BaselineCapture.Hooks), (d.Path, d.Category));
+        Assert.Equal(Verdict.Fail, BaselineCapture.Judge(before, diffs, new HashSet<string> { BaselineCapture.Install }).Verdict);
+        Assert.Equal(Verdict.Pass, BaselineCapture.Judge(before, diffs, new HashSet<string> { BaselineCapture.Hooks }).Verdict);
+    }
+
+    [Fact]
+    public void A_saved_baseline_holding_a_file_twice_is_refused_rather_than_compared_by_one_of_its_hashes()
+    {
+        using var s = Install();
+        using var saved = new Scratch();
+        var captured = BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow);
+        var first = captured.Files[0];
+        var file = Path.Combine(saved.Root, "base.json");
+        BaselineCapture.Save(captured with { Files = [.. captured.Files, first with { Category = BaselineCapture.Hooks, Sha256 = new string('0', 64) }] }, file);
+
+        var e = Assert.Throws<IOException>(() => BaselineCapture.Load(file));
+
+        Assert.Contains($"holds {first.Path} 2 times", e.Message);
+        Assert.Contains("Before migrating, save the baseline again", e.Message);
+    }
+
     [Theory]
     [InlineData("[]")]
     [InlineData("{\"codexHome\":5}")]
