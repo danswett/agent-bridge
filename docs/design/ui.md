@@ -780,7 +780,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     - **An optional single choice or Yes or no can go back to unanswered:** once one of its
       options is selected, a host default included, a plain "Clear" link follows the group on
       its last line, and pressing it unchecks the group. It is absent while nothing is
-      selected and on a required field, and is named "Clear *title*".
+      selected and on a required field, and is named "Clear *title*". Pressing it moves focus
+      to the group's first option, without selecting it, before Clear goes (A4).
     - **One primary per card:** Send answer is the only button with Bridge's fill. A selected
       option is the platform's checked control and never takes the accent fill, so it never
       reads as a button that would act.
@@ -809,6 +810,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       Busy and refused make the fields editable again, with Send answer back. Not confirmed
       and stale keep them read-only, with no Send answer. Failed keeps them read-only, with
       Try again, which resends the same request, so the same answer, never a new one.
+      Focus is never dropped as these change (A4). Send answer keeps focus through its ring
+      and check. If focus is on Send answer when it changes: when Try again takes its place,
+      focus moves to Try again, and when it goes with nothing in its place (not confirmed,
+      stale), focus moves to the card's heading, whose description is the outcome line. If
+      focus is anywhere else, it stays there, so an outcome arriving later never takes it.
     - **Keyboard:** Tab walks the fields in order, then Send answer (A3). Arrows move and
       select within a radio group, Yes and No included, and Space checks a checkbox. Enter in
             an answer field (a radio, a checkbox or a one-line field) sends, as pressing Send
