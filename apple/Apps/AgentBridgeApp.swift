@@ -9,11 +9,11 @@ struct AgentBridgeApp: App {
         WindowGroup(id: "workbench") {
             SessionWorkbench(store: store)
             #if os(macOS)
-                .frame(minWidth: 720, minHeight: 480)
+                .frame(minWidth: 960, minHeight: 580)
             #endif
         }
         #if os(macOS)
-        .defaultSize(width: 1080, height: 760)
+        .defaultSize(width: 1280, height: 800)
         #endif
         .onChange(of: scenePhase) { _, phase in
             store.notifications.setForeground(phase == .active)

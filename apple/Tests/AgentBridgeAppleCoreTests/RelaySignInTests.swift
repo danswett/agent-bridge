@@ -40,8 +40,32 @@ private struct SignInReply: Sendable {
     let status: Int
     let body: Data
     let location: URL?
+    var error: URLError.Code?
     init(_ status: Int, _ body: String, location: URL? = nil) {
         self.status = status; self.body = Data(body.utf8); self.location = location
+    }
+
+    init(_ error: URLError.Code) {
+        self.init(0, "")
+        self.error = error
+    }
+}
+
+private actor ConnectivityChanges {
+    private(set) var values: [Bool] = []
+    func record(_ connected: Bool) {
+        values.append(connected)
+    }
+}
+
+private actor PollPermissions {
+    var values: [Bool]
+    init(_ values: [Bool]) {
+        self.values = values
+    }
+
+    func next() -> Bool {
+        values.isEmpty ? false : values.removeFirst()
     }
 }
 
@@ -132,6 +156,10 @@ private final class SignInURLProtocol: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL)); return
         }
         let reply = fixture.next(request)
+        if let error = reply.error {
+            client?.urlProtocol(self, didFailWithError: URLError(error))
+            return
+        }
         let headers = reply.location.map { ["Location": $0.absoluteString] }
         let response = HTTPURLResponse(url: url, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: headers)!
         if let location = reply.location {
@@ -186,6 +214,83 @@ private func pollingCode(interval: Int = 2, expiresIn: Int = 30) throws -> Relay
     task.cancel()
     await #expect(throws: CancellationError.self) { try await task.value }
     #expect(http.requests.isEmpty)
+}
+
+@Test func signInKeepsTheApprovedCodeAcrossTransientNetworkLoss() async throws {
+    let clock = SignInClock()
+    let http = SignInHTTP([.init(200, validDeviceCode), .init(.networkConnectionLost), .init(.timedOut), .init(202, #"{"interval":2}"#), .init(200, validAccount)])
+    let (client, session) = try http.client(clock)
+    defer { session.invalidateAndCancel(); SignInURLProtocol.fixtures.remove(http) }
+    let changes = ConnectivityChanges()
+    let code = try await client.start()
+    let account = try await client.wait(for: code, onConnectivityChange: { await changes.record($0) })
+    #expect(account.login == "fixture")
+    #expect(await changes.values == [false, true])
+    #expect(clock.sleeps == [.seconds(2), .seconds(4), .seconds(8), .seconds(8)])
+    #expect(http.requests.map { $0.url?.path } == ["/v1/auth/device", "/v1/auth/token", "/v1/auth/token", "/v1/auth/token", "/v1/auth/token"])
+    for body in http.bodies.dropFirst() {
+        #expect(try JSONDecoder().decode(JSONValue.self, from: body) == .object(["deviceCode": .string(code.deviceCode)]))
+    }
+}
+
+@Test func anOfflinePollCannotExtendTheOriginalDeviceCodeDeadline() async throws {
+    let clock = SignInClock()
+    let http = SignInHTTP([.init(.notConnectedToInternet)])
+    let (client, session) = try http.client(clock)
+    defer { session.invalidateAndCancel(); SignInURLProtocol.fixtures.remove(http) }
+    await #expect(throws: RelayError.refused("The code expired. Start sign-in again.")) {
+        try await client.wait(for: pollingCode(interval: 2, expiresIn: 3))
+    }
+    #expect(http.requests.count == 1)
+    #expect(clock.sleeps == [.seconds(2), .seconds(1)])
+}
+
+@Test func repeatedNetworkInterruptionsCapBackoffAtOneMinute() async throws {
+    let clock = SignInClock()
+    let http = SignInHTTP([.init(.networkConnectionLost), .init(.timedOut), .init(200, validAccount)])
+    let (client, session) = try http.client(clock)
+    defer { session.invalidateAndCancel(); SignInURLProtocol.fixtures.remove(http) }
+    #expect(try await client.wait(for: pollingCode(interval: 40, expiresIn: 240)).login == "fixture")
+    #expect(clock.sleeps == [.seconds(40), .seconds(60), .seconds(60)])
+}
+
+@Test func backgroundPollsWaitUntilTheAppReturnsBeforeExchangingTheSameCode() async throws {
+    let clock = SignInClock()
+    let http = SignInHTTP([.init(200, validAccount)])
+    let (client, session) = try http.client(clock)
+    defer { session.invalidateAndCancel(); SignInURLProtocol.fixtures.remove(http) }
+    let visibility = PollPermissions([false, false, true])
+    let code = try pollingCode()
+    #expect(try await client.wait(for: code, canPoll: { await visibility.next() }).login == "fixture")
+    #expect(clock.sleeps == [.seconds(2), .seconds(2), .seconds(2)])
+    #expect(http.requests.count == 1)
+    #expect(try JSONDecoder().decode(JSONValue.self, from: #require(http.bodies.first)) == .object(["deviceCode": .string(code.deviceCode)]))
+}
+
+@Test func backgroundSuspensionCannotExtendTheOriginalCodeLifetime() async throws {
+    let clock = SignInClock()
+    let http = SignInHTTP([])
+    let (client, session) = try http.client(clock)
+    defer { session.invalidateAndCancel(); SignInURLProtocol.fixtures.remove(http) }
+    await #expect(throws: RelayError.refused("The code expired. Start sign-in again.")) {
+        try await client.wait(for: pollingCode(interval: 2, expiresIn: 5), canPoll: { false })
+    }
+    #expect(clock.sleeps == [.seconds(2), .seconds(2), .seconds(1)])
+    #expect(http.requests.isEmpty)
+}
+
+@Test(arguments: [URLError.Code.serverCertificateUntrusted, .cancelled])
+func certificateFailureAndCancellationNeverRetryTheTokenPoll(_ error: URLError.Code) async throws {
+    let http = SignInHTTP([.init(error), .init(200, validAccount)])
+    let (client, session) = try http.client(SignInClock())
+    defer { session.invalidateAndCancel(); SignInURLProtocol.fixtures.remove(http) }
+    do {
+        _ = try await client.wait(for: pollingCode())
+        Issue.record("an untrusted or canceled request must not complete sign-in")
+    } catch let failure as URLError {
+        #expect(failure.code == error)
+    }
+    #expect(http.requests.count == 1)
 }
 
 @Test func signInExpiresWithoutPollingAtOrBeyondTheDeadline() async throws {

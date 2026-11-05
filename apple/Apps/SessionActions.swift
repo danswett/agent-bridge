@@ -1,10 +1,32 @@
 import AgentBridgeAppleCore
 import SwiftUI
 
+enum SessionActionPresentation {
+    case sheet, composer, inspector
+}
+
 struct SessionActions: View {
     let sessionID: String
     let store: BridgeStore
     @Bindable var host: HostStore
+    var presentation: SessionActionPresentation = .sheet
+
+    var body: some View {
+        SessionActionContent(sessionID: sessionID, store: store, host: host, presentation: presentation)
+            .id(Entry(host: ObjectIdentifier(host), sessionID: sessionID))
+    }
+
+    private struct Entry: Hashable {
+        let host: ObjectIdentifier
+        let sessionID: String
+    }
+}
+
+private struct SessionActionContent: View {
+    let sessionID: String
+    let store: BridgeStore
+    @Bindable var host: HostStore
+    let presentation: SessionActionPresentation
     @Environment(\.dismiss) private var dismiss
     @State private var values: [String: JSONValue] = [:]
     @State private var answerText = ""
@@ -13,7 +35,10 @@ struct SessionActions: View {
     @State private var stopConfirmation: BridgeStopConfirmation?
     @State private var stopConnection: UUID?
     @State private var uploading = false
-    @State private var attachments: [(UUID, String)] = []
+    @State private var composerHeight: CGFloat = 160
+    private var attachments: Binding<[(UUID, String)]> {
+        Binding(get: { host.attachmentDrafts[sessionID] ?? [] }, set: { host.attachmentDrafts[sessionID] = $0 })
+    }
 
     private var replyText: Binding<String> {
         Binding(get: { host.replyDrafts[sessionID] ?? "" }, set: { host.replyDrafts[sessionID] = $0 })
@@ -40,6 +65,20 @@ struct SessionActions: View {
     }
 
     var body: some View {
+        Group {
+            switch presentation {
+            case .sheet: sheet
+            case .composer: composer
+            case .inspector: inspector
+            }
+        }
+        .onAppear { resetQuestion(); removeSubmittedReplyAttachments() }
+        .onChange(of: attempt?.result) { removeSubmittedReplyAttachments() }
+        .onChange(of: question?.id) { resetQuestion() }
+        .onChange(of: host.connectionID) { stopConfirmation = nil }
+    }
+
+    private var sheet: some View {
         NavigationStack {
             Form {
                 Section {
@@ -58,49 +97,123 @@ struct SessionActions: View {
                 if let question {
                     questionSection(question)
                 } else if host.can("sessions.reply"), session != nil {
-                    Section("Reply") {
-                        TextField("Message", text: replyText, axis: .vertical).lineLimit(3 ... 12)
-                            .disabled(busy)
-                        AttachmentComposer(store: store, host: host, attachments: $attachments,
-                                           disabled: attempt?.isSending == true || attempt?.uncertain == true) { uploading = $0 }
-                        Button("Send Reply", systemImage: "paperplane", action: sendReply)
-                            .keyboardShortcut(.return, modifiers: .command)
-                            .disabled(busy || attempt?.uncertain == true || !host.isLive || replyText.wrappedValue.isEmpty && attachments.isEmpty)
-                    }
-                } else if question == nil, session != nil {
-                    Section { Text("This machine does not offer remote replies.").foregroundStyle(.secondary) }
+                    Section("Reply") { replyControls }
+                } else if session != nil {
+                    Text(replyHold ?? "This machine does not offer remote replies.")
                 }
                 if host.can("sessions.stop"), session != nil {
-                    Section("End session") {
-                        if let confirmation = stopConfirmation, confirmation.expiresAt > Date(), stopConnection == host.connectionID {
-                            Text("The session is still running. Press Force End to confirm stopping it.")
-                            Button("Force End", role: .destructive) { stop(confirmation) }.disabled(busy || attempt?.uncertain == true)
-                        } else {
-                            Button("End Session", role: .destructive) { stop(nil) }.disabled(busy || attempt?.uncertain == true)
-                        }
-                    }
+                    Section("End session") { stopControls }
                 }
                 if let error {
-                    Section { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+                    Section { errorText(error) }
                 }
             }
             .formStyle(.grouped)
             .navigationTitle(question == nil ? "Session actions" : "Answer question")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(busy) } }
             .interactiveDismissDisabled(busy)
-            .onAppear { resetQuestion(); attachments = host.attachmentDrafts[sessionID] ?? []; removeSubmittedReplyAttachments() }
-            .onChange(of: attachments.map(\.0)) { host.attachmentDrafts[sessionID] = attachments }
-            .onChange(of: attempt?.result) { removeSubmittedReplyAttachments() }
-            .onChange(of: question?.id) { resetQuestion() }
-            .onChange(of: host.connectionID) { stopConfirmation = nil; attachments = [] }
         }
         #if os(macOS)
         .frame(minWidth: 480, idealWidth: 600, minHeight: 480, idealHeight: 680)
         #endif
     }
 
-    private func receipt(_ attempt: MutationAttempt) -> some View {
-        Section("Last action") {
+    private var composer: some View {
+        // One scroll surface keeps the submit control reachable even with ten files
+        // or a long structured question. Measuring its content avoids reserving the
+        // maximum height for an ordinary two-line draft.
+        ScrollView {
+            composerContent
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { composerHeight = $0 }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(idealHeight: composerHeight, maxHeight: composerHeight)
+    }
+
+    private var composerContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let attempt {
+                receipt(attempt).font(.callout)
+            }
+            if let question {
+                questionSection(question)
+            } else {
+                Text("Reply").font(.headline)
+                replyControls
+            }
+            if let error {
+                errorText(error)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+    }
+
+    private var replyHold: String? {
+        if let reason = host.readOnlyReason {
+            return reason
+        }
+        if !host.isLive {
+            return host.status
+        }
+        if session == nil {
+            return "This session has ended."
+        }
+        if !host.can("sessions.reply") {
+            return "This machine does not offer remote replies."
+        }
+        return nil
+    }
+
+    @ViewBuilder private var replyControls: some View {
+        TextField("Message this session", text: replyText, axis: .vertical)
+            .lineLimit(2 ... 5)
+            .textFieldStyle(.roundedBorder)
+            .accessibilityLabel("Reply message")
+        if let reason = replyHold {
+            Text(reason).font(.callout).foregroundStyle(.secondary)
+        }
+        AttachmentComposer(store: store, host: host, attachments: attachments,
+                           disabled: replyHold != nil || attempt?.isSending == true || attempt?.uncertain == true) { uploading = $0 }
+        Button("Send Reply", systemImage: "paperplane", action: sendReply)
+            .keyboardShortcut(.return, modifiers: .command)
+            .buttonStyle(.borderedProminent)
+            .disabled(busy || attempt?.uncertain == true || replyHold != nil || replyText.wrappedValue.isEmpty && attachments.wrappedValue.isEmpty)
+    }
+
+    @ViewBuilder private var inspector: some View {
+        Section("End main session") {
+            stopControls
+            if !host.can("sessions.stop") {
+                Text(host.readOnlyReason ?? (host.isLive ? "This machine does not offer remote stop." : host.status))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let error {
+                errorText(error)
+            }
+        }
+        if let attempt, attempt.operation.op == "session.stop" {
+            receipt(attempt, title: "End session result")
+        }
+    }
+
+    @ViewBuilder private var stopControls: some View {
+        if let confirmation = stopConfirmation, confirmation.expiresAt > Date(), stopConnection == host.connectionID {
+            Text("The session is still running. Press Force End to confirm stopping it.")
+            Button("Force End", role: .destructive) { stop(confirmation) }
+                .disabled(busy || attempt?.uncertain == true || !host.can("sessions.stop") || session == nil)
+        } else {
+            Button("End Session", role: .destructive) { stop(nil) }
+                .disabled(busy || attempt?.uncertain == true || !host.can("sessions.stop") || session == nil)
+        }
+    }
+
+    private func errorText(_ message: String) -> some View {
+        Text(message).foregroundStyle(.red).textSelection(.enabled)
+    }
+
+    private func receipt(_ attempt: MutationAttempt, title: String = "Last action") -> some View {
+        Section(title) {
             if attempt.isSending {
                 ProgressView("Waiting for the machine…")
             }
@@ -114,10 +227,13 @@ struct SessionActions: View {
                 Text(error)
             }
             if attempt.uncertain {
-                Text("Retry uses the same action identity and will not create a second press. It is available only while the same host process is running.").font(.caption)
-                Button("Check Delivery Again") { Task { await host.retry(slot) } }
-                    .disabled(!host.isLive || host.instance != attempt.hostInstance || !attempt.canRetry)
-                if !attempt.canRetry {
+                if attempt.result != nil {
+                    Text("The machine could not confirm delivery. Check this session at the machine.").font(.caption)
+                } else if attempt.canRetry {
+                    Text("Check delivery with the same request while the original host process is running.").font(.caption)
+                    Button("Check Delivery Again") { Task { await host.retry(slot) } }
+                        .disabled(!host.isLive || host.readOnlyReason != nil || host.instance != attempt.hostInstance)
+                } else {
                     Text("The safe retry window expired. Check this session at the machine.").font(.caption)
                 }
             }
@@ -158,21 +274,28 @@ struct SessionActions: View {
 
     private func answer() {
         do {
-            guard let question, let session else { return }
+            guard !busy, host.isLive, attempt?.uncertain != true, let question, let session else { return }
             if let reason = host.readOnlyReason {
                 throw BridgeOperationError(reason)
             }
             let operation = try question.answer(sessionID: sessionID, currentQuestionID: loadedQuestionID,
                                                 values: values, text: question.fields.isEmpty ? answerText : nil, capabilities: host.capabilities, sessionAgent: session.agent)
-            Task { await host.perform(operation, slot: slot) }
+            let connection = host.connectionID
+            Task {
+                guard host.connectionID == connection, self.question?.id == question.id else { return }
+                await host.perform(operation, slot: slot)
+            }
         } catch { self.error = error.localizedDescription }
     }
 
     private func sendReply() {
         do {
-            let operation = try BridgeSessionOperations.reply(sessionID: sessionID, text: replyText.wrappedValue, attachments: attachments.map(\.0),
+            guard !busy, replyHold == nil, attempt?.uncertain != true else { return }
+            let operation = try BridgeSessionOperations.reply(sessionID: sessionID, text: replyText.wrappedValue, attachments: attachments.wrappedValue.map(\.0),
                                                               hasQuestion: session?.question != nil, capabilities: host.capabilities)
+            let connection = host.connectionID
             Task {
+                guard host.connectionID == connection, session != nil, session?.question == nil else { return }
                 await host.perform(operation, slot: slot, consumesReplyDraft: true)
                 guard host.attempts[slot]?.operation.requestID == operation.requestID else { return }
                 removeSubmittedReplyAttachments()
@@ -184,17 +307,23 @@ struct SessionActions: View {
         guard let attempt, attempt.operation.op == "session.reply", let result = attempt.result,
               ["delivered", "unconfirmed"].contains(result["outcome"]?.string ?? "") else { return }
         let used = Set(attempt.operation.data["attachments"]?.array?.compactMap { $0["id"]?.string.flatMap(UUID.init(uuidString:)) } ?? [])
-        attachments.removeAll { used.contains($0.0) }
         host.attachmentDrafts[sessionID]?.removeAll { used.contains($0.0) }
     }
 
     private func stop(_ confirmation: BridgeStopConfirmation?) {
         do {
+            guard !busy, host.can("sessions.stop"), attempt?.uncertain != true, session != nil else { return }
+            if confirmation != nil, stopConnection != host.connectionID {
+                return
+            }
             let operation = try BridgeSessionOperations.stop(sessionID: sessionID, confirmation: confirmation, capabilities: host.capabilities)
             let connection = host.connectionID
             Task {
+                guard host.connectionID == connection, session != nil else { return }
                 await host.perform(operation, slot: slot)
-                if let result = host.attempts[slot]?.result {
+                guard host.connectionID == connection, let attempt,
+                      attempt.operation.requestID == operation.requestID else { return }
+                if let result = attempt.result {
                     stopConfirmation = BridgeStopResult(json: result, sessionID: sessionID).confirmation
                     stopConnection = connection
                 }

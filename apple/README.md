@@ -13,18 +13,30 @@ open AgentBridgeApple.xcodeproj
 ```
 
 Select **AgentBridgeMac** or **AgentBridgeMobile**. Choose a signing team for
-physical devices. `project.yml` is authoritative; generated projects are ignored.
+the runnable Mac app and physical mobile devices. `project.yml` is authoritative;
+generated projects are ignored. To build the Mac app from a terminal:
+
+```sh
+DEVELOPMENT_TEAM=YOUR_TEAM_ID bash scripts/build-macos.sh
+```
+
+Apple Development signing is required even for local Mac use: the data protection
+Keychain requires a provisioned application identity. The Mac target declares one
+private Keychain group, and this script verifies the signed app identity, group
+and embedded development profile. An unsigned compile-check build cannot sign in;
+error `-34018` means its required entitlement is missing, not that the Mac is locked.
 
 The Mac app observes an already-running host's `default` profile. Change the
 profile in **Connection Settings**. Sign in with the same GitHub account as your
 hosts to connect remote machines on any Apple platform. The default relay is the
 one used by the Windows app. Custom relays require HTTPS; authentication and blob
 HTTP requests refuse redirects. Tokens and device keys are scoped to the relay
-and GitHub account and stored in this installation's Keychain.
+and GitHub account and stored in this installation's Keychain. Choose **Sign In with GitHub** and **Copy Code and Open GitHub**, paste the code, authorize Agent Bridge, then return to the app. The iOS app waits to exchange the code while it is in the background. A temporary network interruption retries the same code within its original expiry.
 
-The app does not install, restart, migrate or reconfigure a local host. Mac/Linux
-hosts currently advertise read-only session capabilities. Actions work only when
-the connected host offers them, such as a capable remote Windows host.
+The app does not install, restart, migrate or reconfigure a local host. The Mac
+host supports actions on sessions launched by its own managed terminal backend;
+existing sessions remain read-only. Linux delivery remains unsupported. Actions
+work only when the connected host offers them.
 
 ## Workflows
 
@@ -35,6 +47,12 @@ the connected host offers them, such as a capable remote Windows host.
   state, recently ended sessions, Markdown, reasoning and recent tools. Delegate
   details show task/latest text, reasoning, tool durations, nesting and finished
   groups; a stop request prepares an ID-only reply without sending it.
+- The Mac workbench keeps the reply or question editor below the conversation. A
+  resizable right pane shows details and tools; selecting a delegate opens its
+  activity in that pane while the conversation and composer stay visible.
+  iPad uses the same side-by-side arrangement when its detail column fits both
+  panes. On iPhone and narrow iPad windows, the editor stays below the
+  conversation and the toolbar opens the inspector.
 - Structured questions/approvals, replies and two-step stop. An uncertain action
   remains bound to its original UUID and host process; reconnect never silently
   sends a fresh press. A delivered composer reply removes only its sent prefix
@@ -74,7 +92,9 @@ profiles or live agents.
 
 Validated locally with Xcode 27.2 / Swift 6.4.2. The Mac UI was exercised through
 accessibility against the isolated fixture; iPhone/iPad layouts are checked in
-simulators. Unsigned builds do not establish release signing or Keychain/device
+simulators. A signed physical iPad completed GitHub authorization and displayed
+live sessions, the inline editor and the inspector through the public relay.
+Unsigned builds do not establish release signing or Keychain/device
 entitlement readiness. Real relay/.NET-host interoperability, OS notification
 permission/delivery, minimum-OS devices and VoiceOver still need acceptance tests.
 
@@ -86,6 +106,6 @@ notarization, signed installers and release update channels are deferred by choi
 
 See [`docs/apple-parity.md`](../docs/apple-parity.md). iOS notifications currently
 operate while the app is open; background APNs needs provider and entitlement
-integration. Mac self-updates, host installation and the missing Mac host action backends remain
-separate platform work. Native login-item registration still needs OS acceptance. The Windows
+integration. Mac self-updates and host installation remain separate platform work.
+Native login-item registration still needs OS acceptance. The Windows
 Task Scheduler/registry/Velopack implementations are not Apple platform APIs.

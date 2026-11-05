@@ -14,7 +14,8 @@ using Xunit;
 // launched is the tests' own console echo.
 public sealed class LaunchPieceTests : IDisposable
 {
-    readonly string root = Directory.CreateTempSubdirectory("ablaunch-").FullName;
+    readonly string root = Folders.Physical(Directory.CreateTempSubdirectory("ablaunch-").FullName)
+        ?? throw new IOException("could not resolve the launch fixture's temporary directory");
 
     public void Dispose()
     {
@@ -870,6 +871,47 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.False(StartupQuestions.CopilotReady(["╭─────╮", "│ Confirm folder trust", "│ Do you trust the files in this folder?", "│ ❯ 1. Yes", "│ ↑/↓ to navigate · enter to select · esc to cancel", "╰─────╯"]));
         Assert.False(StartupQuestions.CopilotReady(["╻▄▄▄", "┃", "╹▀▀▀", "Do you trust the files in this folder?"]));
         Assert.False(StartupQuestions.CopilotReady(null));
+    }
+
+    [Theory]
+    [InlineData("/ commands · ? help · tab next tab")]
+    [InlineData(" / commands · ? help · tab next tab                     Claude Haiku 4.5")]
+    public void Copilots_left_aligned_footer_and_empty_current_input_box_confirm_readiness(string footer)
+    {
+        // Sanitized shape captured from the owned Copilot terminal on macOS.
+        Assert.True(StartupQuestions.CopilotReady(["/fixture/workspace", "────────", "❯", "────────", footer, ""]));
+    }
+
+    [Theory]
+    [InlineData("trust")]
+    [InlineData("hooks")]
+    [InlineData("bypass")]
+    [InlineData("busy")]
+    [InlineData("input")]
+    [InlineData("top-border")]
+    [InlineData("bottom-border")]
+    [InlineData("footer-only")]
+    [InlineData("changed-footer")]
+    [InlineData("busy-model-column")]
+    [InlineData("model-and-action")]
+    [InlineData("trailing-content")]
+    public void A_current_Copilot_footer_does_not_override_a_question_busy_input_or_incomplete_composer(string state)
+    {
+        const string footer = "/ commands · ? help · tab next tab";
+        string[] rows = ["", "────────", "❯", "────────", footer];
+        if (state == "trust") { rows[0] = "Confirm folder trust"; }
+        if (state == "hooks") { rows[0] = "Hooks need review"; }
+        if (state == "bypass") { rows[0] = "No, exit · Yes, I accept"; }
+        if (state == "busy") { rows[4] = "esc to cancel · ctrl+r to expand"; }
+        if (state == "input") { rows[2] = "❯ a draft is already present"; }
+        if (state == "top-border") { rows[1] = "loading"; }
+        if (state == "bottom-border") { rows[3] = "──x──"; }
+        if (state == "footer-only") { rows = [footer]; }
+        if (state == "changed-footer") { rows[4] = footer + " · esc to cancel"; }
+        if (state == "busy-model-column") { rows[4] = footer + "  esc to cancel"; }
+        if (state == "model-and-action") { rows[4] = footer + "  Claude Haiku 4.5 · esc to cancel"; }
+        if (state == "trailing-content") { rows = [.. rows, "Working…"]; }
+        Assert.False(StartupQuestions.CopilotReady(rows));
     }
 
     // ---- config ----

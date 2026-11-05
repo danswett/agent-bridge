@@ -6,7 +6,7 @@ struct SessionWorkbench: View {
     @State private var search = ""
     @State private var showingConnection = false
     @State private var showingMachines = false
-    @State private var showingActions = false
+    @State private var showingMobileInspector = false
     @State private var showingLaunch = false
     @State private var needsOnly = false
     @FocusState private var searchFocused: Bool
@@ -49,6 +49,13 @@ struct SessionWorkbench: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            navigation
+            connectionFooter
+        }
+    }
+
+    private var navigation: some View {
         NavigationSplitView {
             List(selection: $store.selectedSessionID) {
                 if search.isEmpty, !needsOnly, !needsYou.isEmpty {
@@ -109,7 +116,6 @@ struct SessionWorkbench: View {
                 ContentUnavailableView("Select a session", systemImage: "terminal", description: Text("Activity and questions appear here."))
             }
         }
-        .safeAreaInset(edge: .bottom) { connectionFooter }
         .tint(.teal)
         .sheet(isPresented: $showingConnection) { ConnectionView(store: store) }
         .sheet(isPresented: $showingMachines) { MachinesView(store: store) }
@@ -125,6 +131,7 @@ struct SessionWorkbench: View {
             store.startOnce()
         }
         .onChange(of: store.selectedSessionID) {
+            showingMobileInspector = false
             store.notifications.focus(machineID: selected?.host?.hello?["machine"]?["id"]?.string, sessionID: selected?.session.id)
             if let selected {
                 store.markRead(selected)
@@ -166,30 +173,54 @@ struct SessionWorkbench: View {
         }
     }
 
+    private func reader(_ entry: SessionEntry, layout: SessionDetailLayout) -> some View {
+        SessionDetail(session: entry.session, readOnlyReason: entry.host?.readOnlyReason,
+                      machineName: entry.machineName, canAnswer: canAnswer(entry),
+                      onLoadHistory: entry.host.map { host in
+                          { @MainActor @Sendable id in
+                              // Leaving the detail must not cancel the shared transport.
+                              try await Task { try await host.call("session.get", data: ["id": .string(id)]) }.value
+                          }
+                      }, onLoadDelegate: delegateLoader(for: entry), onAskMainToStop: delegateStopDraft(for: entry), layout: layout) {
+            if let host = entry.host, !entry.ended {
+                SessionActions(sessionID: entry.session.id, store: store, host: host, presentation: .inspector)
+                    .id(entry.id)
+            }
+        }
+        .id(entry.id)
+    }
+
     private func detail(_ entry: SessionEntry) -> some View {
-        let answerAvailable = canAnswer(entry)
-        return SessionDetail(session: entry.session, readOnlyReason: entry.host?.readOnlyReason,
-                             machineName: entry.machineName, canAnswer: answerAvailable,
-                             onLoadHistory: entry.host.map { host in
-                                 { @MainActor @Sendable id in
-                                     // Leaving the detail must not cancel the shared transport.
-                                     try await Task { try await host.call("session.get", data: ["id": .string(id)]) }.value
-                                 }
-                             }, onLoadDelegate: delegateLoader(for: entry), onAskMainToStop: delegateStopDraft(for: entry))
-            .id(entry.id)
-            .toolbar {
-                if let host = entry.host, !entry.ended {
-                    ToolbarItem {
-                        Button(entry.session.question == nil ? "Reply / Actions" : answerAvailable ? "Answer" : "View Question", systemImage: entry.session.question == nil ? "paperplane" : "questionmark.bubble") { showingActions = true }
-                            .disabled(!host.isLive)
+        #if os(macOS)
+            HSplitView {
+                VStack(spacing: 0) {
+                    reader(entry, layout: .conversation)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if let host = entry.host, !entry.ended {
+                        Divider()
+                        SessionActions(sessionID: entry.session.id, store: store, host: host, presentation: .composer)
+                            .id(entry.id)
+                            .frame(maxHeight: 280)
                     }
                 }
-            }
-            .sheet(isPresented: $showingActions) {
-                if let host = entry.host {
-                    SessionActions(sessionID: entry.session.id, store: store, host: host).id(entry.id)
+                .frame(minWidth: 360, idealWidth: 660, maxWidth: .infinity)
+                VStack(alignment: .leading, spacing: 0) {
+                    Label("Session inspector", systemImage: "sidebar.right")
+                        .font(.headline).padding(.horizontal, 16).padding(.vertical, 12)
+                        .accessibilityAddTraits(.isHeader)
+                    Divider()
+                    reader(entry, layout: .inspector)
                 }
+                .frame(minWidth: 270, idealWidth: 320, maxWidth: 460, maxHeight: .infinity, alignment: .topLeading)
             }
+        #else
+            MobileSessionWorkspace(entry: entry, store: store, showingInspector: $showingMobileInspector) {
+                reader(entry, layout: .conversation)
+            } inspector: {
+                reader(entry, layout: .inspector)
+            }
+            .id(entry.id)
+        #endif
     }
 
     private func canAnswer(_ entry: SessionEntry) -> Bool {
@@ -225,7 +256,9 @@ struct SessionWorkbench: View {
                   session.delegates.contains(where: { $0.id == id && $0.status != "ended" }),
                   let draft = BridgeDelegatePresentation.stopDraft(delegateID: id, existing: host.replyDrafts[session.id] ?? "") else { return }
             host.replyDrafts[session.id] = draft
-            showingActions = true
+            #if os(iOS)
+                showingMobileInspector = false
+            #endif
         }
     }
 
@@ -233,8 +266,20 @@ struct SessionWorkbench: View {
         ContentUnavailableView {
             Label(store.isConnecting ? "Connecting" : store.isLive ? "No active sessions" : "Connect to Agent Bridge", systemImage: "terminal")
         } description: {
-            Text(store.isLive ? "Sessions appear when an agent starts on a connected machine." : "Follow your agents across your machines.")
+            if store.account == nil, !store.isSample, let status = store.signInStatus {
+                Text(status)
+            } else {
+                Text(store.isLive ? "Sessions appear when an agent starts on a connected machine." : "Sign in with the GitHub account you use on your host.")
+            }
         } actions: {
+            if !store.isSample, !store.isFixture, store.account == nil {
+                Button(store.isSigningIn ? "Continue Sign-In" : "Sign In with GitHub") {
+                    showingConnection = true
+                    if !store.isSigningIn {
+                        store.signIn()
+                    }
+                }
+            }
             Button("Connection Settings") { showingConnection = true }
             if !store.isSample {
                 Button("Explore Sample Sessions", action: store.showSamples)
@@ -253,7 +298,7 @@ struct SessionWorkbench: View {
                 }
             }
             Label(store.connectionStatus, systemImage: store.isLive ? "checkmark.circle" : "network")
-            ForEach(store.hosts.filter { $0.discoveryHold != nil }) { host in
+            ForEach(store.canonicalHosts.filter { $0.discoveryHold != nil }) { host in
                 Label("\(host.name): \(host.discoveryHold ?? "")", systemImage: "exclamationmark.triangle")
             }
         }

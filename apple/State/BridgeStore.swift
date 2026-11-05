@@ -64,6 +64,7 @@ final class BridgeStore {
     @ObservationIgnored private var signInTask: Task<Void, Never>?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var signInGeneration = UUID()
+    @ObservationIgnored private var canPollGitHub = true
     @ObservationIgnored private var hostRelays: [String: ObjectIdentifier] = [:]
 
     var isLive: Bool {
@@ -257,6 +258,7 @@ final class BridgeStore {
     }
 
     func suspend() {
+        canPollGitHub = false
         notifications.setForeground(false)
         if !isSample, !isFixture {
             disconnect()
@@ -264,6 +266,7 @@ final class BridgeStore {
     }
 
     func resume() {
+        canPollGitHub = true
         notifications.setForeground(true)
         if !isSample, !isFixture {
             connect()
@@ -284,8 +287,16 @@ final class BridgeStore {
                 let code = try await flow.start()
                 guard token == signInGeneration else { return }
                 signInCode = code
-                signInStatus = "Enter this code on GitHub. This window will update when you finish."
-                let signedIn = try await flow.wait(for: code)
+                let instructions = "Paste this code on GitHub and authorize Agent Bridge. Then return here; your machines will appear after sign-in finishes."
+                signInStatus = instructions
+                let signedIn = try await flow.wait(for: code, canPoll: {
+                    await MainActor.run { token == self.signInGeneration && self.canPollGitHub }
+                }) { connected in
+                    await MainActor.run {
+                        guard token == self.signInGeneration, self.isSigningIn else { return }
+                        self.signInStatus = connected ? instructions : "The connection was interrupted. Agent Bridge is retrying with the same code."
+                    }
+                }
                 try Task.checkCancellation()
                 guard token == signInGeneration else { return }
                 try BridgeKeychain.save(JSONEncoder().encode(signedIn), name: "account:\(address)")

@@ -35,9 +35,9 @@ public static class StartupQuestions
         return StartupQuestion.None;
     }
 
-    // Whether Copilot's window is ready for a prompt: its input box (a row opened by '╻' over
-    // one of '┃') or its key footer ("/ commands"), with no startup question over it. Neither
-    // is drawn while its folder-trust question is (1.0.105, seen live).
+    // Whether Copilot's window is ready for a prompt, with no startup question over it.
+    // Older versions draw ╻/┃ or an interior "/ commands" footer. The current terminal
+    // layout starts the footer at column zero after trimming, below an empty ❯ composer.
     public static bool CopilotReady(IReadOnlyList<string>? rows)
     {
         if (rows is null || Read(rows) != StartupQuestion.None) { return false; }
@@ -46,8 +46,29 @@ public static class StartupQuestions
             var row = rows[i].TrimStart();
             if (row.Contains(" / commands ", StringComparison.Ordinal)) { return true; }
             if (row.StartsWith('\u257B') && i + 1 < rows.Count && rows[i + 1].TrimStart().StartsWith('\u2503')) { return true; }
+            if (CopilotFooter(row.TrimEnd()) && i >= 3 && Horizontal(rows[i - 3])
+                && rows[i - 2].Trim() == "❯" && Horizontal(rows[i - 1])
+                && rows.Skip(i + 1).All(string.IsNullOrWhiteSpace)) { return true; }
         }
         return false;
+    }
+
+    static bool CopilotFooter(string row)
+    {
+        const string footer = "/ commands · ? help · tab next tab";
+        if (row == footer) { return true; }
+        // A model name can occupy the right-aligned column. Another footer action
+        // separated by a dot, or words appended to the instruction, is a changed UI.
+        if (!row.StartsWith(footer + "  ", StringComparison.Ordinal)) { return false; }
+        var model = row[footer.Length..].Trim();
+        return !model.Contains('·') && !model.Contains("esc to ", StringComparison.OrdinalIgnoreCase)
+            && !model.Contains("ctrl+", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static bool Horizontal(string row)
+    {
+        var line = row.Trim();
+        return line.Length >= 3 && line.All(c => c == '─');
     }
 
     // A folder-trust question read in full, to show a person and to answer: the agent's own

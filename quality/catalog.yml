@@ -69,6 +69,7 @@ no_test_paths:
   - '*.md'
   - docs/*.md
   - docs/design/**
+  - docs/images/apple-workbench/** # documentation previews, never shipped app resources
   - .gitignore
   - LICENSE
   - tools/design-mockups/**     # renders reference images only; nothing ships or tests from it
@@ -304,13 +305,26 @@ suites:
     kind: component
     ring: 1
     select: affected
-    # The same .NET test projects on macOS, including ManagedTmux* from codex/mac-tmux-delivery.
-    # It runs the whole solution, so any product or test change reaches it.
+    # Native ownership/delivery suites and the self-contained Mac build. The full product
+    # suite remains in ci.yml on Windows/Linux; legacy Mac migration fixtures are separate.
     platforms: [macos-arm64]
     runner: hosted
-    triggers: [src/**, tests/**, tools/AgentBridge.*/**]
-    command: dotnet test AgentBridge.slnx -c Release
-    status: planned
+    triggers: [src/**, tests/**, tools/AgentBridge.*/**, scripts/build-macos-host.sh, scripts/mac-local-host.sh]
+    command: see macos-host.yml (Core, Delivery, Transport and focused host session/guard tests, then build-macos-host.sh)
+    where: macos-host.yml managed-terminal
+    status: exists
+
+  - id: apple-interop
+    kind: integration
+    ring: 0
+    select: affected
+    security_sensitive: true
+    platforms: [win-x64, win-arm64, linux-x64, macos-arm64]
+    runner: local
+    project: tests/AgentBridge.AppleInterop.Tests
+    command: dotnet test tests/AgentBridge.AppleInterop.Tests -c Release
+    where: ci.yml product
+    status: exists
 
   # ---------------------------------------------------------------- shipped binaries, as they ship
   - id: injector-aot

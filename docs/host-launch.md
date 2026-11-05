@@ -66,11 +66,12 @@ differences, each deliberate:
 | Codex without a prompt | Opened, then a first message offered from the card | Refused: Codex creates its session only on a first message, so a launch must carry one |
 | Attachments | No | Copilot and Agency: files sent first (as for a reply) are staged privately and the prompt mentions each as `@path` |
 | The agent token variable | Set in the child's environment, so a launched agent drives the bridge as itself | No agent principal yet (#45). The agent gets the host's environment plus `AGENT_BRIDGE_SESSION` (its session id, or `launched` for Codex), which everything it runs inherits, however detached; the host's own command line refuses to change its config or sign in when it is set ([local-pipe.md](protocol/local-pipe.md#who-may-manage-the-host)) |
-| Where the host runs | A logon task, always on the desktop | Wherever it was started. Launching is offered only when the host is unelevated, interactive, in a logon session with a desktop (`WinSta0`); elevated, as a service or over SSH it is not, since the agent would be an administrator's, or on no screen |
+| Where the Windows host runs | A logon task, always on the desktop | Wherever it was started. Launching is offered only when the host is unelevated, interactive, in a logon session with a desktop (`WinSta0`); elevated, as a service or over SSH it is not, since the agent would be an administrator's, or on no screen |
 | Worktree marker | `agent-bridge-created` | `agent-bridge-host-created`, so neither product counts or claims the other's trees. Mutex `Local\AgentBridgeHostWorktree_<sha256>`, lock reason `agent-bridge-host-launch:<hex>` |
 | Reclaiming worktrees | Before each isolated launch, by its rules | The same rules, at the same point ([below](#reclaiming-finished-worktrees)), for this host's own marker only, and the same two exempt build outputs. Each tree kept is logged with its reason |
 | Incomplete discovery | Every launch refused while it lasts (`Launch held: waiting on …`) | Only what reads an absence waits: a resume of a held agent's session, or of one not on the list, and a new Codex session are `busy`, saying what holds it; nothing is reclaimed. Other new sessions start ([v1-launch.md](protocol/v1-launch.md#while-discovery-is-held)) |
-| macOS and Linux | tmux | Not offered yet |
+| macOS | tmux | Private tmux server and an owned pane per launch, with exact process identity checks; see [Mac setup](macos-host.md) |
+| Linux | tmux | Not offered yet |
 
 ## In order, for every launch
 
@@ -98,7 +99,10 @@ differences, each deliberate:
    Registered: `started`, except for Copilot, which registers (its `inuse.<pid>.lock`) before
    its window is ready and can ask its trust question after that. Its launch is `started` only
    once its window shows its input box or key footer, and `unconfirmed` if neither shows within
-   20 s. It is still followed after that, so a trust question it draws later still makes other
+   20 s. The current left-aligned `/ commands · ? help · tab next tab` footer is recognized
+   beside an empty `❯` composer between horizontal rules; an occupied input, partial layout
+   or changed busy footer does not establish readiness. Startup questions always take priority.
+   It is still followed after that, so a trust question it draws later still makes other
    launches `busy`. A launcher that exits, handing the session on, is followed through the
    session's own window. Exited first (with 3 s for a launcher that hands over and exits):
    `failed`. A trust question: `unconfirmed`, and other launches are `busy` while it shows, up

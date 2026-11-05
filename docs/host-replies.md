@@ -14,7 +14,8 @@ one session at once.
 | Copilot CLI | Yes, typed only into its input box as seen on screen, and only while it is empty and outside shell mode | agent-ha-bridge has long typed replies into it, and its transcript records every prompt (`user.message`) with the text as typed, which confirms one by identity |
 | Claude Code | Yes, typed only into its input box as seen on screen | Its transcript records a prompt typed while idle as a `user` entry whose content is the line as typed, and one typed while it works as a `queue-operation` `enqueue` with that content (2.1.312, seen live), which confirms one by identity. agent-ha-bridge confirmed only that *some* prompt was submitted |
 | Codex | Yes, typed only into its input box as seen on screen, and only while it is empty | Its rollout records every prompt, idle or mid-turn, as an `item_completed` `UserMessage` with the line as typed (0.165, seen live), which confirms one by identity. agent-ha-bridge typed with no confirmation at all |
-| Any, on macOS or Linux | Refused, and `sessions.reply` is not offered | Delivery through tmux comes later |
+| Managed macOS pane | Same agent-specific checks above, through a private tmux server | Only a pane launched by the current host run; see [managed delivery](macos-managed-delivery.md) |
+| Any, on Linux | Refused, and `sessions.reply` is not offered | No delivery backend |
 
 ## The keys (Copilot)
 

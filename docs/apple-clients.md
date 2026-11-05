@@ -4,6 +4,10 @@ The native SwiftUI clients live in [`apple/`](../apple/README.md). They share a
 Swift 6 protocol library and tested client state across macOS 15+, iOS 18+ and
 iPadOS 18+. XcodeGen builds both applications from `apple/project.yml`.
 
+For a disposable product relay and .NET session host, see
+[the isolated interoperability harness](apple-interop.md). It exercises real
+protocol services with synthetic transcripts and does not type into real agents.
+
 The workbench supports local Mac sockets and remote machines through the same
 GitHub device sign-in, relay proof and Noise XX protocol used by Windows and the
 PWA. Tokens and per-account device identities stay in Keychain. Remote session
@@ -52,7 +56,9 @@ cooperative executor, which also runs client callbacks and timeout tasks.
 See [the parity checklist](apple-parity.md) for remaining work. This is not yet a
 shipping-parity claim: a real .NET-host/relay interoperability run,
 physical/minimum-OS devices, VoiceOver and APNs delivery remain acceptance work.
-The current delivery target is local development builds; signing and distribution
-are deliberately deferred. The Mac/Linux host also lacks answer/reply/stop/launch
-backends and local host management; the client must respect those capability
-limits rather than bypass them. Live hooks, Home Assistant and daemons are untouched.
+The current delivery target is local development builds; release signing and
+distribution are deliberately deferred. Apple Development signing supports local
+physical-device builds. The [Mac host](macos-host.md) now supplies managed tmux
+answer/reply/stop/launch backends for sessions it owns. Mac administration remains
+an operator CLI workflow; Linux delivery is unsupported. The clients respect
+those capability limits. Live hooks, Home Assistant and legacy daemons are untouched.
