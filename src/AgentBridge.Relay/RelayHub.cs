@@ -30,8 +30,13 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         return CloseAllAsync();
     }
 
-    // The roster read an account's stored list late (MachineRoster.Changed): tell its devices.
-    public Task RosterChangedAsync(string accountId) => BroadcastPresenceAsync(accountId);
+    // Confirm removals from storage, explicit forgets, or admission's roster cap. Existing
+    // hosts need two messages too, not only a new host's first complete roster (#206).
+    public async Task RosterChangedAsync(string accountId)
+    {
+        await BroadcastPresenceAsync(accountId);
+        await BroadcastPresenceAsync(accountId);
+    }
 
     // On shutdown, tell every device to reconnect now. A rolling deploy otherwise leaves old
     // sockets on the draining replica for up to its drain timeout (about 90 s observed on
@@ -147,7 +152,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         metrics.Connected(conn.Kind);
         log.LogInformation("connect {Conn} {Kind}; {Count} online in account", conn.Tag, conn.Kind, devices.Count);
         // Announce before "ready", so peers learn of a device before it can send them anything.
-        await BroadcastPresenceAsync(conn.Account.Id);
+        await RosterChangedAsync(conn.Account.Id);
         // blobs: present only with a blob store, so a device knows whether files over 256 KiB can go.
         await conn.SendJsonAsync(new { t = "ready", device = conn.DeviceId, account = conn.Account.Id, login = conn.Account.Login, blobs = blobs.Advertised });
 
@@ -303,13 +308,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         }
         log.LogInformation("forget {Conn} {Kind}: {Outcome}", conn.Tag, conn.Kind, error ?? "ok");
         await conn.SendJsonAsync(new { t = "forget-result", id, machine = Wire.IsDeviceId(machine) ? machine!.ToLowerInvariant() : null, error });
-        if (error is null)
-        {
-            await BroadcastPresenceAsync(conn.Account.Id);
-            // Confirm a real forget without waiting for another membership change. Hosts
-            // require two wire snapshots before deleting cached readings (#206).
-            await BroadcastPresenceAsync(conn.Account.Id);
-        }
+        if (error is null) { await RosterChangedAsync(conn.Account.Id); }
     }
 
     bool WithinRate(Connection c)

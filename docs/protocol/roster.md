@@ -70,6 +70,8 @@ recording the host, so the device remains visible during roster loading. `known`
 the captured device slots, not the roster's separate online counts: a replaced socket
 can still be finishing after its replacement leaves. Closing or kicking a socket uses
 the same disconnect path. A host is thus visible in at least one list across these transitions.
+Admission also confirms its announcement, since the roster cap can remove an offline
+machine when a new one joins.
 
 The .NET transport publishes both lists together as `RelayClient.Snapshot`. Membership
 readers capture it once rather than combine separate reads across messages (#206).
@@ -102,6 +104,9 @@ both omit the forgotten machine. This confirms host cache deletion on an otherwi
 quiet account without a timer, background task or unrelated membership change. The
 confirmation is an ordinary presence message, with no new wire field; older clients
 can process both normally. An unsuccessful forget sends no confirmation.
+The same confirmation path is used when a roster reload learns a removal from another
+replica, both during a periodic reread and after a write conflict. Already-connected
+hosts therefore clear such cached readings without waiting for unrelated activity.
 
 | `error` | Why |
 |---|---|
