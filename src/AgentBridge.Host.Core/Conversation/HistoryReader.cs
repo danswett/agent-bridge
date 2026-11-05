@@ -458,6 +458,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             // name when they report back in a later one.
             var into = turn.Unreadable ? new TurnBuilder(turn.Id, turn.At, null) : turn;
             context.TurnBegins();
+            dialect.TurnBegins();
             var at = s.At;
             Forward(from, spanEnd, (line, _) =>
             {

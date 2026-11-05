@@ -70,8 +70,7 @@ nothing new but `activity.turn` and `activity.responseTurn` ([below](#live-turns
 
 ## `session.history`
 
-Request `data`, read strictly (a field missing where required or of the wrong type fails the
-request, as for every request a client sends):
+Request `data`, read as every request a client sends is read today (below, and #897):
 
 ```json
 { "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b", "before": "h1.AAECAwQF…", "limit": 20 }
@@ -92,8 +91,12 @@ The result is one of:
 | `{ "stale": true }` | `before` is not one this host can continue from: it is malformed, was made for another session or another transcript, or its turn is no longer where it was. The client keeps what it has drawn, asks again without `before`, and merges the new pages by turn id ([Live turns and history](#live-turns-and-history)) |
 | `{ "unavailable": "<why, in words>" }` | The host has no history for this session: its transcript can't be found or read, or this agent's transcripts aren't read for history. At most 256 bytes. A client shows "Earlier messages aren't available from this machine" (H5) and may show the reason as secondary text |
 
-A request that is not an object, has no `id`, or has a `before` or `limit` of the wrong type or
-out of range fails as a request (`{"ok": false, "error": …}`), as for any malformed request.
+A request that is not an object, has no `id`, has a `before` that is not a string, a `limit` that
+is not a whole number, or either out of range fails as a request (`{"ok": false, "error": …}`),
+as for any malformed request. As for every request today, a host reads a number sent as a
+string as that number (`"limit": "5"` is 5, then range-checked), matches field names without
+regard to case, and ignores fields it does not know. Clients send `limit` as a JSON number and
+names as written here; whether hosts should refuse the rest is #897.
 
 ### A page
 

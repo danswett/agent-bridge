@@ -401,6 +401,39 @@ public class HistoryTests
         Assert.True(turn.Truncated);
         Assert.Equal(kept ? ["at the end"] : [], turn.Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => p.Text));
     }
+    // Found in review of #686: one request reads its turns oldest first with one dialect, and a
+    // turn longer than TurnBytes is read only at its end, past its turn_start and its error, so its
+    // notice named the error of the older turn read before it, and so differed by page.
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task A_long_turns_error_notice_never_names_an_older_turns_error(int limit)
+    {
+        await using var s = new Copilot_(options: o => new SessionSourceOptions
+        {
+            CopilotHome = o.CopilotHome, ClaudeHome = o.ClaudeHome, CodexHome = o.CodexHome, UseFileSystemWatcher = false,
+            HistoryKeyFile = o.HistoryKeyFile, HistoryBudgets = new HistoryBudgets { TurnBytes = 4096 },
+        });
+        var lines = new List<string>
+        {
+            Copilot.User("one", 1), Copilot.TurnStart(2),
+            Copilot.Event("session.error", new { errorType = "session", message = "Turn error: too many requests", statusCode = 429 }, 3),
+            Copilot.Event("assistant.message", new { messageId = "m4", content = "\u26A0\uFE0F Turn error: too many requests" }, 4),
+            Copilot.User("two", 5), Copilot.TurnStart(6),
+            Copilot.Event("session.error", new { errorType = "session", message = "Turn error: boom" }, 7),
+        };
+        for (var i = 0; i < 20; i++) { lines.Add(Copilot.ToolResult("c" + i, new string('z', 1000), 8)); }
+        lines.Add(Copilot.Event("assistant.message", new { messageId = "m9", content = "\u26A0\uFE0F Turn error: boom" }, 9));
+        await s.After([.. lines]);
+
+        var newest = (await s.Page(limit: limit)).Turns![^1];
+        var older = (await s.Page(limit: 2)).Turns![0];
+
+        Assert.True(newest.Truncated);
+        Assert.Equal("\u26A0\uFE0F Turn error: Copilot stopped with an error.", newest.Parts.Single(p => p.Kind == HistoryPartKind.Response).Text);
+        Assert.NotEqual(older.Parts.Single(p => p.Kind == HistoryPartKind.Response).Text, newest.Parts.Single(p => p.Kind == HistoryPartKind.Response).Text);
+    }
+
     [Fact]
     public async Task A_turn_longer_than_the_host_reads_keeps_its_prompt_and_its_end()
     {

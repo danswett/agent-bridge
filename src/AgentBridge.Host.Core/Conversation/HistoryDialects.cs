@@ -328,6 +328,9 @@ internal abstract class HistoryDialect
     // What the transcript's first records say of the session (Codex's own thread).
     public virtual void First(JsonElement e, HistoryContext context) { }
 
+    // A turn is about to be read: nothing a dialect kept from the turn read before it holds.
+    public virtual void TurnBegins() { }
+
     protected static bool Has(ReadOnlySpan<byte> line, ReadOnlySpan<byte> marker) => line.IndexOf(marker) >= 0;
 
     public static HistoryPrompt Prompt(string text, UserMessageFrom? from = null, string? label = null)
@@ -343,6 +346,12 @@ internal sealed class CopilotHistory : HistoryDialect
     string? _turnError;
 
     public override TurnMarks Marks => TurnMarks.Copilot;
+
+    // Each turn's error is its own. One request reads its turns oldest first, and a turn longer
+    // than TurnBytes is read only at its end, past its turn_start: its notice took the older
+    // turn's error, so the sentence differed by page (review of #686). Unread, it is the generic
+    // one, as a notice in the parser's tail is (CopilotParser, the tail's start).
+    public override void TurnBegins() => _turnError = null;
 
     public override HistoryPrompt? Start(JsonElement e) =>
         CopilotParser.TurnStart(e) is { } p ? Prompt(p.Text, p.From, p.Label) : null;
