@@ -15,7 +15,7 @@
     --shell: #EEF0F2; --card: #FFFFFF; --stroke: rgba(0,0,0,.12); --text: #1A1A1A; --text2: rgba(0,0,0,.62); --text3: rgba(0,0,0,.58);
     --bridge: #0B7A6E; --on-bridge: #FFFFFF; --active: #0B63E5; --danger: #C9302C;
     --needs-text: #7A4600; --needs-head: #8F5300; --needs-fill: #FFF2D6; --needs-edge: #E8C27A; --needs-ink: #14100A; --focus: #1A1A1A;
-    --bar: 48px; --full: 257px; --ty: 0px;
+    --bar: 48px; --full: 257px; --ty: 0px; --foot: 160px; --fy: 0px;
     --dur: 167ms; --ease: cubic-bezier(.33, 0, .67, 1); --xfade: 83ms;
     --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, system-ui, sans-serif;
@@ -89,8 +89,21 @@
   .q h3 { margin: 0; font-size: 14px; color: var(--needs-head); }
   .opt { text-align: left; height: 44px; padding: 0 14px; border-radius: 8px; background: var(--card); border: 1px solid var(--stroke); }
 
-  /* The reply area: today's, unchanged. */
-  .slot { flex: none; padding: 8px 16px calc(12px + var(--safe-bottom)); border-top: 1px solid var(--stroke); background: var(--shell); }
+  /* The reply area at rest is today's. It floats over the conversation's foot as the header floats over its
+     top (#935, D7), and mirrors it: it rides down with the conversation near the end, and is compact past
+     that, behind a pinned 48 bar whose one-line copy of the box (the draft's first line, or the placeholder)
+     brings it back on a tap. */
+  .scroller { padding-bottom: calc(var(--foot) + 16px); scroll-padding-bottom: calc(var(--fcovered, var(--foot)) + 8px); }
+  .foot { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; pointer-events: none; }
+  .slot { pointer-events: auto; padding: 8px 16px calc(12px + var(--safe-bottom)); border-top: 1px solid var(--stroke); background: var(--shell); transform: translateY(var(--fy)); will-change: transform; }
+  .fanimating .slot { transition: transform var(--dur) var(--ease); }
+  .fbar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: calc(var(--bar) + var(--safe-bottom)); padding: 4px 16px calc(4px + var(--safe-bottom)); display: flex; align-items: center; pointer-events: none; }
+  .fbar::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--shell); border-top: 1px solid var(--stroke); opacity: 0; transition: opacity var(--xfade) linear; }
+  .pill { pointer-events: auto; flex: 1; min-width: 0; height: 40px; display: flex; align-items: center; padding: 0 16px; border-radius: 6px; background: var(--card); border: 1px solid var(--stroke); border-bottom: 2px solid var(--bridge); font-size: 16px; line-height: 24px; color: var(--text3); text-align: left; opacity: 0; visibility: hidden; transition: opacity var(--xfade) linear, visibility 0s linear var(--xfade); }
+  .pill span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .pill.draft { color: var(--text); }
+  [data-fsolid] .fbar::before { opacity: 1; }
+  [data-fsolid] .pill { opacity: 1; visibility: visible; transition: opacity var(--xfade) linear; }
   .held { margin: 0 0 6px; font-size: 13px; line-height: 18px; color: var(--needs-text); }
   .box { display: grid; grid-template-rows: auto auto; padding: 8px 8px 8px 16px; border-radius: 6px; background: var(--card); border: 1px solid var(--stroke); border-bottom: 2px solid var(--bridge); }
   textarea { resize: none; border: 0; background: none; color: var(--text); font: inherit; font-size: 16px; line-height: 24px; padding: 2px 0; min-height: 72px; }
@@ -106,9 +119,12 @@
     .animating .full { transition: none; animation: xfade var(--xfade) linear; }
     @keyframes xfade { from { opacity: 0; } to { opacity: 1; } }
     .fading .full { transition: opacity var(--xfade) linear; opacity: 0; }
+    .fanimating .slot { transition: none; animation: xfade var(--xfade) linear; }
+    .ffading .slot { transition: opacity var(--xfade) linear; opacity: 0; }
   }
   @media (forced-colors: active) {
-    .full, .bar::before, .slot { background: Canvas; border-color: CanvasText; }
+    .full, .bar::before, .slot, .fbar::before { background: Canvas; border-color: CanvasText; }
+    .pill { border-color: CanvasText; }
     .top { border-color: CanvasText; }
     .bar::before { border-bottom: 1px solid CanvasText; }
     .tab[aria-selected="true"]::after { background: Highlight; }
@@ -148,15 +164,20 @@
       <div class="scroller" id="scroller" tabindex="-1">
         <div class="conv" id="conv"></div>
       </div>
-    </div>
-    <div class="slot">
-      <p class="held">The session is waiting for an answer to its question. Answer that first, then reply.</p>
-      <div class="box">
-        <label class="sr" for="reply">Message the main agent</label>
-        <textarea id="reply" rows="2" placeholder="Message the main agent"></textarea>
-        <div class="row">
-          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--text2); margin-left: 2px"><path d="M16.5 6.5l-8 8a2.5 2.5 0 003.5 3.5l8.5-8.5a4.5 4.5 0 00-6.4-6.4L5.6 11.6a6.5 6.5 0 009.2 9.2l6.7-6.7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-          <button class="send" type="button" aria-label="Send" aria-disabled="true"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <div class="foot" id="foot">
+        <div class="slot" id="slot">
+          <p class="held">The session is waiting for an answer to its question. Answer that first, then reply.</p>
+          <div class="box">
+            <label class="sr" for="reply">Message the main agent</label>
+            <textarea id="reply" rows="2" placeholder="Message the main agent"></textarea>
+            <div class="row">
+              <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--text2); margin-left: 2px"><path d="M16.5 6.5l-8 8a2.5 2.5 0 003.5 3.5l8.5-8.5a4.5 4.5 0 00-6.4-6.4L5.6 11.6a6.5 6.5 0 009.2 9.2l6.7-6.7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+              <button class="send" type="button" aria-label="Send" aria-disabled="true"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            </div>
+          </div>
+        </div>
+        <div class="fbar" id="fbar">
+          <button class="pill" id="pill" type="button" tabindex="-1" aria-hidden="true"><span id="pilltext">Message the main agent</span></button>
         </div>
       </div>
     </div>
@@ -169,6 +190,7 @@
   const BAR = 48, DOWN = 32, UP = 64, TITLE_IN = 40;
   const $ = (id) => document.getElementById(id);
   const phone = $('phone'), scroller = $('scroller'), full = $('full'), conv = $('conv'), bt = $('bt');
+  const slot = $('slot'), fbar = $('fbar'), reply = $('reply'), pill = $('pill'), pilltext = $('pilltext');
   // The Delegates tab carries what the phone strip used to: ?d=ask has one delegate asking, ?d=0 none running.
   const dq = new URLSearchParams(location.search).get('d');
   if (dq === 'ask') { $('dneeds').removeAttribute('hidden'); $('dtab').setAttribute('aria-label', 'Delegates, 2 running, 1 asking'); }
@@ -217,12 +239,21 @@
   let last = 0, dir = 0, run = 0, returned = false, focusInside = false, programmatic = false, animTimer = 0, fadeTimer = 0;
   let fading = false, held = null, ty = 0;   // held: how far an app-made scroll left the header slid, kept until the reader scrolls it on
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+  // The foot mirrors the header (#935): froom is how far the reply area can slide before only its bar is left,
+  // counted from the end of the conversation. It keeps its own run, so one edge's threshold never resets the other's.
+  // A session opens with the reply area in full, as it opens with the header in full.
+  let footH = 160, froom = footH - BAR, fbarH = BAR, frun = 0, freturned = true, ffocus = false, fheld = null, fy = 0, ffading = false, ffadeTimer = 0, fanimTimer = 0;
+  const endDist = (s = last) => Math.max(0, scroller.scrollHeight - scroller.clientHeight - s);
 
   const measure = () => {
     phone.style.setProperty('--stage-h', `${$('stage').clientHeight}px`);
     fullH = full.offsetHeight;
     room = Math.max(0, fullH - BAR);
     phone.style.setProperty('--full', `${fullH}px`);
+    footH = slot.offsetHeight;
+    fbarH = fbar.offsetHeight;
+    froom = Math.max(0, footH - fbarH);
+    phone.style.setProperty('--foot', `${footH}px`);
     render();
   };
 
@@ -255,6 +286,33 @@
     render();
   };
 
+  const fanimate = () => {
+    phone.classList.add('fanimating');
+    clearTimeout(fanimTimer);
+    fanimTimer = setTimeout(() => phone.classList.remove('fanimating'), 260);
+  };
+  // The foot's setReturned: the same rules, mirrored.
+  const setFoot = (v, instant = false) => {
+    if (!v && ffading) return;
+    clearTimeout(ffadeTimer);
+    ffading = false;
+    phone.classList.remove('ffading');
+    if (instant) { clearTimeout(fanimTimer); phone.classList.remove('fanimating'); }
+    if (freturned === v) { render(); return; }
+    frun = 0;
+    fheld = null;
+    if (!v && reduced.matches && endDist() > froom) {
+      ffading = true;
+      phone.classList.add('ffading');
+      ffadeTimer = setTimeout(() => { ffading = false; freturned = false; render(); phone.classList.remove('ffading'); }, 83);
+      return;
+    }
+    freturned = v;
+    if (!v && endDist() <= froom) { clearTimeout(fanimTimer); phone.classList.remove('fanimating'); }
+    else if (!instant) fanimate();
+    render();
+  };
+
   // Near the top the header rides up with the conversation (iOS's large title); past that it is compact,
   // and comes back over the conversation on 64 pt up (Material's enterAlways), going again on 32 pt down.
   function render() {
@@ -266,6 +324,13 @@
     phone.toggleAttribute('data-solid', hidden >= TITLE_IN);   // the fill, hairline and title come in together
     phone.toggleAttribute('data-titled', hidden >= TITLE_IN);
     phone.dataset.state = hidden === 0 ? (s > 0 ? 'returned' : 'rest') : hidden >= room ? 'compact' : 'riding';
+    // The foot: near the end it rides down with the conversation; past that it is compact unless brought back.
+    const e = endDist(s);
+    fy = freturned || ffocus ? 0 : fheld !== null ? fheld : Math.min(e, froom);
+    phone.style.setProperty('--fy', `${fy}px`);
+    phone.style.setProperty('--fcovered', `${Math.max(fbarH, footH - fy)}px`);
+    phone.toggleAttribute('data-fsolid', fy >= TITLE_IN);
+    phone.dataset.foot = fy === 0 ? (e > 0 ? 'returned' : 'rest') : fy >= froom ? 'compact' : 'riding';
   }
 
   // The header never expands over the focused control: on a short screen it waits, still counting, until that control would stay in view.
@@ -283,8 +348,9 @@
     last = s;
     if (programmatic || d === 0) { render(); return; }
     const nd = d > 0 ? 1 : -1;
-    if (nd !== dir) { dir = nd; run = 0; }
+    if (nd !== dir) { dir = nd; run = 0; frun = 0; }
     run += Math.abs(d);
+    frun += Math.abs(d);
     if (held !== null && d > 0) { held = Math.min(room, held + d); if (held >= room) held = null; }   // the reader carries on from where the app left it
     if (held !== null && d < 0 && s <= held) held = null;   // going up, it rides with the conversation again from where they meet: no snap at the top
     // Coming down into the top range the header follows the finger, so a slide still running from a threshold above stops.
@@ -296,11 +362,55 @@
     else if (focusInside && !returned) returned = true;   // focus taken at the top: the header stays as it is
     else if (returned && dir > 0 && run >= DOWN && !focusInside) setReturned(false);
     else if ((!returned || fading) && dir < 0 && run >= UP && s > room && !coversFocus()) setReturned(true);   // 64 up also cancels a fade under way
+    // The foot, mirrored: away from the end is up. 32 up sends it, 64 down brings it back, and the end shows it in full.
+    const e = endDist(s), fromE = endDist(from);
+    if (fheld !== null && d < 0) { fheld = Math.min(froom, fheld - d); if (fheld >= froom) fheld = null; }
+    if (fheld !== null && d > 0 && e <= fheld) fheld = null;
+    if (fromE > froom && e <= froom && (!freturned || ffading)) {
+      clearTimeout(fanimTimer); phone.classList.remove('fanimating');
+      if (ffading) { clearTimeout(ffadeTimer); ffading = false; freturned = false; phone.classList.remove('ffading'); }
+    }
+    if (e <= 0) { freturned = false; frun = 0; fheld = null; }
+    else if (ffocus && !freturned) freturned = true;
+    else if (freturned && dir < 0 && frun >= DOWN && !ffocus) setFoot(false);
+    else if ((!freturned || ffading) && dir > 0 && frun >= UP && e > froom) setFoot(true);
     render();
   }
 
   scroller.addEventListener('scroll', onScroll, { passive: true });
   bt.addEventListener('click', () => setReturned(true));
+  // One tap on the bar's copy brings the reply area back, focused. Focus anywhere in it brings it back at once and
+  // holds it, so focus never lands on a hidden control. The copy is drawn, not read, and never focused.
+  pill.addEventListener('click', () => reply.focus());
+  slot.addEventListener('focusin', () => { ffocus = true; if (endDist() > 0) setFoot(true, true); else render(); });
+  slot.addEventListener('focusout', (e) => { if (!slot.contains(e.relatedTarget)) { ffocus = false; render(); } });
+  // A draft is never hidden: the compact bar shows its first line.
+  const syncPill = () => {
+    const line = reply.value.split('\n').find((l) => l.trim()) || '';
+    pilltext.textContent = line || reply.placeholder;
+    pill.classList.toggle('draft', !!line);
+  };
+  reply.addEventListener('input', syncPill);
+  // A vertical swipe or wheel on the foot (not in the text) scrolls the conversation, as on the header.
+  const foot = $('foot');
+  foot.addEventListener('wheel', (e) => {
+    if (e.target === reply || e.ctrlKey || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    e.preventDefault();
+    scroller.scrollTop += e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? scroller.clientHeight : 1);
+  }, { passive: false });
+  let ftouch = null;
+  foot.addEventListener('touchstart', (e) => { ftouch = e.touches.length === 1 && e.target !== reply ? { x: e.touches[0].clientX, y: e.touches[0].clientY, axis: null } : null; }, { passive: true });
+  foot.addEventListener('touchmove', (e) => {
+    if (!ftouch || e.touches.length !== 1) return;
+    const p = e.touches[0], dx = ftouch.x - p.clientX, dy = ftouch.y - p.clientY;
+    if (!ftouch.axis) { if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return; ftouch.axis = Math.abs(dy) > Math.abs(dx) ? 'y' : 'x'; }
+    if (ftouch.axis !== 'y') return;
+    e.preventDefault();
+    scroller.scrollTop += dy;
+    ftouch.x = p.clientX; ftouch.y = p.clientY;
+  }, { passive: false });
+  foot.addEventListener('touchend', () => { ftouch = null; });
+  foot.addEventListener('touchcancel', () => { ftouch = null; });
   // Focus is never hidden: reaching anything in the header brings the header back first, and holds it.
   full.addEventListener('focusin', () => { focusInside = true; if (last > 0) setReturned(true, true); });
   full.addEventListener('focusout', (e) => { if (!full.contains(e.relatedTarget)) { focusInside = false; full.scrollTop = 0; } });
@@ -344,7 +454,7 @@ full.addEventListener('touchcancel', endTouch);
     requestAnimationFrame(() => {
       if (document.activeElement !== el || focusInside) return;
       const sr = $('stage').getBoundingClientRect(), r = el.getBoundingClientRect();
-      if (r.top >= sr.top + Math.max(BAR, fullH + ty) && r.bottom <= sr.bottom) return;
+      if (r.top >= sr.top + Math.max(BAR, fullH + ty) && r.bottom <= sr.bottom - Math.max(fbarH, footH - fy)) return;
       clearTimeout(fadeTimer); clearTimeout(animTimer);
       fading = false; phone.classList.remove('fading', 'animating');
       programmatic = true; returned = false; held = null; run = 0; dir = 0;
@@ -354,7 +464,7 @@ full.addEventListener('touchcancel', endTouch);
       requestAnimationFrame(() => requestAnimationFrame(() => { last = Math.max(0, scroller.scrollTop); programmatic = false; render(); }));
     });
   });
-  if ('ResizeObserver' in window) { const ro = new ResizeObserver(measure); ro.observe(full); ro.observe($('stage')); } else addEventListener('resize', measure);
+  if ('ResizeObserver' in window) { const ro = new ResizeObserver(measure); ro.observe(full); ro.observe(slot); ro.observe($('stage')); } else addEventListener('resize', measure);
 
   // A scroll the app makes (to an arriving question, a restored position) never folds or brings back the header.
   const scrollProgrammatically = (target) => {
@@ -365,8 +475,14 @@ full.addEventListener('touchcancel', endTouch);
     if (hidden < room && stageH - Math.max(BAR, fullH - hidden) < stageH / 2) {
       clearTimeout(fadeTimer); clearTimeout(animTimer); fading = false; phone.classList.remove('fading', 'animating');
       hidden = room;
+      clearTimeout(ffadeTimer); clearTimeout(fanimTimer); ffading = false; phone.classList.remove('ffading', 'fanimating');
+      fy = froom;   // the foot folds to its bar with it
     }
     const wasFull = hidden === 0;
+    // The foot is kept as it was too.
+    const fWasFull = fy === 0;
+    freturned = fWasFull;
+    fheld = !fWasFull ? fy : null;
     programmatic = true;
     // Hold the header exactly as it was, part-way slid included, while the scroll happens: no flash, no fold.
     returned = wasFull;
@@ -376,12 +492,19 @@ full.addEventListener('touchcancel', endTouch);
     requestAnimationFrame(() => requestAnimationFrame(() => {
       last = Math.max(0, scroller.scrollTop);
       returned = wasFull && last > 0;
-      dir = 0; run = 0; programmatic = false;
+      freturned = fWasFull && endDist() > 0;
+      // Landing at the end overrides the hold: the end always shows the reply area in full.
+      if (endDist() <= 0 && fheld !== null) { fheld = null; if (!reduced.matches) fanimate(); }
+      dir = 0; run = 0; frun = 0; programmatic = false;
       render();
     }));
   };
   window.proto620 = {
     state: () => phone.dataset.state,
+    foot: () => phone.dataset.foot,
+    get footRoom() { return froom; },
+    get footHeight() { return footH; },
+    get footDrawn() { return fy; },
     get room() { return room; },
     get fullHeight() { return fullH; },
     scrollToQuestion: () => scrollProgrammatically((covered) => $('question').offsetTop - covered - 8),

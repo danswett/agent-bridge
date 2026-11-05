@@ -373,7 +373,24 @@ And in `tokens.json`'s `motion.catalogue`:
 
 > The strip scrolls away with the header on a phone (§6.2) and comes back with it.
 
-**§6.5 Reply box:** no change (D5 and D6 keep it).
+**§6.5 Reply box:** D5 and D6 keep its size at rest. If the owner approves D7 (#935), append:
+
+> - **Phone: compact while reading (#935).** Below 760 the reply area floats over the
+>   conversation's foot, and mirrors the header (§6.2). A session opens with it in full.
+>   - **Near the end,** it rides down with the scroll, and past its room it is compact: a
+>     pinned 48 bar (plus the safe area) holding a one-line copy of the box, the draft's first
+>     line or the placeholder. The copy is drawn, not read, and is not a tab stop; a tap on it
+>     brings the box back in full and focuses it.
+>   - **Away from the end,** 32 up sends it away and 64 down brings it back, with its own
+>     count. The end always shows it in full. A draft is never hidden: the bar shows its first
+>     line.
+>   - **Focus anywhere in the reply area** brings it back at once and holds it. A scroll the
+>     app makes keeps it as it was, unless it lands at the end, where it shows in full. On a
+>     screen shorter than twice the header it folds with the header.
+>   - **Reduced motion:** a cross-fade, as the header's. From 760 it never collapses.
+>
+> And in §6.2's mid-conversation bullet: "The reply area does the mirror image (§6.5), so the
+> two never both take full room mid-conversation."
 
 **§9 Accessibility** (append):
 
@@ -425,6 +442,17 @@ the recommended option of every decision (2026-11-04).**
 2. One line, "Answer its question first. Go to the question", with a link to the question
    (saves 21).
 
+**D7. The reply area while reading** (#935; *proposed, waiting on the owner*). The owner
+reported that the reply box "sits on too much space when it's not being typed in". Product
+asked for one collapse rule and one motion for the header and the box (#696).
+1. **Mirror the header: it rides down near the end, is a 48 bar with the draft's first line
+   past its room, comes back with 64 down or a tap, and the end and focus always show it in
+   full.** Mid-conversation the header and the box move in opposite directions, so the
+   conversation gains about 110 pt while reading, and nothing is ever a long scroll away.
+2. Collapse the same way, but come back only on a tap or at the end. This is calmer, but
+   the box is out of reach while reading back.
+3. Keep it as today (D5 and D6). This changes nothing, but leaves the owner's report open.
+
 ## Boards
 
 Every board comes in dark and light, and is labelled "Proposal #620 · Decided (owner, 2026-11-04)".
@@ -471,6 +499,14 @@ light, with motion and with reduced motion. The tests cover:
 - the reduced-motion cross-fade and the 167 ms slide;
 - no sideways overflow, no errors and no network requests;
 - in Chromium, a real touch drag collapses it and brings it back.
+
+For D7 (#935), a second run covers the reply area, in both engines, with motion and with
+reduced motion: it opens in full; rests at the end; rides near it; is compact past its room,
+with the draft's first line in the bar; 40 down stays and 70 down comes back; 20 up stays and
+40 up sends it; the header and the reply area never both take full room mid-conversation; a
+tap on the bar focuses the box; focus on Send brings it back; a scroll to the question keeps
+it, or shows it in full when it lands at the end; Send is hit-testable at rest; no overflow
+and no errors. Captures were taken in dark, light and high contrast.
 
 ## What follows
 
