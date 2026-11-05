@@ -117,6 +117,8 @@ static partial class SelfTest
             stepping = window.DispatcherQueue.TryEnqueue(() =>
             {
                 stepping = false;
+                // A step queued as the limit ran out is dropped: the window goes back where it began.
+                if (done.Task.IsCompleted) { return; }
                 window.AppWindow.Resize(new Windows.Graphics.SizeInt32((int)Math.Ceiling(next * scale), (int)Math.Ceiling(SweepHeight * scale)));
             });
         }
@@ -129,6 +131,7 @@ static partial class SelfTest
         finally
         {
             CompositionTarget.Rendering -= OnFrame;
+            done.TrySetResult();
             // Where it began, however far a sweep cut short got.
             Resize(window, SweepWide, SweepHeight);
         }
