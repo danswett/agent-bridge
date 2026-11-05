@@ -608,6 +608,17 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public void A_completed_setup_the_host_reports_after_a_removal_clears_the_removal()
+    {
+        var removed = new AgentSetupNote("Removed this installation's hook registrations.", Tone.Ok, Removed: true);
+        var row = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: "An owned setup record exists and setup completed; registration and activation still need verification."),
+            canManage: true, shared: removed, setup: HookSetup.Completed);
+
+        Assert.Null(row.SetUpVerb);
+        Assert.False(row.Keeps(removed));
+    }
+
+    [Fact]
     public void A_removal_the_host_reads_as_a_setup_that_did_not_finish_offers_set_up_not_repair()
     {
         var row = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Failed), canManage: true,

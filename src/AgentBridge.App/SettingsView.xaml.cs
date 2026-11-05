@@ -13,28 +13,7 @@ public sealed partial class SettingsView : UserControl
 {
     SettingsViewModel? viewModel;
 
-    public SettingsView()
-    {
-        InitializeComponent();
-        // Turning high contrast on can leave ActualTheme as it was, so a status line drawn before
-        // would keep its Light or Dark brush (#705 review): the lines are repainted when the system's
-        // colours change, as the caption buttons are (MainWindow.OnColorValuesChanged). The event
-        // comes off the UI thread, and is held only while the page is in the tree.
-        Loaded += (_, _) => { uiSettings.ColorValuesChanged -= OnColorValuesChanged; uiSettings.ColorValuesChanged += OnColorValuesChanged; };
-        Unloaded += (_, _) => uiSettings.ColorValuesChanged -= OnColorValuesChanged;
-    }
-
-    // Kept: the colour change is raised only while the UISettings that took the handler lives.
-    readonly Windows.UI.ViewManagement.UISettings uiSettings = new();
-
-    void OnColorValuesChanged(Windows.UI.ViewManagement.UISettings sender, object args) =>
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
-        {
-            foreach (var status in Descendants(AgentList).OfType<TextBlock>().Where(t => AutomationProperties.GetAutomationId(t).StartsWith("AgentStatus_", StringComparison.Ordinal)))
-            {
-                PaintStatus(status, null);
-            }
-        });
+    public SettingsView() => InitializeComponent();
 
     public SettingsViewModel ViewModel
     {
@@ -129,19 +108,12 @@ public sealed partial class SettingsView : UserControl
 
     internal ItemsControl AgentRows => AgentList;
 
-    // A row's status in its tone, a failure in Danger, from the brushes of the theme the row is drawn
-    // in: Ui.ToneBrush gives the app's, and a window can be drawn in the other.
+    // A row's status in its tone, a failure in Danger, styled with a ThemeResource (the styles in
+    // SettingsView.xaml): it follows the theme the row is drawn in, which Ui.ToneBrush (the app's)
+    // doesn't, and high contrast, which can come on without ActualTheme changing.
     void OnAgentStatusLoaded(object sender, RoutedEventArgs e)
     {
-        if (sender is not TextBlock status) { return; }
-        PaintStatus(status, null);
-        status.ActualThemeChanged -= PaintStatus;
-        status.ActualThemeChanged += PaintStatus;
-    }
-
-    static void PaintStatus(FrameworkElement sender, object? _)
-    {
-        if (sender is TextBlock { DataContext: AgentReadinessRow row } status) { status.Foreground = Ui.ThemedBrush(Ui.ToneKey(row.StatusTone), status.ActualTheme); }
+        if (sender is TextBlock { DataContext: AgentReadinessRow row } status) { status.Style = (Style)Resources[$"AgentStatus{Ui.ToneKey(row.StatusTone)}"]; }
     }
 
     // A row's status line as drawn (the self-test reads it too).

@@ -5,6 +5,28 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:AgentBridge.App"
     xmlns:core="using:AgentBridge.App.Core">
+    <UserControl.Resources>
+        <!-- An agent row's status in its tone (Ui.ToneKey). A ThemeResource follows the theme the row
+             is drawn in and high contrast as XAML applies them; a brush set from code at an event
+             raced high contrast's resources and kept the Light one (#705 review). An explicit style
+             replaces the implicit one, so the face is set here too. -->
+        <Style x:Key="AgentStatusAbBridge" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />
+            <Setter Property="Foreground" Value="{ThemeResource AbBridge}" />
+        </Style>
+        <Style x:Key="AgentStatusAbNeedsText" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />
+            <Setter Property="Foreground" Value="{ThemeResource AbNeedsText}" />
+        </Style>
+        <Style x:Key="AgentStatusAbDangerText" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />
+            <Setter Property="Foreground" Value="{ThemeResource AbDangerText}" />
+        </Style>
+        <Style x:Key="AgentStatusAbText2" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />
+            <Setter Property="Foreground" Value="{ThemeResource AbText2}" />
+        </Style>
+    </UserControl.Resources>
     <ScrollViewer AutomationProperties.AutomationId="SettingsPane">
         <!-- In a Grid: a ScrollViewer centres a narrower child by its desired width, which pushed
              the column off the right edge (see LaunchView). -->

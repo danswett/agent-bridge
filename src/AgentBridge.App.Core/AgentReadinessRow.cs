@@ -38,7 +38,7 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
         // Removing Copilot CLI's connection can leave its owned record, when other entries share the
         // file (StandaloneHooks.RemoveAsync), which a host reads as set up, or as a setup that didn't
         // finish. A removal of this row's hooks, which a fresh check keeps, says it isn't (#705 review).
-        (ReadinessState.Unknown, _) or (_, HookSetup.Incomplete) when Result is { Removed: true } => "Set up",
+        (ReadinessState.Unknown, HookSetup.Unknown) or (_, HookSetup.Incomplete) when Result is { Removed: true } => "Set up",
         (_, HookSetup.Incomplete) or (ReadinessState.Failed, _) => "Repair",
         (ReadinessState.Missing or ReadinessState.NeedsAction, _) => "Set up",
         (ReadinessState.Unknown, HookSetup.Completed) => null,
@@ -59,7 +59,7 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     // What of this row's last setup a fresh check keeps (SettingsViewModel.CheckAgentsAsync): a
     // removal the host can't tell from a setup, and on an older host a failed setup it reads as set up.
     internal bool Keeps(AgentSetupNote note) => note.Removed
-        ? NotTested || Setup == HookSetup.Incomplete
+        ? (Setup == HookSetup.Unknown && NotTested) || Setup == HookSetup.Incomplete
         : note.Tone == Tone.Bad && Setup == HookSetup.Unknown && NotTested;
     public bool ShowSetUp => SetUpVerb is not null;
     public bool CanSetUp => canManage && ShowSetUp;
