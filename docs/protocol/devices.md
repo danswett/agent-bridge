@@ -6,16 +6,16 @@ design, its reasons and its proofs are in
 wire contract implementations share. It is not [roster.md](roster.md), the relay's list of
 machines seen online.
 
-**Status: R1a and R1b.** R1a is the encoding: framing, ids, entries, their strict parsing,
-presence assertions and the values enrollment computes. R1b is the acceptance rule and state in
-C# (design §3.3 to §3.5). The PWA's port of the rule, person commands, head attestations and
-vetoes come in R1c. It is a library only: nothing in the host, the relay or a client uses it yet
+**Status: R1a, R1b and the first part of R1c.** R1a is the encoding: framing, ids, entries, their
+strict parsing, presence assertions and the values enrollment computes. R1b is the acceptance rule
+and state in C# (design §3.3 to §3.5). R1c ports the rule to the PWA, then adds person commands,
+head attestations and vetoes. It is a library only: nothing in the host, the relay or a client uses it yet
 (slices R2 to R5).
 
 | Implementation | Where |
 |---|---|
 | C# (host, relay, app) | `src/AgentBridge.Roster`, tests in `tests/AgentBridge.Roster.Tests` |
-| JavaScript (PWA) | `pwa/js/roster`, replaying the vectors in `pwa/test/unit/roster-vectors.test.mjs` |
+| JavaScript (PWA) | `pwa/js/roster`, replaying the vectors in `pwa/test/unit/roster-vectors.test.mjs` and `roster-state.test.mjs` |
 | Swift (iOS) | Not yet: left to slice A1, which replays the same vectors |
 
 All three must accept and refuse the same inputs **with the same refusal code**, which is why the
@@ -297,7 +297,8 @@ clock first (alone, they record who is `serving` then and the `names` shown), or
 what the verifier then applies: the active devices with the add, confirmation and name shown of each (and a `pending` rename),
 the conflicted ids, the heads, the quarantined entries, the evidence and who is served. A scenario with `limits` (`addCap`) runs a verifier with that
 cap shrunk so it can be reached. Every refusal `reason` the verifier can give has a scenario that shows it. The PWA's
-port replays the scenarios once R1c lands.
+port (`pwa/js/roster/verifier.js`) replays it in `pwa/test/unit/roster-state.test.mjs`, with the same
+verdicts, codes and state at every step (a scenario's `limits` shrink the port's cap the same way).
 
 ## Decided for the library
 
