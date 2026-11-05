@@ -373,7 +373,9 @@ that can't be opened or read part-way is `unavailable` ("this session's transcri
 a line in a turn that isn't JSON is skipped and the turn marked `truncated`, and a turn-starting
 line that isn't is an `unreadable` turn with `partial` on its page. Live `activity.turn` is then
 absent until the next prompt the host can read, so nothing after that line is drawn under the
-prompt before it.
+prompt before it. A record that is JSON but that the host does not use (an event type it does not
+know, or one whose fields are missing or of another type) adds nothing to its turn and does not
+mark it, as live ignores it; only a line that can't be read at all marks the turn `truncated`.
 
 Half a surrogate pair escaped in a record (`"\uD800"`, as Node writes when it cuts a tool's
 output mid-emoji), and bytes that are not UTF-8, are read as the replacement character (U+FFFD),
