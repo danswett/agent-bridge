@@ -80,7 +80,7 @@ static partial class SelfTest
         check(unreachable is null, $"finds the response's last block, off screen, by its name, which no other block has, and brings it into view for a screen reader{Not(unreachable)}");
         // After Reachable, which needs the last block off screen to begin with: this walk realises every block.
         var (unlisted, listRealised, listSeconds) = list is null ? ("measured: the response not drawn", 0, 0d) : await Listed(list);
-        check(unlisted is null, $"gives a screen reader every block of the response as a list item numbered 1 to {list?.Items.Count} of {list?.Items.Count}, each one not yet realised realised first through its automation peer ({listRealised} realised so, in {listSeconds:0.0} s), and the header and footer outside the set{Not(unlisted)}");
+        check(unlisted is null, $"gives a screen reader every block of the response as a list item numbered 1 to {list?.Items.Count} of {list?.Items.Count}, walked as a screen reader walks it, ItemContainer's FindItemByProperty for each next item and VirtualizedItem's Realize for one not yet realised ({listRealised} realised so, in {listSeconds:0.0} s), none -1, and the header and footer outside the set{Not(unlisted)}");
         if (card is not null) { card.Delegates.FinishedOpen = false; }
         static string Not(string? wrong) => wrong is null ? "" : $": not {wrong}";
 

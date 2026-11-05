@@ -8,14 +8,14 @@ public static class ConversationKeyboard
     // A line, as the ScrollViewer the conversation once was scrolled by one.
     public const double Line = 16;
 
-    // The key as the conversation reads it, or null for one it leaves alone. A key reaches the
-    // conversation only once what had focus has passed it on, and the list under it moves between
-    // its items for plain, Ctrl and Shift arrows and pages alike, so every one of them is taken:
-    // Ctrl+Home and Ctrl+End go to the top and the end as in any document, and the rest with Ctrl
-    // or Shift, and Left and Right (the text never scrolls sideways), don't move. Alt is left to
-    // the window's own keys. A key pressed in a text input, or in a control that uses it (a combo
-    // box, a slider, a list of its own), is that control's, though it passed it on: the caret, a
-    // value or a selection moves, never the page under it, Ctrl+Home and Ctrl+End included.
+    // The key as the conversation reads it, or null for one it leaves alone. The list under the
+    // conversation moves between its items for plain, Ctrl and Shift arrows and pages alike, so
+    // every one of them is taken (on the way down or the way back up: TakenEarly): Ctrl+Home and
+    // Ctrl+End go to the top and the end as in any document, and the rest with Ctrl or Shift, and
+    // Left and Right (the text never scrolls sideways), don't move. Alt is left to the window's own
+    // keys. A key pressed in a text input, or in a control that uses it (a combo box, a slider, a
+    // list of its own), is that control's: the caret, a value or a selection moves, never the page
+    // under it, Ctrl+Home and Ctrl+End included.
     public static ReadingKey? Key(int virtualKey, bool ctrl, bool shift, bool alt, KeyUser focus = KeyUser.None)
     {
         if (alt || focus != KeyUser.None) { return null; }
@@ -88,6 +88,29 @@ public static class ConversationKeyboard
         }
         return -1;
     }
+
+    // Where a held Tab goes once it runs: to its block wherever that now is; or, the block gone
+    // (a reply's last block is replaced as it streams in), to the block a Tab from `from`, where
+    // focus still is, now stops in first, should that be one the list has not realised. Null when
+    // Tab should simply go on from where focus is: to a block already realised, or past the list.
+    public static int? Held(IReadOnlyList<ConversationBlock> blocks, ConversationBlock target, int? from, bool forward, Func<int, bool> realised)
+    {
+        if (Where(blocks, target) is >= 0 and var at) { return at; }
+        if (from is not { } f) { return null; }
+        var step = forward ? 1 : -1;
+        for (var i = f + step; i >= 0 && i < blocks.Count; i += step)
+        {
+            if (blocks[i].Focusable) { return realised(i) ? null : i; }
+        }
+        return null;
+    }
+
+    // Whether a reading key is taken on its way down to what has focus (PreviewKeyDown), so neither
+    // the list nor anything in a block moves first, or only on its way back up (KeyDown), should
+    // nothing inside have used it. Left and Right, and the keys made still by Shift or Ctrl, wait
+    // for the way up, so a wide table's own scroller and selected text keep them; so does every key
+    // pressed in selectable text, whose caret (F7, caret browsing) moves with the arrows.
+    public static bool TakenEarly(ReadingKey key, bool inSelectableText) => key != ReadingKey.Still && !inSelectableText;
 
     // The ends of a Tab as Passed reads them, from the places of what had focus and what gets it
     // (null outside the conversation's tree: entering from a popup, or leaving for one). A move that

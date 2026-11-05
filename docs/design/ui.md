@@ -719,9 +719,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **The keyboard reads it as a page, not a list:** the arrow keys scroll a line, Page Up and Page
     Down a viewport, Home and End (Ctrl too) to the top and the end, under reduced motion without
     animation; none moves between blocks, nor does any of them with Ctrl or Shift, and Left and
-    Right do nothing. A key with Alt is left to the window, and one pressed in a text input or a
-    control that uses it (a combo box, a slider, a list of its own) to that control, Ctrl+Home and
-    Ctrl+End included. Tab and Shift+Tab stop at every link and Copy button in order, a block not
+    Right do nothing to the page (a wide table still scrolls sideways with them, and selected text
+    keeps Shift and the arrows, and with caret browsing every arrow). A key with Alt is left to the
+    window, and one pressed in a text input or a control that uses it (a combo box, a slider, a
+    list of its own) to that control, Ctrl+Home and Ctrl+End included. Tab and Shift+Tab stop at
+    every link and Copy button in order, a block not
     yet laid out included: it is brought into view at the leading edge and laid out, and focus goes
     to its first stop (its last, going back); a block with none is passed. No block's container is
     a stop, and in high contrast it has no fill: the block draws in the system's colours.
@@ -729,8 +731,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     drawn the same before and after it, that Page Down and Down scroll the text with focus and
     selection left alone, that Tab reaches a block not yet laid out, that no container is a stop or
     draws chrome, that the last block is found by its name, which no other block has, and that every
-    block, realised first through its automation peer as a screen reader realises it, is a list item
-    numbered 1 to N in a set of N ([app-windows.md](../app-windows.md)).
+    block, found and realised as a screen reader does it (FindItemByProperty, then Realize), is a
+    list item numbered 1 to N in a set of N, none -1 ([app-windows.md](../app-windows.md)).
 - **Your messages:** a bubble at the right edge of the conversation's column (card fill,
   platform radius), at most 85% of the column's width, so a short message beside a short reply
   is still at the right (#255).

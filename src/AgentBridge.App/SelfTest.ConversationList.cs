@@ -89,21 +89,31 @@ static partial class SelfTest
     }
 
     // What a screen reader is given wrong of the response's items: every block a list item numbered
-    // 1 to N in a set of N, and every list item a block's, so the header and the footer are outside
-    // the set. WinUI numbers an item only once it has a container, so a block not realised yet is
-    // realised first through its peer's VirtualizedItem pattern, as a screen reader moving to it
-    // does. Null when it is given all of them right, with how many blocks were realised that way.
+    // 1 to N in a set of N, none -1, and every list item a block's, so the header and the footer are
+    // outside the set. The items are walked as a screen reader walks a virtualised list, the list's
+    // ItemContainer pattern asked for the item after the last (FindItemByProperty with no property),
+    // and one not realised yet realised through the VirtualizedItem pattern of what it found, since
+    // WinUI numbers an item only once it has a container (#829, B's realisation contract). Null when
+    // it is given all of them right, with how many blocks were realised that way.
     static async Task<(string? Problem, int Realised, double Seconds)> Listed(ListView list)
     {
         var count = list.Items.Count;
         if (count == 0 || FrameworkElementAutomationPeer.CreatePeerForElement(list) is not ItemsControlAutomationPeer peer) { return ("a list to read", 0, 0); }
+        if (peer.GetPattern(PatternInterface.ItemContainer) is not IItemContainerProvider items) { return ("the list's items found as a screen reader finds them", 0, 0); }
         var problems = new List<string>();
         var realised = 0;
         var walk = System.Diagnostics.Stopwatch.StartNew();
+        var finder = new ProviderPeer();
+        IRawElementProviderSimple? after = null;
+        var walked = 0;
         for (var i = 0; i < count; i++)
         {
-            var item = peer.CreateItemAutomationPeer(list.Items[i]);
-            if (item is null || item.GetAutomationControlType() != AutomationControlType.ListItem) { problems.Add($"block {i + 1} a list item: {item?.GetAutomationControlType().ToString() ?? "no peer"}"); break; }
+            var found = items.FindItemByProperty(after, null, null);
+            if (found is null) { problems.Add($"block {i + 1} found after block {i}"); break; }
+            after = found;
+            walked++;
+            if (finder.Of(found) is not ItemAutomationPeer item || !ReferenceEquals(item.Item, list.Items[i])) { problems.Add($"block {i + 1} found in its place"); break; }
+            if (item.GetAutomationControlType() != AutomationControlType.ListItem) { problems.Add($"block {i + 1} a list item: {item.GetAutomationControlType()}"); break; }
             if (list.ContainerFromIndex(i) is null)
             {
                 if (item.GetPattern(PatternInterface.VirtualizedItem) is not IVirtualizedItemProvider virtualised) { problems.Add($"block {i + 1} realisable"); break; }
@@ -123,6 +133,10 @@ static partial class SelfTest
             }
             // A hang guard, not a bar: a walk this long is stuck.
             if (walk.Elapsed > TimeSpan.FromSeconds(30)) { problems.Add($"every block numbered within 30 s: block {i + 1} reached"); break; }
+        }
+        if (problems.Count == 0 && walked == count && items.FindItemByProperty(after, null, null) is { } extra)
+        {
+            problems.Add($"no item after the last block: \"{Clipped(finder.Of(extra)?.GetName() ?? "?")}\"");
         }
         var listed = (peer.GetChildren() ?? []).Where(c => c.GetAutomationControlType() == AutomationControlType.ListItem).ToList();
         if (listed.FirstOrDefault(c => c is not ItemAutomationPeer { Item: ConversationBlock }) is { } stray)

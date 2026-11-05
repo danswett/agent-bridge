@@ -143,6 +143,9 @@ public sealed class ConversationBlocksTests
         Assert.Equal(toned, block.Text);
         Assert.Equal(new string('a', 498) + "…", ConversationBlocks.NameOf(accent));
         Assert.All(new[] { toned, accent, new string('b', 2000), new string('\u202E', 600) }, t => Assert.True(ConversationBlocks.NameOf(t).Length <= ConversationBlocks.NameLongest));
+        var overrides = ConversationBlocks.NameOf(new string('\u202E', 600));
+        Assert.StartsWith("\\u202E\\u202E", overrides);
+        Assert.DoesNotContain('\u202E', overrides);
     }
 
     [Fact]
@@ -394,6 +397,34 @@ public sealed class ConversationKeyboardTests
         Assert.Same(queued, shown[0]);
         ConversationBlocks.Update(shown, MarkdownModel.Parse("More.\n\n[d](https://a.b)"));
         Assert.Equal(-1, ConversationKeyboard.Where(shown, queued));
+    }
+
+    [Fact]
+    public void Tab_held_for_a_block_that_the_streaming_reply_replaces_goes_to_the_block_that_replaced_it()
+    {
+        var shown = new ObservableCollection<ConversationBlock>(Blocks("Plain.\n\n[b](https://a.b)\n\nStill [writ](https://a.b)"));
+        var held = shown[2];
+
+        ConversationBlocks.Update(shown, MarkdownModel.Parse("Plain.\n\n[b](https://a.b)\n\nStill [writ](https://a.b)ing"));
+
+        Assert.NotSame(held, shown[2]);
+        Assert.Equal(2, ConversationKeyboard.Held(shown, held, from: 1, forward: true, i => i < 2));
+        Assert.Null(ConversationKeyboard.Held(shown, held, from: 1, forward: true, i => true));
+        Assert.Null(ConversationKeyboard.Held(shown, held, from: null, forward: true, i => false));
+        Assert.Equal(1, ConversationKeyboard.Held(shown, shown[1], from: 2, forward: false, i => false));
+    }
+
+    [Fact]
+    public void Reading_keys_wait_for_the_way_back_up_when_what_has_focus_may_use_them_and_are_taken_on_the_way_down_otherwise()
+    {
+        Assert.True(ConversationKeyboard.TakenEarly(ReadingKey.PageDown, inSelectableText: false));
+        Assert.True(ConversationKeyboard.TakenEarly(ReadingKey.LineDown, inSelectableText: false));
+        Assert.True(ConversationKeyboard.TakenEarly(ReadingKey.End, inSelectableText: false));
+        // Left and Right (a wide table's own scroller) and Shift+arrows (selection) are Still.
+        Assert.False(ConversationKeyboard.TakenEarly(ReadingKey.Still, inSelectableText: false));
+        Assert.False(ConversationKeyboard.TakenEarly(ReadingKey.LineDown, inSelectableText: true));
+        Assert.Equal(ReadingKey.Still, ConversationKeyboard.Key(0x27, ctrl: false, shift: false, alt: false));
+        Assert.Equal(ReadingKey.Still, ConversationKeyboard.Key(0x28, ctrl: false, shift: true, alt: false));
     }
 
     [Fact]

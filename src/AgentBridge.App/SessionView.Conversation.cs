@@ -78,17 +78,20 @@ public sealed partial class SessionView
         ConversationList.LayoutUpdated += OnConversationLaidOut;
         // Tunnelling, so the keys reach this before anything inside the list can take them: the list
         // would move between its items, a child might handle a key first (ui.md §6.4). What has focus
-        // keeps a key it uses (KeyUserOf).
-        scroll.PreviewKeyDown += OnReadingKey;
+        // keeps a key it uses (KeyUserOf); the keys TakenEarly leaves are taken on the way back up,
+        // once what has focus has had them.
+        scroll.PreviewKeyDown += (_, e) => OnReadingKey(e, early: true);
+        scroll.KeyDown += (_, e) => OnReadingKey(e, early: false);
     }
 
     // The keys that scroll a page scroll the conversation, as its ScrollViewer did (ui.md §6.4),
     // unless what has focus is a text input or a control that uses the key.
-    void OnReadingKey(object sender, KeyRoutedEventArgs e)
+    void OnReadingKey(KeyRoutedEventArgs e, bool early)
     {
         if (ConversationScroll is not { } scroll) { return; }
         static bool Down(VirtualKey k) => InputKeyboardSource.GetKeyStateForCurrentThread(k).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
         if (ConversationKeyboard.Key((int)e.Key, Down(VirtualKey.Control), Down(VirtualKey.Shift), e.KeyStatus.IsMenuKeyDown || Down(VirtualKey.Menu), KeyUserOf(e.OriginalSource as DependencyObject)) is not { } key) { return; }
+        if (early && !ConversationKeyboard.TakenEarly(key, e.OriginalSource is TextBlock or RichTextBlock or RichTextBlockOverflow)) { return; }
         e.Handled = true;
         // From where the last key is taking it, so a key pressed while that scroll still moves adds to it.
         var from = keyTarget ?? scroll.VerticalOffset;
@@ -190,31 +193,46 @@ public sealed partial class SessionView
     // past it rather than staying where it was.
     void FocusBlock(int index, bool forward)
     {
-        var (wanted, target) = (blocks, blocks[index]);
+        var target = blocks[index];
         var direction = forward ? FocusNavigationDirection.Next : FocusNavigationDirection.Previous;
         var waited = 0;
+        ConversationBlock? brought = null;
         DispatcherQueue.TryEnqueue(Bring);
 
-        // The response may change while this waits, so the block is found again each time.
+        // The response may change while this waits, even to a new list of blocks, so the block is
+        // found again each time; one replaced as the reply streams in gives way to the block Tab now
+        // stops in (Held).
         void Bring()
         {
-            if (blocks != wanted || ConversationKeyboard.Where(blocks, target) is not (>= 0 and var at)) { return; }
-            if (waited == 0) { ConversationList.ScrollIntoView(target, ScrollIntoViewAlignment.Leading); }
+            var from = PlaceOf(XamlRoot is { } r ? FocusManager.GetFocusedElement(r) as DependencyObject : null);
+            if (ConversationKeyboard.Held(blocks, target, from, forward, i => ConversationList.ContainerFromIndex(i) is not null) is not { } at)
+            {
+                PassOn();
+                return;
+            }
+            target = blocks[at];
+            if (!ReferenceEquals(brought, target)) { ConversationList.ScrollIntoView(target, ScrollIntoViewAlignment.Leading); brought = target; }
             ConversationList.UpdateLayout();
             if (ConversationList.ContainerFromIndex(at) is not { } container)
             {
                 // Not laid out yet: again at the next layout, a few times at most.
                 if (++waited < 5 && DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, Bring)) { return; }
-                if (XamlRoot?.Content is not { } within) { return; }
-                lettingTabPass = true;
-                try { FocusManager.TryMoveFocus(direction, new FindNextElementOptions { SearchRoot = within }); }
-                finally { lettingTabPass = false; }
+                PassOn();
                 return;
             }
             var stop = forward ? FocusManager.FindFirstFocusableElement(container) : FocusManager.FindLastFocusableElement(container);
             if (stop is not null) { _ = FocusManager.TryFocusAsync(stop, FocusState.Keyboard); }
             // Realised now, so the search passes it this time rather than coming back to it.
             else if (XamlRoot?.Content is { } root) { FocusManager.TryMoveFocus(direction, new FindNextElementOptions { SearchRoot = root }); }
+        }
+
+        // Tab goes on from where focus is, past what could not be brought, never staying put.
+        void PassOn()
+        {
+            if (XamlRoot?.Content is not { } within) { return; }
+            lettingTabPass = true;
+            try { FocusManager.TryMoveFocus(direction, new FindNextElementOptions { SearchRoot = within }); }
+            finally { lettingTabPass = false; }
         }
     }
 
