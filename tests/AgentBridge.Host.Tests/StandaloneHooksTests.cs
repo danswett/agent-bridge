@@ -623,6 +623,26 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.False(File.Exists(Owner("claude")));
     }
 
+    [Fact]
+    public async Task Claude_removal_warns_about_a_backup_that_became_a_directory_and_still_removes_only_owned_hooks()
+    {
+        var backup = Path.Combine(Profile, "hooks", "backups", "claude-settings.json");
+        Write(Registration("claude"), """{"model":"user-model"}""");
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        File.Delete(backup);
+        Directory.CreateDirectory(backup);
+        var output = new StringWriter();
+
+        await Setup.RemoveAsync("claude", false, output);
+
+        Assert.Contains($"Warning: {backup} is unreadable", output.ToString());
+        var remaining = Read(Registration("claude"));
+        Assert.Equal("user-model", (string?)remaining["model"]);
+        Assert.Null(remaining["hooks"]);
+        Assert.True(Directory.Exists(backup));
+        Assert.False(File.Exists(Owner("claude")));
+    }
+
     sealed class WindowsLockFactAttribute : FactAttribute
     {
         public WindowsLockFactAttribute()

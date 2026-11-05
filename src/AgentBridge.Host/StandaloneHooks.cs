@@ -316,15 +316,20 @@ public sealed class StandaloneHooks(
     // The first original settings, byte for byte (comments and formatting included), when
     // the settings without our hooks still parse to exactly what they held; otherwise null,
     // and removal rewrites the current settings without our hooks. A missing backup is not
-    // proof that setup created the file, so the file is never deleted.
+    // proof that setup created the file, so the file is never deleted. Only a backup that
+    // is actually absent is skipped quietly: File.Exists is also false for a directory or
+    // a path it may not inspect, which must warn like any other unreadable backup.
     byte[]? ClaudeOriginal(JsonObject remaining, TextWriter output)
     {
         var backup = Path.Combine(HookFolder, "backups", "claude-settings.json");
-        if (!File.Exists(backup)) { return null; }
         try
         {
             var original = File.ReadAllBytes(backup);
             return JsonNode.DeepEquals(Parse(backup, original), remaining) ? original : null;
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
         }
         // ArgumentException: duplicate property names parse but throw when DeepEquals reads them.
         catch (Exception e) when (e is JsonException or InvalidDataException or ArgumentException or IOException or UnauthorizedAccessException)
