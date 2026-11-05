@@ -307,6 +307,7 @@ Decided by A, Trust lead, 2026-11-04, where the design left them open:
 | Whether a held device's renames are held | Held: see **Names** above |
 | What "distinct heads" means for a merge's parents | No parent an ancestor of another |
 | §10's "partial cascade with a fabricated pair", whose bullet keeps E and E2 active | §3.5 governs, and the bullet is a design erratum (to be fixed after #391 lands): J's and K's removal also revokes D and E's add is not its ancestor, so E and E2 are void until enrolled again. A recovery of a device that approved others needs a cosigner, as the client asks |
+| §10's removal that revokes only a fabricated duplicate of a device's id, whose bullet keeps the device's own add active | §3.5 governs: the removal never takes that add, so the device wipes nothing, but it bars it when the removal's signer was active where it was made, and the device then shows "not active". The bullet describes only the case without the bar (erratum #811) |
 
 ## Open questions
 
