@@ -4,7 +4,7 @@ The scripted migrate-and-rollback rehearsal on the disposable Hyperloop VM: desi
 issue #39. A person or an agent driving Hyperloop runs it step by step. It goes in order:
 
 1. Install agent-ha-bridge.
-2. Install agent-bridge beside it, read-only.
+2. Install Slipgates beside it, read-only.
 3. Migrate.
 4. Check each row of [parity.md](parity.md) against a disposable Home Assistant, the Windows
    app and the PWA.
@@ -49,7 +49,7 @@ two-user arrangement in [ha-connector.md](ha-connector.md) › Validation plan. 
 | Machine | Computer name (slug) | Runs |
 |---|---|---|
 | **VM-W** | `REHEARSAL-W` (`rehearsal_w`) | Docker with the disposable Home Assistant and Mosquitto ([ha-connector.md](ha-connector.md) › Validation plan, when #60 lands). agent-ha-bridge as the **publication writer** of that instance. Edge for the HA dashboard and the PWA |
-| **VM-M** | `REHEARSAL-M` (`rehearsal_m`) | The machine being migrated: one Windows user, `rehearsal`, with Copilot CLI, Claude Code, Codex, agent-ha-bridge (participant), then agent-bridge. Reaches VM-W's Home Assistant through `ssh -N -L 8123:127.0.0.1:8123 rehearsal@VM-W`, so every address stays `127.0.0.1` |
+| **VM-M** | `REHEARSAL-M` (`rehearsal_m`) | The machine being migrated: one Windows user, `rehearsal`, with Copilot CLI, Claude Code, Codex, agent-ha-bridge (participant), then Slipgates. Reaches VM-W's Home Assistant through `ssh -N -L 8123:127.0.0.1:8123 rehearsal@VM-W`, so every address stays `127.0.0.1` |
 | **Phone** | — | An iPhone with the PWA installed and signed in to the same GitHub account (push) |
 
 Never the live Home Assistant, broker or relay account's other machines (design G6). The
@@ -298,7 +298,7 @@ $base = 'C:\rehearsal\evidence\baseline-S1.json'
   happens to match.
 * Session ids: `$cp`, `$cl` and `$cx` hold the Copilot, Claude and Codex sessions in use. Set
   them with `sessions … --id-only`, which prints only the id of the one matching session and
-  fails otherwise. Before agent-bridge is installed, use `newest <agent>`, which reads the
+  fails otherwise. Before Slipgates is installed, use `newest <agent>`, which reads the
   transcripts instead.
 * **Screenshots.** Take them with Hyperloop and keep them with
   `agent-bridge-rehearsal note --step <id> --result pass --detail "…" --screenshot <file>`.
@@ -346,7 +346,7 @@ with `--ignore` from then on. `runtime/`, `logs/` and `*.log*` are already exclu
 
 Volatile files found so far: none. In run 1 (2026-10-31) B-08 was identical, byte for byte, after five idle minutes.
 
-## Phase C: agent-bridge beside it, read-only
+## Phase C: Slipgates beside it, read-only
 
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
@@ -360,7 +360,7 @@ Volatile files found so far: none. In run 1 (2026-10-31) B-08 was identical, byt
 
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
-| **D-01** | §14 "Migrate an existing" | VM-W | Install agent-bridge on VM-W too, and run `agent-bridge-host migrate --dry-run` there | Refused: VM-W is the publication writer (G7). Nothing changes | `agent-bridge-rehearsal note --step D-01 --result pass --detail "<refusal text>"` | #38 |
+| **D-01** | §14 "Migrate an existing" | VM-W | Install Slipgates on VM-W too, and run `agent-bridge-host migrate --dry-run` there | Refused: VM-W is the publication writer (G7). Nothing changes | `agent-bridge-rehearsal note --step D-01 --result pass --detail "<refusal text>"` | #38 |
 | **D-02** | §14 "Migrate an existing" | VM-M | `agent-bridge-host migrate --dry-run` | Lists the task to disable, the hook fallback to move and each `newSession.*` key with its `launch.*` target. Keys with no equivalent (`usage.*`, `homeAssistant.*`, `answerButtons.*`, …) are reported as kept in the old file. Nothing changes | `agent-bridge-rehearsal baseline compare --baseline $base --step D-02` | #38 |
 | **D-03** | §14 "Migrate an existing" | VM-M | `agent-bridge-host migrate` | Exit 0. The daemon stopped; its task is **disabled, not deleted** | `agent-bridge-rehearsal g5 --expect inactive --timeout 30 --step D-03` | #38 |
 | **D-04** | §14 "Migrate an existing" | Tool | What changed | Only hook registrations, agent config and the tasks (disabled). `~/.agent-ha-bridge` is untouched but for Codex's registration, `codex-bridge/plugins/agent-ha-bridge/hooks.json`, which agent-ha-bridge's installer keeps there; the tool counts it as a hook | `agent-bridge-rehearsal baseline compare --baseline $base --allow hooks --allow agents --allow tasks --step D-04` | #38 |
@@ -489,7 +489,7 @@ That also marks the host log, which `log` then reads from.
 
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
-| **E11-01** | §11 "Copy a session", §11 "Resume choices shared" | PWA | Copy `$cp` to VM-W (with agent-bridge installed there) and resume it | Forked under a new id on VM-W, with its history | `agent-bridge-rehearsal note --step E11-01 --result pass --detail "…"` | Transfer |
+| **E11-01** | §11 "Copy a session", §11 "Resume choices shared" | PWA | Copy `$cp` to VM-W (with Slipgates installed there) and resume it | Forked under a new id on VM-W, with its history | `agent-bridge-rehearsal note --step E11-01 --result pass --detail "…"` | Transfer |
 
 ### E12. Hooks
 

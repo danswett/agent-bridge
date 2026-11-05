@@ -1,9 +1,18 @@
-# agent-bridge
+# Slipgates
 
-A standalone app for watching and driving AI coding agent sessions (GitHub Copilot
-CLI, Claude Code, Codex) across your machines and your phone. It is the successor to
+*(formerly Agent Bridge)*
+
+Slipgates is a standalone app for watching and driving AI coding agent sessions (GitHub
+Copilot CLI, Claude Code, Codex) across your machines and your phone. A question asked on a
+Dev Box shows up on your phone, and your answer goes straight back. It is the successor to
 [agent-ha-bridge](https://github.com/danswett/agent-ha-bridge), without the need for
 Home Assistant.
+
+> **The name.** The product is called Slipgates ([brand](docs/design/brand.md)). The
+> repository (`danswett/agent-bridge`), project and namespace names (`AgentBridge.*`),
+> commands (`agent-bridge-host`), install paths, environment variables and the web app's
+> address keep the legacy name until [#541](https://github.com/danswett/agent-bridge/issues/541) migrates them
+> ([what stays](docs/design/brand.md#33-never-renamed-by-the-brand)).
 
 > **Status: in use on a first migrated machine (2026-11-01).** The host, Windows app, phone
 > PWA and relay are built to parity with agent-ha-bridge, and machines are moving over
@@ -19,16 +28,16 @@ Nothing depends on Windows: the host, hook, relay, protocol and all product logi
 shared on Windows, macOS and Linux, and each desktop gets a native app of equal
 standing.
 
-* **Bridge Host** (C#/.NET, Windows, macOS and Linux): one per machine. It does what
+* **The Slipgates host** (C#/.NET, Windows, macOS and Linux): one per machine. It does what
   the agent-ha-bridge daemon does today: picks up hook events, tails transcripts, and
   delivers answers, replies, launches and stops. It holds all the product logic.
-* **Agent Bridge apps**: WinUI 3 on Windows and SwiftUI on macOS. Both are thin native
+* **Slipgates apps**: WinUI 3 on Windows and SwiftUI on macOS. Both are thin native
   shells over the host, providing the desktop UI, notifications, and the installer and
   manager for the host and agent hooks. Linux runs the host only, for now.
 * **Relay**: an untrusted, end-to-end-encrypted rendezvous so your machines and phone
   can reach each other from anywhere. It can be self-hosted, and there are LAN-only
   options.
-* **Phone**: a PWA first, native apps later.
+* **Phone**: the Slipgates web app (a PWA) first, native apps later.
 
 The protocol between them is specified in [docs/protocol](docs/protocol/v1-sessions.md).
 
