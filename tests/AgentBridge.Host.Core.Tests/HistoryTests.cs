@@ -861,6 +861,50 @@ public class HistoryTests
         Assert.Equal((QuestionOutcome.Cancelled, Fixture.T0.AddSeconds(1)), (parts.Single(p => p.Question is not null).Outcome!.Value, parts.Single(p => p.Question is not null).AnsweredAt!.Value));
     }
 
+    // Found disposing Copilot's review of #686: past 4,096 delegate calls in one read, whose a new
+    // call was went unremembered, so a delegate's approval read as the main agent's.
+    [Fact]
+    public async Task A_delegates_approval_after_thousands_of_other_delegate_calls_is_still_the_delegates()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+        [
+            Copilot.User("go", 1),
+            Copilot.ToolStart("t1", "task", new { description = "Helper", prompt = "help" }, 2),
+            Copilot.SubagentStarted("t1", "agent-1", 2),
+            Copilot.ToolStart("t2", "task", new { description = "Busy", prompt = "busy" }, 2),
+            Copilot.SubagentStarted("t2", "agent-2", 2),
+            .. Enumerable.Range(0, 4_100).Select(i => Copilot.ToolStart($"b{i}", "view", new { path = $"f{i}" }, 3, agentId: "agent-2")),
+            Copilot.ToolStart("c7", "powershell", new { command = "git push" }, 4, agentId: "agent-1"),
+            Copilot.Permission("req7", "c7", Copilot.Prompts["commands"], 5),
+            // Past the session's own latest 64 delegate calls, so only this read knows whose c7 is.
+            .. Enumerable.Range(0, 70).Select(i => Copilot.ToolStart($"e{i}", "view", new { path = $"g{i}" }, 6, agentId: "agent-2")),
+        ]);
+
+        var asked = (await s.Page()).Turns!.Single().Parts.Single(p => p.Kind == HistoryPartKind.Question);
+        Assert.Equal("agent-1", asked.Question!.Agent);
+    }
+
+    // The same: past 4,096 delegates started in one read, a new one was not known as the main
+    // agent's, so its report back was dropped.
+    [Fact]
+    public async Task A_delegate_started_after_thousands_of_others_still_reports_back()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+        [
+            Copilot.User("go", 1),
+            .. Enumerable.Range(0, 4_100).SelectMany(i => new[]
+            {
+                Copilot.ToolStart($"t{i}", "task", new { description = $"Job {i}", prompt = "go" }, 2),
+                Copilot.SubagentStarted($"t{i}", $"agent-{i}", 2),
+            }),
+            Copilot.SubagentCompleted("t4099", "agent-4099", 3),
+        ]);
+
+        var reported = (await s.Page()).Turns!.Single().Parts.Where(p => p.Delegate is { Event: DelegateEventKind.Reported }).Select(p => p.Delegate!.Agent);
+        Assert.Equal(["agent-4099"], reported);
+    }
     // Found in review of #686: past 4,096 permission requests in one read, new ones were not
     // remembered, so the newest approvals a turn keeps stayed unknown though each was denied.
     [Fact]

@@ -171,7 +171,7 @@ another agent sent **is** a prompt, with its `from`.
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | string | **Strict (identity).** Stable as a turn's id is, unique within its turn, at most 64 bytes |
+| `id` | string | **Strict (identity).** Stable as a turn's id is, unique within its turn, at most 64 bytes. Made from the record a part starts at, and its place in that record. In a turn read only in part (`truncated`, past the bytes a host reads of one turn), the part of a reply written in several records takes the id of the first one still read, so it can change as the turn grows; clients replace a turn whole by its id (below), so this never duplicates a part |
 | `kind` | `"response"` \| `"reasoning"` \| `"tool"` \| `"delegate"` \| `"question"` | What it is. A client **skips a part whose kind it doesn't know** (it reads as `unknown`), and draws the rest |
 | `at` | time | When it happened: for a tool, a question and a delegate event, when it started or was asked |
 | `text` | string? (Markdown for `response`) | `response`: one message of the main agent's, at most **16 KiB**, the **end** kept, as `activity.response`. `reasoning`: one reasoning block of the main agent's, at most **4 KiB**, the end kept, as `activity.reasoning` |

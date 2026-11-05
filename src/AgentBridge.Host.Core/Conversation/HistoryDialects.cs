@@ -10,26 +10,30 @@ namespace AgentBridge.Host.Core.Conversation;
 // per request; turns are built oldest first, so a start is known before its report.
 internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed, IReadOnlyDictionary<string, string> calls, bool remoteApproval, IReadOnlyDictionary<string, string>? owners = null, IReadOnlySet<string>? sync = null, IReadOnlyDictionary<string, string>? parents = null)
 {
+    // What one read remembers, Keep entries of each at most (Newest): past that the oldest goes,
+    // never the newest. Refusing new ones once full lost what the newest records said, which are the
+    // ones a page shows: a permission's outcome, and whose a call was, so a delegate's approval read
+    // as the main agent's (review of #686). What the session knows starts each, and goes first.
+    const int Keep = 4096;
+
     // The main agent's own delegates, by id, with their names: those this read saw start, and those
     // the session lists now (its subagents with no parent), whose starts may be on an older page.
-    readonly Dictionary<string, string?> _main = new(listed, StringComparer.Ordinal);
-    readonly Dictionary<string, Run> _runs = new(StringComparer.Ordinal);
-    readonly Dictionary<string, string?> _tasks = new(StringComparer.Ordinal);
+    readonly Newest<string?> _main = new(Keep, listed);
+    readonly Newest<Run> _runs = new(Keep);
+    readonly Newest<string?> _tasks = new(Keep);
     // Who made a call (a delegate's own calls), and which delegate a task call started: two maps,
     // since a nested delegate's task call is made by one delegate and starts another. The session
     // knows both, so an unstamped end, permission prompt or nested start names the same delegate
     // whatever page its call is on (found in review of #292).
-    readonly Dictionary<string, string> _callAgent = new(owners ?? new Dictionary<string, string>(), StringComparer.Ordinal);
-    readonly Dictionary<string, string> _callDelegate = new(calls, StringComparer.Ordinal);
-    readonly Dictionary<string, string> _permissions = new(StringComparer.Ordinal);
-    readonly Queue<string> _permissionOrder = new();
+    readonly Newest<string> _callAgent = new(Keep, owners);
+    readonly Newest<string> _callDelegate = new(Keep, calls);
+    readonly Newest<string> _permissions = new(Keep);
     // Delegates known to run synchronously, whose task call returning ends them: those this read
     // saw start, and those the session knows (BackgroundWork.SyncAgents), so it does not depend on
     // the page.
-    readonly HashSet<string> _sync = new(sync ?? new HashSet<string>(), StringComparer.Ordinal);
+    readonly Newest<bool> _sync = new(Keep, sync?.Select(a => KeyValuePair.Create(a, true)));
     // The delegate each nested delegate was started by: this read's starts, and the session's.
-    readonly Dictionary<string, string> _parents = new(parents ?? new Dictionary<string, string>(), StringComparer.Ordinal);
-    const int Keep = 4096;
+    readonly Newest<string> _parents = new(Keep, parents);
 
     // A delegate's runs as the main agent hears of them within one turn, as BackgroundWork keeps
     // them live: a run ends once, whoever says so first, and a notice for a run already said to have
@@ -52,56 +56,36 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     // The session's own thread (Codex), from its first record.
     public string? Thread { get; set; }
 
-    public void TaskCalled(string callId, string? description)
-    {
-        if (_tasks.Count < Keep) { _tasks[callId] = description; }
-    }
+    public void TaskCalled(string callId, string? description) => _tasks.Set(callId, description);
 
-    public string? TaskDescription(string? callId) => callId is not null ? _tasks.GetValueOrDefault(callId) : null;
+    public string? TaskDescription(string? callId) => callId is not null ? _tasks.Get(callId) : null;
 
-    public void CallBy(string callId, string agent)
-    {
-        if (_callAgent.Count < Keep) { _callAgent[callId] = agent; }
-    }
+    public void CallBy(string callId, string agent) => _callAgent.Set(callId, agent);
 
-    public string? AgentOfCall(string? callId) => callId is not null ? _callAgent.GetValueOrDefault(callId) : null;
+    public string? AgentOfCall(string? callId) => callId is not null ? _callAgent.Get(callId) : null;
 
-    public void CallStarted(string callId, string agent)
-    {
-        if (_callDelegate.Count < Keep) { _callDelegate[callId] = agent; }
-    }
+    public void CallStarted(string callId, string agent) => _callDelegate.Set(callId, agent);
 
-    public string? DelegateOfCall(string? callId) => callId is not null ? _callDelegate.GetValueOrDefault(callId) : null;
+    public string? DelegateOfCall(string? callId) => callId is not null ? _callDelegate.Get(callId) : null;
 
-    // The oldest goes when full, never the newest: refusing new ones left the latest approvals a
-    // turn keeps (its newest 20) unknown however they were answered (review of #686).
-    public void Permission(string requestId, string questionId)
-    {
-        if (!_permissions.ContainsKey(requestId))
-        {
-            if (_permissions.Count >= Keep) { _permissions.Remove(_permissionOrder.Dequeue()); }
-            _permissionOrder.Enqueue(requestId);
-        }
-        _permissions[requestId] = questionId;
-    }
+    public void Permission(string requestId, string questionId) => _permissions.Set(requestId, questionId);
 
-    public string? QuestionOf(string? requestId) => requestId is not null ? _permissions.GetValueOrDefault(requestId) : null;
+    public string? QuestionOf(string? requestId) => requestId is not null ? _permissions.Get(requestId) : null;
 
-    public bool IsMain(string agent) => _main.ContainsKey(agent);
+    public bool IsMain(string agent) => _main.Contains(agent);
 
     public void KnowMode(string agent, bool background)
     {
         if (background) { _sync.Remove(agent); }
-        else if (_sync.Count < Keep) { _sync.Add(agent); }
+        else { _sync.Set(agent, true); }
     }
 
     public bool IsSync(string agent) => _sync.Contains(agent);
 
     public void StartedBy(string agent, string parent)
     {
-        if (_parents.Count >= Keep && !_parents.ContainsKey(agent)) { return; }
-        if (_parents.TryGetValue(agent, out var was)) { _children.GetValueOrDefault(was)?.Remove(agent); }
-        _parents[agent] = parent;
+        if (_parents.Get(agent) is { } was) { _children.GetValueOrDefault(was)?.Remove(agent); }
+        if (_parents.Set(agent, parent) is { } dropped) { _children.GetValueOrDefault(dropped.Value)?.Remove(dropped.Key); }
         Child(agent, parent);
     }
 
@@ -121,13 +105,75 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
             if (_childrenOf is null)
             {
                 _childrenOf = new(StringComparer.Ordinal);
-                foreach (var (agent, parent) in _parents)
+                foreach (var (agent, parent) in _parents.Entries)
                 {
                     if (!_childrenOf.TryGetValue(parent, out var children)) { _childrenOf[parent] = children = new HashSet<string>(StringComparer.Ordinal); }
                     children.Add(agent);
                 }
             }
             return _childrenOf;
+        }
+    }
+
+    // A map of at most `keep` entries that drops its oldest to take a new one. Setting a key it
+    // holds keeps its place; one removed and set again is new. The order holds stale keys of removed
+    // entries, which are passed over and pruned once it is twice the size.
+    sealed class Newest<T>
+    {
+        readonly int _keep;
+        readonly Dictionary<string, (T Value, long Stamp)> _map = new(StringComparer.Ordinal);
+        readonly Queue<(string Key, long Stamp)> _order = new();
+        long _next;
+
+        public Newest(int keep, IEnumerable<KeyValuePair<string, T>>? seed = null)
+        {
+            var initial = seed?.ToList() ?? [];
+            // What the session knows is never dropped to make room for itself.
+            _keep = Math.Max(keep, initial.Count);
+            foreach (var (key, value) in initial) { Set(key, value); }
+        }
+
+        public bool Contains(string key) => _map.ContainsKey(key);
+
+        public T? Get(string key) => _map.TryGetValue(key, out var e) ? e.Value : default;
+
+        public IEnumerable<(string Key, T Value)> Entries => _map.Select(e => (e.Key, e.Value.Value));
+
+        // The entry it dropped to make room, if any.
+        public KeyValuePair<string, T>? Set(string key, T value)
+        {
+            if (_map.TryGetValue(key, out var held))
+            {
+                _map[key] = (value, held.Stamp);
+                return null;
+            }
+            KeyValuePair<string, T>? dropped = null;
+            while (_map.Count >= _keep && _order.TryDequeue(out var oldest))
+            {
+                if (_map.TryGetValue(oldest.Key, out var e) && e.Stamp == oldest.Stamp)
+                {
+                    _map.Remove(oldest.Key);
+                    dropped = KeyValuePair.Create(oldest.Key, e.Value);
+                }
+            }
+            var stamp = _next++;
+            _map[key] = (value, stamp);
+            _order.Enqueue((key, stamp));
+            if (_order.Count > 2 * _keep)
+            {
+                var live = _order.Where(o => _map.TryGetValue(o.Key, out var e) && e.Stamp == o.Stamp).ToList();
+                _order.Clear();
+                foreach (var o in live) { _order.Enqueue(o); }
+            }
+            return dropped;
+        }
+
+        public void Remove(string key) => _map.Remove(key);
+
+        public void Clear()
+        {
+            _map.Clear();
+            _order.Clear();
         }
     }
 
@@ -164,7 +210,7 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
         // on an older page, and the start's own description is not always the same (found in
         // review of #292).
         if (listed.TryGetValue(agent, out var known) && known is not null) { name = known; }
-        if (_main.Count < Keep || _main.ContainsKey(agent)) { _main[agent] = name ?? _main.GetValueOrDefault(agent); }
+        _main.Set(agent, name ?? _main.Get(agent));
         if (RunOf(agent) is { } run) { (run.Working, run.Said, run.Owed, run.Allowed) = (true, false, 0, 1); }
         turn.Delegate(new DelegateEvent { Agent = agent, Event = DelegateEventKind.Started, Name = name, Kind = kind }, at);
     }
@@ -172,7 +218,7 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     // A delegate's run began again (woken by a message): its next end is reported again.
     public void Woken(string agent)
     {
-        if (_main.ContainsKey(agent) && RunOf(agent) is { Working: false } run) { (run.Working, run.Said) = (true, false); }
+        if (_main.Contains(agent) && RunOf(agent) is { Working: false } run) { (run.Working, run.Said) = (true, false); }
     }
 
     // A delegate's run ended, said by the run's own end (Copilot's subagent.completed or .failed, a
@@ -180,7 +226,7 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     // that says it again is owed to it.
     public void Ended(TurnBuilder turn, string agent, SubagentOutcome outcome, DateTimeOffset at)
     {
-        if (!_main.ContainsKey(agent) || RunOf(agent) is not { } run) { return; }
+        if (!_main.Contains(agent) || RunOf(agent) is not { } run) { return; }
         // The same end said again (a second wait on a run already reported) owes nothing more: owed,
         // it would swallow the next run's notice (found in review of #292).
         if (!run.Working && run.Said) { return; }
@@ -193,7 +239,7 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     // ends the run, once.
     public void Noticed(TurnBuilder turn, string agent, SubagentOutcome outcome, DateTimeOffset at)
     {
-        if (!_main.ContainsKey(agent) || RunOf(agent) is not { } run) { return; }
+        if (!_main.Contains(agent) || RunOf(agent) is not { } run) { return; }
         if (run.Owed > 0) { run.Owed--; return; }
         if (run.Working || !run.Said) { Report(turn, agent, run, outcome, at); }
     }
@@ -202,7 +248,7 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     // its notice is still to come: one more notice may report.
     public void Messaged(string agent)
     {
-        if (_main.ContainsKey(agent) && RunOf(agent) is { } run) { run.Allowed++; }
+        if (_main.Contains(agent) && RunOf(agent) is { } run) { run.Allowed++; }
     }
 
     // Claude's notice of a delegate's end, the only way Claude says one. A message can wake the
@@ -217,7 +263,7 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     // the queue may be in an earlier one.
     public void RunNoticed(TurnBuilder turn, string agent, SubagentOutcome outcome, DateTimeOffset at)
     {
-        if (!_main.ContainsKey(agent) || RunOf(agent) is not { } run || run.Allowed <= 0) { return; }
+        if (!_main.Contains(agent) || RunOf(agent) is not { } run || run.Allowed <= 0) { return; }
         run.Allowed--;
         Report(turn, agent, run, outcome, at);
     }
@@ -226,15 +272,16 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     {
         (run.Working, run.Said) = (false, true);
         // The session's name for it first, which is the same whatever page this is.
-        var name = listed.TryGetValue(agent, out var known) && known is not null ? known : _main.GetValueOrDefault(agent);
+        var name = listed.TryGetValue(agent, out var known) && known is not null ? known : _main.Get(agent);
         turn.Delegate(new DelegateEvent { Agent = agent, Event = DelegateEventKind.Reported, Name = name, Outcome = outcome }, at);
     }
 
     Run? RunOf(string agent)
     {
-        if (_runs.TryGetValue(agent, out var run)) { return run; }
-        if (_runs.Count >= Keep) { return null; }
-        return _runs[agent] = new Run();
+        if (_runs.Get(agent) is { } run) { return run; }
+        run = new Run();
+        _runs.Set(agent, run);
+        return run;
     }
 }
 
