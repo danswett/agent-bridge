@@ -1289,12 +1289,17 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
 - **Where and how:** one banner per machine, in the same place and the same form as the
   Discovery held banner (#293, #786): an informational InfoBar at the top of the session list,
   above the rows and below any Discovery held banner for the same machine. It is closable.
-- **Content:** a title and up to four lines; a line whose list is empty is left out.
+- **Content:** a title and the lines below, with no line limit: every failure and its reason is
+  shown. A line whose list is empty is left out. The banner grows to fit; past half the list's
+  height it scrolls inside itself, so the rows stay visible.
   - Title: "*machine* restarted after a reboot at 03:12" (`cause: reboot`) or "*machine*'s host
     restarted at 03:12" (`cause: crash`), from `at`. With `signedInAt`, the reboot title ends
     "… · restored when you signed in at 08:40".
-  - "Restored *n* sessions" (`restored`), and, when `midTurn` is non-zero, "*n* were mid-turn and
-    can continue".
+  - "Restored *n* sessions" (`restored`).
+  - When `midTurn` is non-zero: "Can continue: *title*, *title*". The titles are those of this
+    machine's sessions whose `restored.midTurn` is true, from the client's own session list, so
+    the host sends no extra field. Each title opens its session, where Continue waits. If the
+    list doesn't have them yet, the line reads "*n* were mid-turn and can continue" until it does.
   - "Questions lost: *title*, *title*" (`questionsLost[].title`). The question itself died with
     the session; the notice says so, and nothing reasks it.
   - "Couldn't be restored: *title* (*reason*)", one per entry in `failed`, with the host's
@@ -1387,7 +1392,7 @@ arrives, as a `question`.
 | Row mark | "Restored after a reboot · *time*" / "Restored after the host restarted · *time*" |
 | Notice title | "*machine* restarted after a reboot at *time*" / "*machine*'s host restarted at *time*" |
 | Signed in | "restored when you signed in at *time*" |
-| Restored | "Restored *n* sessions"; "*n* were mid-turn and can continue" |
+| Restored | "Restored *n* sessions"; "Can continue: *title*, *title*"; "*n* were mid-turn and can continue" |
 | Offered | "*n* sessions can be restored at the machine" |
 | Lost | "Questions lost: *title*, …" |
 | Failed | "Couldn't be restored: *title* (*reason*)" |
