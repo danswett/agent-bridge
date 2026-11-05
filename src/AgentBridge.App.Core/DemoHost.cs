@@ -717,8 +717,19 @@ public sealed partial class DemoHost : IAsyncDisposable
     // Settings › Agents on this machine (#678): one agent per hook state, so the page shows each
     // verb: Copilot CLI to set up, Claude Code to repair, and Codex set up but not tested yet, as a
     // healthy agent reads on a real host (Unknown with this profile's owned record), with none. The
-    // demo writes nothing: a setup only answers, Claude Code's repair failing so its row shows a failure.
-    static AgentReadinessReport Agents()
+    // demo writes no files, but its readiness moves as a real host's does after a setup (#705
+    // review): one that completes leaves the owned record with intake on, so the row offers no Set
+    // up beside "Hooks registered…"; a removal leaves intake on without it. Claude Code's repair fails.
+    readonly Dictionary<string, ReadinessCheck> hooks = new(StringComparer.Ordinal)
+    {
+        ["copilot"] = new(ReadinessState.NeedsAction, "Hook intake is off for this profile. Explicit setup or migration is required."),
+        ["claude"] = new(ReadinessState.Failed, "The hook ownership record is not recognized. Inspect it before repairing setup."),
+        ["codex"] = new(ReadinessState.Unknown, SetUpHooks),
+    };
+    const string SetUpHooks = "An owned setup record exists; registration and activation still need verification.";
+    const string RemovedHooks = "Intake is enabled; this agent's registration and ownership have not been verified.";
+
+    AgentReadinessReport Agents()
     {
         static AgentReadiness Agent(string id, string label, string version, ReadinessCheck hooks) => new(id, label, $"C:\\Users\\demo\\.{id}", $"C:\\Program Files\\{label}\\{id}.exe", version,
             new(ReadinessState.Working, "Executable found using the launch configuration."),
@@ -726,19 +737,27 @@ public sealed partial class DemoHost : IAsyncDisposable
             hooks,
             new(ReadinessState.Unknown, "CLI sign-in and entitlement have not been verified."),
             new(ReadinessState.Unknown, "Folder trust, hook activation and a new session have not been verified."));
-        return new(DateTimeOffset.UtcNow,
-        [
-            Agent("copilot", "Copilot CLI", "1.0.105", new(ReadinessState.NeedsAction, "Hook intake is off for this profile. Explicit setup or migration is required.")),
-            Agent("claude", "Claude Code", "2.1.4", new(ReadinessState.Failed, "The hook ownership record is not recognized. Inspect it before repairing setup.")),
-            Agent("codex", "Codex", "0.48.0", new(ReadinessState.Unknown, "An owned setup record exists; registration and activation still need verification.")),
-        ]);
+        lock (gate)
+        {
+            return new(DateTimeOffset.UtcNow,
+            [
+                Agent("copilot", "Copilot CLI", "1.0.105", hooks["copilot"]),
+                Agent("claude", "Claude Code", "2.1.4", hooks["claude"]),
+                Agent("codex", "Codex", "0.48.0", hooks["codex"]),
+            ]);
+        }
     }
 
     // As long as a real setup takes to write, so its row says "Setting up…" before its result.
-    static async Task<object?> SetUpAsync(AgentSetupRequest r)
+    async Task<object?> SetUpAsync(AgentSetupRequest r)
     {
         await Task.Delay(TimeSpan.FromMilliseconds(600));
-        return SetUp(r);
+        var result = SetUp(r);
+        if (result.Completed)
+        {
+            lock (gate) { hooks[r.Agent] = new(ReadinessState.Unknown, r.Action == "remove" ? RemovedHooks : SetUpHooks); }
+        }
+        return result;
     }
 
     static AgentSetupResult SetUp(AgentSetupRequest r) => r switch

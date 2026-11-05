@@ -629,7 +629,9 @@ HA ids and names) are not the name and stay (#541).
 protocol's example sessions on a private pipe and answering every op as a cooperative
 host would, and a second pretend host ("Build server") that the app reaches as it would
 another machine through the relay. For trying the app without agents, for screenshots, and for CI. It never
-reaches the real host or its profile.
+reaches the real host or its profile. Its Settings agents move as a real host's readiness does
+after a setup, without writing anything: a setup that completes leaves the agent set up and not
+tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to set up again.
 
 ## Deferred, explicitly
 

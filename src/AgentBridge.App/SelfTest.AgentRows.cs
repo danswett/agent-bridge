@@ -83,6 +83,13 @@ static partial class SelfTest
             && Named(done) == $"Copilot CLI: {done?.Text}" && Named(failed) == $"Claude Code: {failed?.Text}" && Named(quiet) == "Codex: Not tested yet",
             $"says each setup's result on its own row as a polite live region named for its agent, a failure in Danger (\"{Named(done)}\"; \"{Named(failed)}\"; \"{Named(quiet)}\")");
         static string? Named(TextBlock? status) => status is null ? null : FrameworkElementAutomationPeer.CreatePeerForElement(status)?.GetName();
+        // A completed setup moves the row on as a real host's evidence does (#705 review): Copilot CLI,
+        // set up, offers no Set up beside "Hooks registered…", and its Hooks line no longer says
+        // intake is off.
+        var setUp = settings.Agents.Single(a => a.Id == "copilot");
+        var copilotVerb = Buttons(rows).FirstOrDefault(b => b.Id == "SetUpAgent_copilot").Button;
+        check(copilotVerb is null or { Visibility: Visibility.Collapsed } && setUp.SetUpVerb is null && !setUp.Checks.Contains("intake is off", StringComparison.Ordinal),
+            $"offers no Set up once Copilot CLI's setup completed, its Hooks line moved on ({(copilotVerb is null ? "absent" : $"{copilotVerb.Visibility} {copilotVerb.Content}")}; {setUp.Checks.Split('\n')[1]})");
         // The rows' foot at the window's: the last row's "Not tested yet" in the pictures too.
         rows.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false, VerticalAlignmentRatio = 1 });
         var themed = new List<string>();
@@ -97,10 +104,10 @@ static partial class SelfTest
         window.RootElement.RequestedTheme = ElementTheme.Default;
         check(themed.Count == 0, $"draws a failed setup in the Danger text of the theme its row is drawn in{(themed.Count > 0 ? $" ({string.Join("; ", themed)})" : "")}");
         // A fresh check takes the rows' results and the failed repair's page-wide error, as it would
-        // for a person, so the pages drawn after are as before.
+        // for a person, so the pages drawn after are as before; Copilot CLI is set up and not tested yet.
         await settings.CheckAgentsAsync();
         string[] after = [.. settings.Agents.Select(a => $"{a.Id}: {a.Status}")];
-        check(!settings.HasError && after.SequenceEqual(["copilot: ", "claude: ", "codex: Not tested yet"]), $"clears each row's result with a fresh check ({string.Join(" | ", after)}{settings.Error})");
+        check(!settings.HasError && after.SequenceEqual(["copilot: Not tested yet", "claude: ", "codex: Not tested yet"]), $"clears each row's result with a fresh check ({string.Join(" | ", after)}{settings.Error})");
         await Task.Delay(300);
     }
 
