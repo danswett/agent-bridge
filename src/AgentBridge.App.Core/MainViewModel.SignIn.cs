@@ -25,6 +25,9 @@ public sealed partial class MainViewModel
     public event Action<string>? Announce;
     // The sheet closed, by its banner's key: focus goes back to that banner.
     public event Action<string>? SignInSheetClosed;
+    // A banner about to be drawn anew for its new state (needed to confirming, say), by its key, while
+    // its old one is still shown: focus inside the old one moves to the new one.
+    public event Action<string>? SignInRedrawing;
 
     // How long a signin.code or signin.done is held for a start whose result hasn't come yet.
     static readonly TimeSpan EarlyHeld = TimeSpan.FromSeconds(10);
@@ -41,6 +44,9 @@ public sealed partial class MainViewModel
     // Where a person here signed in (signin.done signedIn), by banner: once the host clears its
     // sessions, that reads "Signed in · N sessions recovered" rather than "Recovered by itself".
     readonly HashSet<string> signedInHere = new(StringComparer.Ordinal);
+
+    // A person here signed in on that banner: where its sheet closed, focus goes to its status line.
+    public bool SignedInHere(string key) => signedInHere.Contains(key);
     // What the banners last said aloud, by key: each says so once a state (§9.1 A6).
     readonly Dictionary<string, string> signInSaid = new(StringComparer.Ordinal);
     // signin.code and signin.done that came before the start's result named their flow: held as read
@@ -123,12 +129,17 @@ public sealed partial class MainViewModel
         var want = SignInBanners.For(sources, signInFlows, signInResolved, now);
         var shown = SignIns.ToDictionary(b => b.Key, StringComparer.Ordinal);
         var keep = new List<SignInBannerViewModel>();
+        var redrawn = new List<string>();
         foreach (var b in want)
         {
             // A banner that changes between needed, confirming and resolved is a new one: its button goes.
             var kind = b.State is "needed" or "confirming" ? b.State : "resolved";
             if (shown.TryGetValue(b.Key, out var vm) && vm.Kind == kind) { vm.Update(b); }
-            else { vm = new SignInBannerViewModel(b, p => _ = StartSignInAsync(p), (machine, id) => Open(machine, id)); }
+            else
+            {
+                if (shown.ContainsKey(b.Key)) { redrawn.Add(b.Key); }
+                vm = new SignInBannerViewModel(b, p => _ = StartSignInAsync(p), (machine, id) => Open(machine, id));
+            }
             // Busy while this banner's current start is in flight: not one cancelled, whose late result
             // would otherwise hold a new press back.
             vm.Busy = b.Flow?.State == "starting";
@@ -141,6 +152,7 @@ public sealed partial class MainViewModel
                 Announce?.Invoke(words);
             }
         }
+        foreach (var key in redrawn) { SignInRedrawing?.Invoke(key); }
         var had = SignIns.Count;
         var kept = keep.ToHashSet();
         foreach (var gone in SignIns.Where(v => !kept.Contains(v)).ToList())

@@ -283,10 +283,19 @@ export class SignInBanners {
     for (const b of all) {
       keep.add(b.key);
       let view = this.#views.get(b.key);
-      if (!view || view.state !== viewState(b)) { view?.el.remove(); view = this.#build(b); this.#views.set(b.key, view); }
+      // Drawn anew for its new state (needed to confirming): focus inside the old one moves to the
+      // new one's line, never left on a removed element (nowhere).
+      let refocus = false;
+      if (!view || view.state !== viewState(b)) {
+        refocus = !!view?.el.contains(this.container.ownerDocument?.activeElement);
+        view?.el.remove();
+        view = this.#build(b);
+        this.#views.set(b.key, view);
+      }
       this.#fill(view, b);
       const at = prev ? prev.nextSibling : this.container.firstChild;
       if (at !== view.el) { this.container.insertBefore(view.el, at); }
+      if (refocus) { (view.els.line.hidden ? view.el : view.els.line).focus({ preventScroll: true }); }
       prev = view.el;
       this.#announce(b);
     }
@@ -430,6 +439,9 @@ export class SignInBanners {
         this.#flows.delete(key);
         this.#signedHere.set(key, this.now());
         this.#closeSheet(key);
+        // Focus to the banner's line, never back to Sign in: the host's pending may come after this,
+        // and with it Sign in goes, which would leave focus nowhere.
+        if (this.#focusBack?.key === key) { this.#focusBack.opener = null; }
       } else if (done.outcome === 'cancelled') {
         this.#flows.delete(key);
         this.#closeSheet(key);

@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
 
@@ -28,6 +29,24 @@ public sealed partial class SessionsPage
         vm.PropertyChanged += OnSignInSheet;
         vm.Announce += SayPolitely;
         vm.SignInSheetClosed += OnSignInSheetClosed;
+        vm.SignInRedrawing += OnSignInRedrawing;
+    }
+
+    // A banner drawn anew takes a new container, so focus on its old one (its status line, just after
+    // the sheet closed on success) would go nowhere: it goes to the new one's instead, once drawn.
+    void OnSignInRedrawing(string key)
+    {
+        if (viewModel?.SignIns.FirstOrDefault(b => b.Key == key) is not { } old
+            || SignInBannerList.ContainerFromItem(old) is not DependencyObject container
+            || XamlRoot is null || FocusManager.GetFocusedElement(XamlRoot) is not DependencyObject focused) { return; }
+        for (var up = focused; up is not null; up = VisualTreeHelper.GetParent(up))
+        {
+            if (ReferenceEquals(up, container))
+            {
+                DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => FocusSignInBanner(key));
+                return;
+            }
+        }
     }
 
     // The dialog puts focus back where it was when it opened (the banner's Sign in, perhaps gone by
@@ -192,7 +211,10 @@ public sealed partial class SessionsPage
         // The banner's new state (its button gone, its status line shown) laid out before it is looked for.
         SignInBannerList.UpdateLayout();
         var container = banner is null ? null : SignInBannerList.ContainerFromItem(banner) as DependencyObject;
-        var target = container is null ? null : (Control?)FindIn<Button>(container, null, "SignInVerb") ?? FindIn<ContentControl>(container, null, "SignInStatus");
+        var status = container is null ? null : FindIn<ContentControl>(container, null, "SignInStatus");
+        // Signed in here: the status line, even while Sign in is still drawn, as the host's pending
+        // (which takes it away) may come after the sheet closed.
+        var target = container is null ? null : viewModel!.SignedInHere(key) && status is not null ? status : (Control?)FindIn<Button>(container, null, "SignInVerb") ?? status;
         FocusOnce(target ?? SessionsHeading);
     }
 

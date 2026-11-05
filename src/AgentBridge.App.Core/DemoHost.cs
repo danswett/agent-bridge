@@ -450,7 +450,9 @@ public sealed partial class DemoHost : IAsyncDisposable
     // The person entered the code at github.com (or didn't): signin.done to the flow's channels.
     // Signed in doesn't clear the sessions: under #800's clear gate the host only marks them pending
     // (signed in, waiting for the session to confirm) until the model answers (ConfirmSignInAsync).
-    public async Task FinishSignInAsync(string outcome, string? reason = null)
+    // Signed in with pendingFirst false sends signin.done before the host's pending, which
+    // SignedInPendingAsync then sends: the order a slow host may give.
+    public async Task FinishSignInAsync(string outcome, string? reason = null, bool pendingFirst = true)
     {
         List<(string Flow, List<IProtocolChannel> Channels)> done;
         lock (gate)
@@ -459,7 +461,7 @@ public sealed partial class DemoHost : IAsyncDisposable
             flows.Clear();
         }
         IReadOnlyList<string> resumed = outcome == "signedIn" ? SignInSessions : [];
-        if (outcome == "signedIn") { await MarkSignInAsync("pending"); }
+        if (outcome == "signedIn" && pendingFirst) { await MarkSignInAsync("pending"); }
         foreach (var (flow, chans) in done)
         {
             foreach (var ch in chans.Where(c => c.IsOpen))
@@ -469,6 +471,8 @@ public sealed partial class DemoHost : IAsyncDisposable
             }
         }
     }
+
+    public Task SignedInPendingAsync() => MarkSignInAsync("pending");
 
     // The model answered after the sign-in: the clear gate passes and the host clears the sessions.
     public Task ConfirmSignInAsync() => ClearSignInAsync();

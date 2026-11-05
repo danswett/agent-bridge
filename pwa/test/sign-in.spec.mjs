@@ -585,6 +585,25 @@ test('no code outlives a cancel, its expiry or its machine going away, and a mac
   await expect(page.locator('#sign-in-said')).not.toContainText('recovered');
 });
 
+test('signed in before the host says pending, focus goes to the banner\'s line and stays there as Sign in goes (#878)', async ({ page }) => {
+  await openDemo(page);
+  await signIn(page).click();
+  await expect(sheet(page).locator('.sign-in-code')).toBeVisible();
+  // signin.done alone, the host's pending not yet come.
+  await page.evaluate(() => {
+    const h = window.agentBridgeDemo.host;
+    const f = h.signInFlow;
+    h.signInFlow = null;
+    h.frame({ ev: 'signin.done', seq: h.seq + 1, data: { flow: f.id, outcome: 'signedIn', resumed: [], continue: [] } });
+  });
+  await expect(sheet(page)).toBeHidden();
+  await expect(banner(page).locator('.sign-in-line')).toBeFocused();
+  await setAttention(page, { recovery: 'pending' });
+  await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
+  await expect(banner(page).locator('.sign-in-start')).toHaveCount(0);
+  await expect(banner(page).locator('.sign-in-line')).toBeFocused();
+});
+
 test('signed out, nothing said about the account\'s machines stays in the live region (#878)', async ({ page }) => {
   await openDemo(page);
   await expect(page.locator('#sign-in-said .sign-in-said-line')).toHaveText(['Copilot on DEV-VM1 needs sign-in']);
