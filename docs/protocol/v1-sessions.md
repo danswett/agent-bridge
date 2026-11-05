@@ -1196,8 +1196,8 @@ status rather than instead of it.
 | `message` | string? | The agent's own words, plain text on one line, at most 300 bytes. The host takes out anything that could be a token, a sign-in code, an email address, a path, a link or a request id before sending it. A client shows it as text and **never as a link** |
 | `errorClass` | `"auth"` \| `"rate"` \| `"quota"` \| `"model"` \| `"network"` \| `"other"`? | `error`: what sort, from the agent's structured fields, never its wording. Unknown reads as `other` |
 | `retryAt` | time? | `error`: when the agent said it can be tried again (a rate limit, a quota) |
-| `signIn` | `"phone"` \| `"machine"`? | `signInNeeded`: `phone` when this host can relay the agent's own device-code sign-in to a person's device; `machine` when it can be signed in only at the machine. Absent while not known. Unknown reads as `machine`, so a client never offers a sign-in the host may not relay |
-| `recovery` | `"checking"` \| `"signingIn"` \| `"failed"`? | `signInNeeded`: the host is checking for a still-valid stored credential, a person has started signing in, or the check found none. Absent otherwise. Unknown reads as `failed` |
+| `signIn` | `"phone"` \| `"machine"` \| `"unknown"`? | `signInNeeded`: `phone` when this host can relay the agent's own device-code sign-in to a person's device; `machine` only when the host knows it can be signed in nowhere else. Absent while not known; a host never sends `unknown`. A value a client does not know reads as `unknown`, which claims nothing: no sign-in from the phone is offered on it, and it is not said to be the machine's only |
+| `recovery` | `"checking"` \| `"signingIn"` \| `"pending"` \| `"failed"`? | `signInNeeded`: the host is checking for a still-valid stored credential, a person has started signing in, the agent is signed in again and the host is waiting for the session to show it (`pending`), or the check found none (`failed`). Absent otherwise. Unknown reads as `failed` |
 | `lastEventAt` | time? | `notResponding`: the transcript's last event |
 
 * **`status` stays truthful.** A turn that ended on an error or a sign-in failure has ended, so
@@ -1213,8 +1213,10 @@ status rather than instead of it.
     tool it asked for, dated after the latest sign-in failure. A prompt, a turn starting or
     ending, a hook and anything the bridge typed are written whether the agent can reach its
     model or not, so none of them clears it: on VM1 (#800) a session ended a turn between two
-    sign-in failures 51 ms apart. A sign-in through `sessions.signin`, when it comes, clears it
-    only on the same evidence. A host that did not read part of a long transcript (past its skim
+    sign-in failures 51 ms apart. A sign-in alone never clears it: once one finishes
+    (`signin.done` `signedIn`, when `sessions.signin` comes) or a still-valid credential is found,
+    it stays `signInNeeded` with `recovery` `pending` until that same evidence, and no newer
+    failure, shows the session can reach its model. A host that did not read part of a long transcript (past its skim
     budget) does not keep a failure it read before that part: whatever followed was not seen.
 * A change to it moves `updatedAt`. It is a few hundred bytes and never trimmed by the
   [session budget](#session-budget).

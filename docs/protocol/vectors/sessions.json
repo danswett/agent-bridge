@@ -2452,6 +2452,17 @@
           }
         },
         {
+          "name": "signed-in-waiting-for-the-model",
+          "json": {
+            "kind": "signInNeeded",
+            "since": "2026-10-28T04:22:43.182Z",
+            "agent": "copilot",
+            "provider": "github",
+            "signIn": "phone",
+            "recovery": "pending"
+          }
+        },
+        {
           "name": "unknown-values-and-fields-from-a-newer-host",
           "json": {
             "kind": "paused",
@@ -2467,7 +2478,7 @@
             "kind": "error",
             "since": "2026-10-28T04:22:43.182Z",
             "errorClass": "other",
-            "signIn": "machine",
+            "signIn": "unknown",
             "recovery": "failed"
           }
         },

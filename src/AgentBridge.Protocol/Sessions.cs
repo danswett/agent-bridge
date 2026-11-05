@@ -300,15 +300,19 @@ public enum AttentionKind { Error, SignInNeeded, NotResponding }
 [UnknownAs(Other)]
 public enum ErrorClass { Other, Auth, Rate, Quota, Model, Network }
 
-// Where the agent can be signed in again. One a client does not know is Machine, so it never
-// offers a sign-in from the phone that the host may not relay.
-[UnknownAs(Machine)]
-public enum SignInWhere { Phone, Machine }
+// Where the agent can be signed in again. Machine is sent only when the host knows nothing else
+// is possible. A value a client does not know is Unknown, which claims nothing (#800 ruling): no
+// sign-in from the phone is offered on it, and nor is it said to be the machine's only.
+[UnknownAs(Unknown)]
+public enum SignInWhere { Phone, Machine, Unknown }
 
-// The host's own attempt to recover without a sign-in. One a client does not know is Failed:
-// a sign-in is then offered where it can be, rather than waited on.
+// The way back from signInNeeded. Pending: signed in (a sign-in finished, or a still-valid
+// credential was found), waiting for the session to show it: attention stays signInNeeded until
+// the model is seen answering after the latest failure, and a sign-in alone never clears it
+// (#800 ruling). One a client does not know is Failed: a sign-in is then offered where it can
+// be, rather than waited on.
 [UnknownAs(Failed)]
-public enum RecoveryState { Checking, SigningIn, Failed }
+public enum RecoveryState { Checking, SigningIn, Pending, Failed }
 
 // Dev: built from a working copy rather than released (docs/protocol/v1-usage.md). Sessions:
 // how many were live when hello was answered. ReadOnly: why this machine takes no answers,

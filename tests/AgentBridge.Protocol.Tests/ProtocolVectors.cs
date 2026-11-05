@@ -218,6 +218,8 @@ public static class ProtocolVectors
             .Valid("sign-in-needed", SignInNeeded)
             .Valid("an-error-with-a-retry", new Attention { Kind = AttentionKind.Error, Since = T0, Agent = AgentKind.Claude, Message = "Rate limit reached.", ErrorClass = ErrorClass.Rate, RetryAt = T1 })
             .Valid("not-responding", new Attention { Kind = AttentionKind.NotResponding, Since = T0, Agent = AgentKind.Codex, LastEventAt = T0 })
+            // Signed in, and still signInNeeded until the model is seen answering (#800 ruling).
+            .Valid("signed-in-waiting-for-the-model", new Attention { Kind = AttentionKind.SignInNeeded, Since = T0, Agent = AgentKind.Copilot, Provider = "github", SignIn = SignInWhere.Phone, Recovery = RecoveryState.Pending })
             .Reads("unknown-values-and-fields-from-a-newer-host", """{"kind":"paused","since":"2026-10-28T04:22:43.182Z","errorClass":"cosmic","signIn":"watch","recovery":"teleporting","somethingNew":{"a":1}}""");
         f.Record<Session>(Host)
             .Valid("full", FullSession)
