@@ -53,15 +53,27 @@ command", or as the footer's "Shell" label or "esc exit shell mode" hint. The re
 * when the box holds anything: the reason shows what, escaped (`ShownText.Reveal`) and cut
   to 500 characters;
 * in shell mode;
-* when the screen cannot be read, or shows no single prompt box with the prompt's footer
-  ("open sidebar" or "/ commands") under it: it may be asking something there.
+* in vim's normal mode (the footer's "-- NORMAL --"), where typed keys are commands;
+* when the screen cannot be read, or does not show exactly one box, rail and plain counted
+  together, at the bottom: its bottom edge directly over Copilot's footer row (the sidebar,
+  mode, commands, shell, or file and issue hints), with nothing but blank rows under that.
+  The CLI draws everything else above its input area, and code in the agent's output is
+  drawn as plain text, so the agent can print rows that look like the box and its footer;
+  printed above the real box, or above a dialog in its place, they are not anchored there.
+  An empty box must also show "/ commands" in the footer, which the CLI draws only while
+  the box is empty.
 
 The box is read when the reply arrives, so a draft or shell mode is refused at once, and
 read again once the typing turn has come, after the other checks. The words are held to
 that read's box rows (`KeySend.Expect`): the worker reads them again in the same attach,
 just before the first key, and if anything was typed or shell mode entered in between,
 nothing is typed and the reply is `refused` ("input box changed just as the reply was to be
-typed"). Only the box's rows are held, not the footer, which can change on its own. The
+typed"). Only the box's rows are held, not the footer, which can change on its own (it does
+once the box holds text). The Enter is a send of its own, after Copilot's 300 ms pause, held
+to the box's bottom edge: if that row no longer reads so (a dialog drawn in the input area's
+place while the words were typed), no Enter goes, and the reply is `unconfirmed`, its words
+left in the box for the person to send or clear. A box that grows down the screen with the
+words (a short screen, a long reply) moves that edge too, and is reported the same way. The
 screens the tests read are in `tests/fixtures/screens/copilot-input-box.json`, built from
 the captured live screen and the CLI's rendering code, each naming its source.
 

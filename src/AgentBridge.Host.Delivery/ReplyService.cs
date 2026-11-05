@@ -339,10 +339,17 @@ public sealed class ReplyService : ISessionReplier
             // shows it now: words left in it would go with the reply, and in shell mode Enter runs
             // what it holds as a shell command. The keys are held to those rows (KeySend.Expect),
             // so words typed at the machine, or shell mode entered, after this read and before the
-            // first key, stop them in the worker, with nothing typed (#825).
+            // first key, stop them in the worker, with nothing typed (#825). Their Enter is a send
+            // of its own, held to the box's bottom edge: a box that moved or went (a dialog drawn
+            // in its place while the words were typed) gets no Enter, and the words stay in it.
             var (box, problem, _) = await InputBoxAsync(pid);
             if (box is null) { return Done(Refused(problem!)); }
-            keys = new KeyPlan([keys.Sends[0] with { Expect = box.Rows }, .. keys.Sends.Skip(1)]);
+            var line = keys.Sends.Single();
+            keys = new KeyPlan(
+            [
+                line with { Enter = false, EnterDelayMs = 0, PauseAfterMs = line.EnterDelayMs, Expect = box.Rows },
+                new KeySend("", true, 0, line.PauseAfterMs, [box.Rows[^1]]),
+            ]);
 
             timeline.InjectStart();
             try { result = await injector.InjectAsync(pid, keys); }
@@ -362,6 +369,8 @@ public sealed class ReplyService : ISessionReplier
             InjectionStatus.NothingTyped => Done(Refused(result.Detail == WorkerInjector.ScreenChanged
                 ? "Copilot's input box changed just as the reply was to be typed, so nothing was typed; try again, or reply at the machine"
                 : result.Detail)),
+            InjectionStatus.Interrupted when result.Detail == WorkerInjector.ScreenChangedPartway =>
+                new Attempt(Unconfirmed("the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent; the words are left in the box at the machine, to send or clear there"), null, KeysWent: true),
             InjectionStatus.Interrupted => new Attempt(Unconfirmed($"{result.Detail}; part of the reply may have reached the session, so check at the machine"), null, KeysWent: true),
             _ => new Attempt(null, new Typed(() => ConfirmAsync(transcript, from, words, staged, timeline)), KeysWent: true),
         };

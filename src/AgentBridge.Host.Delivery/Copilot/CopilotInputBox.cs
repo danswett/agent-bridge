@@ -16,8 +16,12 @@ namespace AgentBridge.Host.Delivery.Copilot;
 //     `F === "shell" ? "! " : "\u276F "`.
 //   * Typing '!' at the start enters shell mode and the '!' is taken out of the text (`onEdit`),
 //     so the box's text never shows it.
-//   * The footer under the main prompt's box carries "open sidebar" or "/ commands" (`rDo`);
-//     another box (editing a queued message) does not.
+//   * The footer is the row right under the input area (`oDo`), its parts between '·': the
+//     sidebar hint ("← open sidebar") and "/ commands · ? help" (`rDo`) only while the box is
+//     empty, the mode label ("Interactive · Allow All", "Shell · …"), "esc exit shell mode"
+//     while empty in shell mode, "@ files · # issues" while it holds text, and first, in vim
+//     mode, "-- NORMAL --" or "-- INSERT --" (`Zlt`/`XDn`). In vim's normal mode typed keys are
+//     commands, and a paste is swallowed.
 public sealed record CopilotInputBox(IReadOnlyList<ScreenRow> Rows, string Content)
 {
     public bool Empty => Content.Length == 0;
@@ -38,17 +42,32 @@ public static class CopilotInputBoxReader
 
     // The box, empty and outside shell mode, or why a reply cannot be typed into it; Seen when
     // the screen showed the prompt's box and the problem is what is in it.
+    //
+    // The box is the one at the bottom of the screen, its bottom edge directly over the footer
+    // and nothing but blank rows below that: the CLI draws everything else (the agent's output
+    // included) above its input area. Code in that output is drawn as plain text, so rows that
+    // look like a box, and a footer under them, can be printed by the agent (Trust's #843
+    // review); one drawn above the real box, or above a dialog in its place, is not anchored
+    // there. Rail and plain boxes are looked for together, and the screen must show exactly
+    // one, so a forged rail cannot hide the real plain box under it.
     public static (CopilotInputBox? Box, string? Problem, bool Seen) Read(IReadOnlyList<string> rows)
     {
-        var found = Rails(rows);
-        if (found.Count == 0) { found = Plain(rows); }
+        var found = Rails(rows).Concat(Plain(rows)).ToList();
         if (found.Count != 1)
         {
             return (null, "the host could not find Copilot's input box on the session's screen, so it may be asking something there; answer it at the machine, or reply at the machine", false);
         }
         var (box, glyph, below) = found[0];
-        var footer = rows.Skip(below).Where(r => r.Trim().Length > 0).ToList();
-        if (glyph == ShellGlyph || box.Content == ShellPlaceholder || footer.Any(Shell))
+        if (below >= rows.Count || !IsFooter(rows[below]) || rows.Skip(below + 1).Any(r => r.Trim().Length > 0))
+        {
+            return (null, "the host could not find Copilot's input box at the bottom of the session's screen, over its footer, so it may be asking something there; answer it at the machine, or reply at the machine", false);
+        }
+        var footer = rows[below];
+        if (Parts(footer).Contains(VimNormal))
+        {
+            return (null, "Copilot's input box at the machine is in vim normal mode, where typed keys act as commands; go back to insert mode there first, or reply at the machine", true);
+        }
+        if (glyph == ShellGlyph || box.Content == ShellPlaceholder || Shell(footer))
         {
             return (null, "Copilot's input box at the machine is in shell mode, where a reply would run as a shell command; leave shell mode there (Esc) first, or reply at the machine", true);
         }
@@ -56,11 +75,12 @@ public static class CopilotInputBoxReader
         {
             return (null, $"something is already typed in Copilot's input box at the machine (\"{Shown(box.Content)}\"); send or clear it there first", true);
         }
-        if (glyph is not (null or Glyph) || !footer.Any(r => r.Contains("open sidebar", StringComparison.Ordinal) || r.Contains("/ commands", StringComparison.Ordinal)))
+        // An empty box's footer lists the commands (`rDo`, drawn only while the box is empty).
+        if (glyph is not (null or Glyph) || !Parts(footer).Contains("/ commands"))
         {
-            return (null, "the host could not tell that Copilot's input box is the one for a prompt,             outside shell mode; reply at the machine", false);
+            return (null, "the host could not tell that Copilot's input box is the one for a prompt, outside shell mode; reply at the machine", false);
         }
-                    return (box, null, true);
+        return (box, null, true);
     }
 
     // What is in the box, as a person is shown it: hidden characters escaped (ShownText.Reveal),
@@ -73,9 +93,24 @@ public static class CopilotInputBoxReader
 
     // The footer's word for shell mode: its label ("Shell · Allow All", or "shell" alone) or its
     // hint ("esc exit shell mode").
-    static bool Shell(string row) =>
-        row.Contains("exit shell mode", StringComparison.Ordinal)
-        || row.Split('\u00B7').Any(part => part.Trim() is "Shell" or "shell");
+    static bool Shell(string row) => Parts(row).Any(part => part is "Shell" or "shell" or "esc exit shell mode");
+
+    // The footer's parts, between its '·' separators (`oDo`, `Ft`, `Zlt`).
+    static List<string> Parts(string row) => [.. row.Split('\u00B7').Select(part => part.Trim())];
+
+    // What the footer under the prompt's box may carry (1.0.105's `oDo`): the sidebar hint, the
+    // vim mode (`XDn`), the mode label (`Jlt`/`vEe`), the commands (`rDo`), the shell hint, and
+    // the file and issue hints shown while the box holds text. A row with none of them is not
+    // the footer.
+    static bool IsFooter(string row) => Parts(row).Any(part => FooterParts.Contains(part));
+
+    static readonly HashSet<string> FooterParts = new(StringComparer.Ordinal)
+    {
+        "\u2190 open sidebar", "/ commands", "? help", "@ files", "# issues", "esc exit shell mode", VimNormal, "-- INSERT --",
+        "Interactive", "interactive", "Shell", "shell", "Plan", "plan", "Autopilot", "autopilot", "autopilot (limited)",
+    };
+
+    const string VimNormal = "-- NORMAL --";
 
     // Every rail box: '╻' over '┃' rows to '╹'. Its text is what follows each '┃'.
     static List<(CopilotInputBox Box, string? Glyph, int Below)> Rails(IReadOnlyList<string> rows)

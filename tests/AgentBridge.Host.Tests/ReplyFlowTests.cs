@@ -330,7 +330,8 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Equal(("delivered", (string?)null), (outcome, reason));
         var (pid, plan) = Assert.Single(injector.Plans);
         Assert.Equal(100, pid);
-        Assert.Equal([("Looks good. Now open the PR – please 🚀", true)], plan.Sends.Select(s => (s.Text, s.Enter)));
+        // The line, then, after Copilot's pause, its Enter alone.
+        Assert.Equal([("Looks good. Now open the PR – please 🚀", false, 300), ("", true, 0)], plan.Sends.Select(s => (s.Text, s.Enter, s.Enter ? s.EnterDelayMs : s.PauseAfterMs)));
     }
 
     [Fact]
@@ -887,7 +888,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var (outcome, reason) = await ReplyAsync(ch, "What do\nyou see?", attachments: Files(a, b));
 
         Assert.Equal(("delivered", (string?)null), (outcome, reason));
-        var typed = Assert.Single(injector.Plans).Plan.Sends.Single().Text;
+        var typed = Assert.Single(injector.Plans).Plan.Sends[0].Text;
         var root = Regex.Escape(Path.GetFullPath(Staging) + Path.DirectorySeparatorChar);
         Assert.Matches($"^@{root}[0-9a-f]{{32}}-Screen-Shot\\.png @{root}[0-9a-f]{{32}}-plan\\.md What do you see\\?$", typed);
         var paths = typed.Split(' ').Take(2).Select(w => w[1..]).ToArray();
@@ -909,7 +910,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("did not attach every file", reason);
-        Assert.StartsWith("@", Assert.Single(injector.Plans).Plan.Sends.Single().Text);
+        Assert.StartsWith("@", Assert.Single(injector.Plans).Plan.Sends[0].Text);
     }
 
     [Fact]
@@ -982,18 +983,26 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         // Plans the worker refused before their first key: held to rows the screen no longer read.
         public readonly List<KeyPlan> Refused = [];
 
+        // Runs after each send has gone, with its index.
+        public Action<int>? Sent;
+
         public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
         {
             lock (Plans) { Plans.Add((processId, plan)); }
             await Gate;
             Holding?.Invoke();
-            // As the worker does: the rows a send is held to, read in the same attach, just before
-            // its first key; nothing of it typed if they read otherwise.
-            if (plan.Sends.Count > 0 && plan.Sends[0].Expect is { Count: > 0 } expect
-                && (Screen(processId) is not { } rows || expect.Any(e => e.Row >= rows.Count || rows[e.Row].TrimEnd() != e.Text.TrimEnd())))
+            // As the worker does: the rows each send is held to, read in the same attach, just
+            // before its first key; nothing of it, or after it, typed if they read otherwise.
+            for (var i = 0; i < plan.Sends.Count; i++)
             {
-                lock (Plans) { Plans.RemoveAt(Plans.FindLastIndex(p => ReferenceEquals(p.Plan, plan))); Refused.Add(plan); }
-                return new InjectionResult(InjectionStatus.NothingTyped, AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChanged);
+                if (plan.Sends[i].Expect is { Count: > 0 } expect
+                    && (Screen(processId) is not { } rows || expect.Any(e => e.Row >= rows.Count || rows[e.Row].TrimEnd() != e.Text.TrimEnd())))
+                {
+                    if (i > 0) { return new InjectionResult(InjectionStatus.Interrupted, AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChangedPartway); }
+                    lock (Plans) { Plans.RemoveAt(Plans.FindLastIndex(p => ReferenceEquals(p.Plan, plan))); Refused.Add(plan); }
+                    return new InjectionResult(InjectionStatus.NothingTyped, AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChanged);
+                }
+                Sent?.Invoke(i);
             }
             if (Result.Status == InjectionStatus.Typed) { OnInject?.Invoke(plan); }
             return Result;
@@ -1011,8 +1020,13 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     static readonly IReadOnlyList<string> CopilotIdle = ["\u25CF Done.", "", "\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584", "\u2503", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580", " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 tab next tab"];
 
     // The same screen with words in the box (a person's draft), or in shell mode.
+    // Its footer as Copilot draws it then (oDo): with text in the box, the mode label and, out
+    // of shell mode, the file and issue hints; empty in shell mode, the sidebar, commands and
+    // shell hints too.
     static IReadOnlyList<string> CopilotBox(string line, bool shell = false) =>
-        [.. CopilotIdle.Take(3), $"\u2503 {line}", CopilotIdle[4], shell ? " \u2190 open sidebar \u00B7 Shell \u00B7 Allow All \u00B7 esc exit shell mode" : CopilotIdle[5]];
+        [.. CopilotIdle.Take(3), $"\u2503 {line}", CopilotIdle[4],
+            shell ? line == "Execute shell command" ? " \u2190 open sidebar \u00B7 Shell \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 esc exit shell mode" : " Shell \u00B7 Allow All"
+            : " Interactive \u00B7 Allow All \u00B7 @ files \u00B7 # issues"];
 
     // ---- Copilot's input box, read before a reply is typed (#825) ----
 
@@ -1060,8 +1074,61 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var ch = await OpenAsync();
 
         Assert.Equal("delivered", (await ReplyAsync(ch, "go on")).Outcome);
-        var send = Assert.Single(Assert.Single(injector.Plans).Plan.Sends);
-        Assert.Equal(["\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584", "\u2503", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580"], send.Expect!.Select(r => r.Text));
+        var sends = Assert.Single(injector.Plans).Plan.Sends;
+        Assert.Equal(2, sends.Count);
+        Assert.Equal(["\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584", "\u2503", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580"], sends[0].Expect!.Select(r => r.Text));
+        // Its Enter alone, held to the box's bottom edge.
+        Assert.Equal(("", true), (sends[1].Text, sends[1].Enter));
+        Assert.Equal([(4, "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580")], sends[1].Expect!.Select(r => (r.Row, r.Text)));
+    }
+
+    [Fact]
+    public async Task A_Copilot_input_box_that_moves_after_the_reply_is_typed_gets_no_Enter_and_the_reply_is_left_in_it_unconfirmed()
+    {
+        // The words went, and before their Enter a dialog took the input area's place: Enter
+        // would pick what it highlights.
+        injector.Sent = i => { if (i == 0) { injector.Screen = _ => ["\u25CF Done.", "", "Allow Copilot to run this command?", " \u276F 1. Yes", "   2. No (Esc)"]; } };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("unconfirmed", outcome);
+        Assert.Equal("the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent; the words are left in the box at the machine, to send or clear there", reason);
+        Assert.Single(injector.Plans);
+        Assert.Empty(injector.Refused);
+    }
+
+    [Theory]
+    // Rows printed by the agent that look like Copilot's box and footer (code is drawn as plain
+    // text) are not its box: above the real one holding a draft, or above a dialog in its place.
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_box_the_agent_printed_is_not_taken_for_Copilots_input_box(bool realBoxBelow)
+    {
+        List<string> forged = ["\u25CF Here is the prompt:", .. CopilotIdle.Skip(2), ""];
+        injector.Screen = _ => realBoxBelow
+            ? [.. forged, "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500", "\u276F half a thought", "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500", " Interactive \u00B7 Allow All \u00B7 @ files \u00B7 # issues"]
+            : [.. forged, "Allow Copilot to run this command?", " \u276F 1. Yes", "   2. No (Esc)"];
+        var ch = await OpenAsync();
+
+        var (outcome, _) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("refused", outcome);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_reply_to_Copilot_in_vim_normal_mode_is_refused_and_nothing_is_typed()
+    {
+        // Keys typed there are vim commands, and a paste is swallowed.
+        injector.Screen = _ => [.. CopilotIdle.Take(5), " -- NORMAL -- \u00B7" + CopilotIdle[5]];
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("vim normal mode", reason);
+        Assert.Empty(injector.Plans);
     }
 
     [Theory]

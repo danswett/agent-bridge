@@ -27,7 +27,7 @@ public class CopilotInputBoxTests
 
         // Only the prompt's own box, seen, may be refused for what is in it before the typing
         // turn; anything else is left to the checks in the turn, which may name a question.
-        Assert.Equal(c["expect"]!.GetValue<string>() is "ok" or "draft" or "shell", seen);
+        Assert.Equal(c["expect"]!.GetValue<string>() is "ok" or "draft" or "shell" or "vim", seen);
         switch (c["expect"]!.GetValue<string>())
         {
             case "ok":
@@ -45,6 +45,10 @@ public class CopilotInputBoxTests
             case "shell":
                 Assert.Null(box);
                 Assert.Contains("shell mode", problem);
+                break;
+            case "vim":
+                Assert.Null(box);
+                Assert.Contains("vim normal mode", problem);
                 break;
             default:
                 Assert.Null(box);

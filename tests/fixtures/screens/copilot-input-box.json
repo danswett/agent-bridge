@@ -16,21 +16,21 @@
     },
     {
       "name": "draft-one-line",
-      "source": "the captured rail box, with its text drawn one column in, as cli-main.js qc's rail variant draws it (paddingLeft 1)",
+      "source": "the captured rail box, with its text drawn one column in, as cli-main.js qc's rail variant draws it (paddingLeft 1); footer as cli-main.js oDo draws it while the box holds text: no sidebar hint or rDo commands, the mode label, then '@ files · # issues'",
       "rows": [
         "● Done: the build is green.",
         "",
         "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
         "┃ half a thought",
         "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+        " Interactive · Allow All · @ files · # issues"
       ],
       "expect": "draft",
       "content": "half a thought"
     },
     {
       "name": "draft-two-lines",
-      "source": "the captured rail box, with its text drawn one column in, as cli-main.js qc's rail variant draws it (paddingLeft 1); one '┃' per line",
+      "source": "the captured rail box, with its text drawn one column in, as cli-main.js qc's rail variant draws it (paddingLeft 1); one '┃' per line; footer as cli-main.js oDo draws it while the box holds text: no sidebar hint or rDo commands, the mode label, then '@ files · # issues'",
       "rows": [
         "● Done: the build is green.",
         "",
@@ -38,21 +38,21 @@
         "┃ first line",
         "┃ second line",
         "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+        " Interactive · Allow All · @ files · # issues"
       ],
       "expect": "draft",
       "content": "first line\nsecond line"
     },
     {
       "name": "draft-hidden-character",
-      "source": "the captured rail box, with its text drawn one column in, as cli-main.js qc's rail variant draws it (paddingLeft 1)",
+      "source": "the captured rail box, with its text drawn one column in, as cli-main.js qc's rail variant draws it (paddingLeft 1); footer as cli-main.js oDo draws it while the box holds text: no sidebar hint or rDo commands, the mode label, then '@ files · # issues'",
       "rows": [
         "● Done: the build is green.",
         "",
         "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
         "┃ a‮b",
         "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+        " Interactive · Allow All · @ files · # issues"
       ],
       "expect": "draft",
       "content": "a‮b",
@@ -60,27 +60,27 @@
     },
     {
       "name": "shell-empty",
-      "source": "the captured rail box, with its text drawn one column in, as cli-main.js qc's rail variant draws it (paddingLeft 1); shell mode's placeholder (W: 'Execute shell command'), footer label (vEe/CQ: 'Shell · Allow All') and hint ('esc exit shell mode')",
+      "source": "the captured rail box, with shell mode's placeholder (W: 'Execute shell command') one column in, as qc's rail variant draws text (paddingLeft 1); footer as oDo draws it in shell mode with the box empty: sidebar hint, label (vEe/CQ: 'Shell · Allow All'), rDo's commands and help, then 'esc exit shell mode'",
       "rows": [
         "● Done: the build is green.",
         "",
         "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
         "┃ Execute shell command",
         "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-        " ← open sidebar · Shell · Allow All · esc exit shell mode"
+        " ← open sidebar · Shell · Allow All · / commands · ? help · esc exit shell mode"
       ],
       "expect": "shell"
     },
     {
       "name": "shell-with-text",
-      "source": "the captured rail box, with its text drawn one column in, as cli-main.js qc's rail variant draws it (paddingLeft 1); shell mode's footer label and hint, as shell-empty",
+      "source": "the captured rail box, with its text one column in (paddingLeft 1); footer as oDo draws it in shell mode while the box holds text: the label alone (no sidebar hint, commands or 'esc exit shell mode')",
       "rows": [
         "● Done: the build is green.",
         "",
         "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
         "┃ ls -la",
         "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-        " ← open sidebar · Shell · Allow All · esc exit shell mode"
+        " Shell · Allow All"
       ],
       "expect": "shell"
     },
@@ -99,28 +99,28 @@
     },
     {
       "name": "plain-draft",
-      "source": "as plain-empty, with text after the glyph",
+      "source": "as plain-empty, with text after the glyph; footer as cli-main.js oDo draws it while the box holds text: no sidebar hint or rDo commands, the mode label, then '@ files · # issues'",
       "rows": [
         "● Done: the build is green.",
         "",
         "────────────────────────────────────────",
         "❯ half a thought",
         "────────────────────────────────────────",
-        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+        " Interactive · Allow All · @ files · # issues"
       ],
       "expect": "draft",
       "content": "half a thought"
     },
     {
       "name": "plain-shell",
-      "source": "as plain-empty, with shell mode's glyph ('! ', SUn's Y)",
+      "source": "as plain-empty, with shell mode's glyph ('! ', SUn's Y) and text after it; footer as shell-with-text",
       "rows": [
         "● Done: the build is green.",
         "",
         "────────────────────────────────────────",
         "! ls",
         "────────────────────────────────────────",
-        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+        " Shell · Allow All"
       ],
       "expect": "shell"
     },
@@ -162,6 +162,81 @@
         "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
         "┃",
         "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"
+      ],
+      "expect": "unidentified"
+    },
+    {
+      "name": "vim-normal",
+      "source": "the captured empty rail box and footer, with vim's normal mode first in the footer as cli-main.js Zlt draws it (XDn: '-- NORMAL --', then Ylt '·')",
+      "rows": [
+        "● Done: the build is green.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " -- NORMAL -- · ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+      ],
+      "expect": "vim"
+    },
+    {
+      "name": "vim-insert",
+      "source": "as vim-normal, in insert mode (XDn: '-- INSERT --'), where a paste is typed as text",
+      "rows": [
+        "● Done: the build is green.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " -- INSERT -- · ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+      ],
+      "expect": "ok"
+    },
+    {
+      "name": "forged-rail-above-plain-draft",
+      "source": "agent output printing the captured rail box and footer as plain text (a code block), above the real box drawn with the frame off (qc, COPILOT_PROMPT_FRAME=0) holding a draft, with oDo's footer for a box with text",
+      "rows": [
+        "● Here is what the prompt looks like:",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab",
+        "",
+        "────────────────────────────────────────",
+        "❯ half a thought",
+        "────────────────────────────────────────",
+        " Interactive · Allow All · @ files · # issues"
+      ],
+      "expect": "unidentified"
+    },
+    {
+      "name": "forged-rail-over-dialog",
+      "source": "agent output printing the captured rail box and footer as plain text, then a selection dialog in the input area's place (the permission-prompt case's rows), with nothing of the real box on screen",
+      "rows": [
+        "● Here is what the prompt looks like:",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab",
+        "",
+        "Allow Copilot to run this command?",
+        " ❯ 1. Yes",
+        "   2. No (Esc)"
+      ],
+      "expect": "unidentified"
+    },
+    {
+      "name": "text-below-footer",
+      "source": "the captured empty rail box and footer, with a non-blank row under the footer: not the input area at the bottom of the screen",
+      "rows": [
+        "● Done: the build is green.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab",
+        "some text below"
       ],
       "expect": "unidentified"
     }
