@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Apple layout adoption: Windows, today, dark</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button,textarea,input{font:inherit}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/apple-layout-adoption.md). Pink numbered pins
+     are annotations keyed to the proposal's inventory, never UI. Sample data only. -->
+<div style="width: 1440px; height: 900px; box-sizing: border-box; background: #202326; color: #FFFFFF; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 20px; font-variant-numeric: tabular-nums; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #3A3A3A; border-radius: 8px; position: relative">
+  <div style="height: 48px; flex: none; display: flex; align-items: center; padding-left: 16px; gap: 12px">
+      <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true"><circle cx="19" cy="28" r="9.5" fill="none" stroke="#2DD4BF" stroke-width="4.5"></circle><circle cx="36" cy="12.6" r="6" fill="#2DD4BF"></circle></svg>
+      <span style="font-size: 12px">Agent Bridge</span><span style="flex: 1"></span>
+      <span style="width: 400px; height: 32px; display: flex; align-items: center; padding: 0 12px; border-radius: 4px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.07); color: rgba(255,255,255,0.54); box-sizing: border-box; font-size: 14px">Search</span><span style="flex: 1; min-width: 160px"></span></div>
+  <div style="flex: 1; display: flex; min-height: 0">
+    <nav style="width: 48px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 12px; padding-top: 10px; color: rgba(255,255,255,0.72)"><dc-import name="Icon" icon="sessions" size="16" hint-size="16px,16px"></dc-import><dc-import name="Icon" icon="machine" size="16" hint-size="16px,16px"></dc-import><dc-import name="Icon" icon="launch" size="16" hint-size="16px,16px"></dc-import><dc-import name="Icon" icon="usage" size="16" hint-size="16px,16px"></dc-import></nav>
+    <div style="flex: 1; display: flex; min-width: 0; background: #272A2E; border-top-left-radius: 8px; border: 1px solid rgba(255,255,255,0.07); border-right: 0; border-bottom: 0">
+      <section style="width: 320px; flex: none; display: flex; flex-direction: column; border-right: 1px solid rgba(255,255,255,0.07); background: #272A2E">
+    <div style="height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 16px">
+      <span style="font-size: 20px; line-height: 28px; font-weight: 600">Sessions</span><span style="flex: 1"></span>
+      <span style="color: rgba(255,255,255,0.72)"><dc-import name="Icon" icon="more" size="16" hint-size="16px,16px"></dc-import></span>
+      <span style="height: 28px; padding: 0 12px; border-radius: 4px; background: #2DD4BF; color: #062621; font-size: 13px; line-height: 28px; font-weight: 600">New</span>
+    </div>
+    <div style="display: flex; gap: 16px; padding: 0 16px 8px; font-size: 13px; color: rgba(255,255,255,0.72)"><span style="color: #FFFFFF; border-bottom: 2px solid #2DD4BF; padding-bottom: 4px">All</span><span>WORKSTATION</span><span>BUILD-VM</span></div>
+    <div style="margin: 4px 8px 8px; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.12)"><dc-import name="Glyph" kind="needs" theme="dark" size="16" hint-size="16px,16px"></dc-import><span style="font-size: 13px">Needs you · 1</span></div>
+    <span style="display: block; padding: 4px 16px; font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)">Sessions</span>
+    <div style="position: relative; margin: 0 8px; padding: 8px 8px 8px 12px; display: flex; gap: 10px; border-radius: 4px; background: transparent">
+      
+      <span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="needs" theme="dark" size="16" hint-size="16px,16px"></dc-import></span>
+      <span style="flex: 1; min-width: 0"><span style="display: block; font-size: 14px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Release notes draft</span>
+      <span style="display: block; font-size: 12px; line-height: 16px; color: #FFD27A">Waiting on you · BUILD-VM</span></span>
+      <span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.54)">2m</span>
+    </div>
+<div style="position: relative; margin: 0 8px; padding: 8px 8px 8px 12px; display: flex; gap: 10px; border-radius: 4px; background: rgba(255,255,255,0.07)">
+      <span style="position: absolute; left: 0; top: 18px; width: 3px; height: 16px; border-radius: 2px; background: #2DD4BF"></span>
+      <span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="working" theme="dark" size="16" hint-size="16px,16px"></dc-import></span>
+      <span style="flex: 1; min-width: 0"><span style="display: block; font-size: 14px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Fix flaky upload test</span>
+      <span style="display: block; font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)">Running the upload tests · WORKSTATION</span></span>
+      <span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.54)"></span>
+    </div>
+<div style="position: relative; margin: 0 8px; padding: 8px 8px 8px 12px; display: flex; gap: 10px; border-radius: 4px; background: transparent">
+      
+      <span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="delegating" theme="dark" size="16" hint-size="16px,16px"></dc-import></span>
+      <span style="flex: 1; min-width: 0"><span style="display: block; font-size: 14px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Migrate settings page</span>
+      <span style="display: block; font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)">3 delegates · WORKSTATION</span></span>
+      <span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.54)">6m</span>
+    </div>
+<div style="position: relative; margin: 0 8px; padding: 8px 8px 8px 12px; display: flex; gap: 10px; border-radius: 4px; background: transparent">
+      
+      <span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="idle" theme="dark" size="16" hint-size="16px,16px"></dc-import></span>
+      <span style="flex: 1; min-width: 0"><span style="display: block; font-size: 14px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Nightly issue triage</span>
+      <span style="display: block; font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)">Idle · BUILD-VM</span></span>
+      <span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.54)">1h</span>
+    </div>
+<div style="position: relative; margin: 0 8px; padding: 8px 8px 8px 12px; display: flex; gap: 10px; border-radius: 4px; background: transparent">
+      
+      <span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="done" theme="dark" size="16" hint-size="16px,16px"></dc-import></span>
+      <span style="flex: 1; min-width: 0"><span style="display: block; font-size: 14px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Docs cleanup</span>
+      <span style="display: block; font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)">Finished · WORKSTATION</span></span>
+      <span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.54)">3h</span>
+    </div>
+  </section>
+      <main style="flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; background: #202326">
+        <div style="padding: 16px 24px 0; flex: none">
+      <div style="display: flex; align-items: center; gap: 8px"><span style="font-size: 20px; line-height: 28px; font-weight: 600; flex: 1">Fix flaky upload test</span>
+      <span style="color: rgba(255,255,255,0.72); display: flex; gap: 16px"><dc-import name="Icon" icon="pin" size="16" hint-size="16px,16px"></dc-import><dc-import name="Icon" icon="inspector" size="16" hint-size="16px,16px"></dc-import></span></div>
+      <div style="display: flex; align-items: center; gap: 6px; margin-top: 2px"><dc-import name="Glyph" kind="working" theme="dark" size="14" hint-size="14px,14px"></dc-import><span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)">Working · WORKSTATION · contoso/widgets</span></div>
+      
+    </div>
+        <div style="display: flex; gap: 8px; padding: 10px 24px 0"><span style="display: inline-flex; gap: 6px; align-items: center; height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid rgba(255,255,255,0.12); font-size: 12px"><dc-import name="Glyph" kind="working" theme="dark" size="12" hint-size="12px,12px"></dc-import>Upload retry</span><span style="display: inline-flex; gap: 6px; align-items: center; height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid rgba(255,255,255,0.12); font-size: 12px"><dc-import name="Glyph" kind="working" theme="dark" size="12" hint-size="12px,12px"></dc-import>Test server logs</span></div>
+        <div style="flex: 1; min-height: 0; overflow: hidden; padding: 16px 24px 0; display: flex; flex-direction: column; align-items: center">
+    <div style="width: 640px; max-width: 100%; display: flex; flex-direction: column; gap: 14px">
+      <div style="align-self: flex-end; max-width: 85%; background: #2F3338; border-radius: 8px; padding: 10px 14px; font-size: 14px; line-height: 20px">The upload test fails about one run in ten. Find out why and fix it.</div>
+      <div style="position: relative">
+        <div style="display: flex; gap: 8px; align-items: baseline"><span style="font-size: 14px; font-weight: 600">Main agent</span><span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.54)">4m</span></div>
+        
+        <p style="margin: 6px 0 0; font-size: 14px; line-height: 22px">The retry in <code style="font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 13px">UploadClient</code> waits a fixed 100 ms, so a slow test server times out on the third try. I'm making the wait back off and running the test 20 times to check.</p>
+        <div style="position: relative; margin-top: 8px; font-size: 13px; color: rgba(255,255,255,0.72); display: flex; align-items: center; gap: 6px"><dc-import name="Icon" icon="chevron" size="12" hint-size="12px,12px"></dc-import>Show reasoning</div>
+        <div style="margin-top: 8px; display: flex; align-items: center; gap: 6px"><dc-import name="Glyph" kind="working" theme="dark" size="12" hint-size="12px,12px"></dc-import><span style="font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)">powershell Run the upload tests 20 times</span></div>
+      </div>
+    </div>
+  </div>
+        <div style="flex: none; padding: 12px 24px 16px; display: flex; flex-direction: column; align-items: center">
+    <div style="width: 640px; max-width: 100%">
+      <div style="position: relative; background: #2F3338; border: 1px solid rgba(255,255,255,0.07); border-bottom: 2px solid #2DD4BF; border-radius: 8px; padding: 10px 12px 8px">
+        <div style="font-size: 14px; line-height: 20px; color: rgba(255,255,255,0.54); min-height: 40px">Message the main agent</div>
+        <div style="display: flex; align-items: center; gap: 12px"><span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.54)">0 / 16 KB</span><span style="flex: 1"></span><span style="color: rgba(255,255,255,0.72); display: flex"><dc-import name="Icon" icon="attach" size="16" hint-size="16px,16px"></dc-import></span>
+       <span style="width: 32px; height: 32px; border-radius: 4px; background: #2DD4BF; color: #062621; display: grid; place-items: center"><dc-import name="Icon" icon="send" size="16" hint-size="16px,16px"></dc-import></span></div>
+      </div>
+      
+    </div>
+  </div>
+      </main>
+      <aside style="width: 336px; flex: none; border-left: 1px solid rgba(255,255,255,0.07); padding: 16px 20px; box-sizing: border-box; overflow: hidden; position: relative">
+    <div style="font-size: 14px; font-weight: 600; margin-bottom: 10px">Details</div>
+    <dl style="margin: 0; display: grid; grid-template-columns: 96px 1fr; row-gap: 6px; column-gap: 12px; font-size: 13px; line-height: 18px">
+    <dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Status</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">Working</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Agent</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">Copilot</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Machine</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">WORKSTATION</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Model</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">gpt-5.6-sol</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Repository</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">contoso/widgets</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Branch</dt><dd style="margin: 0; position: relative; font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 12px; white-space: nowrap; text-overflow: ellipsis">fix/upload-retry</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Folder</dt><dd style="margin: 0; position: relative; font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 12px; white-space: nowrap; text-overflow: ellipsis">C:\src\widgets</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Turns</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">12</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Process</dt><dd style="margin: 0; position: relative; font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 12px; white-space: nowrap; text-overflow: ellipsis">4120</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">For</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">4m 12s</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Updated</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">just now</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">ID</dt><dd style="margin: 0; position: relative; font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 12px; white-space: nowrap; text-overflow: ellipsis">7c1e…a42f</dd>
+  </dl>
+  <div style="margin-top: 14px"><span style="display: inline-block; height: 32px; padding: 0 12px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.12); color: #FF9494; font-size: 13px; line-height: 32px">End session</span></div>
+    <div style="font-size: 14px; font-weight: 600; margin: 20px 0 10px">Tools</div>
+    <div style="display: flex; flex-direction: column; gap: 4px"><div style="display: grid; grid-template-columns: 16px 1fr auto; column-gap: 8px">
+    <span style="padding-top: 2px"><dc-import name="Glyph" kind="working" theme="dark" size="12" hint-size="12px,12px"></dc-import></span>
+    <span style="font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 12px; line-height: 16px">powershell <span style="color: rgba(255,255,255,0.72)">Run the upload tests 20 times</span></span><span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)">40s</span></div><div style="display: grid; grid-template-columns: 16px 1fr auto; column-gap: 8px">
+    <span style="padding-top: 2px"><dc-import name="Glyph" kind="done" theme="dark" size="12" hint-size="12px,12px"></dc-import></span>
+    <span style="font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 12px; line-height: 16px">view <span style="color: rgba(255,255,255,0.72)">src/Upload/UploadClient.cs</span></span><span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)">2m</span></div><div style="display: grid; grid-template-columns: 16px 1fr auto; column-gap: 8px">
+    <span style="padding-top: 2px"><dc-import name="Glyph" kind="done" theme="dark" size="12" hint-size="12px,12px"></dc-import></span>
+    <span style="font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 12px; line-height: 16px">edit <span style="color: rgba(255,255,255,0.72)">src/Upload/UploadClient.cs</span></span><span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)">3m</span></div><div style="display: grid; grid-template-columns: 16px 1fr auto; column-gap: 8px">
+    <span style="padding-top: 2px"><dc-import name="Glyph" kind="failed" theme="dark" size="12" hint-size="12px,12px"></dc-import></span>
+    <span style="font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 12px; line-height: 16px">powershell <span style="color: rgba(255,255,255,0.72)">Build the solution</span></span><span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)">6m</span></div><div style="display: grid; grid-template-columns: 16px 1fr auto; column-gap: 8px">
+    <span style="padding-top: 2px"><dc-import name="Glyph" kind="done" theme="dark" size="12" hint-size="12px,12px"></dc-import></span>
+    <span style="font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 12px; line-height: 16px">grep <span style="color: rgba(255,255,255,0.72)">TimeoutException</span></span><span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)">7m</span></div><div style="display: grid; grid-template-columns: 16px 1fr auto; column-gap: 8px">
+    <span style="padding-top: 2px"><dc-import name="Glyph" kind="done" theme="dark" size="12" hint-size="12px,12px"></dc-import></span>
+    <span style="font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 12px; line-height: 16px">view <span style="color: rgba(255,255,255,0.72)">tests/Upload/UploadTests.cs</span></span><span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)">8m</span></div></div>
+  </aside>
+    </div>
+  </div>
+  <span style="position: absolute; right: 16px; bottom: 10px; font-size: 11px; line-height: 14px; padding: 2px 8px; border-radius: 4px; background: #555; color: #fff">Today (code-reading of src/AgentBridge.App)</span>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
