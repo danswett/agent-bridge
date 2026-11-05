@@ -109,23 +109,24 @@ static partial class SelfTest
         return realised == 0 ? "a realised block" : null;
     }
 
-    static string Press(nint window, VirtualKey key, bool foreground)
+    static string Press(nint window, VirtualKey key, bool foreground, bool extended = true)
     {
         var vk = (ushort)key;
         var scan = (ushort)MapVirtualKeyW(vk, 0);
         if (foreground && GetForegroundWindow() == window)
         {
-            // The navigation keys are extended keys: without the flag, Page Down is the keypad's 3.
+            // The navigation keys are extended keys: without the flag, Page Down is the keypad's 3. Tab is not.
+            var flag = extended ? 0x1u : 0u;
             var inputs = new[]
             {
-                new KeyInput { Type = 1, Vk = vk, Scan = scan, Flags = 0x1 },
-                new KeyInput { Type = 1, Vk = vk, Scan = scan, Flags = 0x1 | 0x2 },
+                new KeyInput { Type = 1, Vk = vk, Scan = scan, Flags = flag },
+                new KeyInput { Type = 1, Vk = vk, Scan = scan, Flags = flag | 0x2 },
             };
             if (SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<KeyInput>()) == inputs.Length) { return "SendInput"; }
         }
         var to = GetFocus() is var focus && focus != 0 ? focus : window;
-        const nint Extended = 1 << 24;
-        var lParam = 1 | ((nint)scan << 16) | Extended;
+        var extendedBit = extended ? (nint)(1 << 24) : 0;
+        var lParam = 1 | ((nint)scan << 16) | extendedBit;
         PostMessageW(to, 0x0100, (nint)vk, lParam);
         PostMessageW(to, 0x0101, (nint)vk, lParam | (1 << 30) | unchecked((nint)(1u << 31)));
         return "PostMessage";
