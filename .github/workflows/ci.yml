@@ -725,7 +725,10 @@ jobs:
     needs: plan
     if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes-linux == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 35, as every job that runs `playwright install --with-deps` gets (#689): room for the five
+    # minutes the download step gives a slow apt mirror and a full download from Canonical's
+    # archive, on top of the checks.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -771,6 +774,18 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
+      # Their system packages first, so a slow apt mirror can be left (as in pwa-ui; the action's
+      # download.sh says why). The second spike's finds them downloaded while the two agree.
+      - name: Download Playwright's system packages, S2
+        uses: ./.github/actions/playwright-system-packages
+        with:
+          browsers: chromium webkit
+          working-directory: spikes/s2-noise-interop
+      - name: Download Playwright's system packages, S4
+        uses: ./.github/actions/playwright-system-packages
+        with:
+          browsers: chromium webkit
+          working-directory: spikes/s4-relay
       # In each spike, so a spike that moves to another Playwright still gets its own browsers;
       # the second is quick while they agree.
       - name: Playwright's browsers, for both
@@ -803,6 +818,8 @@ jobs:
     #  - pwa-unit: the PWA's unit tests in Node, then again for coverage, beside the Playwright
     #    jobs rather than before them (#457);
     #  - pwa-site-csp: the Pages build's CSP;
+    #  - playwright-apt: the download of Playwright's system packages leaves a slow apt mirror only
+    #    when it should (.github/actions/playwright-system-packages);
     #  - docs-links: relative links and their #anchors in every Markdown file resolve.
     # Not in plan's own runner: a failing check there would skip every job that needs the plan.
     needs: plan
@@ -828,6 +845,9 @@ jobs:
       - name: Connector read-contract mock
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'connector-conformance')) }}
         run: node --test tools/connector-conformance/mock-host.test.mjs
+      - name: Playwright's system packages leave a slow apt mirror only for Canonical's archive
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'playwright-apt')) }}
+        run: bash .github/actions/playwright-system-packages/test.sh
       # build-site.mjs bundles the app with esbuild (#609), and the unit tests build the site: the
       # PWA's packages, as locked, without Playwright's browsers (only the pwa-ui jobs fetch those).
       # Without install scripts, as pages.yml builds the published site (#650), so a build that
@@ -955,11 +975,13 @@ jobs:
             project: webkit
             shard: 3/3
     runs-on: ubuntu-latest
-    # WebKit's legs get 35 minutes, Chromium's 20. WebKit needs 181 system packages (114 MB),
-    # and on main run 41927187905 a slow apt mirror held webkit 3/3 in that download past 20
-    # minutes, twice, before a test ran. 35 leaves room for the five minutes the download step
-    # below gives that mirror, a full download from Canonical's archive and the shard's tests.
-    timeout-minutes: ${{ matrix.project == 'webkit' && 35 || 20 }}
+    # 35 minutes for every leg, as for every job that runs `playwright install --with-deps`
+    # (#689). WebKit needs 181 system packages (114 MB), and on main run 41927187905 a slow apt
+    # mirror held webkit 3/3 in that download past 20 minutes, twice, before a test ran; Chromium's
+    # come from the same mirror. 35 leaves room for the five minutes the download step below gives
+    # that mirror, a full download from Canonical's archive and the shard's tests. It bounds a
+    # stuck job, not a test: a leg that passes takes as long as before.
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: pwa
@@ -987,43 +1009,13 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-${{ matrix.project }}
       # Playwright's system packages, downloaded before its install so a slow apt mirror can be
-      # left. On main run 41927187905, webkit 3/3 fetched its 181 packages (114 MB) from
-      # azure.archive.ubuntu.com at about 100 kB/s on two runners in turn and hit the 20-minute
-      # limit inside the install, before any test ran, while webkit 2/3 fetched the same 114 MB
-      # in 47 s. The runner's mirror list (/etc/apt/apt-mirrors.txt, from actions/runner-images)
-      # puts that mirror first and Canonical's HTTPS archive after it, but apt moves down the
-      # list only when a fetch fails, never when it is slow. So the download gets five minutes
-      # on the list as it stands; if it isn't done by then, the Azure mirror is taken off the
-      # list and apt fetches the rest from https://archive.ubuntu.com, keeping what it has. apt
-      # checks every package against the signed index either way, and the install below then
-      # finds them all downloaded. The packages and the install are as before; only where a slow
-      # download finishes from changes. If the mirror list isn't the Azure-then-Canonical one
-      # this expects, or Azure is still named after the edit, the step fails rather than go on
-      # waiting on the same mirror.
+      # left after five minutes for Canonical's HTTPS archive (#799; the action's download.sh says
+      # how). The install below then finds them all downloaded; it, and the packages, are as before.
       - name: Download Playwright's system packages
-        run: |
-          list=$(npx playwright install-deps --dry-run "$PROJECT" | sed -n 's/.*--no-install-recommends \([^"]*\)".*/\1/p')
-          read -ra pkgs <<< "$list"
-          if [ "${#pkgs[@]}" -eq 0 ]; then
-            echo "::error::playwright install-deps --dry-run named no packages to download"; exit 1
-          fi
-          sudo apt-get update
-          rc=0
-          sudo timeout 5m apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?
-          if [ "$rc" -eq 124 ]; then
-            mirrors=/etc/apt/apt-mirrors.txt
-            if ! grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors" || ! grep -q '^https://archive\.ubuntu\.com/ubuntu/' "$mirrors"; then
-              echo "::error::$mirrors doesn't list the Azure mirror and https://archive.ubuntu.com this step expects, so it can't leave the slow mirror"; exit 1
-            fi
-            echo "::warning title=pwa-ui::apt took over 5 minutes to download Playwright's system packages; fetching the rest from https://archive.ubuntu.com"
-            sudo sed -i '/^http:\/\/azure\.archive\.ubuntu\.com\//d' "$mirrors"
-            if grep -rqs '^[^#]*azure\.archive\.ubuntu\.com' "$mirrors" /etc/apt/sources.list /etc/apt/sources.list.d/; then
-              echo "::error::apt's sources still name azure.archive.ubuntu.com after removing it from $mirrors"; exit 1
-            fi
-            sudo apt-get install -y --download-only --no-install-recommends "${pkgs[@]}"
-          elif [ "$rc" -ne 0 ]; then
-            exit "$rc"
-          fi
+        uses: ./.github/actions/playwright-system-packages
+        with:
+          browsers: ${{ matrix.project }}
+          working-directory: pwa
       - run: npx playwright install --with-deps "$PROJECT"
       - name: Save Playwright's browsers to main's cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
@@ -1046,7 +1038,11 @@ jobs:
     needs: plan
     if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.pwa-e2e == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 35, as every job that runs `playwright install --with-deps` gets (#689): main run
+    # 41952998347 cancelled this job at its old 15 inside that install, fetching 126 of Chromium's
+    # and WebKit's packages from azure.archive.ubuntu.com at about 100 kB/s. Room for the download
+    # step's five minutes on that mirror and a full download from Canonical's archive.
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: pwa
@@ -1075,6 +1071,12 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
+      # As in pwa-ui: the system packages first, so a slow apt mirror can be left.
+      - name: Download Playwright's system packages
+        uses: ./.github/actions/playwright-system-packages
+        with:
+          browsers: chromium webkit
+          working-directory: pwa
       - run: npx playwright install --with-deps chromium webkit
       - name: Save Playwright's browsers to main's cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'

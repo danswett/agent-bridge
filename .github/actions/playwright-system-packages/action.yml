@@ -1,0 +1,25 @@
+name: Playwright's system packages
+description: >
+  Downloads the system packages `npx playwright install --with-deps` will install for the given
+  browsers, leaving a slow apt mirror for Canonical's HTTPS archive after five minutes (download.sh
+  says why). Every job that runs `playwright install --with-deps` uses it just before that install,
+  which still runs as before and finds the packages downloaded. Linux runners only.
+
+inputs:
+  browsers:
+    description: The browsers, space-separated, as given to `playwright install --with-deps`.
+    required: true
+  working-directory:
+    description: The folder whose node_modules holds that Playwright.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BROWSERS: ${{ inputs.browsers }}
+      run: |
+        read -ra browsers <<< "$BROWSERS"
+        bash "$GITHUB_ACTION_PATH/download.sh" "${browsers[@]}"
