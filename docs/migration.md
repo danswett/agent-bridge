@@ -177,7 +177,7 @@ to put back by hand if it cannot be made a plain folder or file again.
 A rehearsal baseline (`agent-bridge-rehearsal baseline save`) hashes these cached copies too,
 in the Codex home (and Copilot and Claude homes) agent-ha-bridge's `installation.json` records,
 which are the ones a migration rewrites, whatever `CODEX_HOME` or `--home` says. A record that
-cannot say which homes they are (not a JSON object, or a home that is not a full path) is
+cannot say which homes they are (not a JSON object, or a home that is not a valid full path) is
 refused with an error rather than guessed at. A recorded home inside `~/.agent-ha-bridge` is
 measured once, as that agent's file. Save the baseline with the current rehearsal
 tool **before migrating**. One saved by an older tool, which never measured the cache, or

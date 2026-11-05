@@ -118,8 +118,10 @@ internal static class BaselineCapture
             {
                 throw Unclear($"has a {name} that is not a full path");
             }
-            // Normalised, so a file it shares with another home is named alike from both.
-            return Path.GetFullPath(path);
+            // Normalised, so a file it shares with another home is named alike from both. A full
+            // path can still be no path at all (it holds a NUL, say), and that is refused too.
+            try { return Path.GetFullPath(path); }
+            catch (ArgumentException e) { throw Unclear($"has a {name} that is not a valid path ({e.Message})", e); }
         }
         var home = Folder("home") ?? Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(homes.BridgeHome)))!;
         return homes with

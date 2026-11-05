@@ -200,6 +200,39 @@ public class BaselineTests
         Assert.Contains("which homes a migration would rewrite cannot be told", e.Message);
     }
 
+    [Theory]
+    [InlineData("home")]
+    [InlineData("copilotHome")]
+    [InlineData("claudeHome")]
+    [InlineData("codexHome")]
+    public void A_recorded_home_that_is_a_full_path_but_not_a_valid_one_is_refused_naming_it(string name)
+    {
+        using var s = Install();
+        s.File(".agent-ha-bridge/installation.json", System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string> { [name] = Path.Combine(s.Root, "bad\0home") }));
+
+        var e = Assert.Throws<IOException>(() => BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow));
+
+        Assert.Contains($"has a {name} that is not a valid path", e.Message);
+        Assert.Contains("which homes a migration would rewrite cannot be told", e.Message);
+    }
+
+    [Fact]
+    public async Task Baseline_save_given_a_recorded_home_that_is_not_a_valid_path_records_an_error_for_its_step_and_writes_no_baseline()
+    {
+        using var s = Install();
+        using var run = new Scratch();
+        s.File(".agent-ha-bridge/installation.json", System.Text.Json.JsonSerializer.Serialize(new { codexHome = Path.Combine(s.Root, "bad\0home") }));
+        var file = Path.Combine(run.Root, "base.json");
+
+        var code = await Program.Main(["baseline", "save", "--home", s.Root, "--out", file, "--step", "B-01", "--evidence", Path.Combine(run.Root, "evidence")]);
+
+        Assert.NotEqual(0, code);
+        Assert.False(File.Exists(file));
+        using var step = System.Text.Json.JsonDocument.Parse(Assert.Single(File.ReadAllLines(Path.Combine(run.Root, "evidence", "steps", "B-01.jsonl"))));
+        Assert.Equal("error", step.RootElement.GetProperty("verdict").GetString());
+        Assert.Contains("has a codexHome that is not a valid path", step.RootElement.GetProperty("detail").GetString());
+    }
+
     [Fact]
     public void A_version_2_baseline_which_may_have_measured_another_codex_home_is_refused()
     {
