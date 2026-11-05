@@ -20,7 +20,8 @@ public sealed record CopilotField(
     IReadOnlyList<CopilotOption> Options,
     IReadOnlyList<int> Checked,
     bool AllowsEmpty,
-    JsonElement? Prefill = null);
+    JsonElement? Prefill = null,
+    FieldConstraints? Constraints = null);
 
 // The ask_user prompt read from the tool call's own arguments, the way agent-ha-bridge
 // reads it (Get-DecisionSchemaFields), rather than from the Question a client saw: the
@@ -57,27 +58,36 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
     static (CopilotForm?, string?) Schema(JsonElement schema)
     {
         if (schema.ValueKind != JsonValueKind.Object) { return (null, "the question's form could not be read"); }
+        if (CopilotFieldConstraints.FormUnchecked(schema) is { } keyword)
+        {
+            return (null, $"the question's form has a limit the host does not check (\"{keyword}\"); answer it at the machine");
+        }
         if (!schema.TryGetProperty("properties", out var properties) || properties.ValueKind != JsonValueKind.Object)
         {
             return (new CopilotForm([]), null);
         }
         var fields = new List<CopilotField>();
+        var patterns = new PatternBudget();
         foreach (var property in properties.EnumerateObject())
         {
             if (property.Value.ValueKind != JsonValueKind.Object) { return (null, $"the question's field \"{property.Name}\" could not be read"); }
-            var (field, problem) = Field(property.Name, property.Value);
+            var (field, problem) = Field(property.Name, property.Value, patterns);
             if (field is null) { return (null, problem); }
             fields.Add(field);
         }
         return (new CopilotForm(fields), null);
     }
 
-    static (CopilotField?, string?) Field(string name, JsonElement p)
+    static (CopilotField?, string?) Field(string name, JsonElement p, PatternBudget patterns)
     {
         // The input Copilot draws for it, read as the CLI reads it (CopilotFieldSchema): a
         // field the keys would drive as something it is not is not typed into at all.
         var (input, choices, problem) = CopilotFieldSchema.Read(p);
         if (problem is not null) { return (null, $"\"{name}\" {problem}; answer it at the machine"); }
+        // Copilot checks none of the field's constraints itself, so the host checks the answer
+        // against them before a key goes (#766).
+        var (limits, unlimited) = CopilotFieldConstraints.Read(p, patterns);
+        if (unlimited is not null) { return (null, $"\"{name}\" {unlimited}; answer it at the machine"); }
         var options = choices.Select(c => new CopilotOption(Scalar(c.Value), c.Value)).ToList();
         var hasDefault = p.TryGetProperty("default", out var def);
 
@@ -93,7 +103,7 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
                     // an empty one does, and a null one reads "null".
                     var empty = def.ValueKind == JsonValueKind.String && def.GetString()!.Length == 0;
                     var prefilled = hasDefault && !empty && (kind == CopilotFieldKind.Number || def.ValueKind != JsonValueKind.Null);
-                    return (new CopilotField(name, kind, [], [], false, prefilled ? def.Clone() : null), null);
+                    return (new CopilotField(name, kind, [], [], false, prefilled ? def.Clone() : null, limits), null);
                 }
             case CopilotFieldSchema.Input.Multi:
                 {
@@ -111,7 +121,7 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
                         }
                     }
                     ticked.Sort();
-                    return (new CopilotField(name, CopilotFieldKind.Multi, options, ticked, AllowsEmpty(p)), null);
+                    return (new CopilotField(name, CopilotFieldKind.Multi, options, ticked, AllowsEmpty(p), Constraints: limits), null);
                 }
             default:
                 // The keys never count from the default (they walk from the top row), but a
