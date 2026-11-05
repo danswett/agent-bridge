@@ -390,13 +390,33 @@ public sealed class ToastTests
             [nameof(ToastXml.Updated)] = [ToastXml.Updated("0.1.9", "0.1.8", "- Quieter toasts"), ToastXml.Updated("0.1.9", "0.1.8", null)],
             [nameof(ToastXml.Outcome)] = [ToastXml.Outcome("s1", "A session", "Sent.", "remote-id"), ToastXml.Outcome("s1", "A session", "Sent.")],
         };
-        // A builder added later is held to this too: every public method that makes a toast is listed.
+        // A builder added later is held to this too: every public method whose output is a <toast>
+        // is listed. Told apart by what it returns, not by name, so a text helper such as Plain or
+        // Words added beside the builders is no toast (#792).
         var made = typeof(ToastXml).GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
-            .Where(m => m.ReturnType == typeof(string) && m.Name is not (nameof(ToastXml.Args) or nameof(ToastXml.Plain)))
+            .Where(m => m.ReturnType == typeof(string) && MakesAToast(m))
             .Select(m => m.Name).Distinct().Order();
         Assert.Equal(builders.Keys.Order(), made);
 
         Assert.All(builders.Values.SelectMany(x => x), AssertSilent);
+    }
+
+    // Whether a public ToastXml method returns a toast, called with an example of each argument. A
+    // parameter of a type not known here fails the test rather than letting the method go unchecked.
+    static bool MakesAToast(System.Reflection.MethodInfo m)
+    {
+        var args = m.GetParameters().Select(p => p.ParameterType switch
+        {
+            var t when t == typeof(Session) => Make.Session(question: Make.Choice(), response: "Done."),
+            var t when t == typeof(IReadOnlyList<string>) => (object)Caps,
+            var t when t == typeof(string) => "x",
+            var t when t == typeof(int) => 300,
+            var t when t == typeof((string, string)[]) => Array.Empty<(string, string)>(),
+            var t => throw new Xunit.Sdk.XunitException($"ToastXml.{m.Name} takes a {t}: give this test an example of one, to tell whether it makes a toast."),
+        }).ToArray();
+        var made = (string)m.Invoke(null, args)!;
+        try { return XElement.Parse(made).Name.LocalName == "toast"; }
+        catch (System.Xml.XmlException) { return false; }
     }
 
     [Fact]
