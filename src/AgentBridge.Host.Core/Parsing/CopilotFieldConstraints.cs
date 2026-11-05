@@ -28,6 +28,11 @@ public static class CopilotFieldConstraints
         string? problem = null;
         switch (input)
         {
+            // A number box, or a text box, limited to listed values (`enum`, `oneOf`, `const`): the
+            // host checks no list of numbers, so 5 went through an enum of [1, 2, 3] (review of #844).
+            case CopilotFieldSchema.Input.Number when Listed(p):
+            case CopilotFieldSchema.Input.Text when Has(p, "const", out _):
+                return (null, "is limited to listed values the host does not check");
             case CopilotFieldSchema.Input.Number:
                 c = new FieldConstraints
                 {
@@ -49,18 +54,19 @@ public static class CopilotFieldConstraints
                     Format = Format(p, ref problem),
                 };
                 break;
-            // Likewise a checkbox list whose items carry text limits: its options are not checked
-            // against them (review of #844).
-            case CopilotFieldSchema.Input.Multi when p.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Object && TextLimited(items):
-                return (null, "is a list of choices with text limits the host does not check");
+            // Likewise a checkbox list whose items carry text or number limits: its options are not
+            // checked against them, so a minimum of 2 let 1 be ticked (review of #844).
+            case CopilotFieldSchema.Input.Multi when p.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Object && (TextLimited(items) || NumberLimited(items) || Has(items, "const", out _)):
+                return (null, "is a list of choices with limits the host does not check");
             case CopilotFieldSchema.Input.Multi:
                 c = new FieldConstraints { MinItems = Count(p, "minItems", ref problem), MaxItems = Count(p, "maxItems", ref problem) };
                 break;
             // A string list (`enum` or `oneOf`) with text constraints: its options, and the words
             // its Other takes, are not checked against them here, so it is answered at the machine
             // rather than let "toolong" through a maxLength of 2 (review of #844).
-            case CopilotFieldSchema.Input.Choice when TextLimited(p):
-                return (null, "is a list of choices with text limits the host does not check");
+            // A string list's options can be numbers too, so number limits count as well.
+            case CopilotFieldSchema.Input.Choice when TextLimited(p) || NumberLimited(p) || Has(p, "const", out _):
+                return (null, "is a list of choices with limits the host does not check");
             default:
                 return (null, null);
         }
@@ -77,6 +83,11 @@ public static class CopilotFieldConstraints
     static bool TextLimited(JsonElement o) =>
         Has(o, "minLength", out _) || Has(o, "maxLength", out _) || Has(o, "pattern", out _)
         || (Has(o, "format", out var f) && f.ValueKind == JsonValueKind.String && FieldConstraints.Formats.Contains(f.GetString()));
+
+    static bool NumberLimited(JsonElement o) =>
+        Has(o, "minimum", out _) || Has(o, "maximum", out _) || Has(o, "exclusiveMinimum", out _) || Has(o, "exclusiveMaximum", out _) || Has(o, "multipleOf", out _);
+
+    static bool Listed(JsonElement o) => Has(o, "enum", out _) || Has(o, "oneOf", out _) || Has(o, "const", out _);
 
     const string Uncheckable = "has limits the host cannot check exactly";
 

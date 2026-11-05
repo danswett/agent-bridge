@@ -1331,7 +1331,7 @@ and lets the host refuse it. Not strict: a reader that cannot read them reads th
 | `integer` | bool? | The value is a whole number (the schema's `"type": "integer"`) |
 | `minLength`, `maxLength` | int? | In UTF-16 code units, as JavaScript counts them |
 | `pattern` | string? | An ECMAScript pattern, as `new RegExp(pattern)` reads it: no flags, unanchored. At most 1,024 characters |
-| `format` | string? | `email`, `uri`, `date` or `date-time`, checked as Copilot CLI does (`^[^\s@]+@[^\s@]+\.[^\s@]+$`; `^https?://.+`; `YYYY-MM-DD`; `YYYY-MM-DDTHH:MM` with optional seconds, fraction and offset), dates as real dates. Other formats are not carried |
+| `format` | string? | `email`, `uri`, `date` or `date-time`, checked as Copilot CLI does (`^[^\s@]+@[^\s@]+\.[^\s@]+$`; `^https?://.+`; `YYYY-MM-DD`; `YYYY-MM-DDTHH:MM` with optional seconds, fraction and offset `Z`, `z`, `±HH:MM` or `±HHMM`), dates as real dates. Other formats are not carried |
 | `minItems`, `maxItems` | int? | How many options a `multi` takes |
 
 Numbers are compared exactly as written, never as doubles; a host carries only bounds a

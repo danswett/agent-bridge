@@ -236,7 +236,10 @@ public sealed partial record FieldConstraints
 
     // Copilot CLI 1.0.105's own checks for these formats (`g1e`), with JavaScript's \s and $, and
     // its Date.parse made a strict ISO 8601 read: a host refuses a date that could not be one. V8's
-    // Date.parse takes any number of fraction digits (it reads the first three), so this does too.
+    // Date.parse takes any number of fraction digits (it reads the first three), so this does too,
+    // and a lower-case z and an offset written without its colon (+0530), as the CLI's check does
+    // (review of #844); +05, a lower-case t or a space it refuses, and so does this. Where V8 rolls
+    // an impossible date or 24:00 over to another day, this refuses it: dates as real dates.
     // NonBacktracking: the classes either side of the \. overlap on dots, so a backtracking match was
     // quadratic in a run of them (`a@` and 100,000 dots then a space), and a default is matched while
     // a question is read, outside PatternBudget (review of #844). The same pattern, matched in linear
@@ -248,7 +251,7 @@ public sealed partial record FieldConstraints
     [GeneratedRegex(@"\Ahttps?://[^\n\r\u2028\u2029]", RegexOptions.CultureInvariant)]
     private static partial Regex Uri();
 
-    [GeneratedRegex(@"\A([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2}:[0-9]{2})(:[0-9]{2}(\.[0-9]+)?)?(Z|[+-]([0-9]{2}):([0-9]{2}))?\z", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\A([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2}:[0-9]{2})(:[0-9]{2}(\.[0-9]+)?)?([Zz]|[+-]([0-9]{2}):?([0-9]{2}))?\z", RegexOptions.CultureInvariant)]
     private static partial Regex DateTimeText();
 
     static bool IsDate(string text) =>

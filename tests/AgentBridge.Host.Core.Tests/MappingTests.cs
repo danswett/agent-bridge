@@ -25,7 +25,8 @@ public class QuestionMappingTests
 
         Assert.Equal([FieldType.Number, FieldType.Text], q.Fields.Select(f => f.Type));
         Assert.All(q.Fields, f => Assert.Null(f.Options));
-        Assert.Null(q.AnswerAtMachine);
+        // The number box takes any number, and the host checks no list of them (review of #844).
+        Assert.True(q.AnswerAtMachine);
     }
 
     [Theory]

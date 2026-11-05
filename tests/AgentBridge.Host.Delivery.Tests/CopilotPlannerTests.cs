@@ -212,6 +212,14 @@ public class CopilotPlannerTests
     [InlineData("""{ "type": "string", "format": "uri" }""", "ftp://example.com", "\"t\": must be a URL starting http:// or https://")]
     [InlineData("""{ "type": "string", "format": "date" }""", "2026-02-30", "\"t\": must be a date, as YYYY-MM-DD")]
     [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04 19:30", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
+    // What the CLI's check refuses too (cli-main.js PIo and Date.parse): an hour-only offset, a
+    // lower-case t, a three-digit or out-of-range offset, and an offset after a z.
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34+05", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04t19:58", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34+053", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34+0560", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34+2400", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34z+0530", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
     public void Text_outside_its_length_pattern_or_format_is_refused_before_any_key(string property, string text, string why)
     {
         Assert.Equal(why, Outside(Schema("t", property), Answer(new { t = text })));
@@ -226,6 +234,11 @@ public class CopilotPlannerTests
     [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:30:05.123-08:00")]
     // Date.parse reads any number of fraction digits.
     [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34.746123Z")]
+    // And an offset without its colon, or a lower-case z, which it takes too (review of #844).
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34+0530")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58-0800")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34.746123+2359")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34.5z")]
     // The CLI knows four formats and ignores the rest; so does the host.
     [InlineData("""{ "type": "string", "format": "hostname" }""", "not a host name")]
     public void Text_inside_its_constraints_is_typed_as_before(string property, string text)
@@ -322,6 +335,18 @@ public class CopilotPlannerTests
     // A list of choices with text limits, which its options and Other are not checked against.
     [InlineData("""{ "type": "string", "enum": ["ok", "toolong"], "maxLength": 2 }""")]
     [InlineData("""{ "type": "array", "items": { "enum": ["ok", "toolong"], "maxLength": 2 } }""")]
+    // Numbers limited by what the host does not check (review of #844): a number box's listed
+    // values, and options under number limits. The CLI draws a number with an enum as a box that
+    // takes any number and records it (walked as a list, its arrows added one, #700).
+    [InlineData("""{ "type": "integer", "enum": [1, 2, 3] }""")]
+    [InlineData("""{ "type": "integer", "enum": [1, 2, 3], "default": 2 }""")]
+    [InlineData("""{ "type": "number", "oneOf": [{ "const": 1 }, { "const": 2 }] }""")]
+    [InlineData("""{ "type": "number", "const": 4 }""")]
+    [InlineData("""{ "type": "string", "const": "only" }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": [1, 2, 3], "minimum": 2 } }""")]
+    [InlineData("""{ "type": "array", "items": { "type": "number", "enum": [1, 1.5], "multipleOf": 1 } }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": [1, 2], "exclusiveMaximum": 2 } }""")]
+    [InlineData("""{ "type": "string", "enum": [1, 2], "maximum": 1 }""")]
     // A default outside the field's own constraints, which is the only answer it can be given.
     [InlineData("""{ "type": "integer", "minimum": 5, "default": 3 }""")]
     [InlineData("""{ "type": "string", "maxLength": 2, "default": "none" }""")]
@@ -484,24 +509,6 @@ public class CopilotPlannerTests
     }
 
     // ---- fields drawn as Copilot CLI draws them (cli-main.js `tle`), not as their keywords suggest ----
-
-    [Fact]
-    public void A_number_with_an_enum_is_a_number_box_so_its_default_is_kept_by_Enter_and_anything_else_refused()
-    {
-        // Arrows in a number box add or take one: walking it as a list to pick 1 recorded 4.
-        const string Rated = """{ "message": "m", "requestedSchema": { "properties": { "rate": { "type": "integer", "enum": [1, 2, 3], "default": 2 } } } }""";
-
-        Assert.Equal([("", true)], Keys(Plan(Rated, Answer(new { rate = 2 }))));
-        Assert.Contains("pre-filled default", Refusal(Rated, Answer(new { rate = 1 })));
-    }
-
-    [Fact]
-    public void A_number_with_an_enum_and_no_default_opens_empty_and_takes_its_digits_typed()
-    {
-        const string Rated = """{ "message": "m", "requestedSchema": { "properties": { "rate": { "type": "integer", "enum": [1, 2, 3] } } } }""";
-
-        Assert.Equal([("1", true)], Keys(Plan(Rated, Answer(new { rate = 1 }))));
-    }
 
     [Fact]
     public void A_string_with_only_anyOf_is_a_text_box_typed_into_only_when_it_opens_empty()

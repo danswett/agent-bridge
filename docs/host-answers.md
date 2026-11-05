@@ -81,13 +81,14 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf` and `integer`
     type, compared exactly; text's `minLength` and `maxLength` in UTF-16 units, `pattern` as
     JavaScript reads it and `format` `email`, `uri`, `date` and
-    `date-time` with the CLI's own checks; a checkbox list's `minItems` and `maxItems`. A
+    `date-time` with the CLI's own checks (`date-time`'s offset `Z`, `z`, `+HH:MM` or `+HHMM`; dates as real dates, where the CLI's Date.parse rolls `2026-02-30` over); a checkbox list's `minItems` and `maxItems`. A
     field whose constraints cannot be checked exactly (a bound JavaScript holds as another
     number, a pattern .NET would read differently, which includes lookbehinds, named groups,
     back-references, `\b` and `\B`, `^` or `$` followed by a quantifier (no JavaScript pattern at
     all), a quantified lookahead, a class escape beside a class's hyphen other than one first or last in the class and letter escapes such
-    as `\a`), whose pre-filled default breaks them, or a list of choices, or a checkbox list whose items, have
-    text limits (its options and Other words are not checked against them), is answered at the machine. `\d`, `\w`
+    as `\a`), whose pre-filled default breaks them, a number box or text box limited to listed values (`enum`, `oneOf`, `const`:
+    the CLI draws a number with an `enum` as a box taking any number), or a list of choices, or a checkbox list whose items, have
+    text or number limits or a `const` (its options and Other words are not checked against them), is answered at the machine. `\d`, `\w`
     and `\s` are written out as JavaScript's sets, ASCII digits and word characters and Unicode
     white space. All of one question's patterns share 250 ms, building and matching them alike, so an
     agent's many slow patterns cannot hold up the reading of every session: once it is spent,
