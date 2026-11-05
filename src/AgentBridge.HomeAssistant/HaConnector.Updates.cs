@@ -70,6 +70,12 @@ public sealed partial class HaConnector
     // Whether any check has answered, either way, since this host started: until one has, the
     // version installed stands in for the latest; after, only a check changes it.
     bool updateCheckAnswered;
+    // This connector's own checks, for UpdateCheckHealth (#819): when one was last begun, last
+    // reached the feed, last could not, and the class of that failure.
+    DateTimeOffset? updateCheckAttemptAt;
+    DateTimeOffset? updateCheckSuccessAt;
+    DateTimeOffset? updateCheckFailureAt;
+    string? updateCheckFailure;
     string updateNotes = "";
     string? updateUrl;
     // How the last attempt ended, while it is still news (Set-DaemonUpdateVerdict).
@@ -106,6 +112,27 @@ public sealed partial class HaConnector
     string? updateInstalled;
     DateTimeOffset nextOutcomeTry;
     string Installed => updateInstalled ?? options.Version;
+
+    // What this connector's release checks have come to, for a status surface to read: the
+    // entity alone cannot tell a check that found nothing newer from one never made (#819).
+    public HaUpdateCheckHealth UpdateCheckHealth
+    {
+        get
+        {
+            lock (gate)
+            {
+                var notServed = updateServing ? HaUpdateCheckNotServed.None
+                    : !options.CheckForUpdates ? HaUpdateCheckNotServed.ChecksOff : HaUpdateCheckNotServed.NoUpdater;
+                var outcome = !updateServing ? HaUpdateCheckOutcome.NotServed
+                    : !updateCheckAnswered && updateCheckSuccessAt is null ? HaUpdateCheckOutcome.NotYetAnswered
+                    : updateCheckFailure is not null ? HaUpdateCheckOutcome.Failed
+                    : updateLatest is { } latest && latest != Installed ? HaUpdateCheckOutcome.Newer
+                    : HaUpdateCheckOutcome.Current;
+                return new HaUpdateCheckHealth(outcome, notServed, updateCheckAttemptAt, updateCheckSuccessAt, updateCheckFailureAt,
+                    updateCheckFailure, Installed, updateServing ? updateLatest : null);
+            }
+        }
+    }
 
     // A change the watch reported on the Install or Check button.
     bool UpdateHit(HaTrigger hit)
@@ -254,6 +281,7 @@ public sealed partial class HaConnector
         }
         updateCheckPressed = pressed;
         updateCheckEpoch = installEpoch;
+        lock (gate) { updateCheckAttemptAt = now; }
         updateCheck = Begin(() => updates!.CheckAsync(updateCancel.Token).WaitAsync(options.UpdateCheckTimeout, time));
     }
 
@@ -281,7 +309,8 @@ public sealed partial class HaConnector
         lock (gate) { updateCheckAnswered = true; }
         if (done.IsCanceled || done.Exception is not null)
         {
-            var why = done.Exception is { } failed ? failed.InnerException?.Message ?? failed.Message : "the request timed out";
+            // The class, never the exception's text: see HaUpdateCheckFailure.
+            var (failure, why) = HaUpdateCheckFailure.Classify(done.Exception);
             Problem("update-check", $"Home Assistant connector update check failed: {why}");
             nextUpdateCheck = now + options.UpdateRetry;
             // Not "failed": a check that could not be made is not a failed update (#92). The
@@ -289,6 +318,8 @@ public sealed partial class HaConnector
             // as not established.
             lock (gate)
             {
+                updateCheckFailureAt = now;
+                updateCheckFailure = failure;
                 // "Already current" is no longer known.
                 if (updateVerdict is { Stage: "current" }) { updateVerdict = null; }
                 updateLatest = null;
@@ -302,6 +333,8 @@ public sealed partial class HaConnector
         var announce = false;
         lock (gate)
         {
+            updateCheckSuccessAt = now;
+            updateCheckFailure = null;
             if (release is null)
             {
                 updateLatest = Installed;
@@ -376,9 +409,18 @@ public sealed partial class HaConnector
     async Task InstallAsync(CancellationToken ct)
     {
         string? target = null;
+        var reachedFeed = false;
         try
         {
+            lock (gate) { updateCheckAttemptAt = time.GetUtcNow(); }
             var release = await updates!.CheckAsync(ct).WaitAsync(options.UpdateCheckTimeout, time, ct);
+            // The install's own look at the feed reached it: as much a check as any.
+            reachedFeed = true;
+            lock (gate)
+            {
+                updateCheckSuccessAt = time.GetUtcNow();
+                updateCheckFailure = null;
+            }
             if (release is null)
             {
                 var detail = $"{Installed} is already installed, and it is the latest release";
@@ -429,6 +471,11 @@ public sealed partial class HaConnector
             var why = e.Message;
             lock (gate)
             {
+                if (!reachedFeed)
+                {
+                    updateCheckFailureAt = time.GetUtcNow();
+                    updateCheckFailure = HaUpdateCheckFailure.Classify(e).Class;
+                }
                 updateProgress = null;
                 updateAttempt = null;
                 updateAttemptHere = false;
@@ -571,8 +618,14 @@ public sealed partial class HaConnector
                 // Without the buttons the entity still says how an update ended (its outcome).
                 var (stage, proportion, detail) = running ? (updateProgress!.Value.Stage, updateProgress.Value.Proportion, "")
                     : updateVerdict is { } verdict ? (verdict.Stage, (double?)null, verdict.Detail) : ("", (double?)null, "");
+                // Where the entity alone cannot tell a check that found nothing newer from one never
+                // made, or a stale answer from a fresh one, the notes say when this connector's own
+                // check was last begun and last succeeded (#819). Not over a newer release's notes.
+                var notes = updateServing && !running && (updateLatest is null || updateLatest == Installed)
+                    ? HaUpdateCheckLabel.Labelled(updateNotes, updateCheckAnswered, updateCheckAttemptAt, updateCheckSuccessAt)
+                    : updateNotes;
                 state = updateServing
-                    ? HaPayloads.UpdateState(Installed, updateLatest, updateUrl, updateNotes, running, proportion)
+                    ? HaPayloads.UpdateState(Installed, updateLatest, updateUrl, notes, running, proportion)
                     : HaPayloads.UpdateState(options.Version);
                 attributes = HaPayloads.UpdateAttributes(stage, detail);
             }
