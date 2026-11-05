@@ -305,8 +305,14 @@ public sealed class ToastPlanner
             var known = signIns.TryGetValue(key, out var was);
             var due = !known || now >= was.At + SignInRepeat;
             if (!due && was.Count == count) { continue; }
+            // Not shown now (the window in front, or toasts off): the count stays the one on the
+            // toast, so the new one replaces it quietly as soon as it can be.
+            if (!Enabled() || WindowActive())
+            {
+                signIns[key] = (due ? now : was.At, known ? was.Count : 0);
+                continue;
+            }
             signIns[key] = (due ? now : was.At, count);
-            if (!Enabled() || WindowActive()) { continue; }
             sink.Show(new ToastNotice(Tag(key, MachineKey), ToastXml.SignIn(agent, count, MachineName(), MachineKey), Quiet() || !due));
         }
     }

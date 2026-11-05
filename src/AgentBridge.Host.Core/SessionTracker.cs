@@ -224,7 +224,7 @@ internal sealed class SessionTracker
             WaitingOn = question?.Agent,
             Subagents = subagents,
             SubagentsMore = more,
-            Attention = _state.Attention ?? Stalled(effective, Later(_state.LastEventAt, hintAt), agents + shells > 0, now),
+            Attention = _state.Attention ?? Stalled(effective, Later(_state.LastEventAt, hintAt), agents + shells > 0, subagents, now),
             Activity = new Activity
             {
                 Response = response,
@@ -248,15 +248,16 @@ internal sealed class SessionTracker
     // goes quiet. A 401 that the CLI never writes, or a CLI hung on its own network call, left a
     // session reading working for an hour with nothing to say it had stopped. Never over a
     // question (it is waiting on the person) or another attention; any event clears it.
-    Attention? Stalled(SessionStatus effective, DateTimeOffset? lastEvent, bool background, DateTimeOffset now)
+    Attention? Stalled(SessionStatus effective, DateTimeOffset? lastEvent, bool background, IReadOnlyList<Subagent>? subagents, DateTimeOffset now)
     {
         if (effective != SessionStatus.Working || lastEvent is not { } last) { return null; }
         var busy = background || _state.Tools.Current() is not null;
         var after = busy ? _options.NotRespondingBusyAfter : _options.NotRespondingAfter;
         if (now - last < after) { return null; }
-        // A Claude delegate writes only its own transcript beside the session's, so the session's
-        // goes quiet while its delegate works: that counts as the session's own event.
-        if (Discovered.Agent == AgentKind.Claude && DelegatesWrote() is { } wrote && wrote > last)
+        // A delegate that writes only its own transcript (Claude's beside the session's, Codex's a
+        // rollout of its own) leaves the session's quiet while it works: that counts as the
+        // session's own event.
+        if (DelegatesWrote(subagents) is { } wrote && wrote > last)
         {
             last = wrote;
             if (now - last < after) { return null; }
@@ -274,17 +275,34 @@ internal sealed class SessionTracker
 
     static DateTimeOffset? Later(DateTimeOffset? a, DateTimeOffset? b) => a is null ? b : b is null ? a : a > b ? a : b;
 
-    // When any of the session's Claude delegates last wrote its transcript (ClaudeSubagents' folder),
-    // read only once the session already looks stalled, and bounded as that reader is.
-    DateTimeOffset? DelegatesWrote()
+    // When any of the session's delegates last wrote its own transcript, read only once the session
+    // already looks stalled, and bounded as ClaudeSubagents is. Claude's are in <session>/subagents
+    // beside the session's transcript; a Codex sub-agent's is a rollout of its own thread,
+    // rollout-<time>-<thread id>.jsonl, in the day folder it started in (the session's, or its own).
+    DateTimeOffset? DelegatesWrote(IReadOnlyList<Subagent>? subagents)
     {
-        if (Discovered.TranscriptPath is not { } transcript) { return null; }
-        var dir = Path.Combine(Path.GetDirectoryName(transcript) ?? "", Path.GetFileNameWithoutExtension(transcript), "subagents");
+        if (Discovered.TranscriptPath is not { } transcript || Path.GetDirectoryName(transcript) is not { } here) { return null; }
         try
         {
-            if (!Directory.Exists(dir)) { return null; }
+            IEnumerable<string> files;
+            if (Discovered.Agent == AgentKind.Claude)
+            {
+                var dir = Path.Combine(here, Path.GetFileNameWithoutExtension(transcript), "subagents");
+                if (!Directory.Exists(dir)) { return null; }
+                files = Directory.EnumerateFiles(dir, "agent-*.jsonl").Take(ClaudeSubagents.MaxRecords);
+            }
+            else if (Discovered.Agent == AgentKind.Codex && subagents is { Count: > 0 })
+            {
+                var days = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(here)));
+                files = subagents.Where(a => a.Status == SubagentStatus.Working && a.Id.All(c => char.IsAsciiHexDigit(c) || c == '-'))
+                    .SelectMany(a => new[] { here, a.StartedAt is { } at && days is not null ? Path.Combine(days, at.UtcDateTime.ToString("yyyy/MM/dd", System.Globalization.CultureInfo.InvariantCulture)) : null }
+                        .OfType<string>().Distinct().Where(Directory.Exists)
+                        .SelectMany(d => Directory.EnumerateFiles(d, $"rollout-*-{a.Id}.jsonl")))
+                    .Take(ClaudeSubagents.MaxRecords);
+            }
+            else { return null; }
             DateTimeOffset? latest = null;
-            foreach (var file in Directory.EnumerateFiles(dir, "agent-*.jsonl").Take(ClaudeSubagents.MaxRecords))
+            foreach (var file in files)
             {
                 var at = new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero);
                 if (latest is null || at > latest) { latest = at; }

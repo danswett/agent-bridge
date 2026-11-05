@@ -42,6 +42,25 @@ public sealed class ToastTests
         return AuthState.Attach(Make.Session(id, response: "Done.", turns: 2), JsonDocument.Parse(new System.Text.Json.Nodes.JsonObject { ["attention"] = attention }.ToJsonString()).RootElement);
     }
 
+    // A recount while the window was in front changed nothing on the toast: it is made once the
+    // window is not, quietly, never left saying the old count until the hourly repeat.
+    [Fact]
+    public void A_sign_in_toast_recounted_while_the_window_was_in_front_is_updated_quietly_once_it_is_not()
+    {
+        var front = false;
+        var p = new ToastPlanner(sink, clock) { Capabilities = () => Caps, MachineName = () => "Test PC", WindowActive = () => front, Quiet = () => false };
+        p.Upsert(NeedsSignIn("s1"));
+        p.Tick();
+        front = true;
+        p.Upsert(NeedsSignIn("s2"));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        front = false;
+        p.Tick();
+        Assert.Equal((2, "2 sessions affected", true), (sink.Shown.Count, Xml(sink.Shown[^1]).Descendants("text").Last().Value, sink.Shown[^1].Quiet));
+    }
+
     // #800 P0: a 401 stopped every session on a machine and nothing on the desktop said so. One toast
     // per agent and account, in ui.md §6.13's words, at once; its count kept up quietly; again only
     // after an hour while it lasts; withdrawn once every session is signed in again.

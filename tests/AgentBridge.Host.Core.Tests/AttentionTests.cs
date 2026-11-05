@@ -586,4 +586,21 @@ public class AttentionTests
         await source.RefreshAsync();
         Assert.Equal(AttentionKind.NotResponding, source.Get(claude)!.Attention?.Kind);
     }
+
+    // A Codex sub-agent is a thread with a rollout of its own: the session's waits quietly on it.
+    [Fact]
+    public async Task A_Codex_session_whose_sub_agent_is_still_writing_its_own_rollout_is_not_called_not_responding()
+    {
+        await using var r = new CodexSubagentTests.Replay(stalledAfter: TimeSpan.FromMinutes(10));
+        var s = await r.Through(15);
+        Assert.Equal((SessionStatus.Working, SubagentStatus.Working), (s.Status, Assert.Single(s.Subagents!).Status));
+        if (!File.Exists(r.ThreadRollout)) { File.WriteAllText(r.ThreadRollout, ""); }
+
+        // The fixture's clock reads an hour after T0: the session's rollout is that old.
+        File.SetLastWriteTimeUtc(r.ThreadRollout, Fixture.T0.AddMinutes(59).UtcDateTime);
+        Assert.Null((await r.Append()).Attention);
+
+        File.SetLastWriteTimeUtc(r.ThreadRollout, Fixture.T0.AddSeconds(15).UtcDateTime);
+        Assert.Equal(AttentionKind.NotResponding, (await r.Append()).Attention?.Kind);
+    }
 }
