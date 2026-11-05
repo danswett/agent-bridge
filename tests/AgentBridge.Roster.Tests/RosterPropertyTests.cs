@@ -68,6 +68,12 @@ public sealed class RosterPropertyTests
         ["barred-grants"] = RosterWindowTests.BarredGrants,
         ["raw-chain"] = RosterWindowTests.RawChain,
         ["cascade-voids-winner"] = () => RosterWindowTests.CascadeVoidsWinner(removeCopier: true),
+        ["copy-through-subtree"] = RosterKeepTests.CopyThroughSubtree,
+        ["kept-copy"] = RosterKeepTests.KeptCopy,
+        ["outside-copy"] = () => RosterKeepTests.OutsideCopy(personRemovesS: true),
+        ["no-feedback"] = () => RosterStepFourTests.NoFeedback(removeCopier: true),
+        ["removed-subordinate-barred"] = () => RosterStepFourTests.RemovedSubordinate(cSawCopy: true),
+        ["removed-subordinate"] = () => RosterStepFourTests.RemovedSubordinate(cSawCopy: false),
     };
 
     // The labels in a random order in which every entry still follows its parents.
