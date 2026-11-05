@@ -57,6 +57,14 @@ public sealed class RosterPropertyTests
         ["tie-through-p"] = () => RosterFabricationTests.RemoveP(afterSync: false),
         ["partial-cascade"] = RosterFabricationTests.PartialCascade,
         ["quarantined-descendant"] = RosterFabricationTests.QuarantinedDescendant,
+        ["two-adds-conflicted"] = RosterCopyTests.TwoAddsConflicted,
+        ["thief-initiated"] = () => RosterCopyTests.ThiefInitiated(personRemovesJ: true),
+        ["genesis-removes-approver"] = RosterCopyTests.GenesisRemovesApprover,
+        ["stolen-genesis-pair"] = RosterCopyTests.StolenGenesisPair,
+        ["partitioned"] = () => RosterCopyTests.Partitioned(confirmed: true),
+        ["partitioned-unconfirmed"] = () => RosterCopyTests.Partitioned(confirmed: false),
+        ["copies-across-ids"] = RosterCopyTests.CopiesAcrossIds,
+        ["target-cannot-choose"] = RosterCopyTests.TargetCannotChoose,
     };
 
     // The labels in a random order in which every entry still follows its parents.
