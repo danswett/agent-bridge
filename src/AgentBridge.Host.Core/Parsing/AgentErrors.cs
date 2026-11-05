@@ -53,7 +53,7 @@ internal static partial class AgentErrors
         if (text.Length > Scanned) { text = Cut(text); }
         try
         {
-            foreach (var (pattern, mark) in Redactions) { text = pattern.Replace(text, mark); }
+            foreach (var (pattern, mark) in Redactions) { text = pattern.Replace(text, m => mark(m)); }
             text = Whitespace().Replace(text, " ").Trim();
         }
         catch (RegexMatchTimeoutException) { return null; }
@@ -73,22 +73,22 @@ internal static partial class AgentErrors
     // In this order: a keyed secret's quoted value may be a link, and taking the link first left
     // its closing quote to open the next secret's; a link holds paths and tokens; and an id's hex
     // would otherwise read as a code.
-    static readonly (Regex Pattern, string Mark)[] Redactions =
+    static readonly (Regex Pattern, Func<Match, string> Mark)[] Redactions =
     [
-        (Keyed(), "[token]"),
-        (Link(), "[link]"),
-        (Basic(), "[token]"),
-        (Prefixed(), "[token]"),
-        (Jwt(), "[token]"),
-        (Email(), "[email]"),
-        (Uuid(), "[id]"),
-        (GitHubRequestId(), "[id]"),
-        (QuotedPath(), "[path]"),
-        (WindowsPath(), "[path]"),
-        (UnixPath(), "[path]"),
-        (DeviceCode(), "[code]"),
-        (Hex(), "[id]"),
-        (Opaque(), "[token]"),
+        (Keyed(), _ => "[token]"),
+        (Link(), _ => "[link]"),
+        (Basic(), BasicMark),
+        (Prefixed(), _ => "[token]"),
+        (Jwt(), _ => "[token]"),
+        (Email(), _ => "[email]"),
+        (Uuid(), _ => "[id]"),
+        (GitHubRequestId(), _ => "[id]"),
+        (QuotedPath(), _ => "[path]"),
+        (WindowsPath(), _ => "[path]"),
+        (UnixPath(), _ => "[path]"),
+        (DeviceCode(), _ => "[code]"),
+        (Hex(), _ => "[id]"),
+        (Opaque(), _ => "[token]"),
     ];
 
     const int Timeout = 200;
@@ -103,10 +103,24 @@ internal static partial class AgentErrors
     private static partial Regex Keyed();
 
     // An Authorization header echoed back, whatever its scheme, and a Basic credential on its own:
-    // base64 of a short user:password is too short to read as opaque. A digit, +, / or = tells it
-    // from the word ("basic auth failed" stays), unless the header names it.
-    [GeneratedRegex(@"\bauthorization[""']?\s*[:=]\s*[""']?(?:basic|bearer|token|digest)\s+[^\s,;""']+|\bbasic\s+(?=[A-Za-z0-9+/]*[0-9+/=])[A-Za-z0-9+/]+={0,2}", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Timeout)]
+    // base64 of a short user:password is too short to read as opaque, and can be letters only
+    // ("dXNlcjpwYXNz"). A bare one is told from the word ("basic auth failed" stays) by what it
+    // decodes to (BasicMark), never by which characters it happens to use.
+    [GeneratedRegex(@"\bauthorization[""']?\s*[:=]\s*[""']?(?:basic|bearer|token|digest)\s+[^\s,;""']+|\bbasic\s+(?<b64>(?!(?:basic|authorization)\b)[A-Za-z0-9+/]+={0,2})(?![A-Za-z0-9+/=])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Timeout)]
     private static partial Regex Basic();
+
+    // A header is always a credential; a bare "basic <x>" when x is base64 of user:password, padded
+    // or not, in whatever encoding (Basic's own default was ISO-8859-1): the colon's byte is the
+    // same in all of them. The bare word after it is never basic or authorization, which another
+    // match must be free to start at.
+    static string BasicMark(Match m)
+    {
+        if (m.Groups["b64"] is not { Success: true } b64) { return "[token]"; }
+        var value = b64.Value.TrimEnd('=');
+        if (value.Length % 4 == 1) { return m.Value; }
+        try { return Array.IndexOf(Convert.FromBase64String(value.PadRight((value.Length + 3) / 4 * 4, '=')), (byte)':') >= 0 ? "[token]" : m.Value; }
+        catch (FormatException) { return m.Value; }
+    }
 
     // GitHub's, OpenAI's and Anthropic's (sk-, sk-ant-) and Slack's token forms.
     [GeneratedRegex(@"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|sk-[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,})", RegexOptions.CultureInvariant, Timeout)]
@@ -126,8 +140,9 @@ internal static partial class AgentErrors
     [GeneratedRegex(@"\b[0-9A-Fa-f]{3,}(?::[0-9A-Fa-f]{3,}){3,}\b", RegexOptions.CultureInvariant, Timeout)]
     private static partial Regex GitHubRequestId();
 
-    // A quoted path, whole: a folder name with a space in it is still the machine's.
-    [GeneratedRegex(@"""(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|/)[^""\r\n]*""|'(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|/)[^'\r\n]*'", RegexOptions.CultureInvariant, Timeout)]
+    // A quoted path, whole: a folder name with a space in it is still the machine's. Its closing
+    // quote may be past the cut (Cut) or the line's end, and the rest of it is the path still.
+    [GeneratedRegex(@"""(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|/)[^""\r\n]*(?:""|$|(?=[\r\n]))|'(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|/)[^'\r\n]*(?:'|$|(?=[\r\n]))", RegexOptions.CultureInvariant, Timeout)]
     private static partial Regex QuotedPath();
 
     [GeneratedRegex(@"\b[A-Za-z]:[\\/][^\s""'<>|]*|\\\\[^\s""'<>|]+", RegexOptions.CultureInvariant, Timeout)]

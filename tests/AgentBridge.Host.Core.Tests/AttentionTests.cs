@@ -426,6 +426,30 @@ public class AttentionTests
         Assert.Equal("Error.", shown);
     }
 
+    // The cut can fall inside a quoted path and take its closing quote: the rest is still a path.
+    [Theory]
+    [InlineData("\"C:\\Users\\Example Person\\private report.log\"")]
+    [InlineData("'/home/Example Person/private report.log'")]
+    public void A_quoted_path_the_cut_falls_inside_is_still_taken_out_whole(string path)
+    {
+        var quote = 4096 - path.IndexOf("report", StringComparison.Ordinal) - 3;
+
+        var shown = AgentErrors.Shown("Cannot read" + new string(' ', quote - 11) + path + " more");
+
+        Assert.Equal("Cannot read [path]", shown);
+    }
+
+    // user:pass in base64 is letters only, and too short to read as opaque; one can be unpadded,
+    // and the word basic before it must not take its place.
+    [Theory]
+    [InlineData("Sent Basic dXNlcjpwYXNz; basic auth failed", "Sent [token]; basic auth failed")]
+    [InlineData("Sent Basic dXNlcjpwdzE now", "Sent [token] now")]
+    [InlineData("basic\nBasic dXNlcjpwYXNz", "basic [token]")]
+    public void A_bare_basic_credential_is_taken_out_by_what_it_decodes_to(string message, string shown)
+    {
+        Assert.Equal(shown, AgentErrors.Shown(message));
+    }
+
     // #840: the CLI's notice carries the error's own words into activity.response.
     [Fact]
     public async Task The_clis_turn_error_notice_is_shown_redacted()
