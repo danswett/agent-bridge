@@ -1510,9 +1510,9 @@ action lives on the machine, not on each row. The field names here are the clien
 
 - One per (machine, agent, account), repeated at most hourly while it lasts. Title "*Agent* on
   *machine* needs sign-in", body "*n* sessions affected". Never the code or URL.
-- **Sound:** silent until the owner decides otherwise. Decision #764 keeps sound for pending
-  questions and approvals. Whether a sign-in may sound is an open owner decision. The payload
-  sets `notification.silent: true`.
+- **Sound:** the question sound (owner decision, 2026-11-04, extending #764). A sign-in blocks
+  every session on that machine, agent and account, as a question does. The hourly limit keeps
+  it from nagging. The payload does not set `notification.silent`.
 - Errors and "Not responding" get no push of their own; the row says them.
 
 **Accessibility** (§9.1)
