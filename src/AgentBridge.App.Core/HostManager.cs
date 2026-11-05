@@ -270,10 +270,6 @@ public sealed class HostManager
     // that is between crash restarts, or whose host has just ended, starts no host (#106).
     string StopMarker => Path.Combine(layout.ProfileFolder, HostLauncherContract.StopMarker);
 
-    // Whether the host was last stopped on purpose (Settings' Stop, the app's uninstall), and not
-    // started since: the app's automatic updates do not start it again then.
-    public bool StoppedOnPurpose => File.Exists(StopMarker);
-
     void MarkStopped()
     {
         try

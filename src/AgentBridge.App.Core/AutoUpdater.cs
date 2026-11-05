@@ -55,6 +55,11 @@ public sealed class AutoUpdater
     public const string SwitchedOff = "Install updates automatically is off";
     public const string DevelopmentCopy = "this is a development copy";
     public const string HostGone = "the host is not running, so whether its sessions are busy cannot be told";
+    public const string SessionsUnread = "the host's sessions are not yet read in full, so whether they are busy cannot be told";
+    // After the machine stops refusing an update held past WaitAtMost (the link back, say), it
+    // still waits this long for the sessions to go idle before it is forced: devices see "Needs
+    // you" for more than a minute, and a turn under way gets the chance to end (#800 review).
+    public static readonly TimeSpan ReturnGrace = TimeSpan.FromMinutes(20);
     // A refusal still in force is logged again this often, not only when it changes.
     public static readonly TimeSpan SayAgainAfter = TimeSpan.FromHours(1);
     // An update held past WaitAtMost by the machine is told to the owner, again this often.
@@ -93,9 +98,13 @@ public sealed class AutoUpdater
     // When the refusal in force was last logged, and the owner last told of an update it holds.
     DateTimeOffset? saidAt;
     DateTimeOffset? neededYouAt;
-    // The next re-attach to a lost host allowed, and the wait after it.
+    // When the machine last stopped refusing (ReturnGrace runs from it).
+    DateTimeOffset? returnedAt;
+    // The next re-attach to a lost host allowed, and the wait after it; what re-attaching last
+    // logged, and when, so its lines come no more than hourly too.
     DateTimeOffset? reattachAt;
     TimeSpan reattachWait = ReattachFirst;
+    readonly Dictionary<string, DateTimeOffset> reattachSaid = new(StringComparer.Ordinal);
     // Release checks held off after the feed's rate limit refused them, and why.
     DateTimeOffset? checksHeldUntil;
     string? checksHeld;
@@ -204,10 +213,21 @@ public sealed class AutoUpdater
 
     string WaitingFor()
     {
-        var until = $"; it installs anyway at {(WaitFrom() + WaitAtMost).ToLocalTime():g}";
-        if (lastWhyNot is { } why) { return Overdue(why, time.GetUtcNow()) is { } since ? NeedsYouText(Pending!, since, why) : why; }
+        var now = time.GetUtcNow();
+        var at = ForcedAt();
+        // Never a time already gone: the wait is over, and the next tick installs it.
+        var until = at > now ? $"; it installs anyway at {at.ToLocalTime():g}" : "; its wait is over, so it installs at the next look";
+        if (lastWhyNot is { } why) { return Overdue(why, now) is { } since ? NeedsYouText(Pending!, since, why) : why; }
         return Idle ? $"no session has been busy for {IdleFor.TotalMinutes:0} minutes yet{until}"
             : $"a session on this machine has a turn running or a question waiting{until}";
+    }
+
+    // When an update goes whatever the sessions are doing: six hours from WaitFrom, and no sooner
+    // than ReturnGrace after the machine last stopped refusing it.
+    DateTimeOffset ForcedAt()
+    {
+        var at = WaitFrom() + WaitAtMost;
+        return returnedAt is { } back && back + ReturnGrace > at ? back + ReturnGrace : at;
     }
 
     // The person's own choice: anything else that refuses is the machine holding the update.
@@ -293,14 +313,15 @@ public sealed class AutoUpdater
     // an update here restarts only this one.
     public bool Idle => host.Sessions.Complete && !host.Sessions.Unsure && !host.Sessions.All.Any(Busy);
 
-    // Idle now and for IdleFor without a break, or waited six hours. Either way only over a whole
-    // snapshot: six hours on, an update still waits out a reconnect's sessions being read again.
+    // Idle now and for IdleFor without a break, or waited six hours (and ReturnGrace since the
+    // machine last stopped refusing it). Either way only over a whole snapshot: six hours on, an
+    // update still waits out a reconnect's sessions being read again.
     bool Due(DateTimeOffset now)
     {
         if (!Idle) { idleSince = null; }
         else { idleSince ??= now; }
         if (!host.Sessions.Complete) { return false; }
-        return (idleSince is { } since && now - since >= IdleFor) || now - WaitFrom() >= WaitAtMost;
+        return (idleSince is { } since && now - since >= IdleFor) || now >= ForcedAt();
     }
 
     // Where the six hours run from: the release first found, for an automatic install. For one a
@@ -365,8 +386,10 @@ public sealed class AutoUpdater
             }
             var asked = Asked(UpdateAskKind.Install) is not null;
             var why = WhyNot(asked);
-            // The link to the host lost: tried again (reconnected, or the host started) before
-            // refusing again, so a link that went stale is not left so for good (#800).
+            // The link to the host lost: tried again (its status asked for, or the link made again
+            // when the host answers on its pipe) before refusing again, so a link that went stale
+            // is not left so for good (#800). Never a host started: that is the person's, and the
+            // app's own start's.
             if (why == HostGone)
             {
                 await ReattachAsync();
@@ -379,12 +402,25 @@ public sealed class AutoUpdater
             if (why is not null && Chosen(why) && Asked(UpdateAskKind.Check) is null) { Refused(why); idleSince = null; Changed(); return; }
             var now = time.GetUtcNow();
             Due(now);
-            if (checkNow || ((checkedAt is null || now - checkedAt >= CheckEvery) && !(now < checksHeldUntil)))
+            // Held off by the feed's rate limit: due at the hold's end, however recently a press was
+            // answered with it, and the hold over then (rateLimited still doubles the next one);
+            // otherwise every CheckEvery.
+            bool checkDue;
+            if (checksHeldUntil is { } heldUntil)
+            {
+                checkDue = now >= heldUntil;
+                if (checkDue) { (checksHeldUntil, checksHeld) = (null, null); }
+            }
+            else { checkDue = checkedAt is null || now - checkedAt >= CheckEvery; }
+            if (checkNow || checkDue)
             {
                 checkNow = false;
                 checkedAt = now;
                 await CheckAsync(now);
             }
+            // A connected host whose sessions are still not read in full holds the install (Due) as
+            // the machine's refusal, told as one, though a press for it stays queued (#800).
+            if (why is null && Pending is not null && !host.Sessions.Complete) { why = SessionsUnread; }
             if (Refused(why)) { idleSince = null; Changed(); return; }
             if (Pending is null || !Due(time.GetUtcNow())) { Changed(); return; }
             // Settings shares the updater: a check there, or a change of feed, may have replaced
@@ -442,9 +478,9 @@ public sealed class AutoUpdater
                 try { found = await updater.CheckAsync(); }
                 catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
                 {
-                    if (RateLimited(e) is { } limited)
+                    if (RateLimited(e, out var retryAt))
                     {
-                        var held = HoldChecks(now, limited.RetryAt, e.Message);
+                        var held = HoldChecks(now, retryAt, e.Message);
                         (lastCheckAt, lastCheckFailed) = (now, held);
                         throw new InvalidOperationException(held, e);
                     }
@@ -528,6 +564,8 @@ public sealed class AutoUpdater
             log($"auto-update: not installing updates: {why}{link}");
             saidAt = now;
         }
+        // The machine no longer refusing: ReturnGrace before it is forced (ForcedAt).
+        if (why is null && lastWhyNot is { } before && !Chosen(before)) { returnedAt = now; }
         lastWhyNot = why;
         if (why is null) { saidAt = null; }
         if (why != HostGone) { (reattachAt, reattachWait) = (null, ReattachFirst); }
@@ -544,15 +582,15 @@ public sealed class AutoUpdater
         return why is not null;
     }
 
-    // The app's link to its host is not up (or has no status): the link asked to try again now,
-    // and the host started if it is not running and was not stopped on purpose, as the app does
-    // when it starts. At once, then backing off to ReattachAtMost while it stays lost.
+    // The app's link to its host is not up (or has no status): a connected link asked for the
+    // host's status again; otherwise, when the host answers on its pipe, the link ended and made
+    // again (HostConnection.Reconnect). Never a host started: whether one runs is the person's,
+    // and the app's own start's (#800 review: a start here raced Stop and updates). At once, then
+    // backing off to ReattachAtMost while it stays lost.
     async Task ReattachAsync()
     {
         var now = time.GetUtcNow();
         if (reattachAt is { } at && now < at) { return; }
-        // Settings' Update and restart stops the host on purpose.
-        if (manager.UpdateUnderWay) { return; }
         reattachAt = now + reattachWait;
         reattachWait = reattachWait * 2 < ReattachAtMost ? reattachWait * 2 : ReattachAtMost;
         try
@@ -560,28 +598,32 @@ public sealed class AutoUpdater
             using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             if (host.State == LinkState.Connected)
             {
-                log("auto-update: the app's link to the host has no status from it; asking for it again");
+                SayReattach("status", "the app's link to the host is connected but has no status from it; asked the host for its status again", now);
                 await host.RefreshStatusAsync(bound.Token);
                 return;
             }
-            host.RetryNow();
+            var link = $"{host.State}{(host.StateDetail is { } d ? $" ({d})" : "")}";
             if (await manager.IsRunningAsync(bound.Token))
             {
-                log($"auto-update: the host answers on its pipe, but the app's link to it is {host.State}{(host.StateDetail is { } d ? $" ({d})" : "")}; asked it to reconnect");
+                host.Reconnect();
+                SayReattach("reconnect", $"the host answers on its pipe, but the app's link to it is {link}; ended the link's attempt under way and started a new one", now);
                 return;
             }
-            if (!manager.HostInstalled || manager.StoppedOnPurpose)
-            {
-                log("auto-update: the host is not running, and was stopped on purpose (or is not installed); not starting it");
-                return;
-            }
-            log("auto-update: the host is not running; starting it");
-            await manager.StartAsync();
+            SayReattach("absent", $"the host does not answer on its pipe (the app's link to it: {link}); not starting it, as only the person or the app's own start does", now);
         }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
-            log($"auto-update: re-attaching to the host failed: {e.Message}; trying again after {reattachAt.Value.ToLocalTime():t}");
+            SayReattach("failed", $"re-attaching to the host failed: {e.Message}", now);
         }
+    }
+
+    // Re-attaching's lines, each kind (what was done) no more than hourly, whatever the link's
+    // state in it says.
+    void SayReattach(string kind, string line, DateTimeOffset now)
+    {
+        if (reattachSaid.TryGetValue(kind, out var said) && now - said < SayAgainAfter) { return; }
+        reattachSaid[kind] = now;
+        log($"auto-update: {line}");
     }
 
     // A check the feed refused for its rate limit (GitHub's 403 "rate limit exceeded", or a 429):
@@ -596,7 +638,6 @@ public sealed class AutoUpdater
             : now + (backoff < CheckBackoffAtMost ? backoff : CheckBackoffAtMost);
         checksHeldUntil = until;
         checksHeld = $"the release feed's rate limit refused the check ({failure}); checking again after {until.ToLocalTime():t}";
-        checkedAt = until - CheckEvery;
         // Not over an outcome the devices may not have seen yet: the update just made (its first
         // check, right after the restart, is the likeliest to be refused) or a press answered.
         var last = prefs().LastUpdate;
@@ -606,15 +647,17 @@ public sealed class AutoUpdater
     }
 
     // Whether a check failed for the feed's rate limit, and until when it asked to be left alone.
-    static (DateTimeOffset? RetryAt, bool _)? RateLimited(Exception e)
+    // A 403 counts only when it says so: GitHub refuses other things with 403 too.
+    static bool RateLimited(Exception e, out DateTimeOffset? retryAt)
     {
+        retryAt = null;
         for (var x = e; x is not null; x = x.InnerException)
         {
-            if (x is UpdateRateLimitedException limited) { return (limited.RetryAt, true); }
-            if (x is HttpRequestException { StatusCode: System.Net.HttpStatusCode.TooManyRequests }) { return (null, true); }
-            if (x is HttpRequestException { StatusCode: System.Net.HttpStatusCode.Forbidden } && x.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase)) { return (null, true); }
+            if (x is UpdateRateLimitedException limited) { retryAt = limited.RetryAt; return true; }
+            if (x is HttpRequestException { StatusCode: System.Net.HttpStatusCode.TooManyRequests }) { return true; }
+            if (x is HttpRequestException { StatusCode: System.Net.HttpStatusCode.Forbidden } && x.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase)) { return true; }
         }
-        return null;
+        return false;
     }
 
     async Task InstallAsync(string because)
