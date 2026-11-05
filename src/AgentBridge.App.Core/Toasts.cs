@@ -97,7 +97,9 @@ public sealed class ToastPlanner
                 continue;
             }
             NoteWait(t, t.Last, s);
+            var was = t.Last;
             t.Last = s;
+            Recovered(was, s);
             if (t.Shown is { } shown && s.Question?.Id != shown)
             {
                 sink.Withdraw(TagOf(s.Id));
@@ -147,6 +149,7 @@ public sealed class ToastPlanner
         }
         var before = t.Last;
         t.Last = s;
+        Recovered(before, s);
         NoteWait(t, before, s);
         if (t.Shown is { } shown && s.Question?.Id != shown)
         {
@@ -210,6 +213,7 @@ public sealed class ToastPlanner
     public void Remove(string id)
     {
         if (!sessions.Remove(id, out var t)) { return; }
+        Recovered(t.Last, null);
         if (t.Shown is not null) { sink.Withdraw(TagOf(id)); }
     }
 
@@ -279,6 +283,21 @@ public sealed class ToastPlanner
     }
 
     public static readonly TimeSpan SignInRepeat = TimeSpan.FromHours(1);
+
+    // The sign-in toast a session counts toward, by its own agent and account (SignIns), or null.
+    static string? SignInKeyOf(Session? s) =>
+        s is not null && AuthState.Of(s) is { } a && AuthState.NeedsSignIn(a) ? PushNotice.SignInKey(s.Agent, a.Account) : null;
+
+    // The last session of a sign-in toast no longer needs it, seen as it changes rather than at the
+    // next tick: a new failure before that tick was otherwise the same incident, its toast held back
+    // for the rest of the hour. Withdrawn and forgotten, so the next failure toasts at once.
+    void Recovered(Session? was, Session? now)
+    {
+        if (SignInKeyOf(was) is not { } key || key == SignInKeyOf(now) || !signIns.ContainsKey(key)) { return; }
+        if (sessions.Values.Any(t => SignInKeyOf(t.Last) == key)) { return; }
+        signIns.Remove(key);
+        sink.Withdraw(Tag(key, MachineKey));
+    }
 
     // Sign-in toasts up or made (#800, ui.md §6.13), by agent and account: when last raised, and for
     // how many sessions.

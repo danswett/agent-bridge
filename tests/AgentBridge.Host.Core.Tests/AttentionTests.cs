@@ -559,28 +559,34 @@ public class AttentionTests
         Assert.Null((await Read(w, TimeSpan.FromHours(2))).Attention);
     }
 
-    // Claude's delegate writes only its own transcript beside the session's: the session's own goes
-    // quiet for as long as the delegate works, and that is no stall.
+    // A delegate that writes only its own transcript leaves the session's quiet while it works. Its
+    // last event is read from that transcript, never the file's write time, which Windows leaves
+    // stale while the writer holds it open (here: an hour old throughout).
     [Fact]
-    public async Task A_Claude_session_whose_delegate_is_still_writing_is_not_called_not_responding()
+    public async Task A_Claude_session_whose_background_delegate_wrote_recently_is_not_called_not_responding_however_stale_its_file_time()
     {
         using var f = new Fixture();
         await using var source = f.Source(stalledAfter: TimeSpan.FromMinutes(10));
         const string claude = "c1a0de00-0000-4000-8000-000000000001";
         var transcript = f.ClaudeTranscript(claude);
+        var launched = System.Text.Json.Nodes.JsonNode.Parse(Claude.ToolResult("toolu_1", Now))!;
+        launched["toolUseResult"] = new System.Text.Json.Nodes.JsonObject { ["status"] = "async_launched", ["agentId"] = "a1b2c3", ["description"] = "review" };
         Fixture.Append(transcript, Claude.User("Review the PR", Now),
-            Claude.Assistant(Now, "tool_use", Claude.ToolUse("toolu_1", "Task", new System.Text.Json.Nodes.JsonObject { ["description"] = "review" })));
+            Claude.Assistant(Now, "tool_use", Claude.ToolUse("toolu_1", "Task", new System.Text.Json.Nodes.JsonObject { ["description"] = "review" })),
+            launched.ToJsonString());
         f.ClaudeSessionFile(700, claude);
         f.Processes.Run(AgentKind.Claude, 700);
         var delegates = Path.Combine(Path.GetDirectoryName(transcript)!, claude, "subagents");
         Directory.CreateDirectory(delegates);
-        var own = Path.Combine(delegates, "agent-a1.jsonl");
-        File.WriteAllText(own, "{}\n");
+        var own = Path.Combine(delegates, "agent-a1b2c3.jsonl");
+        File.WriteAllText(own, $$$"""{"type":"assistant","timestamp":"{{{Copilot.At(Now + 1800)}}}","message":{}}""" + "\n");
+        File.SetLastWriteTimeUtc(own, Fixture.T0.UtcDateTime);
 
         f.Time.Advance(TimeSpan.FromMinutes(31));
-        File.SetLastWriteTimeUtc(own, f.Time.GetUtcNow().AddMinutes(-1).UtcDateTime);
         await source.RefreshAsync();
-        Assert.Equal((SessionStatus.Working, (AttentionKind?)null), (source.Get(claude)!.Status, source.Get(claude)!.Attention?.Kind));
+        var session = source.Get(claude)!;
+        Assert.Equal((SessionStatus.Working, SubagentStatus.Working), (session.Status, session.Subagents?.Single().Status));
+        Assert.Null(session.Attention);
 
         f.Time.Advance(TimeSpan.FromMinutes(30));
         await source.RefreshAsync();
@@ -589,18 +595,30 @@ public class AttentionTests
 
     // A Codex sub-agent is a thread with a rollout of its own: the session's waits quietly on it.
     [Fact]
-    public async Task A_Codex_session_whose_sub_agent_is_still_writing_its_own_rollout_is_not_called_not_responding()
+    public async Task A_Codex_session_is_not_called_not_responding_while_its_sub_agents_last_event_is_recent_however_stale_its_file_time()
     {
         await using var r = new CodexSubagentTests.Replay(stalledAfter: TimeSpan.FromMinutes(10));
         var s = await r.Through(15);
         Assert.Equal((SessionStatus.Working, SubagentStatus.Working), (s.Status, Assert.Single(s.Subagents!).Status));
-        if (!File.Exists(r.ThreadRollout)) { File.WriteAllText(r.ThreadRollout, ""); }
-
-        // The fixture's clock reads an hour after T0: the session's rollout is that old.
-        File.SetLastWriteTimeUtc(r.ThreadRollout, Fixture.T0.AddMinutes(59).UtcDateTime);
-        Assert.Null((await r.Append()).Attention);
-
-        File.SetLastWriteTimeUtc(r.ThreadRollout, Fixture.T0.AddSeconds(15).UtcDateTime);
+        // The fixture's clock reads an hour after T0: the session's and the sub-agent's last events
+        // are that old.
         Assert.Equal(AttentionKind.NotResponding, (await r.Append()).Attention?.Kind);
+
+        File.AppendAllText(r.ThreadRollout, $$$"""{"timestamp":"{{{Copilot.At(3540)}}}","type":"event_msg","payload":{"type":"agent_reasoning"}}""" + "\n");
+        File.SetLastWriteTimeUtc(r.ThreadRollout, Fixture.T0.UtcDateTime);
+        Assert.Null((await r.Append()).Attention);
+    }
+
+    // Erring toward not flagging: a working sub-agent whose own transcript cannot be found or read
+    // might be the one still writing.
+    [Fact]
+    public async Task A_session_whose_working_sub_agent_cannot_be_checked_is_never_called_not_responding()
+    {
+        await using var r = new CodexSubagentTests.Replay(stalledAfter: TimeSpan.FromMinutes(10));
+        await r.Through(15);
+        Assert.Equal(AttentionKind.NotResponding, (await r.Append()).Attention?.Kind);
+
+        File.Move(r.ThreadRollout, r.ThreadRollout + ".moved");
+        Assert.Null((await r.Append()).Attention);
     }
 }

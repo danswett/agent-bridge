@@ -1344,8 +1344,12 @@ read by its structured fields (VM1's sign-in failures, #800, carry all three):
 
 `notResponding`, for any agent's session, from the host's own watchdog (#800 P0, part C): the
 session is `working` and its transcript has had no event of any kind (a model call, a hook or a
-delegate's tool counts, and for Claude Code a write to a delegate's own transcript beside it) for **10 minutes**, or **30 minutes** while a tool, a delegate or a
-background shell is running. `since` and `lastEventAt` are that last event's time. Not over a
+delegate's tool counts) for **10 minutes**, or **30 minutes** while a tool, a delegate or a
+background shell is running. A Claude Code or Codex delegate that is still working writes its own
+transcript instead (Claude's beside the session's, Codex's a rollout of its own thread): its last
+event there, read by its timestamp and never the file's write time, counts too, and one the host
+cannot check (its transcript not found or unread, or more working than are listed) means the
+session is never called not responding. `since` and `lastEventAt` are the time of the session's own last event. Not over a
 question pending (the session is `waiting`) or another `attention`. It goes with the next event.
 Copilot's sign-in failure is written as `assistant.turn_end`, then `session.error` a few
 milliseconds later; read between the two, the session is briefly `idle` with no `attention`, which

@@ -109,6 +109,23 @@ public sealed class ToastTests
         Assert.Equal([toast.Tag], sink.Withdrawn);
     }
 
+    // Signed in and stopped again between two ticks is a new incident, seen as the session changes:
+    // its toast is raised at once, never held back as the old one's hourly repeat.
+    [Fact]
+    public void A_session_that_recovers_and_fails_again_between_ticks_raises_a_new_sign_in_toast_at_once()
+    {
+        var p = Planner();
+        p.Upsert(NeedsSignIn("s1"));
+        p.Tick();
+        var toast = Assert.Single(sink.Shown);
+
+        p.Upsert(Make.Session("s1"));
+        Assert.Equal([toast.Tag], sink.Withdrawn);
+        p.Upsert(NeedsSignIn("s1"));
+        p.Tick();
+        Assert.Equal((2, toast.Tag, false), (sink.Shown.Count, sink.Shown[^1].Tag, sink.Shown[^1].Quiet));
+    }
+
     [Fact]
     public void A_question_still_pending_after_two_seconds_raises_one_toast()
     {
