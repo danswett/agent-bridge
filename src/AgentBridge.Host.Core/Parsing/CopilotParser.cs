@@ -240,6 +240,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         S.OwnResponseCut = false;
         S.OwnReasoning = null;
         S.OwnAt = null;
+        // Turns may have started and failed unread: a notice in the tail names no error of the
+        // skim's (#846), only the generic sentence unless its own error is read there.
+        _turnError = null;
         // A sign-in failure the skim read is kept: bytes never read are no evidence the model
         // answered, as a retry loop can write plenty without one (#800). The tail clears it only
         // with a main reply after it, and a newer failure there moves its since.

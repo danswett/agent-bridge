@@ -452,6 +452,20 @@ public class AttentionTests
         Assert.Equal("\u26A0\uFE0F Turn error: " + sentence, session.Activity.Response);
     }
 
+    // Past the skim budget, a later turn may have started and failed in the bytes never read.
+    [Fact]
+    public async Task A_turn_error_notice_after_an_unread_stretch_never_names_an_error_the_skim_read()
+    {
+        await using var s = new Session_(tailBytes: 4096, maxSkim: 2048);
+        var lines = new List<string> { Copilot.User("Go", 1), Copilot.TurnStart(2), Error(new { errorType = "session", message = "Turn error: boom", statusCode = 429 }, 3) };
+        lines.AddRange(Enumerable.Range(0, 60).Select(i => Copilot.Assistant("Still bisecting " + new string('x', 200), 20 + i, agentId: "agent-1")));
+        lines.Add(Copilot.Event("assistant.message", new { messageId = "m100", content = "\u26A0\uFE0F Turn error: something else" }, 100));
+
+        var session = await s.After([.. lines]);
+
+        Assert.Equal("\u26A0\uFE0F Turn error: Copilot stopped with an error.", session.Activity.Own?.Response ?? session.Activity.Response);
+    }
+
     // An error is its own turn's: a notice in a later turn, with none read before it, names none.
     [Fact]
     public async Task A_turn_error_notice_never_names_an_earlier_turns_error()
