@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace AgentBridge.App.Core;
 
 // Whether work grows linearly with its input, judged by timing it at two sizes in the same run
@@ -22,24 +20,46 @@ public static class Growth
         public override string ToString() => $"{Small.TotalMilliseconds:0} ms, then {Large.TotalMilliseconds:0} ms at {Step}×, {Ratio:0.0}×";
     }
 
-    // The quickest of a few runs at each size: what the work costs, without the pauses a busy
-    // machine adds to some of them.
-    public static Result Measure(Action<int> work, int size, int runs = 2)
-    {
-        var small = Quickest(() => work(size), runs);
-        var large = Quickest(() => work(size * Step), runs);
-        return new(small, large, large.TotalMilliseconds / Math.Max(small.TotalMilliseconds, Floor.TotalMilliseconds));
-    }
+    // runs pairs, each the smaller size and the larger timed one after the other; the result is the
+    // pair whose ratio is the median (with an even count, the lower of the middle two).
+    public static Result Measure(Action<int> work, int size, int runs = 2) => Measure(work, size, runs, TimeProvider.System);
 
-    static TimeSpan Quickest(Action work, int runs)
+    // The two sizes are timed in turn, not each in a block of its own. Timed as blocks (every
+    // smaller run, then every larger one, the quickest of each), a slow stretch of a shared runner
+    // that covered one block moved only that size's best, and skewed the ratio either way: a linear
+    // control measured 9.9× and a quadratic one 6.6× against a limit of 8× (#872, #681). In turn, a
+    // stretch falls on both sizes of every pair it covers, which keep their ratio; each pair is taken
+    // in the order opposite to the last, so a machine slowing or speeding up steadily favours
+    // neither size; and the median pair outvotes the few a pause or a stretch's edge splits. One
+    // untimed run first: its first call compiles the work, which once inflated the smaller size.
+    internal static Result Measure(Action<int> work, int size, int runs, TimeProvider time)
     {
-        var best = TimeSpan.MaxValue;
+        ArgumentOutOfRangeException.ThrowIfLessThan(runs, 1);
+        work(size);
+        var pairs = new List<Result>(runs);
         for (var i = 0; i < runs; i++)
         {
-            var clock = Stopwatch.StartNew();
-            work();
-            best = TimeSpan.FromTicks(Math.Min(best.Ticks, clock.Elapsed.Ticks));
+            TimeSpan small, large;
+            if (i % 2 == 0)
+            {
+                small = Time(() => work(size), time);
+                large = Time(() => work(size * Step), time);
+            }
+            else
+            {
+                large = Time(() => work(size * Step), time);
+                small = Time(() => work(size), time);
+            }
+            pairs.Add(new(small, large, large.TotalMilliseconds / Math.Max(small.TotalMilliseconds, Floor.TotalMilliseconds)));
         }
-        return best;
+        pairs.Sort((a, b) => a.Ratio.CompareTo(b.Ratio));
+        return pairs[(pairs.Count - 1) / 2];
+    }
+
+    static TimeSpan Time(Action work, TimeProvider time)
+    {
+        var start = time.GetTimestamp();
+        work();
+        return time.GetElapsedTime(start);
     }
 }
