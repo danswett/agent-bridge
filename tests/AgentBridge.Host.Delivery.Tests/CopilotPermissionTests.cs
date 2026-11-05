@@ -484,6 +484,45 @@ public sealed class CopilotPermissionTests : IDisposable
     }
 
     [Fact]
+    public void A_background_delegate_that_completed_a_run_and_asked_again_still_asks_when_another_fails()
+    {
+        // A run's completion is not the delegate's end: it can wake and ask again (Copilot
+        // 4479871566). Only its own failure, abort or shutdown retires its ask.
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 1),
+            Copilot.Event("subagent.started", new { toolCallId = "t1", agentName = "bg", executionMode = "background" }, 2, agentId: "bg"),
+            Copilot.ToolDone("t1", 3),
+            Copilot.Event("subagent.completed", new { toolCallId = "t1" }, 4, agentId: "bg"),
+            Copilot.ToolStart("q8", "ask_user", new { message = "?" }, 5, agentId: "bg"),
+            Copilot.Event("subagent.started", new { toolCallId = "t2", agentName = "other" }, 6, agentId: "other"),
+            Copilot.Event("subagent.failed", new { toolCallId = "t2", error = "x" }, 7, agentId: "other"));
+
+        Assert.Equal(["q1", "q8"], new CopilotPermissionWatch(events, "").Read().Asks!.Order());
+    }
+
+    [Fact]
+    public void A_task_delegates_ask_goes_when_its_call_returns_and_a_background_delegates_stays()
+    {
+        // As BackgroundWork.TaskCallDone has it: a task (synchronous) delegate is done when the
+        // call that started it returns; a background delegate's call returns as it starts
+        // (Copilot 4479871616).
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 1),
+            Copilot.Event("subagent.started", new { toolCallId = "t3", agentName = "sync" }, 2, agentId: "sync"),
+            Copilot.ToolStart("q9", "ask_user", new { message = "?" }, 3, agentId: "sync"),
+            Copilot.Event("subagent.started", new { toolCallId = "t4", agentName = "bg", executionMode = "background" }, 4, agentId: "bg"),
+            Copilot.ToolStart("q10", "ask_user", new { message = "?" }, 5, agentId: "bg"));
+        var watch = new CopilotPermissionWatch(events, "");
+        Assert.Equal(["q1", "q10", "q9"], watch.Read().Asks!.Order());
+
+        Fixture.Append(events, Copilot.ToolDone("t4", 6));
+        Assert.Equal(["q1", "q10", "q9"], watch.Read().Asks!.Order());
+
+        Fixture.Append(events, Copilot.ToolDone("t3", 7));
+        Assert.Equal(["q1", "q10"], watch.Read().Asks!.Order());
+    }
+
+    [Fact]
     public void A_transcript_shorter_than_what_was_read_is_read_again_from_its_start()
     {
         var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);

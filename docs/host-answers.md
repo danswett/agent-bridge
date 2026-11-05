@@ -79,8 +79,9 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     told apart by their call ids: any ask other than this question waiting (a delegate's, whose
     form can read the same) refuses it before the first key and stops it after, as does the
     question being marked for the machine (`answerAtMachine`) once the slot is taken. A
-    delegate that aborted, shut down or failed asks nothing any more, as the session's own
-    parser has it. The call and the prompts waiting are kept up to date from what the
+    delegate that aborted, shut down or failed asks nothing any more, nor does a task
+    (synchronous) delegate whose call has returned, as the session's own parser has it; a
+    background delegate's run completing is not its end, since it can wake and ask again. The call and the prompts waiting are kept up to date from what the
     transcript has gained since the call was validated (`CopilotCallWatch`,
     `CopilotPermissionWatch`), not searched again with that slot held; a transcript that can
     no longer be read, or is shorter than what was read, stops it. A check that fails stops

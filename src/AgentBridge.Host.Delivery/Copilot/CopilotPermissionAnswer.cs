@@ -83,11 +83,11 @@ public sealed class CopilotPermissionWatch(string path, string requestId)
 {
     // In the order asked, each with the request as recorded: a Dictionary does not keep that order once one is removed.\n    readonly List<(string Id, JsonElement Data)> permissions = [];
     readonly Dictionary<string, string?> asks = new(StringComparer.Ordinal);
-    // Delegates by the task call that started them, and those that have ended, as the session's
-    // parser keeps them (CopilotParser, BackgroundWork): a delegate's failure is written by its
-    // task call before CLI 1.0.10x stamped it with the delegate's id.
-    readonly Dictionary<string, string> delegates = new(StringComparer.Ordinal);
-    readonly HashSet<string> ended = new(StringComparer.Ordinal);
+    // Delegates by the task call that started them, and whether they run in the background, as
+    // the session's parser keeps them (BackgroundWork): a delegate's failure is written by its
+    // task call before CLI 1.0.10x stamped it with the delegate's id, and a task (synchronous)
+    // delegate is done when that call returns, where a background one's returns at once.
+    readonly Dictionary<string, (string Agent, bool Background)> delegates = new(StringComparer.Ordinal);
     long to;
 
     // The bytes the last Read took in.
@@ -101,7 +101,6 @@ public sealed class CopilotPermissionWatch(string path, string requestId)
             permissions.Clear();
             asks.Clear();
             delegates.Clear();
-            ended.Clear();
             to = 0;
         }
         if (Jsonl.Lines(path, to, skipFirst: false, Line) is not { } end) { return new CopilotPermissionState(false, null, 0, 0, 0); }
@@ -116,12 +115,16 @@ public sealed class CopilotPermissionWatch(string path, string requestId)
         };
     }
 
-    // A delegate that aborted, shut down or failed asks nothing any more, and nor does one that
-    // had ended before (CopilotParser): left waiting, its ask was counted against an answer to
-    // the session's own question, which must refuse while another ask waits (#510 review).
+    // A delegate that aborted, shut down or failed asks nothing any more, nor does a task
+    // delegate whose call has returned (CopilotParser): left waiting, its ask refused every
+    // answer to the session's own question (#510 review). Only what ends that delegate retires
+    // its asks. A run's completion does not: a background delegate can wake and ask again, and
+    // taken for its end, its live question went with an unrelated delegate's failure (Copilot
+    // 4479871566). A delegate the parser ends only by cascade (a task delegate of one that
+    // ended) is not followed here: its ask stays, and refuses, which fails closed.
     void Retire(string agent)
     {
-        foreach (var id in asks.Where(a => a.Value is { } p && (p == agent || ended.Contains(p))).Select(a => a.Key).ToList()) { asks.Remove(id); }
+        foreach (var id in asks.Where(a => a.Value == agent).Select(a => a.Key).ToList()) { asks.Remove(id); }
     }
 
     void Line(ReadOnlySpan<byte> bytes, long start)
@@ -143,6 +146,9 @@ public sealed class CopilotPermissionWatch(string path, string requestId)
                     break;
                 case "tool.execution_complete" or "human_response.recorded" when CopilotPrompts.Str(data, "toolCallId") is { } id:
                     asks.Remove(id);
+                    // A task delegate's call returning ends it (BackgroundWork.TaskCallDone); a
+                    // background delegate's returns as it starts (Copilot 4479871616).
+                    if (e.Type == "tool.execution_complete" && delegates.TryGetValue(id, out var task) && !task.Background) { Retire(task.Agent); }
                     break;
                 case "permission.requested" when CopilotPrompts.Str(data, "requestId") is { } id:
                     permissions.RemoveAll(p => p.Id == id);
@@ -158,21 +164,17 @@ public sealed class CopilotPermissionWatch(string path, string requestId)
                 case "abort" or "session.shutdown":
                     Retire(e.AgentId!);
                     break;
-                case "subagent.started" when e.AgentId is { } started && CopilotPrompts.Str(data, "toolCallId") is { } task:
-                    delegates[task] = started;
-                    break;
-                case "subagent.completed" when (e.AgentId ?? Delegate(data)) is { } done:
-                    ended.Add(done);
+                case "subagent.started" when e.AgentId is { } started && CopilotPrompts.Str(data, "toolCallId") is { } call:
+                    delegates[call] = (started, CopilotPrompts.Str(data, "executionMode") == "background");
                     break;
                 case "subagent.failed" when (e.AgentId ?? Delegate(data)) is { } failed:
-                    ended.Add(failed);
                     Retire(failed);
                     break;
             }
         }
     }
 
-    string? Delegate(JsonElement data) => CopilotPrompts.Str(data, "toolCallId") is { } task && delegates.TryGetValue(task, out var agent) ? agent : null;
+    string? Delegate(JsonElement data) => CopilotPrompts.Str(data, "toolCallId") is { } call && delegates.TryGetValue(call, out var started) ? started.Agent : null;
 }
 
 // Where on the session's screen the prompt's answers are, read from the rows themselves. The
