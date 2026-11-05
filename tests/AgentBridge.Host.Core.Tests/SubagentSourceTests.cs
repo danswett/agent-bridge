@@ -474,7 +474,13 @@ public class ClaudeSubagentTests
         var transcript = f.ClaudeTranscript(Id);
         f.ClaudeRegistration(Id, 900, transcript);
         f.Processes.Run(AgentKind.Claude, 900);
-        Fixture.Append(transcript, Claude.User("go", 1));
+        // The session's own delegate, Nester: only then does the session read nested records.
+        var launched = JsonNode.Parse(Claude.ToolResult("agent1", 3))!.AsObject();
+        launched["toolUseResult"] = new JsonObject { ["status"] = "async_launched", ["agentId"] = Nester, ["description"] = "Lead", ["prompt"] = "lead" };
+        Fixture.Append(transcript,
+            Claude.User("go", 1),
+            Claude.Assistant(2, "tool_use", Claude.ToolUse("agent1", "Agent", new JsonObject { ["description"] = "Lead", ["prompt"] = "lead" })),
+            launched.ToJsonString());
         var beside = Path.Combine(Path.GetDirectoryName(transcript)!, Id, "subagents");
         Directory.CreateDirectory(beside);
         File.WriteAllText(Path.Combine(beside, $"agent-{Nested}.meta.json"), $"{{\"parentAgentId\":\"{Nester}\",\"spawnDepth\":2,\"description\":\"cut \\uD800\"}}");
@@ -482,15 +488,17 @@ public class ClaudeSubagentTests
         first["message"]!["content"] = "look HALF";
         File.WriteAllText(Path.Combine(beside, $"agent-{Nested}.jsonl"), first.ToJsonString().Replace("HALF", "\\uD800", StringComparison.Ordinal) + "\n");
 
-        var read = Assert.Single(new AgentBridge.Host.Core.Parsing.ClaudeSubagents().Read(transcript));
-        Assert.Equal(("cut \uFFFD", "look \uFFFD"), (read.Description, read.Prompt));
-
         await using var source = f.Source();
         await source.RefreshAsync();
-        Assert.Equal("go", source.Get(Id)!.Activity.UserMessage);
-        Fixture.Append(transcript, Claude.User("next", 2));
+        var listed = source.Get(Id)!;
+        Assert.Equal("go", listed.Activity.UserMessage);
+        Assert.Contains(listed.Subagents!, a => a.Id == Nested);
+        Fixture.Append(transcript, Claude.User("next", 4));
         await source.RefreshAsync();
         Assert.Equal("next", source.Get(Id)!.Activity.UserMessage);
+
+        var read = Assert.Single(new AgentBridge.Host.Core.Parsing.ClaudeSubagents().Read(transcript));
+        Assert.Equal(("cut \uFFFD", "look \uFFFD"), (read.Description, read.Prompt));
     }
 
     [Fact]
