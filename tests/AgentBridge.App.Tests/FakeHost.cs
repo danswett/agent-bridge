@@ -66,13 +66,17 @@ sealed class FakeHost : IAsyncDisposable
     public string Folder => folder;
     public LocalEndpoint Endpoint => LocalEndpoint.For(folder);
 
+    // Each status a run of its own, as each read of the wall clock was, but the same in every run
+    // of the tests: Make.T0 and a second more for each status made.
+    static long runs;
+
     public static HostStatus StatusOf(RelayState relay = RelayState.SignedOut, string? agentHaBridge = null) => new()
     {
         Version = "0.1.0",
         Profile = "test",
         Folder = "x",
         ProcessId = 4242,
-        StartedAt = DateTimeOffset.UtcNow,
+        StartedAt = Make.T0.AddSeconds(Interlocked.Increment(ref runs)),
         Machine = new MachineInfo("host-id", "Test PC", "windows", "0.1.0"),
         Relay = new RelayStatus(relay),
         SignIn = new SignInStatus(SignInState.Idle),
@@ -81,6 +85,14 @@ sealed class FakeHost : IAsyncDisposable
     };
 
     public void On(string op, Func<JsonElement, object?> answer) => ops[op] = d => Task.FromResult(answer(d));
+
+    // Asked to stop, it stops once its answer has gone, as the real host does (HostControl), rather
+    // than a guessed 50 ms after it.
+    public void StopsWhenAsked() => On(HostOps.Stop, data => new ChannelReply(new { stopping = true }, ch =>
+    {
+        _ = Task.Run(StopAsync);
+        return Task.CompletedTask;
+    }));
 
     // A request the host takes its time over, held by awaiting. Held by blocking (.Wait, .Result,
     // SpinWait) each one kept a pool thread for up to Patience, and the tests side by side then

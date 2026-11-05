@@ -2,7 +2,6 @@ using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
-using AgentBridge.Transport;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -79,13 +78,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Directory.CreateDirectory(app);
         File.WriteAllText(Path.Combine(app, OperatingSystem.IsWindows() ? "agent-bridge-host.exe" : "agent-bridge-host"), "");
         File.WriteAllText(Path.Combine(app, OperatingSystem.IsWindows() ? "agent-bridge-hostw.exe" : "agent-bridge-hostw"), "");
-        // Stops once its answer has gone, as the real host does (HostControl), rather than a guessed
-        // 50 ms after it.
-        host.On(HostOps.Stop, data => new ChannelReply(new { stopping = true }, ch =>
-        {
-            _ = Task.Run(() => host.StopAsync());
-            return Task.CompletedTask;
-        }));
+        host.StopsWhenAsked();
         return Task.CompletedTask;
     }
 
