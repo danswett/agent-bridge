@@ -777,6 +777,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       has no tag of its own. A field's head is its title, then "Required" when it is required.
       It has no type hint ("Choose one", "Choose any", "Yes or no", "Text answer", "Number"),
       since the control already says that.
+    - **An optional single choice or Yes or no can go back to unanswered:** once one of its
+      options is selected, a host default included, a plain "Clear" link follows the group on
+      its last line, and pressing it unchecks the group. It is absent while nothing is
+      selected and on a required field, and is named "Clear *title*".
     - **One primary per card:** Send answer is the only button with Bridge's fill. A selected
       option is the platform's checked control and never takes the accent fill, so it never
       reads as a button that would act.
@@ -806,13 +810,16 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       and stale keep them read-only, with no Send answer. Failed keeps them read-only, with
       Try again, which resends the same request, so the same answer, never a new one.
     - **Keyboard:** Tab walks the fields in order, then Send answer (A3). Arrows move and
-      select within a radio group, Yes and No included, and Space checks a checkbox. Enter
-      anywhere in the card sends, as pressing Send answer does, so an incomplete answer
-      shows what's missing rather than sending. In a multi-line text field, Enter is a new
-      line and Ctrl+Enter (⌘↩ on Apple) sends.
+      select within a radio group, Yes and No included, and Space checks a checkbox. Enter in
+            an answer field (a radio, a checkbox or a one-line field) sends, as pressing Send
+            answer does, so an incomplete answer shows what's missing rather than sending. In a
+            multi-line text field, Enter is a new line and Ctrl+Enter (⌘↩ on Apple) sends. On
+            anything else in the card, a link in the question or Clear, Enter keeps its own action
+            and sends nothing.
     - **Spacing** (§5.1): 16 inside the card, 16 between fields, 8 between a field's head and
-      its control, and 16 above the footer row. Option rows sit at one pitch, the target
-      height (A11: 44 on touch, 32 with a pointer), with 8 between a control and its label. The
+      its control, and 16 above the footer row. Each option row is at least the target height
+            (A11: 44 on touch, 32 with a pointer) and grows with a label that wraps or is scaled
+            up (§4.1), never clipping it, with 8 between a control and its label. The
       Windows grid audit (#771) may refine these keylines; this section follows it when it
       does.
     - **Approvals are unchanged:** one press of Approve once (Bridge) or Deny answers, with
@@ -1147,9 +1154,11 @@ question, as choosing its row does.
   right-to-left characters get on its card (§6.4, #165, #220). Windows toasts, Web Push and the
   Apple notifications (#260) follow this, and a button on a toast an older build left in
   Notification Center only opens.
-- **Other questions keep their buttons** where the platform has them and they fit: the options
-  of a single choice, or a text box and Send. Each still checks, before sending, that the
-  question is the one shown.
+- **Other questions never answer on a tap** (#773): a notification offers no option buttons.
+  A question that is one text field keeps a text box and Send answer where the platform has
+  them, since typing then sending is the card's own pattern; it still checks, before sending,
+  that the question is the one shown. Every other question's notification only opens its
+  card.
 - The count each platform shows is Needs you's N (§6.1).
 - **Collaborators (#519):** their sessions are never notified, badged or counted. A message
   from an external agent held for you is counted in N but **never pushed on its own**, unlike
@@ -1412,9 +1421,12 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
     and Highlight and HighlightText when pressed). The `needs` glyph is Highlight with
     HighlightText ink, swapped on the pressed toggle's Highlight fill so its disc still shows.
     The Tools link is a system hyperlink.
-- **A question card (#773):** each field is a group named for its title, with "required" in
-  its state (`aria-required`, or `IsRequiredForForm` on Windows), and a radio group, Yes and
-  No included, is one tab stop with arrows inside it. "Recommended" is part of its option's
+- **A question card (#773):** each field is named for its title. A required field says so
+  where the role supports it: on a radio group (`radiogroup` with `aria-required`) and on a
+  text or number field (`required`; `IsRequiredForForm` on Windows, on the radio list or the
+  text box). A required multiple choice is a group whose accessible description includes
+  "Required", and no checkbox is itself marked required, since that would require every
+  option. A radio group, Yes and No included, is one tab stop with arrows inside it. "Recommended" is part of its option's
   name ("Use the cache, Recommended"). Send answer is named "Send answer"; Approve once and
   Deny as Needs you says. Pressing Send answer with something missing moves focus to the first
   field missing, whose error is its accessible description and is said once, assertively
