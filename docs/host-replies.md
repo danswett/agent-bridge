@@ -65,14 +65,18 @@ command", or as the footer's "Shell" label or "esc exit shell mode" hint. The re
   "esc interrupt" or another Esc hint, "ctrl+q enqueue"; `LMe`'s activity layout) instead,
   never with "/ commands": that row is taken for the footer when it carries Esc's or the
   enqueue hint, the box's own rows decide whether it is empty, and its vim and shell labels
-  are read as in the idle footer, so a reply can still steer a working session. With the
+  are read as in the idle footer, so a reply can still steer a working session. In a
+  window under 80 columns (measured by the box's own bottom edge, which spans the frame) the
+  turn's row leaves those labels out, and a box holding only spaces in shell mode draws as
+  empty, so a reply to a working session there is refused ("reply once the turn ends"). With the
   CLI's hints hidden (`hideToggleHelp`), the idle footer is drawn empty and a reply to an
   idle session is refused; a turn being cancelled shows no hints either, and is refused.
 
 Whenever the screen shows exactly one box, refused or not, the reader also describes it
 (`CopilotInputBoxState`, for #804's Clear and send): its rows, its full text and how many
-lines it draws, whether it is in shell mode, whether it is the prompt's own box at the
-bottom over the footer, and whether it is all on screen. A rail box taller than the window,
+lines it draws, whether it is in shell mode, its vim mode as the footer shows it (none,
+insert or normal), whether it is the prompt's own box at the bottom over the footer, and
+whether it is all on screen. A rail box taller than the window,
 its top edge scrolled away, is described as cut off; it is refused as before. A plain box
 cut off the same way cannot be told from output, so it is not described.
 

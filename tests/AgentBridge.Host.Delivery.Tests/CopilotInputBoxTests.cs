@@ -33,6 +33,7 @@ public class CopilotInputBoxTests
         {
             Assert.True(state is { Main: true, Complete: true });
             Assert.Equal(c["expect"]!.GetValue<string>() == "shell", state!.Shell);
+            Assert.Equal(c["expect"]!.GetValue<string>() == "vim" ? CopilotVimMode.Normal : c["name"]!.GetValue<string>() == "vim-insert" ? CopilotVimMode.Insert : CopilotVimMode.None, state.Vim);
             if (c["content"]?.GetValue<string>() is { } content) { Assert.Equal(content, state.Content); }
         }
         switch (c["expect"]!.GetValue<string>())

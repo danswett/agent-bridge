@@ -242,26 +242,26 @@
     },
     {
       "name": "working-empty",
-      "source": "the captured empty rail box, under it the turn's row: cli-main.js LMe with its activity indicator, drawn in the footer's place while a turn runs: a spinner frame (rr; the glyph varies) with yut's 'Working', then sm('esc', 'interrupt'), '·' and sm(<enqueue key>, 'enqueue'); no rDo commands or sidebar hint",
+      "source": "the captured empty rail box, under it the turn's row: cli-main.js LMe with its activity indicator, drawn in the footer's place while a turn runs: a spinner frame (rr; the glyph varies) with yut's 'Working', then sm('esc', 'interrupt'), '·' and sm(<enqueue key>, 'enqueue'); no rDo commands or sidebar hint; drawn 80 columns wide (the box's edges span the frame)",
       "rows": [
         "● Running the tests.",
         "",
-        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
         "┃",
-        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         " ◐ Working esc interrupt · ctrl+q enqueue"
       ],
       "expect": "ok"
     },
     {
       "name": "working-draft",
-      "source": "as working-empty, with text in the box one column in",
+      "source": "as working-empty, with text in the box one column in; drawn 80 columns wide (the box's edges span the frame)",
       "rows": [
         "● Running the tests.",
         "",
-        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
         "┃ half a thought",
-        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         " ◐ Working esc interrupt · ctrl+q enqueue"
       ],
       "expect": "draft",
@@ -269,40 +269,53 @@
     },
     {
       "name": "working-shell",
-      "source": "as working-empty in shell mode: the placeholder (W), and Xlt's label 'Shell · Allow All' then '·' (activity) before the spinner",
+      "source": "as working-empty in shell mode: the placeholder (W), and Xlt's label 'Shell · Allow All' then '·' (activity) before the spinner; drawn 80 columns wide (the box's edges span the frame)",
       "rows": [
         "● Running the tests.",
         "",
-        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
         "┃ Execute shell command",
-        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         " Shell · Allow All · ◐ Working esc interrupt · ctrl+q enqueue"
       ],
       "expect": "shell"
     },
     {
       "name": "working-vim-normal",
-      "source": "as working-empty with vim's normal mode first (Zlt: '-- NORMAL --' then '·')",
+      "source": "as working-empty with vim's normal mode first (Zlt: '-- NORMAL --' then '·'); drawn 80 columns wide (the box's edges span the frame)",
       "rows": [
         "● Running the tests.",
         "",
-        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
         "┃",
-        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         " -- NORMAL -- · ◐ Working esc interrupt · ctrl+q enqueue"
       ],
       "expect": "vim"
     },
     {
       "name": "working-cancelling",
-      "source": "as working-empty while the turn is cancelled: yut's 'Cancelling', and LMe's activity indicator drops Esc's and the enqueue hints (os === 'cancelling'), leaving nothing the host can tell the turn's row by",
+      "source": "as working-empty while the turn is cancelled: yut's 'Cancelling', and LMe's activity indicator drops Esc's and the enqueue hints (os === 'cancelling'), leaving nothing the host can tell the turn's row by; drawn 80 columns wide (the box's edges span the frame)",
       "rows": [
         "● Running the tests.",
         "",
-        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
         "┃",
-        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         " ◐ Cancelling"
+      ],
+      "expect": "unidentified"
+    },
+    {
+      "name": "working-narrow",
+      "source": "as working-empty in a window under 80 columns (the box's edges 40 wide): LMe draws the turn's row without Zlt's vim label or Xlt's mode label (Le = Ne && ..., Ne = width < V5.compact), so a whitespace draft in shell mode, drawn as an empty '┃', cannot be told from an empty interactive box",
+      "rows": [
+        "● Running the tests.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ◐ Working esc interrupt · ctrl+q enqueue"
       ],
       "expect": "unidentified"
     }

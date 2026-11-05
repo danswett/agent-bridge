@@ -1024,7 +1024,28 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
     // The same box while a turn runs: in the footer's place, the turn's own row (1.0.105's `LMe`
     // activity layout: spinner, Esc's hint, the enqueue hint), with no commands hint.
-    static readonly IReadOnlyList<string> CopilotWorking = [.. CopilotIdle.Take(5), " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue"];
+    // Drawn 80 columns wide: below that the turn's row leaves out the vim and mode labels.
+    static readonly IReadOnlyList<string> CopilotWorking = Working(80, " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue");
+
+    static IReadOnlyList<string> Working(int width, string row, string line = "") =>
+        ["\u25CF Running the tests.", "", "\u257B" + new string('\u2584', width - 1), line.Length == 0 ? "\u2503" : $"\u2503 {line}", "\u2579" + new string('\u2580', width - 1), row];
+
+    [Fact]
+    public async Task A_reply_to_a_working_Copilot_in_a_window_under_80_columns_is_refused_and_nothing_is_typed()
+    {
+        // There the turn's row shows no shell or vim label, and a box holding only spaces in
+        // shell mode draws as empty: the reply could run as a shell command.
+        Fixture.Append(events, Prompt("next task"), Copilot.TurnStart(second++), Copilot.ToolStart("t1", "powershell", new { command = "dotnet test" }, second++));
+        await source.RefreshAsync();
+        injector.Screen = _ => Working(79, " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue");
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "also run the e2e tests");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("reply once the turn ends", reason);
+        Assert.Empty(injector.Plans);
+    }
 
     [Theory]
     // In the turn's row: a draft, shell mode's label, or vim's normal mode, as in the idle footer.
@@ -1037,9 +1058,9 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         await source.RefreshAsync();
         injector.Screen = _ => state switch
         {
-            "draft" => [.. CopilotIdle.Take(3), "\u2503 half a thought", CopilotIdle[4], CopilotWorking[5]],
-            "shell" => [.. CopilotIdle.Take(3), "\u2503 Execute shell command", CopilotIdle[4], " Shell \u00B7 Allow All \u00B7 \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue"],
-            _ => [.. CopilotIdle.Take(5), " -- NORMAL -- \u00B7 \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue"],
+            "draft" => Working(80, CopilotWorking[5], "half a thought"),
+            "shell" => Working(80, " Shell \u00B7 Allow All \u00B7 \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue", "Execute shell command"),
+            _ => Working(80, " -- NORMAL -- \u00B7 \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue"),
         };
         var ch = await OpenAsync();
 

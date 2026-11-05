@@ -41,7 +41,12 @@ public sealed record CopilotInputBox(IReadOnlyList<ScreenRow> Rows, string Conte
 //     seen cut off (its '┃' rows running from the top of the window); the plain box's lines
 //     with its first rule and glyph row scrolled away cannot be told from output, and are not
 //     a box at all.
-public sealed record CopilotInputBoxState(IReadOnlyList<ScreenRow> Rows, string Content, int Lines, bool Shell, bool Main, bool Complete);
+//   * Vim: the vim mode the main box's footer shows ("-- INSERT --", "-- NORMAL --"); None
+//     when it shows neither, or the box is not the main one. A running turn's row in a window
+//     under 80 columns leaves the label out, so it reads None there too.
+public sealed record CopilotInputBoxState(IReadOnlyList<ScreenRow> Rows, string Content, int Lines, bool Shell, bool Main, bool Complete, CopilotVimMode Vim);
+
+public enum CopilotVimMode { None, Insert, Normal }
 
 public static partial class CopilotInputBoxReader
 {
@@ -82,7 +87,8 @@ public static partial class CopilotInputBoxReader
         var working = below < rows.Count && Working(rows[below]);
         var main = below < rows.Count && (working || IsFooter(rows[below])) && !rows.Skip(below + 1).Any(r => r.Trim().Length > 0);
         var shell = glyph == ShellGlyph || box.Content == ShellPlaceholder || (main && Shell(rows[below]));
-        var state = new CopilotInputBoxState(box.Rows, box.Content, box.Rows.Count - (complete ? 2 : 1), shell, main, complete);
+        var vim = !main ? CopilotVimMode.None : Has(rows[below], VimNormal) ? CopilotVimMode.Normal : Has(rows[below], VimInsert) ? CopilotVimMode.Insert : CopilotVimMode.None;
+        var state = new CopilotInputBoxState(box.Rows, box.Content, box.Rows.Count - (complete ? 2 : 1), shell, main, complete, vim);
         // A box cut off at the top was never one the host could find.
         if (!complete) { return (null, NotFound, false, state); }
         if (!main)
@@ -101,6 +107,14 @@ public static partial class CopilotInputBoxReader
         if (!box.Empty)
         {
             return (null, $"something is already typed in Copilot's input box at the machine (\"{Shown(box.Content)}\"); send or clear it there first", true, state);
+        }
+        // In a window under 80 columns (`LMe`: V5.compact) a running turn's row leaves out the vim
+        // and mode labels, and a box holding only spaces in shell mode draws as empty, so an
+        // empty box there says nothing of its mode (Trust's #843 review). The width is the box's
+        // own bottom edge, which spans the frame.
+        if (working && box.Rows[^1].Text.TrimEnd().Length < CompactWidth)
+        {
+            return (null, "Copilot's window at the machine is under 80 columns wide, where a running turn hides whether its input box is in shell or vim mode; reply once the turn ends, or reply at the machine", false, state);
         }
         // An idle footer lists the commands while the box is empty (`rDo`), and only then, so it
         // must; a turn's own row never does, so there the box's own rows, read empty, decide.
@@ -153,11 +167,15 @@ public static partial class CopilotInputBoxReader
 
     static readonly HashSet<string> FooterParts = new(StringComparer.Ordinal)
     {
-        "\u2190 open sidebar", "/ commands", "? help", "@ files", "# issues", "esc exit shell mode", VimNormal, "-- INSERT --",
+        "\u2190 open sidebar", "/ commands", "? help", "@ files", "# issues", "esc exit shell mode", VimNormal, VimInsert,
         "Interactive", "interactive", "Shell", "shell", "Plan", "plan", "Autopilot", "autopilot", "autopilot (limited)",
     };
 
     const string VimNormal = "-- NORMAL --";
+    const string VimInsert = "-- INSERT --";
+
+    // Below this many columns a running turn's row drops its vim and mode labels (`V5.compact`).
+    const int CompactWidth = 80;
 
     // Every rail box: '╻' over '┃' rows to '╹'. Its text is what follows each '┃'.
     // A box whose '┃' rows start at the window's first row is one cut off at the top (Complete
