@@ -49,10 +49,14 @@ internal static class BaselineCapture
     // 2: Codex's cached copies of agent-ha-bridge's plugin hooks.json are measured too (#123). A
     // version 1 baseline never hashed them, so against it they would read as added (failing
     // a strict rollback check) or pass unseen under --allow hooks; neither proves anything.
-    public const int Version = 2;
+    // 3: the agents' homes are the ones installation.json records, which a migration rewrites,
+    // not this process's environment or --home; a version 2 baseline of a custom codexHome
+    // measured another folder's cache, or none, and cannot show that its own was put back.
+    public const int Version = 3;
 
     public static Baseline Capture(Homes homes, ITaskReader tasks, DateTimeOffset now)
     {
+        homes = Recorded(homes);
         var files = new List<FileEntry>();
         // The daemon writes its runtime state and logs as it runs, so those differ between any
         // two moments and say nothing about whether the install was put back.
@@ -78,6 +82,43 @@ internal static class BaselineCapture
         var taskList = tasks.Read() ?? throw new IOException("agent-ha-bridge's scheduled tasks could not be read");
         return new Baseline(Version, now, Environment.MachineName, Environment.UserName,
             [.. files.OrderBy(f => f.Path, StringComparer.Ordinal)], [.. taskList.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase)]);
+    }
+
+    // The agents' homes as agent-ha-bridge's installation.json records them, read as a migration
+    // reads them (AgentHaBridgeInstall.Read): codexHome, copilotHome and claudeHome, else under
+    // its home, else under the folder above bridgeHome. No record leaves them as given (there is
+    // nothing to migrate). A record that cannot say which homes they are is refused, never
+    // guessed at, so a baseline cannot measure an untouched folder and call it put back.
+    internal static Homes Recorded(Homes homes)
+    {
+        var metadata = Path.Combine(homes.BridgeHome, "installation.json");
+        if (!File.Exists(metadata)) { return homes; }
+        IOException Unclear(string why, Exception? inner = null) =>
+            new($"{metadata} {why}, so which homes a migration would rewrite cannot be told; nothing was measured", inner);
+        JsonElement record;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllBytes(metadata));
+            record = doc.RootElement.Clone();
+        }
+        catch (JsonException e) { throw Unclear($"is not JSON ({e.Message})", e); }
+        if (record.ValueKind != JsonValueKind.Object) { throw Unclear("is not a JSON object"); }
+        string? Folder(string name)
+        {
+            if (!record.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null) { return null; }
+            if (value.ValueKind != JsonValueKind.String || value.GetString() is not { } path || !Path.IsPathFullyQualified(path))
+            {
+                throw Unclear($"has a {name} that is not a full path");
+            }
+            return path;
+        }
+        var home = Folder("home") ?? Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(homes.BridgeHome)))!;
+        return homes with
+        {
+            CopilotHome = Folder("copilotHome") ?? Path.Combine(home, ".copilot"),
+            ClaudeHome = Folder("claudeHome") ?? Path.Combine(home, ".claude"),
+            CodexHome = Folder("codexHome") ?? Path.Combine(home, ".codex"),
+        };
     }
 
     // Codex's hook registration. agent-ha-bridge's installer keeps its Codex plugin, and the
@@ -166,7 +207,7 @@ internal static class BaselineCapture
     {
         if (before.Version != Version)
         {
-            return Outcome.Error($"the baseline is version {before.Version}, and this tool measures version {Version} (Codex's cached plugin hooks.json, #123), so it cannot be compared. "
+            return Outcome.Error($"the baseline is version {before.Version}, and this tool measures version {Version} (Codex's cached plugin hooks.json, #123, in the Codex home installation.json records), so it cannot be compared. "
                 + "Before migrating, save the baseline again with this tool. If the machine has already been migrated it is too late: the cache as it was before migrating was never measured, and a baseline saved now does not prove it");
         }
         var unexpected = diffs.Where(d => !allowed.Contains(d.Category)).ToList();

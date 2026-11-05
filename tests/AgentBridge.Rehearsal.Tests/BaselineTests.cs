@@ -118,6 +118,58 @@ public class BaselineTests
     }
 
     [Fact]
+    public void A_custom_codex_home_recorded_by_the_installation_is_the_cache_measured_whatever_the_home_given()
+    {
+        using var s = Install();
+        using var elsewhere = new Scratch();
+        var codexHome = Path.Combine(elsewhere.Root, "codex");
+        s.File(".agent-ha-bridge/installation.json", System.Text.Json.JsonSerializer.Serialize(new { codexHome }));
+        // The default folder has a cache too, which a migration of this installation never touches.
+        s.File(".codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", "{\"hooks\":0}");
+        var older = elsewhere.File("codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/0.9.0/hooks.json", "{\"hooks\":1}");
+        var newer = elsewhere.File("codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", "{\"hooks\":1}");
+        var before = BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow);
+        Assert.Contains(before.Files, f => f.Path == older.Replace('\\', '/'));
+        Assert.Contains(before.Files, f => f.Path == newer.Replace('\\', '/'));
+
+        // As a migration rewrites it, and a rollback that missed it.
+        File.WriteAllText(newer, "{\"hooks\":2}");
+        var diffs = Again(s, before);
+
+        var d = Assert.Single(diffs);
+        Assert.Equal(newer.Replace('\\', '/'), d.Path);
+        Assert.Equal(Verdict.Fail, BaselineCapture.Judge(before, diffs, new HashSet<string>()).Verdict);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("{\"codexHome\":5}")]
+    [InlineData("{\"codexHome\":\"relative\\\\codex\"}")]
+    [InlineData("{\"home\":true}")]
+    [InlineData("{not json")]
+    public void An_installation_record_that_cannot_say_which_codex_home_is_migrated_is_refused(string json)
+    {
+        using var s = Install();
+        s.File(".agent-ha-bridge/installation.json", json);
+
+        var e = Assert.Throws<IOException>(() => BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow));
+
+        Assert.Contains("which homes a migration would rewrite cannot be told", e.Message);
+    }
+
+    [Fact]
+    public void A_version_2_baseline_which_may_have_measured_another_codex_home_is_refused()
+    {
+        using var s = Install();
+        var captured = BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow);
+
+        var outcome = BaselineCapture.Judge(captured with { Version = 2 }, Again(s, captured), new HashSet<string> { BaselineCapture.Hooks });
+
+        Assert.Equal(Verdict.Error, outcome.Verdict);
+        Assert.Contains("Before migrating, save the baseline again", outcome.Detail);
+    }
+
+    [Fact]
     public void A_baseline_that_filed_codexs_hooks_as_install_is_judged_by_the_current_rule()
     {
         using var s = Install();

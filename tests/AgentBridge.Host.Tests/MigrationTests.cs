@@ -492,6 +492,52 @@ public sealed class MigrationTests : MigrationFixture
         }
     }
 
+    [Theory]
+    [InlineData("its version folder")]
+    [InlineData("its hooks.json")]
+    public async Task A_link_put_in_Codexs_plugin_cache_since_migrating_refuses_the_rollback_before_anything_is_touched(string linked)
+    {
+        // The cache was plain when migrated; a rollback must not then write through a link out of it.
+        await Migrated();
+        var outside = Directory.CreateTempSubdirectory("abmigrate-rollback-").FullName;
+        var version = Path.GetDirectoryName(_f.CodexCacheHooks())!;
+        var link = linked == "its hooks.json" ? _f.CodexCacheHooks() : version;
+        var moved = Path.Combine(outside, "moved");
+        try
+        {
+            if (link == version) { Directory.Move(version, moved); }
+            else { File.Move(link, moved); }
+            try
+            {
+                if (link == version) { Directory.CreateSymbolicLink(link, moved); }
+                else { File.CreateSymbolicLink(link, moved); }
+            }
+            catch (Exception e) when (e is UnauthorizedAccessException or IOException) { return; }
+            var listing = _f.Listing();
+            var outsideBytes = Directory.EnumerateFiles(outside, "*", SearchOption.AllDirectories).ToDictionary(f => f, File.ReadAllBytes);
+            _f.Runtime_.Calls.Clear();
+
+            foreach (var dryRun in new[] { true, false })
+            {
+                var report = await _f.Migrator().RollbackAsync(dryRun);
+
+                Assert.False(report.Ok);
+                Assert.Contains($"Refused: {link}, on the way to {_f.CodexCacheHooks()} in Codex's plugin cache, is a symbolic link or junction", report.ToString());
+                Assert.Contains("Nothing was rolled back", report.ToString());
+            }
+            Assert.Equal(listing, _f.Listing());
+            Assert.Equal(outsideBytes.Keys.Order(), Directory.EnumerateFiles(outside, "*", SearchOption.AllDirectories).Order());
+            foreach (var (file, bytes) in outsideBytes) { Assert.Equal(bytes, File.ReadAllBytes(file)); }
+            Assert.Empty(_f.Runtime_.Calls);
+        }
+        finally
+        {
+            FileSystemInfo info = link == version ? new DirectoryInfo(link) : new FileInfo(link);
+            if (info.LinkTarget is not null) { info.Delete(); }
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task A_hook_file_edited_while_migrated_gets_only_its_own_entries_back()
     {

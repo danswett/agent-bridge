@@ -566,6 +566,19 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         var ok = true;
         Say($"{(dryRun ? "Would roll back" : "Rolling back")} the migration of agent-ha-bridge installation {record.InstallationId} ({record.BridgeHome}).");
 
+        // Codex's cache was plain folders when it was migrated (#123); a link put on the way to one
+        // of its files since would carry the restore out of it. Checked for every cached file
+        // before anything at all is rolled back, so a refusal leaves everything as migrated.
+        var linked = record.Files
+            .Where(f => f.Role.StartsWith("codex-cache", StringComparison.Ordinal))
+            .Select(f => (File: f, Link: Registrations.FirstLink(f.Path)))
+            .FirstOrDefault(f => f.Link is not null);
+        if (linked.Link is not null)
+        {
+            Say($"Refused: {linked.Link}, on the way to {linked.File.Path} in Codex's plugin cache, is a symbolic link or junction made since the migration; it is not followed. Nothing was rolled back. Make it a plain folder or file again and roll back again, or put {Path.Combine(snapshot, linked.File.Backup)} back by hand; the record and snapshot are kept in {options.ProfileFolder}.");
+            return new(false, lines);
+        }
+
         // The spool is handed back before the daemon starts; the host lets go of it when it
         // restarts below, once its config.json is restored too, since it reads both only then.
         if (dryRun) { Say($"* Hook spool: remove {IntakeState.FileName} and restart the host, which then stops taking it and reads its restored settings."); }

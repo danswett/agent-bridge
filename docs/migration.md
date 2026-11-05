@@ -168,14 +168,22 @@ this installation's hook are changed, and a version with none is not written. A 
 custom Codex home, inside your home or not) itself included,
 that is a symbolic link or junction refuses the migration in preflight, before anything is
 written, since Codex makes plain folders and a link could lead the rewrite out of the cache. With no
-cache, as before Codex first loads the plugin, there is nothing to re-point.
+cache, as before Codex first loads the plugin, there is nothing to re-point. A rollback checks
+the same way, from the drive's root to each cached `hooks.json` it recorded, before it puts
+anything back: a link made there since the migration refuses the whole rollback, with nothing
+rolled back and `migration.json` and the snapshot kept, naming the link and the snapshot copy
+to put back by hand if it cannot be made a plain folder or file again.
 
 A rehearsal baseline (`agent-bridge-rehearsal baseline save`) hashes these cached copies too,
-so save it with the current rehearsal tool **before migrating**. One saved by an older tool,
-which never measured the cache, is refused by `baseline compare` with an error rather than
-compared; save it again before migrating. If the machine is already migrated, that is too late:
-the cache as it was before migrating was never measured, and a baseline saved now does not
-prove it.
+in the Codex home (and Copilot and Claude homes) agent-ha-bridge's `installation.json` records,
+which are the ones a migration rewrites, whatever `CODEX_HOME` or `--home` says. A record that
+cannot say which homes they are (not a JSON object, or a home that is not a full path) is
+refused with an error rather than guessed at. Save the baseline with the current rehearsal
+tool **before migrating**. One saved by an older tool, which never measured the cache, or
+(version 2) may have measured another Codex home's, is refused by `baseline compare` with an
+error rather than compared; save it again before migrating. If the machine is already migrated,
+that is too late: the cache as it was before migrating was never measured, and a baseline saved
+now does not prove it.
 
 Files are written whole, flushed to the disk and renamed into place (snapshots, `migration.json`,
 `intake.json` and `hook.json` too), so a power cut leaves either the old file or the new one,

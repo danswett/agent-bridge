@@ -135,16 +135,11 @@ public static class Registrations
         // one outside it), then the cache folders below it: a linked .codex, or any linked folder
         // above it, carries every path below out of the cache, though each still looks contained
         // by name. Checked before anything below is enumerated or planned.
-        var codexHome = Path.TrimEndingDirectorySeparator(Path.GetFullPath(install.CodexHome));
-        var folders = new List<string>();
-        for (var up = Path.GetDirectoryName(codexHome); up is not null; up = Path.GetDirectoryName(up)) { folders.Insert(0, up); }
-        folders.Add(codexHome);
-        foreach (var part in new[] { "plugins", "cache", "agent-ha-bridge", "agent-ha-bridge" }) { folders.Add(Path.Combine(folders[^1], part)); }
-        var cache = folders[^1];
+        var cache = install.CodexPluginCache;
         // No cache of agent-ha-bridge's plugin (Codex has not loaded it) leaves nothing to re-point,
         // linked folders or not.
         if (!Directory.Exists(cache)) { return plans; }
-        if (folders.FirstOrDefault(f => new DirectoryInfo(f).Attributes.HasFlag(FileAttributes.ReparsePoint)) is { } linked) { return [Refused(linked)]; }
+        if (FirstLink(cache) is { } linked) { return [Refused(linked)]; }
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(cache)) + Path.DirectorySeparatorChar;
         foreach (var version in new DirectoryInfo(cache).EnumerateDirectories().OrderBy(d => d.Name, StringComparer.Ordinal))
         {
@@ -158,6 +153,24 @@ public static class Registrations
             if (plan.Changes.Count > 0 || plan.KeptGoHook) { plans.Add(plan); }
         }
         return plans;
+    }
+
+    // The first symbolic link or junction on the way to path, from the filesystem root down to
+    // path itself; null when there is none, or the way stops at something that does not exist.
+    // Codex's cache is checked with it when planning and again before a rollback writes to it.
+    public static string? FirstLink(string path)
+    {
+        var way = new List<string>();
+        for (var at = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)); at is not null; at = Path.GetDirectoryName(at)) { way.Insert(0, at); }
+        foreach (var step in way)
+        {
+            FileAttributes attributes;
+            // Not followed: a link's own attributes, dangling or not.
+            try { attributes = File.GetAttributes(step); }
+            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return null; }
+            if (attributes.HasFlag(FileAttributes.ReparsePoint)) { return step; }
+        }
+        return null;
     }
 
     static FilePlan Codex(AgentHaBridgeInstall install, string hook, string role, string path)
