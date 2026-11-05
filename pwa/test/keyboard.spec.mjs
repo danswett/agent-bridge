@@ -168,6 +168,17 @@ test.describe('on a desktop', () => {
     expect(await row(page, CLAUDE).locator('.row-main').evaluate((e) => getComputedStyle(e).boxShadow), 'a ring around the row').toBe('none');
   });
 
+  test('focus the browser brings in from its address bar, with the page on screen all along, keeps the browser\'s ring', async ({ page }) => {
+    await openDemo(page);
+    // Focus out to the browser's own bar and back, with no key this page sees: the browser's Tab
+    // or Shift+Tab, which lands on the first or last control as a script's focus() does here.
+    await page.evaluate(() => { window.dispatchEvent(new Event('blur')); window.dispatchEvent(new Event('focus')); });
+    const open = row(page, CLAUDE).locator('.row-main');
+    await open.focus();
+    await expect(open).toBeFocused();
+    expect((await focused(page)).shown, 'a ring on the row').toBe(true);
+  });
+
   test('a session opens from its row with Enter, and its question is answered with Tab, Space and Enter', async ({ page }) => {
     await openDemo(page);
     const at = new Date(Date.now() + 1000).toISOString();
@@ -312,6 +323,57 @@ test.describe('on a phone', () => {
       await tabTo(page, v.getByRole('button', { name: 'Sessions' }), { key: 'Shift+Tab', max: 3 });
     });
   }
+
+  test('a notification tapped while the app is on screen but another window has focus draws no ring when its window takes focus after', async ({ page }) => {
+    await openDemo(page);
+    await tabTo(page, row(page, CLAUDE).locator('.row-main'));
+    // The worker posts its message, then focuses the window, which sends focus again to what has it.
+    await page.evaluate((id) => {
+      window.dispatchEvent(new Event('blur'));
+      navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url: location.href } }));
+      window.agentBridgeDemo.page.showSession(id);
+      window.dispatchEvent(new Event('focus'));
+      document.activeElement.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    }, CLAUDE);
+    const v = view(page, CLAUDE);
+    await expect(v.locator('.session-title')).toBeFocused();
+    expect((await focused(page)).shown, 'a ring around the title').toBe(false);
+  });
+
+  test('a click that brings the window back keeps a touch\'s focus on the title without a ring, though the window took focus first', async ({ page }) => {
+    await openDemo(page);
+    await page.evaluate(() => document.addEventListener('mousedown', (e) => e.preventDefault(), true));
+    const open = row(page, CLAUDE).locator('.row-main');
+    await tabTo(page, open);
+    await open.tap();
+    const title = view(page, CLAUDE).locator('.session-title');
+    await expect(title).toBeFocused();
+    // A while later, past the moment a press counts as the one that brought the window back.
+    await page.waitForTimeout(600);
+    // Chromium gives the window its focus, and focus back to the title, before the click's press.
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('blur'));
+      window.dispatchEvent(new Event('focus'));
+      document.activeElement.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    });
+    await title.click();
+    await expect(title).toBeFocused();
+    expect((await focused(page)).shown, 'a ring around the title').toBe(false);
+  });
+
+  test('a notification for the session already open, its title focused with a key, takes the title\'s ring away', async ({ page }) => {
+    await openDemo(page);
+    await tabTo(page, row(page, CLAUDE).locator('.row-main'));
+    await page.keyboard.press('Enter');
+    const v = view(page, CLAUDE);
+    await expect(v.locator('.session-title')).toBeFocused();
+    expect((await focused(page)).shown, 'a ring around the title after Enter').toBe(true);
+    // Tapped while the app is open, about the session shown: focus has nowhere to move.
+    await page.evaluate(() => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url: location.href } })));
+    await page.evaluate((id) => window.agentBridgeDemo.page.showSession(id), CLAUDE);
+    await expect(v.locator('.session-title')).toBeFocused();
+    expect((await focused(page)).shown, 'a ring around the title').toBe(false);
+  });
 
   test('the overflow menu opens with Enter, and Escape closes it with focus back on More', async ({ page }) => {
     await openDemo(page);
