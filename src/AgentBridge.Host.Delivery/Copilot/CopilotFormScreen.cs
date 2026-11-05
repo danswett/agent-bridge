@@ -15,8 +15,16 @@ namespace AgentBridge.Host.Delivery.Copilot;
 //     heading, the question's message.
 //   * Then the fields (`Uxn`): with more than one, a tab bar (`Da`) naming each in order
 //     (` <label> `, the selected one `[<label>]` where colour is unavailable); then only the
-//     field being answered, headed `<title ?? name>:` on a row of its own (`Fxn`, `Lxn`,
-//     `Oxn`, `Dxn`, `Nxn`).
+//     field being answered, headed on a row of its own: a list, a Yes/No or a multi-select
+//     (`Dxn`, `Oxn`, `Nxn`) as `<title ?? name>:`, a text or number box (`Fxn`, `Lxn`) as
+//     `<title ?? name>` with no colon (and " * <error>" beside it while its input is invalid).
+//     The bar shows every label only while they all fit across the window; otherwise it
+//     shows those around the selected one, between arrows (`Da`), which the bar check refuses
+//     at the first field, before any key. So the bar read there vouches for every later
+//     field's title before the first key: one that fits holds every label and more, so each
+//     heading, drawn in the same column, fits on its row too; and a title the console draws
+//     other than as written (a line break, a character it shows otherwise) is drawn so in the
+//     bar too, and refused there.
 //   * Under it, the key hints (`Ft`, joined by " · ", wrapping): "enter accept", "tab next"
 //     unless at the last field, "shift+tab prev" unless at the first, "ctrl+d decline",
 //     "esc cancel".
@@ -56,6 +64,7 @@ public static partial class CopilotFormScreen
         }
         var label = form.Fields[index].Label!;
         var off = $"the form on the session's screen was not at the field \"{label}\"";
+        var heading = Headed(form.Fields[index]);
         if (form.Fields.Count > 1)
         {
             // Each label as it is, brackets in a title included; the field being answered alone
@@ -68,7 +77,7 @@ public static partial class CopilotFormScreen
             at++;
         }
         at = Next(rows, at);
-        if (at >= rows.Count || Collapse(rows[at]) != Collapse(label) + ":") { return off; }
+        if (at >= rows.Count || Collapse(rows[at]) != heading) { return off; }
         if (Hints(rows, at + 1, index, form.Fields.Count) is not { } end) { return off; }
         // A permission prompt drawn beside the form, above its heading or below its hints. What
         // is inside the form (an option, or words typed into a field, reading "1. Yes") is the
@@ -77,6 +86,13 @@ public static partial class CopilotFormScreen
     }
 
     static bool Permission(string row) => PermissionRow().IsMatch(row);
+
+    // The field's heading as drawn: a text or number box's title alone, any other's with a
+    // colon (`Fxn`, `Lxn`; `Dxn`, `Oxn`, `Nxn`). Read as "<title>:" for every field, the text
+    // field after a list was never found: the list was picked and committed, and the form left
+    // half answered (#510 review, Copilot 5780329899).
+    static string Headed(CopilotField field) =>
+        Collapse(field.Label!) + (field.Kind is CopilotFieldKind.Text or CopilotFieldKind.Number ? "" : ":");
 
     // Why two of the form's fields could not be told apart on screen, or null. The field being
     // answered is known by its heading and, among several, by the tab hints, which say only
@@ -93,7 +109,7 @@ public static partial class CopilotFormScreen
         for (var i = 0; i < count; i++)
         {
             if (form.Fields[i].Label is not { } label) { continue; }
-            if (!seen.Add((Collapse(label), Place(i))))
+            if (!seen.Add((Headed(form.Fields[i]), Place(i))))
             {
                 return $"two of this question's fields are headed \"{label}\", and the host cannot tell on screen which of them the form is at; answer it at the machine";
             }

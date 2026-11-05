@@ -14,8 +14,9 @@ public sealed record CopilotOption(string Value, JsonElement Raw);
 // One field of Copilot's ask_user prompt, as the keys have to drive it. Checked is the rows
 // a multi-select list opens with ticked (its schema default). Prefill is a text or number
 // field's schema default, which the prompt opens with already typed into it (#662). Label is
-// what the prompt heads the field with while it is the one being answered (`title ?? name`,
-// as `<label>:`), null when its title is something the host cannot say how the CLI draws.
+// what the prompt heads the field with while it is the one being answered (`title ?? name`;
+// CopilotFormScreen says how each kind draws it), null when its title is something the host
+// cannot say how the CLI draws.
 public sealed record CopilotField(
     string Name,
     CopilotFieldKind Kind,
@@ -86,9 +87,10 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields, string? Mes
         return (new CopilotForm(fields), null);
     }
 
-    // The field's heading as Copilot CLI 1.0.105 draws it (`Uxn`: `title ?? name`; each field's
-    // component writes it as `<title>:`). A title that is not a string, or an empty one (drawn
-    // as nothing at all), is not a heading the host can look for.
+    // The field's heading as Copilot CLI 1.0.105 draws it (`Uxn`: `title ?? name`; a list's,
+    // Yes/No's or multi-select's component adds a colon, a text or number box's does not). A
+    // title that is not a string, or an empty one (drawn as nothing at all), is not a heading
+    // the host can look for.
     static string? Label(string name, JsonElement p) =>
         !p.TryGetProperty("title", out var title) || title.ValueKind == JsonValueKind.Null ? name
         : title.ValueKind == JsonValueKind.String && title.GetString() is { Length: > 0 } text ? text

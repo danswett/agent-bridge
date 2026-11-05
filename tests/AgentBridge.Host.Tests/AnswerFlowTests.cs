@@ -380,6 +380,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     {
         Fixture.Append(events, AskDays("q2", second++));
         await source.RefreshAsync();
+        boxes.Add("days");
         injector.Screen = () => FieldsScreen(["pick", "days"], message: "How many?");
         injector.OnInject = () => { if (Enters() == 2) { Fixture.Append(events, Recorded("q2", recorded)); } };
     }
@@ -471,7 +472,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         {
             List<string> rows = [];
             if (hint is not null) { rows.Add(hint); }
-            return Framed("Approve the mark?", labels, 1, [.. rows, "╭──────────────╮", words ? $"│ {Feedback} │" : "│              │", "╰──────────────╯"]);
+            return Framed("Approve the mark?", labels, 1, [.. rows, "╭──────────────╮", words ? $"│ {Feedback} │" : "│              │", "╰──────────────╯"], colon: false);
         }
         List<string> list = [];
         if (before is not null) { list.Add(before); }
@@ -480,10 +481,12 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
     // Copilot CLI 1.0.105's ask_user form (cli-main.js `MIo`, `Uxn`, `Ft`) at field `at`: its
     // heading and question between two rules, a tab bar naming every field when there is more
-    // than one, the field's own heading (`<title ?? name>:`) over its body, and the key hints.
-    // The question is drawn line by line, each wrapped at `wrap` columns when given; with
-    // `marked`, the tab bar puts the field being answered in brackets, as it does without colour.
-    static List<string> Framed(string message, string[] labels, int at, IEnumerable<string> body, int wrap = 0, bool marked = false)
+    // than one, the field's own heading over its body, and the key hints. The heading is
+    // `<title ?? name>:` for a list, Yes/No or multi-select, and without the colon (`colon`
+    // false) for a text or number box (`Fxn`, `Lxn`). The question is drawn line by line, each
+    // wrapped at `wrap` columns when given; with `marked`, the tab bar puts the field being
+    // answered in brackets, as it does without colour.
+    static List<string> Framed(string message, string[] labels, int at, IEnumerable<string> body, int wrap = 0, bool marked = false, bool colon = true)
     {
         List<string> hints = ["enter accept"];
         if (labels.Length > 1 && at < labels.Length - 1) { hints.Add("tab next"); }
@@ -491,7 +494,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         hints.AddRange(["ctrl+d decline", "esc cancel"]);
         List<string> rows = ["────────────────────────", " Copilot needs information.", .. message.Split('\n').SelectMany(line => Wrapped(line, wrap)).Select(l => $" {l}"), ""];
         if (labels.Length > 1) { rows.AddRange([$" {string.Join("   ", labels.Select((l, i) => marked && i == at ? $"[{l}]" : l))}", ""]); }
-        return [.. rows, $" {labels[at]}:", .. body, "", $" {string.Join(" · ", hints)}", "────────────────────────"];
+        return [.. rows, $" {labels[at]}{(colon ? ":" : "")}", .. body, "", $" {string.Join(" · ", hints)}", "────────────────────────"];
     }
 
     // A line as a console `wrap` columns wide breaks it between words; whole when wrap is 0.
@@ -662,6 +665,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
         Assert.Contains("not submitted", result.GetProperty("reason").GetString());
         Assert.Contains("finish it at the machine", result.GetProperty("reason").GetString());
+        Assert.Contains("only the form's first 1 of 2 fields were answered (\"pick\"); \"Feedback (optional)\" was typed into but not submitted", result.GetProperty("reason").GetString());
         // The option list's keys, its Enter and the words went; no Enter after the words, ever.
         Assert.Equal(3, injector.Plans.Count);
         Assert.Equal((Feedback, false), (injector.Plans[^1].Plan.Sends[^1].Text, injector.Plans[^1].Plan.Sends[^1].Enter));
@@ -715,7 +719,21 @@ public sealed class AnswerFlowTests : IAsyncLifetime
             }
         }
         return Rows();
-        List<string> Rows() => field >= names.Length ? ["(sent)"] : Framed(message, labels ?? names, field, [$"Field: {names[field]}", $"│ {typed} │"], wrap, marked);
+        List<string> Rows() => field >= names.Length ? ["(sent)"] : Framed(message, labels ?? names, field, [$"Field: {names[field]}", $"│ {typed} │"], wrap, marked, colon: !boxes.Contains(names[field]));
+    }
+
+    // The fields of the question asked that Copilot draws as a text or number box, headed
+    // without a colon (`Fxn`, `Lxn`); read from its schema as the CLI reads it (`tle`).
+    readonly HashSet<string> boxes = new(StringComparer.Ordinal);
+
+    void Boxes(object properties)
+    {
+        foreach (var p in JsonSerializer.SerializeToElement(properties).EnumerateObject())
+        {
+            var type = p.Value.TryGetProperty("type", out var t) ? t.GetString() : null;
+            var listed = p.Value.TryGetProperty("enum", out _) || p.Value.TryGetProperty("oneOf", out _);
+            if (type is "number" or "integer" || (type is "string" or null && !listed)) { boxes.Add(p.Name); }
+        }
     }
 
     int Enters() { lock (injector.Plans) { return injector.Plans.Sum(p => p.Plan.Sends.Count(s => s.Enter)); } }
@@ -724,6 +742,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     // has taken its Enter.
     async Task AskFieldsAsync(object properties, int fields, object answer, string message = "Tell me")
     {
+        Boxes(properties);
         Fixture.Append(events, Recorded("q1", new { pick = "a" }), Copilot.ToolDone("q1", second++),
             Copilot.ToolStart("q2", "ask_user", new { message, requestedSchema = new { properties } }, second++));
         await source.RefreshAsync();
@@ -1222,10 +1241,32 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
         Assert.Contains("permission prompt", result.GetProperty("reason").GetString());
+        // The form is left part answered, and the reason says how far it got (#510 review).
+        Assert.Contains("only the form's first 1 of 2 fields were answered (\"first\"); the rest were not typed", result.GetProperty("reason").GetString());
         // The first list's keys, then its Enter alone; nothing of the next field, not even tried.
         Assert.Equal(2, injector.Plans.Count);
         Assert.True(HasEnterOnly(injector.Plans[^1].Plan));
         Assert.Equal(2, injector.Attempts.Count);
+    }
+
+    [Theory]
+    // A text or number box after a list, headed as 1.0.105 draws it: its title alone, no colon
+    // (`Fxn`, `Lxn`). Looked for as "<title>:", it was never found: the list was picked and
+    // committed, and the form left half answered (#510 review, Copilot 5780329899).
+    [InlineData("string")]
+    [InlineData("integer")]
+    public async Task A_text_or_number_box_after_a_list_is_found_by_its_title_alone_and_the_form_is_answered_whole(string type)
+    {
+        object answer = type == "string" ? new { pick = "b", note = Feedback } : new { pick = "b", note = 7 };
+        string[] names = ["pick", "note"];
+        await AskFieldsAsync(new { pick = new { type = "string", @enum = new[] { "a", "b", "c" } }, note = new { type, title = "Your note" } }, 2, answer);
+        injector.Screen = () => FieldsScreen(names, labels: ["pick", "Your note"]);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(2, Enters());
     }
 
     [Theory]

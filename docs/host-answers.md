@@ -81,8 +81,10 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     with its own name, and may have a field of the same name), the whole question under it
     (its lines, each wrapped onto as many rows as it takes), with more than one field the tab
     bar naming exactly this form's fields in order (titles as written, brackets included; the
-    field being answered may be in the bar's own brackets), the field's own heading (`<title ?? name>:`,
-    on a row of its own; only the field being answered is drawn), and under it the hints
+    field being answered may be in the bar's own brackets), the field's own heading on a row
+    of its own (`<title ?? name>:` for a list, a Yes/No or a multi-select; the title alone,
+    with no colon, for a text or number box, `Fxn` and `Lxn`; only the field being answered
+    is drawn), and under it the hints
     row (the last row ending "esc cancel", with the rows it wrapped from, every part one of
     the form's hints): "enter accept", "ctrl+d decline" and "esc cancel", with the field's
     place by "tab next" and "shift+tab prev" when there is more than one, read from that row
@@ -97,7 +99,16 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     first could pass for the second. Headings are compared with every run of whitespace, a
     no-break space included, as one space and the ends trimmed; a heading or question the
     console wraps mid-word, or a title with a line break, is refused rather than typed into
-    (#848). A screen that has settled
+    (#848). With more than one field, the tab bar read at the first field, before any key,
+    vouches for every later field's title: a bar too wide for the window shows only some
+    labels, between arrows, and is refused there; one that fits holds every label, so no
+    later heading can wrap; and a title the console draws other than as written is drawn so
+    in the bar too, and refused there.
+    What cannot be known beforehand (a permission prompt opening over a later field, or a
+    long field scrolling the form's heading off a short window) still stops the keys there:
+    the answer is then `unconfirmed`, and its reason names the fields that were answered,
+    the one typed into but not submitted, if any, and that the rest were not typed, for the
+    person to finish the form at the machine. A screen that has settled
     or moved on is not enough: a permission prompt that opens before its transcript entry is
     written reads just as steady, and keys held to its own rows would go into it, the Enter
     approving what it highlights (#510 review). Anything else stops the answer there, as

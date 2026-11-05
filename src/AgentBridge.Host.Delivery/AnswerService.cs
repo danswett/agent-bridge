@@ -309,6 +309,7 @@ public sealed class AnswerService : ISessionAnswerer
         long from;
         InjectionResult typed;
         string? held;
+        string? partial;
         var attempt = AttemptLedger.Key("copilot", session.Id, question.Id);
         try
         {
@@ -344,7 +345,7 @@ public sealed class AnswerService : ISessionAnswerer
             (plan, from) = (planned, call.ScannedTo);
 
             if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
-            (typed, held) = await TypeWordsApartAsync(session.Id, pid, form, plan.Keys, StillAsked, timeline);
+            (typed, held, partial) = await TypeWordsApartAsync(session.Id, pid, form, plan.Keys, StillAsked, timeline);
         }
         finally { gate.DoneTyping(); }
 
@@ -360,7 +361,9 @@ public sealed class AnswerService : ISessionAnswerer
             AnswerResult? recorded;
             try { recorded = await Late(); }
             catch (Exception) { recorded = null; }
-            result = recorded ?? Unconfirmed($"the answer was typed into the prompt but not submitted: {held}, so its Enter was not pressed; finish it at the machine");
+            result = recorded ?? Unconfirmed(partial is not null
+                ? $"the answer was typed into the prompt but not submitted whole: {partial}, and nothing more was pressed ({held}); finish it at the machine"
+                : $"the answer was typed into the prompt but not submitted: {held}, so its Enter was not pressed; finish it at the machine");
         }
         else
         {
@@ -405,7 +408,38 @@ public sealed class AnswerService : ISessionAnswerer
     // question no longer asked, stop it there: nothing more is pressed, and the answer is
     // reported typed (not recorded), for the person to finish at the machine. Held says why;
     // null when every key went.
-    async Task<(InjectionResult Result, string? Held)> TypeWordsApartAsync(string sessionId, int pid, CopilotForm form, KeyPlan plan, Func<string?> stillAsked, DeliveryTimeline? timeline = null)
+    //
+    // Stopped after one or more fields took their Enter, the form is left part answered, and
+    // Partial says how far it got, for the person finishing it (#510 review, Copilot
+    // 5780329899). Every later field's title is vouched for before the first key, by the tab
+    // bar that names them all (CopilotFormScreen), but a later field can still fail to show: a
+    // permission prompt opening over it, or its heading scrolled off a short window by a long
+    // field.
+    async Task<(InjectionResult Result, string? Held, string? Partial)> TypeWordsApartAsync(string sessionId, int pid, CopilotForm form, KeyPlan plan, Func<string?> stillAsked, DeliveryTimeline? timeline = null)
+    {
+        var progress = new FormProgress();
+        var (result, held) = await TypeFieldsAsync(sessionId, pid, form, plan, stillAsked, progress, timeline);
+        return (result, held, held is not null && progress.Taken > 0 ? progress.Said(form) : null);
+    }
+
+    // How far a form's keys got: the fields that took their Enter, and whether any key has gone
+    // into the one after them.
+    sealed class FormProgress
+    {
+        public int Taken;
+        public bool Partway;
+
+        public string Said(CopilotForm form)
+        {
+            string Name(CopilotField f) => $"\"{f.Label ?? f.Name}\"";
+            var rest = Taken >= form.Fields.Count ? ""
+                : Partway ? $"; {Name(form.Fields[Taken])} was typed into but not submitted, and no field after it was reached"
+                : "; the rest were not typed";
+            return $"only the form's first {Taken} of {form.Fields.Count} fields were answered ({string.Join(", ", form.Fields.Take(Taken).Select(Name))}){rest}";
+        }
+    }
+
+    async Task<(InjectionResult Result, string? Held)> TypeFieldsAsync(string sessionId, int pid, CopilotForm form, KeyPlan plan, Func<string?> stillAsked, FormProgress progress, DeliveryTimeline? timeline)
     {
         // Words that leave nothing to look for once white space and line drawing are set aside
         // could never be seen, so their Enter would never go: refused before any key, for the
@@ -445,6 +479,7 @@ public sealed class AnswerService : ISessionAnswerer
             {
                 case InjectionStatus.Typed:
                     typedAny = true;
+                    progress.Partway = true;
                     return null;
                 // Nothing typed yet, for a reason of the injector's own (an elevated session, say):
                 // said as the injector says it, as any other answer refused there is.
@@ -517,6 +552,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (await WriteAsync([new KeySend("", true, 0, commit.PauseAfterMs, Rows(shown))], last) is { } committed) { return committed; }
             leaving = shown;
             at++;
+            (progress.Taken, progress.Partway) = (at, false);
             return null;
         }
 
@@ -565,6 +601,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (await WriteAsync([new KeySend("", true, 0, send.PauseAfterMs, Rows(showing))], i == plan.Sends.Count - 1) is { } entered) { return entered; }
             leaving = showing;
             at++;
+            (progress.Taken, progress.Partway) = (at, false);
         }
         if (pending.Count == 0) { return (new InjectionResult(InjectionStatus.Typed, "ok"), null); }
         // Keys with no Enter of their own after the last field (none is planned so): held to the
