@@ -317,7 +317,7 @@
         "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         " ◐ Working esc interrupt · ctrl+q enqueue"
       ],
-      "expect": "unidentified"
+      "expect": "narrow"
     }
   ]
 }

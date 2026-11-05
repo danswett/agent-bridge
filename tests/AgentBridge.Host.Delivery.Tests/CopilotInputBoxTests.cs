@@ -58,6 +58,10 @@ public class CopilotInputBoxTests
                 Assert.Null(box);
                 Assert.Contains("vim normal mode", problem);
                 break;
+            case "narrow":
+                Assert.Null(box);
+                Assert.Equal("Copilot's window at the machine is too narrow to check its input box; reply once the turn ends, or widen it", problem);
+                break;
             default:
                 Assert.Null(box);
                 Assert.Contains("reply at the machine", problem);

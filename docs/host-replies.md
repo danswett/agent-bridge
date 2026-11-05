@@ -76,7 +76,8 @@ command", or as the footer's "Shell" label or "esc exit shell mode" hint. The re
   are read as in the idle footer, so a reply can still steer a working session. In a
   window under 80 columns (measured by the box's own bottom edge, which spans the frame) the
   turn's row leaves those labels out, and a box holding only spaces in shell mode draws as
-  empty, so a reply to a working session there is refused ("reply once the turn ends"). With the
+  empty, so a reply to a working session there is refused ("too narrow to check its input
+box; reply once the turn ends, or widen it"). With the
   CLI's hints hidden (`hideToggleHelp`), the idle footer is drawn empty and a reply to an
   idle session is refused; a turn being cancelled shows no hints either, and is refused.
 
@@ -94,7 +95,10 @@ that read's box rows (`KeySend.Expect`), and to the footer under them (`KeySend.
 in the same attach, just before the first key, the worker reads the box's rows again, which
 must read exactly so, and the footer, which must still be there (one of its own hints or
 labels) and show neither shell mode ("Shell", "shell", "esc exit shell mode") nor vim's
-normal mode ("-- NORMAL --"). The box's rows alone cannot say so: '!' then a space enters
+normal mode ("-- NORMAL --"), with nothing but blank rows under it to the window's bottom, as
+the reader required: the agent can print rows that read like the box and its footer, and
+with only those rows held, a real box holding a draft, or a permission dialog, drawn under
+them afterwards passed. The box's rows alone cannot say so: '!' then a space enters
 shell mode with only a space in the box, which draws as an empty box, and Esc into vim's
 normal mode changes only the footer. In a window under 80 columns (the box's bottom edge)
 the footer must also not have become a running turn's row (Esc's hint, the enqueue hint):
@@ -182,7 +186,10 @@ own. What guards them is new. agent-ha-bridge's hooks tell it when a permission 
 (words pick an option; Enter accepts the highlighted one). Each of them takes the input
 box's place on screen, so the host reads the screen first (`AgentReplies/Composer.cs`) and
 types only into an **input box that is positively on screen**, with the first send
-held to those rows (`KeySend.Expect`), so nothing is typed if they change in between:
+held to those rows (`KeySend.Expect`), so nothing is typed if they change in between. The
+rows are held as the worker reads them, with only the window's padding (ASCII spaces)
+trimmed: Claude Code draws its prompt as the pointer and a no-break space, and held with
+that space trimmed away, every Claude reply read as a box that had changed and was refused:
 
 - Claude Code 2.1: a row starting `>` at the left edge between two full-width rules. A
   permission prompt shows indented options under one rule; an `AskUserQuestion` shows tabs

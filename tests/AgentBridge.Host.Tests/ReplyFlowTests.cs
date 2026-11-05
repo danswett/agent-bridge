@@ -1017,7 +1017,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
         {
             var rows = Screen(processId);
-            return Task.FromResult(new ConsoleScreen(rows, rows is null ? "this host cannot read the session's screen; answer at the machine" : null));
+            return Task.FromResult(new ConsoleScreen(rows?.Select(Worker.Read).ToList(), rows is null ? "this host cannot read the session's screen; answer at the machine" : null));
         }
     }
 
@@ -1236,6 +1236,44 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         if (typed)
         {
             Assert.Equal("delivered", outcome);
+            return;
+        }
+        Assert.Equal("refused", outcome);
+        Assert.Contains("input box changed just as the reply was to be typed", reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    // A screen from the captured Copilot input box fixtures (tests/fixtures/screens).
+    static IReadOnlyList<string> Captured(string name)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "screens", "copilot-input-box.json")));
+        return [.. doc.RootElement.GetProperty("cases").EnumerateArray().Single(c => c.GetProperty("name").GetString() == name).GetProperty("rows").EnumerateArray().Select(r => r.GetString()!)];
+    }
+
+    [Theory]
+    // Read as the empty box at the bottom, then, its rows and footer unchanged, the screen grows
+    // rows under them: the agent printed rows that read like the box and its footer, and the
+    // real box (holding a draft) or a permission dialog is drawn below. The worker holds every
+    // row under the footer blank, as the reader did, up to each key: none of the reply goes, or
+    // no Enter (#843 review, Copilot 5780796076).
+    [InlineData("forged-rail-over-dialog", false)]
+    [InlineData("forged-rail-above-plain-draft", false)]
+    [InlineData("forged-rail-over-dialog", true)]
+    [InlineData("forged-rail-above-plain-draft", true)]
+    public async Task A_screen_that_grows_rows_under_the_footer_after_the_read_gets_none_of_the_reply_or_no_Enter(string grown, bool afterWords)
+    {
+        injector.Screen = _ => Captured("empty-interactive");
+        if (afterWords) { injector.Sent = i => { if (i == 0) { injector.Screen = _ => Captured(grown); } }; }
+        else { injector.Holding = () => injector.Screen = _ => Captured(grown); }
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        if (afterWords)
+        {
+            Assert.Equal("unconfirmed", outcome);
+            Assert.StartsWith("the reply was typed into Copilot's input box, but the box changed before its Enter", reason);
+            Assert.False(Assert.Single(injector.Plans).Plan.Sends[0].Enter);
             return;
         }
         Assert.Equal("refused", outcome);

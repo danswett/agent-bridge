@@ -93,7 +93,7 @@ public static partial class CopilotInputBoxReader
         if (!complete) { return (null, NotFound, false, state); }
         if (!main)
         {
-            return (null, "the host could not find Copilot's input box at the bottom of the session's screen, over its footer, so it may be asking something there; answer it at the machine, or reply at the machine", false, state);
+            return (null, "Couldn't check Copilot's input box at the machine, so nothing was typed; reply at the machine", false, state);
         }
         var footer = rows[below];
         if (Has(footer, VimNormal))
@@ -114,13 +114,13 @@ public static partial class CopilotInputBoxReader
         // own bottom edge, which spans the frame.
         if (working && Narrow(box))
         {
-            return (null, "Copilot's window at the machine is under 80 columns wide, where a running turn hides whether its input box is in shell or vim mode; reply once the turn ends, or reply at the machine", false, state);
+            return (null, "Copilot's window at the machine is too narrow to check its input box; reply once the turn ends, or widen it", false, state);
         }
         // An idle footer lists the commands while the box is empty (`rDo`), and only then, so it
         // must; a turn's own row never does, so there the box's own rows, read empty, decide.
         if (glyph is not (null or Glyph) || (!working && !Has(footer, "/ commands")))
         {
-            return (null, "the host could not tell that Copilot's input box is the one for a prompt, outside shell mode; reply at the machine", false, state);
+            return (null, "Couldn't check Copilot's input box at the machine, so nothing was typed; reply at the machine", false, state);
         }
         return (box, null, true, state);
     }

@@ -36,6 +36,9 @@ public enum ScreenCheck
     WithAny,
     // The row contains none of Values.
     WithNone,
+    // Every row from Row to the window's last is blank: ASCII spaces at most, the window's
+    // padding (Values unused). Row may be the window's height, where there is no row to check.
+    BlankFrom,
     // The row, leading spaces aside, starts with none of Values.
     NotStartingWith,
 }
@@ -44,7 +47,9 @@ public enum ScreenCheck
 // checks (AgentBridge.Injector, Program.Passes); the two must agree.
 public sealed record ScreenRowCheck(int Row, ScreenCheck Kind, IReadOnlyList<string> Values)
 {
-    public bool Passes(IReadOnlyList<string> rows) => Row < rows.Count && Kind switch
+    public bool Passes(IReadOnlyList<string> rows) => Kind == ScreenCheck.BlankFrom
+        ? rows.Skip(Row).All(r => r.Trim(' ').Length == 0)
+        : Row < rows.Count && Kind switch
     {
         ScreenCheck.WithoutParts => !ScreenParts.Of(rows[Row]).Any(Values.Contains),
         ScreenCheck.WithAny => Values.Any(v => rows[Row].Contains(v, StringComparison.Ordinal)),
@@ -91,11 +96,12 @@ public sealed record KeyPlan(IReadOnlyList<KeySend> Sends)
                 script.Append(' ').Append(expect.Row.ToString(CultureInfo.InvariantCulture))
                     .Append(' ').Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(expect.Text)));
             }
-            // A check: "~" (without parts), "+" (with any) or "^" (not starting with), its row,
+            // A check: "~" (without parts), "+" (with any), "-" (with none), "_" (blank from here
+            // down) or "^" (not starting with), its row,
             // then its values, one per line.
             foreach (var check in send.Checks ?? [])
             {
-                script.Append(' ').Append(check.Kind switch { ScreenCheck.WithoutParts => '~', ScreenCheck.WithAny => '+', ScreenCheck.WithNone => '-', _ => '^' })
+                script.Append(' ').Append(check.Kind switch { ScreenCheck.WithoutParts => '~', ScreenCheck.WithAny => '+', ScreenCheck.WithNone => '-', ScreenCheck.BlankFrom => '_', _ => '^' })
                     .Append(check.Row.ToString(CultureInfo.InvariantCulture))
                     .Append(' ').Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(string.Join('\n', check.Values))));
             }

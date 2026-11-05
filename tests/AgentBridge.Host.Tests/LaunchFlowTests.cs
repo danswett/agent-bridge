@@ -882,7 +882,7 @@ public abstract partial class LaunchFlowFixture
             var rows = Rows ?? [];
             foreach (var expect in plan.Sends.SelectMany(s => s.Expect ?? []))
             {
-                if (expect.Row >= rows.Count || rows[expect.Row].TrimEnd() != expect.Text.TrimEnd()) { return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, "fail screen 0")); }
+                if (expect.Row >= rows.Count || rows[expect.Row].TrimEnd(' ') != expect.Text.TrimEnd(' ')) { return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, "fail screen 0")); }
             }
             OnTyped?.Invoke(plan);
             return Task.FromResult(Then ?? new InjectionResult(InjectionStatus.Typed, "ok"));
@@ -898,7 +898,7 @@ public abstract partial class LaunchFlowFixture
             // The window as it is when the read begins, returned once the read is done.
             var rows = Rows ?? [];
             if (Reading is { } reading) { await reading(); }
-            return new ConsoleScreen(rows, null);
+            return new ConsoleScreen([.. rows.Select(Worker.Read)], null);
         }
 
         // Awaited while a read is on its way: where a test holds one.

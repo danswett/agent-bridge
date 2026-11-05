@@ -360,6 +360,11 @@ public sealed class ReplyService : ISessionReplier
                 // after the read is refused too, as one running at the read is (Trust's #843
                 // re-review).
                 .. CopilotInputBoxReader.Narrow(box) ? [new ScreenRowCheck(footer, ScreenCheck.WithNone, CopilotInputBoxReader.TurnSigns)] : Array.Empty<ScreenRowCheck>(),
+                // Still at the bottom: nothing but blank rows under the footer, as the reader
+                // required. Rows that read like the box and its footer can be printed above the
+                // real ones (a draft in them, or a dialog in their place); with only the box and
+                // footer rows held, a screen that grew that under them passed (#843 review).
+                new(footer + 1, ScreenCheck.BlankFrom, []),
             ];
             keys = new KeyPlan(
             [

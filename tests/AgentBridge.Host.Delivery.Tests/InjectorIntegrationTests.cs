@@ -321,6 +321,54 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Delivered, (string?)null), (result.Outcome, result.Reason));
     }
 
+    // A reply to Claude Code through the real ReplyService and the real worker into a real
+    // console, its empty box drawn as Claude Code draws it: the pointer, then a no-break space
+    // (`children:[pointer,"\xA0"]`). The host holds the box's rows as the worker reads them, so the
+    // no-break space is in both; held as "❯" with it trimmed away, every Claude reply was refused
+    // as a box that had changed (#843 review). A bash-mode box ("!" then a no-break space) is no
+    // input box for a reply, which would run there as a command: nothing is typed into it.
+    [WindowsTheory]
+    [InlineData("\u276F", true)]
+    [InlineData(">", true)]
+    [InlineData("!", false)]
+    public async Task A_Claude_reply_into_its_empty_box_drawn_with_a_no_break_space_is_typed_and_delivered(string pointer, bool typed)
+    {
+        var rule = new string('\u2500', 40);
+        string[] screen = ["> plan it", "", "\u25CF Planned.", "", rule, pointer + "\u00A0", rule, "  \u23F5\u23F5 auto mode on"];
+        var echo = StartEcho(show: screen);
+        using var f = new Fixture();
+        const string Id = "c1a0de00-0000-4000-8000-0000000000a1";
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, echo.Pid, transcript);
+        Fixture.Append(transcript, Claude.User("plan it", 1));
+        f.Processes.Run(AgentBridge.Protocol.AgentKind.Claude, echo.Pid);
+        await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
+        await source.RefreshAsync();
+        var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
+            new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, ConfirmTimeout = TimeSpan.FromSeconds(60), PollInterval = TimeSpan.FromMilliseconds(50) });
+        const string Text = "Ship it";
+        var cli = typed ? Task.Run(() =>
+        {
+            var downs = WaitFor(echo.Log, lines => Keys(lines).Where(k => k.StartsWith("key 1 ", StringComparison.Ordinal)).ToList() is { } d && d.Count >= Text.Length + 1 ? d : null, seconds: 60);
+            var words = new string([.. downs.SkipLast(1).Select(k => (char)int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture))]);
+            var prompt = System.Text.Json.Nodes.JsonNode.Parse(Claude.User(words, 5))!.AsObject();
+            prompt["promptSource"] = "typed";
+            Fixture.Append(transcript, prompt.ToJsonString());
+            return words;
+        }) : null;
+
+        var result = await replies.ReplyAsync(new AgentBridge.Protocol.ReplyRequest { Id = Id, Request = Guid.NewGuid().ToString(), Text = Text });
+
+        if (cli is not null)
+        {
+            Assert.Equal(Text, await cli);
+            Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Delivered, (string?)null), (result.Outcome, result.Reason));
+            return;
+        }
+        Assert.Equal(AgentBridge.Protocol.AnswerOutcome.Refused, result.Outcome);
+        Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
+    }
+
     // The real worker reading a footer's mode on a real console, the row's other parts free to
     // change: in vim's normal mode nothing is typed; in insert mode the key goes (#843 review).
     [WindowsTheory]
