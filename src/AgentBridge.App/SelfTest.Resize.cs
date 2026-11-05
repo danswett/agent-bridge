@@ -17,11 +17,12 @@ namespace AgentBridge.App;
 static partial class SelfTest
 {
     const double SweepWide = 1560, SweepNarrow = 400, SweepStep = 8, SweepHeight = 900;
-    // Each sweep's limit, by its steps: 120 ms a step, half as long again as a step takes with the
-    // heavy window on CI's arm64 runner (~86 ms), and within the 180 s the whole self-test has
-    // (build/app-self-test.ps1). A sweep slower than that is cut short and fails the check.
-    const int SweepSteps = 2 * (int)((SweepWide - SweepNarrow) / SweepStep);
-    static readonly TimeSpan SweepLongest = TimeSpan.FromMilliseconds(SweepSteps * 120);
+    // A hang guard, not a bar: the two sweeps share 30 s, the light one at most half, which keeps the
+    // whole self-test well inside its 180 s (build/app-self-test.ps1) on CI's arm64 runner. A sweep
+    // that runs out is cut short and reported so (lightFinished, heavyFinished); it fails the check
+    // only when it never crossed all three width classes, since how fast a runner draws is reported
+    // and never judged (#681).
+    static readonly TimeSpan SweepBudget = TimeSpan.FromSeconds(30);
 
     static async Task MeasureResize(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
     {
@@ -31,7 +32,9 @@ static partial class SelfTest
         layout.InspectorWanted = true;
         await Choose(window, main, "demo-approval", "Response");
         await Task.Delay(700);
-        var (light, lightDone) = await Sweep(window);
+        var budget = Stopwatch.StartNew();
+        var (light, lightDone) = await Sweep(window, SweepBudget / 2);
+        var lightTook = budget.Elapsed;
 
         await demo.AddHeavyAsync();
         await Until(() => main.AllCards.Any(c => c.Id == DemoHost.HeavyId), TimeSpan.FromSeconds(10));
@@ -55,7 +58,8 @@ static partial class SelfTest
         check(drawn && data["sessions"] > 15 && data["responseBlocks"] + data["delegateEvents"] > 200 && data["delegates"] == DemoHost.HeavyDelegates,
             $"draws a window as heavy as a real one for the resize pass, every delegate in its strip ({string.Join(", ", data.Select(d => $"{d.Value} {d.Key}"))})");
         await Task.Delay(700);
-        var (heavy, heavyDone) = await Sweep(window);
+        var heavyLimit = SweepBudget - lightTook;
+        var (heavy, heavyDone) = await Sweep(window, heavyLimit);
         if (card is not null) { card.Delegates.FinishedOpen = false; }
 
         // Back where the drag began, the session still chosen and every pane drawn.
@@ -79,16 +83,18 @@ static partial class SelfTest
         await File.WriteAllTextAsync(Path.ChangeExtension(outFile, ".resize.json"), JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
         string Said(FrameSummary s) => $"p50 {s.P50:0.#} ms, p95 {s.P95:0.#} ms, max {s.Max:0.#} ms, {s.OverLong} over {FrameTimes.Long} ms of {s.Frames}";
         AppLog.Write($"self-test: resize, light: {Said(light.All)}; heavy: {Said(heavy.All)}");
-        // Measured only when both sweeps went the whole way: one cut short by the time limit is
-        // weighted differently, however many classes it crossed. The frame times are reported only.
+        // The frame times are reported only, a sweep cut short by the hang guard included; the pass
+        // fails only when a sweep never reached every width class, so nothing was measured there.
         var crossed = new[] { PaneMode.Three, PaneMode.Two, PaneMode.One }.All(m => light.In(m).Frames > 0 && heavy.In(m).Frames > 0);
-        string Cut(string name, bool finished) => finished ? "" : $"; the {name} sweep cut short at {SweepLongest.TotalSeconds:0} s";
-        check(crossed && lightDone && heavyDone, $"measures the UI thread's frames through a whole live resize across the three width classes, both sweeps finished (heavy: {Said(heavy.All)}; light: {Said(light.All)}{Cut("light", lightDone)}{Cut("heavy", heavyDone)})");
+        string Cut(string name, bool finished, TimeSpan limit) => finished ? "" : $"; the {name} sweep cut short at {limit.TotalSeconds:0.#} s";
+        if (!lightDone || !heavyDone) { AppLog.Write($"self-test: resize, reported, not failed:{Cut("light", lightDone, SweepBudget / 2)}{Cut("heavy", heavyDone, heavyLimit)}"); }
+        check(crossed, $"measures the UI thread's frames through a live resize across the three width classes (heavy: {Said(heavy.All)}; light: {Said(light.All)}{Cut("light", lightDone, SweepBudget / 2)}{Cut("heavy", heavyDone, heavyLimit)})");
     }
 
-    // Narrowed a step a frame to the narrowest, then widened to where it began. Each step is made
-    // just after a frame, so the interval to the next holds its layout and drawing.
-    static async Task<(FrameTimes Times, bool Finished)> Sweep(MainWindow window)
+    // Narrowed a step a frame to the narrowest, then widened to where it began, or as far as it got
+    // in the time it was given. Each step is made just after a frame, so the interval to the next
+    // holds its layout and drawing.
+    static async Task<(FrameTimes Times, bool Finished)> Sweep(MainWindow window, TimeSpan limit)
     {
         var root = window.RootElement;
         var scale = root.XamlRoot.RasterizationScale;
@@ -117,7 +123,7 @@ static partial class SelfTest
         CompositionTarget.Rendering += OnFrame;
         try
         {
-            var finished = await Task.WhenAny(done.Task, Task.Delay(SweepLongest)) == done.Task;
+            var finished = await Task.WhenAny(done.Task, Task.Delay(limit > TimeSpan.Zero ? limit : TimeSpan.Zero)) == done.Task;
             return (times, finished);
         }
         finally
