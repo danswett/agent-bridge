@@ -1251,6 +1251,9 @@ public sealed partial class LaunchService : ISessionLauncher
 
     static TrustAnswerResult TrustUnconfirmed(string what) => new(TrustAnswerOutcome.Unconfirmed, $"Not confirmed: answer at the machine. {char.ToUpperInvariant(what[0])}{what[1..]}.");
 
+    static TrustAnswerResult BypassAfterTrust(string label) => new(TrustAnswerOutcome.Unconfirmed,
+        $"Not confirmed: the folder was trusted, and {label} is now asking in its window to confirm Bypass Permissions mode (Allow all). Only a person at the machine can answer that; the session appears here once they do.");
+
     // The agent's own process: the launcher's, or, once that handed the session on and exited,
     // the session's own, by its start time where discovery knows it.
     bool AgentAlive(Pending p)
@@ -1295,6 +1298,9 @@ public sealed partial class LaunchService : ISessionLauncher
                 {
                     return new TrustAnswerResult(TrustAnswerOutcome.Started) { Session = id };
                 }
+                // Claude's Allow all asks this next, once the folder is trusted: said for what it
+                // is, and left for a person at the machine, never answered from here (#149, #158).
+                if (p.Asks(StartupQuestion.BypassPermissions)) { return BypassAfterTrust(label); }
                 if (p.LiveId is null && !AgentAlive(p)) { return TrustUnconfirmed($"{label} closed after the answer, before its session was seen"); }
             }
             else if (!AgentAlive(p))
@@ -1308,6 +1314,7 @@ public sealed partial class LaunchService : ISessionLauncher
                 return new TrustAnswerResult(TrustAnswerOutcome.Declined, $"{label} was not trusted with {p.Where}, and closed; nothing was launched");
             }
         }
+        if (trust && p.Asks(StartupQuestion.BypassPermissions)) { return BypassAfterTrust(label); }
         return TrustUnconfirmed(trust
             ? p.Question == StartupQuestion.Trust ? $"the question is still in {label}'s window" : $"{label}'s session was not seen to start within {options.TrustConfirmWait.TotalSeconds:0} s"
             : $"{label} was not seen to close within {options.TrustConfirmWait.TotalSeconds:0} s");
