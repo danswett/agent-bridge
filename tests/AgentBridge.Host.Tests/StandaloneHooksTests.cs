@@ -549,6 +549,43 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.Equal(original, File.ReadAllText(Path.Combine(Profile, "hooks", "backups", "claude-settings.json")));
     }
 
+    [Theory]
+    [InlineData("{\"model\":\"user-model\",\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"user-hook\"}]}]}}", false)]
+    [InlineData("{\r\n    // the person's note\r\n    \"model\": \"user-model\",\r\n    \"permissions\": { \"allow\": [ \"Bash(git status)\", ], },\r\n}\r\n", false)]
+    [InlineData("{\n\t\"env\": {\"A\": \"1\"}\n}\n", true)]
+    public async Task Claude_removal_restores_unchanged_original_settings_byte_for_byte(string original, bool bom)
+    {
+        byte[] bytes = [.. bom ? new byte[] { 0xEF, 0xBB, 0xBF } : Array.Empty<byte>(), .. Encoding.UTF8.GetBytes(original)];
+        Directory.CreateDirectory(Homes.Claude);
+        File.WriteAllBytes(Registration("claude"), bytes);
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Assert.NotEqual(bytes, File.ReadAllBytes(Registration("claude")));
+
+        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+
+        Assert.Equal(bytes, File.ReadAllBytes(Registration("claude")));
+        Assert.False(File.Exists(Owner("claude")));
+    }
+
+    [Fact]
+    public async Task Claude_removal_deletes_settings_it_created_but_keeps_settings_Claude_added_later()
+    {
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+        Assert.False(File.Exists(Registration("claude")));
+
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var settings = Read(Registration("claude"));
+        settings["theme"] = "dark";
+        Write(Registration("claude"), settings.ToJsonString());
+        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+
+        var remaining = Read(Registration("claude"));
+        Assert.Equal("dark", (string?)remaining["theme"]);
+        Assert.Null(remaining["hooks"]);
+    }
+
     [Fact]
     public async Task Claude_removal_recognizes_a_differently_cased_Windows_profile_without_orphaning_hooks()
     {
@@ -558,7 +595,7 @@ public sealed class StandaloneHooksTests : IDisposable
 
         await sameProfile.RemoveAsync("claude", false, TextWriter.Null);
 
-        Assert.Null(Read(Registration("claude"))["hooks"]);
+        Assert.False(File.Exists(Registration("claude")));
         Assert.False(File.Exists(Owner("claude")));
         await Setup.InstallAsync("claude", false, TextWriter.Null);
         Assert.Single(Read(Registration("claude"))["hooks"]!["SessionStart"]!.AsArray());
@@ -716,7 +753,7 @@ public sealed class StandaloneHooksTests : IDisposable
         }
         await setup.InstallAsync("claude", false, TextWriter.Null);
         await setup.RemoveAsync("claude", false, TextWriter.Null);
-        Assert.Null(Read(Registration("claude"))["hooks"]);
+        Assert.False(File.Exists(Registration("claude")));
         Assert.False(File.Exists(Owner("claude")));
     }
 

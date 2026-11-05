@@ -299,6 +299,11 @@ public sealed class StandaloneHooks(
         else if (root is not null)
         {
             if (agent == "copilot" && root.All(p => p.Key == "version")) { DurableFile.Remove(path, before); }
+            else if (agent == "claude" && ClaudeOriginal(root) is { } original)
+            {
+                if (original.Length == 0) { DurableFile.Remove(path, before); }
+                else { DurableFile.Replace(path, original, before); }
+            }
             else { DurableFile.Replace(path, Bytes(root), before); }
         }
         instructions.Apply(InstructionBackup(agent));
@@ -308,6 +313,18 @@ public sealed class StandaloneHooks(
         if (agent != "copilot" || !File.Exists(path)) { DurableFile.Remove(owner, MigrationRecord.Hash(owner)); }
         // Keep the private runtime and binary: sessions already open retain their commands.
         output.WriteLine("Removed. Existing sessions keep their hooks until they end; other settings and Codex hook trust were left alone.");
+    }
+
+    // Settings that, without our hooks, still mean exactly what the person had before setup
+    // get their original bytes back, comments and formatting included. Empty bytes mean setup
+    // created the file and nothing else was added since, so removal deletes it.
+    byte[]? ClaudeOriginal(JsonObject remaining)
+    {
+        var backup = Path.Combine(HookFolder, "backups", "claude-settings.json");
+        if (!File.Exists(backup)) { return remaining.Count == 0 ? [] : null; }
+        var original = File.ReadAllBytes(backup);
+        try { return JsonNode.DeepEquals(Read(backup), remaining) ? original : null; }
+        catch (Exception e) when (e is JsonException or InvalidDataException) { return null; }
     }
 
     static FileStream Lock(string profile)
