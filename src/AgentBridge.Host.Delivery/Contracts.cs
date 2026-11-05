@@ -33,6 +33,9 @@ public sealed record ConsoleScreen(IReadOnlyList<string>? Rows, string? Problem)
 // when it is not. While it is, this host must not type into any session (design G5).
 public interface IAgentHaBridgeProbe
 {
+    // Active's reason when it could not tell either way: refused, as running is, but not "running".
+    const string Unchecked = "whether agent-ha-bridge is running for this user could not be checked; answer at the machine";
+
     string? Active();
 
     // The same answer, perhaps a moment old (SharedAgentHaBridgeProbe), for what is only offered or

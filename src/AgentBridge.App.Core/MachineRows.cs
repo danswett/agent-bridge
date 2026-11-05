@@ -18,6 +18,7 @@ public sealed class MachineRowViewModel : Observable
     bool canShowSessions;
     bool canCheckHere;
     MachineUpdateViewModel? update;
+    MachineDiagnosisViewModel? diagnosis;
 
     internal MachineRowViewModel(string key, OfflineMachineViewModel? offline = null)
     {
@@ -72,6 +73,13 @@ public sealed class MachineRowViewModel : Observable
         internal set { if (Set(ref update, value)) { Raise(nameof(HasUpdate)); } }
     }
     public bool HasUpdate => update is not null;
+    // Diagnose (#802): another machine's, while it is connected; never this one's.
+    public MachineDiagnosisViewModel? Diagnosis
+    {
+        get => diagnosis;
+        internal set { if (Set(ref diagnosis, value)) { Raise(nameof(HasDiagnosis)); } }
+    }
+    public bool HasDiagnosis => diagnosis is not null;
     public OfflineMachineViewModel? Offline { get; }
     public bool IsOffline => Offline is not null;
     public string ShowSessionsName => $"Show the sessions on {name}";
@@ -105,6 +113,10 @@ public sealed partial class MainViewModel
             row.CanShowSessions = connected && !m.Offline && machines.Count > 1;
             row.CanCheckHere = m.IsLocal && CheckLocal is not null;
             row.Update = MachineUpdates.FirstOrDefault(u => u.Key == m.Key);
+            // This machine's host is reached over the local pipe, which never serves diagnostics.
+            if (m.IsLocal || m.Offline || !connected) { row.Diagnosis?.Close(); row.Diagnosis = null; }
+            else if (row.Diagnosis?.Machine != m) { row.Diagnosis = new MachineDiagnosisViewModel(m, Time); }
+            else { row.Diagnosis?.Refresh(); }
             want.Add(row);
         }
         foreach (var o in OfflineMachines)

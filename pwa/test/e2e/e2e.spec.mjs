@@ -111,7 +111,7 @@ test('a signed-in phone sees a machine\'s live sessions over an end-to-end chann
   await page.click('#machine-tabs [data-device-name="fixture-host"]');
   await expect(page.locator('.session')).toHaveCount(fixture.sessions.length, { timeout: 30000 });
   await expect(page.locator('#sessions-h')).toHaveText('Sessions on fixture-host');
-  await expect(page.locator('[data-device-name="fixture-host"] button')).toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('[data-device-name="fixture-host"] button.machine-button')).toHaveAttribute('aria-current', 'true');
   await expect(card(page, CLAUDE)).toHaveAttribute('data-status', 'working');
   // Idle, but waiting on work it started: background crosses the relay intact.
   await expect(card(page, DELEGATING)).toHaveAttribute('data-view', 'delegating');
@@ -180,7 +180,7 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   // The new sign-in starts where one with nothing remembered does, at every machine, not at
   // the machine the last one chose.
   await expect(opened.locator('[data-device-id="all"] button')).toHaveAttribute('aria-current', 'true');
-  await expect(opened.locator('[data-device-name="fixture-host"] button')).not.toHaveAttribute('aria-current', 'true');
+  await expect(opened.locator('[data-device-name="fixture-host"] button.machine-button')).not.toHaveAttribute('aria-current', 'true');
   await expect(opened.locator('#sessions-h')).toHaveText('Sessions on all machines');
 });
 

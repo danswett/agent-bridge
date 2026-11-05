@@ -120,6 +120,9 @@ public sealed class SessionService
     // the machine's person-device roster, given the asking device's id. Offered with sign-in itself.
     internal Func<string?, SignInDevices>? SignInDevices { get; init; }
 
+    // diagnostics.get, through the relay only, to a device pinned as a person's (RemoteDiagnostics).
+    public RemoteDiagnostics? Diagnostics { get; init; }
+
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
         UsageService? usage = null, ISessionLauncher? launcher = null, SessionTransfers? transfers = null)
@@ -219,6 +222,9 @@ public sealed class SessionService
                 return await Updates.HandleAsync(channel, op, data);
             case var manage when ManageProtocol.Ops.Contains(manage) && Manage is not null:
                 return await Manage.HandleAsync(channel, op, data);
+            // Never this machine's pipe: a LocalChannel falls through to an unknown op.
+            case DiagnosticsProtocol.Get when Diagnostics is not null && channel is SecureChannel:
+                return await Diagnostics.HandleAsync(channel, data);
             case Ops.SessionsList:
                 return source.List(String(data, "cursor"));
             case Ops.SessionGet:
@@ -554,6 +560,7 @@ public sealed class SessionService
         if (Updates?.Offered(channel) == true) { offered.Add(UpdateProtocol.Capability); }
         if (Restore is not null) { offered.Add(RestoreProtocol.Capability); }
         if (Manage is not null) { offered.AddRange(Manage.Offered(channel)); }
+        if (Diagnostics?.Offered(channel) == true) { offered.Add(DiagnosticsProtocol.Capability); }
         // Transfers are signed by a device through the relay, and go through its blob store.
         if (transfers is not null && channel is SecureChannel)
         {

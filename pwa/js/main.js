@@ -42,6 +42,7 @@ import { UsageBook } from './usage.js';
 import { FleetStatus } from './fleet.js';
 import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UpdateControl } from './update.js';
+import { DiagnoseControl } from './diagnostics.js';
 import { ReleaseWatch } from './release-watch.js';
 import { LastingBanner } from './banner-rule.js';
 import { UsageView } from './ui/usage-view.js';
@@ -409,7 +410,8 @@ async function startDemo() {
   // ?confirmDelay=: how long after typing an answer or reply the machine confirms it, to see Typed.
   host.confirmDelayMs = Number(params.get('confirmDelay')) || 0;
   // ?machines=2 or 3: the account's other machines, after this one.
-  const machines = [host, ...demoMachines(Number(params.get('machines')) || 1, { answerDelayMs, stopWindowMs })];
+  // ?diagnose=1: the laptop offers its diagnostics (#802); the others are hosts from before.
+  const machines = [host, ...demoMachines(Number(params.get('machines')) || 1, { answerDelayMs, stopWindowMs, diagnosing: params.get('diagnose') === '1' })];
   // With ?signin=1, each other machine that takes answers needs a sign-in too (#800).
   if (params.get('signin') === '1') {
     for (const m of machines.slice(1).filter((x) => x.capabilities.includes('sessions.answer'))) {
@@ -460,6 +462,8 @@ async function startDemo() {
     });
   }
   const demoUpdates = new UpdateControl({ fleet });
+  // ?diagnose=1: each machine's Diagnose (#802), as a person's device has it.
+  const demoDiagnose = params.get('diagnose') === '1' ? new DiagnoseControl({ fleet }) : null;
   const transfers = new Map();
   for (const m of machines) {
     if (m.capabilities.includes(TRANSFER.capability)) { transfers.set(m.machine.id, await demoTransfers(m, m.machine.id)); }
@@ -483,11 +487,13 @@ async function startDemo() {
     forget: demoForget,
     updates: demoUpdates,
     signInDevices: (id) => fleet.signIns(id),
+    diagnose: demoDiagnose,
     storage: demoStorage,
     onRendered: () => focusLinked(),
   });
   demoForget.onChange(() => page.drawMachines());
   demoUpdates.onChange(() => page.drawMachines());
+  demoDiagnose?.onChange(() => page.drawMachines());
   fleet.onChange(() => page.drawMachines());
   $('machines').hidden = false;
   hosts.restoreTarget(page.routedHost ?? null);
@@ -642,10 +648,13 @@ function begin(account) {
   // subscription is on that machine, which is gone; the notices it left here are closed.
   // Each machine's updates (#51): Check and Install, from a person's device, which this is.
   const updates = new UpdateControl({ fleet });
+  // Each machine's Diagnose (#802): read here, copied only after review.
+  const diagnose = new DiagnoseControl({ fleet });
   const dropMachine = (id) => {
     hosts.dropMachine(id);
     fleet.forget(id);
     updates.forget(id);
+    diagnose.forget(id);
     if (hosts.targetId === id) { hosts.select(ALL); }
     worker().then((r) => closeMachineNotices(r, id)).catch(() => {});
   };
@@ -690,6 +699,7 @@ function begin(account) {
     forget: forgets,
     updates,
     signInDevices: (id) => fleet.signIns(id),
+    diagnose,
     onRendered: () => focusLinked(),
   });
   const { answers, replies, stops, launches } = page;
@@ -790,6 +800,7 @@ function begin(account) {
   fleet.onChange(() => page.drawMachines());
   forgets.onChange(() => page.drawMachines());
   updates.onChange(() => page.drawMachines());
+  diagnose.onChange(() => page.drawMachines());
   hosts.restoreTarget(link?.host ?? page.routedHost ?? null);
   fleet.start();
   // "last seen 5m ago" moves on with nothing else to redraw the list: every machine may be offline.
@@ -834,6 +845,7 @@ function begin(account) {
     fleet.clear();
     forgets.clear();
     updates.clear();
+    diagnose.clear();
     lastKnown = null;
     page.clear();
     // A session's address names this account's machine: the next sign-in, perhaps another

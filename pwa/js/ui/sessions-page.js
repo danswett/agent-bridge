@@ -172,10 +172,11 @@ export class SessionsPage {
   // trust(hostId): how a folder-trust question on that machine is answered from here, or null.
   // status(id): a machine's status line. forget: a ForgetControl for offline machines, or null.
   // updates: an UpdateControl for the machines that offer updates (#51), or null.
+  // diagnose: a DiagnoseControl for each machine's Diagnose (#802), or null.
   // shell: the pages and app bar (./shell.js), or null: where a session shown goes, and where
   // machines online and a waiting folder-trust question are said.
-  constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, confirm = () => null, status = () => '', facts = null, forget = null, updates = null, signInDevices = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {} }) {
-    Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, confirm, status, facts, forget, updates, signInDevices, storage, onRendered });
+  constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, confirm = () => null, status = () => '', facts = null, forget = null, updates = null, signInDevices = null, diagnose = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {} }) {
+    Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, confirm, status, facts, forget, updates, signInDevices, diagnose, storage, onRendered });
     const current = (hostId) => hosts.route(hostId);
     const timing = retryMs ? { retryMs } : {};
     // One gate for every send (#269): nothing new is given for a machine with no route now (its
@@ -963,6 +964,7 @@ export class SessionsPage {
       forget: this.forget,
       updates: this.updates,
       signInDevices: this.signInDevices,
+      diagnose: this.diagnose,
       allStatus: hosts.all ? plural(hosts.sessions.size, 'session', 'sessions') : '',
     });
     $('machines-empty').hidden = n !== 0 || !connection.ready;
@@ -1009,4 +1011,3 @@ export class SessionsPage {
   #read(key) { try { return this.storage?.getItem(key) ?? null; } catch { return null; } }
   #write(key, value) { try { this.storage?.setItem(key, value); } catch { /* a nicety */ } }
 }
-

@@ -1699,6 +1699,22 @@ machine, online ones first, then the account's offline machines (#213):
   keeps no roster lists it so only while its rows are kept.
 - **A machine whose bridge isn't running (§6.14, proposed):** still "Offline" on line 1, and
   line 2 says "Bridge isn't running · since *time*" in place of "Last seen…".
+- **Diagnose (#802, v1-diagnostics.md):** in another connected machine's row, after its updates,
+  a quiet small secondary **Diagnose** when its host offers it. A host that does not offer it
+  shows, in that place, the passive line "Can't be diagnosed from this device · update Agent
+  Bridge on <machine>", never a button that cannot act. This machine's own row has neither. The
+  states, the same on both clients except where said:
+  - **Asking:** Diagnose does nothing more until the answer (the PWA's reads "Diagnosing…"; the
+    app's is disabled).
+  - **Review:** the snapshot as plain monospace text, headed with the product, the machine and the
+    Pacific time. The PWA wraps it within the row, so a 400 px phone never scrolls sideways; the
+    app keeps lines whole in a read-only box that scrolls within 360 px. Under it the box "I have
+    read this and it is fine to share", and **Copy**, disabled until the box is ticked, beside
+    **Close** (the PWA's Diagnose reads "Diagnose again"). Close is the default: Escape anywhere
+    in the report, on its Copy and Close too, closes it, and Close and Escape both put focus back
+    on Diagnose.
+  - **Refused or unreadable:** one line in the row's error style, in the person's words
+    (v1-diagnostics.md "In the clients"), never the host's text; Diagnose stays pressable.
 
 ### 6.7 Collaborators (#519)
 
