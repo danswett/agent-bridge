@@ -19,6 +19,23 @@ public sealed class SignInTests
     static JsonElement Frame(FakeTimeProvider time, string? code = null, string? uri = null) =>
         Json(new { kind = "code", userCode = code ?? SyntheticCode, verificationUri = uri ?? "https://github.com/login/device", expiresAt = time.GetUtcNow().AddSeconds(10) });
 
+    [Fact]
+    public void Approved_native_command_disables_debug_logging_and_never_uses_a_shell_or_inherited_token()
+    {
+        using var fixture = new Fixture();
+        var executable = Path.Combine(fixture.Root, "trusted-copilot");
+        var start = CopilotDeviceCommand.Create(executable, fixture.CopilotHome);
+        Assert.Equal(executable, start.FileName);
+        Assert.Equal(["login", "--device-code", "--host", "https://github.com", "--log-level", "none"], start.ArgumentList);
+        Assert.False(start.UseShellExecute);
+        Assert.True(start.RedirectStandardInput && start.RedirectStandardOutput && start.RedirectStandardError);
+        Assert.Equal(fixture.CopilotHome, start.Environment["COPILOT_HOME"]);
+        Assert.False(start.Environment.ContainsKey("COPILOT_GITHUB_TOKEN"));
+        Assert.False(start.Environment.ContainsKey("GH_TOKEN"));
+        Assert.False(start.Environment.ContainsKey("GITHUB_TOKEN"));
+        Assert.Throws<ArgumentException>(() => CopilotDeviceCommand.Create("peer-supplied-command", fixture.CopilotHome));
+    }
+
     [Theory]
     [InlineData("TEST-0001", "https://github.com/login/device", true)]
     [InlineData("test-0001", "https://github.com/login/device", false)]
@@ -346,7 +363,7 @@ public sealed class SignInTests
     public async Task Silent_candidate_stays_pending_without_claiming_recovery_until_real_model_output(bool automatic)
     {
         await using var h = await Harness.CreateAsync();
-        h.Recovery.Candidate = true;
+        h.Recovery.ModelEvidence = true;
         var phone = h.Phone();
         if (automatic) { Assert.True(await h.Service.TryPrepareSilentRecoveryAsync(AgentKind.Copilot, null)); }
         else { await h.Start(phone).Then(phone); }
@@ -375,7 +392,7 @@ public sealed class SignInTests
         Fixture.Append(other, AuthError(2));
         await h.Source.RefreshAsync();
         h.Resolver.Ids = [Id, OtherId];
-        h.Recovery.Candidate = true;
+        h.Recovery.ModelEvidence = true;
         var phone = h.Phone();
         await h.Start(phone).Then(phone);
         Fixture.Append(h.Events, Copilot.Assistant("first model reply", 3));
@@ -461,9 +478,9 @@ public sealed class SignInTests
     }
     sealed class Recovery : ISignInRecovery
     {
-        public bool Candidate;
+        public bool ModelEvidence;
         public int Resumes;
-        public Task<bool> HasCandidateAsync(SignInTarget target, CancellationToken ct) => Task.FromResult(Candidate);
+        public Task<bool> HasModelEvidenceAsync(SignInTarget target, CancellationToken ct) => Task.FromResult(ModelEvidence);
         public Task<SignInResume> ResumeAsync(SignInContext context, Func<bool> authorize, CancellationToken ct)
         {
             Assert.True(authorize());

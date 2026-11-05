@@ -119,7 +119,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
             try
             {
                 await StateAsync(context, flow.Id, RecoveryState.Checking, true, flow.Stop.Token);
-                var candidate = await recovery.HasCandidateAsync(context.Target, flow.Stop.Token).WaitAsync(CheckLimit, time, flow.Stop.Token);
+                var candidate = await recovery.HasModelEvidenceAsync(context.Target, flow.Stop.Token).WaitAsync(CheckLimit, time, flow.Stop.Token);
                 if (!candidate || !CanPrepare(flow)) { await EndAsync(flow, SignInOutcome.Failed); return false; }
                 await StateAsync(context, flow.Id, RecoveryState.Pending, ct: flow.Stop.Token);
                 await recovery.ResumeAsync(context, () => CanPrepare(flow), flow.Stop.Token).WaitAsync(CheckLimit, time, flow.Stop.Token);
@@ -245,7 +245,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
         {
             if (!HasParticipant(flow) || !Compatible(flow.Context)) { await EndAsync(flow, SignInOutcome.Cancelled); return; }
             await StateAsync(flow.Context, flow.Id, RecoveryState.Checking, true, flow.Stop.Token);
-            var candidate = await recovery.HasCandidateAsync(flow.Context.Target, flow.Stop.Token).WaitAsync(CheckLimit, time, flow.Stop.Token);
+            var candidate = await recovery.HasModelEvidenceAsync(flow.Context.Target, flow.Stop.Token).WaitAsync(CheckLimit, time, flow.Stop.Token);
             if (!HasParticipant(flow) || !Compatible(flow.Context)) { await EndAsync(flow, SignInOutcome.Cancelled); return; }
             if (candidate)
             {

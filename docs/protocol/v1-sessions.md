@@ -1188,7 +1188,14 @@ opens a browser and copies the code**. No production runner is included here, no
 sign-in was attempted, and there is no replacement OAuth client or installed-CLI patch.
 An approved adapter must suppress CLI debug logging with a supported option, preserve
 the CLI's persistence/organization-policy checks, and keep both output streams private.
-Its future command/output parser still needs the routed, redacted capture.
+The prepared, unexecuted launch contract uses
+`copilot login --device-code --host https://github.com --log-level none`,
+with host-resolved absolute executable/home, private redirected streams, no shell,
+and inherited token variables removed by name without examining their values.
+The installed CLI declares `none` as a supported level and forwards it into login.
+This launch specification is not a process factory; the output adapter still needs
+the routed, redacted capture. Upstream follow-up:
+[github/copilot-cli#5358](https://github.com/github/copilot-cli/issues/5358).
 
 The framework's request/event contract (not yet offered to clients) is:
 
@@ -1229,9 +1236,11 @@ the existing parser sees real main-agent model output after the latest auth fail
 Prompts, turn boundaries, CLI error notices and login/resume acknowledgements do not
 clear it. An old callback cannot overwrite a newer flow/failure. Host-owned silent
 recovery has the same checking → pending → model-proof contract and initiates no
-device flow or approval; its status provider is unavailable by default, with no
-credential-file reads or speculative auth probes. Without a supported token-free
-agent status/reload contract, only the parser's positive model evidence proves recovery.
+device flow or approval. Its injectable evidence source is unavailable by default
+and may accept **positive main-model evidence only**, for the same host-resolved
+credential scope. There is no status provider, credential-file inspection or auth
+probe. Even proof from another matching session only makes this session pending:
+its own real main-model reply is required to clear its attention.
 Dead-session resume/reload is an interface dependency on **#780 Host B**; the supplied
 stub starts/types nothing and claims no resumed session ids. No signed-in push is
 emitted by this framework.

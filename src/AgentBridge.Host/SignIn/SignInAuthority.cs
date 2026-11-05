@@ -38,7 +38,9 @@ internal interface ISignInContextResolver
 internal sealed record SignInResume(IReadOnlyList<string> Resumed, IReadOnlyList<string> Continue);
 internal interface ISignInRecovery
 {
-    Task<bool> HasCandidateAsync(SignInTarget target, CancellationToken ct);
+    // Positive main-model evidence for the same host-resolved credential scope only.
+    // No status command, credential-file inspection or auth probe is permitted.
+    Task<bool> HasModelEvidenceAsync(SignInTarget target, CancellationToken ct);
     // Host B must recheck authorize at the effect, including after any queue.
     Task<SignInResume> ResumeAsync(SignInContext context, Func<bool> authorize, CancellationToken ct);
 }
@@ -46,7 +48,7 @@ internal interface ISignInRecovery
 // #780 Host B owns restoring/reloading sessions. Host A alone must start nothing.
 internal sealed class UnavailableSignInRecovery : ISignInRecovery
 {
-    public Task<bool> HasCandidateAsync(SignInTarget target, CancellationToken ct) => Task.FromResult(false);
+    public Task<bool> HasModelEvidenceAsync(SignInTarget target, CancellationToken ct) => Task.FromResult(false);
     public Task<SignInResume> ResumeAsync(SignInContext context, Func<bool> authorize, CancellationToken ct) =>
         Task.FromResult(new SignInResume([], []));
 }
