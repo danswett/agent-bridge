@@ -1252,6 +1252,13 @@ code when it is an HTTP status (100 to 599):
 | `error` / `other` | "*Agent* stopped with an error (*status*)." |
 | `notResponding` | "*Agent* isn't responding." |
 
+Copilot CLI follows the error that ends a turn with a notice of its own, an `assistant.message`
+that starts "⚠️ Turn error:" and quotes the error's words. Those words can hold a credential, a
+path or an address, so the host never shows them (#846). In `activity.response` (or
+`own.response`) the notice reads "⚠️ Turn error: " followed by the same sentence as `message` for
+that turn's error, or "Copilot stopped with an error." when no error was read before it in the
+turn. Clients, HA and a `finished` push therefore never carry any of the agent's error text.
+
 Claude Code and Codex send none yet: their records are read only once a real, redacted sample of
 each has been captured. `notResponding`, `account`, `signIn`, `recovery`, the per-machine
 roll-up in `hello`, the `signIn` and `signedIn` notices and the `sessions.signin` capability
