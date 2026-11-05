@@ -258,4 +258,38 @@ public sealed class RosterCopyTests
         w.Remove("late", "G", "+A'", "m");
         Assert.Equal(Invalid.Target, w.Feed(v, "late")[0].Reason);
     }
+
+    // §10's cycle of copies: concurrent approvers A, B and C each add X, over histories holding A
+    // and C, A and B, and B and C, so A's add displaces B's, B's displaces C's and C's displaces A's.
+    internal static World CopyCycle()
+    {
+        var w = new World();
+        w.Genesis();
+        foreach (var d in new[] { "A", "B", "C" })
+        {
+            w.Add($"+{d}", "G", d, "G");
+            w.Confirm($"c{d}", "G", $"+{d}", $"+{d}");
+        }
+        w.Merge("mAC", "A", ["cA", "cC"]);
+        w.Add("aA", "A", "X", "mAC");
+        w.Merge("mAB", "B", ["cA", "cB"]);
+        w.Add("aB", "B", "X", "mAB");
+        w.Merge("mBC", "C", ["cB", "cC"]);
+        w.Add("aC", "C", "X", "mBC");
+        w.Merge("join", "G", ["aA", "aB", "aC"]);
+        return w;
+    }
+
+    [Fact]
+    public void In_a_cycle_of_copies_no_add_wins_and_with_two_of_them_the_pairwise_winner_is_active()
+    {
+        var w = CopyCycle();
+        var v = w.Verifier();
+        Assert.Contains(w.Id("X"), v.State.Conflicted);
+        Assert.Null(v.State.ActiveAdd(w.Id("X")));
+        Assert.Null(v.State.Device(w.Id("X")));
+        var two = w.Verifier([.. w.Labels.Where(l => l is not ("mBC" or "aC" or "join"))]);
+        Assert.Equal(Index(w, two, "aA"), two.State.ActiveAdd(w.Id("X")));
+        Assert.True(two.State.IsVoid(Index(w, two, "aB")));
+    }
 }
