@@ -37,6 +37,10 @@ public sealed class RosterStateVectorTests
                 w.Merge("tidy", "G", ["+D8", "nY"], adopt: true);
                 return w;
             });
+        // Quarantine depends on what a verifier held when an entry arrived, so these are in one order:
+        // the property tests leave them out.
+        yield return new("unrefreshed-removal", "an add on a removal signed 30 entries back is as far outside the window as its parent", () => RosterWindowTests.Unrefreshed(removalFirst: true));
+        yield return new("unrefreshed-rename", "an add on a quarantined rename signed 30 entries back is quarantined with it", () => RosterWindowTests.Unrefreshed(removalFirst: false));
         yield return new("quarantined-removal", "a removal on a quarantined branch applies when it is valid without it",
             () =>
             {
