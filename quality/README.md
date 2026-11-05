@@ -298,10 +298,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    (its own output, and it runs on `main` and in the whole ring whatever the plan says); the plan
    step's `JOBS`, the jobs gated on the plan and the plan's outputs, bound to the steps that
    compute them, agree; every check job in ci.yml is in `quality-gate`'s needs (all but the
-   delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, each pinned to the one
-   job it follows), and its `if:` is
+   delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, `sign`, each pinned to
+   the jobs it follows), and its `if:` is
    `always()`; `publish-gate` needs `quality-gate` and requires its success as a top-level
-   condition, and `publish` needs `publish-gate` with no status function; the plan's suites and
+   condition, `sign` needs `publish-gate`, and `publish` needs `publish-gate` and `sign`, the two
+   with no status function; the plan's suites and
    whole-ring reach steps only as `SUITES` and `WHOLE_RING`; and each step that reads the plan's
    suites names suites the catalog has, whose `where:` names that job explicitly, in the one
    condition shape that runs on `main` and in the whole ring whatever the plan selected, with an

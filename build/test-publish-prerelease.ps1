@@ -862,6 +862,48 @@ Check 'A pack required to sign, without the means to, builds nothing' {
     }
 }
 
+# --- CI's signing job (#734): it packs and signs the folder an app job published, building nothing,
+# so no build or test holds the signing identity.
+function New-PpPublished([string]$Runtime = 'win-x64', [switch]$Release) {
+    & $packScript -Version '0.1.600' -Runtime $Runtime -Out $scratch -Release:$Release -NoPack 6>$null 3>$null
+    $global:PpPublishRids.Clear()
+}
+
+Check 'A pack-only signing pack signs the folder already published, for either architecture, publishing nothing' {
+    foreach ($runtime in 'win-x64', 'win-arm64') {
+        Reset
+        New-PpPublished $runtime -Release
+        $global:PpPackMakes = $true
+        $global:PpSign = @{ 'Microsoft.Runtime.dll' = 'microsoft' }
+        $metadata = New-PpMetadata
+        & $packScript -Version '0.1.600' -Runtime $runtime -Out $scratch -Release -PackOnly -AzureTrustedSignFile $metadata -RequireSignature -SignerEku $global:PpEku 6>$null 3>$null
+        Assert ($global:PpPublishRids.Count -eq 0) "dotnet publish ran for: $($global:PpPublishRids)"
+        Assert ((PackArg '-p') -eq [IO.Path]::GetFullPath((Join-Path $scratch 'publish'))) "vpk pack $($global:PpPackArgs -join ' ')"
+        Assert ((PackArg '--azureTrustedSignFile') -eq $metadata) "vpk pack $($global:PpPackArgs -join ' ')"
+        Assert ((PackArg '-c') -ceq @{ 'win-x64' = 'win'; 'win-arm64' = 'win-arm64' }[$runtime]) "channel: $(PackArg '-c')"
+    }
+}
+
+Check 'A pack-only pack still checks the folder it is given, and packs nothing it refuses' {
+    foreach ($case in @(
+            @{ Setup = {}; Args = @{}; Says = '*-PackOnly packs*and there is none*' }
+            @{ Setup = { New-PpPublished }; Args = @{ Release = $true }; Says = '*dev build, not a release build*' }
+            @{ Setup = { New-PpPublished -Release }; Args = @{ Release = $true; Runtime = 'win-arm64' }; Says = '*not built for arm64*AgentBridge.exe (x64)*' }
+            @{ Setup = { New-PpPublished -Release; Remove-Item (Join-Path $scratch 'publish' 'agent-bridge-injector.exe') }; Args = @{ Release = $true }; Says = '*missing from the publish folder: agent-bridge-injector.exe*' }
+            @{ Setup = { New-PpPublished -Release }; Args = @{ Release = $true; NoPack = $true }; Says = '*-PackOnly packs the folder already there, and -NoPack packs nothing*' }
+            @{ Setup = { New-PpPublished -Release }; Args = @{ Release = $true; RequireSignature = $true; SignerEku = $global:PpEku }; Says = '*neither -AzureTrustedSignFile nor -SignParams*' }
+        )) {
+        Reset
+        & $case.Setup
+        $a = $case.Args
+        $threw = $false
+        try { & $packScript -Version '0.1.600' -Out $scratch -PackOnly @a 6>$null 3>$null } catch { $threw = $_.Exception.Message -like $case.Says }
+        Assert $threw "not refused: $($case.Says)"
+        Assert ($global:PpPublishRids.Count -eq 0) "dotnet publish ran: $($case.Says)"
+        Assert ($null -eq $global:PpPackSaw) "vpk pack ran: $($case.Says)"
+    }
+}
+
 Check 'The Artifact Signing metadata names the account and profile, the Azure CLI sign-in alone, and no secret' {
     Reset
     $metadata = Get-Content (New-PpMetadata) -Raw | ConvertFrom-Json

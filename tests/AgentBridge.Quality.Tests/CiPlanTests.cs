@@ -188,7 +188,7 @@ public class CiPlanTests
     [Fact]
     public void A_check_job_missing_from_the_gate_is_reported_whether_or_not_it_reads_the_plan()
     {
-        const string Problem = " isn't in quality-gate's needs, so its result wouldn't count (only attest, publish, publish-gate, relay-image-sarif may stay out)";
+        const string Problem = " isn't in quality-gate's needs, so its result wouldn't count (only attest, publish, publish-gate, relay-image-sarif, sign may stay out)";
 
         Assert.Equal(["ci.yml job ha-integration" + Problem], Check(Wired.Replace("needs: [plan, product, ha-integration]", "needs: [plan, product]")));
         Assert.Equal(["ci.yml job lint" + Problem], Check(Wired.Replace("  quality-gate:", "  lint:\n    runs-on: ubuntu-latest\n  quality-gate:")));
@@ -224,18 +224,24 @@ public class CiPlanTests
     }
 
     [Theory]
-    [InlineData("[publish-gate]", "needs.publish-gate.outputs.newest == 'true'", null)]
-    [InlineData("[plan]", "github.event_name == 'push'", "ci.yml delivery job publish must need exactly [publish-gate]")]
-    [InlineData("[publish-gate]", "always() && needs.publish-gate.outputs.newest == 'true'", IfProblem)]
-    [InlineData("[publish-gate]", "needs.publish-gate.outputs.newest == 'true' || github.event_name == 'push'", IfProblem)]
-    public void Publish_runs_only_after_publish_gate_succeeded(string needs, string condition, string? problem)
+    [InlineData("publish", "[publish-gate, sign]", "needs.publish-gate.outputs.newest == 'true'", null)]
+    [InlineData("publish", "[publish-gate]", "needs.publish-gate.outputs.newest == 'true'", "ci.yml delivery job publish must need exactly [publish-gate, sign]")]
+    [InlineData("publish", "[plan]", "github.event_name == 'push'", "ci.yml delivery job publish must need exactly [publish-gate, sign]")]
+    [InlineData("publish", "[publish-gate, sign]", "always() && needs.publish-gate.outputs.newest == 'true'", "ci.yml publish" + IfProblem)]
+    [InlineData("publish", "[publish-gate, sign]", "needs.publish-gate.outputs.newest == 'true' || github.event_name == 'push'", "ci.yml publish" + IfProblem)]
+    // sign holds the signing identity: it too runs only on a publish-gate that succeeded.
+    [InlineData("sign", "[publish-gate]", "needs.publish-gate.outputs.newest == 'true'", null)]
+    [InlineData("sign", "[plan]", "github.event_name == 'push'", "ci.yml delivery job sign must need exactly [publish-gate]")]
+    [InlineData("sign", "[publish-gate]", "always() && needs.publish-gate.outputs.newest == 'true'", "ci.yml sign" + IfProblem)]
+    [InlineData("sign", "[publish-gate]", "needs.publish-gate.outputs.newest == 'true' || github.event_name == 'push'", "ci.yml sign" + IfProblem)]
+    public void Publish_and_sign_run_only_after_publish_gate_succeeded(string job, string needs, string condition, string? problem)
     {
-        var problems = Check(Wired + $"\n  publish:\n    needs: {needs}\n    if: {condition}\n");
+        var problems = Check(Wired + $"\n  {job}:\n    needs: {needs}\n    if: {condition}\n");
 
         Assert.Equal(problem is null ? [] : [problem], problems);
     }
 
-    const string IfProblem = "ci.yml publish's if: has a ||, ${{ }} inside or a status function, so it could run without publish-gate succeeding";
+    const string IfProblem = "'s if: has a ||, ${{ }} inside or a status function, so it could run without publish-gate succeeding";
 
     [Fact]
     public void A_check_job_renamed_to_a_delivery_job_is_reported_since_delivery_jobs_are_pinned_to_their_place()

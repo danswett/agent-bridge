@@ -4,6 +4,7 @@
 #
 #   pwsh build/pack-app.ps1 -Version 0.2.0            # out/app/publish and out/app/releases
 #   pwsh build/pack-app.ps1 -Version 0.2.0 -NoPack    # the folder only
+#   pwsh build/pack-app.ps1 -Version 0.2.0 -PackOnly  # packs the folder already there, building nothing
 #   pwsh build/pack-app.ps1 -Version 0.2.0 -DeltaFrom https://github.com/danswett/agent-bridge
 #                                                     # and a delta from the latest release
 #   pwsh build/pack-app.ps1 -Version 0.2.0 -Runtime win-arm64
@@ -25,6 +26,10 @@ param(
     # A release build: the host reports itself as released rather than dev (hello's machine.dev).
     [switch]$Release,
     [switch]$NoPack,
+    # Packs the publish folder already in -Out (an app job's, downloaded) rather than publishing
+    # one: CI's signing job, which holds the signing identity and so builds and runs nothing from
+    # the source. The folder gets the same checks a fresh one does, which only read its files.
+    [switch]$PackOnly,
     # A GitHub repository whose latest release (pre-releases included) the new package gets a
     # delta from. Each full package is about 100 MB; a delta is what an installed copy downloads.
     # Uses GH_TOKEN when set, for the API's rate limit. Empties the releases folder first.
@@ -43,6 +48,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'app-channels.ps1')
+if ($PackOnly -and $NoPack) { throw '-PackOnly packs the folder already there, and -NoPack packs nothing' }
 if ($RequireSignature) {
     # Before building anything: a signed release that cannot be signed must not become an unsigned one.
     . (Join-Path $PSScriptRoot 'app-signing.ps1')
@@ -58,23 +64,27 @@ $Out = [IO.Path]::GetFullPath($Out)
 $publish = Join-Path $Out 'publish'
 $releases = Join-Path $Out 'releases'
 $packId = $AppPackId
-if (Test-Path $publish) { Remove-Item $publish -Recurse -Force }
+if ($PackOnly) {
+    if (-not (Test-Path -LiteralPath $publish -PathType Container)) { throw "-PackOnly packs $publish, and there is none" }
+} else {
+    if (Test-Path $publish) { Remove-Item $publish -Recurse -Force }
 
-function Publish([string]$project, [string[]]$extra) {
-    & dotnet publish (Join-Path $root $project) -c Release -r $Runtime -o $publish --nologo "-p:Version=$Version" @extra
-    if ($LASTEXITCODE) { throw "publishing $project failed" }
+    function Publish([string]$project, [string[]]$extra) {
+        & dotnet publish (Join-Path $root $project) -c Release -r $Runtime -o $publish --nologo "-p:Version=$Version" @extra
+        if ($LASTEXITCODE) { throw "publishing $project failed" }
+    }
+
+    # One folder: the host runs from beside the app, so an app update is a host update. The
+    # self-contained runtime files the four share are the same SDK's, so whichever lands last is
+    # identical to the others; the app goes last, as the one with the most.
+    $hostFlags = @('--self-contained')
+    if ($Release) { $hostFlags += '-p:AgentBridgeRelease=true' }
+    Publish 'src/AgentBridge.Host/AgentBridge.Host.csproj' $hostFlags
+    Publish 'src/AgentBridge.HostLauncher/AgentBridge.HostLauncher.csproj' @('--self-contained')
+    Publish 'src/AgentBridge.Injector/AgentBridge.Injector.csproj' @()
+    Publish 'src/AgentBridge.Hook/AgentBridge.Hook.csproj' @()
+    Publish 'src/AgentBridge.App/AgentBridge.App.csproj' @()
 }
-
-# One folder: the host runs from beside the app, so an app update is a host update. The
-# self-contained runtime files the four share are the same SDK's, so whichever lands last is
-# identical to the others; the app goes last, as the one with the most.
-$hostFlags = @('--self-contained')
-if ($Release) { $hostFlags += '-p:AgentBridgeRelease=true' }
-Publish 'src/AgentBridge.Host/AgentBridge.Host.csproj' $hostFlags
-Publish 'src/AgentBridge.HostLauncher/AgentBridge.HostLauncher.csproj' @('--self-contained')
-Publish 'src/AgentBridge.Injector/AgentBridge.Injector.csproj' @()
-Publish 'src/AgentBridge.Hook/AgentBridge.Hook.csproj' @()
-Publish 'src/AgentBridge.App/AgentBridge.App.csproj' @()
 
 # The .pri carries the compiled XAML: without it the installed app fails at startup with
 # nothing but 0xC000027B (spike S3), while the build output runs fine.
@@ -98,7 +108,7 @@ if ($foreign) { throw "not built for $($target.Machine): $($foreign -join ', ')"
 $identity = & (Join-Path $PSScriptRoot 'host-identity.ps1') (Join-Path $publish 'agent-bridge-host.dll')
 $wanted = if ($Release) { 'release' } else { 'dev' }
 if ($identity -ne $wanted) { throw "the host was built as a $identity build, not a $wanted build" }
-Write-Host "published $Version ($identity build, $Runtime) to $publish"
+Write-Host "$(if ($PackOnly) { "checked $Version ($identity build, $Runtime) in" } else { "published $Version ($identity build, $Runtime) to" }) $publish"
 
 if ($NoPack) { return }
 

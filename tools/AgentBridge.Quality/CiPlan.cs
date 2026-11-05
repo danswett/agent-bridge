@@ -18,12 +18,13 @@ static partial class CiPlan
     // The output the plan job sets, outside the selector, when the whole ring must run: it gates
     // nothing by its own name.
     const string WholeRing = "whole-ring";
-    // Jobs that deliver rather than check, so quality-gate doesn't wait on them, each with the one
-    // job it follows.
+    // Jobs that deliver rather than check, so quality-gate doesn't wait on them, each with the jobs
+    // it follows.
     static readonly Dictionary<string, string[]> DeliveryNeeds = new(StringComparer.Ordinal)
     {
         [PublishGate] = [Gate],
-        ["publish"] = [PublishGate],
+        ["sign"] = [PublishGate],
+        ["publish"] = [PublishGate, "sign"],
         ["attest"] = ["publish"],
         ["relay-image-sarif"] = ["product"],
     };
@@ -193,14 +194,16 @@ static partial class CiPlan
                 || !TopLevelConjuncts(publishIf).Any(t => GatePassed().IsMatch(t)))
                 Add($"ci.yml {PublishGate}'s if: doesn't require needs.{Gate}.result == 'success' (as one of its top-level && conditions, with no || and no ${{{{ }}}} inside)");
         }
-        if (jobs.TryGetValue("publish", out var publish))
-        {
-            // No status function: then the implicit success() holds publish to publish-gate's.
-            var publishCondition = Expression(Scalar(publish, "if") ?? "");
-            if (publishCondition.Contains("||", StringComparison.Ordinal) || IsTemplate(publishCondition)
-                || StatusFunction().IsMatch(publishCondition))
-                Add($"ci.yml publish's if: has a ||, ${{{{ }}}} inside or a status function, so it could run without {PublishGate} succeeding");
-        }
+        // sign, which holds the signing identity, and publish, which writes the release: no status
+        // function, so the implicit success() holds each to publish-gate's (and publish to sign's).
+        foreach (var id in new[] { "sign", "publish" })
+            if (jobs.TryGetValue(id, out var delivering))
+            {
+                var condition = Expression(Scalar(delivering, "if") ?? "");
+                if (condition.Contains("||", StringComparison.Ordinal) || IsTemplate(condition)
+                    || StatusFunction().IsMatch(condition))
+                    Add($"ci.yml {id}'s if: has a ||, ${{{{ }}}} inside or a status function, so it could run without {PublishGate} succeeding");
+            }
 
         // Steps that run when a suite is selected: the suite must exist, say it runs in this job,
         // and the step must run on main and in the whole ring whatever the plan selected, so its

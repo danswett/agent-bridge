@@ -487,14 +487,24 @@ OIDC (#734). The code is in place but **off**: until the owner turns it on, ever
 unsigned, as before, and an unsigned release is a legacy build, not a dogfood-ready one. A
 downloaded `Setup.exe` then meets SmartScreen and, where it is on, Smart App Control.
 
-**How it signs.** In the `app` job of a push to main, `azure/login` signs in to Azure with the
-run's OIDC token: no secret, password or certificate is stored anywhere, and the signing key
-never leaves Artifact Signing's HSM. `build/app-signing.ps1` writes the `metadata.json` (endpoint,
-account and certificate profile, and only the Azure CLI credential allowed), and
-`build/pack-app.ps1 -AzureTrustedSignFile` hands it to `vpk pack`, which signs through signtool
-and the Artifact Signing plug-in (on .NET 8), with an RFC 3161 timestamp from
-`timestamp.acs.microsoft.com`, every executable it packs and `Setup.exe`, before it builds the
-delta and the installer. A signing failure fails the pack. The job signs out of Azure after it.
+**How it signs.** In a job of its own, `sign`, which runs only for the commit `main` is at, after
+every check has passed (`publish-gate`), and with signing on. Signing is kept out of the jobs
+that build and run the source: the `app` jobs publish, pack and self-test unsigned, with no
+OIDC token and no Azure session, and with signing on each uploads its publish folder as it
+published it, before anything runs the app from it. The `sign` job builds and runs nothing from
+the source: it downloads both folders and packs each with `build/pack-app.ps1 -PackOnly`, which
+reads the folder it is given, checks its files, host build and architecture, and packs it,
+publishing nothing. There, `azure/login` signs in to Azure with the run's OIDC token: no secret,
+password or certificate is stored anywhere, and the signing key never leaves Artifact Signing's
+HSM. `build/app-signing.ps1` writes the `metadata.json` (endpoint, account and certificate
+profile, and only the Azure CLI credential allowed), and `pack-app.ps1 -AzureTrustedSignFile`
+hands it to `vpk pack`, which signs through signtool and the Artifact Signing plug-in (on .NET
+8), with an RFC 3161 timestamp from `timestamp.acs.microsoft.com`, every executable it packs and
+`Setup.exe`, before it builds the delta and the installer. Both architectures are signed in that
+one job (on x64, since signing only reads the Arm64 files), so a release is signed whole or not
+at all; a signing failure fails the job, and `publish`, which needs it, does not run. The job
+signs out of Azure after it, and `publish` takes the signed packages. With signing off, `sign`
+only notes that on Linux and `publish` takes the `app` jobs' unsigned packages, as before.
 
 **What is checked, and where.** With signing on, nothing unsigned is published:
 
@@ -544,7 +554,8 @@ Pull requests and forks never sign, and their OIDC tokens are trusted by no Azur
 **Not yet proven.** The tests (`build/test-publish-prerelease.ps1`) use fixture certificates and
 stand-ins for `vpk` and `gh`; they show the checks refuse what they should, not that Azure signs.
 The first signed release must be checked by hand (`Get-AuthenticodeSignature` on an installed
-copy's files) on both architectures. And signing is not reputation: SmartScreen can still warn on
+copy's files) on both architectures; its signed `Setup.exe` is not install-tested in CI, whose
+self-tests run the unsigned package built from the same publish folder. And signing is not reputation: SmartScreen can still warn on
 the first downloads of a new publisher until its reputation builds, so a clean PC installing
 without a SmartScreen prompt (#747) has to be checked on a clean PC, not assumed.
 
