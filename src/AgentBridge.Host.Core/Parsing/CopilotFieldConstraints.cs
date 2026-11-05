@@ -52,6 +52,12 @@ public static class CopilotFieldConstraints
             case CopilotFieldSchema.Input.Multi:
                 c = new FieldConstraints { MinItems = Count(p, "minItems", ref problem), MaxItems = Count(p, "maxItems", ref problem) };
                 break;
+            // A string list (`enum` or `oneOf`) with text constraints: its options, and the words
+            // its Other takes, are not checked against them here, so it is answered at the machine
+            // rather than let "toolong" through a maxLength of 2 (review of #844).
+            case CopilotFieldSchema.Input.Choice when Has(p, "minLength", out _) || Has(p, "maxLength", out _) || Has(p, "pattern", out _)
+                || (Has(p, "format", out var f) && f.ValueKind == JsonValueKind.String && FieldConstraints.Formats.Contains(f.GetString())):
+                return (null, "is a list of choices with text limits the host does not check");
             default:
                 return (null, null);
         }

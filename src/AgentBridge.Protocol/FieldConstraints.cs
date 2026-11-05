@@ -121,6 +121,8 @@ public sealed partial record FieldConstraints
     // any group, escape or class this cannot vouch for answers at the machine.
     public static bool Readable(string pattern, PatternBudget budget) => Translate(pattern) is { } translated && budget.Compiles(translated);
 
+    const string AsciiWord = "a-zA-Z0-9_";
+
     // JavaScript's \s: WhiteSpace and LineTerminator.
     const string JsSpace = @"\t\n\v\f\r \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF";
 
@@ -136,18 +138,38 @@ public sealed partial record FieldConstraints
             {
                 if (i + 1 >= pattern.Length) { return null; }
                 var e = pattern[++i];
+                // A class escape beside a hyphen in a class: JavaScript reads the hyphen as itself,
+                // and the escape written out as a set would make it a range (review of #844).
+                if (inClass && e is 's' or 'S' or 'd' or 'D' or 'w' or 'W'
+                    && ((i >= 2 && pattern[i - 2] == '-') || (i + 1 < pattern.Length && pattern[i + 1] == '-'))) { return null; }
                 switch (e)
                 {
                     case 's': b.Append(inClass ? JsSpace : $"[{JsSpace}]"); continue;
                     case 'S' when inClass: return null;
                     case 'S': b.Append($"[^{JsSpace}]"); continue;
+                    // JavaScript's \d and \w are ASCII; .NET's \w takes U+0130 even in ECMAScript
+                    // mode (review of #844), so both are written out. \b and \B are .NET's \w
+                    // boundaries, which no rewrite here makes JavaScript's: answered at the machine.
+                    case 'd': b.Append(inClass ? "0-9" : "[0-9]"); continue;
+                    case 'D' when inClass: return null;
+                    case 'D': b.Append("[^0-9]"); continue;
+                    case 'w': b.Append(inClass ? AsciiWord : $"[{AsciiWord}]"); continue;
+                    case 'W' when inClass: return null;
+                    case 'W': b.Append($"[^{AsciiWord}]"); continue;
+                    // In a class, \b is a backspace in both.
+                    case 'b' when inClass: b.Append(@"\b"); continue;
+                    case 'b' or 'B': return null;
                     case 'c' when i + 1 < pattern.Length && char.IsAsciiLetter(pattern[i + 1]): b.Append('\\').Append(e).Append(pattern[++i]); continue;
-                    case 'd' or 'D' or 'w' or 'W' or 'b' or 'B' or 't' or 'n' or 'v' or 'f' or 'r' or 'x' or 'u':
+                    case 't' or 'n' or 'v' or 'f' or 'r' or 'x' or 'u':
                         b.Append('\\').Append(e); continue;
+                    // \0 not followed by a digit is NUL in both.
+                    case '0' when !(i + 1 < pattern.Length && char.IsAsciiDigit(pattern[i + 1])): b.Append(@"\0"); continue;
                     default:
-                        // A digit is a back-reference or octal in both; any other letter means
-                        // something else in .NET (or nothing), and punctuation is itself in both.
-                        if (char.IsAsciiDigit(e) || (!char.IsLetter(e) && e < 0x80)) { b.Append('\\').Append(e); continue; }
+                        // A back-reference: .NET keeps what a capture inside a repeated group took on
+                        // an earlier pass, where JavaScript clears it (`^(a|(b))+\2$` and "bab",
+                        // review of #844), and a digit may be octal instead. Any other letter means
+                        // something else in .NET (or nothing); punctuation is itself in both.
+                        if (!char.IsAsciiDigit(e) && !char.IsLetter(e) && e < 0x80) { b.Append('\\').Append(e); continue; }
                         return null;
                 }
             }

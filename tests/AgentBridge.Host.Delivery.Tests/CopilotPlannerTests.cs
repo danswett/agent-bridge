@@ -249,6 +249,16 @@ public class CopilotPlannerTests
         Assert.NotNull(Answers.Check(question, Answer(new { t = "abc\n" })));
     }
 
+    // Found in review of #844: .NET's \w takes U+0130 even in ECMAScript mode, and JavaScript's
+    // does not; its \d is ASCII too.
+    [Fact]
+    public void Word_and_digit_classes_are_JavaScripts_ASCII_ones()
+    {
+        Assert.Equal("\"t\": does not match the form the question asks for", Outside(Schema("t", """{ "type": "string", "pattern": "^\\w+$" }"""), Answer(new { t = "\u0130" })));
+        Assert.Equal("\"t\": does not match the form the question asks for", Outside(Schema("t", """{ "type": "string", "pattern": "^[\\w.]+$" }"""), Answer(new { t = "a\u0130" })));
+        Assert.Equal("\"t\": does not match the form the question asks for", Outside(Schema("t", """{ "type": "string", "pattern": "^\\d+$" }"""), Answer(new { t = "\u0661" })));
+        Assert.Equal([("a_1", true)], Keys(Plan(Schema("t", """{ "type": "string", "pattern": "^\\w+$" }"""), Answer(new { t = "a_1" }))));
+    }
     [Fact]
     public void Text_is_checked_as_it_would_be_typed_with_its_line_breaks_flattened()
     {
@@ -284,7 +294,13 @@ public class CopilotPlannerTests
     [InlineData("""{ "type": "string", "pattern": "[]" }""")]
     [InlineData("""{ "type": "string", "pattern": "(" }""")]
     [InlineData("""{ "type": "string", "format": 5 }""")]
-    // A default outside the field's own constraints, which is the only answer it can be given.
+    // Patterns JavaScript and .NET read differently (review of #844): a back-reference into a
+    // capture a later pass clears, \s beside a class hyphen, a word boundary.
+    [InlineData("""{ "type": "string", "pattern": "^(a|(b))+\\2$" }""")]
+    [InlineData("""{ "type": "string", "pattern": "^[\\s-\\uFFFF]+$" }""")]
+    [InlineData("""{ "type": "string", "pattern": "\\bword\\b" }""")]
+    // A list of choices with text limits, which its options and Other are not checked against.
+    [InlineData("""{ "type": "string", "enum": ["ok", "toolong"], "maxLength": 2 }""")]    // A default outside the field's own constraints, which is the only answer it can be given.
     [InlineData("""{ "type": "integer", "minimum": 5, "default": 3 }""")]
     [InlineData("""{ "type": "string", "maxLength": 2, "default": "none" }""")]
     public void A_field_whose_constraints_cannot_be_checked_exactly_or_whose_default_breaks_them_is_answered_at_the_machine(string property)
