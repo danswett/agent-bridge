@@ -1086,7 +1086,10 @@ up / Repair and Remove connection. You can't tell whether anything is needed. No
 - **The other states also need evidence.** A bridge setup record, with this profile's hook
   intake on and nothing heard yet, is Not tested yet, never Needs repair, so a healthy machine
   never shows Repair on its rows. No setup record, or intake off for this profile, is Not set
-  up, with Set up, which turns intake on (#705). Repair is offered only when the host reports the hooks failed or changed.
+  up, with Set up, which turns intake on (#705). Two states come first, in this order:
+  hooks owned by policy or another tool are Managed elsewhere, and an incomplete setup
+  (`hookSetup: incomplete`, registration failed after the record was written) is Needs
+  repair, with Repair hooks, whatever the record and intake say. Repair is offered only when the host reports the hooks failed or changed.
 - **Sign-in and trust** are never shown as checked until the host can observe them. They stay
   neutral rows in Details and don't affect the roll-up.
 
