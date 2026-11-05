@@ -21,7 +21,7 @@ public sealed class ReceiptTests
         (e, stalled) => e.State == DeliveryState.Done
             ? new ReceiptLine("delivered", "", null, Tone.None, ReceiptMark.Check, $"{(answer ? "Answer" : "Reply")} delivered")
             : ReceiptWords.InFlight(answer, e, "ULTRA", stalled),
-        line => { drawn.Add(line.Whole); keys.Add(line.Key); }, said.Add);
+        line => { drawn.Add(line.Whole); keys.Add(line.Key); }, (speech, _) => said.Add(speech));
 
     void Show(Receipt r, Func<Delivery, Delivery>? change = null)
     {
@@ -32,6 +32,50 @@ public sealed class ReceiptTests
     void Tick(int ms) => clock.Advance(TimeSpan.FromMilliseconds(ms));
     string Shown => drawn[^1];
     string Key => keys[^1];
+
+    // #625, Copilot 4478422027: the oldest of 50 histories went whatever showed it, so a card
+    // refreshed after 50 other requests said "Answer delivered" again.
+    [Fact]
+    public void A_history_a_receipt_still_shows_is_kept_however_many_requests_come_after_it()
+    {
+        using var r = NewReceipt(answer: true);
+        Show(r, e => e with { State = DeliveryState.Done, Outcome = "delivered" });
+        Assert.Equal(["Answer delivered"], said);
+        for (var i = 0; i < 120; i++)
+        {
+            using var other = NewReceipt();
+            other.Show(new Delivery { Key = $"reply|other{i}", Request = Guid.NewGuid().ToString(), State = DeliveryState.Done, Outcome = "delivered", Attempts = 1 });
+        }
+        said.Clear();
+
+        // The card made afresh shows the same delivery: nothing new to say.
+        Show(r);
+
+        Assert.Empty(said);
+    }
+
+    // #625, Copilot 4478422096: a failure or a refusal needs the person to act, so it is said
+    // assertively (ui.md §9.1 A6); the stages before it and a delivery stay polite.
+    [Theory]
+    [InlineData(DeliveryState.Failed, null, true)]
+    [InlineData(DeliveryState.Done, "refused", true)]
+    [InlineData(DeliveryState.Done, "delivered", false)]
+    public void Only_a_failure_or_a_refusal_is_announced_assertively(DeliveryState state, string? outcome, bool urgent)
+    {
+        var heard = new List<(string Speech, bool Urgent)>();
+        using var r = new Receipt(clock, InlineDispatcher.Instance, (e, stalled) => QuestionViewModel.Describe(e, "ULTRA", stalled), _ => { }, (s, u) => heard.Add((s, u)));
+        Show(r);
+        Tick(1000);
+        Show(r, e => e with { Stage = DeliveryProgress.Received });
+        Tick(1000);
+
+        Show(r, e => e with { State = state, Outcome = outcome, Reason = state == DeliveryState.Failed ? "the pipe broke" : null });
+        Tick(1000);
+
+        Assert.True(heard.Count >= 2, string.Join(" | ", heard));
+        Assert.All(heard.SkipLast(1), h => Assert.False(h.Urgent, h.Speech));
+        Assert.Equal(urgent, heard[^1].Urgent);
+    }
 
     [Fact]
     public void Nothing_is_said_for_the_first_400_ms_then_the_furthest_stage_reached_so_a_fast_delivery_never_says_Sent()

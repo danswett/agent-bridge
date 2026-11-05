@@ -158,8 +158,8 @@ public static class ReceiptWords
 }
 
 // Times one line's receipt. describe(delivery, stalled): its words now. show(line): puts them on
-// the line, called on the UI when they change. announce(speech): what a screen reader hears,
-// rate-limited here.
+// the line, called on the UI when they change. announce(speech, urgent): what a screen reader
+// hears, rate-limited here, and whether it is a failure or a refusal (said assertively).
 public sealed class Receipt : IDisposable
 {
     // What a request's receipt has been through, kept apart from any one view model: a question's
@@ -181,23 +181,33 @@ public sealed class Receipt : IDisposable
         // What has been spoken, and what is to be once the limit allows (the later of two inside it).
         public readonly HashSet<string> Said = [];
         public string? Pending;
+        // Whether that is a failure or a refusal: one the person must act on, said assertively
+        // (ui.md §9.1 A6; #625, Copilot 4478422096). Progress and success are polite.
+        public bool PendingUrgent;
         public TimeSpan SaidAt = TimeSpan.MinValue;
         public ITimer? SayTimer;
         public readonly List<Receipt> Voices = [];
+        // Last seen still on its way: its quiet window and stalls are still being timed.
+        public bool InFlight;
     }
 
     sealed record ShownLine(string Key, TimeSpan At, ReceiptLine Line, bool InFlight);
 
+    // Histories no receipt shows and no request still needs, kept for a receipt made again (a card
+    // refreshed); past Keep the oldest of those goes. One a receipt shows is never let go: dropped,
+    // a card refreshed after 50 other requests made it afresh and said "Answer delivered" again, and
+    // a request in flight lost its quiet window and stalls (#625, Copilot 4478422027). So the
+    // histories are at most twice Keep, plus those receipts show.
     const int Keep = 50;
     static readonly Lock Gate = new();
     static readonly Dictionary<string, History> Histories = [];
-    static readonly Queue<string> Order = new();
+    static readonly List<string> Order = [];
 
     readonly TimeProvider time;
     readonly IUiDispatcher ui;
     readonly Func<Delivery, bool, ReceiptLine> describe;
     readonly Action<ReceiptLine> show;
-    readonly Action<string> announce;
+    readonly Action<string, bool> announce;
     Delivery? entry;
     ReceiptLine? instead;
     ITimer? timer;
@@ -206,7 +216,7 @@ public sealed class Receipt : IDisposable
     string? drawn;
     bool disposed;
 
-    public Receipt(TimeProvider time, IUiDispatcher ui, Func<Delivery, bool, ReceiptLine> describe, Action<ReceiptLine> show, Action<string> announce)
+    public Receipt(TimeProvider time, IUiDispatcher ui, Func<Delivery, bool, ReceiptLine> describe, Action<ReceiptLine> show, Action<string, bool> announce)
     {
         (this.time, this.ui, this.describe, this.show, this.announce) = (time, ui, describe, show, announce);
     }
@@ -233,9 +243,12 @@ public sealed class Receipt : IDisposable
     void Voice(History? h)
     {
         if (h == voiceOf) { return; }
-        voiceOf?.Voices.Remove(this);
-        voiceOf = h;
-        h?.Voices.Add(this);
+        lock (Gate)
+        {
+            voiceOf?.Voices.Remove(this);
+            voiceOf = h;
+            h?.Voices.Add(this);
+        }
     }
 
     static History HistoryFor(string request, TimeSpan now)
@@ -245,8 +258,20 @@ public sealed class Receipt : IDisposable
             if (Histories.TryGetValue(request, out var h)) { return h; }
             h = new History { Start = now, StageAt = now };
             Histories[request] = h;
-            Order.Enqueue(request);
-            if (Order.Count > Keep) { Histories.Remove(Order.Dequeue()); }
+            Order.Add(request);
+            if (Order.Count > Keep)
+            {
+                // Never the one just made, which its receipt is about to show.
+                var spare = Order.FindIndex(0, Order.Count - 1, r => Histories[r] is { Voices.Count: 0, InFlight: false });
+                // Past twice Keep, an unshown request in flight goes too: one whose outcome never
+                // came would otherwise be kept for the life of the app.
+                if (spare < 0 && Order.Count > 2 * Keep) { spare = Order.FindIndex(0, Order.Count - 1, r => Histories[r].Voices.Count == 0); }
+                if (spare >= 0)
+                {
+                    Histories.Remove(Order[spare]);
+                    Order.RemoveAt(spare);
+                }
+            }
             return h;
         }
     }
@@ -291,6 +316,7 @@ public sealed class Receipt : IDisposable
         var h = HistoryFor(e.Request, t);
         Voice(h);
         var inFlight = e.State is DeliveryState.Sending or DeliveryState.Waiting;
+        h.InFlight = inFlight;
         if (!inFlight)
         {
             // An outcome is never held, and replaces whatever shows.
@@ -344,6 +370,7 @@ public sealed class Receipt : IDisposable
     void Speak(History h, ReceiptLine line)
     {
         h.Pending = line.Speech is { } speech && !h.Said.Contains(speech) ? speech : null;
+        h.PendingUrgent = line.Tone == Tone.Bad;
         Announce(h);
     }
 
@@ -375,6 +402,6 @@ public sealed class Receipt : IDisposable
         h.Pending = null;
         h.Said.Add(text);
         h.SaidAt = Now();
-        if (h.Voices.Count > 0) { h.Voices[^1].announce(text); }
+        if (h.Voices.Count > 0) { h.Voices[^1].announce(text, h.PendingUrgent); }
     }
 }

@@ -358,6 +358,7 @@
                             IsTextSelectionEnabled="True"
                             AutomationProperties.AutomationId="Receipt"
                             AutomationProperties.LiveSetting="Polite"
+                            local:ReceiptMarkView.Urgent="{x:Bind Card.ReceiptAnnouncementUrgent, Mode=OneWay}"
                             local:ReceiptMarkView.Announcement="{x:Bind Card.ReceiptAnnouncement, Mode=OneWay}"
                             Text="{x:Bind Card.ReceiptText, Mode=OneWay}"
                             Foreground="{x:Bind local:Ui.ReceiptBrush(Card.ReceiptTone), Mode=OneWay}"
@@ -807,6 +808,7 @@
                         IsTextSelectionEnabled="True"
                         AutomationProperties.AutomationId="ReplyStatus"
                         AutomationProperties.LiveSetting="Polite"
+                        local:ReceiptMarkView.Urgent="{x:Bind Card.Reply.AnnouncementUrgent, Mode=OneWay}"
                         local:ReceiptMarkView.Announcement="{x:Bind Card.Reply.Announcement, Mode=OneWay}"
                         Text="{x:Bind Card.Reply.StatusText, Mode=OneWay}"
                         Foreground="{x:Bind local:Ui.ReceiptBrush(Card.Reply.StatusTone), Mode=OneWay}" />

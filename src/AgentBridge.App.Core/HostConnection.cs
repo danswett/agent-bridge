@@ -173,8 +173,29 @@ public sealed class HostConnection : IAsyncDisposable
     }
 
     // A line for the app's log (the one this connection was given), for what the app measures of
-    // its own deliveries (Deliveries' timing marks, #600).
-    internal void Log(string line) => log(line);
+    // its own deliveries (Deliveries' timing marks, #600). Queued, and written in order by one task
+    // of its own: a delivery finishes on the UI thread, and the app's log opens, appends to and
+    // locks a file there, which held up input and painting whenever the disk was slow (#625,
+    // Copilot 4478421982). What is still queued is written when the connection is let go.
+    internal void Log(string line)
+    {
+        if (!logged.Writer.TryWrite(line)) { return; }
+        lock (logGate) { logging ??= Task.Run(WriteLogAsync); }
+    }
+
+    readonly System.Threading.Channels.Channel<string> logged =
+        System.Threading.Channels.Channel.CreateUnbounded<string>(new System.Threading.Channels.UnboundedChannelOptions { SingleReader = true });
+    readonly object logGate = new();
+    Task? logging;
+
+    async Task WriteLogAsync()
+    {
+        await foreach (var line in logged.Reader.ReadAllAsync().ConfigureAwait(false))
+        {
+            try { log(line); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ObjectDisposedException) { }
+        }
+    }
 
     public async Task<T> CallAsync<T>(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
         (await CallAsync(op, data, timeout, ct)).Deserialize<T>(ProtocolJson.Options) ?? throw new HostErrorException($"{op} returned nothing");
@@ -742,6 +763,10 @@ public sealed class HostConnection : IAsyncDisposable
     {
         stop.Cancel();
         try { await loop; } catch (Exception) { }
+        logged.Writer.TryComplete();
+        Task? writing;
+        lock (logGate) { writing = logging; }
+        if (writing is not null) { try { await writing; } catch (Exception) { } }
     }
 }
 

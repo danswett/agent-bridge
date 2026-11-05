@@ -1,6 +1,7 @@
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
@@ -95,6 +96,9 @@ static partial class SelfTest
 
         static void Press(Button b) => ((IInvokeProvider)new ButtonAutomationPeer(b).GetPattern(PatternInterface.Invoke)).Invoke();
 
+    // The width an option's label is laid out at, beside the room kept for its ring (WithRing).
+    static double LabelWidth(Button? b) => b?.Content is Grid { Children: [_, _, FrameworkElement label, ..] } ? label.ActualWidth : -1;
+
         try
         {
             // A reply: Send's ring in the quiet window, Still sending… once 3 s pass with nothing
@@ -114,6 +118,8 @@ static partial class SelfTest
                 held.SetResult(new ReplyResult(AnswerOutcome.Delivered));
                 var checkShown = await Until(() => reply.SendCheck, TimeSpan.FromSeconds(5));
                 check(checkShown && reply.StatusText.Length == 0, $"shows Send's check once delivered, nothing on the line ({pass}: \"{reply.StatusText}\")");
+                var polite = await Until(() => ById<TextBlock>(window.Content, "ReplyStatus") is { } line && AutomationProperties.GetLiveSetting(line) == AutomationLiveSetting.Polite, TimeSpan.FromSeconds(3));
+                check(polite && !reply.AnnouncementUrgent, $"announces a delivered reply politely ({pass}: \"{reply.Announcement}\")");
                 await Draw("send-check");
                 await Until(() => reply.SendRest, TimeSpan.FromSeconds(5));
                 demo.Script(replyCard.Id, () => throw new InvalidOperationException("the session's terminal closed"));
@@ -121,6 +127,9 @@ static partial class SelfTest
                 reply.Send();
                 var failed = await Until(() => reply.ShowResend, TimeSpan.FromSeconds(10));
                 check(failed && reply.SendRest && reply.StatusText.StartsWith("Couldn't send it", StringComparison.Ordinal), $"shows a failed reply's reason and Send again, Send at rest ({pass}: \"{reply.StatusText}\")");
+                // A failure is said assertively, a delivery politely (ui.md §9.1 A6; #625, Copilot 4478422096).
+                var assertive = await Until(() => ById<TextBlock>(window.Content, "ReplyStatus") is { } line && AutomationProperties.GetLiveSetting(line) == AutomationLiveSetting.Assertive, TimeSpan.FromSeconds(3));
+                check(assertive && reply.AnnouncementUrgent, $"announces a failed reply assertively ({pass}: \"{reply.Announcement}\")");
                 await Draw("reply-failed");
             }
             else { check(false, $"opens the gallery's reply session ({pass})"); }
@@ -131,11 +140,18 @@ static partial class SelfTest
             {
                 var held = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
                 demo.Script(tapCard.Id, () => held.Task);
+                tapView.UpdateLayout();
+                var atRest = LabelWidth(ById<Button>(tapView, "Option:fixes"));
                 if (ById<Button>(tapView, "Option:fixes") is { } fixes) { Press(fixes); }
                 await Until(() => tq.InFlight, TimeSpan.FromSeconds(2));
                 check(tq.InFlight && ById<Button>(tapView, "Option:fixes") is { IsEnabled: true } && ById<Button>(tapView, "Option:docs") is { IsEnabled: false },
                     $"keeps the tapped option at full strength with its ring while the others are disabled ({pass})");
                 await Draw("tap-ring");
+                // The ring takes room kept for it at rest, so the label never re-wraps (#625,
+                // Copilot 4478422056).
+                tapView.UpdateLayout();
+                var withRing = LabelWidth(ById<Button>(tapView, "Option:fixes"));
+                check(atRest > 0 && Math.Abs(withRing - atRest) < 0.5, $"keeps the tapped option's label as wide with its ring as at rest ({pass}: {atRest:0.#} px, then {withRing:0.#})");
                 held.SetResult(new AnswerResult(AnswerOutcome.Unconfirmed, "no word from the agent"));
                 var unconfirmed = await Until(() => tq.StatusText.StartsWith("Sent, but not confirmed", StringComparison.Ordinal), TimeSpan.FromSeconds(5));
                 check(unconfirmed && !tq.CanAnswer && ById<Button>(tapView, "Option:fixes") is { IsEnabled: true } && ById<Button>(tapView, "Option:docs") is { IsEnabled: false },

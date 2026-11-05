@@ -11,9 +11,9 @@ namespace AgentBridge.App;
 // region, which hears every stage, the quiet ones included, though the line shows only exceptions.
 public sealed partial class ReceiptMarkView : UserControl
 {    // What a screen reader is to hear of a receipt's line (the view model's Announcement): set on
-    // the line itself, which is a polite live region, and raised as LiveRegionChanged. The line's
-    // name becomes what was said ("Reply delivered"), so the subject goes with it, until its words
-    // change: the view model clears it then, and the line is named by its words again, so a reader
+    // the line itself, a live region (polite, or assertive for a failure: Urgent), and raised as
+    // LiveRegionChanged. The line's name becomes what was said ("Reply delivered"), so the subject
+    // goes with it, until its words change: the view model clears it then, and the line is named by its words again, so a reader
     // moving to it hears what it says now, not what an earlier state said.
     public static readonly DependencyProperty AnnouncementProperty = DependencyProperty.RegisterAttached(
         "Announcement", typeof(string), typeof(ReceiptMarkView), new PropertyMetadata("", OnAnnouncement));
@@ -32,6 +32,15 @@ public sealed partial class ReceiptMarkView : UserControl
     public static string GetAnnouncement(DependencyObject o) => (string)o.GetValue(AnnouncementProperty);
     public static void SetAnnouncement(DependencyObject o, string value) => o.SetValue(AnnouncementProperty, value);
 
+    // Whether the announcement is a failure or a refusal (the view model's AnnouncementUrgent), set
+    // before it: those need the person to act and are said assertively (ui.md §9.1 A6). Every
+    // announcement was made polite here, failures too (#625, Copilot 4478422096).
+    public static readonly DependencyProperty UrgentProperty = DependencyProperty.RegisterAttached(
+        "Urgent", typeof(bool), typeof(ReceiptMarkView), new PropertyMetadata(false));
+
+    public static bool GetUrgent(DependencyObject o) => (bool)o.GetValue(UrgentProperty);
+    public static void SetUrgent(DependencyObject o, bool value) => o.SetValue(UrgentProperty, value);
+
     static void OnAnnouncement(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is not FrameworkElement line) { return; }
@@ -40,7 +49,7 @@ public sealed partial class ReceiptMarkView : UserControl
             line.ClearValue(AutomationProperties.NameProperty);
             return;
         }
-        AutomationProperties.SetLiveSetting(line, AutomationLiveSetting.Polite);
+        AutomationProperties.SetLiveSetting(line, GetUrgent(line) ? AutomationLiveSetting.Assertive : AutomationLiveSetting.Polite);
         AutomationProperties.SetName(line, said);
         // Bound as the line is first drawn, it is what was said before: named, not said again.
         if (!line.IsLoaded || hushed > 0) { return; }

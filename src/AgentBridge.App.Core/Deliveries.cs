@@ -400,8 +400,7 @@ public sealed class Deliveries
                 .Select(n => $"{n} {timings.GetProperty(n).GetInt64()} ms").ToList();
             if (stages.Count > 0) { line += $"; host: {string.Join(", ", stages)}"; }
         }
-        try { host.Log(line); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ObjectDisposedException) { }
+        host.Log(line);
     }
 
     void Publish(Delivery entry) => ui.Post(() => Changed?.Invoke(entry));

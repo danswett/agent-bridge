@@ -244,6 +244,8 @@ public sealed partial class SessionCardViewModel : Observable
     public bool HasReceipt => receipt is not null;
     // What a screen reader is to hear of the receipt now (Receipt); the view raises it.
     public string ReceiptAnnouncement { get; private set; } = "";
+    // Whether that is a failure or a refusal, said assertively; set before ReceiptAnnouncement.
+    public bool ReceiptAnnouncementUrgent { get; private set; }
     // The longest outcome's words, which the view keeps room for (ReceiptWords.Room).
     public string ReceiptRoom => $"Your answer: {ReceiptWords.Room(ctx.MachineName())}";
 
@@ -438,8 +440,10 @@ public sealed partial class SessionCardViewModel : Observable
     }
 
     // Cleared first, so the same words said again are a change too.
-    void SayReceipt(string speech)
+    void SayReceipt(string speech, bool urgent)
     {
+        ReceiptAnnouncementUrgent = urgent;
+        Raise(nameof(ReceiptAnnouncementUrgent));
         ReceiptAnnouncement = "";
         Raise(nameof(ReceiptAnnouncement));
         ReceiptAnnouncement = speech;

@@ -184,6 +184,33 @@ public sealed class DeliveryProgressTests : IAsyncLifetime
         Assert.Matches(new Regex($@"^reply {entry.Request[..8]} delivered: sent \d+ ms, typed \d+ ms, result \d+ ms$"), Logged(entry.Request)!);
     }
 
+    // #625, Copilot 4478421982: the timing line went to the app's log, its file and its lock, on the
+    // UI thread the delivery finished on, so a slow disk held up input and painting.
+    [Fact]
+    public async Task A_delivery_s_timing_line_never_holds_up_the_UI_thread_while_the_log_is_slow()
+    {
+        using var disk = new ManualResetEventSlim();
+        host.Sessions.Add(Make.Session("s1"));
+        host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Delivered));
+        host.Start();
+        connection = host.Connect(log: line =>
+        {
+            if (line.StartsWith("reply ", StringComparison.Ordinal)) { disk.Wait(TimeSpan.FromSeconds(30)); }
+            lock (log) { log.Add(line); }
+        });
+        deliveries = new Deliveries(connection, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
+
+        var entry = deliveries.Submit("reply|s1", Ops.SessionReply, r => new ReplyRequest { Id = "s1", Request = r, Text = "carry on" }, _ => false, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Done, "an outcome");
+
+        // The UI thread takes its next turns while the log still waits for the disk.
+        await Task.Delay(200);
+        Assert.Null(Logged(entry.Request));
+        disk.Set();
+        await Wait.UntilAsync(() => Logged(entry.Request) is not null, "the timing line, once the disk answers");
+    }
+
     [Fact]
     public async Task A_reply_given_while_the_host_is_away_is_marked_sent_once_when_it_goes_not_at_each_refused_try()
     {

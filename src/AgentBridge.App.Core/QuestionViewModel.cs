@@ -79,8 +79,10 @@ public sealed partial class QuestionViewModel : Observable
     }
 
     // Cleared first, so the same words said again (the next reply delivered) are a change too.
-    void Said(string speech)
+    void Said(string speech, bool urgent)
     {
+        AnnouncementUrgent = urgent;
+        Raise(nameof(AnnouncementUrgent));
         Announcement = "";
         Raise(nameof(Announcement));
         Announcement = speech;
@@ -163,6 +165,9 @@ public sealed partial class QuestionViewModel : Observable
     // What a screen reader is to hear of the status line now: raised once for each, at most one a
     // second (Receipt); the view raises LiveRegionChanged with it.
     public string Announcement { get; private set; } = "";
+    // Whether that is a failure or a refusal, which a screen reader hears at once (assertively);
+    // set before Announcement is raised, so the view reads it with the words.
+    public bool AnnouncementUrgent { get; private set; }
     // The longest outcome's words, which the view keeps room for (ReceiptWords.Room).
     public string StatusRoom { get; }
 

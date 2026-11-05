@@ -173,7 +173,11 @@ public sealed class QuestionView : StackPanel
         if (vm.Announcement != announced)
         {
             announced = vm.Announcement;
-            if (drawn) { ReceiptMarkView.SetAnnouncement(status, announced); }
+            if (drawn)
+            {
+                ReceiptMarkView.SetUrgent(status, vm.AnnouncementUrgent);
+                ReceiptMarkView.SetAnnouncement(status, announced);
+            }
         }
         error.Text = vm.Error ?? "";
         error.Visibility = Ui.Show(vm.HasError);
@@ -361,14 +365,20 @@ public sealed class QuestionView : StackPanel
     // second once it is delivered (§6.5, CheckGlyph). Beside the label, never over it or fading
     // it: before it on the answer's button, at a tapped option's trailing edge (§6.5, "Tap to
     // answer"). A grid, not a horizontal stack: a stack measures the label at any width, and a
-    // long option would no longer wrap to the card.
+    // long option would no longer wrap to the card. An option's indicator column keeps its room at
+    // rest: sized to what it held, it grew from nothing to 24 px as the ring came, and a tapped
+    // option's label re-wrapped and moved the options below it (#625, Copilot 4478422056). Send's
+    // stays sized to it: the button grows by the ring beside its one-line label, which moves nothing
+    // (Send again shows only once Send is at rest), where a gap kept at rest would set "Send" off
+    // centre in its most common state.
     static Grid WithRing(FrameworkElement label, bool trailing = false)
     {
-        var margin = trailing ? new Thickness(8, 0, 0, 0) : new Thickness(0, 0, 8, 0);
+        const double Indicator = 16, Gap = 8;
+        var margin = trailing ? new Thickness(Gap, 0, 0, 0) : new Thickness(0, 0, Gap, 0);
         var ring = new InFlightRing { Margin = margin, VerticalAlignment = VerticalAlignment.Center };
         var check = new CheckGlyph { Margin = margin, VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed };
         var grid = new Grid();
-        var auto = new ColumnDefinition { Width = GridLength.Auto };
+        var auto = new ColumnDefinition { Width = trailing ? new GridLength(Indicator + Gap) : GridLength.Auto };
         var rest = new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) };
         grid.ColumnDefinitions.Add(trailing ? rest : auto);
         grid.ColumnDefinitions.Add(trailing ? auto : rest);

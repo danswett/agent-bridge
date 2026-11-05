@@ -659,13 +659,16 @@ on *machine*" after 5 s, "Passed to the agent · not picked up yet" after 10 s (
 stalls); a resend that meets the first copy in flight keeps its stage and adds "· still being
 delivered"; one held while the host isn't connected says "Waiting for *machine* · it goes when
 *machine* is back", with Send's ring standing still in text3 (`ReceiptTiming` holds the
-thresholds). The line is a polite live region that hears every stage, quiet ones included:
+thresholds). The line is a live region that hears every stage, quiet ones included:
 nothing for the first 400 ms, then the furthest stage reached ("Sending reply", "Reply sent",
 "Reply passed to the agent", "Reply up next, after the agent's current step"), each said once,
 at most one a second (the later of two), and the outcome always ("Reply delivered", "Answer
-delivered. You answered *value*"); between announcements the line is named by its words, so it
-never reads as an earlier state. The timing and what was said are kept by request, so the
-question's line and the card's receipt after the question has gone share them. From Send the
+delivered. You answered *value*"); a failure, a refusal or a question changed since is said
+assertively, since the person must act on it (ui.md §9.1 A6), everything else politely. Between announcements the line is
+named by its words, so it never reads as an earlier state. The timing and what was said are kept
+by request, so the question's line and the card's receipt after the question has gone share
+them, for as long as any receipt shows the request. Past 50 kept, the oldest that no receipt
+shows and that is no longer on its way goes; past 100, an unshown one still on its way goes too. From Send the
 line keeps the room the longest outcome needs (`ReceiptWords.Room`, laid out unseen under it:
 two lines at phone width, one on a wide window) until the box is next typed in, so neither an
 exception, the check nor Send's return to rest moves what is below. Each answer and reply also writes one
