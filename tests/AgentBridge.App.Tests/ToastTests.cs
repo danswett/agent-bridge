@@ -658,6 +658,23 @@ public sealed class ToastTests
     }
 
     [Fact]
+    public void A_done_toast_goes_to_Notification_Center_only_with_no_sound_and_replaces_the_sessions_earlier_toast()
+    {
+        var p = Planner(quiet: false);
+        p.Upsert(As(NotificationClass.NeedsYou, Make.Session(question: Make.Choice())));
+        RaiseDue(p);
+        p.Upsert(As(NotificationClass.Done, Make.Session(status: SessionStatus.Working)));
+        p.Upsert(As(NotificationClass.Done, Make.Session(response: "Done.", turns: 2)));
+        RaiseDue(p);
+
+        var done = sink.Shown[^1];
+        Assert.Equal(2, sink.Shown.Count);
+        Assert.Equal(sink.Shown[0].Tag, done.Tag);
+        Assert.True(done.Quiet);
+        AssertSilent(done.Xml);
+    }
+
+    [Fact]
     public void A_class_this_app_does_not_know_reads_as_none_and_the_toast_is_as_ever()
     {
         var node = JsonSerializer.SerializeToNode(Make.Session(question: Make.Choice()), ProtocolJson.Options)!.AsObject();

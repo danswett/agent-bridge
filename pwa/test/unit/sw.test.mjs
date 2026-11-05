@@ -19,13 +19,16 @@ function worker({ clients = [] } = {}) {
   const opened = [];
   // What is in the tray: shown, and not closed since; one per tag, as the browser keeps it.
   const open = [];
+  const events = [];
   const self = {
     registration: {
       scope,
       showNotification: async (title, options) => {
         // Per the Notifications spec: a silent notification cannot renotify.
         if (options.silent && options.renotify) { throw new TypeError('silent and renotify are mutually exclusive'); }
-        const n = { title, ...options, close: () => { open.splice(open.indexOf(n), 1); } };
+        const n = { title, ...options, close: () => { events.push('close'); open.splice(open.indexOf(n), 1); } };
+        await new Promise((r) => setImmediate(r));
+        events.push('show');
         shown.push({ title, ...options });
         const at = options.tag === undefined ? -1 : open.findIndex((o) => o.tag === options.tag);
         if (at >= 0) { open.splice(at, 1); }
@@ -43,7 +46,7 @@ function worker({ clients = [] } = {}) {
     handlers[type]({ ...event, waitUntil: (p) => { done = p; } });
     await done;
   };
-  return { fire, shown, opened, open };
+  return { fire, shown, opened, open, events };
 }
 
 // Objects made inside the worker's realm have its prototypes; compare their contents.
@@ -145,6 +148,19 @@ test('an answered question with no tag to withdraw it by is shown and closed und
   await sw.fire('push', push(notice('resolved', { tag: '' })));
   assert.equal(sw.shown.length, 1);
   assert.deepEqual(sw.open, []);
+});
+
+test('a withdrawn notice says the session\'s own line while it is up, never a placeholder, and is closed only after it is shown', async () => {
+  const sw = worker();
+  await sw.fire('push', push(classed('question', 'fyi', { body: 'DEV · finished a side task' })));
+  await sw.fire('push', push(notice('resolved', { body: 'DEV · no longer waiting' })));
+  await sw.fire('push', push(notice('resolved', { body: undefined })));
+  assert.deepEqual(sw.shown.map((n) => [n.body, n.silent, n.renotify]), [
+    ['DEV · finished a side task', true, false],
+    ['DEV · no longer waiting', true, false],
+    ['Pick the session store', true, false],
+  ]);
+  assert.deepEqual(sw.events, ['show', 'close', 'show', 'close', 'show', 'close']);
 });
 
 test('a class from a newer machine, or of the wrong type, reads as none: the notice is as before', async () => {

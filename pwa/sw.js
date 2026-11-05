@@ -158,7 +158,8 @@ function notice(message) {
   // is the first safeguard, this the second. A silent notice that renotifies is a TypeError.
   const silent = withdraw || cls === 'done' || n.silent === true;
   const options = {
-    body: text(n.body) ?? 'A session needs you.',
+    // A withdrawn notice may flash, so what it says must be true: never the question's placeholder.
+    body: text(n.body) ?? (withdraw ? text(n.title) ?? NAME : 'A session needs you.'),
     // A PNG: not every platform's notifications draw an SVG.
     icon: 'icons/icon-192.png',
     // Android draws the badge in the status bar by its alpha alone: the mark, as ic_stat_slipgates.
