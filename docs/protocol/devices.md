@@ -252,6 +252,13 @@ of the verifier's running time from when it first accepted it (an earlier time r
 enrollment can be adopted). A device whose approval lineage passes through a device on probation,
 or through a held device, is **held**: active, shown, and not **served**.
 
+**Names**: a rename signed by a device on probation, or by a held device, is **pending** until that
+hold ends; the device is shown by its previous name meanwhile, with the pending one beside it
+(`Name`, `PendingName`). A device not yet trusted must not change how approvers see it, for
+example by renaming itself to look like a device they already know. The hold applies even where
+the name rules would catch a look-alike, as defence in depth (decided by A, Trust lead,
+2026-11-04). A rename signed by a trusted device applies at once, whoever it names.
+
 ### Where a removal is signed
 
 `RemovalParents.Choose` gives the parent a remover's client signs a `remove` on (§3.3): of the
@@ -281,10 +288,20 @@ with the fewest ancestors outside what they all hold, and names the holders that
 [vectors/roster-state.json](vectors/roster-state.json) holds the acceptance rule's scenarios, each
 with its `devices` (name to id), its `entries` (label, hash, wrapper) and its `steps`: an
 `offer` of an entry with its `verdict` and refusal `reason`, `hours` that move the running-time
-clock first (alone, they record who is `serving` then), or an `adopt` of a head. Its `state` is
-what the verifier then applies: the active devices with the add, confirmation and name of each,
+clock first (alone, they record who is `serving` then and the `names` shown), or an `adopt` of a head. Its `state` is
+what the verifier then applies: the active devices with the add, confirmation and name shown of each (and a `pending` rename),
 the conflicted ids, the heads, the quarantined entries, the evidence and who is served. The PWA's
 port replays it in R1c.
+
+## Decided for the library
+
+Decided by A, Trust lead, 2026-11-04, where the design left them open:
+
+| Question | Decision |
+|---|---|
+| How many entries refused for a cap or budget a verifier keeps aside as possible evidence | 2,048, twice the evidence it can admit; past that they are refused and dropped |
+| Whether a held device's renames are held | Held: see **Names** above |
+| What "distinct heads" means for a merge's parents | No parent an ancestor of another |
 
 ## Open questions
 
@@ -303,6 +320,3 @@ check to change:
 | The origin an assertion must name | Exactly `https://` + `rpId` |
 | The challenge role for person commands and vetoes | Decided in R1c |
 | How the QR identifies N's `sign` key when N shows it | Decided with R3 |
-| How many entries refused for a cap or budget a verifier keeps aside as possible evidence | 2,048, twice the evidence it can admit; past that they are refused and dropped |
-| Whether a held device's renames are held | Not held: only grants that make a device active are |
-| What "distinct heads" means for a merge's parents | No parent an ancestor of another |
