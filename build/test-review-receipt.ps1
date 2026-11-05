@@ -10,7 +10,7 @@
 # two changed files and the diff and ends `VERDICT: CLEAN`; checks.json is the pull request's checks
 # as read again afterwards; ledger.json is the read ledger the script must replay from that log.
 # Each case changes one thing in memory and expects the script to refuse it, or, for a change it
-# must take (a view the CLI cut short and read on later, report text after the verdict, a DELTA
+# must take (a view the CLI cut short and read on later, blank lines after the verdict, a DELTA
 # from an authorized receipt), still to print the receipt. For DELTA the stand-in also answers for
 # main's quality/merge-rule.yml (synthetic posters) and -Since's statuses.
 #
@@ -230,32 +230,53 @@ Check 'A task call that asked for no model is refused, though its prompt names o
     Assert-Refused (Get-Refusal) '*subagent.started doesn''t say its model came from the task call*'
 }
 
-Check 'One standalone VERDICT: CLEAN line anywhere in the last message is the verdict, with report text after it; two, or none standalone, are refused' {
-    Reset ($events.Replace('VERDICT: CLEAN","model"', 'VERDICT: CLEAN\n\nWhat was read: every changed file whole, and the diff.","model"'))
+Check 'The verdict is the last non-empty line, exactly VERDICT: CLEAN; text after it, a fenced, bold, indented, other-case or inline CLEAN, or a second one is refused' {
+    Reset ($events.Replace('VERDICT: CLEAN","model"', 'VERDICT: CLEAN\n\n \n","model"'))
     $receipt = Invoke-Receipt
     Assert ($receipt.StartsWith('<!-- agent-bridge review-receipt v1 -->')) "receipt: $receipt"
     Assert ($receipt.Contains('sec-929 CLEAN')) 'no verdict line'
-    Reset ($events.Replace('VERDICT: CLEAN","model"', 'VERDICT: CLEAN\nVERDICT: CLEAN","model"'))
-    Assert-Refused (Get-Refusal) '*has 2 VERDICT lines; exactly one is needed*'
+    Reset ($events.Replace('no findings.\n\nVERDICT: CLEAN","model"', 'no findings.\r\n\r\nVERDICT: CLEAN\r\n","model"'))
+    Assert ((Invoke-Receipt).StartsWith('<!-- agent-bridge review-receipt v1 -->')) 'a CRLF report ending VERDICT: CLEAN was refused'
+    foreach ($ending in @(
+            'VERDICT: CLEAN\n\nWhat was read: every changed file whole, and the diff.',
+            '```\nVERDICT: CLEAN\n```',
+            '**VERDICT: CLEAN**',
+            '  VERDICT: CLEAN',
+            'Verdict: Clean',
+            'VERDICT: CLEAN (no findings)',
+            'VERDICT:  CLEAN')) {
+        Reset ($events.Replace('VERDICT: CLEAN","model"', "$ending`",`"model`""))
+        Assert-Refused (Get-Refusal) '*doesn''t end in the line VERDICT: CLEAN*'
+    }
     Reset ($events.Replace('no findings.\n\nVERDICT: CLEAN","model"', 'no findings. VERDICT: CLEAN","model"'))
-    Assert-Refused (Get-Refusal) '*has 0 VERDICT lines; exactly one is needed*'
+    Assert-Refused (Get-Refusal) '*doesn''t end in the line VERDICT: CLEAN*'
+    Reset ($events.Replace('VERDICT: CLEAN","model"', 'VERDICT: CLEAN\nVERDICT: CLEAN","model"'))
+    Assert-Refused (Get-Refusal) '*has 2 lines with VERDICT:; only its last line may*'
+    Reset ($events.Replace('VERDICT: CLEAN","model"', '```\nVERDICT: CLEAN\n```\n\nVERDICT: CLEAN","model"'))
+    Assert-Refused (Get-Refusal) '*has 2 lines with VERDICT:; only its last line may*'
 }
 
-Check 'Every line starting VERDICT: counts, whatever follows: a NOT CLEAN verdict with a fenced CLEAN, after any whitespace, an empty or other-case marker, or more words is refused' {
-    Reset ($events.Replace('VERDICT: CLEAN","model"', '\u00a0VERDICT: NOT CLEAN (1 Medium)\n\n```\nVERDICT: CLEAN\n```","model"'))
-    Assert-Refused (Get-Refusal) '*has 2 VERDICT lines; exactly one is needed*'
-    Reset ($events.Replace('VERDICT: CLEAN","model"', '\fVERDICT: NOT CLEAN (1 Medium)\nVERDICT: CLEAN","model"'))
-    Assert-Refused (Get-Refusal) '*has 2 VERDICT lines; exactly one is needed*'
-    Reset ($events.Replace('VERDICT: CLEAN","model"', 'VERDICT: NOT CLEAN (1 Medium)\n\nOnce fixed, it would end:\n```\nVERDICT: CLEAN\n```","model"'))
-    Assert-Refused (Get-Refusal) '*has 2 VERDICT lines; exactly one is needed*'
-    Reset ($events.Replace('VERDICT: CLEAN","model"', 'VERDICT: NOT CLEAN (1 Medium)\n\n> VERDICT: CLEAN","model"'))
-    Assert-Refused (Get-Refusal) '*verdict is ''NOT CLEAN (1 Medium)'', not CLEAN*'
-    Reset ($events.Replace('VERDICT: CLEAN","model"', 'VERDICT:\nVERDICT: CLEAN","model"'))
-    Assert-Refused (Get-Refusal) '*has 2 VERDICT lines; exactly one is needed*'
-    Reset ($events.Replace('VERDICT: CLEAN","model"', 'verdict: not clean\nVERDICT: CLEAN","model"'))
-    Assert-Refused (Get-Refusal) '*has 2 VERDICT lines; exactly one is needed*'
-    Reset ($events.Replace('VERDICT: CLEAN","model"', 'VERDICT: CLEAN (no findings)","model"'))
-    Assert-Refused (Get-Refusal) '*verdict is ''CLEAN (no findings)'', not CLEAN*'
+Check 'A message ending VERDICT: CLEAN is refused when it says NOT CLEAN or NOT_CLEAN anywhere, or VERDICT: on another line, but not for prose about the verdict' {
+    foreach ($before in @(
+            '**VERDICT: NOT CLEAN** (1 Medium)',
+            '## VERDICT: NOT CLEAN',
+            '- VERDICT: NOT CLEAN',
+            '\u00a0VERDICT: NOT CLEAN (1 Medium)',
+            '\fVERDICT: NOT CLEAN (1 Medium)',
+            'Verdict: not clean',
+            'The result: NOT_CLEAN, see below.')) {
+        Reset ($events.Replace('VERDICT: CLEAN","model"', "$before\n\nVERDICT: CLEAN`",`"model`""))
+        Assert-Refused (Get-Refusal) '*says NOT CLEAN*'
+    }
+    foreach ($before in @(
+            '**VERDICT: CHANGES REQUESTED** (1 Medium)',
+            '## Verdict: blocked',
+            '- VERDICT:')) {
+        Reset ($events.Replace('VERDICT: CLEAN","model"', "$before\n\nVERDICT: CLEAN`",`"model`""))
+        Assert-Refused (Get-Refusal) '*has 2 lines with VERDICT:; only its last line may*'
+    }
+    Reset ($events.Replace('VERDICT: CLEAN","model"', 'The verdict follows.\n\nVERDICT: CLEAN","model"'))
+    Assert ((Invoke-Receipt).StartsWith('<!-- agent-bridge review-receipt v1 -->')) 'prose mentioning the verdict, without the marker, was refused'
 }
 
 Check 'A reviewer whose completion confirms another model is refused' {

@@ -41,10 +41,10 @@
 #  - Coverage, from the reviewer's own view calls (the read ledger, below), checked against the
 #    head's contents from GitHub: each file the scope needs, read whole after the CI capture, and
 #    the diff read.
-#  - The verdict: the reviewer's last message has exactly one standalone line `VERDICT: CLEAN`,
-#    anywhere in it (report text may follow); no other line starting VERDICT: after only whitespace
-#    on that line, a no-break space or form feed included (in any case, inside a code fence or
-#    not, whatever follows it).
+#  - The verdict: the reviewer's last message ends in the line `VERDICT: CLEAN`, exactly (only
+#    blank lines may follow it); `NOT CLEAN` and `NOT_CLEAN` appear nowhere in the message, in any
+#    case; and no other line has the marker `VERDICT:` in any case, whatever markdown is around
+#    it. Prose that only mentions the verdict, without that marker, is fine.
 #  - The pull request: open, its head still -Head when the checks, threads and reviews are read,
 #    and every review thread resolved.
 #  Before it posts the comment, and again before the status, it reads the head again; if the head
@@ -73,8 +73,9 @@
 #
 # The conventions this asks of the coordinator and a reviewer's prompt, then: capture CI as above
 # once it's green, then start the reviewer with a task call that passes its `model` argument; read
-# each file with `view` (in ranges when it's large); run that git diff with full SHAs; give exactly
-# one standalone `VERDICT: CLEAN` line in the last message, or the findings.
+# each file with `view` (in ranges when it's large); run that git diff with full SHAs; end the last
+# message with the line `VERDICT: CLEAN`, with `VERDICT:`, NOT CLEAN and NOT_CLEAN nowhere else,
+# or give the findings.
 #
 # Needs gh, signed in as an account in independent_review.posters (quality/merge-rule.yml) to post.
 # Only events.jsonl schema version 1 (session.start's version, as Copilot CLI 1.0.105 writes it) is
@@ -412,12 +413,16 @@ foreach ($e in $events) {
 $messages = @($run | Where-Object { $_.Type -eq 'assistant.message' -and ([string](Get-Field $_.Data 'content')).Trim() })
 if ($messages.Count -eq 0) { Stop-Receipt 'the reviewer said nothing' }
 $report = [string](Get-Field $messages[-1].Data 'content')
-# Every line that starts (after any whitespace on that line: spaces, tabs, no-break spaces, form
-# feeds and the like) with VERDICT:, in any case and whatever follows, is a verdict line, so a
-# NOT CLEAN verdict can't hide behind a quoted or fenced CLEAN one.
-$verdicts = [regex]::Matches($report, '(?im)^[^\S\r\n]*VERDICT:(.*)$')
-if ($verdicts.Count -ne 1) { Stop-Receipt "the reviewer's last message has $($verdicts.Count) VERDICT lines; exactly one is needed" }
-if ($verdicts[0].Value -cnotmatch '^[ \t]*VERDICT:[ \t]*CLEAN[ \t]*\r?$') { Stop-Receipt "the reviewer's verdict is '$($verdicts[0].Groups[1].Value.Trim())', not CLEAN" }
+# Judged by the message's shape, not by guessing at markdown: its last non-empty line is exactly
+# VERDICT: CLEAN; it says NOT CLEAN or NOT_CLEAN nowhere (any case); and no other line has the
+# marker VERDICT: (any case, whatever markdown is around it).
+$reportLines = $report -split '\r\n|\r|\n'
+$last = $reportLines.Count - 1
+while ($last -ge 0 -and [string]::IsNullOrWhiteSpace($reportLines[$last])) { $last-- }
+if ($last -lt 0 -or $reportLines[$last] -cne 'VERDICT: CLEAN') { Stop-Receipt "the reviewer's last message doesn't end in the line VERDICT: CLEAN" }
+if ($report -match 'NOT CLEAN|NOT_CLEAN') { Stop-Receipt "the reviewer's last message says NOT CLEAN" }
+$verdictLines = @($reportLines | Where-Object { $_ -match 'VERDICT:' })
+if ($verdictLines.Count -ne 1) { Stop-Receipt "the reviewer's last message has $($verdictLines.Count) lines with VERDICT:; only its last line may" }
 
 # --- CI before the first read: the coordinator's own `gh pr checks` on the head, between two reads
 # of the head, run as a powershell tool call in this session; the last one it started before the
