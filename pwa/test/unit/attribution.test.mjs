@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { readSession } from '../../js/protocol.js';
 import { FOLD_AFTER, NAME_MAX, aloud, askToStopText, backgroundCounts, delegateEvents, delegateFold, delegateList, delegateName, delegateTime, delegateTitle, descendants, eventParts, mainVoice } from '../../js/attribution.js';
-import { clock, pacificTime } from '../../js/ui/time.js';
+import { clock } from '../../js/ui/time.js';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const session = (fields = {}) => readSession({ id: 's1', agent: 'copilot', status: 'idle', ...fields });
@@ -379,15 +379,23 @@ test('the conversation hears only the main agent\'s own delegates, in the order 
   ]);
 });
 
-test('each line gives its absolute time in Pacific, for its tooltip and accessible name', () => {
-  // 2026-11-02 12:00 UTC is 4:00 AM in Pacific (standard time).
-  const [start] = lines([{ id: 'a', name: 'A', status: 'working', startedAt: minsAgo(17) }]);
-  const [merged] = lines([{ id: 'a', name: 'A', status: 'ended', outcome: 'done', startedAt: minsAgo(65), endedAt: minsAgo(5) }]);
-  const [alone] = lines([{ id: 'a', name: 'A', status: 'ended', outcome: 'failed', endedAt: minsAgo(5) }]);
-  assert.equal(start.tip, 'Started 3:43 AM PT');
-  assert.equal(merged.tip, 'Started 2:55 AM, reported back 3:55 AM PT');
-  assert.equal(alone.tip, 'Failed 3:55 AM PT');
-  assert.equal(pacificTime('2026-07-01T19:41:00Z'), '12:41 PM');
+test('each line gives its absolute time in the viewer\'s own time zone, with no zone after it, for its tooltip and accessible name', () => {
+  // Tokyo, far from Pacific: 2026-11-02 12:00 UTC is 9:00 PM there and 4:00 AM in Pacific. The
+  // expected times are Tokyo's in this machine's own locale ("8:43 PM" in en-US, "20:43" in en-GB).
+  const tokyo = (iso) => new Intl.DateTimeFormat(undefined, { timeZone: 'Asia/Tokyo', hour: 'numeric', minute: '2-digit' }).format(Date.parse(iso)).replace(/\s/gu, ' ');
+  const tz = process.env.TZ;
+  process.env.TZ = 'Asia/Tokyo';
+  try {
+    const [start] = lines([{ id: 'a', name: 'A', status: 'working', startedAt: minsAgo(17) }]);
+    const [merged] = lines([{ id: 'a', name: 'A', status: 'ended', outcome: 'done', startedAt: minsAgo(65), endedAt: minsAgo(5) }]);
+    const [alone] = lines([{ id: 'a', name: 'A', status: 'ended', outcome: 'failed', endedAt: minsAgo(5) }]);
+    assert.equal(start.tip, `Started ${tokyo(minsAgo(17))}`);
+    assert.equal(merged.tip, `Started ${tokyo(minsAgo(65))}, reported back ${tokyo(minsAgo(5))}`);
+    assert.equal(alone.tip, `Failed ${tokyo(minsAgo(5))}`);
+    if (new Intl.DateTimeFormat().resolvedOptions().locale === 'en-US') { assert.equal(start.tip, 'Started 8:43 PM'); }
+  } finally {
+    if (tz === undefined) { delete process.env.TZ; } else { process.env.TZ = tz; }
+  }
 });
 
 test('more than three lines in a row fold into one that counts failed and ended apart from reported back, with a link of its own to the earliest still working (D3)', () => {
@@ -412,6 +420,25 @@ test('more than three lines in a row fold into one that counts failed and ended 
     { id: 'd', name: 'd', status: 'working', startedAt: minsAgo(30) }, { id: 'x', name: 'x', status: 'waiting', startedAt: minsAgo(29.5) },
   ]);
   assert.deepEqual(delegateFold(shared), { button: '5 delegates', link: '5 still working', workingId: 'a', label: '5 delegates · 5 still working' });
+});
+
+test('a fold counts a stopped delegate by its outcome, or as ended with none, even with no end time, so its counts add up to its total', () => {
+  const run = lines([
+    ...['a', 'b', 'c', 'd'].map((id, i) => ({ id, name: id, status: 'ended', outcome: 'done', startedAt: minsAgo(50 - i * 5), endedAt: minsAgo(10) })),
+    // Idle with no outcome: the host never saw it end, so it is "ended" whether or not it has an end time.
+    { id: 'w', name: 'w', status: 'idle', startedAt: minsAgo(28), endedAt: minsAgo(27) },
+    { id: 'x', name: 'x', status: 'idle', startedAt: minsAgo(25) },
+    // An outcome with no end time counts by the outcome.
+    { id: 'y', name: 'y', status: 'ended', outcome: 'failed', startedAt: minsAgo(20) },
+    { id: 'z', name: 'z', status: 'idle', outcome: 'done', startedAt: minsAgo(15) },
+  ]);
+  // With no end time, its line is still its start, aged from it (ruling 4).
+  assert.deepEqual(run.slice(-3).map((l) => [l.kind, l.glyph, words(l)]), [
+    ['start', null, 'Started delegate x · 25m'],
+    ['start', null, 'Started delegate y · 20m'],
+    ['start', null, 'Started delegate z · 15m'],
+  ]);
+  assert.deepEqual(delegateFold(run), { button: '8 delegates · 5 reported back, 1 failed, 2 ended', link: null, workingId: null, label: '8 delegates · 5 reported back, 1 failed, 2 ended' });
 });
 
 test('a delegate that names itself its parent, from a broken host, is the main agent\'s own in the conversation', () => {

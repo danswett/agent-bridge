@@ -6,7 +6,7 @@
 // A host's top-level response and reasoning are last-writer-wins, kept for older clients: a
 // delegate's thinking can be there in place of the main agent's answer. activity.source says
 // which delegate wrote each, and activity.own carries the main agent's own text beside it.
-import { ago, duration, pacificTime } from './ui/time.js';
+import { ago, duration, timeOfDay } from './ui/time.js';
 
 // The main agent's own words, never a delegate's (v1-sessions.md, Activity, the `own` row):
 // for each of response and reasoning, own's when source names a delegate for it, otherwise
@@ -289,8 +289,8 @@ function reportOf(a) {
 // B · 9m"; "Started 3 delegates: A, B and 1 more"), which one leaves for its own merged line when
 // it reports back. Lines are in start order, so a line keeps its place as it changes.
 // Each: { key, was (the key it had, if another), kind ('start', 'shared' or 'merged'), glyph (a
-// merged line's outcome, else null: a start has the delegate icon), before, names [{ name, id }], after, tip (absolute, in Pacific),
-// at, states (each delegate's: 'reported back', 'failed', 'ended', 'working' or null) }. A name
+// merged line's outcome, else null: a start has the delegate icon), before, names [{ name, id }], after, tip (absolute, in the viewer's zone),
+// at, states (what the fold counts each delegate as: 'reported back', 'failed', 'ended', 'working' or null) }. A name
 // links to its delegate, and the word Delegate stays before it, outside the link, unless the label
 // says it already: these lines say what a delegate did, so no name may read as the main agent's.
 // eventParts() puts a line's words together; delegateFold() folds a run of them.
@@ -300,14 +300,18 @@ export function delegateEvents(session, now = Date.now()) {
   const mine = list.filter((a) => !a.parent || a.parent === a.id);
   const time = (iso) => Date.parse(iso ?? '');
   const named = (a) => ({ name: delegateName(a), id: a.id });
-  const still = (a) => (a.status === 'working' || a.status === 'waiting' ? 'working' : null);
+  // What a fold counts it as (§6.4, D3), from its status and outcome alone: an end time only
+  // decides its line. Stopped with no outcome, the host never saw it end: "ended".
+  const counted = (a) => (a.status === 'working' || a.status === 'waiting' ? 'working'
+    : a.status !== 'idle' && a.status !== 'ended' ? null
+      : a.outcome === 'failed' ? 'failed' : a.outcome === 'done' ? 'reported back' : 'ended');
   const lines = [];
   const merged = (a, r) => {
     const ran = Number.isFinite(time(a.startedAt)) ? duration(a.startedAt, time(a.endedAt)) : '';
     const said = r.said;
-    const tip = ran ? `Started ${pacificTime(a.startedAt)}, ${said} ${pacificTime(a.endedAt)} PT` : `${said[0].toUpperCase()}${said.slice(1)} ${pacificTime(a.endedAt)} PT`;
+    const tip = ran ? `Started ${timeOfDay(a.startedAt)}, ${said} ${timeOfDay(a.endedAt)}` : `${said[0].toUpperCase()}${said.slice(1)} ${timeOfDay(a.endedAt)}`;
     return { key: `d|${a.id}`, kind: 'merged', glyph: r.glyph, before: saysDelegate(delegateName(a)) ? '' : 'Delegate', names: [named(a)],
-      after: `· ${ran ? `ran ${ran}, ` : ''}${said} · ${duration(a.endedAt, now)}`, tip, at: ran ? a.startedAt : a.endedAt, states: [said] };
+      after: `· ${ran ? `ran ${ran}, ` : ''}${said} · ${duration(a.endedAt, now)}`, tip, at: ran ? a.startedAt : a.endedAt, states: [counted(a)] };
   };
   const starts = mine.filter((a) => Number.isFinite(time(a.startedAt))).sort((a, b) => time(a.startedAt) - time(b.startedAt));
   for (let i = 0; i < starts.length;) {
@@ -320,7 +324,7 @@ export function delegateEvents(session, now = Date.now()) {
     }
     if (!waiting.length) { continue; }
     const at = waiting[0].startedAt;
-    const common = { glyph: null, after: `· ${duration(at, now)}`, tip: `Started ${pacificTime(at)} PT`, at, states: waiting.map(still) };
+    const common = { glyph: null, after: `· ${duration(at, now)}`, tip: `Started ${timeOfDay(at)}`, at, states: waiting.map(counted) };
     // Keyed by the batch, not by who is left in it, so it stays in place as they leave. A line
     // that became shared as another started (the host tells of them one at a time) was its first
     // delegate's own: was names that key, so the line it was is the one kept.

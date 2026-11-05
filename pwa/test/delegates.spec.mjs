@@ -26,7 +26,8 @@ const later = () => new Date(Date.now() + 1000).toISOString();
 const showList = (page) => card(page).getByRole('tab', { name: 'Delegates' }).click();
 const openRow = (page, id) => delegate(page, id).locator('.delegate-summary').click();
 
-test.use({ viewport: { width: 900, height: 800 } });
+// A zone far from Pacific, so a time shown in Pacific can't pass for the viewer's own.
+test.use({ viewport: { width: 900, height: 800 }, timezoneId: 'Asia/Tokyo', locale: 'en-US' });
 
 async function openDemo(page, query = '&delegates=1', id = SESSION) {
   await page.addInitScript(() => {
@@ -521,6 +522,28 @@ test.describe('on a phone', () => {
     await page.emulateMedia({ colorScheme: 'light' });
   });
 
+  test('on a phone a closed fold too long for one line keeps its icon on the summary\'s first line, and the link wraps under the summary\'s words, not the icon', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    await addRun(page, [...RUN, { id: 'fold-g', name: 'Tidy the branch', status: 'ended', startedAt: 9.5, endedAt: 9 }]);
+    const line = c.locator('.agent-block .delegate-events .delegate-fold-line');
+    await expect(line.locator('.delegate-fold-toggle')).toHaveText('9 delegates · 4 reported back, 1 failed, 1 ended');
+    await expect(line.locator('.delegate-fold-working')).toHaveText('3 still working');
+    const box = await line.evaluate((el) => {
+      const rect = (e) => e.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(el.querySelector('.delegate-fold-label'));
+      const first = range.getClientRects()[0];
+      const mark = rect(el.querySelector('.delegate-event-mark'));
+      return { first: { top: first.top, bottom: first.bottom, left: first.left }, mark: mark.top + mark.height / 2, link: rect(el.querySelector('.delegate-fold-working')) };
+    });
+    // At 390 the link doesn't fit beside the summary: it starts a line of its own.
+    expect(box.link.top).toBeGreaterThanOrEqual(box.first.bottom);
+    expect(box.mark).toBeGreaterThanOrEqual(box.first.top);
+    expect(box.mark).toBeLessThanOrEqual(box.first.bottom);
+    expect(box.link.left).toBeGreaterThanOrEqual(box.first.left);
+  });
+
   test.describe('with touch', () => {
     test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
 
@@ -659,12 +682,18 @@ test.describe('at three panes', () => {
     const c = card(page);
     const events = c.locator('.agent-block .delegate-events > li');
     // Starts each within a minute of the last share a line, naming them; one that reported back
-    // has its own line, its start and its report merged (D2). Each gives its time in Pacific.
+    // has its own line, its start and its report merged (D2). Each gives its time in the viewer's
+    // own zone, with no zone after it.
+    const at = await page.evaluate((id) => {
+      const time = (iso) => new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Tokyo', hour: 'numeric', minute: '2-digit' }).format(Date.parse(iso)).replace(/\s/gu, ' ');
+      const a = Object.fromEntries(window.agentBridgeDemo.host.get(id).subagents.map((d) => [d.id, d]));
+      return { witness: time(a['demo-agent-witness'].startedAt), lintStart: time(a['demo-agent-lint'].startedAt), lintEnd: time(a['demo-agent-lint'].endedAt) };
+    }, SESSION);
     await expect(events).toHaveText([
-      /^Started Read witness shell logic and Run full test suite · 1[78]m \(Started \d{1,2}:\d\d [AP]M PT\)$/,
-      /^Delegate Lint the PWA · ran 1m, failed · 1[45]m \(Started \d{1,2}:\d\d [AP]M, failed \d{1,2}:\d\d [AP]M PT\)$/,
+      new RegExp(`^Started Read witness shell logic and Run full test suite · 1[78]m \\(Started ${at.witness}\\)$`),
+      new RegExp(`^Delegate Lint the PWA · ran 1m, failed · 1[45]m \\(Started ${at.lintStart}, failed ${at.lintEnd}\\)$`),
     ]);
-    await expect(events.first()).toHaveAttribute('title', /^Started \d{1,2}:\d\d [AP]M PT$/);
+    await expect(events.first()).toHaveAttribute('title', `Started ${at.witness}`);
     // After the main agent's words, before what it is running now.
     expect(await c.locator('.agent-block > :not([hidden])').evaluateAll((els) => els.map((e) => e.className))).toEqual(['speaker', 'reasoning', 'md response', 'delegate-events']);
     await events.nth(1).getByRole('button', { name: 'Lint the PWA' }).click();

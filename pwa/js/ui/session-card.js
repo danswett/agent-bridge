@@ -891,7 +891,7 @@ export class SessionCard {
   }
 
   // One line: the delegate icon for a start, the outcome's glyph once it reported back; its words
-  // with each name a link, and its absolute time (Pacific) as its tooltip and in its name.
+  // with each name a link, and its absolute time (the viewer's own) as its tooltip and in its name.
   #eventLine(li, line, st) {
     if (!li) { li = h('li', { class: 'delegate-event' }, h('span', { class: 'delegate-event-mark' }), h('span', { class: 'delegate-event-text' })); }
     li.dataset.kind = line.kind;

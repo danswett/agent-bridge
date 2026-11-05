@@ -850,18 +850,22 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .delegate-event-text { min-width: 0; overflow-wrap: anywhere; }
 /* A run of more than three (D3): one line, its button, the chevron ending it inside its target
    and focus ring, then the "still working" link after a 12 gap, each a target of its own
-   (ui.md §9.1 A11). Open, its lines are indented under a rule from the icon's centre. */
-.delegate-fold-line { align-items: center; }
-.delegate-fold-text { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--ab-space-3); }
+   (ui.md §9.1 A11). Too long for one line (a phone), the link wraps under the summary's words,
+   and the icon stays on their first line: each target pads its first line to the target's
+   middle, and the icon's cell is a target high. Open, its lines are indented under a rule from
+   the icon's centre. */
+.delegate-fold-line { --fold-target: 32px; }
+@media (pointer: coarse) { .delegate-fold-line { --fold-target: var(--tap); } }
+.delegate-fold-line > .delegate-event-mark { height: var(--fold-target); }
+.delegate-fold-text { min-width: 0; display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: var(--ab-space-3); }
 .delegate-fold-toggle {
-  display: inline-flex; align-items: center; gap: var(--ab-space-1); min-width: 0; max-width: 100%; min-height: 32px;
-  padding: var(--ab-space-1) 0; margin: 0; border: 0; background: none; font: inherit; color: var(--ab-text2); text-align: start; cursor: pointer;
+  display: inline-flex; align-items: flex-start; gap: var(--ab-space-1); min-width: 0; max-width: 100%; min-height: var(--fold-target);
+  padding: calc((var(--fold-target) - var(--type-meta-line)) / 2) 0; margin: 0; border: 0; background: none; font: inherit; color: var(--ab-text2); text-align: start; cursor: pointer;
 }
 .delegate-fold-label { min-width: 0; overflow-wrap: anywhere; }
-.delegate-link.delegate-fold-working { display: inline-block; min-height: 32px; padding: var(--ab-space-1) 0; overflow-wrap: anywhere; }
+.delegate-link.delegate-fold-working { display: inline-block; min-height: var(--fold-target); padding: calc((var(--fold-target) - var(--type-meta-line)) / 2) 0; overflow-wrap: anywhere; }
 .delegate-link.delegate-fold-working[hidden] { display: none; }
-@media (pointer: coarse) { .delegate-fold-toggle, .delegate-link.delegate-fold-working { min-height: var(--tap); } }
-.delegate-fold-chevron { display: flex; flex: none; align-items: center; color: var(--ab-text2); }
+.delegate-fold-chevron { display: flex; flex: none; align-items: center; height: var(--type-meta-line); color: var(--ab-text2); }
 .delegate-fold-chevron .ab-icon { transition: transform var(--ab-motion-disclosure-exit-duration) var(--ab-motion-disclosure-exit-ease); }
 .delegate-fold[data-open] .delegate-fold-chevron .ab-icon { transform: rotate(90deg); transition-duration: var(--ab-motion-disclosure-duration); transition-timing-function: var(--ab-motion-disclosure-ease); }
 .delegate-fold-lines {
