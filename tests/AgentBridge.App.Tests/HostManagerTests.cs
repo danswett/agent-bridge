@@ -297,7 +297,10 @@ public sealed class HostManagerTests : IAsyncLifetime
         Directory.CreateDirectory(manager.Layout.ProfileFolder);
         File.WriteAllText(StopMarker, "");
         File.SetLastWriteTimeUtc(StopMarker, startedUtc.AddMinutes(-5));
-        using var launcherFiles = new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { });
+        // What the launcher logs: without the lock, its delete either took the new marker or failed
+        // on the app's write still open, which only this tells apart from a clean pass.
+        var launcherLog = new List<string>();
+        using var launcherFiles = new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, launcherLog.Add);
         Task? stop = null;
         BetweenReadAndDelete(launcherFiles, () =>
         {
@@ -312,6 +315,7 @@ public sealed class HostManagerTests : IAsyncLifetime
 
         Assert.True(File.Exists(StopMarker));
         Assert.True(launcherFiles.Stopped());
+        Assert.Empty(launcherLog);
     }
 
     // A lock held past its 2 s (nothing holds it longer than a look and a delete) does not keep
@@ -320,12 +324,22 @@ public sealed class HostManagerTests : IAsyncLifetime
     [Trait("Category", "Network")]
     public async Task A_stop_writes_its_marker_even_past_a_lock_that_is_not_let_go()
     {
+        var logged = new List<string>();
+        var m = new HostManager(manager.Layout, tasks, processes,
+            ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(50),
+            Log = logged.Add,
+        };
         using var held = HostLauncherContract.LockStopMarker(manager.Layout.ProfileFolder, TimeSpan.Zero);
         Assert.NotNull(held);
 
-        await manager.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        await m.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.True(File.Exists(StopMarker));
+        Assert.Contains(logged, l => l.Contains("without its lock", StringComparison.Ordinal));
     }
 
     // The launcher's seam for that test, internal to it, so set by reflection: an

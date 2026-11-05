@@ -45,7 +45,10 @@ public partial class App : Application
     }
 
     internal static HostManager ManagerFor(string profile, string? dataRoot = null, ILogonTasks? tasks = null, IProcesses? processes = null) =>
-        new(new InstallLayout(AppContext.BaseDirectory, dataRoot ?? Paths.DataRoot, profile), tasks ?? new WindowsLogonTasks(), processes ?? new SystemProcesses());
+        new(new InstallLayout(AppContext.BaseDirectory, dataRoot ?? Paths.DataRoot, profile), tasks ?? new WindowsLogonTasks(), processes ?? new SystemProcesses())
+        {
+            Log = AppLog.Write,
+        };
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {

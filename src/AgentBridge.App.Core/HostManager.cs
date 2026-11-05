@@ -213,6 +213,9 @@ public sealed class HostManager
     public TimeProvider Time { get; init; } = TimeProvider.System;
     // Whether this app runs elevated; tests pretend.
     public Func<bool> Elevated { get; init; } = PeerPolicy.SelfElevated;
+    // Where the app's log is: what it could not do that no caller is told (the stop marker
+    // written without its lock).
+    public Action<string> Log { get; init; } = _ => { };
 
     public InstallLayout Layout => layout;
     public string TaskName => LogonTaskXml.TaskName(layout.Profile, userSid);
@@ -321,19 +324,30 @@ public sealed class HostManager
     // Written under the marker's lock (HostLauncherContract.StopMarkerLock), which a launcher
     // clears an earlier marker under, so its delete never takes this one (#478 review, Copilot
     // 4470090733). A lock not had within 2 s (a launcher holds it only for a look and a delete)
-    // is written past: writing it never starts a host, and only a launcher still in the middle of
-    // clearing an earlier marker all that time could then delete it.
+    // is written past, and logged: writing it never starts a host, and only a launcher still in
+    // the middle of clearing an earlier marker all that time could then delete it. So the lock is
+    // waited for once more, and a marker gone by then is written again under it.
     void MarkStopped()
     {
         try
         {
             Directory.CreateDirectory(layout.ProfileFolder);
-            using var held = HostLauncherContract.LockStopMarker(layout.ProfileFolder, TimeSpan.FromSeconds(2));
+            using var held = HostLauncherContract.LockStopMarker(layout.ProfileFolder, StopMarkerLockWait);
             File.WriteAllText(StopMarker, "");
+            if (held is not null) { return; }
+            Log($"the host's stop marker was written without its lock ({HostLauncherContract.StopMarkerLock} was held for {StopMarkerLockWait.TotalSeconds:0} s)");
+            using var later = HostLauncherContract.LockStopMarker(layout.ProfileFolder, StopMarkerLockWait);
+            if (later is not null && !File.Exists(StopMarker))
+            {
+                File.WriteAllText(StopMarker, "");
+                Log("the host's stop marker had gone meanwhile, and was written again under its lock");
+            }
         }
         // The launcher is still ended below; the marker only spares it being ended by force.
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
+
+    static readonly TimeSpan StopMarkerLockWait = TimeSpan.FromSeconds(2);
 
     void ClearStopped()
     {
