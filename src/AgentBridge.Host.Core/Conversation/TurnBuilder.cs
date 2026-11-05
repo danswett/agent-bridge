@@ -11,6 +11,12 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
     readonly List<HistoryPart> _parts = [];
     readonly Dictionary<string, int> _tools = new(StringComparer.Ordinal);
     readonly Dictionary<string, int> _questions = new(StringComparer.Ordinal);
+    // The parts that may still be open, by index, so an abort or a delegate's end settles them
+    // without visiting every part: rescanning them all, 2,000 responses and 2,000 aborts were four
+    // million visits (review of #686). An index is dropped once settled, so each is visited once.
+    readonly List<int> _running = [];
+    readonly List<int> _unanswered = [];
+    readonly Dictionary<string, List<int>> _askedBy = new(StringComparer.Ordinal);
     string _record = id;
     int _index;
 
@@ -104,6 +110,7 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
         if (_tools.ContainsKey(callId)) { return; }
         Add(Blank(HistoryPartKind.Tool, at) with { Tool = new ToolCall { Id = callId, Name = name, Summary = summary, Status = ToolStatus.Running, StartedAt = at } });
         _tools[callId] = _parts.Count - 1;
+        _running.Add(_parts.Count - 1);
     }
 
     // The first report of a call's end wins, as in the tool history.
@@ -120,6 +127,12 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
         if (_questions.ContainsKey(question.Id)) { return; }
         Add(Blank(HistoryPartKind.Question, at) with { Question = question, Outcome = QuestionOutcome.Unknown });
         _questions[question.Id] = _parts.Count - 1;
+        _unanswered.Add(_parts.Count - 1);
+        if (question.Agent is { } agent)
+        {
+            if (!_askedBy.TryGetValue(agent, out var asked)) { _askedBy[agent] = asked = []; }
+            asked.Add(_parts.Count - 1);
+        }
     }
 
     // How a question ended. Only the first outcome counts: an approval's tool call starting after
@@ -145,12 +158,10 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
     // no one, as the live question goes with it.
     public void Withdrawn(string agent, DateTimeOffset at)
     {
-        for (var i = 0; i < _parts.Count; i++)
+        if (!_askedBy.Remove(agent, out var asked)) { return; }
+        foreach (var i in asked)
         {
-            if (_parts[i] is { Kind: HistoryPartKind.Question, Outcome: QuestionOutcome.Unknown, Question.Agent: { } a } p && a == agent)
-            {
-                _parts[i] = p with { Outcome = QuestionOutcome.Cancelled, AnsweredAt = at };
-            }
+            if (_parts[i] is { Outcome: QuestionOutcome.Unknown } p) { _parts[i] = p with { Outcome = QuestionOutcome.Cancelled, AnsweredAt = at }; }
         }
     }
 
@@ -159,12 +170,17 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
     // The turn was interrupted or the agent shut down: nothing is running and nothing is asked any more.
     public void Abandoned(DateTimeOffset? at)
     {
-        for (var i = 0; i < _parts.Count; i++)
+        foreach (var i in _running)
         {
-            var p = _parts[i];
-            if (p.Tool is { Status: ToolStatus.Running } tool) { _parts[i] = p with { Tool = tool with { Status = ToolStatus.Failed, EndedAt = at } }; }
-            else if (p.Kind == HistoryPartKind.Question && p.Outcome == QuestionOutcome.Unknown) { _parts[i] = p with { Outcome = QuestionOutcome.Cancelled, AnsweredAt = at }; }
+            if (_parts[i].Tool is { Status: ToolStatus.Running } tool) { _parts[i] = _parts[i] with { Tool = tool with { Status = ToolStatus.Failed, EndedAt = at } }; }
         }
+        foreach (var i in _unanswered)
+        {
+            if (_parts[i] is { Outcome: QuestionOutcome.Unknown } p) { _parts[i] = p with { Outcome = QuestionOutcome.Cancelled, AnsweredAt = at }; }
+        }
+        _running.Clear();
+        _unanswered.Clear();
+        _askedBy.Clear();
     }
 
     // The turn as sent. latest: no prompt follows it, so what is running may still be, and what

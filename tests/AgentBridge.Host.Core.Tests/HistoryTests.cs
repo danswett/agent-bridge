@@ -836,6 +836,52 @@ public class HistoryTests
         Assert.Equal(JsonSerializer.Serialize(together, ProtocolJson.Options), JsonSerializer.Serialize(alone, ProtocolJson.Options));
     }
 
+    // Found in review of #686: an abort, or a delegate's end, looked at every part of the turn, so
+    // many parts and many aborts were quadratic. Only the parts still open are looked at now.
+    [Fact]
+    public void Many_aborts_and_delegate_ends_after_many_parts_settle_what_is_open_in_linear_time()
+    {
+        var turn = new TurnBuilder("t", Fixture.T0, null);
+        const int N = 50_000;
+        turn.ToolStarted("c1", "view", null, Fixture.T0);
+        turn.Asked(new Question { Id = "q1", Kind = QuestionKind.Approval, Message = "Push?", AskedAt = Fixture.T0, Agent = "agent-1" }, Fixture.T0);
+        for (var i = 0; i < N; i++) { turn.Response($"r{i}", Fixture.T0); }
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        for (var i = 0; i < N; i++)
+        {
+            turn.Withdrawn("agent-1", Fixture.T0.AddSeconds(1));
+            turn.Abandoned(Fixture.T0.AddSeconds(2));
+        }
+        clock.Stop();
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"took {clock.Elapsed}");
+        var parts = turn.Build(latest: true).Parts!;
+        Assert.Equal((ToolStatus.Failed, Fixture.T0.AddSeconds(2)), (parts.Single(p => p.Tool is not null).Tool!.Status, parts.Single(p => p.Tool is not null).Tool!.EndedAt!.Value));
+        Assert.Equal((QuestionOutcome.Cancelled, Fixture.T0.AddSeconds(1)), (parts.Single(p => p.Question is not null).Outcome!.Value, parts.Single(p => p.Question is not null).AnsweredAt!.Value));
+    }
+
+    // Found in review of #686: past 4,096 permission requests in one read, new ones were not
+    // remembered, so the newest approvals a turn keeps stayed unknown though each was denied.
+    [Fact]
+    public async Task The_newest_approvals_of_a_turn_of_thousands_keep_their_outcomes()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+        [
+            Copilot.User("go", 1),
+            .. Enumerable.Range(0, 4_120).SelectMany(i => new[]
+            {
+                Copilot.ToolStart($"c{i}", "powershell", new { command = "git push" }, 2),
+                Copilot.Permission($"req{i}", $"c{i}", Copilot.Prompts["commands"], 2),
+                Copilot.PermissionDone($"req{i}", $"c{i}", "denied-interactively-by-user", 3),
+            }),
+        ]);
+
+        var approvals = (await s.Page()).Turns!.Single().Parts.Where(p => p.Question?.Kind == QuestionKind.Approval).ToList();
+        Assert.Equal(HistoryLimits.QuestionsPerTurn, approvals.Count);
+        Assert.All(approvals, p => Assert.Equal(QuestionOutcome.Denied, p.Outcome));
+    }
     // Found in review of #292 (Codex): a delegate's task call on an older page, and the start it
     // made on this one, which names no parent: read alone, the start was taken for the main agent's.
     [Fact]

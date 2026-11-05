@@ -22,6 +22,7 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     readonly Dictionary<string, string> _callAgent = new(owners ?? new Dictionary<string, string>(), StringComparer.Ordinal);
     readonly Dictionary<string, string> _callDelegate = new(calls, StringComparer.Ordinal);
     readonly Dictionary<string, string> _permissions = new(StringComparer.Ordinal);
+    readonly Queue<string> _permissionOrder = new();
     // Delegates known to run synchronously, whose task call returning ends them: those this read
     // saw start, and those the session knows (BackgroundWork.SyncAgents), so it does not depend on
     // the page.
@@ -72,9 +73,16 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
 
     public string? DelegateOfCall(string? callId) => callId is not null ? _callDelegate.GetValueOrDefault(callId) : null;
 
+    // The oldest goes when full, never the newest: refusing new ones left the latest approvals a
+    // turn keeps (its newest 20) unknown however they were answered (review of #686).
     public void Permission(string requestId, string questionId)
     {
-        if (_permissions.Count < Keep) { _permissions[requestId] = questionId; }
+        if (!_permissions.ContainsKey(requestId))
+        {
+            if (_permissions.Count >= Keep) { _permissions.Remove(_permissionOrder.Dequeue()); }
+            _permissionOrder.Enqueue(requestId);
+        }
+        _permissions[requestId] = questionId;
     }
 
     public string? QuestionOf(string? requestId) => requestId is not null ? _permissions.GetValueOrDefault(requestId) : null;
@@ -91,7 +99,36 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
 
     public void StartedBy(string agent, string parent)
     {
-        if (_parents.Count < Keep || _parents.ContainsKey(agent)) { _parents[agent] = parent; }
+        if (_parents.Count >= Keep && !_parents.ContainsKey(agent)) { return; }
+        if (_parents.TryGetValue(agent, out var was)) { _children.GetValueOrDefault(was)?.Remove(agent); }
+        _parents[agent] = parent;
+        Child(agent, parent);
+    }
+
+    void Child(string agent, string parent)
+    {
+        if (!_children.TryGetValue(parent, out var children)) { _children[parent] = children = new HashSet<string>(StringComparer.Ordinal); }
+        children.Add(agent);
+    }
+
+    // Each delegate's nested ones, from _parents, so a delegate's end walks only what is below it:
+    // walking every synchronous delegate on each abort was quadratic as well (review of #686).
+    Dictionary<string, HashSet<string>>? _childrenOf;
+    Dictionary<string, HashSet<string>> _children
+    {
+        get
+        {
+            if (_childrenOf is null)
+            {
+                _childrenOf = new(StringComparer.Ordinal);
+                foreach (var (agent, parent) in _parents)
+                {
+                    if (!_childrenOf.TryGetValue(parent, out var children)) { _childrenOf[parent] = children = new HashSet<string>(StringComparer.Ordinal); }
+                    children.Add(agent);
+                }
+            }
+            return _childrenOf;
+        }
     }
 
     // A delegate's turn ended for good: what it asked, and what every synchronous delegate it was
@@ -101,22 +138,24 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     public void EndTurnOf(TurnBuilder turn, string root, DateTimeOffset at)
     {
         turn.Withdrawn(root, at);
-        foreach (var agent in _sync)
+        // Down from the root through synchronous delegates only, at most 64 deep, as before.
+        var level = new List<string> { root };
+        var seen = new HashSet<string>(StringComparer.Ordinal) { root };
+        for (var depth = 0; depth < 64 && level.Count > 0; depth++)
         {
-            if (Below(agent, root)) { turn.Withdrawn(agent, at); }
+            var next = new List<string>();
+            foreach (var parent in level)
+            {
+                if (!_children.TryGetValue(parent, out var children)) { continue; }
+                foreach (var child in children)
+                {
+                    if (!_sync.Contains(child) || !seen.Add(child)) { continue; }
+                    turn.Withdrawn(child, at);
+                    next.Add(child);
+                }
+            }
+            level = next;
         }
-    }
-
-    bool Below(string agent, string root)
-    {
-        var a = agent;
-        for (var depth = 0; depth < 64; depth++)
-        {
-            if (!_sync.Contains(a) || !_parents.TryGetValue(a, out var parent)) { return false; }
-            if (parent == root) { return true; }
-            a = parent;
-        }
-        return false;
     }
 
     public void Started(TurnBuilder turn, string agent, string? name, SubagentKind kind, DateTimeOffset at)
