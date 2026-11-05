@@ -304,14 +304,18 @@ jobs:
       # packages: a rebuild on the fixed base, or a package bump, clears it. One without a fix
       # cannot be cleared here, so it is only reported (code scanning, from main). The image had no
       # high or critical finding, fixed or not, when this was added (#433). To accept one for a
-      # while, list it in .trivyignore with a reason and an exp: date.
+      # while, list it in .trivyignore with a reason and an exp: date. The database comes first,
+      # from mirror.gcr.io or else ghcr.io (install-trivy's download-db.ps1); with neither, the
+      # install fails and nothing is scanned. Both scans use only that database.
       - name: Install Trivy
         if: runner.os == 'Linux' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'container-scan'))
         uses: ./.github/actions/install-trivy
+        with:
+          vulnerability-db: 'true'
       - name: The relay image has no fixable high or critical vulnerability
         id: relay-scan
         if: runner.os == 'Linux' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'container-scan'))
-        run: trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay
+        run: trivy image --scanners vuln --skip-db-update --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay
       - name: The relay image's high and critical vulnerabilities, fixed or not, as SARIF
         # Also after the scan above fails: then most of all. relay-image-sarif sends it to code
         # scanning from main.

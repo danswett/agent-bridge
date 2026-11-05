@@ -785,7 +785,7 @@ suites:
     triggers: [src/AgentBridge.Relay/**, src/AgentBridge.Transport/**, nuget.config, .github/actions/install-trivy/**]
     # Blocks on a fixable HIGH or CRITICAL vulnerability (none on main when added, #433); unfixed
     # ones go to code scanning from main only. relay.yml scan holds staging and production back.
-    command: see ci.yml product (trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay)
+    command: see ci.yml product (install-trivy's vulnerability-db, then trivy image --scanners vuln --skip-db-update --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay)
     where: ci.yml product, relay-image-sarif; relay.yml scan
     status: exists
 
