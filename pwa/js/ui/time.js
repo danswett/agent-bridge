@@ -34,6 +34,14 @@ export function clock(from, to = null, now = Date.now()) {
   return s < 3600 ? `${Math.floor(s / 60)}:${two(s % 60)}` : `${Math.floor(s / 3600)}:${two(Math.floor(s / 60) % 60)}:${two(s % 60)}`;
 }
 
+// A clock time in Pacific, "12:41 PM", for an event's tooltip and accessible name (ui.md §6.4).
+// The space before AM or PM is a plain one, whatever space Intl puts there.
+const PACIFIC = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', hour: 'numeric', minute: '2-digit' });
+export function pacificTime(iso) {
+  const t = Date.parse(iso ?? '');
+  return Number.isFinite(t) ? PACIFIC.format(t).replace(/\s/gu, ' ') : '';
+}
+
 export function localTime(iso) {
   const t = Date.parse(iso ?? '');
   return Number.isFinite(t) ? new Date(t).toLocaleString() : '';

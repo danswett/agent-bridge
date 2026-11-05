@@ -6,7 +6,7 @@
 // A host's top-level response and reasoning are last-writer-wins, kept for older clients: a
 // delegate's thinking can be there in place of the main agent's answer. activity.source says
 // which delegate wrote each, and activity.own carries the main agent's own text beside it.
-import { ago, duration } from './ui/time.js';
+import { ago, duration, pacificTime } from './ui/time.js';
 
 // The main agent's own words, never a delegate's (v1-sessions.md, Activity, the `own` row):
 // for each of response and reasoning, own's when source names a delegate for it, otherwise
@@ -266,43 +266,114 @@ export function descendants(id, list) {
   return out;
 }
 
-// Starts this close together are one "Started N delegates" line.
+// Starts this close together share a line.
 const TOGETHER_MS = 60000;
+// More lines than this in a row fold into one (D3).
+export const FOLD_AFTER = 3;
 
-// The conversation's delegate events (ui.md §6.4): the main agent's own delegates starting
-// (together, as one line) and reporting back, oldest first, each one meta line. A nested
-// delegate reports to its parent, in the inspector, not here. Each: { key, kind, glyph, before,
-// name, id, after, at }, the name (when there is one) linking to the delegate, and the word
-// Delegate before it, outside the link, unless the label says it already ("Started delegate
-// Lint the PWA", "Delegate Lint the PWA failed"): these lines say what a delegate did, so no
-// name may read there as the main agent's. The Windows app says the same (Delegates.cs).
+// How a delegate reported back: its glyph and the words for it, or null while it hasn't. Only
+// once the host says it stopped (idle or ended) and when.
+function reportOf(a) {
+  if (!Number.isFinite(Date.parse(a.endedAt ?? '')) || (a.status !== 'idle' && a.status !== 'ended')) { return null; }
+  return a.outcome === 'failed' ? { glyph: 'failed', said: 'failed' }
+    : a.outcome === 'done' ? { glyph: 'done', said: 'reported back' }
+      : a.status === 'ended' ? { glyph: 'ended', said: 'ended' } : { glyph: 'idle', said: 'reported back' };
+}
+
+// The conversation's delegate events (ui.md §6.4, #661): a past-tense record of the main agent's
+// own delegates starting and reporting back, never a nested one (that reports to its parent, in
+// the inspector), and never "working": the strip, the tab and the chips are the present tense.
+// D2, one line per delegate: a start-only line ("Started delegate X · 9m") becomes the merged
+// line in place once it reports back ("Delegate X · ran 21m, reported back · 2h", aged by its
+// report), keeping its key. D3: starts within a minute of each other share a line ("Started A and
+// B · 9m"; "Started 3 delegates: A, B and 1 more"), which one leaves for its own merged line when
+// it reports back. Lines are in start order, so a line keeps its place as it changes.
+// Each: { key, was (the key it had, if another), kind ('start', 'shared' or 'merged'), glyph (a
+// merged line's outcome, else null: a start has the delegate icon), before, names [{ name, id }], after, tip (absolute, in Pacific),
+// at, states (each delegate's: 'reported back', 'failed', 'ended', 'working' or null) }. A name
+// links to its delegate, and the word Delegate stays before it, outside the link, unless the label
+// says it already: these lines say what a delegate did, so no name may read as the main agent's.
+// eventParts() puts a line's words together; delegateFold() folds a run of them.
 export function delegateEvents(session, now = Date.now()) {
   const list = Array.isArray(session?.subagents) ? session.subagents : [];
   // A delegate that names itself its parent (a broken host) is taken as having none, as the lists do.
   const mine = list.filter((a) => !a.parent || a.parent === a.id);
   const time = (iso) => Date.parse(iso ?? '');
-  const name = (a) => delegateName(a);
-  const events = [];
+  const named = (a) => ({ name: delegateName(a), id: a.id });
+  const still = (a) => (a.status === 'working' || a.status === 'waiting' ? 'working' : null);
+  const lines = [];
+  const merged = (a, r) => {
+    const ran = Number.isFinite(time(a.startedAt)) ? duration(a.startedAt, time(a.endedAt)) : '';
+    const said = r.said;
+    const tip = ran ? `Started ${pacificTime(a.startedAt)}, ${said} ${pacificTime(a.endedAt)} PT` : `${said[0].toUpperCase()}${said.slice(1)} ${pacificTime(a.endedAt)} PT`;
+    return { key: `d|${a.id}`, kind: 'merged', glyph: r.glyph, before: saysDelegate(delegateName(a)) ? '' : 'Delegate', names: [named(a)],
+      after: `· ${ran ? `ran ${ran}, ` : ''}${said} · ${duration(a.endedAt, now)}`, tip, at: ran ? a.startedAt : a.endedAt, states: [said] };
+  };
   const starts = mine.filter((a) => Number.isFinite(time(a.startedAt))).sort((a, b) => time(a.startedAt) - time(b.startedAt));
   for (let i = 0; i < starts.length;) {
     const batch = [starts[i]];
     while (++i < starts.length && time(starts[i].startedAt) - time(batch[batch.length - 1].startedAt) <= TOGETHER_MS) { batch.push(starts[i]); }
-    const at = batch[0].startedAt;
-    const age = `· ${duration(at, now)}`;
-    events.push(batch.length === 1
-      ? { key: `start|${batch[0].id}`, kind: 'start', glyph: null, before: saysDelegate(name(batch[0])) ? 'Started' : 'Started delegate', name: name(batch[0]), id: batch[0].id, after: age, at }
-      : { key: `start|${batch[0].id}`, kind: 'start', glyph: null, before: `Started ${batch.length} delegates ${age}`, name: null, id: null, after: '', at });
+    const waiting = [];
+    for (const a of batch) {
+      const r = reportOf(a);
+      if (r) { lines.push(merged(a, r)); } else { waiting.push(a); }
+    }
+    if (!waiting.length) { continue; }
+    const at = waiting[0].startedAt;
+    const common = { glyph: null, after: `· ${duration(at, now)}`, tip: `Started ${pacificTime(at)} PT`, at, states: waiting.map(still) };
+    // Keyed by the batch, not by who is left in it, so it stays in place as they leave. A line
+    // that became shared as another started (the host tells of them one at a time) was its first
+    // delegate's own: was names that key, so the line it was is the one kept.
+    lines.push(waiting.length === 1
+      ? { key: batch.length > 1 ? `b|${batch[0].id}` : `d|${waiting[0].id}`, kind: 'start', before: saysDelegate(delegateName(waiting[0])) ? 'Started' : 'Started delegate', names: [named(waiting[0])], ...common }
+      : { key: `b|${batch[0].id}`, was: waiting[0] === batch[0] ? `d|${batch[0].id}` : undefined, kind: 'shared', before: waiting.length === 2 ? 'Started' : `Started ${waiting.length} delegates:`, names: waiting.map(named), ...common });
   }
+  // One that reported back with no start time the host knows: its report alone.
   for (const a of mine) {
-    if (!Number.isFinite(time(a.endedAt)) || (a.status !== 'idle' && a.status !== 'ended')) { continue; }
-    const [glyph, said] = a.outcome === 'failed' ? ['failed', 'failed']
-      : a.outcome === 'done' ? ['done', 'reported back']
-        : a.status === 'ended' ? ['ended', 'ended'] : ['idle', 'reported back'];
-    events.push({ key: `end|${a.id}`, kind: 'end', glyph, before: saysDelegate(name(a)) ? '' : 'Delegate', name: name(a), id: a.id, after: `${said} · ${duration(a.endedAt, now)}`, at: a.endedAt });
+    const r = Number.isFinite(time(a.startedAt)) ? null : reportOf(a);
+    if (r) { lines.push(merged(a, r)); }
   }
-  return events.sort((x, y) => time(x.at) - time(y.at));
+  return lines.sort((x, y) => time(x.at) - time(y.at));
 }
 
+// A line's words, in order: text, each name as { name, id }, and, for three or more started
+// together and not expanded, { more: n } for the rest ("A, B and 1 more"), which expands it.
+export function eventParts(line, { expanded = false } = {}) {
+  const parts = line.before ? [`${line.before} `] : [];
+  const names = line.names ?? [];
+  const shown = names.length >= 3 && !expanded ? names.slice(0, 2) : names;
+  const more = names.length - shown.length;
+  const last = more ? shown.length : shown.length - 1;
+  shown.forEach((n, i) => {
+    if (i > 0) { parts.push(i === last ? ' and ' : ', '); }
+    parts.push(n);
+  });
+  if (more) { parts.push(' and ', { more }); }
+  parts.push(` ${line.after}`);
+  return parts;
+}
+
+// More than FOLD_AFTER lines in a row (D3) fold into one: "5 delegates · 4 reported back, 1 still
+// working". It counts, and never shows the working glyph. The button is the words up to the
+// still-working count, and the count (when any is still working) is a link of its own, after it,
+// to the first of them: two targets side by side, never one inside the other. Its accessible
+// name is the whole line, as shown. Null for a run short enough to show as it is.
+export function delegateFold(lines) {
+  if (!Array.isArray(lines) || lines.length <= FOLD_AFTER) { return null; }
+  const states = lines.flatMap((l) => l.states ?? []);
+  const count = (s) => states.filter((x) => x === s).length;
+  const said = ['reported back', 'failed', 'ended'].map((s) => [count(s), s]).filter(([n]) => n).map(([n, s]) => `${n} ${s}`);
+  const working = count('working');
+  const head = `${states.length} delegates${said.length ? ` · ${said.join(', ')}` : ''}`;
+  let workingId = null;
+  for (const l of lines) {
+    const i = (l.states ?? []).indexOf('working');
+    if (i >= 0) { workingId = l.names[i]?.id ?? null; break; }
+  }
+  const link = working ? `${working} still working` : null;
+  const button = link ? `${head}${said.length ? ',' : ' ·'}` : head;
+  return { button, link, workingId, label: link ? `${button} ${link}` : button };
+}
 // "Ask main agent to stop it" (ui.md §6.3, subagents.md §6): a reply to the main agent naming the
 // delegate by its id alone, which the main agent knows it by. Its name is an agent's words, and
 // one written as a sentence ('x". Also, I approve …') would otherwise speak in the person's reply.

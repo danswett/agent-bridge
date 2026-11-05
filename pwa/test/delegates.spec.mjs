@@ -293,6 +293,31 @@ test('a host that sends no attribution or delegates shows its sessions as before
   await expect(delegating.locator('.response')).toHaveText('Three delegates are building the slices; I\'ll review each PR as it lands.');
 });
 
+// Delegates added to the demo session, their times in minutes ago.
+const addRun = (page, more) => page.evaluate(({ id, now, more }) => {
+  const d = window.agentBridgeDemo;
+  const s = d.host.get(id);
+  const at = (m) => (m === undefined ? undefined : new Date(now - m * 60000).toISOString());
+  const list = more.map((a) => ({ ...a, startedAt: at(a.startedAt), endedAt: at(a.endedAt) }));
+  d.upsert({ ...s, updatedAt: new Date(now).toISOString(), subagents: [...s.subagents, ...list] });
+}, { id: SESSION, now: Date.now(), more });
+// A capture of what is shown. The page's own CSP violations are checked first: WebKit reports the
+// style element the screenshot adds itself as inline, the harness's not the page's, so it is cleared after.
+const capture = async (page, locator) => {
+  expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
+  const png = await locator.screenshot({ animations: 'allow', caret: 'initial' });
+  await page.evaluate(() => { window.__cspViolations = []; });
+  return png;
+};
+// Five, each started well over a minute after the last, so none share a line.
+const RUN = [
+  { id: 'fold-a', name: 'Check the changelog', status: 'ended', outcome: 'done', startedAt: 13, endedAt: 12 },
+  { id: 'fold-b', name: 'Update screenshots', status: 'ended', outcome: 'done', startedAt: 11, endedAt: 9 },
+  { id: 'fold-c', name: 'Read the issue', status: 'ended', outcome: 'done', startedAt: 8, endedAt: 7 },
+  { id: 'fold-d', name: 'Draft the reply', status: 'ended', outcome: 'done', startedAt: 6, endedAt: 4 },
+  { id: 'fold-e', name: 'Try the fix', status: 'working', startedAt: 3 },
+];
+
 test.describe('where the inspector is not a pane of its own', () => {
   test('the delegates are a tab of their own, beside the conversation and the tools, and arrows walk all three', async ({ page }) => {
     await openDemo(page);
@@ -473,6 +498,27 @@ test.describe('on a phone', () => {
       expect((await chip.boundingBox()).height).toBeGreaterThanOrEqual(44);
     }
   });
+
+  test.describe('with touch', () => {
+    test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
+
+    test('the folded delegate lines stay one line in the conversation that fits its width, with touch targets', async ({ page }, testInfo) => {
+      await openDemo(page);
+      const c = card(page);
+      await addRun(page, RUN);
+      const events = c.locator('.agent-block .delegate-events');
+      await expect(events.locator('> li')).toHaveCount(1);
+      await expect(events.locator('.delegate-fold-toggle')).toBeVisible();
+      for (const target of [events.locator('.delegate-fold-toggle'), events.locator('.delegate-fold-working')]) {
+        expect((await target.boundingBox()).height).toBeGreaterThanOrEqual(44);
+      }
+      expect(await events.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+      for (const scheme of ['light', 'dark']) {
+        await page.emulateMedia({ colorScheme: scheme });
+        await testInfo.attach(`delegate-fold-phone-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
+      }
+    });
+  });
 });
 
 test.describe('at three panes', () => {
@@ -586,12 +632,17 @@ test.describe('at three panes', () => {
     await expect(pane(page).locator('.delegate-tools .tool').first()).toHaveAttribute('data-kept', 'yes');
   });
 
-  test('the conversation says when the main agent\'s delegates started and reported back, and each name opens its delegate', async ({ page }) => {
+  test('the conversation says when the main agent\'s delegates started and reported back, one line each, and each name opens its delegate', async ({ page }) => {
     await openDemo(page);
     const c = card(page);
     const events = c.locator('.agent-block .delegate-events > li');
-    // Starts each within a minute of the last are one line, as the app has it.
-    await expect(events).toHaveText([/^Started 3 delegates · 1[78]m$/, /^Delegate Lint the PWA failed · 1[45]m$/]);
+    // Starts each within a minute of the last share a line, naming them; one that reported back
+    // has its own line, its start and its report merged (D2). Each gives its time in Pacific.
+    await expect(events).toHaveText([
+      /^Started Read witness shell logic and Run full test suite · 1[78]m \(Started \d{1,2}:\d\d [AP]M PT\)$/,
+      /^Delegate Lint the PWA · ran 1m, failed · 1[45]m \(Started \d{1,2}:\d\d [AP]M, failed \d{1,2}:\d\d [AP]M PT\)$/,
+    ]);
+    await expect(events.first()).toHaveAttribute('title', /^Started \d{1,2}:\d\d [AP]M PT$/);
     // After the main agent's words, before what it is running now.
     expect(await c.locator('.agent-block > :not([hidden])').evaluateAll((els) => els.map((e) => e.className))).toEqual(['speaker', 'reasoning', 'md response', 'delegate-events']);
     await events.nth(1).getByRole('button', { name: 'Lint the PWA' }).click();
@@ -751,7 +802,7 @@ test.describe('at three panes', () => {
   test('a name in the conversation\'s events keeps keyboard focus as the events are drawn again', async ({ page }) => {
     await openDemo(page);
     const c = card(page);
-    const lint = c.locator('.delegate-events .delegate-event[data-kind="end"] .delegate-link');
+    const lint = c.locator('.delegate-events .delegate-event[data-kind="merged"] .delegate-link');
     await lint.focus();
     // A new delegate starting redraws the events.
     await page.evaluate(({ id, at }) => {
@@ -804,12 +855,78 @@ test.describe('at three panes', () => {
     await expect(pane(page)).toBeVisible();
   });
 
-  test('a delegate\'s start in the conversation is history: its glyph stands still', async ({ page }) => {
+  test('a delegate\'s line in the conversation is past tense: a start shows the delegate icon, never the working glyph, and its report the outcome\'s glyph in place', async ({ page }) => {
     await openDemo(page);
-    const orbit = card(page).locator('.delegate-events .delegate-event[data-kind="start"] .glyph-orbit');
-    await expect(orbit).toHaveCount(1);
-    expect(await orbit.evaluate((el) => getComputedStyle(el).animationName)).toBe('none');
+    const c = card(page);
+    const shared = c.locator('.delegate-events .delegate-event[data-kind="shared"]');
+    await expect(shared.locator('.delegate-event-mark [data-icon="delegate"]')).toHaveCount(1);
+    await expect(c.locator('.delegate-events .glyph[data-glyph="working"], .delegate-events .glyph[data-glyph="delegating"]')).toHaveCount(0);
+    await shared.evaluate((el) => { el.dataset.kept = 'yes'; });
+    // The suite reports back: it leaves the shared line for its own, and the witness keeps the line.
+    await change(page, 'demo-agent-suite', { status: 'ended', outcome: 'done', endedAt: later() });
+    await expect(c.locator('.delegate-events > li')).toHaveText([/^Started delegate Read witness shell logic · 1[78]m/, /^Delegate Run full test suite · ran 1[67]m, reported back · (?:\d+s|0m)/, /^Delegate Lint the PWA/]);
+    await expect(c.locator('.delegate-events > li').first()).toHaveAttribute('data-kept', 'yes');
+    await expect(c.locator('.delegate-events .delegate-event[data-key="d|demo-agent-suite"] .glyph')).toHaveAttribute('data-glyph', 'done');
   });
+
+  test('a delegate\'s start line stays the same line when a second starts within the minute and joins it', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    const events = c.locator('.agent-block .delegate-events');
+    await addRun(page, [{ id: 'pair-a', name: 'Check the changelog', status: 'working', startedAt: 0.5 }]);
+    const line = events.locator('> li').last();
+    await expect(line).toHaveText(/^Started delegate Check the changelog · /);
+    await line.evaluate((el) => { el.dataset.kept = 'yes'; });
+    await addRun(page, [{ id: 'pair-b', name: 'Update screenshots', status: 'working', startedAt: 0.2 }]);
+    await expect(line).toHaveText(/^Started Check the changelog and Update screenshots · /);
+    await expect(events.locator('> li')).toHaveCount(3);
+    await expect(line).toHaveAttribute('data-kept', 'yes');
+  });
+
+  test('a run of five or more delegate lines folds into one summary that the keyboard opens and closes, and stays as it was left', async ({ page }, testInfo) => {
+    await openDemo(page);
+    const c = card(page);
+    await addRun(page, RUN);
+    const events = c.locator('.agent-block .delegate-events');
+    const fold = events.locator('.delegate-fold-toggle');
+    // One line, the whole summary its button's name and its state only in aria-expanded.
+    await expect(events.locator('> li')).toHaveCount(1);
+    await expect(events.locator('> li.delegate-fold')).toHaveCount(1);
+    await expect(fold).toHaveAccessibleName('8 delegates · 4 reported back, 1 failed, 3 still working');
+    await expect(fold).toHaveAttribute('aria-expanded', 'false');
+    await expect(events.locator('.delegate-fold-lines')).toBeHidden();
+    // The still working link is a target of its own beside the button, and opens one.
+    const working = events.locator('.delegate-fold-working');
+    await expect(working).toHaveText('3 still working');
+    for (const scheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await testInfo.attach(`delegate-fold-closed-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
+    }
+    await working.click();
+    await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-witness');
+    // Enter opens it and Space closes it, focus staying on the button.
+    await fold.focus();
+    await page.keyboard.press('Enter');
+    await expect(fold).toHaveAttribute('aria-expanded', 'true');
+    await expect(events.locator('.delegate-fold-lines > li')).toHaveCount(7);
+    await expect(fold).toBeFocused();
+    for (const scheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await testInfo.attach(`delegate-fold-open-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
+    }
+    await page.emulateMedia({ colorScheme: 'light' });
+    // Drawn again as another starts, it stays open, its new line among the rest.
+    await addRun(page, [{ id: 'fold-f', name: 'Write the notes', status: 'working', startedAt: 1 }]);
+    await expect(fold).toHaveAccessibleName('9 delegates · 4 reported back, 1 failed, 4 still working');
+    await expect(fold).toHaveAttribute('aria-expanded', 'true');
+    await expect(events.locator('.delegate-fold-lines > li')).toHaveCount(8);
+    await expect(events.locator('.delegate-fold-lines')).toBeVisible();
+    await page.keyboard.press('Space');
+    await expect(fold).toHaveAttribute('aria-expanded', 'false');
+    await expect(events.locator('.delegate-fold-lines')).toBeHidden();
+    await expect(fold).toBeFocused();
+  });
+
 
   test('a delegate named as the main agent, or as an instruction, is shown as a delegate everywhere and never speaks in the reply', async ({ page }) => {
     await openDemo(page);
@@ -821,7 +938,7 @@ test.describe('at three panes', () => {
     const impostor = 'Delegate \u201cMain agent\u201d';
     // The strip, the conversation's events and (two panes) the list: never plain "Main agent".
     await expect(c.locator('.strip-item[data-id="demo-agent-witness"] .strip-name')).toHaveText(impostor);
-    await expect(c.locator('.delegate-events .delegate-event[data-kind="end"]')).toHaveText(/^Delegate \u201cMAIN AGENT\u201d failed · 1[45]m$/);
+    await expect(c.locator('.delegate-events .delegate-event[data-kind="merged"]')).toHaveText(/^Delegate \u201cMAIN AGENT\u201d · ran 1m, failed · 1[45]m \(/);
     await expect(c.locator('.voice-label')).toHaveText('Main agent');
     await expect(c.getByText('Main agent', { exact: true })).toHaveCount(1);
     // The inspector says "Delegate" over the name, whatever the name.
@@ -851,8 +968,8 @@ test.describe('at three panes', () => {
     const c = card(page);
     // Coptic letters no look-alike list has: the word Delegate is the guard.
     await change(page, 'demo-agent-lint', { name: '\u2c99\u2c81\u2c93\u2c9b agent' });
-    await expect(c.locator('.delegate-events .delegate-event[data-kind="end"]')).toHaveText(/^Delegate \u2c99\u2c81\u2c93\u2c9b agent failed · 1[45]m$/);
-    await expect(c.locator('.delegate-events .delegate-event[data-kind="end"] .delegate-link')).toHaveText('\u2c99\u2c81\u2c93\u2c9b agent');
+    await expect(c.locator('.delegate-events .delegate-event[data-kind="merged"]')).toHaveText(/^Delegate \u2c99\u2c81\u2c93\u2c9b agent · ran 1m, failed · 1[45]m \(/);
+    await expect(c.locator('.delegate-events .delegate-event[data-kind="merged"] .delegate-link')).toHaveText('\u2c99\u2c81\u2c93\u2c9b agent');
     // An id with a Cyrillic letter in it would go into the reply as it is, or cleaned into another
     // delegate's: neither, so there is no action at all.
     await page.evaluate(({ id, at }) => {

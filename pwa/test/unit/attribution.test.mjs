@@ -5,8 +5,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { readSession } from '../../js/protocol.js';
-import { NAME_MAX, aloud, askToStopText, backgroundCounts, delegateEvents, delegateList, delegateName, delegateTime, delegateTitle, descendants, mainVoice } from '../../js/attribution.js';
-import { clock } from '../../js/ui/time.js';
+import { FOLD_AFTER, NAME_MAX, aloud, askToStopText, backgroundCounts, delegateEvents, delegateFold, delegateList, delegateName, delegateTime, delegateTitle, descendants, eventParts, mainVoice } from '../../js/attribution.js';
+import { clock, pacificTime } from '../../js/ui/time.js';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const session = (fields = {}) => readSession({ id: 's1', agent: 'copilot', status: 'idle', ...fields });
@@ -302,36 +302,123 @@ test('the delegates listed carry their names as shown, and so does the parent a 
 const NOW = Date.parse('2026-11-02T12:00:00Z');
 const minsAgo = (m) => new Date(NOW - m * 60000).toISOString();
 
-test('the conversation hears the main agent\'s own delegates start together and report back, oldest first, never a nested one', () => {
-  const events = delegateEvents({ subagents: [
+// A line's words as shown, each name as itself and the rest as "N more".
+const words = (line, opts) => eventParts(line, opts).map((p) => (typeof p === 'string' ? p : p.name ?? `${p.more} more`)).join('');
+const lines = (subagents) => delegateEvents({ subagents }, NOW);
+
+test('a delegate that starts and reports back is one line, which keeps its key as the start becomes the merged form (D2)', () => {
+  const started = lines([{ id: 's', name: 'Run full test suite', status: 'working', startedAt: minsAgo(30) }]);
+  const back = lines([{ id: 's', name: 'Run full test suite', status: 'ended', outcome: 'done', startedAt: minsAgo(30), endedAt: minsAgo(9) }]);
+  assert.deepEqual(started.map((l) => [l.key, l.kind, l.glyph, words(l)]), [['d|s', 'start', null, 'Started delegate Run full test suite · 30m']]);
+  // Aged by its report, and how long it ran.
+  assert.deepEqual(back.map((l) => [l.key, l.kind, l.glyph, words(l)]), [['d|s', 'merged', 'done', 'Delegate Run full test suite · ran 21m, reported back · 9m']]);
+  assert.deepEqual(back[0].names, [{ name: 'Run full test suite', id: 's' }]);
+});
+
+test('a merged line says how it ended: failed, ended, or reported back from a delegate between runs', () => {
+  const said = (fields) => lines([{ id: 'a', name: 'Lint the PWA', startedAt: minsAgo(15), endedAt: minsAgo(14), ...fields }]).map((l) => [l.glyph, words(l)]);
+  assert.deepEqual(said({ status: 'ended', outcome: 'failed' }), [['failed', 'Delegate Lint the PWA · ran 1m, failed · 14m']]);
+  assert.deepEqual(said({ status: 'ended' }), [['ended', 'Delegate Lint the PWA · ran 1m, ended · 14m']]);
+  assert.deepEqual(said({ status: 'idle' }), [['idle', 'Delegate Lint the PWA · ran 1m, reported back · 14m']]);
+  // Ended with no time the host knows, it hasn't reported back yet.
+  assert.deepEqual(said({ status: 'ended', endedAt: undefined }), [[null, 'Started delegate Lint the PWA · 15m']]);
+});
+
+test('delegates started within a minute of each other share a line, naming two and then "and N more", which expands to name the rest (D3)', () => {
+  const two = lines([
+    { id: 't', name: 'Tidy changelog', status: 'working', startedAt: minsAgo(9) },
+    { id: 'u', name: 'Update screenshots', status: 'working', startedAt: minsAgo(8.5) },
+  ]);
+  assert.deepEqual(two.map((l) => [l.key, l.kind, words(l)]), [['b|t', 'shared', 'Started Tidy changelog and Update screenshots · 9m']]);
+  // The first one's own line, until the second started: the line it was.
+  assert.equal(two[0].was, 'd|t');
+  assert.equal(lines([{ id: 't', name: 'Tidy changelog', status: 'working', startedAt: minsAgo(9) }])[0].key, 'd|t');
+  const four = lines(['a', 'b', 'c', 'd'].map((id, i) => ({ id, name: id.toUpperCase(), status: 'working', startedAt: minsAgo(9 - i / 4) })));
+  assert.deepEqual(four.map((l) => words(l)), ['Started 4 delegates: A, B and 2 more · 9m']);
+  assert.deepEqual(eventParts(four[0]).filter((p) => typeof p !== 'string'), [{ name: 'A', id: 'a' }, { name: 'B', id: 'b' }, { more: 2 }]);
+  assert.equal(words(four[0], { expanded: true }), 'Started 4 delegates: A, B, C and D · 9m');
+});
+
+test('one that reports back leaves the shared line for its own merged line, and the line keeps its key and place', () => {
+  const at = [minsAgo(9), minsAgo(8.8), minsAgo(8.6)];
+  const before = lines([
+    { id: 'a', name: 'A', status: 'working', startedAt: at[0] },
+    { id: 'b', name: 'B', status: 'working', startedAt: at[1] },
+    { id: 'c', name: 'C', status: 'working', startedAt: at[2] },
+  ]);
+  const after = lines([
+    { id: 'a', name: 'A', status: 'ended', outcome: 'done', startedAt: at[0], endedAt: minsAgo(2) },
+    { id: 'b', name: 'B', status: 'working', startedAt: at[1] },
+    { id: 'c', name: 'C', status: 'working', startedAt: at[2] },
+  ]);
+  assert.deepEqual(before.map((l) => [l.key, words(l)]), [['b|a', 'Started 3 delegates: A, B and 1 more · 9m']]);
+  assert.deepEqual(after.map((l) => [l.key, words(l)]), [['d|a', 'Delegate A · ran 7m, reported back · 2m'], ['b|a', 'Started B and C · 8m']]);
+  // The last one left keeps the batch's line, a start of its own.
+  const last = lines([
+    { id: 'a', name: 'A', status: 'ended', outcome: 'done', startedAt: at[0], endedAt: minsAgo(2) },
+    { id: 'b', name: 'B', status: 'ended', outcome: 'done', startedAt: at[1], endedAt: minsAgo(1) },
+    { id: 'c', name: 'C', status: 'working', startedAt: at[2] },
+  ]);
+  assert.deepEqual(last.map((l) => [l.key, l.kind, words(l)]).at(-1), ['b|a', 'start', 'Started delegate C · 8m']);
+});
+
+test('the conversation hears only the main agent\'s own delegates, in the order they started, never a nested one', () => {
+  const events = lines([
     { id: 'w', name: 'Read witness shell logic', status: 'working', startedAt: minsAgo(17) },
     { id: 's', name: 'Run full test suite', status: 'working', startedAt: minsAgo(16.5) },
     { id: 'g', parent: 'w', name: 'Find the timer reset', status: 'ended', outcome: 'done', startedAt: minsAgo(2), endedAt: minsAgo(1) },
-    { id: 'l', name: 'Lint the PWA', status: 'ended', outcome: 'failed', startedAt: minsAgo(15), endedAt: minsAgo(14) },
+    { id: 'l', name: 'Lint the PWA', status: 'ended', outcome: 'failed', startedAt: minsAgo(16), endedAt: minsAgo(14) },
     { id: 'r', name: 'Review', status: 'idle', outcome: 'done', startedAt: minsAgo(13), endedAt: minsAgo(12) },
-    { id: 'e', name: 'Old', status: 'ended', startedAt: minsAgo(11), endedAt: minsAgo(10) },
-  ] }, NOW);
-  assert.deepEqual(events.map((e) => [e.before, e.name, e.after, e.glyph]), [
-    ['Started 2 delegates · 17m', null, '', null],
-    ['Started delegate', 'Lint the PWA', '· 15m', null],
-    ['Delegate', 'Lint the PWA', 'failed · 14m', 'failed'],
-    ['Started delegate', 'Review', '· 13m', null],
-    ['Delegate', 'Review', 'reported back · 12m', 'done'],
-    ['Started delegate', 'Old', '· 11m', null],
-    ['Delegate', 'Old', 'ended · 10m', 'ended'],
+    { id: 'n', name: 'No start', status: 'ended', outcome: 'done', endedAt: minsAgo(11) },
   ]);
-  // A named event links to its delegate.
-  assert.equal(events[2].id, 'l');
+  assert.deepEqual(events.map((l) => words(l)), [
+    'Started Read witness shell logic and Run full test suite · 17m',
+    'Delegate Lint the PWA · ran 2m, failed · 14m',
+    'Delegate Review · ran 1m, reported back · 12m',
+    'Delegate No start · reported back · 11m',
+  ]);
+});
+
+test('each line gives its absolute time in Pacific, for its tooltip and accessible name', () => {
+  // 2026-11-02 12:00 UTC is 4:00 AM in Pacific (standard time).
+  const [start] = lines([{ id: 'a', name: 'A', status: 'working', startedAt: minsAgo(17) }]);
+  const [merged] = lines([{ id: 'a', name: 'A', status: 'ended', outcome: 'done', startedAt: minsAgo(65), endedAt: minsAgo(5) }]);
+  const [alone] = lines([{ id: 'a', name: 'A', status: 'ended', outcome: 'failed', endedAt: minsAgo(5) }]);
+  assert.equal(start.tip, 'Started 3:43 AM PT');
+  assert.equal(merged.tip, 'Started 2:55 AM, reported back 3:55 AM PT');
+  assert.equal(alone.tip, 'Failed 3:55 AM PT');
+  assert.equal(pacificTime('2026-07-01T19:41:00Z'), '12:41 PM');
+});
+
+test('more than three lines in a row fold into one that counts them, with a link of its own to the one still working (D3)', () => {
+  const run = lines([
+    ...['a', 'b', 'c'].map((id, i) => ({ id, name: id, status: 'ended', outcome: 'done', startedAt: minsAgo(50 - i * 5), endedAt: minsAgo(10) })),
+    { id: 'd', name: 'd', status: 'ended', outcome: 'failed', startedAt: minsAgo(30), endedAt: minsAgo(9) },
+    { id: 'e', name: 'e', status: 'working', startedAt: minsAgo(20) },
+  ]);
+  assert.equal(run.length, 5);
+  assert.deepEqual(delegateFold(run), { button: '5 delegates · 3 reported back, 1 failed,', link: '1 still working', workingId: 'e', label: '5 delegates · 3 reported back, 1 failed, 1 still working' });
+  // Three lines are shown as they are.
+  assert.equal(delegateFold(run.slice(0, FOLD_AFTER)), null);
+  // With none still working there is no link: the line is the button alone.
+  const done = run.slice(0, 4);
+  assert.deepEqual(delegateFold(done), { button: '4 delegates · 3 reported back, 1 failed', link: null, workingId: null, label: '4 delegates · 3 reported back, 1 failed' });
+  // A fold counts delegates, not lines, and never says "working" without a link to one.
+  const shared = lines([
+    ...['a', 'b', 'c'].map((id, i) => ({ id, name: id, status: 'working', startedAt: minsAgo(50 - i * 5) })),
+    { id: 'd', name: 'd', status: 'working', startedAt: minsAgo(30) }, { id: 'x', name: 'x', status: 'waiting', startedAt: minsAgo(29.5) },
+  ]);
+  assert.deepEqual(delegateFold(shared), { button: '5 delegates ·', link: '5 still working', workingId: 'a', label: '5 delegates · 5 still working' });
 });
 
 test('a delegate that names itself its parent, from a broken host, is the main agent\'s own in the conversation', () => {
-  const events = delegateEvents({ subagents: [{ id: 's', parent: 's', name: 'Self', status: 'ended', outcome: 'done', startedAt: minsAgo(3), endedAt: minsAgo(1) }] }, NOW);
-  assert.deepEqual(events.map((e) => e.kind), ['start', 'end']);
+  const events = lines([{ id: 's', parent: 's', name: 'Self', status: 'ended', outcome: 'done', startedAt: minsAgo(3), endedAt: minsAgo(1) }]);
+  assert.deepEqual(events.map((e) => e.kind), ['merged']);
 });
 
 test('a delegate event says Delegate before its name once, so no name reads there as the main agent\'s', () => {
-  const said = (name) => delegateEvents({ subagents: [{ id: 'a1', name, status: 'ended', outcome: 'done', startedAt: minsAgo(3), endedAt: minsAgo(1) }] }, NOW)
-    .map((e) => [e.before, e.name].filter(Boolean).join(' '));
+  const said = (name) => ['working', 'ended'].map((status) => lines([{ id: 'a1', name, status, outcome: 'done', startedAt: minsAgo(3), endedAt: minsAgo(1) }])[0])
+    .map((e) => [e.before, ...e.names.map((n) => n.name)].filter(Boolean).join(' '));
   // Lookalikes no list has still have the word in front.
   assert.deepEqual(said('\u2c99\u2c81\u2c93\u2c9b agent'), ['Started delegate \u2c99\u2c81\u2c93\u2c9b agent', 'Delegate \u2c99\u2c81\u2c93\u2c9b agent']);
   // A label that says Delegate already says it once.
