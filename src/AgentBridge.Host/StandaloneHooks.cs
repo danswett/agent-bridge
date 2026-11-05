@@ -63,7 +63,9 @@ public sealed class StandaloneHooks(
         _ => throw new ArgumentException("Choose copilot (also Agency), claude or codex."),
     };
 
-    static JsonObject Read(string path) => JsonNode.Parse(Registrations.Decode(File.ReadAllBytes(path)),
+    static JsonObject Read(string path) => Parse(path, File.ReadAllBytes(path));
+
+    static JsonObject Parse(string path, byte[] bytes) => JsonNode.Parse(Registrations.Decode(bytes),
         documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip }) as JsonObject
         ?? throw new InvalidDataException($"{path} is not a JSON object; it was left alone");
 
@@ -285,6 +287,7 @@ public sealed class StandaloneHooks(
             if (before is not null) { root = Read(path); Unregister(root, agent); }
         }
         var instructions = ManagedInstructions.Plan(Instructions(agent), profile, removing: true);
+        var original = agent == "claude" && root is not null ? ClaudeOriginal(root, output) : null;
         Preflight(agent, removing: true);
         output.WriteLine($"{(dryRun ? "Would remove" : "Removing")} only {agent} hooks owned by {profile}.");
         if (dryRun) { return; }
@@ -299,12 +302,7 @@ public sealed class StandaloneHooks(
         else if (root is not null)
         {
             if (agent == "copilot" && root.All(p => p.Key == "version")) { DurableFile.Remove(path, before); }
-            else if (agent == "claude" && ClaudeOriginal(root) is { } original)
-            {
-                if (original.Length == 0) { DurableFile.Remove(path, before); }
-                else { DurableFile.Replace(path, original, before); }
-            }
-            else { DurableFile.Replace(path, Bytes(root), before); }
+            else { DurableFile.Replace(path, original ?? Bytes(root), before); }
         }
         instructions.Apply(InstructionBackup(agent));
         var owner = Path.Combine(Home(agent), OwnerFile);
@@ -315,16 +313,21 @@ public sealed class StandaloneHooks(
         output.WriteLine("Removed. Existing sessions keep their hooks until they end; other settings and Codex hook trust were left alone.");
     }
 
-    // Settings that, without our hooks, still mean exactly what the person had before setup
-    // get their original bytes back, comments and formatting included. Empty bytes mean setup
-    // created the file and nothing else was added since, so removal deletes it.
-    byte[]? ClaudeOriginal(JsonObject remaining)
+    // The first original settings, byte for byte (comments and formatting included), when
+    // the settings without our hooks still parse to exactly what they held; otherwise null,
+    // and removal rewrites the current settings without our hooks. A missing backup is not
+    // proof that setup created the file, so the file is never deleted.
+    byte[]? ClaudeOriginal(JsonObject remaining, TextWriter output)
     {
         var backup = Path.Combine(HookFolder, "backups", "claude-settings.json");
-        if (!File.Exists(backup)) { return remaining.Count == 0 ? [] : null; }
+        if (!File.Exists(backup)) { return null; }
         var original = File.ReadAllBytes(backup);
-        try { return JsonNode.DeepEquals(Read(backup), remaining) ? original : null; }
-        catch (Exception e) when (e is JsonException or InvalidDataException) { return null; }
+        try { return JsonNode.DeepEquals(Parse(backup, original), remaining) ? original : null; }
+        catch (Exception e) when (e is JsonException or InvalidDataException)
+        {
+            output.WriteLine($"Warning: {backup} is unreadable ({e.Message}); the original settings cannot be restored, so only the owned hooks are removed from the current settings.");
+            return null;
+        }
     }
 
     static FileStream Lock(string profile)

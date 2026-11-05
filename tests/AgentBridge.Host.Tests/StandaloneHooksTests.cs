@@ -569,21 +569,57 @@ public sealed class StandaloneHooksTests : IDisposable
     }
 
     [Fact]
-    public async Task Claude_removal_deletes_settings_it_created_but_keeps_settings_Claude_added_later()
+    public async Task Claude_removal_keeps_empty_settings_whose_backup_is_missing()
     {
+        Write(Registration("claude"), "{}");
         await Setup.InstallAsync("claude", false, TextWriter.Null);
-        await Setup.RemoveAsync("claude", false, TextWriter.Null);
-        Assert.False(File.Exists(Registration("claude")));
+        File.Delete(Path.Combine(Profile, "hooks", "backups", "claude-settings.json"));
 
+        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+
+        Assert.Empty(Read(Registration("claude")));
+        Assert.False(File.Exists(Owner("claude")));
+    }
+
+    [Fact]
+    public async Task Claude_removal_after_later_edits_keeps_them_and_leaves_the_backup_untouched()
+    {
+        var original = "{\r\n  // the person's note\r\n  \"model\": \"user-model\",\r\n}\r\n";
+        var backup = Path.Combine(Profile, "hooks", "backups", "claude-settings.json");
+        Write(Registration("claude"), original);
         await Setup.InstallAsync("claude", false, TextWriter.Null);
         var settings = Read(Registration("claude"));
         settings["theme"] = "dark";
         Write(Registration("claude"), settings.ToJsonString());
+
         await Setup.RemoveAsync("claude", false, TextWriter.Null);
 
         var remaining = Read(Registration("claude"));
+        Assert.Equal("user-model", (string?)remaining["model"]);
         Assert.Equal("dark", (string?)remaining["theme"]);
         Assert.Null(remaining["hooks"]);
+        Assert.Equal(original, File.ReadAllText(backup));
+    }
+
+    [Theory]
+    [InlineData("{broken")]
+    [InlineData("[]")]
+    public async Task Claude_removal_warns_about_an_unreadable_backup_and_still_removes_only_owned_hooks(string damaged)
+    {
+        var backup = Path.Combine(Profile, "hooks", "backups", "claude-settings.json");
+        Write(Registration("claude"), """{"model":"user-model"}""");
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        File.WriteAllText(backup, damaged);
+        var output = new StringWriter();
+
+        await Setup.RemoveAsync("claude", false, output);
+
+        Assert.Contains($"Warning: {backup} is unreadable", output.ToString());
+        var remaining = Read(Registration("claude"));
+        Assert.Equal("user-model", (string?)remaining["model"]);
+        Assert.Null(remaining["hooks"]);
+        Assert.Equal(damaged, File.ReadAllText(backup));
+        Assert.False(File.Exists(Owner("claude")));
     }
 
     [Fact]
@@ -595,7 +631,7 @@ public sealed class StandaloneHooksTests : IDisposable
 
         await sameProfile.RemoveAsync("claude", false, TextWriter.Null);
 
-        Assert.False(File.Exists(Registration("claude")));
+        Assert.Null(Read(Registration("claude"))["hooks"]);
         Assert.False(File.Exists(Owner("claude")));
         await Setup.InstallAsync("claude", false, TextWriter.Null);
         Assert.Single(Read(Registration("claude"))["hooks"]!["SessionStart"]!.AsArray());
@@ -753,7 +789,7 @@ public sealed class StandaloneHooksTests : IDisposable
         }
         await setup.InstallAsync("claude", false, TextWriter.Null);
         await setup.RemoveAsync("claude", false, TextWriter.Null);
-        Assert.False(File.Exists(Registration("claude")));
+        Assert.Null(Read(Registration("claude"))["hooks"]);
         Assert.False(File.Exists(Owner("claude")));
     }
 
