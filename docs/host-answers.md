@@ -96,9 +96,11 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     white space. All of one question's patterns share 250 ms, building and matching them alike, so an
     agent's many slow patterns cannot hold up the reading of every session: once it is spent,
     every pattern left counts as one that cannot be checked, and the question is answered at the
-    machine (or the answer refused so). Text of only spaces, tabs or no-break spaces is checked
-    like any other (it is typed and recorded as typed), and an empty answer to a required text
-    field is refused, since nothing typed records no answer. Whether Copilot trims a text box's words before recording
+    machine (or the answer refused so). Text is checked both as typed and as trimmed
+    (JavaScript's `trim`), and refused if either form breaks a limit: the form passes it on as
+    typed, but a trim where it is recorded is not ruled out, and "  ab" is 4 typed and 2 trimmed.
+    Text of only spaces, tabs or no-break spaces is checked so too, and an empty or blank answer
+    to a required text field is refused, since it records no answer or might. Whether Copilot trims a text box's words before recording
     them is not settled: its form passes them on as typed (`Fxn`, and `Uxn`'s accept step), but
     the native layer after it was not traced, so lengths are counted untrimmed.
   * An option list whose `default` is present but is not one of its options, `null` included,

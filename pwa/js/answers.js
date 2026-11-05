@@ -97,8 +97,9 @@ export function checkAnswer(question, answer) {
       if (field.required === true) { return `"${label(field)}" needs an answer`; }
       continue;
     }
-    // Empty text is typed as nothing, which a form records as no answer at all (Answers.Check).
-    if (field.required === true && field.type === 'text' && value === '') { return `"${label(field)}" needs an answer`; }
+    // Empty text is typed as nothing, which a form records as no answer at all, and text of only
+    // spaces might be recorded trimmed to that (Answers.Check).
+    if (field.required === true && field.type === 'text' && typeof value === 'string' && value.trim() === '') { return `"${label(field)}" needs an answer`; }
     const problem = valueProblem(field, value);
     if (problem) { return `"${label(field)}": ${problem}`; }
   }

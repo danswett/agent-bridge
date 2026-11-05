@@ -227,6 +227,10 @@ public class CopilotPlannerTests
     [InlineData("""{ "type": "string", "pattern": "^[a-z]+$" }""", "\t", "\"t\": does not match the form the question asks for")]
     [InlineData("""{ "type": "string", "pattern": "^[a-z]+$" }""", "\u00A0", "\"t\": does not match the form the question asks for")]
     [InlineData("""{ "type": "string", "format": "email" }""", "   ", "\"t\": must be an email address")]
+    // And as trimmed, since a trim where Copilot records the words is not ruled out (review of
+    // #844): "  ab" is 4 typed but 2 trimmed, and " ab" fits a leading-space pattern only typed.
+    [InlineData("""{ "type": "string", "minLength": 4 }""", "  ab", "\"t\": must be at least 4 characters")]
+    [InlineData("""{ "type": "string", "pattern": "^ [a-z]+$" }""", " ab", "\"t\": does not match the form the question asks for")]
     public void Text_outside_its_length_pattern_or_format_is_refused_before_any_key(string property, string text, string why)
     {
         Assert.Equal(why, Outside(Schema("t", property), Answer(new { t = text })));
@@ -248,8 +252,11 @@ public class CopilotPlannerTests
     [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34.5z")]
     // The CLI knows four formats and ignores the rest; so does the host.
     [InlineData("""{ "type": "string", "format": "hostname" }""", "not a host name")]
-    // Spaces in a field with no constraints are still typed, and read as the field left empty.
+    // Spaces in a field with no constraints are still typed, and read as the field left empty;
+    // words with spaces around them are typed as they are, and fit limits both forms meet.
     [InlineData("""{ "type": "string" }""", "   ")]
+    [InlineData("""{ "type": "string" }""", "  ab")]
+    [InlineData("""{ "type": "string", "maxLength": 4 }""", "  ab")]
     public void Text_inside_its_constraints_is_typed_as_before(string property, string text)
     {
         Assert.Equal([(text, true)], Keys(Plan(Schema("t", property), Answer(new { t = text }))));
@@ -568,14 +575,15 @@ public class CopilotPlannerTests
         Assert.True(ratio < 10, $"reading 4x the options took {ratio:F1}x as long");
     }
     // An empty answer is typed as nothing, and Copilot then records no answer at all to a field
-    // the form requires (review of #844).
+    // the form requires; one of only spaces might be recorded trimmed to that (review of #844).
     [Fact]
-    public void An_empty_answer_to_a_required_text_field_is_refused()
+    public void An_empty_or_blank_answer_to_a_required_text_field_is_refused()
     {
         var (_, question) = Ask("""{ "message": "m", "requestedSchema": { "properties": { "t": { "type": "string" } }, "required": ["t"] } }""");
 
         Assert.Equal("\"t\" needs an answer", Answers.Check(question, Answer(new { t = "" })));
-        Assert.Null(Answers.Check(question, Answer(new { t = " " })));
+        Assert.Equal("\"t\" needs an answer", Answers.Check(question, Answer(new { t = " \t\u00A0" })));
+        Assert.Null(Answers.Check(question, Answer(new { t = " a " })));
     }
 
     [Fact]

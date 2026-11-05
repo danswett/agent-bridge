@@ -39,8 +39,9 @@ public static class Answers
                 if (field.Required == true) { return $"\"{Label(field)}\" needs an answer"; }
                 continue;
             }
-            // Empty text is typed as nothing, which a form records as no answer at all (review of #844).
-            if (field.Required == true && field.Type == FieldType.Text && value.ValueKind == JsonValueKind.String && value.GetString()!.Length == 0)
+            // Empty text is typed as nothing, which a form records as no answer at all, and text of
+            // only spaces might be recorded trimmed to that (review of #844).
+            if (field.Required == true && field.Type == FieldType.Text && value.ValueKind == JsonValueKind.String && FieldConstraints.Trimmed(value.GetString()!).Length == 0)
             {
                 return $"\"{Label(field)}\" needs an answer";
             }

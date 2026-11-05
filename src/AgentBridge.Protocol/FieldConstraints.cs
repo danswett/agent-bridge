@@ -73,7 +73,27 @@ public sealed partial record FieldConstraints
     }
 
     // Text, as it would be recorded.
+    // Checked as typed and as trimmed, refused if either breaks a limit. Copilot 1.0.105's form
+    // passes the words on as typed, but what records them after it was not traced, so a trim
+    // there is not ruled out; checked as typed alone, "  ab" passed a minLength of 4 that "ab"
+    // breaks (review of #844). Both forms make the check strict whichever it records.
     public string? TextProblem(string text, PatternBudget? budget = null)
+    {
+        var trimmed = Trimmed(text);
+        return Problem(text, budget) ?? (trimmed.Length == text.Length ? null : Problem(trimmed, budget));
+    }
+
+    // JavaScript's String.prototype.trim: its WhiteSpace and LineTerminator, U+FEFF included,
+    // which .NET's Trim() leaves.
+    public static string Trimmed(string text) => text.Trim(JsTrim);
+
+    static readonly char[] JsTrim =
+    [
+        '\t', '\n', '\v', '\f', '\r', ' ', '\u00A0', '\u1680', '\u2000', '\u2001', '\u2002', '\u2003', '\u2004',
+        '\u2005', '\u2006', '\u2007', '\u2008', '\u2009', '\u200A', '\u2028', '\u2029', '\u202F', '\u205F', '\u3000', '\uFEFF',
+    ];
+
+    string? Problem(string text, PatternBudget? budget)
     {
         if (MinLength is { } min && text.Length < min) { return $"must be at least {min} characters"; }
         if (MaxLength is { } max && text.Length > max) { return $"must be at most {max} characters"; }

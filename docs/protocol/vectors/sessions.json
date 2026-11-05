@@ -6906,7 +6906,29 @@
           "reason": "\"ticket\": must be at least 5 characters"
         },
         {
-          "name": "whitespace-shorter-than-its-minimum",
+          "name": "whitespace-that-is-not-an-email-address",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q4",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "fields": {
+              "runs": 4,
+              "ticket": "ABC-12",
+              "mail": "   ",
+              "day": "2028-02-29",
+              "above": 0.5,
+              "pair": [
+                "host",
+                "pwa"
+              ]
+            }
+          },
+          "context": "a-form-with-constraints",
+          "refusedBy": "Answers.Check",
+          "reason": "\"mail\": must be an email address"
+        },
+        {
+          "name": "a-required-text-field-of-only-spaces",
           "json": {
             "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
             "question": "call_q4",
@@ -6925,7 +6947,7 @@
           },
           "context": "a-form-with-constraints",
           "refusedBy": "Answers.Check",
-          "reason": "\"ticket\": must be at least 5 characters"
+          "reason": "\"ticket\" needs an answer"
         },
         {
           "name": "a-required-text-field-left-empty",
@@ -8089,7 +8111,7 @@
       "pwa": "checkAnswer takes it: it does not check constraints yet"
     },
     {
-      "vector": "AnswerRequest/whitespace-shorter-than-its-minimum",
+      "vector": "AnswerRequest/whitespace-that-is-not-an-email-address",
       "issue": 766,
       "differs": "pwa",
       "step": "check",
