@@ -147,9 +147,7 @@ static partial class SelfTest
 
     // What a screen reader can't reach of the response: the last block, off screen and unrealised,
     // named as no other block is, found by that name, and realised and brought into view through the
-    // peer the search found, as a reader does. Null when it can. Each step is logged with where the
-    // view is and what has focus; on a failure, the same is tried once more with focus out of the
-    // conversation and logged, to tell what took the view away, the verdict unchanged.
+    // peer the search found, as a reader does. Null when it can.
     static async Task<string?> Reachable(ListView list)
     {
         var count = list.Items.Count;
@@ -165,82 +163,23 @@ static partial class SelfTest
             problems.Add("the last block found by its name");
             return string.Join(", ", problems);
         }
-        if (foundPeer.GetPattern(PatternInterface.VirtualizedItem) is not IVirtualizedItemProvider virtualised)
+        if (foundPeer.GetPattern(PatternInterface.VirtualizedItem) is IVirtualizedItemProvider virtualised) { virtualised.Realize(); }
+        else { problems.Add("the last block realisable"); }
+        if (!await Until(() => list.ContainerFromIndex(count - 1) is ListViewItem, TimeSpan.FromSeconds(5))) { problems.Add("the last block realised"); }
+        else
         {
-            problems.Add("the last block realisable");
-            return string.Join(", ", problems);
-        }
-        // Where the view goes, step by step, and every move of it, so a failure says whether the
-        // list's own anchoring of the view (AnchorCorrections) or the list took it away (#829).
-        var scroller = SessionView.Shallowest<ScrollViewer>(list);
-        var moves = new List<string>();
-        var clock = System.Diagnostics.Stopwatch.StartNew();
-        var watched = new EventHandler<ScrollViewerViewChangedEventArgs>((_, e) => { if (moves.Count < 32 && scroller is not null) { moves.Add($"{clock.ElapsedMilliseconds} ms {scroller.VerticalOffset:0}{(e.IsIntermediate ? "~" : "")}"); } });
-        if (scroller is not null) { scroller.ViewChanged += watched; }
-        try
-        {
-            ReaderSaw(list, "to begin with");
-            var brought = await Brought();
-            if (brought is null) { return problems.Count > 0 ? string.Join(", ", problems) : null; }
-            problems.Add(brought);
-            // Once, to tell the causes apart, with focus out of the conversation: the verdict
-            // stands whatever this finds.
-            var outside = list.XamlRoot?.Content is { } root && FocusManager.FindFirstFocusableElement(root) is { } first && !InList(list, first) ? first : null;
-            var away = outside is not null && (await FocusManager.TryFocusAsync(outside, FocusState.Programmatic)).Succeeded;
-            ReaderSaw(list, away ? $"focus moved out of the conversation, to {outside!.GetType().Name}, and again" : "focus not moved out of the conversation, and again");
-            var again = await Brought();
-            AppLog.Write($"self-test: reader, again: {again ?? "the last block brought into view and said as an item"}");
-            return string.Join(", ", problems);
-        }
-        finally { if (scroller is not null) { scroller.ViewChanged -= watched; } }
-
-        async Task<string?> Brought()
-        {
-            moves.Clear();
-            var view = FindAncestor<SessionView>(list);
-            var correctedBefore = view?.AnchorCorrections ?? 0;
-            clock.Restart();
-            virtualised.Realize();
-            var realised = await Until(() => list.ContainerFromIndex(count - 1) is ListViewItem, TimeSpan.FromSeconds(5));
-            ReaderSaw(list, $"realised by its peer at {clock.ElapsedMilliseconds} ms");
-            if (!realised) { return "the last block realised"; }
             if (foundPeer.GetPattern(PatternInterface.ScrollItem) is IScrollItemProvider scrolled) { scrolled.ScrollIntoView(); }
-            ReaderSaw(list, "scrolled into view by its peer");
             // Until it is in view, 3 s at most, rather than a fixed wait; still checked below.
-            var shown = await Until(() => list.ContainerFromIndex(count - 1) is ListViewItem l && SessionView.Shallowest<ScrollViewer>(list) is { } s
+            await Until(() => list.ContainerFromIndex(count - 1) is ListViewItem l && SessionView.Shallowest<ScrollViewer>(list) is { } s
                 && l.TransformToVisual(s).TransformPoint(default).Y is var y && y < s.ViewportHeight && y + l.ActualHeight > 0, TimeSpan.FromSeconds(3));
-            ReaderSaw(list, $"{(shown ? "in view" : "not in view")} at {clock.ElapsedMilliseconds} ms, {(view?.AnchorCorrections ?? 0) - correctedBefore} anchor corrections since it was asked; the view's moves: {(moves.Count > 0 ? string.Join(", ", moves) : "none")}");
-            if (ItemSaid(peer, list.ContainerFromIndex(count - 1) as ListViewItem, count - 1, count) is { } wrong) { return wrong; }
-            if (list.ContainerFromIndex(count - 1) is ListViewItem lastShown && SessionView.Shallowest<ScrollViewer>(list) is { } scroll
+            if (ItemSaid(peer, list.ContainerFromIndex(count - 1) as ListViewItem, count - 1, count) is { } wrong) { problems.Add(wrong); }
+            else if (list.ContainerFromIndex(count - 1) is ListViewItem lastShown && SessionView.Shallowest<ScrollViewer>(list) is { } scroll
                 && lastShown.TransformToVisual(scroll).TransformPoint(default).Y is var top && (top >= scroll.ViewportHeight || top + lastShown.ActualHeight <= 0))
             {
-                return $"the last block brought into view: at {top:0.#} px of {scroll.ViewportHeight:0.#}";
+                problems.Add($"the last block brought into view: at {top:0.#} px of {scroll.ViewportHeight:0.#}");
             }
-            return null;
         }
-    }
-
-    // Where the conversation's view is for a screen reader's check, logged with what has focus.
-    static void ReaderSaw(ListView list, string step)
-    {
-        var scroll = SessionView.Shallowest<ScrollViewer>(list);
-        var panel = list.ItemsPanelRoot as ItemsStackPanel;
-        var focused = FocusManager.GetFocusedElement(list.XamlRoot);
-        AppLog.Write($"self-test: reader, {step}: the view at {scroll?.VerticalOffset:0} of {scroll?.ScrollableHeight:0} px, {scroll?.ViewportHeight:0} shown; "
-            + $"blocks {panel?.FirstVisibleIndex + 1} to {panel?.LastVisibleIndex + 1} in view, {panel?.FirstCacheIndex + 1} to {panel?.LastCacheIndex + 1} laid out; "
-            + $"the last block {(list.ContainerFromIndex(list.Items.Count - 1) is null ? "not laid out" : "laid out")}; "
-            + $"focus on {focused?.GetType().Name ?? "nothing"}{(BlockOf(list, focused) is { } b ? $" in block {b + 1}" : "")}; "
-            + $"{FindAncestor<SessionView>(list)?.AnchorCorrections ?? 0} anchor corrections in all");
-    }
-
-    // Whether an element, a link in a text block included, is in the list.
-    static bool InList(ListView list, DependencyObject element)
-    {
-        for (var node = element is TextElement t ? t.ContentStart?.VisualParent : element; node is not null; node = VisualTreeHelper.GetParent(node))
-        {
-            if (node == list) { return true; }
-        }
-        return false;
+        return problems.Count > 0 ? string.Join(", ", problems) : null;
     }
 
     // As a screen reader is given it: the list's peer for the item, which works out its place in
@@ -348,10 +287,13 @@ static partial class SelfTest
             await Still(scroll);
             if (list.ContainerFromIndex(code) is not FrameworkElement block || list.ContainerFromIndex(from) is not FrameworkElement before) { return ($"setup: blocks {from + 1} and {code + 1} realised", method); }
             var top = Top(block, scroll);
-            if (wholly != ConversationKeyboard.WhollyInView(top, block.ActualHeight, scroll.ViewportHeight)) { return ($"setup: block {code + 1} {where}: its top {top:0.#} px, {block.ActualHeight:0.#} px tall, in a {scroll.ViewportHeight:0.#} px view", method); }
+            if (wholly != ConversationKeyboard.WhollyInView(top, block.ActualHeight, scroll.ViewportHeight) || (!wholly && (top < 0 || top >= scroll.ViewportHeight))) { return ($"setup: block {code + 1} {where}: its top {top:0.#} px, {block.ActualHeight:0.#} px tall, in a {scroll.ViewportHeight:0.#} px view", method); }
             if (FocusManager.FindLastFocusableElement(before) is not DependencyObject stop) { return ($"setup: a stop in block {from + 1}", method); }
-            // Focus taken without the view moving to it.
+            // Focus taken without the view moving to it: the content where it was on screen, measured
+            // before and after. The offset the view was asked for is no measure of that, the list
+            // re-estimating its blocks' heights as it scrolls (run 41994389656).
             var held = new TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>((_, e) => e.Handled = true);
+            var (offsetBefore, topBefore) = (scroll.VerticalOffset, Top(block, scroll));
             bool focused;
             before.BringIntoViewRequested += held;
             try
@@ -360,9 +302,10 @@ static partial class SelfTest
                 await Still(scroll);
             }
             finally { before.BringIntoViewRequested -= held; }
-            var offset = scroll.VerticalOffset;
-            Log($"block {code + 1} {where}, its top {Top(block, scroll):0.#} px, focus on the last stop of block {from + 1}: {(focused ? "taken" : "refused")}, the view at {offset:0.#} px");
-            if (!focused || !ReferenceEquals(FocusManager.GetFocusedElement(list.XamlRoot), stop) || Math.Abs(offset - at) > 0.5) { return ($"setup: focus on the last stop of block {from + 1} with the view still at {at:0.#} px", method); }
+            var (offset, topAfter) = (scroll.VerticalOffset, Top(block, scroll));
+            Log($"block {code + 1} {where}, its top {topBefore:0.#} px before focus and {topAfter:0.#} px after, focus on the last stop of block {from + 1}: {(focused ? "taken" : "refused")}, the view at {offsetBefore:0.#} px then {offset:0.#} px");
+            if (!focused || !ReferenceEquals(FocusManager.GetFocusedElement(list.XamlRoot), stop)) { return ($"setup: focus on the last stop of block {from + 1}", method); }
+            if (Math.Abs(offset - offsetBefore) > 0.5 || Math.Abs(topAfter - topBefore) > 0.5) { return ($"setup: block {code + 1} left where it was on screen while block {from + 1} took focus: its top {topBefore:0.#} px, then {topAfter:0.#} px", method); }
 
             // Tab, pressed as the keyboard presses it.
             var seen = false;

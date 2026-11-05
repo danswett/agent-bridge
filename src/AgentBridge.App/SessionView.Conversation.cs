@@ -348,13 +348,8 @@ public sealed partial class SessionView
     {
         anchoring = to;
         anchorAt = to;
-        AnchorCorrections++;
         scroll.ChangeView(null, to, null, disableAnimation: true);
     }
-
-    // How many times the view has been moved to keep its anchor block in place: read by the
-    // self-test, which tells such a move from one of the list's own.
-    internal int AnchorCorrections { get; private set; }
 
     static double Top(UIElement element, UIElement viewport) => element.TransformToVisual(viewport).TransformPoint(default).Y;
 
