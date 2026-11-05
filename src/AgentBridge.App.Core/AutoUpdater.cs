@@ -409,7 +409,10 @@ public sealed class AutoUpdater
             if (checksHeldUntil is { } heldUntil)
             {
                 checkDue = now >= heldUntil;
-                if (checkDue) { (checksHeldUntil, checksHeld) = (null, null); }
+                // Its cached failure goes with it: answered from that, the check at the hold's end
+                // (a reset under CheckAgainAfter away) never reached the feed, and the next waited
+                // CheckEvery more.
+                if (checkDue) { (checksHeldUntil, checksHeld, lastCheckAt, lastCheckFailed) = (null, null, null, null); }
             }
             else { checkDue = checkedAt is null || now - checkedAt >= CheckEvery; }
             if (checkNow || checkDue)
@@ -421,6 +424,22 @@ public sealed class AutoUpdater
             // A connected host whose sessions are still not read in full holds the install (Due) as
             // the machine's refusal, told as one, though a press for it stays queued (#800).
             if (why is null && Pending is not null && !host.Sessions.Complete) { why = SessionsUnread; }
+            // The machine refused at the last look just before installing (another profile running,
+            // the host's own status unreadable): asked again before that is taken as over, rather
+            // than cleared unasked, which started ReturnGrace and dropped "Needs you" while the
+            // blocker stayed (#923 review). A press is refused with it once its install is due, as
+            // it would have been below.
+            if (why is null && lastWhyNot is { } before && !Chosen(before))
+            {
+                var pressedNow = Asked(UpdateAskKind.Install);
+                if (await WhyNotNowAsync(pressedNow is not null) is { } still)
+                {
+                    Refused(still);
+                    if (pressedNow is not null && Pending is not null && Due(time.GetUtcNow())) { Finish(ref installRequest, pressedNow, UpdateOutcome.Refused, still); }
+                    Changed();
+                    return;
+                }
+            }
             if (Refused(why)) { idleSince = null; Changed(); return; }
             if (Pending is null || !Due(time.GetUtcNow())) { Changed(); return; }
             // Settings shares the updater: a check there, or a change of feed, may have replaced

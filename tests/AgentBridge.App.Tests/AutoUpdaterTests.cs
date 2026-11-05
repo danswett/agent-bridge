@@ -582,6 +582,56 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal(3, updater.Checks);
     }
 
+    // #923 review: a reset under CheckAgainAfter away, and a press at it, was answered from the
+    // cached failure, and the feed was not asked for CheckEvery more.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_check_pressed_as_a_short_rate_limit_hold_ends_asks_the_feed_rather_than_the_cached_failure()
+    {
+        updater.Found = null;
+        await StartAsync();
+        updater.CheckFails = new UpdateRateLimitedException("403 (rate limit exceeded)", time.GetUtcNow() + TimeSpan.FromSeconds(30));
+        await auto.TickAsync();
+        Assert.Equal(1, updater.Checks);
+        updater.CheckFails = null;
+
+        time.Advance(TimeSpan.FromSeconds(30));
+        await AskedAsync(UpdateAskKind.Check, "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d");
+
+        Assert.Equal(2, updater.Checks);
+        Assert.Equal((UpdateOutcome.Current, "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"), (prefs.LastUpdate!.Outcome, prefs.LastUpdate.Request));
+    }
+
+    // #923 review: a tick after another profile's refusal cleared it unasked, started the grace
+    // and dropped "Needs you" though that profile still ran.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_overdue_update_another_profile_still_holds_keeps_needs_you_and_its_grace_starts_only_once_that_profile_stops()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        others = "another profile's host (pid 77) runs from this installation";
+        time.Advance(AutoUpdater.WaitAtMost);
+        await auto.TickAsync();
+        Assert.StartsWith("Needs you: the update to 0.2.0", auto.State.Waiting);
+
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.StartsWith("Needs you: the update to 0.2.0", auto.State.Waiting);
+        Assert.Contains(others, auto.State.Waiting);
+
+        others = null;
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.Contains($"installs anyway at {(time.GetUtcNow() + AutoUpdater.ReturnGrace).ToLocalTime():g}", auto.State.Waiting);
+        time.Advance(AutoUpdater.ReturnGrace - TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.True(updater.Applied);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Checks_the_feeds_rate_limit_refused_back_off_and_say_why()
