@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using AgentBridge.Host.Core.Discovery;
 using AgentBridge.Host.Core.Processes;
+using AgentBridge.Host.Core.Restore;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Core;
@@ -12,7 +13,7 @@ namespace AgentBridge.Host.Core;
 // Discovers live Copilot, Claude and Codex sessions and keeps a contract Session for
 // each, strictly read-only: it opens agent files for shared reading and never writes,
 // locks, renames or deletes anything, and never lists agent-ha-bridge's hook spool.
-public sealed class SessionSource : ISessionSource
+public sealed class SessionSource : ISessionSource, IRestoreMarks
 {
     static readonly TimeSpan TranscriptSearchCache = TimeSpan.FromSeconds(30);
     static readonly TimeSpan WakeDebounce = TimeSpan.FromMilliseconds(50);
@@ -32,6 +33,9 @@ public sealed class SessionSource : ISessionSource
     // Sessions the host is ending, and since when. Under _gate.
     readonly Dictionary<string, DateTimeOffset> _ending = new(StringComparer.Ordinal);
     readonly Dictionary<string, (DateTimeOffset ErrorAt, string Generation, RecoveryState State)> _recovery = new(StringComparer.Ordinal);
+    // Sessions restored after a reboot or a crash (#780, RestoreRecorder), with their mark. Set before
+    // the session registers, too: shown from its first upsert. Under _gate.
+    readonly Dictionary<string, SessionRestored> _restoreMarks = new(StringComparer.Ordinal);
     // Who drives each session (Session.Driver), shared with the Home Assistant connector; null for
     // a source that does not say.
     readonly SessionDrivers? _drivers;
@@ -92,7 +96,7 @@ public sealed class SessionSource : ISessionSource
         public long? Pending;
         // What the last commit was made from: Commit made again from the same is the same.
         public Session? CommittedFull;
-        public (DateTimeOffset? Touched, DateTimeOffset? Ending, DriverKind? Driver, string? Principal, bool AgentsPrompt) CommittedWith;
+        public (DateTimeOffset? Touched, DateTimeOffset? Ending, DriverKind? Driver, string? Principal, bool AgentsPrompt, SessionRestored? Restored) CommittedWith;
     }
 
     public SessionSource(SessionSourceOptions options, IProcessInspector? processes = null, TimeProvider? time = null, SessionDrivers? drivers = null)
@@ -832,6 +836,18 @@ public sealed class SessionSource : ISessionSource
         finally { _pass.Release(); }
     }
 
+    // IRestoreMarks: shown at once, off the caller's thread (the recorder calls under its own lock).
+    public void Mark(string id, SessionRestored? mark)
+    {
+        lock (_gate)
+        {
+            if (mark is null ? !_restoreMarks.Remove(id) : _restoreMarks.TryGetValue(id, out var was) && was == mark) { return; }
+            if (mark is not null) { _restoreMarks[id] = mark; }
+            if (!_entries.ContainsKey(id)) { return; }
+        }
+        _ = Task.Run(() => RecommitDriverAsync(id));
+    }
+
     async Task RecommitDriverAsync(string id)
     {
         try
@@ -861,7 +877,19 @@ public sealed class SessionSource : ISessionSource
     {
         entry.Full = full;
         DateTimeOffset? endingSince;
-        lock (_gate) { endingSince = _ending.TryGetValue(full.Id, out var at) ? at : null; }
+        SessionRestored? restored;
+        lock (_gate)
+        {
+            endingSince = _ending.TryGetValue(full.Id, out var at) ? at : null;
+            // Continue is for a session that went mid-turn and has not been given a turn since:
+            // once a turn starts after the restore (Continue pressed, any reply, or typed at the
+            // machine), it goes. A turn the transcript still shows from before the restore does not.
+            if (_restoreMarks.TryGetValue(full.Id, out var mark) && mark.MidTurn == true && full.Status == SessionStatus.Working && full.StatusSince > mark.At)
+            {
+                _restoreMarks[full.Id] = mark = mark with { MidTurn = null, Continue = null };
+            }
+            restored = mark;
+        }
         (DriverKind? Kind, string? Principal) driver = (null, null);
         var agentsPrompt = false;
         if (_drivers is not null)
@@ -872,7 +900,9 @@ public sealed class SessionSource : ISessionSource
             driver = _drivers.Shown(full.Id);
             agentsPrompt = _drivers.For(full.Id).PromptIsAgents;
         }
-        var inputs = (entry.Touched, endingSince, driver.Kind, driver.Principal, agentsPrompt);
+        // The restore mark too (#780): it is held, cleared and taken away apart from the transcript,
+        // so an unchanged session with a changed mark is shown again.
+        var inputs = (entry.Touched, endingSince, driver.Kind, driver.Principal, agentsPrompt, restored);
         // The tracker hands back the very session it built last when nothing it reads changed.
         // Fitting and serialising it again (about 37 MB/min, #608) found the same JSON every time.
         // Never while a sign-in recovery overlay is held (#800): each step of it (Checking, then
@@ -899,6 +929,7 @@ public sealed class SessionSource : ISessionSource
             }
         }
         if (endingSince is { } since) { shown = shown with { Status = SessionStatus.Ending, StatusSince = since }; }
+        if (restored is not null) { shown = shown with { Restored = restored }; }
         if (_drivers is not null)
         {
             shown = shown with { Driver = driver.Kind, DriverPrincipal = driver.Principal };
@@ -996,6 +1027,7 @@ public sealed class SessionSource : ISessionSource
             if (!_entries.Remove(id, out var entry)) { return; }
             _ending.Remove(id);
             _recovery.Remove(id);
+            _restoreMarks.Remove(id);
             _drivers?.Forget(id);
             entry.Timer?.Dispose();
             entry.Timer = null;

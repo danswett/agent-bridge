@@ -177,6 +177,29 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal($"https://danswett.github.io/agent-bridge/app/?v=2&host={Machine}", n.GetProperty("navigate").GetString());
     }
 
+    // #780 Host B: what was restored is said first, and what was not after it, with those that died
+    // again too soon after a restore counted.
+    [Fact]
+    public async Task What_a_reboot_took_says_how_many_were_restored_and_which_are_left_to_resume()
+    {
+        Start();
+        Subscribe(Phone);
+
+        notifier.NotifyRestore(new RestoreNotice
+        {
+            At = T,
+            Cause = RestoreCause.Reboot,
+            Why = RestoreWhy.Pending,
+            Restored = 3,
+            Loops = 1,
+            Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login" }],
+        });
+        await After(TimeSpan.Zero);
+
+        var (_, n, _, _, _) = Assert.Single(Received());
+        Assert.Equal("3 sessions were restored, idle.\n1 more went with it.\n1 died again soon after a restore, so it wasn't restored again.\nResume them from Launch.", n.GetProperty("body").GetString());
+    }
+
     [Fact]
     public async Task A_question_answered_at_the_machine_before_its_delay_is_never_notified()
     {

@@ -29,6 +29,9 @@ public sealed record RestoreEntry
     public RestoreLaunch? Launch { get; init; }
     public required DateTimeOffset Seen { get; init; }
     public DateTimeOffset? Gone { get; init; }
+    // Restored by this host after a reboot or a crash, and when; kept until it has stayed live
+    // RestoreRecorder.LoopWithin, so one that dies sooner is not restored again (crash loop).
+    public DateTimeOffset? Restored { get; init; }
 }
 
 // A session that went with an earlier run of the host, with why, about when (Since: when that run
@@ -38,20 +41,25 @@ public sealed record RestoreEntry
 // EndedSeen: its agent was once seen to record a normal ending while it was still being judged,
 // kept because the record of it may be gone by the time it can be judged (the hook intake prunes
 // an ended Codex registration once its process has gone).
+// Restored: when a restore of it was started; it is not started again. Loop: it had been restored and
+// died again before it stayed live RestoreRecorder.LoopWithin, so it is only offered.
 // Uncertain: a Claude or Codex session judged on the same boot with its registration gone, so whether
-// it ended is unknown (RestoreVerdict.Uncertain): never offered or pushed, its folder kept as an
-// offer's is, for as long.
-public sealed record RestoreOwed(RestoreEntry Entry, RestoreCause Cause, DateTimeOffset? Since, DateTimeOffset At, bool Decided, bool? EndedSeen = null, bool? Uncertain = null);
+// it ended is unknown (RestoreVerdict.Uncertain): never offered, pushed or restored, its folder kept as
+// an offer's is, for as long.
+public sealed record RestoreOwed(RestoreEntry Entry, RestoreCause Cause, DateTimeOffset? Since, DateTimeOffset At, bool Decided, bool? EndedSeen = null,
+    DateTimeOffset? Restored = null, bool? Loop = null, bool? Uncertain = null);
 
 // restore.json, in the profile's folder beside config.json. Boot: when the machine started, as this
-// run of the host read it; a later run on another boot knows the machine restarted. Stopped: the host
-// stopped cleanly (an update, a stop or a restart). Sessions: the live ones, and for a short while
-// those it saw go. Owed: sessions of earlier runs that died, or are still being judged.
+// run of the host read it; a later run on another boot knows the machine restarted. Logon: the logon
+// session it ran in (ILogonMarker.Logon), an opaque number. Stopped: the host stopped cleanly (an
+// update, a stop or a restart). Sessions: the live ones, and for a short while those it saw go. Owed:
+// sessions of earlier runs that died, or are still being judged.
 public sealed record RestoreFile
 {
     public const int CurrentVersion = 1;
     public int V { get; init; } = CurrentVersion;
     public required DateTimeOffset Boot { get; init; }
+    public string? Logon { get; init; }
     public required string Instance { get; init; }
     public required DateTimeOffset Written { get; init; }
     public DateTimeOffset? Stopped { get; init; }
@@ -224,6 +232,10 @@ public sealed class SystemBootClock(TimeProvider? time = null) : IBootClock
 // Whether the person's logon session began since this host last ran in it, asked once at start. A
 // sign-out ends every agent, and so does a Windows shutdown with Fast Startup, which hibernates the
 // machine rather than rebooting it, so the boot time stays as it was. Either reads as a reboot.
+// Logon: the logon session's own number, kept in the record, so a marker gone within the same logon
+// (removed by an uninstall's cleanup, or never made by a host before this one) is not read as a new
+// logon, which would offer every session that ended normally meanwhile as died (sec-813). Null when
+// it cannot be read: the marker alone decides then.
 public interface ILogonMarker
 {
     // Whether the marker is missing: only read, never made here.
@@ -233,6 +245,8 @@ public interface ILogonMarker
     // left the old record with the sign-out's evidence gone, so the next start read sessions the
     // shutdown ended as ending normally, and let their worktrees go (Copilot on #813).
     void Commit() { }
+
+    string? Logon() => null;
 }
 
 // A volatile registry key of this profile's, HKCU\Software\AgentBridge\logon-<hash of the profile
@@ -293,6 +307,29 @@ public sealed class VolatileLogonMarker(string profileFolder) : ILogonMarker
         // reboot. Never the other way.
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException) { }
     }
+
+    // The logon session's LUID (TOKEN_STATISTICS.AuthenticationId) of the host's own token: Windows
+    // never gives two logons on one boot the same one, and a sign-out ends it.
+    public string? Logon()
+    {
+        if (!OperatingSystem.IsWindows()) { return null; }
+        try
+        {
+            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent(System.Security.Principal.TokenAccessLevels.Query);
+            var statistics = new byte[TokenStatisticsSize];
+            if (!GetTokenInformation(identity.AccessToken, TokenStatistics, statistics, statistics.Length, out _)) { return null; }
+            return BitConverter.ToUInt64(statistics, AuthenticationIdOffset).ToString("x16", System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (Exception e) when (e is System.Security.SecurityException or UnauthorizedAccessException or InvalidOperationException) { return null; }
+    }
+
+    const int TokenStatistics = 10;
+    // TOKEN_STATISTICS: TokenId (a LUID, 8 bytes), then AuthenticationId; 56 bytes in all.
+    const int AuthenticationIdOffset = 8;
+    const int TokenStatisticsSize = 56;
+
+    [System.Runtime.InteropServices.DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool GetTokenInformation(Microsoft.Win32.SafeHandles.SafeAccessTokenHandle token, int informationClass, byte[] information, int length, out int returned);
 }
 // Whether a session that is not running ended normally, as its agent records it: true, false, or
 // null when the agent records nothing that could say (a Claude session without a hook

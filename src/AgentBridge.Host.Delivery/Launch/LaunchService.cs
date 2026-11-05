@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Restore;
 using AgentBridge.Host.Delivery.Copilot;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Protocol;
@@ -123,7 +124,7 @@ public sealed class LaunchServiceOptions
 //     before it asks, so its launch is started only once its window shows it ready.
 //   * Never while agent-ha-bridge is active for this user (G5), and never twice for one request
 //     (OutcomeMemory). One start at a time, so worktrees and Codex's binding cannot race.
-public sealed partial class LaunchService : ISessionLauncher
+public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 {
     readonly ISessionSource source;
     readonly IAgentHaBridgeProbe probe;
@@ -366,20 +367,7 @@ public sealed partial class LaunchService : ISessionLauncher
     async Task<List<Offered>> ResumableAsync(IReadOnlyDictionary<string, string> executables, IReadOnlyList<Session> live, CancellationToken ct)
     {
         if (Config.ResumeCount <= 0) { return []; }
-        var kinds = new HashSet<string>(StringComparer.Ordinal);
-        if (executables.ContainsKey("claude")) { kinds.Add("claude"); }
-        if (executables.ContainsKey("codex")) { kinds.Add("codex"); }
-        IReadOnlyList<ResumeEntry> fromAgency = executables.TryGetValue("agency", out var a) ? await agency.SessionsAsync(a, ct) : [];
-        var copilotLauncher = executables.ContainsKey("copilot") ? "copilot" : executables.ContainsKey("agency") ? "agency" : null;
-        if (fromAgency.Count == 0 && copilotLauncher is not null) { kinds.Add("copilot"); }
-        var stored = await Task.Run(() => resumable.Read(kinds), ct);
-
-        var candidates = stored.Where(e => e.Agent != AgentKind.Copilot).Concat(fromAgency)
-            .Concat(stored.Where(e => e.Agent == AgentKind.Copilot).Select(e => e with { Launcher = copilotLauncher! }));
-        // An agent whose discovery is held may have a live session discovery could not see, and
-        // offering it would put two CLIs on one transcript; none of its sessions is offered
-        // until a complete pass (§6.3 invariants 6 and 10).
-        if (source.Held is { } held) { candidates = candidates.Where(e => !held.Agents.Contains(e.Agent)); }
+        var candidates = await CandidatesAsync(executables, ct);
         var once = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // Approval can ask git (a worktree's top and marker), so each folder is asked once per
         // pass, and newest first, so the older sessions past the limit are never asked about.
@@ -430,6 +418,27 @@ public sealed partial class LaunchService : ISessionLauncher
 
     // A label already offered, told apart by the start of its session's id.
     public static string Repeated(string title, string id) => Limits.KeepStart($"{title} ({id[..Math.Min(8, id.Length)]})", LaunchProtocol.MaxLabel * 2)!;
+
+    // Every installed agent's stored sessions, each under the launcher that resumes it (Agency's own
+    // list when it has one, Copilot's store otherwise), before any is checked or cut.
+    async Task<IEnumerable<ResumeEntry>> CandidatesAsync(IReadOnlyDictionary<string, string> executables, CancellationToken ct)
+    {
+        var kinds = new HashSet<string>(StringComparer.Ordinal);
+        if (executables.ContainsKey("claude")) { kinds.Add("claude"); }
+        if (executables.ContainsKey("codex")) { kinds.Add("codex"); }
+        IReadOnlyList<ResumeEntry> fromAgency = executables.TryGetValue("agency", out var a) ? await agency.SessionsAsync(a, ct) : [];
+        var copilotLauncher = executables.ContainsKey("copilot") ? "copilot" : executables.ContainsKey("agency") ? "agency" : null;
+        if (fromAgency.Count == 0 && copilotLauncher is not null) { kinds.Add("copilot"); }
+        var stored = await Task.Run(() => resumable.Read(kinds), ct);
+
+        var candidates = stored.Where(e => e.Agent != AgentKind.Copilot).Concat(fromAgency)
+            .Concat(stored.Where(e => e.Agent == AgentKind.Copilot).Select(e => e with { Launcher = copilotLauncher! }));
+        // An agent whose discovery is held may have a live session discovery could not see, and
+        // offering it would put two CLIs on one transcript; none of its sessions is offered
+        // until a complete pass (§6.3 invariants 6 and 10).
+        if (source.Held is { } held) { candidates = candidates.Where(e => !held.Agents.Contains(e.Agent)); }
+        return candidates;
+    }
 
     // "<summary> - <folder>", the agent named when the list holds more than one kind, cut to 120
     // characters, as agent-ha-bridge labels its resume list.
@@ -502,11 +511,56 @@ public sealed partial class LaunchService : ISessionLauncher
             log($"launch {Short(key)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Session is { } s ? $" session {Short(s)}" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
     }
 
+    // A restore after a reboot or a crash (#780, RestoreRecorder): a resume like any other, through
+    // every check a resume from Launch meets (G5, launch.enabled, busy while a folder-trust question
+    // waits, held discovery, the folder still approved, not already running), with no prompt, so the
+    // session opens idle. Not limited to the resume list's length. Its settings are what this host
+    // launched it with, each only while launch.options still offers it; a session started by hand, of
+    // which nothing is known, asks permission whatever the machine's default is: it is never given
+    // Allow all it may not have had.
+    public Task<LaunchResult> ResumeAsync(ResumeAsk ask, CancellationToken cancellationToken = default)
+    {
+        var key = Guid.NewGuid();
+        var l = ask.Launch;
+        var request = new LaunchRequest
+        {
+            Request = key.ToString("D"),
+            Resume = ask.Id,
+            Agent = l?.Launcher,
+            Profile = l?.Profile,
+            Model = l?.Model,
+            Effort = l?.Effort,
+            Context = l?.Context,
+            Permissions = l?.Permissions == LaunchProtocol.AllowAll ? LaunchProtocol.AllowAll : LaunchProtocol.Ask,
+        };
+        return requests.Once(key, () => RunAsync(request, key, ask.By, restoring: true), result =>
+            log($"launch {Short(key)} ({ask.By}): {result.Outcome.ToString().ToLowerInvariant()}{(result.Session is { } s ? $" session {Short(s)}" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
+    }
+
+    // A restore's settings, each kept only while this machine still offers it (else its default),
+    // and its launcher only while installed and of the session's own agent (else the one that
+    // resumes it here).
+    static LaunchRequest StillOffered(LaunchRequest r, Resolved resolved)
+    {
+        var resume = resolved.Resumable.FirstOrDefault(e => string.Equals(e.Id, r.Resume, StringComparison.OrdinalIgnoreCase));
+        var agentId = r.Agent is { } named && Launchers.Find(named) is { } l && resolved.Executables.ContainsKey(l.Id) && (resume is null || l.Kind == resume.Agent) ? named : null;
+        var agent = resolved.Options.Agents.FirstOrDefault(a => a.Id == (agentId ?? resume?.Launcher));
+        static string? Keep(string? value, IReadOnlyList<string>? offered) => value is not null && offered?.Contains(value, StringComparer.Ordinal) == true ? value : null;
+        return r with
+        {
+            Agent = agentId,
+            Profile = Keep(r.Profile, agent?.Profiles),
+            Model = Keep(r.Model, agent?.Models),
+            Effort = Keep(r.Effort, agent?.Efforts),
+            Context = Keep(r.Context, agent?.Contexts),
+        };
+    }
+
     // Everything a launch was settled on before it starts.
     sealed record Plan(Launcher Launcher, string Executable, string Directory, string? Workspace, WorkspaceConfig? Isolated, ResumeEntry? Resume,
         string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null);
 
-    async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer)
+    async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false)
     {
         try
         {
@@ -527,6 +581,17 @@ public sealed partial class LaunchService : ISessionLauncher
                 && !resolved.Resumable.Any(e => string.Equals(e.Id, resumeId, StringComparison.OrdinalIgnoreCase)))
             {
                 return new LaunchResult(LaunchOutcome.Busy, HeldReason(held));
+            }
+            if (restoring && request.Resume is { } restoreId)
+            {
+                // Found among every stored session, not only the newest resumeCount; Settle and
+                // StartAsync still check its folder and that it is not running.
+                if (!resolved.Resumable.Any(e => string.Equals(e.Id, restoreId, StringComparison.OrdinalIgnoreCase))
+                    && (await CandidatesAsync(resolved.Executables, CancellationToken.None)).FirstOrDefault(e => string.Equals(e.Id, restoreId, StringComparison.OrdinalIgnoreCase)) is { } found)
+                {
+                    resolved = resolved with { Resumable = [.. resolved.Resumable, found] };
+                }
+                request = StillOffered(request, resolved);
             }
             var (plan, problem) = Settle(request, resolved);
             if (plan is null) { return Refused(problem!); }

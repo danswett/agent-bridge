@@ -2,6 +2,7 @@ using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Intake;
+using AgentBridge.Host.Core.Restore;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
@@ -349,6 +350,49 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal("started", o.Outcome_);
         var (id, launched) = Assert.Single(told);
         Assert.Equal((o.Session, "copilot", "API", "ask"), (id, launched.Agent, launched.Workspace, launched.Permissions));
+    }
+
+    // #780 Host B: a restore is a resume through the same path as one from Launch, with nothing typed
+    // (so the session opens idle), found past the resume list's length, with what the machine no
+    // longer offers left to its defaults, and never Allow all for a session started by hand, whatever
+    // the machine's default.
+    [Fact]
+    public async Task A_restore_resumes_idle_with_no_prompt_and_never_gives_a_session_started_by_hand_allow_all()
+    {
+        const string Hand = "77777777-7777-4777-8777-777777777777";
+        const string Ours = "78787878-7878-4878-8878-787878787878";
+        Resumable(Hand, app, "By hand");
+        Resumable(Ours, app, "Launched here");
+        var launcher = Launcher(Config(c => c with { Permissions = LaunchProtocol.AllowAll, ResumeCount = 0 }));
+
+        var hand = await launcher.ResumeAsync(new ResumeAsk(Hand, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+        var ours = await launcher.ResumeAsync(new ResumeAsk(Ours, AgentKind.Copilot,
+            new RestoreLaunch("copilot", "App", null, null, "gpt-9-retired", null, null, LaunchProtocol.AllowAll), RestoreRecorder.RestorePrincipal));
+
+        Assert.Equal((LaunchOutcome.Started, Hand), (hand.Outcome, hand.Session));
+        Assert.Equal(["--session-id", Hand, "--banner"], starter.Specs[0].Arguments);
+        Assert.Equal(LaunchProtocol.Ask, hand.Launched!.Permissions);
+        Assert.Equal((LaunchOutcome.Started, Ours), (ours.Outcome, ours.Session));
+        Assert.Equal(["--session-id", Ours, "--banner", "--allow-all"], starter.Specs[1].Arguments);
+        Assert.Empty(screens.Typed);
+        // Live now: a second restore is refused, as a second resume from Launch is.
+        Assert.Equal(LaunchOutcome.Refused, (await launcher.ResumeAsync(new ResumeAsk(Hand, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
+        Assert.Equal(2, starter.Specs.Count);
+    }
+
+    [Fact]
+    public async Task A_restore_starts_nothing_while_agent_ha_bridge_runs_or_launching_is_off()
+    {
+        const string Id = "79797979-7979-4979-8979-797979797979";
+        Resumable(Id, app, "Waiting");
+        probe.Reason = "agent-ha-bridge is running for this user";
+        var g5 = await Launcher(Config()).ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+        probe.Reason = null;
+        var off = await Launcher(Config(c => c with { Enabled = false })).ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+
+        Assert.Equal((LaunchOutcome.Refused, "agent-ha-bridge is running for this user"), (g5.Outcome, g5.Reason));
+        Assert.Equal(LaunchOutcome.Refused, off.Outcome);
+        Assert.Empty(starter.Specs);
     }
 
     [Fact]

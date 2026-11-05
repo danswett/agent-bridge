@@ -48,9 +48,10 @@ public static class RestoreProtocol
 [UnknownAs(Crash)]
 public enum RestoreCause { Reboot, Crash, Restart }
 
-// Why sessions that died are offered rather than started again. Pending: the host keeps them for a
-// person to resume from Launch. ReadOnly: the machine takes no launches now (design G5), and keeps
-// them until it does. Off: sessions.restoreOnStart is off on this machine, and they are only said.
+// Why sessions that died are offered rather than restored. Pending: the host keeps them for a person
+// to resume from Launch (it could not restore them, or they died again too soon after a restore).
+// ReadOnly: the machine takes no launches now (design G5), and keeps them until it does. Off:
+// sessions.restoreOnStart is off on this machine, and they are only said.
 [UnknownAs(Pending)]
 public enum RestoreWhy { Pending, ReadOnly, Off }
 
@@ -69,8 +70,10 @@ public sealed record RestoreSession
 }
 
 // A session's restored field: it was restored by its host after a reboot or a crash, left idle.
-// Continue: the exact words of the reply a client offers to send for one that went mid-turn, sent
-// through session.reply like any reply, and only when a person presses it. No host sends it.
+// MidTurn: it went while working, and has had no turn since (the host takes it away once a turn starts
+// after the restore). Continue: the exact words of the reply a client offers to send for it, with
+// MidTurn only, sent through session.reply like any reply, and only when a person presses it. No host
+// sends it, and a reply with these words is given no more trust than any other.
 public sealed record SessionRestored
 {
     public required DateTimeOffset At { get; init; }
@@ -87,9 +90,9 @@ public sealed record RestoreNotice
     public required RestoreCause Cause { get; init; }
     // When the host last wrote down what was live before it stopped: about when the sessions went.
     public DateTimeOffset? Since { get; init; }
-    // Started again (restore itself, a later slice of #780): none yet.
+    // Restored by the host, idle, through its resume path: how many.
     public int Restored { get; init; }
-    // Restored once and died again within ten minutes, so not restored again: none yet.
+    // Restored once and died again within ten minutes, so not restored again, only offered.
     public int Loops { get; init; }
     // Still being judged: their agent's session discovery is held, so whether they are still
     // running cannot be told yet (§6.3 invariant, #43). Nothing is said of them until it can.

@@ -216,15 +216,16 @@ recursive delete. A worktree where agent-bridge was built stays until a person r
 ## Restoring after a reboot or a crash
 
 A machine that reboots, or a host that crashes, takes the sessions running there with it (#780).
-The host keeps a record of the sessions it sees live, and when it starts again it says what went.
-This slice starts nothing: restoring itself, the crash-loop guard and Continue come later, through
-this page's resume path and every rule it has.
+The host keeps a record of the sessions it sees live, and when it starts again it restores those
+that died, idle, through this page's resume path and every rule it has, and says what went.
 
 **The record.** `restore.json` in the profile's folder, beside `config.json`. For each live session
 only what `launch.options` already says of one: its id, agent, title, folder, model, whether a turn
 was running and whether a question was waiting, and for a session this host launched, what it was
-launched with (launcher, workspace, worktree, profile, model, effort, context, permissions). Never a
-prompt, a response, a question's words or an attachment. With it, when the machine booted, this run's
+launched with (launcher, workspace, worktree, profile, model, effort, context, permissions), and
+when this host restored it, until it has stayed live 10 minutes. Never a prompt, a response, a
+question's words or an attachment. With it, when the machine booted, the logon session's number
+(an opaque id, so a missing logon marker within the same logon is not read as a new logon), this run's
 `machine.instance`, when it was written and, after a clean stop, `stopped`. It is written on each
 change that matters, at most every 250 ms, whole: to a temporary file, flushed to the disk, then
 renamed over the last, so a power cut leaves the record before or the record after. A session that
@@ -240,7 +241,7 @@ cannot be moved aside is left as it is and never written over: the record does n
 |---|---|
 | Running now | Adopted as it is. Nothing to restore |
 | Its agent's discovery is held ([v1-sessions.md](protocol/v1-sessions.md#discovery-held)) | Waits, and is judged once it can be: never read as gone (§6.3, #43) |
-| The machine booted since (boot times more than 2 minutes apart), or on Windows the person's logon is new (a sign-out, or a shutdown with Fast Startup, which keeps the boot time): an empty, volatile key of the profile's, `HKCU\Software\AgentBridge\logon-<hash>`, which Windows drops with the logon and which holds no value (uninstall removes any left behind); a start makes it only once it has written its record, so one that goes down before that leaves the next start reading the logon as new too | Died: a shutdown or a sign-out ends every session, so an ending written as it went down is the shutdown's |
+| The machine booted since (boot times more than 2 minutes apart), or on Windows the person's logon is new (a sign-out, or a shutdown with Fast Startup, which keeps the boot time): an empty, volatile key of the profile's, `HKCU\Software\AgentBridge\logon-<hash>`, which Windows drops with the logon and which holds no value (uninstall removes any left behind), missing, and the logon session's number not the one the record was written in; a start makes it only once it has written its record, so one that goes down before that leaves the next start reading the logon as new too | Died: a shutdown or a sign-out ends every session, so an ending written as it went down is the shutdown's |
 | Same boot, and the last run saw it go | Ended under the host's eyes |
 | Same boot, and its agent's endings are not yet all taken in (on a machine migrated from agent-ha-bridge, a Claude or Codex SessionEnd still in the hook intake's spool) | Waits until the intake has drained the spool, then is judged; while the profile's `intake.json` cannot be read no intake runs, and it waits; so it does while the intake cannot claim the spool (another host has it, or the claim file cannot be opened), since nothing here takes it in |
 | Same boot, and its agent recorded a normal end | Ended. Copilot: a `session.shutdown` of the main agent after the last `user.message` and the last `session.resume` in its `events.jsonl`. Claude and Codex: its hook registration says `Ended` (their SessionEnd hook), the newest of its roots; an ending read while discovery was held is kept, since the intake may prune the registration before the hold lifts |
@@ -252,19 +253,50 @@ The cause is `reboot` across boots or logons; on the same boot, `restart` if the
 as died: it is offered, never typed into. A Claude or Codex one whose registration is gone reads as
 uncertain (above): not offered, its folder kept.
 
-**What died** is kept in the record as owed, offered for 7 days (counted from when it is offered, and let go on time while the host keeps
+**Restoring.** Once every session is judged, what this start found died is restored, newest first,
+one at a time, each as a resume from Launch would be (`launch <id> (host-restore): …` in the log):
+every check that resume meets (agent-ha-bridge, `launch.enabled`, discovery held, its folder still
+approved, not already running, busy while a folder-trust or Bypass Permissions question waits for a
+person) and no prompt, so the session opens **idle** and nothing is typed. Folder trust is never
+answered: a restore that meets the question is `unconfirmed`, and the next waits while launches are
+busy, trying again every 15 s. It is not limited to the resume list's length. Its settings are what
+this host launched it with, each kept only while `launch.options` still offers it (else the
+machine's default); a session started by hand, of which nothing is known, asks permission, whatever
+the machine's default is: it is never given Allow all it may not have had. A restore that is refused
+or fails stays offered. Restored, a session carries `restored` ([v1-sessions.md](protocol/v1-sessions.md#sessions))
+for this run, at most 24 hours: when, why, whether it went mid-turn or with a question waiting, and
+for one that went mid-turn `continue`, the words of the reply a client offers as **Continue**
+("You were interrupted by a reboot at 03:12; carry on where you left off", in the machine's time).
+Continue is an ordinary `session.reply` a person sends, with no more trust than any reply; no host
+sends it, and `midTurn` and `continue` go once a turn starts after the restore.
+
+**Crash loops.** A restored session that dies before it has stayed live 10 minutes (with the host
+watching, or found dead at the next start) is not restored again: it is offered, and counted in
+`loops`. Its restore stamp is cleared once it has stayed live that long. A host that keeps starting
+cannot restore one more than once: each restore is stamped in the record before the next start.
+
+**What died** and was not restored is kept in the record as owed, offered for 7 days (counted from when it is offered, and let go on time while the host keeps
 running; one still being judged is never let go) unless it is resumed or seen live again, and said in `hello`'s `machine.restore` ([v1-sessions.md](protocol/v1-sessions.md#hello)) for
-this run, at most 24 hours, and in one `restored` notification, sent when every session is judged or
-10 minutes after start, and only if this start found any that died. The notification names only
-those; one an earlier start offered is offered still in `hello`, not notified again. One an earlier
-start was still judging is judged now, as of this start's cause. Nothing starts: a person resumes it from Launch, through the resume path
-above. Beside agent-ha-bridge, or while the machine is read-only or launching is off, the sessions
-are only offered (design G5), and stay owed until the machine takes launches. With
-`sessions.restoreOnStart` off ([host-config.md](host-config.md)), what went is said and nothing is
-kept owed, and what earlier starts kept owed is let go.
+this run, at most 24 hours, and in one `restored` notification, sent when every session is judged and
+restored, or 10 minutes after start, and only if this start found any that died. The notification
+says how many were restored and names those offered; one an earlier start offered is offered still in
+`hello`, not notified again, and is not restored by a later start: a person resumes it from Launch.
+One an earlier start was still judging is judged now, as of this start's cause. Beside agent-ha-bridge,
+or while the machine is read-only or launching is off, nothing is restored: the sessions are only
+offered (design G5), and are restored if the machine takes launches again while this run lasts. With
+`sessions.restoreOnStart` off ([host-config.md](host-config.md)), nothing is restored, what went is
+said and nothing is kept owed, and what earlier starts kept owed is let go. Off only because
+`config.json` could not be read, nothing is restored but what died is kept owed, as when it is on.
+
+**For other callers** (#800, sessions an expired sign-in stopped): `ISessionRestorer.RestoreAsync`
+resumes one session the same way, through the same one-at-a-time queue and checks, marks it restored
+with the cause it is given and Continue when it went mid-turn, and is refused while the machine is
+read-only.
 
 **Worktrees.** The reclaimer keeps the worktree of every session owed or still being judged, as it
-keeps a live session's; one owed without a folder or with one that cannot be resolved, or a record set aside, keeps every worktree.
+keeps a live session's. A folder deleted since is placed under what is left of its path, so it keeps
+the worktree it was in; one owed without a folder, one whose place cannot be resolved (a link that
+cannot be read), or a record set aside, keeps every worktree.
 
 **A clock set back** (a bad RTC, a VM restored from a snapshot, a year corrected) leaves times in the
 record ahead of it. One more than 2 minutes ahead is read as now: an offer is kept, and let go a week

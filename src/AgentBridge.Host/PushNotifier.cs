@@ -869,15 +869,19 @@ public sealed class PushNotifier : IAsyncDisposable
     {
         var count = n.Offered.Count + (n.OfferedMore ?? 0);
         var title = n.Cause == RestoreCause.Reboot ? $"{machine.Name} restarted" : $"{machine.Name} · the host stopped";
-        var lines = new List<string>
+        var lines = new List<string>();
+        if (n.Restored > 0) { lines.Add(n.Restored == 1 ? "1 session was restored, idle." : $"{n.Restored} sessions were restored, idle."); }
+        if (count > 0)
         {
-            count == 1 ? "1 session went with it." : $"{count} sessions went with it.",
-        };
-        var midTurn = n.Offered.Where(o => o.MidTurn == true).Select(Named).ToList();
-        if (midTurn.Count > 0) { lines.Add($"Mid-turn: {string.Join(", ", midTurn)}."); }
-        var lost = n.Offered.Where(o => o.QuestionLost == true).Select(Named).ToList();
-        if (lost.Count > 0) { lines.Add($"A question went unanswered in {string.Join(", ", lost)}."); }
-        lines.Add(n.Why == RestoreWhy.ReadOnly ? "They can be resumed once the machine takes launches." : "Resume them from Launch.");
+            lines.Add(n.Restored > 0 ? (count == 1 ? "1 more went with it." : $"{count} more went with it.")
+                : count == 1 ? "1 session went with it." : $"{count} sessions went with it.");
+            if (n.Loops > 0) { lines.Add(n.Loops == 1 ? "1 died again soon after a restore, so it wasn't restored again." : $"{n.Loops} died again soon after a restore, so they weren't restored again."); }
+            var midTurn = n.Offered.Where(o => o.MidTurn == true).Select(Named).ToList();
+            if (midTurn.Count > 0) { lines.Add($"Mid-turn: {string.Join(", ", midTurn)}."); }
+            var lost = n.Offered.Where(o => o.QuestionLost == true).Select(Named).ToList();
+            if (lost.Count > 0) { lines.Add($"A question went unanswered in {string.Join(", ", lost)}."); }
+            lines.Add(n.Why == RestoreWhy.ReadOnly ? "They can be resumed once the machine takes launches." : "Resume them from Launch.");
+        }
         var url = PushNotice.NavigateMachine(app, machine.Id);
         return PushNotice.Fit(new PushMessage
         {

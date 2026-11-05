@@ -13,6 +13,48 @@ public interface IRestorePending
     IReadOnlyList<string>? Folders();
 }
 
+// A session to resume, idle, through the host's existing resume path (LaunchService): its id and
+// agent, and what a launch through this host started it with, if one did. A session started by hand
+// has none: it is resumed with the machine's default settings and asks permission (never Allow all).
+// By: who asked, for the log ("host-restore").
+public sealed record ResumeAsk(string Id, AgentKind Agent, RestoreLaunch? Launch, string By);
+
+// The resume path: one launch at a time, never a prompt (so the session opens idle), folder trust
+// and Bypass Permissions never answered, refused or busy as any launch is (G5, launch.enabled, held
+// discovery). LaunchService.ResumeAsync.
+public interface ISessionResumer
+{
+    Task<LaunchResult> ResumeAsync(ResumeAsk ask, CancellationToken cancellationToken = default);
+}
+
+// Where a session's restored mark is shown (SessionSource): set when it is restored, null to take it
+// away. The source clears midTurn itself once a turn starts after the restore.
+public interface IRestoreMarks
+{
+    void Mark(string id, SessionRestored? mark);
+}
+
+// Resuming a session that is not running, idle, as a restore does, for a caller other than the
+// start-up queue (#800: sessions an agent's expired sign-in stopped, once it is renewed). Through the
+// same queue, so still one launch at a time; refused while the machine is read-only. Marked
+// restored with the cause given, and offered Continue when MidTurn: nothing is ever typed.
+public sealed record RestoreAsk
+{
+    public required string Session { get; init; }
+    public required RestoreCause Cause { get; init; }
+    // When it went, for Continue's words; now when absent.
+    public DateTimeOffset? Since { get; init; }
+    public bool MidTurn { get; init; }
+    public bool QuestionLost { get; init; }
+    // Who asked, for the log, e.g. "host-signin".
+    public required string By { get; init; }
+}
+
+public interface ISessionRestorer
+{
+    Task<LaunchResult> RestoreAsync(RestoreAsk ask, CancellationToken cancellationToken = default);
+}
+
 public static class RestoreJudge
 {
     // Boot times read against the wall clock move with a clock change; two boots closer than this
@@ -68,8 +110,15 @@ public sealed record RestoreOptions
     // Whether every ending an agent's hooks wrote so far has been taken in (the hook intake's spool
     // is drained), by agent; none says always. Until then that agent's sessions wait to be judged.
     public Func<AgentKind, bool>? EndsSettled { get; init; }
-    // sessions.restoreOnStart (docs/host-config.md): off, what died is only said, never kept.
+    // sessions.restoreOnStart (docs/host-config.md): off, what died is only said, never kept nor started.
     public bool RestoreOnStart { get; init; } = true;
+    // Off only because config.json could not be read: nothing is started, but what died is kept to
+    // offer, as when it is on (HostSettings.RestoreKept).
+    public bool RestoreKept { get; init; }
+    // Where a restored session's mark is shown (SessionSource).
+    public IRestoreMarks? Marks { get; init; }
+    // The machine's time zone, for the time Continue's words give; the local one when none.
+    public TimeZoneInfo? Zone { get; init; }
     // Why the machine takes no launches from other devices now (design G5), or null.
     public Func<string?> ReadOnly { get; init; } = () => null;
     public IBootClock? Boot { get; init; }
@@ -80,14 +129,16 @@ public sealed record RestoreOptions
 }
 
 // The host's record of the sessions it saw live (#780), and what it found at start of those an
-// earlier run saw. It starts nothing: what died is offered, by hello's machine.restore and one push,
-// and kept from the worktree reclaimer while it waits.
+// earlier run saw. What this run found died is restored, idle, through the resume path, one at a time
+// (Restore), unless the machine is read-only or sessions.restoreOnStart is off; what is not restored is
+// offered, by hello's machine.restore and one push, and kept from the worktree reclaimer while it
+// waits. Nothing is ever typed into a restored session: Continue is a client's ordinary reply.
 //
 // The record is written on every change that matters (a session appears or goes, its turn or its
 // question changes), at most every Coalesce, whole and flushed before it replaces the last. A session
 // that goes is kept GoneKept more: a machine shutting down ends its agents before it ends the host,
 // and the next start must still know they were live.
-public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
+public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncDisposable
 {
     public static readonly TimeSpan Coalesce = TimeSpan.FromMilliseconds(250);
     public static readonly TimeSpan GoneKept = TimeSpan.FromSeconds(60);
@@ -96,7 +147,8 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     // A session offered and never resumed is let go this long after it was offered, so its worktree
     // can go too. Never one still being judged: what it is cannot be told, so its worktree is kept.
     public static readonly TimeSpan OwedFor = TimeSpan.FromDays(7);
-    // The push waits for every session to be judged, or this long after start, whichever is first.
+    // The push waits for every session to be judged and restored, or this long after start,
+    // whichever is first.
     public static readonly TimeSpan NoticeAfter = TimeSpan.FromMinutes(10);
     // A time in the record more than this ahead of the clock (one set back: a bad RTC, a VM restored
     // from a snapshot, a year corrected) is read as now. Kept, never let go for it, and never left to
@@ -105,6 +157,13 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     // No timer is set further out than this: a later deadline is looked at again when it fires. The
     // system's timers refuse anything past about 49.7 days, and that refusal stopped the host.
     public static readonly TimeSpan LongestWait = TimeSpan.FromDays(1);
+    // A restored session that dies before it has stayed live this long is not restored again: a
+    // session that kills its agent, or a machine that keeps falling over, would otherwise loop.
+    public static readonly TimeSpan LoopWithin = TimeSpan.FromMinutes(10);
+    // A restore the launcher says is busy (a folder-trust question waiting for a person, discovery
+    // held) is tried again after this.
+    public static readonly TimeSpan BusyRetry = TimeSpan.FromSeconds(15);
+    public const string RestorePrincipal = "host-restore";
     // What the record keeps of launches whose sessions have not been seen (bounded, never growing).
     const int LaunchesKept = 256;
 
@@ -116,8 +175,9 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     readonly bool freshLogon;
     // A fresh logon's marker, still to be made: once a record of this start's judgement is written.
     bool logonPending;
+    readonly string? logon;
     // Sessions this run judged from the last run's live ones, as against those it carried over
-    // owed: only these are news, and only they make the push.
+    // owed: only these are news, only they make the push, and only they are restored.
     readonly HashSet<string> judgedNow = new(StringComparer.Ordinal);
     // Gone between Start's subscribing and its snapshot being merged: not taken from the snapshot.
     readonly HashSet<string> goneBeforeStart = new(StringComparer.Ordinal);
@@ -128,6 +188,23 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     readonly List<RestoreOwed> owed = [];
     // Judged to have died while sessions.restoreOnStart is off: said in the notice, never kept.
     readonly List<RestoreOwed> said = [];
+    // Restored, by when, until each has stayed live LoopWithin.
+    readonly Dictionary<string, DateTimeOffset> restoredAt = new(StringComparer.Ordinal);
+    // The marks shown on sessions restored in this run, each taken away after ShownFor.
+    readonly Dictionary<string, ITimer> marks = new(StringComparer.Ordinal);
+    // One resume at a time, the start-up queue's and RestoreAsync's alike.
+    readonly SemaphoreSlim one = new(1, 1);
+    // Tried this run and refused or failed: offered, not tried again.
+    readonly HashSet<string> tried = new(StringComparer.Ordinal);
+    // Restored by this run: not offered, whatever the clock says of their stamps.
+    readonly HashSet<string> restoredThisRun = new(StringComparer.Ordinal);
+    ISessionResumer? resumer;
+    bool resuming;
+    DateTimeOffset retryAt;
+    int restoredNow;
+    // Why and since when, as this start found it, for a notice once every session it found is restored.
+    RestoreCause startCause = RestoreCause.Crash;
+    DateTimeOffset? startSince;
     DateTimeOffset started;
     // Started, on the monotonic clock: how long the notice is shown and the hold's wait before the
     // push are elapsed time. Measured on the wall clock, one set back days kept both going for days.
@@ -162,7 +239,11 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         boot = (options.Boot ?? new SystemBootClock(time)).Boot();
         freshLogon = options.Logon?.Fresh() == true;
         logonPending = freshLogon;
+        logon = options.Logon?.Logon();
     }
+
+    // What died is kept to offer (and, with restoreOnStart on, to restore).
+    bool Keeps => options.RestoreOnStart || options.RestoreKept;
 
     // hello's machine.restore: for RestoreProtocol.ShownFor after the host started. Why is read as
     // it is now, so a machine that takes launches again (agent-ha-bridge stopped) says so.
@@ -235,7 +316,8 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         {
             log($"restore: {RestoreFiles.FileName}.unreadable is still there; no worktree is reclaimed until it is removed");
         }
-        // What the sessions still live were launched with, so adopting them keeps it.
+        // What the sessions still live were launched with, so adopting them keeps it; and when those
+        // restored lately were, so one that dies soon after is not restored again.
         lock (gate)
         {
             // Owed ones too: one still being judged when the host stopped may be found running now.
@@ -244,6 +326,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             foreach (var e in (previous?.Sessions ?? []).Concat((previous?.Owed ?? []).Select(w => w.Entry)))
             {
                 if (e.Launch is { } l) { launched.TryAdd(e.Id, l); }
+                if (e.Restored is { } r) { restoredAt.TryAdd(e.Id, r); }
             }
         }
         // Heard from now, so nothing between the snapshot and this is missed; the snapshot is taken
@@ -265,7 +348,11 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             goneBeforeStart.Clear();
             if (previous is not null)
             {
-                var cause = RestoreJudge.CauseOf(previous, boot, freshLogon);
+                // A marker missing in the logon the record was written in is not a new logon: it
+                // was removed, or never made (sec-813).
+                var sameLogon = logon is not null && previous.Logon == logon;
+                var cause = RestoreJudge.CauseOf(previous, boot, freshLogon && !sameLogon);
+                (startCause, startSince) = (cause, previous.Written);
                 var seen = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var e in previous.Sessions)
                 {
@@ -273,12 +360,13 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
                     owed.Add(new RestoreOwed(e, cause, previous.Written, now, Decided: false));
                     judgedNow.Add(e.Id);
                 }
-                // Sessions earlier runs left owed. Those offered already are not news. Those still
-                // being judged are, and are judged as of now: a reboot since makes them died. With
-                // sessions.restoreOnStart off none is kept.
+                // Sessions earlier runs left owed. Those offered already are not news, and are not
+                // restored now: a person resumes them from Launch. Those still being judged are, and
+                // are judged as of now: a reboot since makes them died. With sessions.restoreOnStart
+                // off none is kept.
                 foreach (var w in previous.Owed)
                 {
-                    if (!options.RestoreOnStart || (w.Decided && now - w.At >= OwedFor) || !seen.Add(w.Entry.Id)) { continue; }
+                    if (!Keeps || (w.Decided && now - w.At >= OwedFor) || !seen.Add(w.Entry.Id)) { continue; }
                     if (w.Decided) { owed.Add(w); continue; }
                     owed.Add(cause == RestoreCause.Reboot ? w with { Cause = cause } : w);
                     judgedNow.Add(w.Entry.Id);
@@ -288,8 +376,21 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             ready = AdvanceLocked(now);
             WriteLocked(now);
             ArmLocked(now);
+            PumpLocked(now);
         }
         if (ready is not null) { Tell(ready); }
+    }
+
+    // The resume path, once the launcher exists (it is made after the recorder): what this start found
+    // died is restored from now, one at a time.
+    public void Restore(ISessionResumer with)
+    {
+        lock (gate)
+        {
+            if (stopped) { return; }
+            resumer = with;
+            if (running) { PumpLocked(time.GetUtcNow()); }
+        }
     }
 
     // A session this host launched, with what it was launched with: kept with its entry, so a restore
@@ -358,6 +459,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             ready = AdvanceLocked(now);
             if (Signature() != before) { ScheduleWriteLocked(Coalesce); }
             ArmLocked(now);
+            PumpLocked(now);
         }
         if (ready is not null) { Tell(ready); }
     }
@@ -381,19 +483,27 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         foreach (var (id, e) in live.ToList())
         {
             if (e.Gone is { } gone && gone - now > AheadTolerance) { live[id] = e with { Gone = now }; }
+            if (e.Restored is { } stamped && stamped - now > AheadTolerance) { live[id] = live[id] with { Restored = now }; }
         }
+        // A restore stamp ahead stays until its session has stayed live LoopWithin from now; a busy
+        // retry ahead would hold the queue for as long as the clock was set back.
+        foreach (var (id, r) in restoredAt.ToList())
+        {
+            if (r - now > AheadTolerance) { restoredAt[id] = now; }
+        }
+        if (retryAt - now > BusyRetry + AheadTolerance) { retryAt = now; }
     }
 
     // Never before now, never past LongestWait: what fires early only looks again.
     static TimeSpan Wait(TimeSpan due) => due < TimeSpan.Zero ? TimeSpan.Zero : due > LongestWait ? LongestWait : due;
 
-    // While anything is still being judged, every JudgeEvery; then once, when the first offer comes
-    // to OwedFor (at most LongestWait ahead, then again), so a host that runs for weeks lets it go
-    // (and its worktree) on time.
+    // While anything is still being judged or waits to be restored, every JudgeEvery; then once, when
+    // the first offer comes to OwedFor (at most LongestWait ahead, then again), so a host that runs for
+    // weeks lets it go (and its worktree) on time.
     void ArmLocked(DateTimeOffset now)
     {
         AheadLocked(now);
-        var judging = owed.Any(w => !w.Decided);
+        var judging = owed.Any(w => !w.Decided) || (resumer is not null && options.RestoreOnStart && Candidates().Any());
         // Already looking every JudgeEvery, and still judging: left to run.
         if (!stopped && judging && judgeTimer is not null && judgingEvery) { return; }
         judgeTimer?.Dispose();
@@ -409,6 +519,163 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         var due = owed.Min(w => w.At) + OwedFor - now;
         judgeTimer = time.CreateTimer(_ => Guarded(Tick), null, Wait(due > JudgeEvery ? due : JudgeEvery), Timeout.InfiniteTimeSpan);
     }
+
+    // What this start found died and has not yet tried to restore: never one an earlier run offered
+    // (a person resumes that from Launch), one already restored, or one that died again too soon.
+    IEnumerable<RestoreOwed> Candidates() =>
+        owed.Where(w => Offered(w) && w.Loop != true && w.Restored is null && judgedNow.Contains(w.Entry.Id) && !tried.Contains(w.Entry.Id));
+
+    // Whether the queue may start one now: a resume path, restoreOnStart on, and a machine that takes
+    // launches (G5, launch.enabled, a config that could be read). Read-only, they wait, offered.
+    bool CanRestoreLocked() => resumer is not null && options.RestoreOnStart && options.ReadOnly() is null;
+
+    // Still restoring: one under way, or one that could start now.
+    bool RestoringLocked() => resuming || (CanRestoreLocked() && Candidates().Any());
+
+    // Starts the next restore, newest first, if one may start now. Only one is ever under way.
+    void PumpLocked(DateTimeOffset now)
+    {
+        if (stopped || !running || resuming || now < retryAt || !CanRestoreLocked()) { return; }
+        if (Candidates().OrderByDescending(w => w.Entry.Seen).FirstOrDefault() is not { } next) { return; }
+        resuming = true;
+        // Off this thread: the launcher takes locks of its own, and calls back into this one.
+        _ = Task.Run(async () =>
+        {
+            try { await RestoreNextAsync(next); }
+            catch (Exception e) when (e is not OutOfMemoryException) { Fail("restore a session", e); }
+        });
+    }
+
+    async Task RestoreNextAsync(RestoreOwed w)
+    {
+        var entry = w.Entry;
+        var result = await ResumeOneAsync(new ResumeAsk(entry.Id, entry.Agent, LaunchOf(entry), RestorePrincipal));
+        RestoreNotice? ready;
+        lock (gate)
+        {
+            resuming = false;
+            if (stopped) { return; }
+            var now = time.GetUtcNow();
+            var i = owed.FindIndex(x => x.Entry.Id == entry.Id);
+            switch (result.Outcome)
+            {
+                case LaunchOutcome.Started or LaunchOutcome.Unconfirmed:
+                    restoredNow++;
+                    if (i >= 0) { owed[i] = owed[i] with { Restored = now }; }
+                    restoredThisRun.Add(entry.Id);
+                    MarkLocked(entry.Id, now, w.Cause, w.Since ?? w.At, entry.Turn == RestoreTurn.Working, entry.QuestionWaiting);
+                    log($"restore: session {Short(entry.Id)} restored, idle{(result.Outcome == LaunchOutcome.Unconfirmed ? $" (not confirmed: {result.Reason})" : "")}");
+                    break;
+                case LaunchOutcome.Busy:
+                    // Waiting on a person at the machine (folder trust), or on discovery: tried again.
+                    retryAt = now + BusyRetry;
+                    log($"restore: session {Short(entry.Id)} waits ({result.Reason})");
+                    break;
+                default:
+                    tried.Add(entry.Id);
+                    log($"restore: session {Short(entry.Id)} could not be restored ({result.Reason}); it stays offered to resume from Launch");
+                    break;
+            }
+            BuildNoticeLocked();
+            ready = AdvanceLocked(now);
+            ScheduleWriteLocked(Coalesce);
+            ArmLocked(now);
+            PumpLocked(now);
+        }
+        if (ready is not null) { Tell(ready); }
+    }
+
+    // What a session's restore resumes it with: what this host launched it with, else nothing (the
+    // machine's defaults, asking permission).
+    RestoreLaunch? LaunchOf(RestoreEntry entry) => entry.Launch ?? (launched.TryGetValue(entry.Id, out var l) ? l : null);
+
+    async Task<LaunchResult> ResumeOneAsync(ResumeAsk ask)
+    {
+        ISessionResumer? path;
+        lock (gate) { path = resumer; }
+        if (path is null) { return new LaunchResult(LaunchOutcome.Refused, "this host cannot resume sessions"); }
+        await one.WaitAsync();
+        try { return await path.ResumeAsync(ask); }
+        catch (Exception e) when (e is not OutOfMemoryException) { return new LaunchResult(LaunchOutcome.Failed, e.Message); }
+        finally { one.Release(); }
+    }
+
+    // #800: a session an agent's expired sign-in stopped, resumed once it is renewed, as a restore is.
+    public async Task<LaunchResult> RestoreAsync(RestoreAsk ask, CancellationToken cancellationToken = default)
+    {
+        AgentKind agent;
+        RestoreLaunch? launch;
+        lock (gate)
+        {
+            if (stopped) { return new LaunchResult(LaunchOutcome.Refused, "the host is stopping"); }
+            if (options.ReadOnly() is { } why) { return new LaunchResult(LaunchOutcome.Refused, why); }
+            var known = live.GetValueOrDefault(ask.Session) ?? owed.FirstOrDefault(w => w.Entry.Id == ask.Session)?.Entry;
+            agent = known?.Agent ?? AgentKind.Unknown;
+            launch = known is null ? launched.GetValueOrDefault(ask.Session) : LaunchOf(known);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = await ResumeOneAsync(new ResumeAsk(ask.Session, agent, launch, ask.By));
+        if (result.Outcome is LaunchOutcome.Started or LaunchOutcome.Unconfirmed)
+        {
+            lock (gate)
+            {
+                if (stopped) { return result; }
+                var now = time.GetUtcNow();
+                var i = owed.FindIndex(x => x.Entry.Id == ask.Session);
+                if (i >= 0) { owed[i] = owed[i] with { Restored = now }; }
+                restoredThisRun.Add(ask.Session);
+                MarkLocked(ask.Session, now, ask.Cause, ask.Since ?? now, ask.MidTurn, ask.QuestionLost);
+                ScheduleWriteLocked(Coalesce);
+            }
+        }
+        log($"restore: session {Short(ask.Session)} asked by {ask.By}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}");
+        return result;
+    }
+
+    // The restored mark, shown on the session for this host run and at most ShownFor; Continue's words
+    // only for one that went mid-turn. Stamped too, so one that dies within LoopWithin is not restored
+    // again.
+    void MarkLocked(string id, DateTimeOffset now, RestoreCause cause, DateTimeOffset went, bool midTurn, bool questionLost)
+    {
+        restoredAt[id] = now;
+        var mark = new SessionRestored
+        {
+            At = now,
+            Cause = cause,
+            MidTurn = midTurn ? true : null,
+            QuestionLost = questionLost ? true : null,
+            Continue = midTurn ? ContinueText(cause, went, options.Zone ?? TimeZoneInfo.Local) : null,
+        };
+        options.Marks?.Mark(id, mark);
+        if (marks.Remove(id, out var earlier)) { earlier.Dispose(); }
+        marks[id] = time.CreateTimer(_ => Guarded(() => Unmark(id)), null, RestoreProtocol.ShownFor, Timeout.InfiniteTimeSpan);
+    }
+
+    void Unmark(string id)
+    {
+        lock (gate)
+        {
+            if (stopped || !marks.Remove(id, out var timer)) { return; }
+            timer.Dispose();
+        }
+        options.Marks?.Mark(id, null);
+    }
+
+    // The reply a client offers to send for a session that went mid-turn, word for word the same on
+    // every client: the host sends nothing itself. The time is the machine's own.
+    public static string ContinueText(RestoreCause cause, DateTimeOffset went, TimeZoneInfo zone)
+    {
+        var what = cause switch
+        {
+            RestoreCause.Reboot => "a reboot",
+            RestoreCause.Restart => "a host restart",
+            _ => "a host crash",
+        };
+        var at = TimeZoneInfo.ConvertTime(went, zone);
+        return string.Create(System.Globalization.CultureInfo.InvariantCulture, $"You were interrupted by {what} at {at:HH:mm}; carry on where you left off");
+    }
+
+    static string Short(string id) => id.Length > 8 ? id[..8] : id;
 
     void Tell(RestoreNotice ready)
     {
@@ -426,7 +693,8 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             _ => "to resume from Launch",
         };
         var held = n.Waiting > 0 ? $"; {n.Waiting} still being judged while discovery is held" : "";
-        return $"{n.Offered.Count + (n.OfferedMore ?? 0)} session(s) went with the {(n.Cause == RestoreCause.Reboot ? "reboot" : "host")} and are offered ({why}){held}";
+        var loops = n.Loops > 0 ? $"; {n.Loops} not restored again, having died within {LoopWithin.TotalMinutes:0} minutes of a restore" : "";
+        return $"{n.Restored} session(s) restored, idle, after the {(n.Cause == RestoreCause.Reboot ? "reboot" : "host stopped")}; {n.Offered.Count + (n.OfferedMore ?? 0)} offered ({why}){loops}{held}";
     }
 
     // Judges what can be judged now, and the notice from it. Returns the notice to push, once.
@@ -467,21 +735,24 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             // What its agent records now, and only once that is gone, the ending kept.
             var verdict = RestoreJudge.Judge(entry, w.Cause, running: false, held: held.Contains(entry.Agent), () => options.Ends.Ended(entry.Agent, entry.Id) ?? (seen == true ? true : null),
                 endsSettled: settled);
+            // Restored, and it went before it had stayed live LoopWithin (its stamp is taken away
+            // only then): not restored again, only offered.
+            var loop = entry.Restored is not null ? true : (bool?)null;
             switch (verdict)
             {
                 case RestoreVerdict.Ended:
                 case RestoreVerdict.Running:
                     owed.RemoveAt(i);
                     break;
-                case RestoreVerdict.Died when options.RestoreOnStart:
+                case RestoreVerdict.Died when Keeps:
                     // Offered from now: a session held undecided for days still gets its full week.
-                    owed[i] = w with { Decided = true, At = now };
+                    owed[i] = w with { Decided = true, At = now, Loop = loop };
                     break;
                 case RestoreVerdict.Died:
                     owed.RemoveAt(i);
-                    said.Add(w with { Decided = true, At = now });
+                    said.Add(w with { Decided = true, At = now, Loop = loop });
                     break;
-                case RestoreVerdict.Uncertain when options.RestoreOnStart:
+                case RestoreVerdict.Uncertain when Keeps:
                     // Kept for its folder alone, as long as an offer would be: never offered or pushed.
                     owed[i] = w with { Decided = true, At = now, Uncertain = true };
                     log($"restore: session {(entry.Id.Length > 8 ? entry.Id[..8] : entry.Id)} went while the host was away and its registration is gone, so whether it ended is unknown; not offered, its folder kept for {OwedFor.TotalDays:0} days");
@@ -494,19 +765,25 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         BuildNoticeLocked();
         if (told || notice is null) { return null; }
         var waiting = owed.Count(w => !w.Decided);
-        if (waiting > 0 && time.GetElapsedTime(startedStamp) < NoticeAfter) { return null; }
+        // Until every one is judged and the queue has restored what it can: one push, saying it all.
+        if ((waiting > 0 || RestoringLocked()) && time.GetElapsedTime(startedStamp) < NoticeAfter) { return null; }
         // The push says only what this start found: an offer an earlier one pushed is in hello alone.
-        var found = owed.Where(Offered).Concat(said).Where(w => judgedNow.Contains(w.Entry.Id)).OrderByDescending(w => w.Entry.Seen).ToList();
-        if (found.Count == 0) { return null; }
+        var found = Offered().Where(w => judgedNow.Contains(w.Entry.Id)).ToList();
+        if (found.Count == 0 && restoredNow == 0) { return null; }
         told = true;
         return NoticeOf(found, waiting, found);
     }
 
+    // What is offered: what died and was not restored by this run. A session restored by an earlier
+    // run whose session never came is offered again.
+    List<RestoreOwed> Offered() =>
+        [.. owed.Where(w => Offered(w) && !restoredThisRun.Contains(w.Entry.Id)).Concat(said).OrderByDescending(w => w.Entry.Seen)];
+
     void BuildNoticeLocked()
     {
-        var offered = owed.Where(Offered).Concat(said).OrderByDescending(w => w.Entry.Seen).ToList();
+        var offered = Offered();
         var waiting = owed.Count(w => !w.Decided);
-        if (offered.Count == 0 && waiting == 0)
+        if (offered.Count == 0 && waiting == 0 && restoredNow == 0)
         {
             notice = null;
             return;
@@ -519,15 +796,17 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
 
     RestoreNotice NoticeOf(List<RestoreOwed> offered, int waiting, List<RestoreOwed> about)
     {
-        var latest = about.MaxBy(w => w.At)!;
+        var latest = about.MaxBy(w => w.At);
         // Within its budget in hello and the push, whatever the titles hold (RestoreProtocol.Fit).
         return RestoreProtocol.Fit(new RestoreNotice
         {
             At = started,
-            Cause = latest.Cause,
-            Since = latest.Since,
+            Cause = latest?.Cause ?? startCause,
+            Since = latest is null ? startSince : latest.Since,
+            Restored = restoredNow,
+            Loops = offered.Count(w => w.Loop == true),
             Waiting = waiting,
-            Why = !options.RestoreOnStart ? RestoreWhy.Off : options.ReadOnly() is not null ? RestoreWhy.ReadOnly : RestoreWhy.Pending,
+            Why = !Keeps ? RestoreWhy.Off : options.ReadOnly() is not null ? RestoreWhy.ReadOnly : RestoreWhy.Pending,
             Offered = [.. offered.Take(RestoreProtocol.MaxOffered).Select(w => new RestoreSession
             {
                 Id = w.Entry.Id,
@@ -567,6 +846,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             QuestionWaiting = s.Question is not null || s.WaitingOn is not null,
             Launch = launch,
             Seen = now,
+            Restored = restoredAt.TryGetValue(s.Id, out var restored) ? restored : null,
         };
     }
 
@@ -604,7 +884,8 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     void WriteLocked(DateTimeOffset now, DateTimeOffset? stoppedAt = null)
     {
         AheadLocked(now);
-        DateTimeOffset? nextGone = null;
+        DateTimeOffset? next = null;
+        void Next(DateTimeOffset at) { if (next is null || at < next) { next = at; } }
         foreach (var (id, e) in live.ToList())
         {
             if (e.Gone is not { } gone) { continue; }
@@ -612,12 +893,23 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             {
                 live.Remove(id);
                 launched.Remove(id);
+                restoredAt.Remove(id);
             }
-            else if (nextGone is null || gone + GoneKept < nextGone) { nextGone = gone + GoneKept; }
+            else { Next(gone + GoneKept); }
+        }
+        // A restored session that has stayed live LoopWithin is no longer one that died soon after
+        // its restore; one that went sooner keeps its stamp for as long as it is kept at all.
+        foreach (var (id, r) in restoredAt.ToList())
+        {
+            if (now - r < LoopWithin) { Next(r + LoopWithin); continue; }
+            if (live.TryGetValue(id, out var e) && e.Gone is { } went && went - r < LoopWithin) { continue; }
+            restoredAt.Remove(id);
+            if (live.TryGetValue(id, out var still) && still.Restored is not null) { live[id] = still with { Restored = null }; }
         }
         var file = new RestoreFile
         {
             Boot = boot,
+            Logon = logon,
             Instance = options.Instance,
             Written = now,
             Stopped = stoppedAt,
@@ -643,7 +935,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             logonPending = false;
             options.Logon?.Commit();
         }
-        if (nextGone is { } at) { ScheduleWriteLocked(at - now > Coalesce ? at - now : Coalesce); }
+        if (next is { } at) { ScheduleWriteLocked(at - now > Coalesce ? at - now : Coalesce); }
     }
 
     // A clean stop: the record says so, so the next run on this boot knows the host was stopped, not
@@ -659,6 +951,8 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             writeTimer = null;
             judgeTimer?.Dispose();
             judgeTimer = null;
+            foreach (var t in marks.Values) { t.Dispose(); }
+            marks.Clear();
             if (running)
             {
                 var now = time.GetUtcNow();

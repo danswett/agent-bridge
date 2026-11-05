@@ -22,16 +22,29 @@ public sealed class RestoreTests : IDisposable
 
     RestoreFile Written() => RestoreFiles.Read(Record).File!;
 
-    RestoreRecorder Recorder(bool restoreOnStart = true, bool freshLogon = false, Func<AgentKind, bool>? endsSettled = null, TimeProvider? clock = null,
-        Func<string?>? readOnly = null, List<string>? logs = null, ILogonMarker? marker = null)
+    RestoreRecorder Recorder(bool restoreOnStart = true, bool freshLogon = false, Func<AgentKind, bool>? endsSettled = null, Resumer? resumer = null,
+        Func<string?>? readOnly = null, bool restoreKept = false, string? logon = null, TimeProvider? clock = null, ILogonMarker? marker = null)
     {
         var r = new RestoreRecorder(source, new RestoreOptions
         {
-            Path = Record, Instance = "run2", Ends = ends, RestoreOnStart = restoreOnStart, Boot = boot, Logon = marker ?? new Logon(freshLogon), Time = clock ?? Time, EndsSettled = endsSettled,
-            ReadOnly = readOnly ?? (() => null), Log = logs is null ? null : s => logs.Add(s),
+            Path = Record, Instance = "run2", Ends = ends, RestoreOnStart = restoreOnStart, Boot = boot, Logon = marker ?? new Marker(freshLogon, logon), Time = clock ?? Time, EndsSettled = endsSettled,
+            RestoreKept = restoreKept, ReadOnly = readOnly ?? (() => null), Marks = marks, Zone = TimeZoneInfo.Utc, Log = s => { lock (logs) { logs.Add(s); } },
         });
-        r.NoticeReady += told.Add;
+        r.NoticeReady += n => { lock (told) { told.Add(n); } };
+        if (resumer is not null) { r.Restore(resumer); }
         return r;
+    }
+
+    readonly Marks marks = new();
+    readonly List<string> logs = [];
+
+    bool Logged(string part) { lock (logs) { return logs.Any(l => l.Contains(part, StringComparison.Ordinal)); } }
+
+    // A restore runs off the caller's thread; what it does is waited for, never slept on blindly.
+    static async Task Until(Func<bool> done)
+    {
+        for (var i = 0; i < 500 && !done(); i++) { await Task.Delay(10); }
+        Assert.True(done());
     }
 
     // What an earlier run of the host wrote, booted then, stopped cleanly or not.
@@ -194,8 +207,7 @@ public sealed class RestoreTests : IDisposable
         Previous(Fixture.T0, false, E("codex", AgentKind.Codex, cwd: "/work/codex"), E("claude", AgentKind.Claude, cwd: "/work/claude"));
         ends.Of["codex"] = null;
         ends.Of["claude"] = null;
-        var logs = new List<string>();
-        await using var r = Recorder(logs: logs);
+        await using var r = Recorder();
 
         r.Start();
 
@@ -203,7 +215,7 @@ public sealed class RestoreTests : IDisposable
         Assert.Null(r.Notice);
         Assert.Equal(["/work/claude", "/work/codex"], r.Folders()!.Order(StringComparer.Ordinal));
         Assert.Equal(2, Written().Owed.Count(w => w.Uncertain == true));
-        Assert.Equal(2, logs.Count(l => l.Contains("registration is gone", StringComparison.Ordinal)));
+        Assert.True(Logged("registration is gone"));
 
         Time.Advance(RestoreRecorder.OwedFor);
         Assert.Empty(r.Folders()!);
@@ -699,8 +711,7 @@ public sealed class RestoreTests : IDisposable
     {
         Previous(Fixture.T0, false, E("a"));
         var clock = new SystemLimits(Time);
-        var logs = new List<string>();
-        await using var r = Recorder(clock: clock, logs: logs);
+        await using var r = Recorder(clock: clock);
         r.Start();
         Assert.Single(told);
 
@@ -841,8 +852,7 @@ public sealed class RestoreTests : IDisposable
     public async Task A_start_that_fails_is_said_and_keeps_every_worktree()
     {
         Previous(Fixture.T0, false, E("a"));
-        var logs = new List<string>();
-        await using var r = Recorder(readOnly: () => throw new InvalidOperationException("broken"), logs: logs);
+        await using var r = Recorder(readOnly: () => throw new InvalidOperationException("broken"));
 
         r.Start();
 
@@ -895,6 +905,303 @@ public sealed class RestoreTests : IDisposable
         }
     }
 
+    // ---- Host B: restoring (#780) ----
+
+    [Fact]
+    public async Task What_a_crash_took_is_restored_one_at_a_time_as_it_was_launched_and_one_push_says_so_once_all_are_done()
+    {
+        var launch = new RestoreLaunch("copilot", "App", null, "work", "gpt-6.1-sol", "high", null, LaunchProtocol.Ask);
+        Previous(Fixture.T0, false, E("a", turn: RestoreTurn.Working) with { Launch = launch }, E("b", question: true));
+        var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+
+        await Until(() => resumer.Asked.Count == 1);
+        // The push waits for the queue, so it can say what was restored.
+        Assert.Empty(told);
+        resumer.Gate!.SetResult();
+        await Until(() => resumer.Asked.Count == 2 && told.Count == 1);
+
+        Assert.Equal(1, resumer.Most);
+        Assert.Equal([("a", launch, "host-restore"), ("b", (RestoreLaunch?)null, "host-restore")], resumer.Asked.Select(x => (x.Id, x.Launch, x.By)));
+        var n = told[0];
+        Assert.Equal((2, 0, RestoreCause.Crash), (n.Restored, n.Offered.Count, n.Cause));
+        // Continue's words for the one that went mid-turn only, with the time it went in the machine's
+        // zone (the record was last written five minutes before this start, at 04:55).
+        Assert.Equal(((bool?)true, (bool?)null, (string?)"You were interrupted by a host crash at 04:55; carry on where you left off"), (marks.Of["a"]!.MidTurn, marks.Of["a"]!.QuestionLost, marks.Of["a"]!.Continue));
+        Assert.Equal(((bool?)null, true, (string?)null), (marks.Of["b"]!.MidTurn, marks.Of["b"]!.QuestionLost, marks.Of["b"]!.Continue));
+        // Stamped, so a restore is never started twice, and one that dies soon is not restored again.
+        Time.Advance(RestoreRecorder.Coalesce);
+        Assert.All(Written().Owed, w => Assert.NotNull(w.Restored));
+    }
+
+    [Fact]
+    public async Task A_session_that_dies_again_within_ten_minutes_of_its_restore_is_only_offered()
+    {
+        Previous(Fixture.T0, false, E("a") with { Restored = Time.GetUtcNow().AddMinutes(-8) }, E("b"));
+        var resumer = new Resumer();
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+
+        await Until(() => told.Count == 1);
+        Assert.Equal(["b"], resumer.Asked.Select(x => x.Id));
+        var n = told[0];
+        Assert.Equal((1, 1), (n.Restored, n.Loops));
+        Assert.Equal(["a"], n.Offered.Select(o => o.Id));
+    }
+
+    [Fact]
+    public async Task A_restored_session_that_stays_live_ten_minutes_is_restored_again_when_it_later_dies()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer();
+        await using (var first = Recorder(resumer: resumer))
+        {
+            first.Start();
+            await Until(() => told.Count == 1);
+            source.Upsert(S("a"));
+            Time.Advance(RestoreRecorder.Coalesce);
+            Assert.NotNull(Assert.Single(Written().Sessions).Restored);
+            Time.Advance(RestoreRecorder.LoopWithin);
+            Assert.Null(Assert.Single(Written().Sessions).Restored);
+        }
+        source.Remove("a");
+        lock (told) { told.Clear(); }
+
+        await using var second = Recorder(resumer: resumer);
+        second.Start();
+
+        await Until(() => told.Count == 1);
+        Assert.Equal(["a", "a"], resumer.Asked.Select(x => x.Id));
+        Assert.Equal((1, 0), (told[0].Restored, told[0].Loops));
+    }
+
+    [Fact]
+    public async Task Nothing_is_restored_while_the_machine_is_read_only_and_what_died_waits_offered_until_it_takes_launches()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        string? why = "agent-ha-bridge is running for this user";
+        var resumer = new Resumer();
+        await using var r = Recorder(resumer: resumer, readOnly: () => Volatile.Read(ref why));
+        r.Start();
+
+        var n = Assert.Single(told);
+        Assert.Equal((RestoreWhy.ReadOnly, 0), (n.Why, n.Restored));
+        Assert.Equal(["a"], n.Offered.Select(o => o.Id));
+        Time.Advance(RestoreRecorder.JudgeEvery);
+        Assert.Empty(resumer.Asked);
+
+        Volatile.Write(ref why, null);
+        Time.Advance(RestoreRecorder.JudgeEvery);
+        await Until(() => resumer.Asked.Count == 1);
+    }
+
+    [Fact]
+    public async Task With_restore_on_start_off_nothing_is_restored()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer();
+        await using var r = Recorder(restoreOnStart: false, resumer: resumer);
+        r.Start();
+
+        Assert.Equal(RestoreWhy.Off, Assert.Single(told).Why);
+        Time.Advance(RestoreRecorder.JudgeEvery);
+        Assert.Empty(resumer.Asked);
+    }
+
+    // sec-813: off only because config.json could not be read, nothing is started, and what a reboot
+    // took is kept, on this start and the next: the person may have meant it on.
+    [Fact]
+    public async Task A_config_that_cannot_be_read_restores_nothing_but_keeps_what_died_offered()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer();
+        await using (var first = Recorder(restoreOnStart: false, restoreKept: true, resumer: resumer, readOnly: () => "config.json has a problem"))
+        {
+            first.Start();
+            Assert.Equal(RestoreWhy.ReadOnly, Assert.Single(told).Why);
+            Assert.Equal(["a"], Written().Owed.Select(w => w.Entry.Id));
+        }
+
+        await using var second = Recorder(restoreOnStart: false, restoreKept: true, readOnly: () => "config.json has a problem");
+        second.Start();
+
+        Assert.Equal(["a"], second.Notice!.Offered.Select(o => o.Id));
+        Assert.Single(second.Folders()!);
+        Assert.Empty(resumer.Asked);
+    }
+
+    [Fact]
+    public async Task A_session_is_not_restored_while_its_agents_discovery_is_held_and_is_once_it_is_judged_to_have_died()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        source.HeldNow = new DiscoveryHeld("the copilot processes could not be listed", [AgentKind.Copilot]);
+        var resumer = new Resumer();
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+
+        Time.Advance(RestoreRecorder.JudgeEvery);
+        Assert.Empty(resumer.Asked);
+        Assert.Empty(told);
+
+        source.HeldNow = null;
+        Time.Advance(RestoreRecorder.JudgeEvery);
+        await Until(() => resumer.Asked.Count == 1 && told.Count == 1);
+    }
+
+    [Fact]
+    public async Task A_restore_the_launcher_says_is_busy_is_tried_again_and_one_it_refuses_stays_offered()
+    {
+        Previous(Fixture.T0, false, E("a"), E("b"));
+        var resumer = new Resumer();
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Busy, "Busy: Copilot in App is waiting for a person to answer whether to trust that folder"));
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Refused, "Resume refused: the original directory must exist and be an approved workspace."));
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+
+        await Until(() => Logged("waits (Busy"));
+        Assert.Single(resumer.Asked);
+        Time.Advance(RestoreRecorder.BusyRetry);
+        await Until(() => told.Count == 1);
+
+        Assert.Equal(["a", "a", "b"], resumer.Asked.Select(x => x.Id));
+        Assert.Equal((1, RestoreWhy.Pending), (told[0].Restored, told[0].Why));
+        Assert.Equal(["a"], told[0].Offered.Select(o => o.Id));
+    }
+
+    [Fact]
+    public async Task Sessions_an_earlier_run_offered_are_left_for_a_person_to_resume_and_not_restored_by_a_later_start()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        await using (var first = Recorder(readOnly: () => "agent-ha-bridge is running for this user"))
+        {
+            first.Start();
+        }
+        var resumer = new Resumer();
+
+        await using var second = Recorder(resumer: resumer);
+        second.Start();
+        Time.Advance(RestoreRecorder.JudgeEvery);
+
+        Assert.Equal(["a"], second.Notice!.Offered.Select(o => o.Id));
+        Assert.Empty(resumer.Asked);
+    }
+
+    // #800's way in: a session resumed for another reason goes through the same queue and path, marked
+    // restored with Continue offered when it went mid-turn, and is refused while the machine is read-only.
+    [Fact]
+    public async Task A_session_restored_on_request_goes_through_the_resume_path_and_offers_continue_when_it_went_mid_turn()
+    {
+        var resumer = new Resumer();
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+
+        var result = await r.RestoreAsync(new RestoreAsk { Session = "s", Cause = RestoreCause.Crash, Since = Time.GetUtcNow().AddMinutes(-2), MidTurn = true, By = "host-signin" });
+
+        Assert.Equal(LaunchOutcome.Started, result.Outcome);
+        Assert.Equal(("s", "host-signin"), (resumer.Asked[0].Id, resumer.Asked[0].By));
+        Assert.Equal("You were interrupted by a host crash at 04:58; carry on where you left off", marks.Of["s"]!.Continue);
+
+        await using var readOnly = Recorder(resumer: resumer, readOnly: () => "agent-ha-bridge is running for this user");
+        readOnly.Start();
+        var refused = await readOnly.RestoreAsync(new RestoreAsk { Session = "t", Cause = RestoreCause.Crash, By = "host-signin" });
+        Assert.Equal((LaunchOutcome.Refused, "agent-ha-bridge is running for this user"), (refused.Outcome, refused.Reason));
+        Assert.Single(resumer.Asked);
+    }
+
+    // sec-813: the logon marker can be gone within one logon (removed at uninstall, or never made by
+    // an older host); the logon's own number, kept in the record, says whether it really is new.
+    [Theory]
+    [InlineData("00000000000abc12", false)]
+    [InlineData("00000000000def34", true)]
+    public async Task A_missing_logon_marker_reads_as_a_new_logon_only_when_the_logon_itself_changed(string logonNow, bool offered)
+    {
+        RestoreFiles.Write(Record, new RestoreFile
+        {
+            Boot = Fixture.T0, Logon = "00000000000abc12", Instance = "run1", Written = Time.GetUtcNow().AddMinutes(-5), Sessions = [E("a")],
+        });
+        ends.Of["a"] = true;
+        await using var r = Recorder(freshLogon: true, logon: logonNow);
+
+        r.Start();
+
+        Assert.Equal(offered, told.Count == 1);
+        if (offered) { Assert.Equal(RestoreCause.Reboot, told[0].Cause); }
+    }
+
+    [Fact]
+    public async Task A_restored_mark_offers_continue_until_a_turn_starts_after_the_restore()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999999";
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var real = f.Source();
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2));
+        await real.RefreshAsync();
+
+        real.Mark(Id, new SessionRestored { At = Fixture.T0.AddSeconds(5), Cause = RestoreCause.Reboot, MidTurn = true, Continue = "carry on" });
+        await Until(() => real.Get(Id)?.Restored is not null);
+        // Working still, by a transcript that stops where the reboot cut it: Continue stays.
+        Assert.Equal(((bool?)true, "carry on"), (real.Get(Id)!.Restored!.MidTurn, real.Get(Id)!.Restored!.Continue));
+
+        Fixture.Append(events, Copilot.TurnEnd(3), Copilot.User("carry on", 10), Copilot.TurnStart(11));
+        await real.RefreshAsync();
+        var after = real.Get(Id)!;
+        Assert.Equal(SessionStatus.Working, after.Status);
+        Assert.Equal(((bool?)null, (string?)null, RestoreCause.Reboot), (after.Restored!.MidTurn, after.Restored.Continue, after.Restored.Cause));
+
+        real.Mark(Id, null);
+        await Until(() => real.Get(Id)!.Restored is null);
+    }
+
+    [Fact]
+    public async Task A_session_an_earlier_run_restored_stays_offered_when_the_clock_is_set_back_before_its_restore()
+    {
+        var now = Time.GetUtcNow();
+        RestoreFiles.Write(Record, new RestoreFile
+        {
+            Boot = Fixture.T0, Instance = "run1", Written = now.AddMinutes(-5),
+            Owed = [new RestoreOwed(E("a"), RestoreCause.Reboot, now.AddMinutes(-5), now.AddMinutes(-5), Decided: true, Restored: now.AddDays(60))],
+        });
+        await using var r = Recorder(resumer: new Resumer(), clock: new SystemLimits(Time));
+
+        r.Start();
+
+        Assert.Equal(["a"], r.Notice!.Offered.Select(o => o.Id));
+    }
+
+    sealed class Resumer : ISessionResumer
+    {
+        public readonly List<ResumeAsk> Asked = [];
+        public readonly Queue<LaunchResult> Answers = new();
+        public TaskCompletionSource? Gate;
+        public int Most;
+        int under;
+
+        public async Task<LaunchResult> ResumeAsync(ResumeAsk ask, CancellationToken cancellationToken = default)
+        {
+            LaunchResult? answer;
+            lock (Asked)
+            {
+                Asked.Add(ask);
+                Most = Math.Max(Most, ++under);
+                answer = Answers.Count > 0 ? Answers.Dequeue() : null;
+            }
+            try
+            {
+                if (Gate is { } gate) { await gate.Task; }
+                return answer ?? new LaunchResult(LaunchOutcome.Started) { Session = ask.Id };
+            }
+            finally { lock (Asked) { under--; } }
+        }
+    }
+
+    sealed class Marks : IRestoreMarks
+    {
+        public readonly System.Collections.Concurrent.ConcurrentDictionary<string, SessionRestored?> Of = new(StringComparer.Ordinal);
+        public void Mark(string id, SessionRestored? mark) => Of[id] = mark;
+    }
+
     sealed class Live : ISessionSource
     {
         public readonly List<Session> Sessions = [];
@@ -934,9 +1241,10 @@ public sealed class RestoreTests : IDisposable
         public bool? Ended(AgentKind agent, string id) => Of.TryGetValue(id, out var ended) ? ended : false;
     }
 
-    sealed class Logon(bool fresh) : ILogonMarker
+    sealed class Marker(bool fresh, string? logon = null) : ILogonMarker
     {
         public bool Fresh() => fresh;
+        public string? Logon() => logon;
     }
 
     // The volatile key's behaviour: missing until made, and made only by Commit.

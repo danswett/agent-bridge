@@ -805,6 +805,20 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Empty(injector.Plans);
     }
 
+    // #780: Continue is an ordinary reply. Its words earn no trust a reply does not have: beside
+    // agent-ha-bridge it is refused like any other, and nothing is typed.
+    [Fact]
+    public async Task A_reply_with_continues_words_is_refused_beside_agent_ha_bridge_like_any_reply()
+    {
+        var ch = await OpenAsync();
+        probe.Reason = "agent-ha-bridge is running for this user";
+
+        var words = AgentBridge.Host.Core.Restore.RestoreRecorder.ContinueText(RestoreCause.Reboot, DateTimeOffset.UnixEpoch, TimeZoneInfo.Utc);
+
+        Assert.Equal(("refused", probe.Reason), await ReplyAsync(ch, words));
+        Assert.Empty(injector.Plans);
+    }
+
     [Fact]
     public async Task Invalid_replies_attachments_and_other_agents_are_refused_untyped()
     {
