@@ -973,7 +973,9 @@ jobs:
       - run: npm ci
       - name: Which Playwright
         id: playwright
-        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+          echo "os=$(. /etc/os-release && echo "$ID$VERSION_ID")" >> "$GITHUB_OUTPUT"
       # Playwright's browser from main's cache, as in spikes-linux, keyed by browser so each leg
       # restores only the one it runs.
       - name: Playwright's browsers from main's cache
@@ -982,13 +984,54 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-${{ matrix.project }}
-      - run: npx playwright install --with-deps "$PROJECT"
+      # The .deb files of the system packages Playwright installs for its browser, from main's
+      # cache. --with-deps still runs apt-get update and apt-get install every time; this only
+      # spares the download. For WebKit that is 181 packages, 114 MB, fetched one after another
+      # from the runner's apt mirror (azure.archive.ubuntu.com first). apt moves to the next
+      # mirror in the runner's list only when one fails, not when it slows: on main run
+      # 41927187905, webkit 3/3 fetched them at about 100 kB/s on two runners in turn and hit the
+      # 20-minute limit inside this install both times, before any test ran, while webkit 2/3
+      # fetched the same 114 MB in 47 s. apt uses a .deb already in its archive directory only
+      # when it matches the hash in the signed index it has just fetched, and downloads any that
+      # don't, so a stale or altered cache costs a download, never an unverified package.
+      - name: Playwright's system packages from main's cache
+        id: apt-packages
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/playwright-apt
+          key: playwright-apt-${{ steps.playwright.outputs.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-${{ matrix.project }}
+      - name: Playwright's browser and system packages
+        id: install
+        env:
+          APT_CACHE_HIT: ${{ steps.apt-packages.outputs.cache-hit }}
+        run: |
+          apt_cache="$HOME/.cache/playwright-apt"
+          if [ -d "$apt_cache" ]; then
+            echo "Seeding apt with $(find "$apt_cache" -maxdepth 1 -name '*.deb' | wc -l) cached .deb files"
+            find "$apt_cache" -maxdepth 1 -name '*.deb' -exec sudo cp -t /var/cache/apt/archives/ {} +
+          fi
+          npx playwright install --with-deps "$PROJECT"
+          if [ "$APT_CACHE_HIT" != 'true' ]; then
+            mkdir -p "$apt_cache"
+            find /var/cache/apt/archives -maxdepth 1 -name '*.deb' -exec cp -t "$apt_cache" {} +
+            debs=$(find "$apt_cache" -maxdepth 1 -name '*.deb' | wc -l)
+            echo "debs=$debs" >> "$GITHUB_OUTPUT"
+            if [ "$debs" -eq 0 ]; then
+              echo "::warning title=pwa-ui::apt kept no .deb files after installing Playwright's system packages, so there are none to cache"
+            fi
+          fi
       - name: Save Playwright's browsers to main's cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: ${{ steps.browsers.outputs.cache-primary-key }}
+      - name: Save Playwright's system packages to main's cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.apt-packages.outputs.cache-hit != 'true' && steps.install.outputs.debs != '0'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/playwright-apt
+          key: ${{ steps.apt-packages.outputs.cache-primary-key }}
       - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()

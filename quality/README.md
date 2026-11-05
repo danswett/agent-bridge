@@ -339,8 +339,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
      runner and every `*.csproj`, `Directory.*` file, `nuget.config`, `global.json` and the
      tool manifest; Playwright's browsers for `spikes-linux`, `pwa-ui` (per browser) and
-     `pwa-e2e`, keyed by Playwright's version. Only `main` saves a cache, so a pull request can't
-     fill the repository's 10 GB or seed what main restores; a pull request restores main's, and
+     `pwa-e2e`, keyed by Playwright's version. `pwa-ui` also caches the `.deb` files of the
+     system packages `--with-deps` installs, keyed by Ubuntu release, Playwright's version and
+     browser, since a slow apt mirror once held a WebKit shard in that install past its
+     20 minutes (main run 41927187905); apt still installs them every run and uses a cached
+     `.deb` only when it matches the signed index, so the cache spares the download and nothing
+     else. Only `main` saves a cache, so a pull request can't fill the repository's 10 GB or
+     seed what main restores; a pull request restores main's, and
      the nearest older NuGet key when its projects differ. `app` and `publish` restore nothing:
      the package main publishes is built from what the feeds serve.
    - CodeQL on a pull request analyses only the languages the change reaches (`codeql.yml`
