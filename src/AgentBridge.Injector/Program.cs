@@ -22,8 +22,8 @@ namespace AgentBridge.Injector;
 // inside the same attach, every one still reads so; otherwise "fail screen 0" and nothing of
 // it is written. It may also check what rows say, in the same read (KeyPlan's ScreenRowCheck):
 // "~<row>" shows none of the given parts (split at '·' and at runs of two or more spaces,
-// trimmed), "+<row>" contains one of the given texts, "^<row>" starts, leading spaces aside,
-// with none of them. With --screen nothing is typed at all: it says "row <base64>" for each row
+// trimmed), "+<row>" contains one of the given texts, "-<row>" contains none of them, "^<row>"
+// starts, leading spaces aside, with none of them. With --screen nothing is typed at all: it says "row <base64>" for each row
 // of the visible window, top to bottom, then "ok".
 //
 // The host treats a worker that ends any other way after a "writing" line as "some of the
@@ -88,7 +88,7 @@ internal static unsafe partial class Program
                 for (var k = 5; k < parts.Length; k += 2)
                 {
                     var value = Encoding.UTF8.GetString(Convert.FromBase64String(parts[k + 1]));
-                    if (parts[k].Length > 0 && parts[k][0] is '~' or '+' or '^') { checks.Add((parts[k][0], int.Parse(parts[k][1..], NumberStyles.None, CultureInfo.InvariantCulture), value.Split('\n'))); }
+                    if (parts[k].Length > 0 && parts[k][0] is '~' or '+' or '-' or '^') { checks.Add((parts[k][0], int.Parse(parts[k][1..], NumberStyles.None, CultureInfo.InvariantCulture), value.Split('\n'))); }
                     else { expect.Add((int.Parse(parts[k], NumberStyles.None, CultureInfo.InvariantCulture), value)); }
                 }
                 sends.Add(new KeySend(text, parts[2] == "1",
@@ -335,6 +335,7 @@ internal static unsafe partial class Program
     {
         '~' => !Parts(rows[row]).Any(values.Contains),
         '+' => values.Any(v => rows[row].Contains(v, StringComparison.Ordinal)),
+        '-' => !values.Any(v => rows[row].Contains(v, StringComparison.Ordinal)),
         _ => !values.Any(v => rows[row].TrimStart().StartsWith(v, StringComparison.Ordinal)),
     };
 

@@ -1216,6 +1216,34 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     }
 
     [Theory]
+    // Read idle, then a turn starts on its own and the person types '!' then a space: shell mode
+    // holding a space, drawn as an empty box, under the turn's row. Under 80 columns that row
+    // leaves out the mode label (`LMe`), so nothing in it says shell mode, and the worker
+    // refuses a turn's row there outright, as the reader does one running at the read; at 80 it
+    // would show the label, and a row without one is safe (Trust's #843 re-review).
+    [InlineData(70, false)]
+    [InlineData(80, true)]
+    public async Task A_turn_that_starts_after_the_read_in_a_narrow_window_gets_none_of_the_reply(int width, bool typed)
+    {
+        const string Idle = " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help";
+        injector.Screen = _ => Working(width, Idle);
+        injector.Holding = () => injector.Screen = _ => Working(width, " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue", " ");
+        injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text));
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        if (typed)
+        {
+            Assert.Equal("delivered", outcome);
+            return;
+        }
+        Assert.Equal("refused", outcome);
+        Assert.Contains("input box changed just as the reply was to be typed", reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Theory]
     // The words went, and before their Enter: Esc into vim's normal mode; Home then '!', shell
     // mode, its label in the footer; the frame-off box's glyph turning to '!'; or the footer
     // gone. No Enter, and the words are left in the box (#843 review).

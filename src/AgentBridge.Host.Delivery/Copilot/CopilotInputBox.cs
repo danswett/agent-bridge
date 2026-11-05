@@ -112,7 +112,7 @@ public static partial class CopilotInputBoxReader
         // and mode labels, and a box holding only spaces in shell mode draws as empty, so an
         // empty box there says nothing of its mode (Trust's #843 review). The width is the box's
         // own bottom edge, which spans the frame.
-        if (working && box.Rows[^1].Text.TrimEnd().Length < CompactWidth)
+        if (working && Narrow(box))
         {
             return (null, "Copilot's window at the machine is under 80 columns wide, where a running turn hides whether its input box is in shell or vim mode; reply once the turn ends, or reply at the machine", false, state);
         }
@@ -157,6 +157,16 @@ public static partial class CopilotInputBoxReader
         "Interactive", "interactive", "Shell", "shell", "Plan", "plan", "Autopilot", "autopilot",
         "esc interrupt", "esc stop agents", "esc edit prompt", "esc again to", " enqueue",
     ];
+
+    // A running turn's own hints (`LMe`), as TurnHints reads them. Under 80 columns that row
+    // leaves out the vim and mode labels, so a turn that starts after the box was read would
+    // hide them from the footer checks: in a narrow window both of a reply's sends refuse it
+    // (Trust's #843 re-review).
+    public static readonly IReadOnlyList<string> TurnSigns = ["esc interrupt", "esc stop agents", "esc edit prompt", "esc again to", " enqueue"];
+
+    // Whether the window is under 80 columns (`V5.compact`), measured by the box's own bottom
+    // edge, which spans the frame.
+    public static bool Narrow(CopilotInputBox box) => box.Rows[^1].Text.TrimEnd().Length < CompactWidth;
 
     // What the box's first text row starts with, leading spaces aside, when its text starts with
     // '!' (the frame-off box's shell glyph, or a '!' the CLI has not yet taken as shell mode).

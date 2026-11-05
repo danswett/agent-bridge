@@ -356,6 +356,10 @@ public sealed class ReplyService : ISessionReplier
             [
                 new(footer, ScreenCheck.WithAny, CopilotInputBoxReader.FooterSigns),
                 new(footer, ScreenCheck.WithoutParts, CopilotInputBoxReader.UnsafeFooter),
+                // Under 80 columns a turn's row has no mode labels to check, so a turn that starts
+                // after the read is refused too, as one running at the read is (Trust's #843
+                // re-review).
+                .. CopilotInputBoxReader.Narrow(box) ? [new ScreenRowCheck(footer, ScreenCheck.WithNone, CopilotInputBoxReader.TurnSigns)] : Array.Empty<ScreenRowCheck>(),
             ];
             keys = new KeyPlan(
             [

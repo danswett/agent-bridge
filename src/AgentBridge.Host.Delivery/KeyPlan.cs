@@ -34,6 +34,8 @@ public enum ScreenCheck
     WithoutParts,
     // The row contains at least one of Values.
     WithAny,
+    // The row contains none of Values.
+    WithNone,
     // The row, leading spaces aside, starts with none of Values.
     NotStartingWith,
 }
@@ -46,6 +48,7 @@ public sealed record ScreenRowCheck(int Row, ScreenCheck Kind, IReadOnlyList<str
     {
         ScreenCheck.WithoutParts => !ScreenParts.Of(rows[Row]).Any(Values.Contains),
         ScreenCheck.WithAny => Values.Any(v => rows[Row].Contains(v, StringComparison.Ordinal)),
+        ScreenCheck.WithNone => !Values.Any(v => rows[Row].Contains(v, StringComparison.Ordinal)),
         _ => !Values.Any(v => rows[Row].TrimStart().StartsWith(v, StringComparison.Ordinal)),
     };
 }
@@ -92,7 +95,7 @@ public sealed record KeyPlan(IReadOnlyList<KeySend> Sends)
             // then its values, one per line.
             foreach (var check in send.Checks ?? [])
             {
-                script.Append(' ').Append(check.Kind switch { ScreenCheck.WithoutParts => '~', ScreenCheck.WithAny => '+', _ => '^' })
+                script.Append(' ').Append(check.Kind switch { ScreenCheck.WithoutParts => '~', ScreenCheck.WithAny => '+', ScreenCheck.WithNone => '-', _ => '^' })
                     .Append(check.Row.ToString(CultureInfo.InvariantCulture))
                     .Append(' ').Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(string.Join('\n', check.Values))));
             }

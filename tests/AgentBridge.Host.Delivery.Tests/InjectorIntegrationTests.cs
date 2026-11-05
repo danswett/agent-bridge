@@ -312,7 +312,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         var echo = StartEcho(show: screen);
         var injector = new WorkerInjector(Worker);
 
-        var result = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend("x", false, 0, 0, null, [new ScreenRowCheck(5, ScreenCheck.WithoutParts, ["-- NORMAL --", "Shell"]), new ScreenRowCheck(5, ScreenCheck.WithAny, ["open sidebar"]), new ScreenRowCheck(3, ScreenCheck.NotStartingWith, ["\u2503 !"])])]));
+        var result = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend("x", false, 0, 0, null, [new ScreenRowCheck(5, ScreenCheck.WithoutParts, ["-- NORMAL --", "Shell"]), new ScreenRowCheck(5, ScreenCheck.WithAny, ["open sidebar"]), new ScreenRowCheck(5, ScreenCheck.WithNone, ["esc interrupt"]), new ScreenRowCheck(3, ScreenCheck.NotStartingWith, ["\u2503 !"])])]));
 
         if (types)
         {

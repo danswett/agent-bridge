@@ -91,8 +91,11 @@ must read exactly so, and the footer, which must still be there (one of its own 
 labels) and show neither shell mode ("Shell", "shell", "esc exit shell mode") nor vim's
 normal mode ("-- NORMAL --"). The box's rows alone cannot say so: '!' then a space enters
 shell mode with only a space in the box, which draws as an empty box, and Esc into vim's
-normal mode changes only the footer. Anything else in the footer (its spinner, its hints)
-may change. If a check fails, nothing is typed and the reply is `refused` ("input box
+normal mode changes only the footer. In a window under 80 columns (the box's bottom edge)
+the footer must also not have become a running turn's row (Esc's hint, the enqueue hint):
+there that row leaves out the mode labels, so a turn starting after the read would hide
+them, and it is refused as one running at the read is. Anything else in the footer (its
+spinner, its hints) may change. If a check fails, nothing is typed and the reply is `refused` ("input box
 changed just as the reply was to be typed"). The Enter is a send of its own, after
 Copilot's 300 ms pause, held to the box's bottom edge and to the same footer checks, and
 to the box's first text row not starting with '!' (the frame-off box's shell glyph): if
