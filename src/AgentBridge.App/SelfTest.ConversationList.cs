@@ -417,6 +417,140 @@ static partial class SelfTest
         return (null, method);
     }
 
+    // Tab only ever moves the view for the stop it lands on (ui.md §6.4; the creative director on
+    // #829, #881): focus on a stop scrolled out of view, more than the focus manager's 20 px padding
+    // above it, and Tab onto the Copy button of a block wholly in view near the top edge leaves the
+    // view where it is. The stop focus is leaving must not pull the view back (CI run 42012618845:
+    // block 17's Copy 295 px above the view, Tab onto block 28's, the view moved -315 px). A code block
+    // well down the response is put 3 px below the top; the last stop before it, in a block above
+    // the view, is focused with the view held, measured before and after, and Tab pressed as the
+    // keyboard presses it. Every BringIntoViewRequested that reaches the conversation meanwhile is
+    // logged (BringIntoViewLog). A code block whose preceding stop is too near is passed over for the
+    // next; none right fails with "setup: ...", never skips. Null, and how Tab was pressed, when right.
+    static async Task<(string? Problem, string Method)> TabbedFromOffScreen(MainWindow window, ListView list)
+    {
+        if (list.ItemsSource is not IList<ConversationBlock> blocks || SessionView.Shallowest<ScrollViewer>(list) is not { } scroll) { return ("setup: a list of blocks with a scroller", "none"); }
+        static void Log(string step) => AppLog.Write($"self-test: Tab from a stop out of view, {step}");
+        static double Top(UIElement e, UIElement view) => e.TransformToVisual(view).TransformPoint(default).Y;
+        var candidates = Enumerable.Range(20, Math.Max(0, blocks.Count - 20))
+            .Where(i => blocks[i].Block is MdCode && Enumerable.Range(0, i).Any(j => blocks[j].Focusable)).Take(4).ToList();
+        if (candidates.Count == 0) { return ("setup: a code block after block 20 with a stop before it", "none"); }
+        var method = "none";
+        var setup = "";
+        foreach (var code in candidates)
+        {
+            var from = Enumerable.Range(0, code).Last(j => blocks[j].Focusable);
+            list.ScrollIntoView(blocks[code], ScrollIntoViewAlignment.Leading);
+            await Still(scroll);
+            if (list.ContainerFromIndex(code) is not FrameworkElement placed) { setup += $"; block {code + 1} not realised at the leading edge"; continue; }
+            scroll.ChangeView(null, Math.Max(0, scroll.VerticalOffset + Top(placed, scroll) - 3), null, disableAnimation: true);
+            await Still(scroll);
+            if (list.ContainerFromIndex(code) is not FrameworkElement block || list.ContainerFromIndex(from) is not FrameworkElement before) { setup += $"; blocks {from + 1} and {code + 1} not both realised"; continue; }
+            if (FocusManager.FindFirstFocusableElement(block) is not Button copy) { setup += $"; no Copy button in block {code + 1}"; continue; }
+            if (FocusManager.FindLastFocusableElement(before) is not DependencyObject stop) { setup += $"; no stop in block {from + 1}"; continue; }
+            var (top, copyTop) = (Top(block, scroll), Top(copy, scroll));
+            var stopBottom = stop is FrameworkElement s ? Top(s, scroll) + s.ActualHeight : Top(before, scroll) + before.ActualHeight;
+            Log($"block {code + 1} ({block.ActualHeight:0.#} px tall) top {top:0.#} px, Copy's {copyTop:0.#} px, the last stop of block {from + 1} ({stop.GetType().Name}) ends {stopBottom:0.#} px from the view's top, in a {scroll.ViewportHeight:0.#} px view");
+            if (!ConversationKeyboard.WhollyInView(top, block.ActualHeight, scroll.ViewportHeight) || stopBottom > -30) { setup += $"; block {code + 1} wholly in view with the last stop of block {from + 1} 30 px or more above the view: top {top:0.#} px, that stop ends {stopBottom:0.#} px"; continue; }
+
+            var held = new TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>((_, e) => e.Handled = true);
+            var (offsetBefore, topBefore) = (scroll.VerticalOffset, top);
+            bool focused;
+            before.BringIntoViewRequested += held;
+            try
+            {
+                focused = (await FocusManager.TryFocusAsync(stop, FocusState.Keyboard)).Succeeded;
+                await Still(scroll);
+            }
+            finally { before.BringIntoViewRequested -= held; }
+            var (offset, topAfter) = (scroll.VerticalOffset, Top(block, scroll));
+            Log($"focus on the last stop of block {from + 1}: {(focused ? "taken" : "refused")}, the view at {offsetBefore:0.#} px then {offset:0.#} px, block {code + 1}'s top {topBefore:0.#} px then {topAfter:0.#} px");
+            if (!focused || !ReferenceEquals(FocusManager.GetFocusedElement(list.XamlRoot), stop)) { return ($"setup: focus on the last stop of block {from + 1}", method); }
+            if (Math.Abs(offset - offsetBefore) > 0.5 || Math.Abs(topAfter - topBefore) > 0.5) { return ($"setup: block {code + 1} left where it was on screen while block {from + 1} took focus: its top {topBefore:0.#} px, then {topAfter:0.#} px", method); }
+
+            // Tab, pressed as the keyboard presses it, every request to bring something into view logged.
+            var seen = false;
+            var heard = new KeyEventHandler((_, e) => seen |= e.Key == VirtualKey.Tab);
+            using var requests = new BringIntoViewLog(list, scroll, Log);
+            scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
+            try
+            {
+                method = Press(window.Handle, VirtualKey.Tab, foreground: true, extended: false);
+                if (!await Until(() => seen, TimeSpan.FromSeconds(2)) && method == "SendInput")
+                {
+                    method = Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false);
+                    await Until(() => seen, TimeSpan.FromSeconds(2));
+                }
+            }
+            finally { scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard); }
+            if (!seen) { return ($"Tab reaching the conversation ({method})", method); }
+            var landed = await Until(() => BlockOf(list, FocusManager.GetFocusedElement(list.XamlRoot)) == code, TimeSpan.FromSeconds(3));
+            await Still(scroll);
+            var on = FocusManager.GetFocusedElement(list.XamlRoot);
+            var shown = list.ContainerFromIndex(code) as FrameworkElement;
+            var now = shown is null ? double.NaN : Top(shown, scroll);
+            var moved = scroll.VerticalOffset - offset;
+            Log($"Tab pressed by {method}: focus on {on?.GetType().Name ?? "nothing"} in block {(BlockOf(list, on) is { } b ? b + 1 : 0)}, block {code + 1}'s top {now:0.#} px, the view moved {moved:0.#} px, {requests.Count} requests reached the conversation");
+            if (!landed || !ReferenceEquals(on, copy)) { return ($"Tab from block {from + 1} onto the Copy button of block {code + 1}: on {on?.GetType().Name ?? "nothing"} in {(BlockOf(list, on) is { } to ? $"block {to + 1}" : "no block")}", method); }
+            if (Math.Abs(moved) > 0.5 || Math.Abs(now - topAfter) > 0.5) { return ($"block {code + 1}, wholly in view near the top, left where it was by Tab from a stop out of view (block {from + 1}'s, {-stopBottom:0.#} px above the view): the view moved {moved:0.#} px, its top {topAfter:0.#} px then {now:0.#} px", method); }
+            return (null, method);
+        }
+        return ($"setup: a code block wholly in view near the top, the stop before it above the view{setup}", method);
+    }
+
+    // TEST-ONLY (#881), made only by the self-test and never in a normal run: every
+    // BringIntoViewRequested that reaches the conversation while it is open is logged, never handled.
+    // Heard on the list, on its items' panel (below the scroller, so before it takes the request) and
+    // on the scroller, with the element that asked, its block, where it is, the rectangle and
+    // alignment asked for and whether it was handled by then; and each change of the view.
+    sealed class BringIntoViewLog : IDisposable
+    {
+        readonly List<(UIElement Target, TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs> Handler)> heard = [];
+        readonly ScrollViewer scroll;
+        readonly ListView list;
+        readonly Action<string> log;
+        readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+        public int Count { get; private set; }
+
+        public BringIntoViewLog(ListView list, ScrollViewer scroll, Action<string> log)
+        {
+            (this.list, this.scroll, this.log) = (list, scroll, log);
+            Listen("list", list);
+            if (list.ItemsPanelRoot is { } panel) { Listen("panel", panel); }
+            Listen("scroller", scroll);
+            scroll.ViewChanged += OnViewChanged;
+        }
+
+        void Listen(string where, UIElement target)
+        {
+            var handler = new TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>((_, e) => Heard(where, e));
+            target.BringIntoViewRequested += handler;
+            heard.Add((target, handler));
+        }
+
+        void Heard(string where, BringIntoViewRequestedEventArgs e)
+        {
+            Count++;
+            var source = e.OriginalSource;
+            var element = source is TextElement t ? t.ContentStart?.VisualParent : source as UIElement;
+            var block = BlockOf(list, source) is { } at ? $"block {at + 1}" : "no block";
+            var id = source is DependencyObject d ? AutomationProperties.GetAutomationId(d) : "";
+            var where2 = element is null ? "" : $", {element.TransformToVisual(scroll).TransformPoint(default).Y:0.#} px from the view's top";
+            var r = e.TargetRect;
+            log($"BringIntoViewRequested #{Count} at {clock.ElapsedMilliseconds} ms, seen on the {where}: from {source?.GetType().Name ?? "nothing"} {id} in {block}{where2}, target {e.TargetElement?.GetType().Name ?? "none"}, rectangle x {r.X:0.#} y {r.Y:0.#} {r.Width:0.#}x{r.Height:0.#}, vertical ratio {e.VerticalAlignmentRatio:0.##}, horizontal {e.HorizontalAlignmentRatio:0.##}, offsets {e.HorizontalOffset:0.#},{e.VerticalOffset:0.#}, animated {e.AnimationDesired}, handled {e.Handled}, the view at {scroll.VerticalOffset:0.#} px");
+        }
+
+        void OnViewChanged(object? sender, ScrollViewerViewChangedEventArgs e) =>
+            log($"the view changed at {clock.ElapsedMilliseconds} ms to {scroll.VerticalOffset:0.#} px{(e.IsIntermediate ? " (intermediate)" : "")}");
+
+        public void Dispose()
+        {
+            foreach (var (target, handler) in heard) { target.BringIntoViewRequested -= handler; }
+            heard.Clear();
+            scroll.ViewChanged -= OnViewChanged;
+        }
+    }
+
     // A block taller than the view (DemoHost.HeavyTall, a quoted log with a link on its first line
     // and its last; ui.md §6.4, the creative director and B on #829): Tab onto its first link brings
     // its start to the leading edge; Shift+Tab onto its last brings that link wholly into view at the
