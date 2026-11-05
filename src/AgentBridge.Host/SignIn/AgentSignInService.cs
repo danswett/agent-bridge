@@ -26,6 +26,8 @@ internal sealed class AgentSignInService : IAsyncDisposable
         public string Id { get; } = Guid.NewGuid().ToString();
         public SignInContext Context { get; } = context;
         public DateTimeOffset At { get; } = at;
+        public long StartedAt { get; } = time.GetTimestamp();
+        public TimeSpan Lifetime { get; } = limit;
         public CancellationTokenSource Stop { get; } = new(limit, time);
         public Dictionary<IProtocolChannel, SignInGrant> Participants { get; } = [];
         public Dictionary<string, SignInGrant> Bindings { get; } = new(StringComparer.Ordinal);
@@ -83,7 +85,14 @@ internal sealed class AgentSignInService : IAsyncDisposable
     }
 
     bool Current(Flow flow, IProtocolChannel channel, SignInGrant grant) =>
-        !flow.Ending && flow.Done is null && !flow.Stop.IsCancellationRequested && Grant(channel) == grant && Compatible(flow.Context);
+        !flow.Ending && flow.Done is null && !flow.Stop.IsCancellationRequested && !LifetimeExpired(flow)
+        && Grant(channel) == grant && Compatible(flow.Context);
+
+    bool LifetimeExpired(Flow flow) => time.GetElapsedTime(flow.StartedAt) >= flow.Lifetime;
+
+    bool CanAttach(Flow flow, IProtocolChannel channel, SignInGrant grant) =>
+        Current(flow, channel, grant) && CanBind(flow, grant)
+        && (flow.Participants.Count < MaxParticipants || flow.Participants.ContainsKey(channel));
 
     bool Latest(SignInContext context) => context.Failures.Count is > 0 and <= 50
         && context.Failures.All(f => source.Get(f.Id)?.Attention is { Kind: AttentionKind.SignInNeeded } a
@@ -126,6 +135,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
                 flow.Resume = await recovery.ResumeAsync(context, () => CanPrepare(flow), flow.Stop.Token).WaitAsync(CheckLimit, time, flow.Stop.Token);
                 return true; // Pending, not recovered; no event or notification claims otherwise.
             }
+            catch (OperationCanceledException) { await EndAsync(flow, SignInOutcome.Cancelled); return false; }
             catch (Exception) { await EndAsync(flow, SignInOutcome.Failed); return false; }
             finally
             {
@@ -135,7 +145,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
     }
 
     bool CanPrepare(Flow flow) => Enabled && !disposed && !readOnly() && !flow.Ending
-        && !flow.Stop.IsCancellationRequested && Compatible(flow.Context);
+        && !flow.Stop.IsCancellationRequested && !LifetimeExpired(flow) && Compatible(flow.Context);
 
     public object Start(IProtocolChannel channel, JsonElement data)
     {
@@ -170,7 +180,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
             string outcome;
             if (requests.TryGetValue((grant, request), out var prior))
             {
-                if (prior.Target != target) { return Refused(); }
+                if (prior.Target != target || prior.Flow.Done is null && !CanAttach(prior.Flow, channel, grant)) { return Refused(); }
                 flow = prior.Flow;
                 outcome = flow.Done is null ? "busy" : "started";
             }
@@ -179,7 +189,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
                 if (requests.Count >= MaxRequests) { return new StartResult("refused", Reason: "too many recent sign-in requests"); }
                 if (active.TryGetValue(target.Store, out var existing))
                 {
-                    if (existing.Context.Target != target || existing.Ending || !Compatible(existing.Context) || !CanBind(existing, grant)) { return new StartResult("refused", Reason: "this credential store is busy"); }
+                    if (existing.Context.Target != target || !CanAttach(existing, channel, grant)) { return new StartResult("refused", Reason: "this credential store is busy"); }
                     flow = existing;
                     outcome = "busy";
                 }
@@ -214,8 +224,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
         {
             if (Grant(channel) != grant) { return; }
             done = flow.Done;
-            if (done is null && (!Current(flow, channel, grant) || !CanBind(flow, grant)
-                || flow.Participants.Count >= MaxParticipants && !flow.Participants.ContainsKey(channel))) { return; }
+            if (done is null && !CanAttach(flow, channel, grant)) { return; }
             if (done is null)
             {
                 flow.Bindings[grant.Device] = grant;
@@ -309,13 +318,17 @@ internal sealed class AgentSignInService : IAsyncDisposable
 
     async Task<bool> SendAsync(IProtocolChannel channel, SignInGrant grant, string name, object value, CancellationToken ct, Func<bool>? authorize = null)
     {
-        bool Allowed() => Grant(channel) == grant && (authorize?.Invoke() ?? true);
+        using var budget = new CancellationTokenSource(CheckLimit, time);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, budget.Token);
+        var token = linked.Token;
+        bool Allowed() => !token.IsCancellationRequested && Grant(channel) == grant && (authorize?.Invoke() ?? true);
         if (!Allowed()) { return false; }
         try
         {
             var sending = channel is SecureChannel secure
-                ? secure.SendPrivateEventAsync(name, value, Allowed, ct) : channel.SendEventAsync(name, value, ct);
-            await sending.WaitAsync(CheckLimit, time, ct);
+                ? secure.SendPrivateEventAsync(name, value, Allowed, token) : channel.SendEventAsync(name, value, token);
+            _ = sending.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+            await sending.WaitAsync(token);
             return Allowed();
         }
         catch (Exception) { return false; }
@@ -348,6 +361,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
         lock (gate)
         {
             if (flow.Ending || flow.Done is not null) { return; }
+            if (LifetimeExpired(flow)) { outcome = SignInOutcome.Expired; }
             flow.Ending = true;
             flow.Code = null;
             flow.Stop.Cancel();
@@ -395,10 +409,11 @@ internal sealed class AgentSignInService : IAsyncDisposable
             lock (gate) { flows = active.Values.ToArray(); Trim(); }
             foreach (var flow in flows)
             {
-                if (flow.Stop.IsCancellationRequested || flow.Code is { } code && code.ExpiresAt <= time.GetUtcNow())
+                if (LifetimeExpired(flow) || flow.Code is { } code && code.ExpiresAt <= time.GetUtcNow())
                 {
                     endings.Add(EndAsync(flow, SignInOutcome.Expired)); continue;
                 }
+                if (flow.Stop.IsCancellationRequested) { endings.Add(EndAsync(flow, SignInOutcome.Cancelled)); continue; }
                 if (!Enabled || disposed || readOnly()) { endings.Add(EndAsync(flow, SignInOutcome.Cancelled)); continue; }
                 bool revoked;
                 bool alone;

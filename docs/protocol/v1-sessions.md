@@ -1213,6 +1213,8 @@ fields fail closed. Recovery values come only from the host's typed lifecycle.
   the same person key/generation and replay its unexpired code; a reconnect alone cannot.
   Terminal receipts precede active-failure validation, so the original requester can
   retrieve `signin.done` after real model proof clears attention.
+  A nonterminal retry that can no longer attach (for example after a newer auth error)
+  is refused immediately, not acknowledged as busy with no later event.
 * `signin.code {flow, agent, userCode, verificationUri, expiresAt}` is sent only to
   explicit, still-authorized participants over their encrypted channels, never the
   session feed, hello, push, HA, transcript, log or a prompt. The code is uppercase ASCII
@@ -1230,6 +1232,9 @@ fields fail closed. Recovery values come only from the host's typed lifecycle.
   Terminal overlay updates are best-effort and bounded: a stalled source cannot hold
   cancellation or cleanup hostage. A timed-out process cleanup stays quarantined until
   disposal actually succeeds.
+  Send deadlines cancel the underlying encrypted send as well as its wait, including
+  terminal delivery and receipt replay. Lifetime expiry reports `expired` whether the
+  worker or sweep observes it first; explicit cancellation before expiry stays `cancelled`.
 * Current pinned **person**, session-read **and** write authority are all required.
   A self-claimed `app`/`pwa` kind is insufficient even when the transitional trust
   enforcement switch is off. Service/host roles, revoked/regranted generations,

@@ -413,6 +413,83 @@ public sealed class SignInTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Terminal_delivery_and_receipt_replay_cancel_the_underlying_send_on_deadline(bool replay)
+    {
+        await using var h = await Harness.CreateAsync();
+        var phone = h.Phone();
+        var request = Guid.NewGuid();
+        await h.Start(phone, request).Then(phone);
+        await h.Factory.Started.Task.WaitAsync(Patience);
+        h.Factory.Process.OutputPipe.Put(Frame(h.Time));
+        await phone.Code.Task.WaitAsync(Patience);
+        Task? replaying = null;
+        try
+        {
+            phone.BlockSends = !replay;
+            h.Factory.Process.Complete();
+            if (replay)
+            {
+                await phone.Done.Task.WaitAsync(Patience);
+                phone.BlockSends = true;
+                replaying = h.Start(phone, request).Then(phone);
+            }
+            await phone.SendBlocked.Task.WaitAsync(Patience);
+            h.Time.Advance(h.Service.CheckLimit + TimeSpan.FromSeconds(1));
+            await phone.SendFinished.Task.WaitAsync(Patience);
+            if (replaying is not null) { await replaying.WaitAsync(Patience); }
+            Assert.True(phone.HeldToken.IsCancellationRequested);
+            Assert.Equal(0, phone.PendingSends);
+        }
+        finally { phone.ReleaseSends.TrySetResult(); }
+    }
+
+    [Fact]
+    public async Task An_inflight_uuid_with_a_newer_auth_failure_is_refused_instead_of_silently_busy()
+    {
+        await using var h = await Harness.CreateAsync();
+        var phone = h.Phone();
+        var request = Guid.NewGuid();
+        await h.Start(phone, request).Then(phone);
+        await h.Factory.Started.Task.WaitAsync(Patience);
+        h.Factory.Process.OutputPipe.Put(Frame(h.Time));
+        await phone.Code.Task.WaitAsync(Patience);
+        Fixture.Append(h.Events, AuthError(3));
+        await h.Source.RefreshAsync();
+        var replacement = h.Phone();
+        Assert.Equal("refused", Json(h.Service.Start(replacement, h.Request(request))).GetProperty("outcome").GetString());
+        Assert.Empty(replacement.Events);
+        Assert.Equal(1, h.Factory.Starts);
+        await h.Service.SweepAsync();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Lifetime_expiry_is_expired_when_the_worker_finishes_before_the_sweep(bool evidence)
+    {
+        await using var h = await Harness.CreateAsync(TimeSpan.FromSeconds(2), manualSweeps: true);
+        h.Factory.DelayStart = !evidence;
+        h.Recovery.ModelEvidence = evidence;
+        h.Recovery.HoldResume = evidence;
+        var phone = h.Phone();
+        await h.Start(phone).Then(phone);
+        if (evidence) { await h.Recovery.ResumeEntered.Task.WaitAsync(Patience); }
+        else { await h.Factory.Started.Task.WaitAsync(Patience); }
+        try
+        {
+            h.Time.Advance(TimeSpan.FromSeconds(3));
+            Assert.Equal("expired", (await phone.Done.Task.WaitAsync(Patience)).GetProperty("outcome").GetString());
+        }
+        finally
+        {
+            h.Factory.Delayed.TrySetResult(h.Factory.Process);
+            h.Recovery.ReleaseResume.TrySetResult(new([], []));
+        }
+    }
+
+    [Theory]
     [InlineData("cancel")]
     [InlineData("expire")]
     [InlineData("shutdown")]
@@ -559,7 +636,7 @@ public sealed class SignInTests
         public Recovery Recovery { get; } = new();
         public AgentSignInService Service = null!;
         public bool ReadOnly;
-        public static async Task<Harness> CreateAsync()
+        public static async Task<Harness> CreateAsync(TimeSpan? limit = null, bool manualSweeps = false)
         {
             var h = new Harness();
             h.Events = h.Fixture.CopilotSession(Id, 100);
@@ -570,7 +647,9 @@ public sealed class SignInTests
             Assert.Equal(AttentionKind.SignInNeeded, h.Source.Get(Id)!.Attention!.Kind);
             h.Resolver = new(h.Source);
             h.States = new(h.Source);
-            h.Service = new(h.States, h.Authority, h.Resolver, h.Recovery, new(h.Factory, h.Time), () => h.ReadOnly, h.Time) { Enabled = true };
+            TimeProvider clock = manualSweeps ? new ManualSweepClock(h.Time) : h.Time;
+            h.Service = new(h.States, h.Authority, h.Resolver, h.Recovery, new(h.Factory, h.Time), () => h.ReadOnly, clock)
+                { Enabled = true, Limit = limit ?? TimeSpan.FromMinutes(10) };
             return h;
         }
         public Phone Phone(string device = "phone") => new(device);
@@ -623,12 +702,16 @@ public sealed class SignInTests
         public bool ModelEvidence;
         public int Resumes;
         public SignInResume Result = new([], []);
+        public bool HoldResume;
+        public TaskCompletionSource ResumeEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<SignInResume> ReleaseResume { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task<bool> HasModelEvidenceAsync(SignInTarget target, CancellationToken ct) => Task.FromResult(ModelEvidence);
         public Task<SignInResume> ResumeAsync(SignInContext context, Func<bool> authorize, CancellationToken ct)
         {
             Assert.True(authorize());
             ++Resumes;
-            return Task.FromResult(Result);
+            ResumeEntered.TrySetResult();
+            return HoldResume ? ReleaseResume.Task.WaitAsync(ct) : Task.FromResult(Result);
         }
     }
     sealed class Phone(string id) : IProtocolChannel
@@ -642,15 +725,48 @@ public sealed class SignInTests
         public List<(string Name, JsonElement Value)> Events { get; } = [];
         public TaskCompletionSource<JsonElement> Code { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<JsonElement> Done { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool BlockSends;
+        public int PendingSends;
+        public CancellationToken HeldToken;
+        public TaskCompletionSource SendBlocked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SendFinished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseSends { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default)
         {
+            if (BlockSends) { return HoldAsync(ct); }
             var value = Json(data!);
             lock (Events) { Events.Add((name, value)); }
             if (name == AgentSignIn.Code) { Code.TrySetResult(value); }
             if (name == AgentSignIn.Done) { Done.TrySetResult(value); }
             return Task.FromResult(1L);
         }
+        async Task<long> HoldAsync(CancellationToken ct)
+        {
+            HeldToken = ct;
+            Interlocked.Increment(ref PendingSends);
+            SendBlocked.TrySetResult();
+            try
+            {
+                await ReleaseSends.Task.WaitAsync(ct);
+                return 1L;
+            }
+            finally { Interlocked.Decrement(ref PendingSends); SendFinished.TrySetResult(); }
+        }
         public void Close() => closed.TrySetResult();
+    }
+    sealed class ManualSweepClock(FakeTimeProvider inner) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+        public override long GetTimestamp() => inner.GetTimestamp();
+        public override long TimestampFrequency => inner.TimestampFrequency;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
+            period == Timeout.InfiniteTimeSpan ? inner.CreateTimer(callback, state, dueTime, period) : new DisabledTimer();
+        sealed class DisabledTimer : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+            public void Dispose() { }
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
     }
     sealed class Factory : IPrivateSignInProcessFactory
     {
