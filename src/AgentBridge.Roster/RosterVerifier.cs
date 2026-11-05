@@ -6,10 +6,10 @@ public enum Verdict
     Accepted,
     // Accepted and kept, not applied: outside the window, a fifth head, or on a quarantined branch.
     Quarantined,
-    // Admitted only as evidence for a removal (§3.3): kept, never applied.
-    Evidence,
     // Already held.
     Duplicate,
+    // Refused, with its code. One refused only for a cap or budget is kept aside, in case a later
+    // removal brings it as evidence (§3.3); it is never applied.
     Refused,
 }
 
