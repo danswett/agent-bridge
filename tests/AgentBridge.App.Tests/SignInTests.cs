@@ -373,7 +373,9 @@ public sealed class SignInTests
 
         TestUi.Read(() => { demo.Main.CancelSignIn(); return 0; });
         await Wait.UntilAsync(() => TestUi.Read(() => demo.Main.SignInSheet) is null, "the sheet to close");
-        await Task.Delay(500);
+        // A cancel would have been written as the sheet closed: once the machine has everything
+        // sent before this, none was.
+        await demo.Connection.HostHasAllAsync();
         Assert.Equal([AuthState.Start], demo.Host.SignInLog);
         Assert.DoesNotContain("WDJB", TestUi.Read(demo.Shown));
     }
@@ -655,7 +657,7 @@ public sealed class SignInTests
         await demo.Host.SignInWayAsync(null);
         await Wait.UntilAsync(() => demo.Main.SignInSheet is { Refused: true, CanRetry: false }, "Try again gone", why: () => $"sheet {demo.Main.SignInSheet?.Shape ?? "none"} {demo.Main.SignInSheet?.CanRetry}");
         TestUi.Read(() => { demo.Main.RetrySignIn(); return 0; });
-        await Task.Delay(300);
+        await demo.Connection.HostHasAllAsync();
         Assert.Equal([AuthState.Start], demo.Host.SignInLog);
     }
 

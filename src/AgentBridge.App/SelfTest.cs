@@ -137,8 +137,24 @@ static partial class SelfTest
                 bool InSession() => Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is DependencyObject f && Above<FrameworkElement>(f, e => e == window.Sessions.SessionPaneView) is not null;
                 var focused = await Until(() => main.Selected is { WantsFocus: false } && InSession(), TimeSpan.FromSeconds(5));
                 Check(focused, "takes keyboard focus into the session a Needs you entry opens");
+                // On the question's heading, never an answer (#484): a stray Enter or Space there
+                // would answer the question unread.
+                Check(OnHeading(), $"puts keyboard focus on the opened question's heading, not an answer ({FocusedName(window)})");
             }
             else { Check(false, "finds the form question's Needs you entry"); }
+            // The same for a permission prompt, whose first control is Approve once.
+            var approvalEntry = Entries().FirstOrDefault(g => main.NeedsYou.ElementAtOrDefault(Entries().IndexOf(g))?.Card.Id == "demo-approval");
+            if (approvalEntry is not null && ById<HyperlinkButton>(approvalEntry, "NeedsYouOpen") is { } openApproval)
+            {
+                main.Selected = null;
+                ((IInvokeProvider)new HyperlinkButtonAutomationPeer(openApproval).GetPattern(PatternInterface.Invoke)).Invoke();
+                var onHeading = await Until(() => main.Selected is { Id: "demo-approval", WantsFocus: false } && OnHeading(), TimeSpan.FromSeconds(5));
+                Check(onHeading, $"puts keyboard focus on a permission prompt's heading when Needs you opens it, not on Approve once ({FocusedName(window)})");
+            }
+            else { Check(false, "finds the permission prompt's Needs you entry"); }
+            bool OnHeading() => Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is FrameworkElement f
+                && f is not Microsoft.UI.Xaml.Controls.Primitives.ButtonBase && AutomationProperties.GetAutomationId(f) == "QuestionHeading"
+                && Above<FrameworkElement>(f, e => e == window.Sessions.SessionPaneView) is not null;
             // Alt+Down and Alt+Up on a row (§9, #164): the row moves, perhaps drawn by another
             // control, and its list item has focus again, so the next move is the same row's. A row
             // other than the open one, as from its menu: the session open stays open.
@@ -287,6 +303,7 @@ static partial class SelfTest
             else { Check(false, "finds the Launch button"); }
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".launched.png"));
             await CheckYourMessages(window, main, Check, outFile, launchedPrompt);
+            await CheckPrompts(window, main, demo, Check, outFile);
             Resize(window, 1000, 900);
 
             // Codex on the other machine starts only on a first message: nothing is sent without one.

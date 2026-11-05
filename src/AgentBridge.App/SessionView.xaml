@@ -351,6 +351,124 @@
                         Foreground="{x:Bind local:Ui.ToneBrush(Card.ReceiptTone), Mode=OneWay}"
                         Visibility="{x:Bind local:Ui.Show(Card.HasReceipt), Mode=OneWay}" />
 
+                    <!-- A prompt you didn't type (#489, §6.4): never a bubble, and never at the right, which is
+                         yours. At the column's start: a label line in agent colour (a clock for a schedule,
+                         the driven diamond for an agent), read before the prompt; two lines of it, and Show
+                         prompt, a compact disclosure (its Disclosure motion), opening on all of it inside a thin
+                         agent rule on the leading edge, not a filled card. -->
+                    <StackPanel
+                        x:Name="PromptLine"
+                        Spacing="4"
+                        AutomationProperties.AutomationId="Prompt"
+                        Visibility="{x:Bind local:Ui.Show(Card.HasPrompt), Mode=OneWay}">
+                        <local:FlowPanel Spacing="8" LineSpacing="0" AutomationProperties.AutomationId="PromptLabel">
+                            <Grid Width="16" Height="16" VerticalAlignment="Center">
+                                <ContentControl
+                                    Style="{StaticResource AbIconClock}"
+                                    Width="16"
+                                    Height="16"
+                                    Foreground="{ThemeResource AbAgent}"
+                                    AutomationProperties.AutomationId="PromptClock"
+                                    AutomationProperties.AccessibilityView="Raw"
+                                    Visibility="{x:Bind local:Ui.Show(Card.PromptIsSchedule), Mode=OneWay}" />
+                                <!-- The driven-badge glyph's diamond on its own: its 16 grid scaled about the
+                                     diamond and moved to the middle, as the PWA crops it. -->
+                                <ContentControl
+                                    Style="{StaticResource AbGlyphDrivenBadge}"
+                                    Width="16"
+                                    Height="16"
+                                    Foreground="{ThemeResource AbAgent}"
+                                    Background="Transparent"
+                                    AutomationProperties.AutomationId="PromptDiamond"
+                                    AutomationProperties.AccessibilityView="Raw"
+                                    Visibility="{x:Bind local:Ui.Show(Card.PromptIsDriven), Mode=OneWay}">
+                                    <ContentControl.RenderTransform>
+                                        <CompositeTransform CenterX="13.3" CenterY="13.3" ScaleX="1.7" ScaleY="1.7" TranslateX="-5.3" TranslateY="-5.3" />
+                                    </ContentControl.RenderTransform>
+                                </ContentControl>
+                            </Grid>
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                Style="{StaticResource AbTypeMeta}"
+                                Foreground="{ThemeResource AbAgentText}"
+                                TextWrapping="Wrap"
+                                AutomationProperties.AutomationId="PromptLabelText"
+                                Text="{x:Bind Card.PromptLabel, Mode=OneWay}" />
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                Style="{StaticResource AbTypeMeta}"
+                                Foreground="{ThemeResource AbText2}"
+                                TextWrapping="Wrap"
+                                AutomationProperties.AutomationId="PromptBy"
+                                Text="{x:Bind Card.PromptBy, Mode=OneWay}"
+                                Visibility="{x:Bind local:Ui.Show(Card.HasPromptBy), Mode=OneWay}" />
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                Style="{StaticResource AbTypeMeta}"
+                                Foreground="{ThemeResource AbText2}"
+                                AutomationProperties.AutomationId="PromptAge"
+                                Text="{x:Bind Card.PromptAgeText, Mode=OneWay}"
+                                Visibility="{x:Bind local:Ui.Show(Card.HasPromptAge), Mode=OneWay}" />
+                        </local:FlowPanel>
+                        <TextBlock
+                            Style="{StaticResource AbTypeRow}"
+                            Foreground="{ThemeResource AbText2}"
+                            TextWrapping="Wrap"
+                            MaxLines="2"
+                            TextTrimming="CharacterEllipsis"
+                            AutomationProperties.AutomationId="PromptPreview"
+                            Text="{x:Bind Card.PromptPreview, Mode=OneWay}"
+                            Visibility="{x:Bind local:Ui.Show(Card.HasPromptPreview), Mode=OneWay}" />
+                        <!-- Show prompt: a compact disclosure, as the PWA's and as wide as its words; its chevron
+                             leads them, pointing right shut and down open (Motion.Turn), and the words are at the
+                             label's size. Open, all of it settles in (Disclosure) inside the agent rule. -->
+                        <local:DisclosureButton
+                            x:Name="PromptToggle"
+                            HorizontalAlignment="Left"
+                            MinHeight="32"
+                            Margin="-4,0,0,0"
+                            Padding="4,4"
+                            BorderThickness="0"
+                            Background="{ThemeResource SubtleFillColorTransparentBrush}"
+                            Foreground="{ThemeResource AbText}"
+                            CornerRadius="{StaticResource AbRadiusControl}"
+                            AutomationProperties.AutomationId="ShowPrompt"
+                            AutomationProperties.Name="{x:Bind Card.PromptToggleName, Mode=OneWay}"
+                            IsExpanded="{x:Bind Card.PromptOpen, Mode=TwoWay}">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <ContentControl
+                                    x:Name="PromptChevron"
+                                    Style="{StaticResource AbIconChevron}"
+                                    Width="16"
+                                    Height="16"
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource AbText2}"
+                                    AutomationProperties.AutomationId="PromptChevron"
+                                    AutomationProperties.AccessibilityView="Raw" />
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    Style="{StaticResource AbTypeMeta}"
+                                    AutomationProperties.AutomationId="PromptToggleText"
+                                    Text="{x:Bind Card.PromptToggleText, Mode=OneWay}" />
+                            </StackPanel>
+                        </local:DisclosureButton>
+                        <Border
+                            x:Name="PromptRule"
+                            Margin="0,4,0,0"
+                            Padding="12,0,0,0"
+                            BorderBrush="{ThemeResource AbAgent}"
+                            BorderThickness="2,0,0,0"
+                            AutomationProperties.AutomationId="PromptRule"
+                            Visibility="{x:Bind local:Ui.Show(Card.PromptOpen), Mode=OneWay}">
+                            <TextBlock
+                                Style="{StaticResource AbTypeReading}"
+                                TextWrapping="Wrap"
+                                IsTextSelectionEnabled="True"
+                                AutomationProperties.AutomationId="PromptText"
+                                Text="{x:Bind Card.PromptText, Mode=OneWay}" />
+                        </Border>
+                    </StackPanel>
+
                     <!-- Your message: a bubble at the column's right, at most 85% of it, as in the PWA. -->
                     <Grid Visibility="{x:Bind local:Ui.Show(Card.HasUserMessage), Mode=OneWay}">
                         <Grid.ColumnDefinitions>

@@ -312,6 +312,7 @@ public sealed partial class MainViewModel : Observable
         MachineRemoved?.Invoke(key);
         // A launch's open stays: the machine may be back in a moment, with the session it started.
         pendingOpens.RemoveWhere(p => p.Machine == key);
+        focusOpens.RemoveWhere(p => p.Machine == key);
         unhook.Remove(m, out var undo);
         undo?.Invoke();
         machines.Remove(m);
@@ -369,22 +370,33 @@ public sealed partial class MainViewModel : Observable
     // after such a list (a folder-trust question answered at the machine).
     readonly HashSet<(string Machine, string Session)> pendingOpens = [];
     readonly HashSet<(string Machine, string Session)> launchOpens = [];
+    // Of those, the ones whose session takes keyboard focus once it opens (a toast's).
+    readonly HashSet<(string Machine, string Session)> focusOpens = [];
 
     public void Open(string? sessionId) => Open(null, sessionId);
 
-    public void Open(string? machineKey, string? sessionId, bool untilItArrives = false)
+    // focus: keyboard focus goes with it (SessionCardViewModel.WantsFocus), as Needs you's does: on
+    // its question's heading, never one of its answers (#484), so the next Tab is in the session.
+    public void Open(string? machineKey, string? sessionId, bool untilItArrives = false, bool focus = false)
     {
         if (sessionId is null) { return; }
         var wanted = (machineKey ?? Machine.LocalKey, sessionId);
-        if (!byId.TryGetValue(CardKey(wanted.Item1, sessionId), out var card)) { (untilItArrives ? launchOpens : pendingOpens).Add(wanted); return; }
+        if (!byId.TryGetValue(CardKey(wanted.Item1, sessionId), out var card))
+        {
+            (untilItArrives ? launchOpens : pendingOpens).Add(wanted);
+            if (focus) { focusOpens.Add(wanted); }
+            return;
+        }
         pendingOpens.Remove(wanted);
         launchOpens.Remove(wanted);
+        focus |= focusOpens.Remove(wanted);
         // A card the picker hides is shown: it is what was asked for.
         if (!Visible(card)) { SelectedMachine = Machines[0]; }
         // Unfolded too, as before the panes: the fold store still keeps it, and Needs you's tests
         // (#165) hold opening to it.
         card.Folded = false;
         Selected = card;
+        if (focus) { card.WantsFocus = true; }
         OpenRequested?.Invoke(card);
     }
 
@@ -561,6 +573,7 @@ public sealed partial class MainViewModel : Observable
         m.Cards.Folds.Keep(owner.Where(p => p.Value == m).Select(p => p.Key.Id));
         // The session a toast asked for has ended since.
         pendingOpens.RemoveWhere(p => p.Machine == m.Key && !byId.ContainsKey(CardKey(p.Machine, p.Session)));
+        focusOpens.RemoveWhere(p => p.Machine == m.Key && !byId.ContainsKey(CardKey(p.Machine, p.Session)) && !launchOpens.Contains(p));
         Order.Synced(m.Key, owner.Where(p => p.Value == m).Select(p => p.Key.Id).ToHashSet(StringComparer.Ordinal));
         Rearrange();
         RefreshLabels();

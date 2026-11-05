@@ -1358,10 +1358,15 @@ export class SessionCard {
 
   // The question brought into sight on purpose (a notification, a Needs you entry): its controls
   // wait as they do for one that arrives. behavior: the page's smooth scroll, or a jump. el: the
-  // part of it to bring into sight (a notification's focused answer), the whole question if not.
+  // part of it that must be in sight (a notification's focused heading). The whole question when
+  // it fits in the pane, so its answers come with it; el when it is taller: brought to the
+  // nearest edge, the whole question moved nowhere from midway through it, and a heading that
+  // had focus stayed out of sight (#893 review, Copilot 4481392664).
   revealQuestion(behavior = scrollBehavior(), el = null) {
     const view = this.#guarded?.isConnected ? this.#guarded : null;
-    if (view) { this.#scrollTo(el && view.contains(el) ? el : view, behavior); }
+    if (!view) { return; }
+    const fits = view.getBoundingClientRect().height <= this.els.scroll.getBoundingClientRect().height;
+    this.#scrollTo(el && view.contains(el) && !fits ? el : view, behavior);
   }
 
   // A scroll to the question: the guard runs from now and, for a smooth scroll that has somewhere

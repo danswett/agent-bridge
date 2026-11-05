@@ -293,8 +293,36 @@ does.
 
 - **Spacing:** a 4 px grid (4, 8, 12, 16, 20, 24, 32, 40, 48).
   - 24 between blocks in the conversation, and 8 between a speaker label and its text.
-  - Panes pad 20–24 on desktop and 16–20 on phones.
+  - Panes pad 24 on desktop (the keylines below) and 16–20 on phones.
   - A row's glyph aligns with the row's first line of text, not with its centre.
+- **Keylines (desktop, #771).** A base unit of 4 and a rhythm of 8. Every pane (the list,
+  the session, the inspector, and full-page surfaces such as Settings) shares one set:
+  - **K0, the pane inset: 24** from the pane's left and right edges (16–20 in the one column
+    below 760, as phones pad). Headings, body text,
+    tabs and the edges of cards sit on it.
+  - **K1, text after a glyph: K0 + 24.** The glyph sits on K0 and the text 24 after it,
+    whatever the glyph's size: a 16 px glyph leaves an 8 px gap, and the 20 px session mark
+    (brand.md) leaves 4. It applies to session rows, Tools rows, delegate events, the delegate
+    strip's items, nested delegates and Needs you items. A glyph inside a card sits on the
+    card's own inner inset, and its text 24 after that.
+  - **Cards** (Needs you, the delegate strip's items, the banner, Show reasoning, the reply
+    box) put their edge on K0 and their text 12–16 inside it. A card's edge never hangs
+    outside K0 to line its text up with K0.
+  - **Gutters between panes** are K0 | hairline | K0: nothing else separates two panes.
+  - **One header band** across the panes, 20 from the pane's top: a 32 px title row in which
+    Sessions, the session's title and the inspector's heading sit on one shared baseline.
+    Details keeps its section-header style but sits on that baseline. A two-line heading (a
+    chosen delegate's "Delegate" overline over its name, §6.3) puts the name on the baseline
+    and the overline in the band's top 20. Nothing else sits above the band.
+  - **Meta lists** (property rows such as Details, Tools rows and delegate events) have a row
+    pitch of 24. A wrapped row grows by whole lines; its next row still starts on the pitch.
+  - **Scrolling under a header:** a header that stays put (a pane's header band, the delegate
+    strip) shows a hairline at its foot only while content is scrolled beneath it, and none
+    at rest.
+  - **Overflow in a strip:** a row of items too wide for its pane (the delegate strip, like the
+    machine tabs) ends in an "N more" item that opens the rest. It never clips an item
+    mid-word.
+  - Every margin, padding and spacing value is a step of the scale above; no other values.
 - **Radii follow the platform:**
   - Windows: 4 on controls, 8 on cards.
   - macOS: 6 and 10.
@@ -318,6 +346,13 @@ Selection survives a resize across breakpoints. #166 has the acceptance criteria
 - **Which session:** the one chosen, or with none chosen yet on a desktop, the first row.
   A phone shows the list until one is chosen.
 - **The inspector's toggle** is remembered on the device.
+- **Keylines at each width** (§5.1): each pane keeps K0 inside its own edges, whether there
+  are three panes, two or one. K0 is 24 from 760 up, and in the one column below 760 it is
+  §5.1's phone padding, 16–20 (`design/tokens.json`), so a phone has one inset, not two.
+  When the session pane is wider than the conversation's
+  centred reading column, the session's header, its tabs and the delegate strip follow that
+  column's edges, as the conversation's cards and the reply box (§6.5) already do, so the whole
+  pane shares one left edge. K0 is then the column's edge rather than the pane's.
 - **Scrolling:** from 760 the window itself never scrolls. The app bar, the rail and the
   reply box stay put; a page scrolls on its own, and on Sessions the list, the conversation
   and the inspector each do (#288). A phone's list scrolls the page; a pushed session's
@@ -424,7 +459,7 @@ easing in, its duration out, and how far it travels.
 | Push and pop | Narrow widths (§5.2): list → session → delegate | Opening a row or a delegate; Back, Esc or the system back gesture | The incoming screen's surface covers the old screen at once, and its content slides 24 in from the trailing side and fades in. Pop is the mirror: the screen beneath returns at once, and its content slides 24 in from the leading side. An approval's command never slides: a session asking a question only fades in, and the list's Needs you lane is there at once. Only content fades, never a surface, so two screens never show through each other | `push`: emphasis, decelerate; medium | Windows: `Frame` navigation with `SlideNavigationTransitionInfo`, or a connected animation from the row's title to the session's, configured Direct (never Gravity's lift and shadow). PWA: the tokens on the incoming content. Apple: `NavigationStack`. Android: Material's shared axis X, with predictive back | Cross-fade |
 | Pane and inspector | Wide widths: the delegate inspector, Details | The header's inspector toggle; Details; choosing a delegate | The pane's content slides 12 in from the trailing edge and fades in. The columns take their new widths at once, so text reflows once and not on every frame | `pane`: standard, decelerate; fast out; small | Windows: the tokens on the pane's content. PWA: a transition on transform and opacity. macOS: `.inspector` | Cross-fade |
 | Tab switch | Conversation / Delegates / Tools; machine tabs; the phone's bottom bar | Choosing a tab | The indicator moves to the new tab, as Selection does. The new content fades in without sliding (Fluent's top-level fade) | `tab`: standard, decelerate | Windows: `SelectorBar`'s and `NavigationView`'s own indicators. Apple: `TabView`. Android: `NavigationBar` | Instant |
-| Disclosure | Show reasoning, Show prompt, Tool history, the finished delegates, the Ended group, the machine list | Opening or closing it | The chevron turns, and the content fades in and settles 4 down. Its space opens at once: nothing below it slides. Closing turns the chevron back and closes the space at once | `disclosure`: standard, decelerate; fast out; nudge | Windows: `Expander`'s own motion where it is one. PWA: the tokens on the chevron and the content | Instant |
+| Disclosure | Show reasoning, Show prompt, Tool history, the finished delegates, the Ended group, the machine list | Opening or closing it | The chevron turns, and the content fades in and settles 4 down. Its space opens at once: nothing below it slides. Closing turns the chevron back and closes the space at once | `disclosure`: standard, decelerate; fast out; nudge | Windows: `Expander`'s own motion where it is one; Show prompt's compact disclosure, the tokens on the chevron and the content (`Motion.Turn`, `Motion.Enter`). PWA: the tokens on the chevron and the content | Instant |
 | Arriving and leaving | A session row (also as Needs you shows or hides it), a delegate in the strip | A host adds or removes it; a question is asked or answered; Needs you is turned on or off | The item fades in where it lands. Leaving, its space closes at once and it fades out where it was. Neighbours never slide | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` replaced by this fade, because `AddDeleteThemeTransition` and `RepositionThemeTransition` slide the neighbours. PWA: the tokens on the row; a copy of a leaving row, which nothing can find or tap, fades where it was. Until #253 reaches the PWA, its Needs you entries and an approval's command appear at once and never fade or move: only an entry's mark fades in. Apple: `.transition(.opacity)`. Android: `animateItem` with no placement spec | Cross-fade |
 | Status glyph | A row, the session header, the delegate strip | The state changes, such as working → idle | The old glyph cross-fades into the new one, with its colour. The words change at once. The arc and the orbit turning are §2.1's, not this | `glyph`: fast, standard | The same on every platform: opacity on the two glyphs | Instant |
 | Activity dot | A row's trailing edge (§6.1) | The session updates while its row isn't open; the row is opened | The 6 px dot fades in, and later fades out. It never pulses, grows or repeats. The title's weight changes at once | `activityDot`: standard, decelerate; fast out | The same on every platform | Instant |
@@ -1503,7 +1538,9 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
     on every machine", or "Needs you, 1 on ULTRA, 3 on every machine" with a machine chosen.
   - A change in N is announced once, politely ("3 need you"), at most every 5 s, and not while
     the person types in the reply box.
-  - The question's heading (level 3) is where focus lands, and its accessible description is
+  - The question's heading (level 3) is where focus lands, from a waiting row, a toast or a
+    notification alike, never one of its answers: an approval's first is Approve once, which a
+    stray Enter or Space would press unread (#484). Its accessible description is
     the question's first line. Approve once and Deny are named for their session and machine
     ("Approve once: *title* on *machine*").
   - In high contrast, the toggle takes the system's button colours (ButtonFace and ButtonText,
