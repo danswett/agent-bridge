@@ -922,8 +922,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     same two messages is one line, "Delegate *Run full test suite* · ran 21m, reported back ·
     2h" ("failed" or "ended" as it ended), aged by its report. A start-only line reads "Started
     delegate *Tidy changelog* · 9m", and if that delegate reports back before the next message
-    the line becomes the merged form in place, easing (#659): its glyph cross-fades (Status
-    glyph, §5.3), its words change at once, and nothing below it slides.
+    the line becomes the merged form in place. Its glyph and words change as §5.3's "Status
+    glyph" and "Arriving and leaving" rows say. If the longer text wraps onto another line,
+    what is below it moves as §5.3 says for a change in height.
   - **Every delegate named (D3):** delegates started within 60 s of each other share a line,
     "Started *Tidy changelog* and *Update screenshots* · 9m". With three or more it reads
     "Started 3 delegates: *A*, *B* and 1 more", and "1 more" expands the line to name the rest.
