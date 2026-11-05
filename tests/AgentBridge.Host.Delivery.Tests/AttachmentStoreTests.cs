@@ -362,6 +362,7 @@ public sealed class AttachmentStoreTests : IDisposable
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool Hold;
         public readonly List<string> Forgotten = [];
+        public TaskCompletionSource<string> FirstForgotten { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task FetchAsync(BlobRef blob, long size, Stream output, Action<long> progress, CancellationToken cancellationToken)
         {
@@ -377,6 +378,7 @@ public sealed class AttachmentStoreTests : IDisposable
         public Task ForgetAsync(BlobRef blob)
         {
             lock (Forgotten) { Forgotten.Add(blob.Id); }
+            FirstForgotten.TrySetResult(blob.Id);
             return Task.CompletedTask;
         }
     }
@@ -443,19 +445,34 @@ public sealed class AttachmentStoreTests : IDisposable
         Assert.Equal(new AttachmentState(photo.Length, true), s.Start(Phone, start));
     }
 
-    [Fact]
-    public async Task A_fetched_file_that_does_not_match_its_sha256_is_refused_and_deleted_everywhere()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_fetched_file_that_does_not_match_its_sha256_is_refused_and_deleted_everywhere(bool failureAlreadyReported)
     {
-        var blobs = new FakeBlobs();
+        var blobs = new FakeBlobs { Hold = true };
         using var s = WithBlobs(blobs);
         var start = FromBlob(Png(500_000), blobs, contents: Png(500_000));
 
         s.Start(Phone, start);
-        var e = await WaitForFailureAsync(s, start);
+        // This rejected blob is forgotten only after its failure is recorded and its local file removed.
+        var forgotten = blobs.FirstForgotten.Task;
+        if (failureAlreadyReported)
+        {
+            blobs.Release.SetResult();
+            await forgotten.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        var finished = forgotten.WaitAsync(TimeSpan.FromSeconds(10));
+        if (!failureAlreadyReported)
+        {
+            Assert.False(forgotten.IsCompleted);
+            blobs.Release.SetResult();
+        }
+        Assert.Equal(start.Blob!.Id, await finished);
+        var e = Assert.Throws<InvalidOperationException>(() => s.Start(Phone, start));
 
         Assert.Equal("the attachment's bytes do not match its sha256, so it was dropped; send it again", e.Message);
         Assert.Empty(Directory.GetFiles(Incoming));
-        await UntilAsync(() => { lock (blobs.Forgotten) { return blobs.Forgotten.Count == 1; } }, "the blob to be deleted from the store");
         Assert.Equal([start.Blob!.Id], blobs.Forgotten);
         Assert.Contains("is not on the host", s.Claim(Phone, Refs(start)).Problem);
     }

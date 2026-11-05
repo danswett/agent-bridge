@@ -572,6 +572,11 @@ Free text, in `text` or `other`, is at most 4 KiB of UTF-8; the whole request is
 Free text of nothing but what shows as nothing (white space, control and format characters,
 default-ignorables such as U+3164, marks with no base; see `session.reply`) is empty, and
 `refused` as such.
+A field's `constraints` (below) are checked too: a value outside them is `refused`, with why.
+An empty or blank value for a `required` `text` field is `refused` as needing an answer: `""`,
+or text that is empty once its control characters (Cc) are made spaces, as a host types them,
+and JavaScript's `trim()` is applied (so `"   "`, `"\u0085"` and `"\u001b "` alike). Typing
+nothing records no answer, and blank text might be recorded trimmed to nothing.
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
 Result: `{ "outcome": "<outcome>", "reason": "<text>" }`, with `reason` present for
@@ -1175,6 +1180,96 @@ running (`working`); the main agent idle with background agents or commands stil
 and it was already `waiting` for a sub-agent's permission prompt before hosts said whose it
 was.
 
+### Disabled phone sign-in framework (#800 slice 2)
+
+`sessions.signin` is **not advertised**. Neither production sign-in entrypoint nor
+credential-status adapter is registered. Direct `signin.start` and `signin.cancel`
+requests return `refused`. The internal, fake-tested framework is gated off by default;
+enabling a fake backend in a test does not enable deployed hosts.
+
+The eventual agent-owned entrypoint is subject to captured-output/privacy admission.
+Engineering approved unpatched `copilot login --device-code` conditionally: **the machine
+opens a browser and copies the code**. No production runner is included here, no live
+sign-in was attempted, and there is no replacement OAuth client or installed-CLI patch.
+An approved adapter must suppress CLI debug logging with a supported option, preserve
+the CLI's persistence/organization-policy checks, and keep both output streams private.
+The prepared, unexecuted launch contract uses
+`copilot login --device-code --host https://github.com --log-level none`,
+with host-resolved absolute executable/home, private redirected streams, no shell,
+and inherited token variables removed by name without examining their values.
+The installed CLI declares `none` as a supported level and forwards it into login.
+This launch specification is not a process factory; the output adapter still needs
+the routed, redacted capture. Upstream follow-up:
+[github/copilot-cli#5358](https://github.com/github/copilot-cli/issues/5358).
+
+The framework's request/event contract (not yet offered to clients) is:
+
+`account`, `signIn` and `recovery` are structured host metadata, never copied or inferred
+from CLI prose, messages or displayed account strings. An account with no structured
+identity remains absent. A requester can select a known identity but cannot supply one
+to publish. The private adapter accepts no account/sign-in/recovery fields; unexpected
+fields fail closed. Recovery values come only from the host's typed lifecycle.
+
+* `signin.start {request: UUID, agent: "copilot", account?: string}` returns
+  `{outcome: "started" | "busy" | "refused", flow?: UUID, reason?: string}`.
+  The host resolves the effective credential-store identity from its own state,
+  serializes that store, binds UUID receipts to target and authenticated device generation,
+  and starts only after returning the response. A matching explicit request can reattach
+  the same person key/generation and replay its unexpired code; a reconnect alone cannot.
+  Terminal receipts precede active-failure validation, so the original requester can
+  retrieve `signin.done` after real model proof clears attention.
+  A nonterminal retry that can no longer attach (for example after a newer auth error)
+  is refused immediately, not acknowledged as busy with no later event.
+* `signin.code {flow, agent, userCode, verificationUri, expiresAt}` is sent only to
+  explicit, still-authorized participants over their encrypted channels, never the
+  session feed, hello, push, HA, transcript, log or a prompt. The code is uppercase ASCII
+  `XXXX-XXXX` (letters/digits), and the URL must equal
+  `https://github.com/login/device` byte for byte. No browser link supplied by a peer
+  or near-match URL is accepted. A queued private event rechecks authorization at
+  encryption, before spending a nonce.
+* `signin.cancel {flow}` is accepted only from a participating person binding.
+  `signin.done {flow, outcome, resumed, continue}` has constant outcomes
+  `signedIn | expired | cancelled | failed | refused` and never carries private output.
+  Cancel, expiry, revocation/G5 and shutdown purge the retained code and abort the
+  contained helper. Slots/receipts, participants, output, waits and cleanup are bounded.
+  Launch authorization is checked after source-state waits and again by the factory
+  at the actual launch, including after any queue.
+  Terminal overlay updates are best-effort and bounded: a stalled source cannot hold
+  cancellation or cleanup hostage. A timed-out process cleanup stays quarantined until
+  disposal actually succeeds.
+  Send deadlines cancel the underlying encrypted send as well as its wait, including
+  terminal delivery and receipt replay. Lifetime expiry reports `expired` whether the
+  worker or sweep observes it first; explicit cancellation before expiry stays `cancelled`.
+* Current pinned **person**, session-read **and** write authority are all required.
+  A self-claimed `app`/`pwa` kind is insufficient even when the transitional trust
+  enforcement switch is off. Service/host roles, revoked/regranted generations,
+  read-only G5 machines and unapproved/default configurations get no capability.
+
+The private runner accepts **adapter frames, not guessed Copilot console fixtures**:
+one strict JSON line with exactly `kind: "code"`, `userCode`, `verificationUri`,
+`expiresAt`, then a `done` line with exactly `kind`, `outcome: "signedIn"`,
+`persisted: true`, `policyAllowed: true`, and successful process exit. Duplicate,
+unknown, malformed/invalid-UTF-8, trailing or oversized output fails closed. Native
+expiry metadata is required and capped by the host deadline. Stdout/stderr never enter
+the generic command runner or a logger; errors expose only constant outcomes. There
+is deliberately no concrete process factory until the entrypoint gate passes.
+
+`signin.done signedIn` sets **pending**, not recovered: `signInNeeded` remains until
+the existing parser sees real main-agent model output after the latest auth failure.
+Prompts, turn boundaries, CLI error notices and login/resume acknowledgements do not
+clear it. An old callback cannot overwrite a newer flow/failure. Host-owned silent
+recovery has the same checking → pending → model-proof contract and initiates no
+device flow or approval. Its injectable evidence source is unavailable by default
+and may accept **positive main-model evidence only**, for the same host-resolved
+credential scope. There is no status provider, credential-file inspection or auth
+probe. Even proof from another matching session only makes this session pending:
+its own real main-model reply is required to clear its attention.
+Dead-session resume/reload is an interface dependency on **#780 Host B**; the supplied
+stub starts/types nothing and claims no resumed session ids. No signed-in push is
+emitted by this framework.
+Advertising also waits for perf-A's follow-up to suppress ordinary "finished" pushes
+on auth failure (review 4476391166); that notification fix is not part of this slice.
+
 ### Attention
 
 **New (#800).** What is wrong with a session that its `status` cannot say, shown over the
@@ -1402,6 +1497,42 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `allowOther` | bool? | `choice` and `multi` also accept free text |
 | `default` | any? | |
 | `required` | bool? | |
+| `constraints` | FieldConstraints? | What the agent's schema allows of the value (#766). Absent when it says nothing a host checks |
+
+### FieldConstraints
+
+A Copilot `ask_user` field's JSON Schema constraints, for the input it draws: bounds for a
+`number`, length, pattern and format for `text`, how many may be ticked for a `multi`. Copilot
+CLI checks none of them on that form and records whatever is typed, so a host checks the answer
+against them (`Answers.Check`, and again on what it would type) and `refused`s one outside
+them before any key. A client may check them first; one that cannot read them sends the answer
+and lets the host refuse it. Not strict: a reader that cannot read them reads the field without.
+
+| Field | Type | Notes |
+|---|---|---|
+| `minimum`, `maximum` | number? | Inclusive bounds |
+| `exclusiveMinimum`, `exclusiveMaximum` | number? | Exclusive bounds |
+| `multipleOf` | number? | Greater than 0 |
+| `integer` | bool? | The value is a whole number (the schema's `"type": "integer"`) |
+| `minLength`, `maxLength` | int? | In UTF-16 code units, as JavaScript counts them |
+| `pattern` | string? | An ECMAScript pattern, as `new RegExp(pattern)` reads it: no flags, unanchored. At most 1,024 characters |
+| `format` | string? | `email`, `uri`, `date` or `date-time`, checked as Copilot CLI does (`^[^\s@]+@[^\s@]+\.[^\s@]+$`; `^https?://.+`; `YYYY-MM-DD`; `YYYY-MM-DDTHH:MM` with optional seconds, fraction and offset `Z`, `z`, `±HH:MM` or `±HHMM`), dates as real dates. Other formats are not carried |
+| `minItems`, `maxItems` | int? | How many options a `multi` takes |
+
+Numbers are compared exactly as written, never as doubles; a host carries only bounds a
+JavaScript client holds exactly. Text is checked unless it is empty (`""`, no answer); text of
+only white space is checked like any other. It is checked both as typed and as trimmed with
+JavaScript's `trim()`, and refused if either form breaks a length, `pattern` or `format` limit:
+Copilot CLI's form passes text on as typed, but a trim where it is recorded is not ruled out,
+and `"  ab"` is 4 characters typed and 2 trimmed. A host checks the text it would type, line
+breaks flattened. A field whose constraints a host cannot check exactly (a bound JavaScript would
+hold as another number, a length that is not a whole number, a pattern it cannot read as
+JavaScript does, or patterns past the 250 ms one question's patterns share), or whose pre-filled
+default breaks them (checked so too), makes its question `answerAtMachine`. So does a `required`
+`text` field whose pre-filled default is blank (non-empty, but blank as above): that default
+is the only answer it can be given from another device, and it is refused as blank. So does a
+`choice` whose schema, or a `multi` whose `items`, has text constraints. A client checking a
+`pattern` reads it as JavaScript does, without flags: `\d` and `\w` are ASCII.
 
 ### Option
 

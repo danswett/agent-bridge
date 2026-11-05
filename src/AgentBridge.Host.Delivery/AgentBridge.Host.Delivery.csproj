@@ -13,6 +13,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="agent-bridge-host" />
     <InternalsVisibleTo Include="AgentBridge.Host.Delivery.Tests" />
     <InternalsVisibleTo Include="AgentBridge.Host.Tests" />
   </ItemGroup>

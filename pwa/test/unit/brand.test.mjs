@@ -25,7 +25,10 @@ test('the page, the manifest and the service worker name the product as js/brand
 test('a new name in js/brand.js reaches every place the page, the manifest and the worker show the old one', () => {
   const renamed = brandFiles(appRoot, RENAMED);
   for (const [rel, text] of Object.entries(renamed)) {
-    assert.ok(!text.includes(BRAND.name), `${rel} still says ${BRAND.name}`);
+    // The precached font files are named for their families, Slipgates Sans and Mono (#557),
+    // which keep their names whatever the product is called.
+    const shown = text.replace(/'\.\/design\/fonts\/[^']+'/g, '');
+    assert.ok(!shown.includes(BRAND.name), `${rel} still says ${BRAND.name}`);
   }
   const manifest = JSON.parse(renamed['manifest.webmanifest']);
   assert.deepEqual([manifest.name, manifest.short_name], [RENAMED.name, RENAMED.shortName]);
@@ -53,3 +56,22 @@ test('no script names the product but js/brand.js, so none keeps the old name af
   assert.deepEqual(scripts.filter((f) => read(f).includes(BRAND.name)), []);
 });
 
+// What an installed app is known by: renaming it must change none of them, or it would lose its
+// device key (a new device to every machine, to be approved again), its sign-in, its settings,
+// its notifications, or its install (#541 renames identifiers, with a migration).
+test('the rename changes nothing an installed app is known by: its database, storage keys, caches, worker message and manifest identity', () => {
+  const pins = {
+    'js/identity.js': ["const DB = 'agent-bridge-app';"],
+    'js/signin.js': ["const ACCOUNT = 'agent-bridge.app.account';"],
+    'js/push.js': ["const SETTING = 'agent-bridge.app.notify';"],
+    'js/session-order.js': ["const KEY = 'agent-bridge.app.order';"],
+    'js/host-session.js': ["const LAST_HOST = 'agent-bridge.app.lastHost';"],
+    'sw.js': ["const PREFIX = 'agent-bridge-app-';", "type: 'agent-bridge.open'"],
+    'js/main.js': ["'agent-bridge.open'"],
+  };
+  for (const [file, lines] of Object.entries(pins)) {
+    for (const line of lines) { assert.ok(read(file).includes(line), `${file} keeps ${line}`); }
+  }
+  const { id, start_url: start, scope } = JSON.parse(read('manifest.webmanifest'));
+  assert.deepEqual([id, start, scope], ['./', './', './']);
+});

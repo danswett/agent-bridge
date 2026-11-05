@@ -142,7 +142,13 @@ public sealed partial class SessionCardViewModel : Observable
     // When the main agent last wrote what is shown: own.at for its own text beside a delegate's,
     // which moves the session's updatedAt without touching the main agent's answer; else the
     // session's age, as on its row.
-    public string ResponseAgeText => ResponseByDelegate && session.Activity.Own?.At is { } at ? Words.Age(at, ctx.Time.GetUtcNow()) : AgeText;
+    public string ResponseAgeText => Words.Age(ResponseByDelegate && session.Activity.Own?.At is { } at ? at : session.UpdatedAt, ctx.Time.GetUtcNow());
+    // Since when a Not responding session (rule 12) has been silent: when the host last heard from
+    // the agent (lastEventAt), else since it said so; null for any other row (#878, ui.md §6.13).
+    public DateTimeOffset? SilentSince => View == "stalled" && AuthState.Of(session) is { Kind: AuthState.NotResponding } a ? a.LastEventAt ?? a.Since : null;
+    // When the row's trailing age counts from: for Not responding, since it went silent, so the age
+    // says since when; otherwise the session's last update. The response's age stays the session's.
+    public DateTimeOffset RowAt => SilentSince ?? session.UpdatedAt;
     public string Reasoning => Voice.Reasoning ?? "";
     public bool HasReasoning => ctx.ShowDetail() && Reasoning.Length > 0;
     public string UserMessage => session.Activity.UserMessage ?? "";
@@ -368,7 +374,7 @@ public sealed partial class SessionCardViewModel : Observable
         // Idle needs no clock; delegating does, since it is waiting on something.
         SinceText = View == "idle" ? "" : $"for {Words.Duration(session.StatusSince, now)}";
         UpdatedText = $"updated {Words.Ago(session.UpdatedAt, now)}";
-        AgeText = Words.Age(session.UpdatedAt, now);
+        AgeText = Words.Age(RowAt, now);
         Raise(nameof(SinceText));
         Raise(nameof(UpdatedText));
         Raise(nameof(AgeText));

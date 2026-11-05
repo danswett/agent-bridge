@@ -6,8 +6,9 @@ namespace AgentBridge.App.Core;
 // What an entry in Needs you offers (ui.md §6.1, #165): Approve once and Deny for an approval
 // this app can answer and whose whole prompt the entry shows; "Answer at the machine" and nothing
 // to press for a prompt no host can answer from here; otherwise its session is opened, where the
-// card says what it asks and why.
-public enum NeedsYouMode { Approve, Open, AtMachine }
+// card says what it asks and why. SignIn (#800): an agent that needs a person to sign it in; the
+// session opens, and signing in is the machine's banner's (SignInBanners).
+public enum NeedsYouMode { Approve, Open, AtMachine, SignIn }
 
 // One pending question in the Needs you lane, the session's own or a delegate's (pwa/js/needs-you.js
 // holds the PWA to the same rules). It refers to its card and never moves it. Approve once and Deny
@@ -51,6 +52,22 @@ public sealed partial class NeedsYouEntry : Observable
         Mode = ModeOf(q, card.Agent, question, Whole);
     }
 
+    // A session whose agent needs sign-in (#800): no question, nothing to answer here.
+    internal static NeedsYouEntry ForSignIn(MainViewModel main, string key, string machineKey, SessionCardViewModel card) => new(main, key, machineKey, card, NeedsYouMode.SignIn);
+
+    NeedsYouEntry(MainViewModel main, string key, string machineKey, SessionCardViewModel card, NeedsYouMode mode)
+    {
+        this.main = main;
+        Key = key;
+        MachineKey = machineKey;
+        Card = card;
+        QuestionId = "";
+        Message = "";
+        AskedAt = SignInSince(card);
+        Line = "Needs sign-in";
+        Mode = mode;
+    }
+
     // The words it was built from, and whether they are an approval's whole prompt: parsed once,
     // and reused while an upsert leaves them alone (MainViewModel.SyncNeedsYou).
     internal string Message { get; }
@@ -61,7 +78,10 @@ public sealed partial class NeedsYouEntry : Observable
     public SessionCardViewModel Card { get; }
     internal QuestionViewModel? QuestionModel => question;
     public string QuestionId { get; }
-    public DateTimeOffset AskedAt { get; }
+    // A sign-in entry's follows its session's since, which a new failure moves (Refresh).
+    public DateTimeOffset AskedAt { get; private set; }
+
+    static DateTimeOffset SignInSince(SessionCardViewModel card) => AuthState.Of(card.Session)?.Since ?? card.Session.StatusSince;
     public NeedsYouMode Mode { get; }
     // Every entry waits on you: the Needs you glyph (ui.md §2.2 rule 1).
     public StatusGlyph Glyph => StatusGlyph.Needs;
@@ -127,6 +147,11 @@ public sealed partial class NeedsYouEntry : Observable
             Raise(nameof(ApproveName));
             Raise(nameof(DenyName));
             Raise(nameof(ResendName));
+        }
+        if (Mode == NeedsYouMode.SignIn && SignInSince(Card) is var since && since != AskedAt)
+        {
+            AskedAt = since;
+            Raise(nameof(AskedAt));
         }
         Delegate = DelegateOf(Card.Session);
         Meta = string.Join(" · ", new[] { machineName, Card.AgentName, Delegate is { } d ? $"{d} asks" : null, Words.Duration(AskedAt, now) }.Where(s => !string.IsNullOrEmpty(s)));

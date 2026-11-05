@@ -399,26 +399,68 @@ public sealed class CardTests : IAsyncLifetime
     [Fact]
     public async Task On_a_host_that_takes_large_files_over_its_pipe_a_file_over_256_KiB_goes_as_it_is_in_chunks()
     {
-        host.On(Ops.AttachmentStart, _ => new AttachmentState(0, false));
+        var evidence = new AttachmentDeliveryEvidence(300_000);
+        host.On(Ops.AttachmentStart, _ =>
+        {
+            evidence.AttachmentStarted();
+            return new AttachmentState(0, false);
+        });
         long received = 0;
-        host.On(Ops.AttachmentChunk, d => { received += Convert.FromBase64String(d.GetProperty("data").GetString()!).Length; return new AttachmentState(received, received == 300_000); });
-        host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Delivered));
-        var r = new ReplyViewModel(Make.Session(), attach: true, deliveries, connection, new Shrinker(), large: true);
+        host.On(Ops.AttachmentChunk, d =>
+        {
+            var bytes = Convert.FromBase64String(d.GetProperty("data").GetString()!).Length;
+            var total = Interlocked.Add(ref received, bytes);
+            evidence.ChunkReceived(bytes);
+            return new AttachmentState(total, total == 300_000);
+        });
+        host.On(Ops.SessionReply, _ =>
+        {
+            evidence.ReplyReceived();
+            return new ReplyResult(AnswerOutcome.Delivered);
+        });
+        var session = Make.Session();
+        DeliveryState? state = null;
+        void Observe(Delivery d)
+        {
+            if (d.Key != $"reply|{session.Id}") { return; }
+            state = d.State;
+            // A generated timeout's Done state is not a reply acknowledgement.
+            if (d.State == DeliveryState.Done && d.Result.ValueKind == JsonValueKind.Object)
+            {
+                evidence.ReplyAcknowledged(d.Outcome);
+            }
+        }
+        deliveries.Changed += Observe;
+        try
+        {
+            var r = new ReplyViewModel(session, attach: true, deliveries, connection, new Shrinker(), large: true);
+            bool Delivered()
+            {
+                evidence.ObserveUi(r.StatusText, r.StatusTone, r.Error, state);
+                return r.StatusText == "Delivered. The session has your reply.";
+            }
+            string Why()
+            {
+                evidence.ObserveUi(r.StatusText, r.StatusTone, r.Error, state);
+                return evidence.Describe();
+            }
 
-        await r.AddAsync("report.pdf", "application/pdf", new byte[300_000]);
-        var file = Assert.Single(r.Attachments);
-        Assert.Equal((300_000L, false), (file.Size, file.Resized));
-        r.Refuse("video.mp4", "video/mp4", 150L * 1024 * 1024);
-        Assert.Equal("Couldn't attach video.mp4: it is 150.0 MiB, over the 100.0 MiB limit for an attachment.", r.Error);
-        r.Send();
+            await r.AddAsync("report.pdf", "application/pdf", new byte[300_000]);
+            var file = Assert.Single(r.Attachments);
+            Assert.Equal((300_000L, false), (file.Size, file.Resized));
+            r.Refuse("video.mp4", "video/mp4", 150L * 1024 * 1024);
+            Assert.Equal("Couldn't attach video.mp4: it is 150.0 MiB, over the 100.0 MiB limit for an attachment.", r.Error);
+            r.Send();
 
-        await Wait.UntilAsync(() => r.StatusText == "Delivered. The session has your reply.", "delivered");
-        Assert.Equal(300_000, received);
-        Assert.Equal(300_000L, host.Sent(Ops.AttachmentStart)[0].GetProperty("size").GetInt64());
+            await Wait.UntilAsync(Delivered, "delivered", why: Why);
+            Assert.Equal(300_000, received);
+            Assert.Equal(300_000L, host.Sent(Ops.AttachmentStart)[0].GetProperty("size").GetInt64());
 
-        // A host that stops offering them takes 256 KiB again.
-        r.Update(Make.Session(), takesFiles: true);
-        Assert.Equal(AttachmentLimits.Bytes, r.MaxBytes);
+            // A host that stops offering them takes 256 KiB again.
+            r.Update(Make.Session(), takesFiles: true);
+            Assert.Equal(AttachmentLimits.Bytes, r.MaxBytes);
+        }
+        finally { deliveries.Changed -= Observe; }
     }
 
     // The relay's blob store as a test stands it in: what was put, for whom, and what was deleted.
@@ -619,6 +661,32 @@ public sealed class CardTests : IAsyncLifetime
         card.Update(Make.Session(question: Make.Approval() with { Message = "Allow **shell**?\n\nTidy up &#x202E;sdrawkcab\n\n```\nls\n```" }));
         Assert.False(card.Question!.Answerable);
         Assert.Contains("&#x202E;", card.Question.Message);
+    }
+
+    // #878, ui.md §6.13: a Not responding row's trailing age says since when the host last heard
+    // from the agent (lastEventAt, else since), not the session's last update, and Details gives the
+    // time; the answer's age stays the session's.
+    [Fact]
+    public void A_Not_responding_rows_age_counts_from_the_agents_last_event_else_since_and_Details_gives_the_time()
+    {
+        static Session Stalled(object attention) => AuthState.Attach(Make.Session(status: SessionStatus.Working, response: "Running.", updated: Make.T0), JsonSerializer.SerializeToElement(new { attention }));
+        var now = clock.GetUtcNow();
+        var card = new SessionCardViewModel(Stalled(new { kind = "notResponding", since = Make.T0.AddMinutes(-20).ToString("O"), lastEventAt = Make.T0.AddMinutes(-30).ToString("O") }), Context());
+        card.RefreshTimes();
+        Assert.Equal("Not responding", card.Line.FirstFact);
+        Assert.Equal((Words.Age(Make.T0.AddMinutes(-30), now), Words.Age(Make.T0, now)), (card.AgeText, card.ResponseAgeText));
+        Assert.Equal(AuthState.Clock(Make.T0.AddMinutes(-30)), card.Details.Single(d => d.Label == "Not responding since").Value);
+
+        card.Update(Stalled(new { kind = "notResponding", since = Make.T0.AddMinutes(-20).ToString("O") }));
+        card.RefreshTimes();
+        Assert.Equal(Words.Age(Make.T0.AddMinutes(-20), now), card.AgeText);
+        Assert.Equal(AuthState.Clock(Make.T0.AddMinutes(-20)), card.Details.Single(d => d.Label == "Not responding since").Value);
+
+        // Any other row counts from its update, and has no such fact.
+        card.Update(Make.Session(status: SessionStatus.Working, updated: Make.T0));
+        card.RefreshTimes();
+        Assert.Equal(Words.Age(Make.T0, now), card.AgeText);
+        Assert.DoesNotContain("Not responding since", card.Details.Select(d => d.Label));
     }
 
     [Fact]
