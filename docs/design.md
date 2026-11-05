@@ -186,6 +186,11 @@ A scheduled task at logon (Windows), a LaunchAgent (macOS) or a systemd user ser
 (Linux) starts it independently of the app. That replaces `agent-bridge-launch.vbs` +
 `agent-bridge-supervisor.ps1` (see §6.2 on the console requirement).
 
+Proposed extension, not implemented: [host liveness and offline reasons (#805)](design/host-liveness.md)
+defines safe launcher watchdog recovery, delivery fencing and the shared
+[#801 planned-state contract](protocol/host-liveness.md). Connection reviews the
+contract before code; relay state is observation, never management authority.
+
 ### 3.3 Platforms
 
 | | Windows | macOS | Linux |
