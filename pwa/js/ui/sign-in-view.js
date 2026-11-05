@@ -24,7 +24,7 @@ const keyOf = (hostId, agent, account) => `${hostId}\n${agent}\n${account ?? ''}
 
 // What the banners show, from every machine shown. Pure, so each case is tested on its own.
 // links: [{ hostId, name, rollUp: hello.machine.signIn, sessions: [session], canSignIn }]
-// flows: Map key -> this device's flow ({ state, attempt, flow, code, outcome, reason, atMachine })
+// flows: Map key -> this device's flow ({ state, attempt, flow, code, outcome, reason })
 // resolved: Map key -> { kind: 'signedIn' | 'recovered', count, at, agent, account, hostId, name }
 // A banner is needed while any of its sessions needs sign-in; confirming once every one is signed
 // in and waiting for the session to confirm (recovery pending); and resolved only once the host has
@@ -73,8 +73,6 @@ export function signInBanners(links, { flows = new Map(), resolved = new Map(), 
       const flow = flows.get(g.key) ?? null;
       const code = flow?.code && !flow.code.refused && flowExpired(flow.code, now) ? null : flow?.code ?? null;
       const expired = !!flow?.code && !flow.code.refused && !code;
-      // A machine-only result with no reason is still one: its presence says so, not its text.
-      const told = flow?.atMachine !== undefined && flow?.atMachine !== null;
       const waiting = !g.needed.length && g.confirming.length > 0 && !['starting', 'pending'].includes(flow?.state);
       const shown = g.needed.length ? g.needed : g.confirming;
       out.push({
@@ -88,12 +86,11 @@ export function signInBanners(links, { flows = new Map(), resolved = new Map(), 
         sessions: shown.map((s) => ({ id: s.id, title: s.title || 'Untitled session' })),
         // Only a provider the host says has no device flow is signed in at the machine. A value this
         // client doesn't know, or none, is not that (the no-RDP rule, #696).
-        atMachine: g.signIn === 'machine' || told,
-        atMachineReason: told ? flow.atMachine || null : null,
+        atMachine: g.signIn === 'machine',
         recovery: g.recovery,
         // Sign in only where the host says a person's device can (signIn phone): an unknown value or
         // none makes no claim, so no button either (6648000166).
-        canSignIn: !waiting && canSignIn && g.signIn === 'phone' && !told,
+        canSignIn: !waiting && canSignIn && g.signIn === 'phone',
         flow: flow ? { ...flow, code: expired ? null : code, expired: expired || flow.outcome === 'expired' } : null,
       });
     }
@@ -121,7 +118,7 @@ export function bannerWords(b) {
   }
   const f = b.flow;
   let line = `${plural(b.sessions.length, 'session', 'sessions')} affected`;
-  if (b.atMachine) { line = b.atMachineReason ? `Sign in at the machine \u00b7 ${b.atMachineReason}` : 'Sign in at the machine'; }
+  if (b.atMachine) { line = 'Sign in at the machine'; }
   else if (f?.outcome === 'failed') { line = f.reason ? `Sign-in failed \u00b7 ${f.reason}` : 'Sign-in failed'; }
   else if (f?.outcome === 'refused') { line = f.reason ? `Sign-in refused \u00b7 ${f.reason}` : 'Sign-in refused'; }
   else if (f?.expired) { line = 'Code expired'; }
@@ -286,10 +283,19 @@ export class SignInBanners {
     for (const b of all) {
       keep.add(b.key);
       let view = this.#views.get(b.key);
-      if (!view || view.state !== viewState(b)) { view?.el.remove(); view = this.#build(b); this.#views.set(b.key, view); }
+      // Drawn anew for its new state (needed to confirming): focus inside the old one moves to the
+      // new one's line, never left on a removed element (nowhere).
+      let refocus = false;
+      if (!view || view.state !== viewState(b)) {
+        refocus = !!view?.el.contains(this.container.ownerDocument?.activeElement);
+        view?.el.remove();
+        view = this.#build(b);
+        this.#views.set(b.key, view);
+      }
       this.#fill(view, b);
       const at = prev ? prev.nextSibling : this.container.firstChild;
       if (at !== view.el) { this.container.insertBefore(view.el, at); }
+      if (refocus) { const key = b.key; this.#focusOn(() => this.#lineOf(key)); }
       prev = view.el;
       this.#announce(b);
     }
@@ -300,22 +306,51 @@ export class SignInBanners {
     this.container.hidden = all.length === 0;
     this.#speak();
     this.#drawSheet(all.find((b) => b.key === this.#sheet?.key) ?? null);
-    // Back to the control that opened the sheet, or its banner when that has gone (§9.1 A4): after
-    // drawing, as the button is not there while its flow runs. With both gone (the machine away),
-    // the Sessions heading (§6.13), never nowhere.
+    // Back to the control that opened the sheet, or, when that has gone, its banner's status line
+    // ("Signed in · waiting for…" once a person signed in, as in the app), else the banner (§9.1 A4):
+    // after drawing, as the button is not there while its flow runs. With all gone (the machine
+    // away), the Sessions heading (§6.13), never nowhere.
     const back = this.#focusBack;
     this.#focusBack = null;
     if (back) {
-      const target = back.opener?.isConnected ? back.opener : this.#views.get(back.key)?.el;
-      target?.focus({ preventScroll: true });
-      if (!target || this.container.ownerDocument?.activeElement !== target) {
-        const heading = this.fallback();
-        if (heading) {
-          if (!heading.hasAttribute('tabindex')) { heading.setAttribute('tabindex', '-1'); }
-          heading.focus({ preventScroll: true });
-        }
-      }
+      this.#focusOn(() => (back.opener?.isConnected ? back.opener : this.#lineOf(back.key)), back.restored);
     }
+  }
+
+  // Focus on target, else the Sessions heading. WebKit can refuse focus to an element drawn in the
+  // same task the modal sheet closed in (the banner drawn anew for confirming), so a refused target is
+  // tried once more on the next frame, as the app tries again after the next layout (FocusOnce), if
+  // focus is still nowhere by then: the page, or the closed sheet (Chromium leaves it on Cancel a while).
+  // pick() is asked again for the retry: the banner may have been drawn anew in between (the host's
+  // pending after signin.done), so its line then is a new element. restored: where the closing
+  // dialog put focus back by itself (the opener), which is no person's move, so the retry goes on.
+  #focusOn(pick, restored = null) {
+    const doc = this.container.ownerDocument;
+    const take = (el) => {
+      if (!el?.isConnected) { return false; }
+      el.focus({ preventScroll: true });
+      return doc?.activeElement === el;
+    };
+    const heading = () => {
+      const h = this.fallback();
+      if (h && !h.hasAttribute('tabindex')) { h.setAttribute('tabindex', '-1'); }
+      take(h);
+    };
+    const target = pick();
+    if (take(target)) { return; }
+    if (!target?.isConnected) { heading(); return; }
+    const later = globalThis.requestAnimationFrame ?? ((f) => setTimeout(f, 16));
+    later(() => {
+      const at = doc?.activeElement;
+      if (at && at !== doc.body && at !== restored && at.isConnected && !at.closest?.('dialog:not([open])')) { return; }
+      if (!take(pick())) { heading(); }
+    });
+  }
+
+  // A banner's status line where it is shown, else the banner, by key: whichever is drawn now.
+  #lineOf(key) {
+    const view = this.#views.get(key);
+    return view && !view.els.line.hidden ? view.els.line : view?.el;
   }
 
   #resolve(b, kind, count) {
@@ -351,7 +386,8 @@ export class SignInBanners {
     const view = { key: b.key, state: viewState(b), entry: b, els: {} };
     const els = view.els;
     els.head = h('p', { class: 'sign-in-head' });
-    els.line = h('p', { class: 'sign-in-line' });
+    // Focusable from script only (never a Tab stop): where focus goes once the button has gone.
+    els.line = h('p', { class: 'sign-in-line', tabindex: '-1' });
     els.sessions = h('ul', { class: 'sign-in-sessions' });
     // Not a live region: it is in the list pane, which a phone hides, and drawn on every render. A
     // failed start is said politely through the sign-in live region instead (#start).
@@ -430,6 +466,10 @@ export class SignInBanners {
         this.#flows.delete(key);
         this.#signedHere.set(key, this.now());
         this.#closeSheet(key);
+        // Focus to the banner's line, never back to Sign in: the host's pending may come after this,
+        // and with it Sign in goes, which would leave focus nowhere. The closing dialog itself puts
+        // focus back on Sign in, so a retry finding it there still moves it on (r4485757956).
+        if (this.#focusBack?.key === key) { this.#focusBack.restored = this.#focusBack.opener; this.#focusBack.opener = null; }
       } else if (done.outcome === 'cancelled') {
         this.#flows.delete(key);
         this.#closeSheet(key);
@@ -725,6 +765,8 @@ export class SignInBanners {
   // With the account: nothing of its machines stays on the page.
   stop() {
     clearInterval(this.ticker);
+    this.#toSay = [];
+    this.live?.replaceChildren();
     for (const u of this.unwatch) { u?.(); }
     this.unwatch = [];
     this.#views.clear();

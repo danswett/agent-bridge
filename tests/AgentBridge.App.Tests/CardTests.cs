@@ -663,6 +663,32 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Contains("&#x202E;", card.Question.Message);
     }
 
+    // #878, ui.md §6.13: a Not responding row's trailing age says since when the host last heard
+    // from the agent (lastEventAt, else since), not the session's last update, and Details gives the
+    // time; the answer's age stays the session's.
+    [Fact]
+    public void A_Not_responding_rows_age_counts_from_the_agents_last_event_else_since_and_Details_gives_the_time()
+    {
+        static Session Stalled(object attention) => AuthState.Attach(Make.Session(status: SessionStatus.Working, response: "Running.", updated: Make.T0), JsonSerializer.SerializeToElement(new { attention }));
+        var now = clock.GetUtcNow();
+        var card = new SessionCardViewModel(Stalled(new { kind = "notResponding", since = Make.T0.AddMinutes(-20).ToString("O"), lastEventAt = Make.T0.AddMinutes(-30).ToString("O") }), Context());
+        card.RefreshTimes();
+        Assert.Equal("Not responding", card.Line.FirstFact);
+        Assert.Equal((Words.Age(Make.T0.AddMinutes(-30), now), Words.Age(Make.T0, now)), (card.AgeText, card.ResponseAgeText));
+        Assert.Equal(AuthState.Clock(Make.T0.AddMinutes(-30)), card.Details.Single(d => d.Label == "Not responding since").Value);
+
+        card.Update(Stalled(new { kind = "notResponding", since = Make.T0.AddMinutes(-20).ToString("O") }));
+        card.RefreshTimes();
+        Assert.Equal(Words.Age(Make.T0.AddMinutes(-20), now), card.AgeText);
+        Assert.Equal(AuthState.Clock(Make.T0.AddMinutes(-20)), card.Details.Single(d => d.Label == "Not responding since").Value);
+
+        // Any other row counts from its update, and has no such fact.
+        card.Update(Make.Session(status: SessionStatus.Working, updated: Make.T0));
+        card.RefreshTimes();
+        Assert.Equal(Words.Age(Make.T0, now), card.AgeText);
+        Assert.DoesNotContain("Not responding since", card.Details.Select(d => d.Label));
+    }
+
     [Fact]
     public void A_card_says_what_the_session_is_doing_in_the_words_and_glyph_of_the_status_rules()
     {

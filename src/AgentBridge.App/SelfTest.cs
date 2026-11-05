@@ -347,11 +347,13 @@ static partial class SelfTest
             // The theme passes draw the Sessions page with a delegate in its strip and inspector.
             await ShowADelegate(window, main, Check);
             await CheckPagesInEveryTheme(window, Check, outFile);
+            AppLog.Write("self-test: sign-in");
             await CheckSignIn(window, main, remote, Check, outFile);
+            await CaptureSignIn(window, main, remote, Check, outFile);
             // What was seen so far, written down first: a failure in high contrast that ends the
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
             await Write(outFile, result, checks, failures, "high contrast");
-            await CheckHighContrast(window, Check, outFile, result);
+            await CheckHighContrast(window, main, remote, Check, outFile, result);
             // Last, as it adds sessions every check above counts without (#765).
             await Write(outFile, result, checks, failures, "live resize");
             await MeasureResize(window, main, demo, Check, outFile, result);
@@ -944,7 +946,7 @@ static partial class SelfTest
     // setting is changed off the UI thread: SystemParametersInfo sends WM_SETTINGCHANGE to every
     // window, this app's included, and from the UI thread that message would re-enter XAML in the
     // middle of this method.
-    static async Task CheckHighContrast(MainWindow window, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
+    static async Task CheckHighContrast(MainWindow window, MainViewModel main, DemoHost remote, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
     {
         var contrast = await HighContrastPass.BeginAsync();
         result["highContrast"] = contrast.How;
@@ -969,6 +971,8 @@ static partial class SelfTest
             check(system.Count > 0 && own.Count == 0, $"uses a system colour for every role and surface in high contrast{(own.Count > 0 ? $": not {string.Join(", ", own)}" : "")}");
             var systemCaptions = await Until(() => window.AppWindow.TitleBar.ButtonForegroundColor is null, TimeSpan.FromSeconds(10));
             check(systemCaptions, $"leaves the caption buttons in the system's colours in high contrast ({window.AppWindow.TitleBar.ButtonForegroundColor?.ToString() ?? "system"})");
+            // The sign-in banner and sheet in high contrast (#800, Creative 6655285995).
+            await CaptureSignIn(window, main, remote, check, outFile, contrast: true);
             window.ShowPage("sessions");
         }
         finally
@@ -1162,11 +1166,26 @@ static partial class SelfTest
     static T? ById<T>(DependencyObject root, string id) where T : FrameworkElement =>
         Find<T>(root).FirstOrDefault(e => AutomationProperties.GetAutomationId(e) == id);
 
-    static async Task Picture(UIElement element, string file)
+    // On a backdrop, an element whose own fill is see-through (Dark's are) is drawn on what it sits
+    // on in the window, not on the viewer's white.
+    static async Task Picture(UIElement element, string file, Windows.UI.Color? backdrop = null)
     {
         try
         {
             var picture = await PicturePixels(element);
+            if (backdrop is { } under)
+            {
+                // Premultiplied: each colour gets the backdrop's share that the pixel lets through.
+                var p = picture.Pixels;
+                for (var i = 0; i < p.Length; i += 4)
+                {
+                    var through = 255 - p[i + 3];
+                    p[i] = (byte)(p[i] + under.B * through / 255);
+                    p[i + 1] = (byte)(p[i + 1] + under.G * through / 255);
+                    p[i + 2] = (byte)(p[i + 2] + under.R * through / 255);
+                    p[i + 3] = 255;
+                }
+            }
             using var stream = new InMemoryRandomAccessStream();
             var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
             var dpi = 96.0;
