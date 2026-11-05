@@ -998,8 +998,11 @@ public sealed class ReplyFlowTests : IAsyncLifetime
             // before its first key; nothing of it, or after it, typed if they read otherwise.
             for (var i = 0; i < plan.Sends.Count; i++)
             {
-                if (plan.Sends[i].Expect is { Count: > 0 } expect
-                    && (Screen(processId) is not { } rows || expect.Any(e => e.Row >= rows.Count || rows[e.Row].TrimEnd() != e.Text.TrimEnd())))
+                var send = plan.Sends[i];
+                if ((send.Expect is { Count: > 0 } || send.Checks is { Count: > 0 })
+                    && (Screen(processId) is not { } rows
+                        || (send.Expect ?? []).Any(e => e.Row >= rows.Count || rows[e.Row].TrimEnd() != e.Text.TrimEnd())
+                        || (send.Checks ?? []).Any(c => !c.Passes(rows))))
                 {
                     if (i > 0) { return new InjectionResult(InjectionStatus.Interrupted, AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChangedPartway); }
                     lock (Plans) { Plans.RemoveAt(Plans.FindLastIndex(p => ReferenceEquals(p.Plan, plan))); Refused.Add(plan); }
@@ -1091,7 +1094,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var (outcome, reason) = await ReplyAsync(ch, "go on");
 
         Assert.Equal("refused", outcome);
-        Assert.Equal("something is already typed in Copilot's input box at the machine (\"half a thought \\u202E\"); send or clear it there first", reason);
+        Assert.Equal("something is already typed in Copilot's input box at the machine (16 characters: \"half a thought \\u202E\"); send or clear it there first", reason);
         Assert.Empty(injector.Plans);
     }
 
@@ -1181,6 +1184,106 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Equal("refused", outcome);
         Assert.Contains("vim normal mode", reason);
         Assert.Empty(injector.Plans);
+    }
+
+    const string InsertFooter = " -- INSERT -- \u00B7 \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 tab next tab";
+
+    [Theory]
+    // Only the footer changes after the host read the box, the box's rows reading the same: Esc
+    // into vim's normal mode; '!' then a space, shell mode holding a space (drawn as an empty
+    // box); or the footer gone. The worker reads the footer again in the same attach, before
+    // the first key, and types nothing (#843 review).
+    [InlineData("vim")]
+    [InlineData("shell")]
+    [InlineData("gone")]
+    public async Task A_footer_that_changes_after_the_box_was_read_gets_none_of_the_reply(string change)
+    {
+        injector.Screen = _ => change == "vim" ? [.. CopilotIdle.Take(5), InsertFooter] : CopilotIdle;
+        injector.Holding = () => injector.Screen = _ => change switch
+        {
+            "vim" => [.. CopilotIdle.Take(5), InsertFooter.Replace("INSERT", "NORMAL")],
+            "shell" => [.. CopilotIdle.Take(3), "\u2503 ", CopilotIdle[4], " Shell \u00B7 Allow All"],
+            _ => [.. CopilotIdle.Take(5)],
+        };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("input box changed just as the reply was to be typed", reason);
+        Assert.Empty(injector.Plans);
+        Assert.Single(injector.Refused);
+    }
+
+    [Theory]
+    // The words went, and before their Enter: Esc into vim's normal mode; Home then '!', shell
+    // mode, its label in the footer; the frame-off box's glyph turning to '!'; or the footer
+    // gone. No Enter, and the words are left in the box (#843 review).
+    [InlineData("vim")]
+    [InlineData("shell")]
+    [InlineData("bang")]
+    [InlineData("gone")]
+    public async Task A_footer_or_box_that_changes_before_the_Enter_gets_no_Enter(string change)
+    {
+        IReadOnlyList<string> plain = ["\u25CF Done.", "", "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500", "\u276F", "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500", CopilotIdle[5]];
+        const string Typed = " Interactive \u00B7 Allow All \u00B7 @ files \u00B7 # issues";
+        injector.Screen = _ => change == "bang" ? plain : CopilotIdle;
+        injector.Sent = i =>
+        {
+            if (i != 0) { return; }
+            injector.Screen = _ => change switch
+            {
+                "vim" => [.. CopilotIdle.Take(3), "\u2503 go on", CopilotIdle[4], " -- NORMAL -- \u00B7" + Typed],
+                "shell" => [.. CopilotIdle.Take(3), "\u2503 go on", CopilotIdle[4], " Shell \u00B7 Allow All"],
+                "bang" => [.. plain.Take(3), "! go on", plain[4], Typed],
+                _ => [.. CopilotIdle.Take(3), "\u2503 go on", CopilotIdle[4]],
+            };
+        };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("unconfirmed", outcome);
+        Assert.StartsWith("the reply was typed into Copilot's input box, but the box changed before its Enter", reason);
+        Assert.False(Assert.Single(injector.Plans).Plan.Sends[0].Enter);
+    }
+
+    [Fact]
+    public async Task The_words_and_Enter_go_when_only_the_footers_other_parts_change()
+    {
+        // The words change the footer to its with-text hints, and the turn's spinner moves: no
+        // mode in it, so both go.
+        injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text));
+        injector.Sent = i => { if (i == 0) { injector.Screen = _ => [.. CopilotIdle.Take(3), "\u2503 go on", CopilotIdle[4], " Interactive \u00B7 Allow All \u00B7 @ files \u00B7 # issues"]; } };
+        var ch = await OpenAsync();
+
+        Assert.Equal("delivered", (await ReplyAsync(ch, "go on")).Outcome);
+    }
+
+    [Fact]
+    public async Task A_draft_shown_to_the_person_in_the_refusal_never_reaches_the_hosts_log()
+    {
+        const string Secret = "ghp_SENTINEL0123456789";
+        var logged = new List<string>();
+        Serve(Answerer(), new ReplyService(source, f.Processes, probe, new NoGuard(), injector, new ReplyOptions
+        {
+            CopilotHome = f.CopilotHome,
+            PlatformSupported = true,
+        }, m => { lock (logged) { logged.Add(m); } }, gate));
+        injector.Screen = _ => CopilotBox($"token {Secret}");
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        // The person's own client is shown it; the host's log says its length only.
+        Assert.Equal("refused", outcome);
+        Assert.Equal($"something is already typed in Copilot's input box at the machine (28 characters: \"token {Secret}\"); send or clear it there first", reason);
+        await Wait.UntilAsync(() => { lock (logged) { return logged.Any(m => m.StartsWith("reply ", StringComparison.Ordinal) && m.Contains("refused", StringComparison.Ordinal)); } }, "the outcome line", Patience);
+        lock (logged)
+        {
+            Assert.DoesNotContain(logged, m => m.Contains(Secret, StringComparison.Ordinal));
+            Assert.Contains(logged, m => m.Contains("(28 characters, not shown here)", StringComparison.Ordinal));
+        }
     }
 
     [Theory]

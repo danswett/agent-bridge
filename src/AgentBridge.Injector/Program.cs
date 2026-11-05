@@ -20,7 +20,10 @@ namespace AgentBridge.Injector;
 //
 // A send may name rows of the console's visible window and their text: it is typed only if,
 // inside the same attach, every one still reads so; otherwise "fail screen 0" and nothing of
-// it is written. With --screen nothing is typed at all: it says "row <base64>" for each row
+// it is written. It may also check what rows say, in the same read (KeyPlan's ScreenRowCheck):
+// "~<row>" shows none of the given parts (split at '·' and at runs of two or more spaces,
+// trimmed), "+<row>" contains one of the given texts, "^<row>" starts, leading spaces aside,
+// with none of them. With --screen nothing is typed at all: it says "row <base64>" for each row
 // of the visible window, top to bottom, then "ok".
 //
 // The host treats a worker that ends any other way after a "writing" line as "some of the
@@ -62,7 +65,7 @@ internal static unsafe partial class Program
         return 0;
     }
 
-    sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, List<(int Row, string Text)> Expect);
+    sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, List<(int Row, string Text)> Expect, List<(char Kind, int Row, string[] Values)> Checks);
 
     static List<KeySend>? Read(Stream input)
     {
@@ -81,13 +84,16 @@ internal static unsafe partial class Program
             {
                 var text = Encoding.UTF8.GetString(Convert.FromBase64String(parts[1]));
                 var expect = new List<(int, string)>();
+                var checks = new List<(char, int, string[])>();
                 for (var k = 5; k < parts.Length; k += 2)
                 {
-                    expect.Add((int.Parse(parts[k], NumberStyles.None, CultureInfo.InvariantCulture), Encoding.UTF8.GetString(Convert.FromBase64String(parts[k + 1]))));
+                    var value = Encoding.UTF8.GetString(Convert.FromBase64String(parts[k + 1]));
+                    if (parts[k].Length > 0 && parts[k][0] is '~' or '+' or '^') { checks.Add((parts[k][0], int.Parse(parts[k][1..], NumberStyles.None, CultureInfo.InvariantCulture), value.Split('\n'))); }
+                    else { expect.Add((int.Parse(parts[k], NumberStyles.None, CultureInfo.InvariantCulture), value)); }
                 }
                 sends.Add(new KeySend(text, parts[2] == "1",
                     int.Parse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture),
-                    int.Parse(parts[4], NumberStyles.None, CultureInfo.InvariantCulture), expect));
+                    int.Parse(parts[4], NumberStyles.None, CultureInfo.InvariantCulture), expect, checks));
             }
             catch (FormatException) { return null; }
             catch (OverflowException) { return null; }
@@ -113,13 +119,17 @@ internal static unsafe partial class Program
         }
         try
         {
-            if (send.Expect.Count > 0)
+            if (send.Expect.Count > 0 || send.Checks.Count > 0)
             {
                 var (rows, failure) = Window();
                 if (rows is null) { return failure; }
                 foreach (var (row, expected) in send.Expect)
                 {
                     if (row >= rows.Count || !string.Equals(rows[row], expected.TrimEnd(), StringComparison.Ordinal)) { return "fail screen 0"; }
+                }
+                foreach (var (kind, row, values) in send.Checks)
+                {
+                    if (!Passes(rows, kind, row, values)) { return "fail screen 0"; }
                 }
             }
             if (send.Text.Length > 0)
@@ -319,4 +329,17 @@ internal static unsafe partial class Program
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetConsoleCtrlHandler(delegate* unmanaged<uint, int> handler, [MarshalAs(UnmanagedType.Bool)] bool add);
+
+    // The same as AgentBridge.Host.Delivery's ScreenRowCheck.Passes, which writes the plan.
+    static bool Passes(List<string> rows, char kind, int row, string[] values) => row < rows.Count && kind switch
+    {
+        '~' => !Parts(rows[row]).Any(values.Contains),
+        '+' => values.Any(v => rows[row].Contains(v, StringComparison.Ordinal)),
+        _ => !values.Any(v => rows[row].TrimStart().StartsWith(v, StringComparison.Ordinal)),
+    };
+
+    // A row read as a footer is: its parts between '·' and runs of two or more spaces, trimmed.
+    // The same as AgentBridge.Host.Delivery's ScreenParts.Of.
+    static IEnumerable<string> Parts(string row) =>
+        row.Split('\u00B7').SelectMany(part => System.Text.RegularExpressions.Regex.Split(part, " {2,}")).Select(part => part.Trim()).Where(part => part.Length > 0);
 }

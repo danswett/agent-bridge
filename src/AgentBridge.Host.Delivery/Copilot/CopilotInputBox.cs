@@ -106,7 +106,7 @@ public static partial class CopilotInputBoxReader
         }
         if (!box.Empty)
         {
-            return (null, $"something is already typed in Copilot's input box at the machine (\"{Shown(box.Content)}\"); send or clear it there first", true, state);
+            return (null, AgentBridge.Protocol.ReplyReasons.Draft(box.Content, Shown(box.Content)), true, state);
         }
         // In a window under 80 columns (`LMe`: V5.compact) a running turn's row leaves out the vim
         // and mode labels, and a box holding only spaces in shell mode draws as empty, so an
@@ -140,8 +140,27 @@ public static partial class CopilotInputBoxReader
     // The footer's parts, between its '·' separators (`oDo`, `Ft`, `Zlt`, `Xlt`). The model or
     // agent shown at the row's right end (`LMe`) is set apart by spaces only, so a run of two or
     // more spaces divides parts too.
-    static List<string> Parts(string row) =>
-        [.. row.Split('\u00B7').SelectMany(part => System.Text.RegularExpressions.Regex.Split(part, " {2,}")).Select(part => part.Trim()).Where(part => part.Length > 0)];
+    static List<string> Parts(string row) => ScreenParts.Of(row);
+
+    // The footer parts that say a reply must not be typed into the box: vim's normal mode, and
+    // shell mode's label (idle, or in a running turn's row) and hint. Held in the worker, with
+    // the box's own rows, up to each key (ScreenRowWithout): the box's rows read the same in
+    // those modes, and only the footer tells them apart (#843 review).
+    public static readonly IReadOnlyList<string> UnsafeFooter = [VimNormal, "Shell", "shell", "esc exit shell mode"];
+
+    // Something only Copilot's footer under the box, idle or a running turn's row, says: one of
+    // these must still be there up to each key, or the footer has gone (a dialog, a resize)
+    // and nothing says the box's mode (#843 review).
+    public static readonly IReadOnlyList<string> FooterSigns =
+    [
+        "open sidebar", "/ commands", "? help", "@ files", "# issues", "esc exit shell mode", VimNormal, VimInsert,
+        "Interactive", "interactive", "Shell", "shell", "Plan", "plan", "Autopilot", "autopilot",
+        "esc interrupt", "esc stop agents", "esc edit prompt", "esc again to", " enqueue",
+    ];
+
+    // What the box's first text row starts with, leading spaces aside, when its text starts with
+    // '!' (the frame-off box's shell glyph, or a '!' the CLI has not yet taken as shell mode).
+    public static readonly IReadOnlyList<string> Bang = [ShellGlyph, $"{Rail} {ShellGlyph}", $"{Rail}{ShellGlyph}"];
 
     static bool Has(string row, string part) => Parts(row).Contains(part);
 

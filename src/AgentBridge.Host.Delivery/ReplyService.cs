@@ -201,7 +201,7 @@ public sealed class ReplyService : ISessionReplier
             return Task.FromResult(Refused("request must be a UUID"));
         }
         return requests.Once(key, watch, () => new DeliveryTimeline(options.Time, "reply", key, log), t => DeliverAsync(request, key, peer ?? "", t), result =>
-            log($"reply {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
+            log($"reply {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({ReplyReasons.Shared(result.Reason)})")}"));
     }
 
     async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline)
@@ -344,11 +344,23 @@ public sealed class ReplyService : ISessionReplier
             // in its place while the words were typed) gets no Enter, and the words stay in it.
             var (box, problem, _, _) = await InputBoxAsync(pid);
             if (box is null) { return Done(Refused(problem!)); }
+            // Both are held to the footer's mode too, in the same read: the box's rows read the same
+            // empty, in vim's normal mode, or in shell mode holding only a space ('!' then a space),
+            // and only the footer under them says which. The footer must still be there, and show
+            // neither mode; and before the Enter, the box's text must not start with '!' (#843
+            // review). What is left is the moment between the worker's read and the CLI taking
+            // the key, which no read can close.
             var line = keys.Sends.Single();
+            var footer = box.Rows[^1].Row + 1;
+            ScreenRowCheck[] mode =
+            [
+                new(footer, ScreenCheck.WithAny, CopilotInputBoxReader.FooterSigns),
+                new(footer, ScreenCheck.WithoutParts, CopilotInputBoxReader.UnsafeFooter),
+            ];
             keys = new KeyPlan(
             [
-                line with { Enter = false, EnterDelayMs = 0, PauseAfterMs = line.EnterDelayMs, Expect = box.Rows },
-                new KeySend("", true, 0, line.PauseAfterMs, [box.Rows[^1]]),
+                line with { Enter = false, EnterDelayMs = 0, PauseAfterMs = line.EnterDelayMs, Expect = box.Rows, Checks = mode },
+                new KeySend("", true, 0, line.PauseAfterMs, [box.Rows[^1]], [.. mode, new(box.Rows[1].Row, ScreenCheck.NotStartingWith, CopilotInputBoxReader.Bang)]),
             ]);
 
             timeline.InjectStart();

@@ -48,7 +48,7 @@ public class CopilotInputBoxTests
                 Assert.Null(box);
                 Assert.StartsWith("something is already typed in Copilot's input box at the machine", problem);
                 var shown = c["shown"]?.GetValue<string>() ?? c["content"]!.GetValue<string>();
-                Assert.Contains($"(\"{shown}\")", problem);
+                Assert.Contains($" characters: \"{shown}\")", problem);
                 break;
             case "shell":
                 Assert.Null(box);

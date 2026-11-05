@@ -50,8 +50,11 @@ shell mode). Shell mode shows as that glyph, as the empty box's placeholder "Exe
 command", or as the footer's "Shell" label or "esc exit shell mode" hint. The reply is
 `refused`, with nothing typed:
 
-* when the box holds anything: the reason shows what, escaped (`ShownText.Reveal`) and cut
-  to 500 characters;
+* when the box holds anything: the requesting client's reply result says how many
+  characters, and shows what, escaped (`ShownText.Reveal`) and cut to 500 characters. That
+  text goes nowhere else: the host's log and Home Assistant (which keeps it in its history)
+  get the fixed reason and the length only (`ReplyReasons.Shared`), since a draft can hold a
+  pasted password or token;
 * in shell mode;
 * in vim's normal mode (the footer's "-- NORMAL --"), where typed keys are commands;
 * when the screen cannot be read, or does not show exactly one box, rail and plain counted
@@ -82,15 +85,24 @@ cut off the same way cannot be told from output, so it is not described.
 
 The box is read when the reply arrives, so a draft or shell mode is refused at once, and
 read again once the typing turn has come, after the other checks. The words are held to
-that read's box rows (`KeySend.Expect`): the worker reads them again in the same attach,
-just before the first key, and if anything was typed or shell mode entered in between,
-nothing is typed and the reply is `refused` ("input box changed just as the reply was to be
-typed"). Only the box's rows are held, not the footer, which can change on its own (it does
-once the box holds text). The Enter is a send of its own, after Copilot's 300 ms pause, held
-to the box's bottom edge: if that row no longer reads so (a dialog drawn in the input area's
-place while the words were typed), no Enter goes, and the reply is `unconfirmed`, its words
-left in the box for the person to send or clear. A box that grows down the screen with the
-words (a short screen, a long reply) moves that edge too, and is reported the same way. The
+that read's box rows (`KeySend.Expect`), and to the footer under them (`KeySend.Checks`):
+in the same attach, just before the first key, the worker reads the box's rows again, which
+must read exactly so, and the footer, which must still be there (one of its own hints or
+labels) and show neither shell mode ("Shell", "shell", "esc exit shell mode") nor vim's
+normal mode ("-- NORMAL --"). The box's rows alone cannot say so: '!' then a space enters
+shell mode with only a space in the box, which draws as an empty box, and Esc into vim's
+normal mode changes only the footer. Anything else in the footer (its spinner, its hints)
+may change. If a check fails, nothing is typed and the reply is `refused` ("input box
+changed just as the reply was to be typed"). The Enter is a send of its own, after
+Copilot's 300 ms pause, held to the box's bottom edge and to the same footer checks, and
+to the box's first text row not starting with '!' (the frame-off box's shell glyph): if
+any fails (a dialog drawn in the input area's place, Home then '!' while the words were
+typed, Esc), no Enter goes, and the reply is `unconfirmed`, its words left in the box for
+the person to send or clear. A box that grows down the screen with the words (a short
+screen, a long reply) moves its edge too, and is reported the same way; one that grows up a
+full screen moves its first text row, which then leaves the '!' check to the footer's. What
+no check can close is the moment between the worker's read and the CLI taking the key: a
+mode changed at the machine in that moment is not seen. The
 screens the tests read are in `tests/fixtures/screens/copilot-input-box.json`, built from
 the captured live screen and the CLI's rendering code, each naming its source.
 

@@ -301,6 +301,31 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Delivered, (string?)null), (result.Outcome, result.Reason));
     }
 
+    // The real worker reading a footer's mode on a real console, the row's other parts free to
+    // change: in vim's normal mode nothing is typed; in insert mode the key goes (#843 review).
+    [WindowsTheory]
+    [InlineData("NORMAL", false)]
+    [InlineData("INSERT", true)]
+    public async Task The_worker_types_nothing_while_a_row_shows_a_forbidden_part_and_types_while_it_does_not(string mode, bool types)
+    {
+        string[] screen = [.. CopilotIdle.Take(5), $" -- {mode} -- \u00B7" + CopilotIdle[5]];
+        var echo = StartEcho(show: screen);
+        var injector = new WorkerInjector(Worker);
+
+        var result = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend("x", false, 0, 0, null, [new ScreenRowCheck(5, ScreenCheck.WithoutParts, ["-- NORMAL --", "Shell"]), new ScreenRowCheck(5, ScreenCheck.WithAny, ["open sidebar"]), new ScreenRowCheck(3, ScreenCheck.NotStartingWith, ["\u2503 !"])])]));
+
+        if (types)
+        {
+            Assert.Equal(InjectionStatus.Typed, result.Status);
+            Assert.NotEmpty(Keys(WaitFor(echo.Log, lines => Keys(lines).Count > 0 ? lines : null)));
+        }
+        else
+        {
+            Assert.Equal((InjectionStatus.NothingTyped, WorkerInjector.ScreenChanged), (result.Status, result.Detail));
+            Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
+        }
+    }
+
     // A person's draft in Copilot's input box on a real console, read by the real worker: the
     // reply is refused with the draft shown, and not one key reaches the console (#825).
     [WindowsFact]
@@ -320,7 +345,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
 
         var result = await replies.ReplyAsync(new AgentBridge.Protocol.ReplyRequest { Id = Id, Request = Guid.NewGuid().ToString(), Text = "go on" });
 
-        Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Refused, "something is already typed in Copilot's input box at the machine (\"half a thought\"); send or clear it there first"), (result.Outcome, result.Reason));
+        Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Refused, "something is already typed in Copilot's input box at the machine (14 characters: \"half a thought\"); send or clear it there first"), (result.Outcome, result.Reason));
         Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
     }
 
