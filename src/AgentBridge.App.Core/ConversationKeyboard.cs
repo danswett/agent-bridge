@@ -106,16 +106,17 @@ public static class ConversationKeyboard
     }
 
     // What a held Tab does when it runs (#829): nothing at all once another session's conversation is
-    // shown, or once focus has moved from where the Tab left it (a click, a session's own focus);
-    // otherwise as Held says, however the list was replaced since. Focus taken from a block the
-    // reply has since replaced (leftFrom, null for anywhere outside the list) went with the block,
-    // so that isn't a move. Block is where to bring focus; null with Dropped false, Tab goes on
-    // from where focus is.
+    // shown, or once focus has moved from where the Tab left it (a click, the reply box, a session's
+    // own focus); otherwise as Held says, however the list was replaced since. Focus taken from a
+    // block the reply has since replaced (leftFrom, null for anywhere outside the list) went with the
+    // block, so that alone isn't a move: but only while focus is parked where the list leaves it on
+    // taking the focused element away (focusParked: nowhere, or in the list, nothing pressed since
+    // the Tab). Block is where to bring focus; null with Dropped false, Tab goes on from where focus is.
     public readonly record struct HeldMove(bool Dropped, int? Block);
 
-    public static HeldMove Resume(string? heldIn, string? shownIn, object? focusedThen, ConversationBlock? leftFrom, object? focusedNow, IReadOnlyList<ConversationBlock> blocks, ConversationBlock target, int? from, bool forward, Func<int, bool> realised, bool wrapped = false) =>
+    public static HeldMove Resume(string? heldIn, string? shownIn, object? focusedThen, ConversationBlock? leftFrom, object? focusedNow, bool focusParked, IReadOnlyList<ConversationBlock> blocks, ConversationBlock target, int? from, bool forward, Func<int, bool> realised, bool wrapped = false) =>
         heldIn is null || heldIn != shownIn
-            || (focusedThen is not null && !ReferenceEquals(focusedThen, focusedNow) && (leftFrom is null || Where(blocks, leftFrom) >= 0))
+            || (focusedThen is not null && !ReferenceEquals(focusedThen, focusedNow) && (leftFrom is null || Where(blocks, leftFrom) >= 0 || !focusParked))
             ? new(true, null)
             : new(false, Held(blocks, target, from, forward, realised, wrapped));
 

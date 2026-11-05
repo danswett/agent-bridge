@@ -63,6 +63,8 @@ public sealed partial class SessionView : UserControl
         AddHandler(LosingFocusEvent, new Windows.Foundation.TypedEventHandler<UIElement, LosingFocusEventArgs>(OnLeavingBlock), true);
         AddHandler(GettingFocusEvent, new Windows.Foundation.TypedEventHandler<UIElement, GettingFocusEventArgs>(OnReachingBlock), true);
         AddHandler(PreviewKeyDownEvent, new KeyEventHandler(OnTabKey), true);
+        // A press anywhere in the session moves focus as the person means it: a held Tab then does nothing (Resume).
+        AddHandler(PointerPressedEvent, new PointerEventHandler((_, _) => presses++), true);
         ConversationList.AddHandler(PointerPressedEvent, new PointerEventHandler((_, e) =>
         {
             if (Touch(e)) { follow.TouchDown(e.Pointer.PointerId); }

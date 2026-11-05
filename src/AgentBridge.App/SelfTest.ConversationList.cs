@@ -319,6 +319,80 @@ static partial class SelfTest
         finally { panel.CacheLength = cache; }
     }
 
+    // Tab onto a block not wholly in view brings its start to the leading edge; onto one wholly in
+    // view, nothing moves (ui.md §6.4; B and the creative director on #829). For a Copy button, as
+    // TabbedLink is for a link: a code block well down the response is put first wholly in view
+    // near the bottom of the view, then across its bottom edge, laid out both times; the last stop
+    // of the block before it with one is focused with the view held, and Tab pressed as the
+    // keyboard presses it. Each step is logged; a view that can't be put so fails with "setup: ...",
+    // never skips. Null, and how Tab was pressed, when right.
+    static async Task<(string? Problem, string Method)> TabbedInView(MainWindow window, ListView list)
+    {
+        if (list.ItemsSource is not IList<ConversationBlock> blocks || SessionView.Shallowest<ScrollViewer>(list) is not { } scroll) { return ("setup: a list of blocks with a scroller", "none"); }
+        static void Log(string step) => AppLog.Write($"self-test: Copy Tab, {step}");
+        static double Top(UIElement e, UIElement view) => e.TransformToVisual(view).TransformPoint(default).Y;
+        var code = Enumerable.Range(0, blocks.Count).FirstOrDefault(i => i >= 20 && blocks[i].Block is MdCode && Enumerable.Range(0, i).Any(j => blocks[j].Focusable), -1);
+        if (code < 0) { return ("setup: a code block after block 20 with a stop before it", "none"); }
+        var from = Enumerable.Range(0, code).Last(j => blocks[j].Focusable);
+        var method = "none";
+        foreach (var wholly in new[] { true, false })
+        {
+            var where = wholly ? "wholly in view" : "across the view's bottom edge";
+            list.ScrollIntoView(blocks[code], ScrollIntoViewAlignment.Leading);
+            await Still(scroll);
+            if (list.ContainerFromIndex(code) is not FrameworkElement placed) { return ($"setup: block {code + 1} realised at the leading edge", method); }
+            var (height, view) = (placed.ActualHeight, scroll.ViewportHeight);
+            var at = scroll.VerticalOffset + Top(placed, scroll) - (wholly ? view - height - 8 : view - height / 2);
+            if (height + 16 > view || at < 0) { return ($"setup: block {code + 1} ({height:0.#} px) placed {where} in a {view:0.#} px view", method); }
+            scroll.ChangeView(null, at, null, disableAnimation: true);
+            await Still(scroll);
+            if (list.ContainerFromIndex(code) is not FrameworkElement block || list.ContainerFromIndex(from) is not FrameworkElement before) { return ($"setup: blocks {from + 1} and {code + 1} realised", method); }
+            var top = Top(block, scroll);
+            if (wholly != ConversationKeyboard.WhollyInView(top, block.ActualHeight, scroll.ViewportHeight)) { return ($"setup: block {code + 1} {where}: its top {top:0.#} px, {block.ActualHeight:0.#} px tall, in a {scroll.ViewportHeight:0.#} px view", method); }
+            if (FocusManager.FindLastFocusableElement(before) is not DependencyObject stop) { return ($"setup: a stop in block {from + 1}", method); }
+            // Focus taken without the view moving to it.
+            var held = new TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>((_, e) => e.Handled = true);
+            bool focused;
+            before.BringIntoViewRequested += held;
+            try
+            {
+                focused = (await FocusManager.TryFocusAsync(stop, FocusState.Keyboard)).Succeeded;
+                await Still(scroll);
+            }
+            finally { before.BringIntoViewRequested -= held; }
+            var offset = scroll.VerticalOffset;
+            Log($"block {code + 1} {where}, its top {Top(block, scroll):0.#} px, focus on the last stop of block {from + 1}: {(focused ? "taken" : "refused")}, the view at {offset:0.#} px");
+            if (!focused || !ReferenceEquals(FocusManager.GetFocusedElement(list.XamlRoot), stop) || Math.Abs(offset - at) > 0.5) { return ($"setup: focus on the last stop of block {from + 1} with the view still at {at:0.#} px", method); }
+
+            // Tab, pressed as the keyboard presses it.
+            var seen = false;
+            var heard = new KeyEventHandler((_, e) => seen |= e.Key == VirtualKey.Tab);
+            scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
+            try
+            {
+                method = Press(window.Handle, VirtualKey.Tab, foreground: true, extended: false);
+                if (!await Until(() => seen, TimeSpan.FromSeconds(2)) && method == "SendInput")
+                {
+                    method = Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false);
+                    await Until(() => seen, TimeSpan.FromSeconds(2));
+                }
+            }
+            finally { scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard); }
+            if (!seen) { return ($"Tab reaching the conversation ({method})", method); }
+            var landed = await Until(() => BlockOf(list, FocusManager.GetFocusedElement(list.XamlRoot)) == code, TimeSpan.FromSeconds(3));
+            await Still(scroll);
+            var on = FocusManager.GetFocusedElement(list.XamlRoot);
+            var shown = list.ContainerFromIndex(code) as FrameworkElement;
+            var first = shown is null ? null : FocusManager.FindFirstFocusableElement(shown);
+            var now = shown is null ? double.NaN : Top(shown, scroll);
+            Log($"Tab pressed by {method}: focus on {on?.GetType().Name ?? "nothing"} in block {(BlockOf(list, on) is { } b ? b + 1 : 0)}, block {code + 1}'s top {now:0.#} px, the view moved {scroll.VerticalOffset - offset:0.#} px");
+            if (!landed || first is not Button || !ReferenceEquals(on, first)) { return ($"Tab from block {from + 1} onto the Copy button of block {code + 1} {where}: on {on?.GetType().Name ?? "nothing"} in {(BlockOf(list, on) is { } to ? $"block {to + 1}" : "no block")}", method); }
+            if (wholly && Math.Abs(scroll.VerticalOffset - offset) > 0.5) { return ($"block {code + 1} wholly in view left where it was: the view moved {scroll.VerticalOffset - offset:0.#} px", method); }
+            if (!wholly && Math.Abs(now) > 1.5) { return ($"block {code + 1} across the view's bottom edge brought to the leading edge: its top {now:0.#} px from the view's", method); }
+        }
+        return (null, method);
+    }
+
     // A link is a text element in its block's text, not a control (#829): in the window itself, Tab
     // pressed on the last link of the last block the list has realised goes to the first link of the
     // next block, which it had not, and brings that block in at the leading edge, numbered in its

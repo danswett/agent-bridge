@@ -448,9 +448,9 @@ public sealed class ConversationKeyboardTests
         var shown = new ObservableCollection<ConversationBlock>(Blocks("[x](https://a.b)\n\nOther.\n\n[y](https://a.b)"));
 
         Assert.Equal(2, ConversationKeyboard.Held(shown, held, from: 0, forward: true, i => i < 1));
-        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume("a", "b", focus, before[1], focus, shown, held, from: 0, forward: true, i => i < 1));
-        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume("a", "b", focus, before[1], new object(), shown, held, from: 0, forward: true, i => true));
-        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume(null, "b", null, null, focus, shown, held, from: 0, forward: true, i => i < 1));
+        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume("a", "b", focus, before[1], focus, focusParked: true, shown, held, from: 0, forward: true, i => i < 1));
+        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume("a", "b", focus, before[1], new object(), focusParked: true, shown, held, from: 0, forward: true, i => true));
+        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume(null, "b", null, null, focus, focusParked: true, shown, held, from: 0, forward: true, i => i < 1));
     }
 
     [Fact]
@@ -459,10 +459,10 @@ public sealed class ConversationKeyboardTests
         var shown = Blocks("Plain.\n\n[b](https://a.b)\n\nMore.\n\n[d](https://a.b)");
 
         // From a link still shown, and from outside the list (the reply box, say).
-        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume("a", "a", new object(), shown[1], new object(), shown, shown[3], from: 1, forward: true, i => i < 2));
-        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume("a", "a", new object(), null, new object(), shown, shown[3], from: -1, forward: true, i => i < 2));
+        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume("a", "a", new object(), shown[1], new object(), focusParked: true, shown, shown[3], from: 1, forward: true, i => i < 2));
+        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume("a", "a", new object(), null, new object(), focusParked: true, shown, shown[3], from: -1, forward: true, i => i < 2));
         // With nothing focused when the Tab was held, there is nowhere it could have moved from.
-        Assert.Equal(new ConversationKeyboard.HeldMove(false, 3), ConversationKeyboard.Resume("a", "a", null, null, new object(), shown, shown[3], from: 1, forward: true, i => i < 2));
+        Assert.Equal(new ConversationKeyboard.HeldMove(false, 3), ConversationKeyboard.Resume("a", "a", null, null, new object(), focusParked: false, shown, shown[3], from: 1, forward: true, i => i < 2));
     }
 
     [Fact]
@@ -474,8 +474,8 @@ public sealed class ConversationKeyboardTests
         // link the Tab left from gone with its block, so focus is somewhere else.
         var shown = new ConversationItems(Blocks("Plain.\n\n[b](https://a.b)\n\nStill [writ](https://a.b)ing"));
 
-        Assert.Equal(new ConversationKeyboard.HeldMove(false, 2), ConversationKeyboard.Resume("a", "a", new object(), before[1], new object(), shown, held, from: 1, forward: true, i => i < 2));
-        Assert.Equal(new ConversationKeyboard.HeldMove(false, null), ConversationKeyboard.Resume("a", "a", new object(), before[1], new object(), shown, held, from: 1, forward: true, i => true));
+        Assert.Equal(new ConversationKeyboard.HeldMove(false, 2), ConversationKeyboard.Resume("a", "a", new object(), before[1], new object(), focusParked: true, shown, held, from: 1, forward: true, i => i < 2));
+        Assert.Equal(new ConversationKeyboard.HeldMove(false, null), ConversationKeyboard.Resume("a", "a", new object(), before[1], new object(), focusParked: true, shown, held, from: 1, forward: true, i => true));
     }
 
     [Fact]
@@ -488,8 +488,31 @@ public sealed class ConversationKeyboardTests
 
         Assert.Same(held, shown[0]);
         Assert.NotSame(leftFrom, shown[2]);
-        Assert.Equal(new ConversationKeyboard.HeldMove(false, 0), ConversationKeyboard.Resume("a", "a", new object(), leftFrom, new object(), shown, held, from: null, forward: false, i => false));
+        Assert.Equal(new ConversationKeyboard.HeldMove(false, 0), ConversationKeyboard.Resume("a", "a", new object(), leftFrom, new object(), focusParked: true, shown, held, from: null, forward: false, i => false));
     }
+
+    [Fact]
+    public void A_queued_Shift_Tab_from_a_replaced_block_does_nothing_once_the_person_has_put_focus_outside_the_list_or_pressed()
+    {
+        var shown = new ObservableCollection<ConversationBlock>(Blocks("[a](https://a.b)\n\nPlain.\n\nStill [writ](https://a.b)"));
+        var (held, leftFrom) = (shown[0], shown[2]);
+        ConversationBlocks.Update(shown, MarkdownModel.Parse("[a](https://a.b)\n\nPlain.\n\nStill [writ](https://a.b)ing"));
+        var replyBox = new object();
+
+        Assert.Equal(new ConversationKeyboard.HeldMove(true, null), ConversationKeyboard.Resume("a", "a", new object(), leftFrom, replyBox, focusParked: false, shown, held, from: null, forward: false, i => false));
+    }
+
+    [Fact]
+    public void A_queued_Shift_Tab_from_a_replaced_block_still_lands_with_focus_parked_nowhere_or_in_the_list()
+    {
+        var shown = new ObservableCollection<ConversationBlock>(Blocks("[a](https://a.b)\n\nPlain.\n\nStill [writ](https://a.b)"));
+        var (held, leftFrom) = (shown[0], shown[2]);
+        ConversationBlocks.Update(shown, MarkdownModel.Parse("[a](https://a.b)\n\nPlain.\n\nStill [writ](https://a.b)ing"));
+
+        Assert.Equal(new ConversationKeyboard.HeldMove(false, 0), ConversationKeyboard.Resume("a", "a", new object(), leftFrom, null, focusParked: true, shown, held, from: null, forward: false, i => false));
+        Assert.Equal(new ConversationKeyboard.HeldMove(false, 0), ConversationKeyboard.Resume("a", "a", new object(), leftFrom, new object(), focusParked: true, shown, held, from: 2, forward: false, i => false));
+    }
+
     [Fact]
     public void Reading_keys_wait_for_the_way_back_up_when_what_has_focus_may_use_them_and_are_taken_on_the_way_down_otherwise()
     {

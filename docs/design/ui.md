@@ -724,8 +724,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     window, and one pressed in a text input or a control that uses it (a combo box, a slider, a
     list of its own) to that control, Ctrl+Home and Ctrl+End included. Tab and Shift+Tab stop at
     every link and Copy button in order, a block not
-    yet laid out included: it is brought into view at the leading edge and laid out, and focus goes
-    to its first stop (its last, going back); a block with none is passed. That holds when Tab or
+    fully in view included, laid out or not: it is brought into view with its start at the leading
+    edge (a block taller than the view too; at once, without animation, so under reduced motion
+    as well), and focus goes to its first stop (its last, going back), whether that is a link or a
+    Copy button; a block fully in view doesn't move; a block with none is passed. That holds when Tab or
     Shift+Tab wraps round the window too: when nothing after the response is a stop, Shift+Tab from
     the window's first control goes to the response's last block with a stop, laid out or not. No
     block's container is
@@ -733,7 +735,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - The self-test checks that a block stays in place through a live resize and the conversation is
     drawn alike before and after it (a renderer's noise aside), that Page Down and Down scroll the text with focus and
     selection left alone, that Tab reaches a block not yet laid out, from a Copy button or from a link
-    to the link in the next block, that no container is a stop or
+    to the link in the next block, brought in at the leading edge, that Tab onto a Copy button in a
+    block across the view's bottom edge brings the block's start to the leading edge and onto one in
+    a block wholly in view moves nothing, that no container is a stop or
     draws chrome, that the last block is found by its name, which no other block has, and that every
     block, found and realised as a screen reader does it (FindItemByProperty, then Realize), is a
     list item numbered 1 to N in a set of N, none -1 ([app-windows.md](../app-windows.md)).

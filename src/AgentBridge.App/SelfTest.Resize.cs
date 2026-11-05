@@ -74,6 +74,8 @@ static partial class SelfTest
         check(unkeyed is null, $"scrolls the conversation's text with Page Down and Down pressed on a link in it, focus left where it was and nothing selected ({pressedBy}){Not(unkeyed)}");
         var untabbed = list is null ? "measured: the response not drawn" : await Tabbed(list);
         check(untabbed is null, $"takes Tab from the last link or Copy button the conversation has drawn to the first in the next block with one, which it realises, inside the block and not onto it{Not(untabbed)}");
+        var (unplaced, placedPressedBy) = list is null ? ("measured: the response not drawn", "none") : await TabbedInView(window, list);
+        check(unplaced is null, $"takes Tab onto a Copy button in a block across the conversation's bottom edge with the block's start to the leading edge, and onto one in a block wholly in view without moving it ({placedPressedBy}){Not(unplaced)}");
         var (unlinked, linkPressedBy) = list is null ? ("measured: the response not drawn", "none") : await TabbedLink(window, list);
         check(unlinked is null, $"takes Tab, pressed on the last link of the last block the conversation has drawn, to the first link of the next block, which it realises at the leading edge, numbered in its set ({linkPressedBy}){Not(unlinked)}");
         var chrome = list is null ? "measured: the response not drawn" : Contained(list);
@@ -107,6 +109,8 @@ static partial class SelfTest
             ["keysPressedBy"] = pressedBy,
             ["containerProblem"] = chrome,
             ["tabProblem"] = untabbed,
+            ["tabInViewProblem"] = unplaced,
+            ["tabInViewPressedBy"] = placedPressedBy,
             ["linkTabProblem"] = unlinked,
             ["linkTabPressedBy"] = linkPressedBy,
             ["captures"] = new[] { Path.GetFileName(Path.ChangeExtension(outFile, ".resize.before.png")), Path.GetFileName(Path.ChangeExtension(outFile, ".resize.after.png")) },

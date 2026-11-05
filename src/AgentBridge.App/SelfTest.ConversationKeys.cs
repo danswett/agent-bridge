@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using AgentBridge.App.Core;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.System;
@@ -19,22 +20,26 @@ static partial class SelfTest
     // keyboard would send them; either way seen arriving at the conversation's scroller.
     static async Task<(string? Problem, string Method)> Keyed(MainWindow window, ListView list)
     {
-        if (SessionView.Shallowest<ScrollViewer>(list) is not { } scroll || list.ItemsPanelRoot is not ItemsStackPanel { FirstVisibleIndex: >= 0 } panel) { return ("a scroller with blocks in view", "none"); }
+        if (SessionView.Shallowest<ScrollViewer>(list) is not { } scroll || list.ItemsPanelRoot is not ItemsStackPanel { FirstVisibleIndex: >= 0 }) { return ("a scroller with blocks in view", "none"); }
         // Room above and below for a page each way, from a block in the middle of the response
-        // before its run of linked paragraphs (DemoHost.HeavyLinkedRun): the block it always was.
+        // before its run of linked paragraphs (DemoHost.HeavyLinkedRun): the block it always was,
+        // where the view is put back once done, so the checks after this one start where they did.
         var middle = (list.Items.Count - DemoHost.HeavyLinkedRun) / 2;
         list.ScrollIntoView(list.Items[middle], ScrollIntoViewAlignment.Leading);
         await Task.Delay(500);
-        if (scroll.ScrollableHeight - scroll.VerticalOffset < scroll.ViewportHeight + ConversationKeyboard.Line * 2) { return ($"a page below to scroll to: {scroll.ScrollableHeight - scroll.VerticalOffset:0} px of {scroll.ViewportHeight:0}", "none"); }
-        // A link or a Copy button in a block in view, focused as the keyboard puts it.
-        DependencyObject? stop = null;
-        for (var i = panel.FirstVisibleIndex; i <= panel.LastVisibleIndex && stop is null; i++)
-        {
-            if (list.ContainerFromIndex(i) is { } c) { stop = FocusManager.FindFirstFocusableElement(c); }
-        }
-        if (stop is null || !(await FocusManager.TryFocusAsync(stop, FocusState.Keyboard)).Succeeded) { return ("a link or a Copy button in view to focus", "none"); }
-        await Task.Delay(300);
         var start = scroll.VerticalOffset;
+        // A link, not a Copy button: a paragraph in the middle of the run of linked paragraphs at
+        // the top of the view, with more than a page of the run above and below it.
+        var linked = list.Items.Count - 1 - DemoHost.HeavyLinkedRun / 2;
+        if (list.Items[linked] is not ConversationBlock { Block: MdParagraph p } || !p.Inlines.Any(i => i is MdLink)) { return ($"setup: a linked paragraph at block {linked + 1}", "none"); }
+        list.ScrollIntoView(list.Items[linked], ScrollIntoViewAlignment.Leading);
+        await Still(scroll);
+        if (scroll.VerticalOffset < scroll.ViewportHeight || scroll.ScrollableHeight - scroll.VerticalOffset < scroll.ViewportHeight + ConversationKeyboard.Line * 2) { return ($"setup: a page above and below block {linked + 1}: {scroll.VerticalOffset:0} px above, {scroll.ScrollableHeight - scroll.VerticalOffset:0} px below, of {scroll.ViewportHeight:0}", "none"); }
+        // Its link focused as the keyboard puts it.
+        var stop = list.ContainerFromIndex(linked) is { } c ? FocusManager.FindFirstFocusableElement(c) : null;
+        if (stop is not Hyperlink) { return ($"setup: a link in block {linked + 1} to focus, not {stop?.GetType().Name ?? "nothing"}", "none"); }
+        if (!(await FocusManager.TryFocusAsync(stop, FocusState.Keyboard)).Succeeded || FocusManager.GetFocusedElement(list.XamlRoot) is not Hyperlink) { return ($"setup: focus on the link in block {linked + 1}", "none"); }
+        await Task.Delay(300);
         var seen = new List<VirtualKey>();
         var heard = new KeyEventHandler((_, e) => seen.Add(e.Key));
         scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);

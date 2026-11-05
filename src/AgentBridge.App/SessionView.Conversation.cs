@@ -42,8 +42,11 @@ public sealed partial class SessionView
     // The blocks the list had laid out when Tab was last pressed in the session, until that press
     // has been handled: the focus search realises the block it lands in on its way (Reached).
     HashSet<int>? laidOutAtTab;
-    // How far a Tab that lands in a block by itself brings it in (ConversationKeyboard.Reached): the
-    // one place that says so, while B rules on the leading edge for a block already laid out (#829).
+    // Pointer presses in the session, so a held Tab can tell focus the person moved from focus the
+    // list parked when it took a focused element away.
+    int presses;
+    // How far a Tab that lands in a block by itself brings it in (ConversationKeyboard.Reached): any
+    // block not wholly in view, laid out or not, as B and the creative director ruled on #829 (ui.md §6.4).
     static readonly TabReach Reach = TabReach.NotWhollyInView;
 
     void ShowResponse(bool reset)
@@ -126,8 +129,8 @@ public sealed partial class SessionView
     // out of (LosingFocus) or into (GettingFocus) anything in it, handled or not, so a Tab that passes
     // the whole list, nothing in it a stop until a block is realised, is held too; whichever comes
     // first holds it. A link is a text element, whose moves raise neither, so those come from the
-    // focus manager (OnFocusMoving). A block Tab lands in by itself is brought in at the leading
-    // edge too (Reached).
+    // focus manager (OnFocusMoving). A block Tab lands in by itself that isn't wholly in view is
+    // brought in at the leading edge too (Reached); one wholly in view doesn't move.
     void OnLeavingBlock(UIElement sender, LosingFocusEventArgs e)
     {
         if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } passed) { e.Cancel = true; FocusBlock(passed.Index, e.Direction == FocusNavigationDirection.Next, passed.Wrapped, e.OldFocusedElement); }
@@ -153,7 +156,7 @@ public sealed partial class SessionView
         var wrapped = ConversationKeyboard.Wrapped(f, t, forward, f == t ? Precedes(to, from) : null);
         if (ConversationKeyboard.Passed(blocks, f, t, forward, i => ConversationList.ContainerFromIndex(i) is not null, wrapped) is { } index) { return (index, wrapped); }
         // Landed in a block by itself: still brought in at the leading edge when it wasn't laid out
-        // as Tab was pressed (or, by Reach, isn't wholly in view).
+        // as Tab was pressed, or isn't wholly in view (Reach).
         var laidOut = laidOutAtTab;
         return ConversationKeyboard.Reached(was, now, blocks.Count, Reach,
             i => laidOut?.Contains(i) ?? ConversationList.ContainerFromIndex(i) is not null,
@@ -187,11 +190,16 @@ public sealed partial class SessionView
     }
 
     // Whether an element, a link in a text block included, is in this session's tree.
-    bool Within(DependencyObject? element)
+    bool Within(DependencyObject? element) => Under(element, this);
+
+    // Whether an element is in the conversation list: on it, its scroller, or in a block.
+    bool InList(DependencyObject? element) => Under(element, ConversationList);
+
+    static bool Under(DependencyObject? element, DependencyObject ancestor)
     {
         for (var node = element is TextElement t ? t.ContentStart?.VisualParent : element; node is not null; node = VisualTreeHelper.GetParent(node))
         {
-            if (node == this) { return true; }
+            if (node == ancestor) { return true; }
         }
         return false;
     }
@@ -256,6 +264,7 @@ public sealed partial class SessionView
         var target = blocks[index];
         var heldIn = Card?.Id;
         var leftFrom = PlaceOf(focusedThen) is { } p && p >= 0 && p < blocks.Count ? blocks[p] : null;
+        var pressedThen = presses;
         var direction = forward ? FocusNavigationDirection.Next : FocusNavigationDirection.Previous;
         var waited = 0;
         ConversationBlock? brought = null;
@@ -264,11 +273,12 @@ public sealed partial class SessionView
         // The response may change while this waits, even to a new list of blocks, so the block is
         // found again each time; one replaced as the reply streams in gives way to the block Tab now
         // stops in (Held). Another session shown since, or focus moved other than with a replaced
-        // block, and it does nothing.
+        // block (anywhere outside the list, or by a press), and it does nothing.
         void Bring()
         {
             var focused = XamlRoot is { } r ? FocusManager.GetFocusedElement(r) : null;
-            var move = ConversationKeyboard.Resume(heldIn, Card?.Id, focusedThen, leftFrom, focused, blocks, target, PlaceOf(focused as DependencyObject), forward, i => ConversationList.ContainerFromIndex(i) is not null, wrapped);
+            var parked = presses == pressedThen && (focused is null || InList(focused as DependencyObject));
+            var move = ConversationKeyboard.Resume(heldIn, Card?.Id, focusedThen, leftFrom, focused, parked, blocks, target, PlaceOf(focused as DependencyObject), forward, i => ConversationList.ContainerFromIndex(i) is not null, wrapped);
             if (move.Dropped) { return; }
             if (move.Block is not { } at)
             {
