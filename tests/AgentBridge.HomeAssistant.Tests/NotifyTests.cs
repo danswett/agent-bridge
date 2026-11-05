@@ -1435,6 +1435,52 @@ public sealed class NotifyTests : IDisposable
     }
 
     [Fact]
+    public async Task Each_destination_is_told_again_an_hour_after_its_own_delivery_not_another_ones()
+    {
+        ha.NotifyFailsFor = s => s == "notify.notify";
+        await using var c = Connector(Phones with { Enabled = true });
+        Fail(SignInNeeded());
+        await Pass(c);
+        Assert.Single(Notices());
+        Assert.Empty(Pushes());
+
+        // The push service comes back at minute 59: told then, and not again a minute later when
+        // the phones' hour is up.
+        await Pass(c, 59 * 60);
+        Assert.Empty(Pushes());
+        ha.NotifyFailsFor = null;
+        await Pass(c, 20);
+        Assert.Single(Pushes());
+        await Pass(c, 2 * 60);
+        Assert.Equal(2, Notices().Count);
+        Assert.Single(Pushes());
+        await Pass(c, 60 * 60);
+        Assert.Equal(2, Pushes().Count);
+    }
+
+    [Fact]
+    public async Task A_need_that_comes_back_while_a_withdrawal_is_still_retried_is_told_again()
+    {
+        await using var c = Connector(Phones with { Enabled = true });
+        Fail(SignInNeeded());
+        await Pass(c);
+        Assert.Single(Notices());
+        Assert.Single(Pushes());
+
+        // Signed in: the phone is cleared, the tablet can't be reached.
+        ha.NotifyFailsFor = s => s == Tablet;
+        Fail(null);
+        await Pass(c);
+        Assert.Equal(1, NoticeClears());
+
+        // Signed out again within the hour: news again, everywhere it can go.
+        Fail(SignInNeeded() with { Since = FakeSessions.T0.AddMinutes(5) });
+        await Pass(c, 20);
+        Assert.Equal(2, Notices().Count);
+        Assert.Equal(2, Pushes().Count);
+    }
+
+    [Fact]
     public async Task A_destination_that_missed_the_sign_in_notice_is_tried_again_and_one_that_took_it_is_not_told_twice()
     {
         ha.NotifyFailsFor = s => s is Tablet or "notify.notify";

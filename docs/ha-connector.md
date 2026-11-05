@@ -716,8 +716,10 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   * When it was sent, which destinations have it and which phones hold it are kept in the
     connector's state file. A restart within the hour therefore doesn't send it again, and still
     withdraws it. A destination that missed it (a phone or the push service failing, or a pass
-    stopped part-way) is tried again every 15 s. A destination that took it isn't told twice in
-    the hour, and a failing service is logged once until it works.
+    stopped part-way) is tried again every 15 s. Each destination is told again an hour after its
+    own delivery, never sooner, and a failing service is logged once until it works. Once the need
+    is over, what was delivered is forgotten at once, even while a withdrawal is still being
+    retried, so a need that comes back is told everywhere again.
   * An error and Not responding send nothing. They show on the status only, as on the clients.
 
 Where stage 5b knowingly differs from the daemon:

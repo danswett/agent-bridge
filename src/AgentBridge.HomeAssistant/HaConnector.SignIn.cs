@@ -17,15 +17,15 @@ public sealed partial class HaConnector
     sealed class SignInNotice
     {
         public required string Tag;
-        // When this round first reached a destination; when sending or withdrawing is next tried.
-        public DateTimeOffset? SentAt;
+        // When sending or withdrawing is next tried.
         public DateTimeOffset RetryAt;
         // The phones that hold it, to withdraw it from.
         public HashSet<string> Phones = new(StringComparer.Ordinal);
-        // The destinations this round reached (each phone, and "push:<service>"): only the others are
-        // tried again, so one that took it is not told twice, and one that failed is not left out
-        // for the hour because another took it (found in review).
-        public HashSet<string> Delivered = new(StringComparer.Ordinal);
+        // When each destination (a phone, or "push:<service>") last took it while this need lasts.
+        // Each is told again an hour after its own delivery, and one that missed it is tried again
+        // shortly, so no destination hears it twice within the hour and none is left out because
+        // another took it (found in review). Forgotten once the need is over: a new need is news.
+        public Dictionary<string, DateTimeOffset> Delivered = new(StringComparer.Ordinal);
     }
 
     // By "<agent>:<account digest>". Kept in the ledger, so a restart neither sends one again within
@@ -65,32 +65,24 @@ public sealed partial class HaConnector
             {
                 if (!signIns.TryGetValue(g.Key, out n)) { signIns[g.Key] = n = new SignInNotice { Tag = HaNotify.SignInTag(Slug, AgentWire(g.Agent), g.Account) }; }
             }
-            // A round is over an hour after it first reached anyone: the next goes to every destination.
+            var push = Notify.Enabled && HaNotify.Split(Notify.Service) is not null ? "push:" + Notify.Service : null;
+            bool Due(string destination) => !n.Delivered.TryGetValue(destination, out var at) || now - at >= options.SignInRepeat;
+            List<string> phones;
+            bool pushDue;
             lock (gate)
             {
-                if (n.SentAt is { } at && now - at >= options.SignInRepeat)
-                {
-                    n.SentAt = null;
-                    n.Delivered.Clear();
-                }
+                phones = Notify.ButtonsOn ? [.. Notify.AnswerButtonServices.Where(Due)] : [];
+                pushDue = push is not null && Due(push);
             }
-            var push = Notify.Enabled && HaNotify.Split(Notify.Service) is not null ? "push:" + Notify.Service : null;
-            List<string> phones;
-            lock (gate) { phones = Notify.ButtonsOn ? [.. Notify.AnswerButtonServices.Where(s => !n.Delivered.Contains(s))] : []; }
-            var pushDue = push is not null && !n.Delivered.Contains(push);
             if ((phones.Count == 0 && !pushDue) || now < n.RetryAt) { continue; }
             var (title, message) = HaNotify.SignIn(options.MachineName, AgentName(g.Agent), g.Names);
             var missed = false;
-            // Each destination on record as soon as it has it, the round's time with it: a pass
-            // stopped part-way (cancelled, or agent-ha-bridge starting) must not send it again to one
-            // that took it, after a restart or a resume either (found in review).
+            // Each destination on record as soon as it has it: a pass stopped part-way (cancelled, or
+            // agent-ha-bridge starting) must not send it again to one that took it, after a restart
+            // or a resume either (found in review).
             void Took(string destination)
             {
-                lock (gate)
-                {
-                    n.Delivered.Add(destination);
-                    n.SentAt ??= now;
-                }
+                lock (gate) { n.Delivered[destination] = now; }
             }
             if (phones.Count > 0)
             {
@@ -123,6 +115,16 @@ public sealed partial class HaConnector
         lock (gate) { over = [.. signIns.Where(x => !groups.Any(g => g.Key == x.Key)).Select(x => (x.Key, x.Value))]; }
         foreach (var (key, n) in over)
         {
+            // The need is over: what was delivered for it is forgotten at once, so a need that comes
+            // back is told everywhere again even while a withdrawal is still being retried (found in
+            // review). The phones are kept until each has been cleared.
+            bool forgot;
+            lock (gate)
+            {
+                forgot = n.Delivered.Count > 0;
+                n.Delivered.Clear();
+            }
+            if (forgot) { SaveLedger(); }
             if (now < n.RetryAt && n.Phones.Count > 0) { continue; }
             List<string> phones;
             lock (gate) { phones = [.. n.Phones]; }
@@ -149,14 +151,14 @@ public sealed partial class HaConnector
         var o = new JsonObject();
         foreach (var (key, n) in signIns.OrderBy(x => x.Key, StringComparer.Ordinal))
         {
-            var entry = new JsonObject
+            var delivered = new JsonObject();
+            foreach (var (to, at) in n.Delivered.OrderBy(x => x.Key, StringComparer.Ordinal)) { delivered[to] = at.ToString("o", System.Globalization.CultureInfo.InvariantCulture); }
+            o[key] = new JsonObject
             {
                 ["tag"] = n.Tag,
                 ["phones"] = new JsonArray([.. n.Phones.Order(StringComparer.Ordinal).Select(p => (JsonNode)p)]),
-                ["delivered"] = new JsonArray([.. n.Delivered.Order(StringComparer.Ordinal).Select(p => (JsonNode)p)]),
+                ["delivered"] = delivered,
             };
-            if (n.SentAt is { } at) { entry["sentAt"] = at.ToString("o", System.Globalization.CultureInfo.InvariantCulture); }
-            o[key] = entry;
         }
         return o;
     }
@@ -170,8 +172,6 @@ public sealed partial class HaConnector
             if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty("tag", out var tag) || tag.ValueKind != JsonValueKind.String
                 || tag.GetString() is not { } t || !t.StartsWith("bridge_signin_", StringComparison.Ordinal)) { continue; }
             var n = new SignInNotice { Tag = t };
-            if (e.TryGetProperty("sentAt", out var at) && at.ValueKind == JsonValueKind.String
-                && DateTimeOffset.TryParse(at.GetString(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var sent)) { n.SentAt = sent; }
             if (e.TryGetProperty("phones", out var phones) && phones.ValueKind == JsonValueKind.Array)
             {
                 foreach (var p in phones.EnumerateArray())
@@ -179,11 +179,15 @@ public sealed partial class HaConnector
                     if (p.ValueKind == JsonValueKind.String && HaNotify.Split(p.GetString()!) is not null) { n.Phones.Add(p.GetString()!); }
                 }
             }
-            if (e.TryGetProperty("delivered", out var delivered) && delivered.ValueKind == JsonValueKind.Array)
+            if (e.TryGetProperty("delivered", out var delivered) && delivered.ValueKind == JsonValueKind.Object)
             {
-                foreach (var d in delivered.EnumerateArray())
+                foreach (var d in delivered.EnumerateObject())
                 {
-                    if (d.ValueKind == JsonValueKind.String && d.GetString() is { Length: > 0 } to) { n.Delivered.Add(to); }
+                    if (d.Name.Length > 0 && d.Value.ValueKind == JsonValueKind.String
+                        && DateTimeOffset.TryParse(d.Value.GetString(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var at))
+                    {
+                        n.Delivered[d.Name] = at;
+                    }
                 }
             }
             signIns[entry.Name] = n;
