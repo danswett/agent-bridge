@@ -632,6 +632,10 @@ public sealed partial class DemoHost : IAsyncDisposable
         return result;
     }
 
+    // A session as a host would send it next, for the self-test: a schedule's or an agent's prompt
+    // arriving (#489), which nothing in the demo sends on its own.
+    public Task Upsert(Session next) => Change(next);
+
     // finishes: a turn started here ends a moment later, as an agent's would; not a session that has
     // stopped answering (#800).
     async Task Change(Session next, bool finishes = true)
