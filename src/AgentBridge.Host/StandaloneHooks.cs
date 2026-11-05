@@ -321,9 +321,12 @@ public sealed class StandaloneHooks(
     {
         var backup = Path.Combine(HookFolder, "backups", "claude-settings.json");
         if (!File.Exists(backup)) { return null; }
-        var original = File.ReadAllBytes(backup);
-        try { return JsonNode.DeepEquals(Parse(backup, original), remaining) ? original : null; }
-        catch (Exception e) when (e is JsonException or InvalidDataException)
+        try
+        {
+            var original = File.ReadAllBytes(backup);
+            return JsonNode.DeepEquals(Parse(backup, original), remaining) ? original : null;
+        }
+        catch (Exception e) when (e is JsonException or InvalidDataException or IOException or UnauthorizedAccessException)
         {
             output.WriteLine($"Warning: {backup} is unreadable ({e.Message}); the original settings cannot be restored, so only the owned hooks are removed from the current settings.");
             return null;

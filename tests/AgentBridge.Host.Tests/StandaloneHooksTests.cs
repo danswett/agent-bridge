@@ -622,6 +622,36 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.False(File.Exists(Owner("claude")));
     }
 
+    sealed class WindowsLockFactAttribute : FactAttribute
+    {
+        public WindowsLockFactAttribute()
+        {
+            if (!OperatingSystem.IsWindows()) { Skip = "Windows share modes make a held file unreadable"; }
+        }
+    }
+
+    [WindowsLockFact]
+    public async Task Claude_removal_warns_about_a_locked_backup_and_still_removes_only_owned_hooks()
+    {
+        var backup = Path.Combine(Profile, "hooks", "backups", "claude-settings.json");
+        Write(Registration("claude"), """{"model":"user-model"}""");
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var before = File.ReadAllBytes(backup);
+        var output = new StringWriter();
+
+        using (new FileStream(backup, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            await Setup.RemoveAsync("claude", false, output);
+        }
+
+        Assert.Contains($"Warning: {backup} is unreadable", output.ToString());
+        var remaining = Read(Registration("claude"));
+        Assert.Equal("user-model", (string?)remaining["model"]);
+        Assert.Null(remaining["hooks"]);
+        Assert.Equal(before, File.ReadAllBytes(backup));
+        Assert.False(File.Exists(Owner("claude")));
+    }
+
     [Fact]
     public async Task Claude_removal_recognizes_a_differently_cased_Windows_profile_without_orphaning_hooks()
     {
