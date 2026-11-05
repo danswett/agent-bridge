@@ -16,6 +16,9 @@ public class CopilotPlannerTests
     {
         using var doc = JsonDocument.Parse(arguments);
         var question = QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0);
+        // Free text is listed for the machine and refused before it is planned (AnswerService,
+        // #510 review); its plan is still the planner's to make, and is tested here as such.
+        if (question.Fields.Count == 0) { question = question with { AnswerAtMachine = null }; }
         var (form, problem) = CopilotForm.Read(doc.RootElement.Clone());
         Assert.Null(problem);
         // The two readers of one schema agree, or nothing would be typed at all.

@@ -29,6 +29,18 @@ public class QuestionMappingTests
         Assert.True(q.AnswerAtMachine);
     }
 
+    [Fact]
+    public void Free_text_with_no_form_or_list_is_shown_to_be_answered_at_the_machine_and_forms_and_lists_are_offered_as_before()
+    {
+        // The host types into a form it can see on screen, field by field, and a schema-less
+        // ask_user draws none it knows (#510 review, Copilot 5784910042).
+        Assert.True(Ask("""{ "message": "What next?" }""").AnswerAtMachine);
+        Assert.True(Ask("""{ "question": "What next?" }""").AnswerAtMachine);
+
+        Assert.Null(Ask("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] } } } }""").AnswerAtMachine);
+        Assert.Null(Ask("""{ "question": "Which?", "choices": ["a", "b"] }""").AnswerAtMachine);
+    }
+
     [Theory]
     // A list Copilot opens on its Other box (a null default, or one naming no option), and lists
     // the host cannot drive, are flagged to the person rather than offered and then refused (#700).

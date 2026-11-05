@@ -130,6 +130,11 @@ internal static class QuestionMapper
             // machine rather than offer what the host would then refuse (#662).
             atMachine = !drivable;
         }
+        // Neither a form nor a list: free text, which the host does not type (AnswerService),
+        // since there is no form on screen to hold its keys to, so a client shows it to be
+        // answered at the machine rather than offer a box whose answer is always refused
+        // (#510 review, Copilot 5784910042).
+        else { atMachine = true; }
         return new Question
         {
             Id = id,

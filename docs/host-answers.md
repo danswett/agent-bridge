@@ -9,7 +9,7 @@ how the host does it and what it refuses.
 
 | Agent | Question | Answered |
 |---|---|---|
-| Copilot CLI | `ask_user` with no form: free text | Yes: the words, then Enter |
+| Copilot CLI | `ask_user` with no form or list: free text | Refused, `answerAtMachine`: there is no form on screen to hold its keys to (below) |
 | Copilot CLI | `ask_user` form (`requestedSchema`): `choice` (`type: string` with `enum` or `oneOf`), `boolean`, `multi` (`type: array`, items `anyOf` or `enum`), `text`, `number`, any number of fields | Yes |
 | Copilot CLI | Other words for a question that is one option list | Yes (`allowOther` is set on exactly that shape) |
 | Copilot CLI | Other in a form of several fields, or in a checkbox list | Refused: no walk reaches it |
@@ -42,7 +42,9 @@ live prompts. Every send is one attach-write-detach: a burst of characters, then
 pause, Enter as a keystroke of its own (a burst is a paste, and Enter inside it would not
 submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
 
-* **Free text:** the words, then Enter as a write of its own once they show on screen (as for a form's text field, below).
+* **Free text** (an `ask_user` with no form or list): not typed. It is listed `answerAtMachine`
+  and refused before any key: the host types only into a form it can see on screen (below),
+  and 1.0.105 draws no form for it whose rows the keys could be held to.
 * **A form,** field by field in schema order, each committed with its own Enter, a write of
   its own once the screen has settled from the field's keys (below), 240 ms before the next
   field:

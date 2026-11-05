@@ -1120,7 +1120,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     public async Task A_question_with_no_form_schema_is_refused_for_the_machine_with_nothing_typed()
     {
         // How the CLI draws an ask_user with no requestedSchema cannot be told from its code, so
-        // there is no form to hold the keys to.
+        // there is no form to hold the keys to; the listing says so (answerAtMachine), and the
+        // answer is refused as one for the machine (Copilot 5784910042).
         Fixture.Append(events, Recorded("q1", new { pick = "a" }), Copilot.ToolDone("q1", second++),
             Copilot.ToolStart("q2", "ask_user", new { message = "What should I call it?" }, second++));
         await source.RefreshAsync();
@@ -1132,7 +1133,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.True(response.GetProperty("ok").GetBoolean(), response.GetRawText());
         var result = response.GetProperty("result");
         Assert.Equal("refused", result.GetProperty("outcome").GetString());
-        Assert.EndsWith("answer it at the machine", result.GetProperty("reason").GetString());
+        Assert.Equal("this Copilot prompt can only be answered at the machine", result.GetProperty("reason").GetString());
+        Assert.True(source.Get(Id)?.Question is { Id: "q2", AnswerAtMachine: true });
         Assert.Empty(injector.Attempts);
     }
 
