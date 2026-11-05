@@ -14,6 +14,85 @@ explains its safety and operating choices; both are proposals, not existing beha
 `host-planned-state` message, correlate its E2E command result by `transition`,
 and keep actors and command request IDs out of relay-visible state.
 
+## Implementation boundary: slice 1 versus slice 2
+
+The [SRE slice decision](https://github.com/danswett/agent-bridge/pull/815#issuecomment-6654417590)
+permits a **graceful, process-local slice 1**, subject to Connection's veto.
+The [implementation branch](https://github.com/danswett/agent-bridge/tree/sre/805-quiet-primitive)
+adds only the shared primitive and read-only release-eligibility adapters.
+The sections below still describe the full future target; they do not claim a
+durable journal or cross-process handoff exists in slice 1.
+
+- Slice 1 fences new deliveries in the **departing host itself**, including
+  accepted work before `OutcomeMemory` schedules it. It is "quiet now", never
+  a whole-session idle/`AutoUpdater.IdleFor` gate. Self-initiated graceful update,
+  remote restart, sleep/reboot/sign-out consumers may use it after their own
+  authorization and condition registration.
+- Acquisition waits at most ten seconds (default five); the provisional lease
+  is nonrenewable, expires after 30 seconds, and cannot interrupt active typing.
+  `AnnouncePlanned` binds the transition/receipt to the current connection and
+  waits at most five seconds. `Legacy` is permitted only for an authorized
+  person's restart/stop when capability was **not negotiated**, not for #819's
+  unattended update. No live relay message handler is claimed by this slice.
+- **Slice 2 is refused, not weakened:** forced watchdog recovery, another
+  process restarting the host and recovered/queued input handover return the
+  closed `JournalUncertain` blocker. No process-local flag stands in for the
+  future journal or cross-process exclusion. Connection decides that contract.
+
+### Composition-time conditions and atomic commit
+
+Slice 1's owner API supersedes the earlier generic eligibility-recheck wording:
+
+```csharp
+enum DepartureBlocker {
+    DeliveryInFlight, Typing, AnnounceUnacked, JournalUncertain,
+    AppRunning, OtherHostRunning, ChannelChanged, TransferInFlight, ConditionFault
+}
+interface IDepartureCondition {
+    DepartureBlocker Kind { get; }
+    bool IsBlocking();
+}
+// Register once per DeparturePurpose at composition, never at the call site:
+DepartureConditions.Register(purpose, conditions);
+TryAcquireQuiet(maxWait, purpose); // QuietLease | Blocked
+AnnouncePlanned(lease);            // durable receipt or blocked, <= 5 s
+CommitDeparture(lease);            // Committed(DepartureGuard) | Aborted(kind)
+```
+
+`Update` consumes App/other-host/channel/transfer conditions registered by their
+owners; `RemoteRestart` consumes the transfer condition. Real conditions remain
+their owners' implementation, not #805 guesses. Each reads only its owner's
+in-memory snapshot refreshed **outside** the fence: synchronous, side-effect
+free, no I/O/awaits. Unknown kinds and late/duplicate registration are refused.
+Missing purpose registration fails closed.
+
+In **one critical section under the same delivery fence**, commit checks the
+fence/announcement and evaluates **every registered condition exactly once**.
+Any block aborts; a throw or re-entrant coordinator call is `ConditionFault`,
+never a deadlock or an implicit "not blocking". Abort releases the provisional
+lease, makes no departure and schedules cancellation if a plan was sent.
+There is no call-site `stillEligible` predicate and no third safety definition.
+
+On success, the **same lease** is consumed into `DepartureGuard`, holding the
+local fence **until process exit**. Disposing/finalizing the guard, disposing
+the lease or reaching its former timeout cannot reopen deliveries. An apply
+failure after commit leaves the departing host fenced until exit; no guard
+release API is provided.
+
+On abort, release or expiry of an announced provisional lease, send
+`phase: cancelled` **only after releasing the fence and every internal lock**,
+with a five-second bound. Network cancellation never holds up a subsequent
+`TryAcquireQuiet`. Failed, timed-out or unsent cancellation is observable as
+`CancelUnsent` (`QuietLease.CancellationStatus` / awaitable `Cancellation`), not
+an empty catch. This tightens the earlier "cancel before releasing when
+possible" target wording for slice 1.
+
+Focused slice-1 tests cover working-session quiet grants, in-flight/typing
+exclusion, lease expiry, forced-recovery refusal, exactly-once conditions under
+the fence, blocking/throwing/re-entrant/unknown conditions, a disposed committed
+guard still refusing deliveries, and hung/unsent cancellation not holding the
+fence. The new implementation has no #819 scheduler/installer/apply code.
+
 ## 1. What runs today, and who watches whom
 
 Source paths below are relative to the repository; baseline is `cf042d43`.
