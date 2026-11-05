@@ -6,6 +6,9 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Documents;
+using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Graphics.Imaging;
 using Windows.Storage.Streams;
@@ -106,6 +109,55 @@ static partial class SelfTest
                     : null;
         }
         static string Clip(string s) => s.Length > 40 ? s[..40] + "…" : s;
+    }
+
+    // What Tab gets wrong in the response: from the last link or Copy button the list has realised,
+    // Tab goes on to the first in the next block that has one, which the list had not realised,
+    // and lands in the block, never on its container. The list's cache is cut to the viewport while
+    // it looks, so the next block with a stop is off the realised end. Null when Tab gets it right.
+    static async Task<string?> Tabbed(ListView list)
+    {
+        if (list.ItemsPanelRoot is not ItemsStackPanel panel || list.ItemsSource is not IList<ConversationBlock> blocks || list.XamlRoot?.Content is not { } root) { return "a list of blocks"; }
+        var cache = panel.CacheLength;
+        try
+        {
+            panel.CacheLength = 0;
+            await Task.Delay(500);
+            // Focus on the last stop realised may scroll it into view and realise more: then again.
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                var end = Math.Max(panel.LastVisibleIndex, 0);
+                while (end + 1 < blocks.Count && list.ContainerFromIndex(end + 1) is not null) { end++; }
+                var from = -1;
+                for (var i = end; i >= 0 && from < 0; i--)
+                {
+                    if (blocks[i].Focusable && list.ContainerFromIndex(i) is { } c && FocusManager.FindLastFocusableElement(c) is not null) { from = i; }
+                }
+                if (from < 0) { return "a realised block with a link or a Copy button"; }
+                var next = Enumerable.Range(from + 1, blocks.Count - from - 1).FirstOrDefault(i => blocks[i].Focusable, -1);
+                if (next < 0) { return $"a block with a stop after block {from + 1}"; }
+                await FocusManager.TryFocusAsync(FocusManager.FindLastFocusableElement(list.ContainerFromIndex(from)), FocusState.Keyboard);
+                await Task.Delay(300);
+                if (list.ContainerFromIndex(next) is not null) { continue; }
+                FocusManager.TryMoveFocus(FocusNavigationDirection.Next, new FindNextElementOptions { SearchRoot = root });
+                if (await Until(() => BlockOf(list, FocusManager.GetFocusedElement(list.XamlRoot)) == next, TimeSpan.FromSeconds(3))) { return null; }
+                var focused = FocusManager.GetFocusedElement(list.XamlRoot);
+                return focused is ListViewItem or ListView ? $"focus on a block's container: {focused.GetType().Name}"
+                    : $"Tab from block {from + 1} to block {next + 1}: it went to {(BlockOf(list, focused) is { } at ? $"block {at + 1}" : focused?.GetType().Name ?? "nothing")}";
+            }
+            return "the next block with a stop unrealised when Tab was pressed";
+        }
+        finally { panel.CacheLength = cache; }
+    }
+
+    // The block an element is in, a link in its text block included; null outside the blocks.
+    static int? BlockOf(ListView list, object? element)
+    {
+        for (var node = element is TextElement t ? t.ContentStart?.VisualParent : element as DependencyObject; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (node is ListViewItem item && ItemsControl.ItemsControlFromItemContainer(item) == list) { return list.IndexFromContainer(item); }
+        }
+        return null;
     }
 
     // An element as drawn, its pixels, and a picture of it for review.

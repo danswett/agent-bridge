@@ -16,6 +16,9 @@ public sealed class ConversationBlock(MdBlock block)
     // list has realised it, so Narrator's scan and search reach a block that is off screen (#707).
     public string Text { get; } = ConversationBlocks.TextOf(block);
 
+    // Whether Tab stops in it (a link, a Copy button), so Tab can bring it in unrealised.
+    public bool Focusable { get; } = ConversationKeyboard.Focusable(block);
+
     public override string ToString() => Text;
 }
 

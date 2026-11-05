@@ -312,7 +312,7 @@
                 </ListView.ItemTemplate>
                 <ListView.Header>
                 <!-- The pane's width, whatever the header's host gives it, so the column centres in the pane. -->
-                <local:ReadingColumn>
+                <local:ReadingColumn x:Name="ConversationHeader">
                 <local:ReadingColumn
                     x:Name="Conversation"
                     MaxWidth="{StaticResource AbLayoutReadingMax}"
@@ -394,7 +394,7 @@
                 </local:ReadingColumn>
                 </ListView.Header>
                 <ListView.Footer>
-                <local:ReadingColumn>
+                <local:ReadingColumn x:Name="ConversationFooter">
                 <local:ReadingColumn
                     MaxWidth="{StaticResource AbLayoutReadingMax}"
                     HorizontalAlignment="Center"

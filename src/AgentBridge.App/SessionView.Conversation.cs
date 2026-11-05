@@ -1,9 +1,13 @@
 using System.Collections.ObjectModel;
 using AgentBridge.App.Core;
+using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Documents;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Windows.System;
 
 namespace AgentBridge.App;
 
@@ -23,6 +27,8 @@ public sealed partial class SessionView
     ScrollAnchor? anchor;
     // The offset a correction of ours asked for: its ViewChanged is not the person scrolling.
     double? anchoring;
+    // Where the last scrolling key is taking the conversation, until that scroll has stopped.
+    double? keyTarget;
 
     void ShowResponse(bool reset)
     {
@@ -54,10 +60,81 @@ public sealed partial class SessionView
             // A question still moving into view is held from the pointer until it has stopped.
             guard.Scrolled(DateTimeOffset.UtcNow);
             if (anchoring is not { } asked || Math.Abs(scroll.VerticalOffset - asked) >= 0.5) { TakeAnchor(); }
-            if (!e.IsIntermediate) { anchoring = null; }
+            if (!e.IsIntermediate) { anchoring = null; keyTarget = null; }
         };
-        scroll.DirectManipulationStarted += (_, _) => follow.PanStarted();
+        scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; follow.PanStarted(); };
         scroll.DirectManipulationCompleted += (_, _) => follow.PanEnded();
+        // Below the list, so the keys reach this before the list moves between its items: a key
+        // from a block passes the block's container, which leaves it to the list.
+        scroll.KeyDown += OnReadingKey;
+    }
+
+    // The keys that scroll a page scroll the conversation, as its ScrollViewer did (ui.md §6.4).
+    void OnReadingKey(object sender, KeyRoutedEventArgs e)
+    {
+        if (ConversationScroll is not { } scroll) { return; }
+        static bool Down(VirtualKey k) => InputKeyboardSource.GetKeyStateForCurrentThread(k).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        if (ConversationKeyboard.Key((int)e.Key, Down(VirtualKey.Control), Down(VirtualKey.Shift), e.KeyStatus.IsMenuKeyDown || Down(VirtualKey.Menu)) is not { } key) { return; }
+        e.Handled = true;
+        // From where the last key is taking it, so a key pressed while that scroll still moves adds to it.
+        var from = keyTarget ?? scroll.VerticalOffset;
+        var to = ConversationKeyboard.Offset(key, from, scroll.ViewportHeight, scroll.ScrollableHeight);
+        if (Math.Abs(to - from) >= 0.5 && scroll.ChangeView(null, to, null, disableAnimation: !Motion.Scrolls)) { keyTarget = to; }
+    }
+
+    // Tab and Shift+Tab stop in every block with a link or a Copy button, in order: one the list
+    // has not realised yet is passed by the focus search, so the move is held, the block realised
+    // and focus put on its first stop (its last, going back). The list's handlers see a move into
+    // it (GettingFocus) and out of or within it (LosingFocus); whichever comes first holds it.
+    void OnLeavingBlock(UIElement sender, LosingFocusEventArgs e)
+    {
+        if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } index) { e.Cancel = true; FocusBlock(index, e.Direction == FocusNavigationDirection.Next); }
+    }
+
+    void OnReachingBlock(UIElement sender, GettingFocusEventArgs e)
+    {
+        if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } index) { e.Cancel = true; FocusBlock(index, e.Direction == FocusNavigationDirection.Next); }
+    }
+
+    int? TabPassed(DependencyObject? from, DependencyObject? to, FocusNavigationDirection direction)
+    {
+        if (direction is not (FocusNavigationDirection.Next or FocusNavigationDirection.Previous)) { return null; }
+        var forward = direction == FocusNavigationDirection.Next;
+        var outside = forward ? -1 : blocks.Count;
+        return ConversationKeyboard.Passed(blocks, PlaceOf(from) ?? outside, PlaceOf(to) ?? (forward ? blocks.Count : -1), forward, i => ConversationList.ContainerFromIndex(i) is not null);
+    }
+
+    // Where in the conversation an element is: -1 its header, a block's index, the block count its
+    // footer, or null outside it. A link is a text element, in its text block.
+    int? PlaceOf(DependencyObject? element)
+    {
+        for (var node = element is TextElement t ? t.ContentStart?.VisualParent : element; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (node == ConversationHeader) { return -1; }
+            if (node == ConversationFooter) { return blocks.Count; }
+            if (node is ListViewItem item && ItemsControl.ItemsControlFromItemContainer(item) == ConversationList) { return ConversationList.IndexFromContainer(item); }
+            if (node == ConversationList) { return null; }
+        }
+        return null;
+    }
+
+    // The block brought into view and laid out, then focus on its first stop (or last, going back),
+    // as the keyboard had put it there. Should it hold none after all, Tab goes on from where it was.
+    void FocusBlock(int index, bool forward)
+    {
+        var wanted = blocks;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (blocks != wanted || index >= blocks.Count) { return; }
+            ConversationList.ScrollIntoView(blocks[index]);
+            ConversationList.UpdateLayout();
+            var container = ConversationList.ContainerFromIndex(index);
+            if (container is null) { return; }
+            var stop = forward ? FocusManager.FindFirstFocusableElement(container) : FocusManager.FindLastFocusableElement(container);
+            if (stop is not null) { _ = FocusManager.TryFocusAsync(stop, FocusState.Keyboard); }
+            // Realised now, so the search passes it this time rather than coming back to it.
+            else if (XamlRoot?.Content is { } root) { FocusManager.TryMoveFocus(forward ? FocusNavigationDirection.Next : FocusNavigationDirection.Previous, new FindNextElementOptions { SearchRoot = root }); }
+        });
     }
 
     // The block across the viewport's top edge, where it starts against that edge.

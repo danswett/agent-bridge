@@ -712,6 +712,12 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **Accessibility (#707):** a screen reader gets the response as a list, each block an item named
     by its text and numbered in the set ("12 of 214"), so its scan and search reach a block that is
     off screen and bring it into view.
+  - **The keyboard reads it as a page, not a list:** the arrow keys scroll a line, Page Up and Page
+    Down a viewport, Home and End (Ctrl too) to the top and the end, under reduced motion without
+    animation; none moves between blocks, nor does any of them with Ctrl or Shift, and Left and
+    Right do nothing. A key with Alt is left to the window. Tab and Shift+Tab stop at every link
+    and Copy button in order, a block not yet laid out included: it is laid out and brought into
+    view as Tab reaches it.
   - The self-test checks that a block stays in place through a live resize and the conversation is
     drawn the same before and after it ([app-windows.md](../app-windows.md)).
 - **Your messages:** a bubble at the right edge of the conversation's column (card fill,

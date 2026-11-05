@@ -138,3 +138,79 @@ public sealed class ScrollAnchorTests
         Assert.Equal(0, anchor.OffsetFor(offset: 100, topNow: 400, scrollable: -1));
     }
 }
+
+// The conversation read with the keyboard as a page (#765): the keys that scroll a page scroll it,
+// and Tab stops in every block with a link or a Copy button, one not realised yet included.
+public sealed class ConversationKeyboardTests
+{
+    const int Up = 0x26, Down = 0x28, Left = 0x25, PageDown = 0x22, Home = 0x24, End = 0x23;
+
+    static List<ConversationBlock> Blocks(string markdown) => [.. MarkdownModel.Parse(markdown).Select(b => new ConversationBlock(b))];
+
+    [Fact]
+    public void Arrows_pages_home_and_end_scroll_the_text_and_left_and_right_are_kept_from_the_list()
+    {
+        Assert.Equal(
+            [ReadingKey.LineUp, ReadingKey.LineDown, ReadingKey.PageDown, ReadingKey.Top, ReadingKey.End, ReadingKey.Still],
+            new[] { Up, Down, PageDown, Home, End, Left }.Select(k => ConversationKeyboard.Key(k, ctrl: false, shift: false, alt: false)));
+        Assert.Equal(500, ConversationKeyboard.Offset(ReadingKey.Still, 500, 700, 4000));
+    }
+
+    [Fact]
+    public void A_key_with_ctrl_or_shift_never_moves_between_blocks_and_only_ctrl_home_and_ctrl_end_scroll()
+    {
+        Assert.Equal(ReadingKey.Still, ConversationKeyboard.Key(Down, ctrl: false, shift: true, alt: false));
+        Assert.Equal(ReadingKey.Still, ConversationKeyboard.Key(PageDown, ctrl: true, shift: false, alt: false));
+        Assert.Equal(ReadingKey.Still, ConversationKeyboard.Key(End, ctrl: true, shift: true, alt: false));
+        Assert.Equal(ReadingKey.End, ConversationKeyboard.Key(End, ctrl: true, shift: false, alt: false));
+        Assert.Null(ConversationKeyboard.Key(Up, ctrl: false, shift: true, alt: true));
+        Assert.Null(ConversationKeyboard.Key(0x41, ctrl: true, shift: false, alt: false));
+    }
+
+    [Fact]
+    public void A_line_is_the_scrollers_step_a_page_the_viewport_and_neither_goes_past_an_end()
+    {
+        Assert.Equal(516, ConversationKeyboard.Offset(ReadingKey.LineDown, 500, 700, 4000));
+        Assert.Equal(1200, ConversationKeyboard.Offset(ReadingKey.PageDown, 500, 700, 4000));
+        Assert.Equal(4000, ConversationKeyboard.Offset(ReadingKey.PageDown, 3800, 700, 4000));
+        Assert.Equal(0, ConversationKeyboard.Offset(ReadingKey.PageUp, 300, 700, 4000));
+        Assert.Equal(4000, ConversationKeyboard.Offset(ReadingKey.End, 300, 700, 4000));
+        Assert.Equal(0, ConversationKeyboard.Offset(ReadingKey.Top, 300, 700, 4000));
+    }
+
+    [Fact]
+    public void Tab_stops_in_a_block_with_a_link_anywhere_in_it_or_a_code_block_and_not_in_plain_text()
+    {
+        var blocks = Blocks("Plain.\n\nSee [docs](https://example.com).\n\n```\nrun\n```\n\n> quoted [link](https://a.b)\n\n- one\n- [two](https://c.d)\n\n| a | b |\n|---|---|\n| [x](https://e.f) | y |\n\n## Heading\n\n---");
+
+        Assert.Equal([false, true, true, true, true, true, false, false], blocks.Select(b => b.Focusable));
+    }
+
+    [Fact]
+    public void Tab_past_an_unrealised_block_with_a_link_is_sent_to_that_block_first()
+    {
+        var blocks = Blocks("[a](https://a.b)\n\nPlain.\n\n[c](https://a.b)\n\n[d](https://a.b)");
+        bool Realised(int i) => i < 2;
+
+        Assert.Equal(2, ConversationKeyboard.Passed(blocks, from: 0, to: blocks.Count, forward: true, Realised));
+        Assert.Equal(0, ConversationKeyboard.Passed(blocks, from: -1, to: 3, forward: true, i => i == 3));
+    }
+
+    [Fact]
+    public void Shift_tab_into_the_response_from_below_lands_on_its_last_block_with_a_stop()
+    {
+        var blocks = Blocks("[a](https://a.b)\n\n[b](https://a.b)\n\nPlain.");
+
+        Assert.Equal(1, ConversationKeyboard.Passed(blocks, from: blocks.Count, to: -1, forward: false, i => false));
+    }
+
+    [Fact]
+    public void Tab_is_left_alone_when_it_passed_nothing_it_should_have_stopped_in()
+    {
+        var blocks = Blocks("[a](https://a.b)\n\nPlain.\n\n[c](https://a.b)");
+
+        Assert.Null(ConversationKeyboard.Passed(blocks, from: 0, to: 2, forward: true, i => false));
+        Assert.Null(ConversationKeyboard.Passed(blocks, from: 0, to: blocks.Count, forward: true, i => true));
+        Assert.Null(ConversationKeyboard.Passed(blocks, from: -1, to: -1, forward: true, i => false));
+    }
+}
