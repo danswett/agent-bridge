@@ -630,6 +630,21 @@ public sealed class ConversationKeyboardTests
     }
 
     [Fact]
+    public void A_stop_wholly_in_view_in_a_block_brought_to_the_leading_edge_keeps_the_focus_manager_from_scrolling_it()
+    {
+        Assert.True(ConversationKeyboard.HoldsFocusScroll(TabLanding.FocusVisible, 12, 32, 576));
+        Assert.True(ConversationKeyboard.HoldsFocusScroll(TabLanding.BlockStart, 12, 32, 576));
+    }
+
+    [Fact]
+    public void A_stop_below_the_view_in_a_block_taller_than_it_is_brought_in_when_focus_wins_and_left_when_the_block_start_wins()
+    {
+        Assert.False(ConversationKeyboard.HoldsFocusScroll(TabLanding.FocusVisible, 700, 32, 576));
+        Assert.False(ConversationKeyboard.HoldsFocusScroll(TabLanding.FocusVisible, 560, 32, 576));
+        Assert.True(ConversationKeyboard.HoldsFocusScroll(TabLanding.BlockStart, 700, 32, 576));
+    }
+
+    [Fact]
     public void A_focus_move_is_left_to_the_focus_manager_only_when_no_control_in_the_session_raised_it_and_an_end_is_in_the_session()
     {
         Assert.True(ConversationKeyboard.Unrouted(fromControlHere: false, toControlHere: false, fromHere: true, toHere: true));

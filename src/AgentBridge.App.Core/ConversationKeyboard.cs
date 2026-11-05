@@ -174,6 +174,15 @@ public static class ConversationKeyboard
     // `viewport` tall: half a pixel either way is rounding.
     public static bool WhollyInView(double top, double height, double viewport) => top >= -0.5 && top + height <= viewport + 0.5;
 
+    // Whether the scroll the focus manager makes to a stop focused in a block just brought to the
+    // leading edge is held back (#829): it pads a control 20 px each side, so a Copy button 12 px
+    // down its block would take the block's start 8 px off the edge. Held when the stop itself, its
+    // top `top` from the viewport's and `height` tall, is wholly in view, as nothing need move; one
+    // not wholly in view (in a block taller than the view) is brought in with TabLanding.FocusVisible,
+    // and stays where it is, the block's start at the edge, with TabLanding.BlockStart.
+    public static bool HoldsFocusScroll(TabLanding landing, double top, double height, double viewport) =>
+        landing == TabLanding.BlockStart || WhollyInView(top, height, viewport);
+
     // Whether a focus move is the focus manager's to report, not a routed LosingFocus or
     // GettingFocus's (#829): those are raised only on a control, never on a text element such as a
     // link, so a move between two links, or between a link and anything outside the session, raises
@@ -186,6 +195,10 @@ public static class ConversationKeyboard
 // How far Tab brings in a block it lands in by itself (Reached): one not laid out when Tab was
 // pressed, or also one not wholly in view.
 public enum TabReach { NotLaidOut, NotWhollyInView }
+
+// Which gives way when the stop Tab focuses in a block brought to the leading edge is not wholly in
+// view (HoldsFocusScroll): the block's start at the edge, or the stop in view.
+public enum TabLanding { FocusVisible, BlockStart }
 
 public enum ReadingKey { LineUp, LineDown, PageUp, PageDown, Top, End, Still }
 

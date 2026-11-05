@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Windows.Foundation;
 using Windows.System;
 
 namespace AgentBridge.App;
@@ -48,6 +49,9 @@ public sealed partial class SessionView
     // How far a Tab that lands in a block by itself brings it in (ConversationKeyboard.Reached): any
     // block not wholly in view, laid out or not, as B and the creative director ruled on #829 (ui.md §6.4).
     static readonly TabReach Reach = TabReach.NotWhollyInView;
+    // Where focus goes on a stop not wholly in view in a block brought to the leading edge (one taller
+    // than the view): brought in, the block's start leaving the edge, until B rules on #829.
+    static readonly TabLanding Landing = TabLanding.FocusVisible;
 
     void ShowResponse(bool reset)
     {
@@ -296,7 +300,7 @@ public sealed partial class SessionView
                 return;
             }
             var stop = forward ? FocusManager.FindFirstFocusableElement(container) : FocusManager.FindLastFocusableElement(container);
-            if (stop is not null) { _ = FocusManager.TryFocusAsync(stop, FocusState.Keyboard); }
+            if (stop is not null) { Land((UIElement)container, stop); }
             // Realised now, so the search passes it this time rather than coming back to it.
             else if (XamlRoot?.Content is { } root) { FocusManager.TryMoveFocus(direction, new FindNextElementOptions { SearchRoot = root }); }
         }
@@ -309,6 +313,48 @@ public sealed partial class SessionView
             try { FocusManager.TryMoveFocus(direction, new FindNextElementOptions { SearchRoot = within }); }
             finally { lettingTabPass = false; }
         }
+    }
+
+    // Focus on a stop in a block just brought to the leading edge, the focus manager's own scroll to
+    // it held back when nothing need move (HoldsFocusScroll): it pads a control 20 px each side
+    // (BringIntoViewHandler), so a Copy button 12 px down its block took the block's start 8 px off
+    // the edge (run 41997001156). A link it brings in unpadded, so only as far as it must. Its
+    // request is raised as focus moves but routed later, after the focus has completed, so the hold
+    // waits for that request itself (from the stop, or a link's text) and takes only it; it goes
+    // without one should focus be refused, or move on from the block first.
+    void Land(UIElement container, DependencyObject stop)
+    {
+        var hold = stop is FrameworkElement e && ConversationScroll is { } s
+            ? ConversationKeyboard.HoldsFocusScroll(Landing, Top(e, s), e.ActualHeight, s.ViewportHeight)
+            : Landing == TabLanding.BlockStart;
+        var source = stop as UIElement ?? (stop as TextElement)?.ContentStart?.VisualParent;
+        // Focus already there moves nothing, so asks for no scroll to hold.
+        if (!hold || source is null || XamlRoot is not { } root || ReferenceEquals(FocusManager.GetFocusedElement(root), stop))
+        {
+            _ = FocusManager.TryFocusAsync(stop, FocusState.Keyboard);
+            return;
+        }
+        TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>? held = null;
+        TypedEventHandler<UIElement, LosingFocusEventArgs>? left = null;
+        void Release()
+        {
+            container.BringIntoViewRequested -= held;
+            container.LosingFocus -= left;
+        }
+        held = (_, e) =>
+        {
+            if (!ReferenceEquals(e.OriginalSource, source)) { return; }
+            e.Handled = true;
+            Release();
+        };
+        left = (_, _) => Release();
+        container.BringIntoViewRequested += held;
+        FocusManager.TryFocusAsync(stop, FocusState.Keyboard).Completed = (op, status) =>
+        {
+            if (status != AsyncStatus.Completed || !op.GetResults().Succeeded) { DispatcherQueue.TryEnqueue(Release); }
+        };
+        // Only once focus has moved: the move itself may raise LosingFocus here.
+        container.LosingFocus += left;
     }
 
     // The block across the viewport's top edge, where it starts against that edge, and the offset then.
