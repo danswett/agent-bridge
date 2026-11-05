@@ -3,13 +3,15 @@
 // The set of accepted entries, which are quarantined, what has been adopted, and the state it
 // applies. It decides each offered entry by the acceptance rule, in the order offered; nothing
 // accepted is ever dropped.
-import { RosterFormatError } from './refusal.js';
 import { compare } from './codec.js';
-import { isPerson, presenceChallenge, signedBy, signedByCosigner } from './entry.js';
+import { isPerson, signedBy, signedByCosigner } from './entry.js';
 import { verify } from './p256.js';
-import { checkAssertion } from './webauthn.js';
 import { Bits, RosterGraph } from './graph.js';
 import { RosterState } from './state.js';
+import { INVALID } from './invalid.js';
+import { presenceProof } from './presence.js';
+
+export { INVALID };
 
 export const VERDICT = Object.freeze({
   // Accepted and applied (or held for probation, which only delays an effect).
@@ -20,29 +22,6 @@ export const VERDICT = Object.freeze({
   // Refused, with its code. One refused only for a cap or budget is kept aside, in case a later
   // removal brings it as evidence; it is never applied.
   refused: 'refused',
-});
-
-// Why the acceptance rule refuses an entry: the C# library's codes (Invalid).
-export const INVALID = Object.freeze({
-  parent: 'parent',
-  account: 'account',
-  generation: 'generation',
-  genesis: 'genesis',
-  seq: 'seq',
-  signer: 'signer',
-  signature: 'signature',
-  presence: 'presence',
-  readded: 'readded',
-  target: 'target',
-  seniority: 'seniority',
-  cosign: 'cosign',
-  keep: 'keep',
-  confirm: 'confirm',
-  merge: 'merge',
-  activeCap: 'active-cap',
-  cap: 'cap',
-  budget: 'budget',
-  evidence: 'evidence',
 });
 
 export const WINDOW = 8;
@@ -279,14 +258,14 @@ export class RosterVerifier {
     if (body.op === 'genesis') {
       const d = body.device;
       if (!(await verify(d.sign, signedBy(e.bodyBytes), e.sig))) return INVALID.signature;
-      return presenceOf(e, d, 'by', e.uvBy);
+      return presenceProof(e.bodyBytes, d, 'by', e.uvBy);
     }
 
     const signer = p.activeAdd(body.by);
     if (signer === null || !isPerson(g.at(signer).body.device.kind)) return INVALID.signer;
     const signerDevice = g.at(signer).body.device;
     if (!(await verify(signerDevice.sign, signedBy(e.bodyBytes), e.sig))) return INVALID.signature;
-    const noPresence = await presenceOf(e, signerDevice, 'by', e.uvBy);
+    const noPresence = await presenceProof(e.bodyBytes, signerDevice, 'by', e.uvBy);
     if (noPresence !== null) return noPresence;
     let cosigner = -1;
     if (body.cosigner !== null) {
@@ -295,7 +274,7 @@ export class RosterVerifier {
       cosigner = c;
       const cd = g.at(c).body.device;
       if (!(await verify(cd.sign, signedByCosigner(e.bodyBytes), e.cosig))) return INVALID.signature;
-      const noCoPresence = await presenceOf(e, cd, 'cosigner', e.uvCosigner);
+      const noCoPresence = await presenceProof(e.bodyBytes, cd, 'cosigner', e.uvCosigner);
       if (noCoPresence !== null) return noCoPresence;
     }
     facts.signer = signer;
@@ -521,25 +500,5 @@ export class RosterVerifier {
   get serving() {
     const held = this.held;
     return new Map([...this.state.active].filter(([id]) => !held.has(id)));
-  }
-}
-
-// Every entry needs each signer's presence: `key`, or `webauthn` with that signer's own
-// assertion; `none` signs nothing (decision 3(a)).
-async function presenceOf(e, d, role, uv) {
-  switch (d.presence) {
-    case 'key':
-      return uv === null ? null : INVALID.presence;
-    case 'webauthn':
-      if (uv === null) return INVALID.presence;
-      try {
-        await checkAssertion(uv, d.webauthn, await presenceChallenge(role, e.bodyBytes));
-      } catch (err) {
-        if (err instanceof RosterFormatError) return INVALID.presence;
-        throw err;
-      }
-      return null;
-    default:
-      return INVALID.presence;
   }
 }
