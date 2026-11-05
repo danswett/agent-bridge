@@ -372,6 +372,11 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
 }
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+// An answer whose panel stays once its question has gone (SessionCard #leave): one on its way, and
+// any outcome §6.5 draws on the panel. Busy and refused, which would offer its options again for a
+// question that has gone, resolve to the card's receipt at once.
+const leaves = (entry) => entry.state === 'sending' || entry.state === 'waiting' || entry.state === 'failed'
+  || (entry.state === 'done' && entry.outcome !== 'busy' && entry.outcome !== 'refused');
 
 // Why nothing can be given for a session now, for under its controls, or null (#269): its
 // machine is offline, reconnecting, back and its whole list not yet in, or no longer offering
@@ -1202,7 +1207,10 @@ export class SessionCard {
       const entry = old.entry;
       if (draft) {
         this.#orphan = { text: draft, why: !q || q.id !== old.questionId ? 'changed' : 'unanswerable' };
-      } else if (entry && !q && (entry.state === 'sending' || entry.state === 'waiting')) {
+      } else if (entry && !q && leaves(entry)) {
+        // Whichever came first, the question going or the answer's result: the same panel, so a
+        // result that arrived first keeps its check, or its pressed option and its words, as the
+        // other order does.
         this.#leave(old);
         leaving = true;
       } else if (entry) {
@@ -1474,7 +1482,9 @@ export class SessionCard {
     const settle = (entry) => {
       if (this.#leaving !== leaving || leaving.timer || !entry || entry.state === 'sending' || entry.state === 'waiting') { return; }
       if (entry.state === 'done' && entry.outcome === 'delivered') {
-        leaving.timer = setTimeout(resolve, ReceiptTiming.sendCheckHoldMs);
+        // For what is left of its check: all of it, unless the result came before the question went.
+        const until = panel.checkUntil;
+        leaving.timer = setTimeout(resolve, until === null ? ReceiptTiming.sendCheckHoldMs : Math.max(0, until - Date.now()));
       } else if (entry.state === 'done' && (entry.outcome === 'busy' || entry.outcome === 'refused')) {
         // After the watchers being told now, the panel's own among them: none is told of a view it has left.
         queueMicrotask(resolve);
@@ -1482,6 +1492,7 @@ export class SessionCard {
     };
     this.#leaving = leaving;
     leaving.unwatch = service.watch(hostId, sessionId, panel.questionId, settle);
+    settle(service.get(hostId, sessionId, panel.questionId));
   }
 
   #dropLeaving() {

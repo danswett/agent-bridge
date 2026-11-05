@@ -362,6 +362,59 @@ test.describe('on a phone', () => {
 test.describe('outcomes', () => {
   test.use({ viewport: { width: 390, height: 664 } });
 
+  // The machine's result can reach the phone before its update taking the question away: the card
+  // ends as it does the other way round. The demo host's question-clearing upsert is held back here
+  // until the result is in.
+  const resultFirst = (page) => page.evaluate(() => {
+    const h = window.agentBridgeDemo.host;
+    const upsert = h.upsert.bind(h);
+    const held = [];
+    h.upsert = (s) => { if (s.question === null) { held.push(s); } else { upsert(s); } };
+    window.__questionGoes = () => { h.upsert = upsert; for (const s of held) { upsert(s); } };
+  });
+
+  test('a delivered result before its question goes keeps the panel for the rest of its check, then resolves to You answered', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, choice());
+    await resultFirst(page);
+    // When the check went on, and when the panel went: a second apart, as when the question goes first.
+    await q.evaluate((el) => {
+      const option = el.querySelector('.choice[data-value="sqlite"]');
+      const at = window.__panel = {};
+      new MutationObserver(() => {
+        if (at.checked === undefined && option.classList.contains('checked')) { at.checked = performance.now(); }
+        if (at.gone === undefined && !el.isConnected) { at.gone = performance.now(); }
+      }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
+    });
+    const sqlite = q.locator('.choice[data-value="sqlite"]');
+    await sqlite.click();
+    await expect(sqlite).toHaveClass(/\bchecked\b/);
+    await page.evaluate(() => window.__questionGoes());
+    await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
+    await expect(q).toHaveCount(0);
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('You answered · SQLite');
+    const at = await page.evaluate(() => window.__panel);
+    expect(at.gone - at.checked).toBeGreaterThanOrEqual(900);
+  });
+
+  test('an unconfirmed result before its question goes keeps the panel as the usual order does: the option pressed, the rest disabled, saying why', async ({ page }) => {
+    await openDemo(page);
+    await script(page, 'unconfirmed');
+    const q = await ask(page, choice());
+    await resultFirst(page);
+    await q.locator('.choice[data-value="pg"]').click();
+    await expect(q).toHaveAttribute('data-answer', 'unconfirmed');
+    await page.evaluate(() => window.__questionGoes());
+    await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
+    // Past any check's hold: the panel is there to stay, not on its way out.
+    await page.waitForTimeout(1500);
+    await expect(q).toHaveCount(1);
+    await expect(q.locator('.answer-status')).toHaveText('Sent, but not confirmed. Check at the machine on Demo machine. (the session stopped answering)');
+    await expect(q.locator('.choice[data-value="pg"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(q.locator('.choice[data-value="sqlite"]')).toBeDisabled();
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveCount(0);
+  });
+
   test('unconfirmed says to check at the machine, keeps the option that went pressed and the rest disabled, and nothing offers to send it again', async ({ page }) => {
     await openDemo(page);
     await script(page, 'unconfirmed');

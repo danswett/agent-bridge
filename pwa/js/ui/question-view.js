@@ -260,6 +260,9 @@ export class QuestionPanel {
 
   get entry() { const { service, hostId, sessionId } = this.answering; return service.get(hostId, sessionId, this.q.id); }
 
+  // When the check on the control that sent its delivered answer ends, or null.
+  get checkUntil() { return this.#receipt.checkUntil; }
+
   // Text the person typed that has not gone to the machine, which would be lost if the
   // panel went away silently.
   unsentText() {

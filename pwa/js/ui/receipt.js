@@ -319,6 +319,9 @@ export class ReceiptClock {
     this.#tick();
   }
 
+  // When the check this view shows for its request's delivery ends, or null where it shows none.
+  get checkUntil() { return this.#check && this.#check.request === this.#entry?.request ? this.#check.until : null; }
+
   destroy() {
     clearTimeout(this.#timer);
     this.#timer = null;
