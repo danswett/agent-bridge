@@ -281,6 +281,31 @@ public sealed class CopilotPermissionTests : IDisposable
         Assert.Equal("1", choice!.Key);
     }
 
+    // Copilot wraps a warning without trimming it, so a run of spaces as wide as the dialog draws a
+    // row of nothing: "x", 250 spaces and "y" draws as "x", a blank row and "y" do. Compared part by
+    // part, the two were unlike, and the screen drawing either was read as the other's (Trust review
+    // of #769). One such warning is never answered from the screen: it could not be found there.
+    [Fact]
+    public void A_warning_whose_spaces_wrap_into_a_blank_row_is_never_told_from_one_with_a_blank_line_nor_answered_from_the_screen()
+    {
+        const string Q = "Do you want to run this command?";
+        CopilotPermissionScreen.Crowd Crowd(AgentBridge.Host.Core.Parsing.CopilotDialog mine, AgentBridge.Host.Core.Parsing.CopilotDialog theirs) =>
+            new(mine, ["npm test"], [new CopilotPermissionScreen.Other("shell, request r2", ["npm test"], theirs)]);
+        var wide = new AgentBridge.Host.Core.Parsing.CopilotDialog("Run the tests", [new(false, ["x" + new string(' ', 250) + "y"]), new(true, ["npm test"])], Q);
+        var blank = new AgentBridge.Host.Core.Parsing.CopilotDialog("Run the tests", [new(false, ["x\n\ny"]), new(true, ["npm test"])], Q);
+        var screen = CopilotScreen.Dialog("Run the tests", [(false, ["x"]), (false, ["y"]), (true, ["npm test"])], Q, CopilotScreen.ShellOptions);
+
+        Assert.True(AgentBridge.Host.Core.Parsing.CopilotDialogs.Alike(wide, blank));
+        Assert.Contains("would be drawn the same", CopilotPermissionScreen.Locate(screen, approve: true, ["npm test"], Crowd(blank, wide)).Problem);
+        var (choice, problem) = CopilotPermissionScreen.Locate(screen, approve: true, ["npm test"], Crowd(wide, blank));
+        Assert.Null(choice);
+        Assert.NotNull(problem);
+
+        // Beside one drawn otherwise, too: the screen cannot show where its text breaks.
+        var other = new AgentBridge.Host.Core.Parsing.CopilotDialog("Run the linter", [new(true, ["npm run lint"])], Q);
+        Assert.Contains("run of spaces", CopilotPermissionScreen.Locate(screen, approve: true, ["npm test"], Crowd(wide, other)).Problem);
+    }
+
     // The shape seen in #690: a read of one file outside the session's paths, offering read-only
     // access to its directory, described from its request and found in Copilot's dialog for it.
     [Fact]

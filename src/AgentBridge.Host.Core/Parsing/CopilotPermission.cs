@@ -76,22 +76,47 @@ public sealed record CopilotDialogPart(bool Boxed, IReadOnlyList<string> Lines);
 // be typed (SessionTracker), and types only then (CopilotPermissionScreen).
 public static class CopilotDialogs
 {
-    // Whether two dialogs could draw the same: as a screen shows them (Visible), every part alike
-    // once all white space is gone. A box wraps a long line hard at its width, so one line on two
-    // rows reads like two lines, and trailing white space is not drawn.
-    public static bool Alike(CopilotDialog a, CopilotDialog b)
+    // Whether two dialogs could draw the same: as a screen shows them (Visible), every box alike,
+    // and the text between two boxes alike as one, once all white space is gone. A box wraps a long
+    // line hard at its width, so one line on two rows reads like two lines, and trailing white
+    // space is not drawn. Text is wrapped without trimming (1.0.105's `Kve(…, {trim: false, hard:
+    // true})`), so a run of spaces as wide as the dialog draws a row of nothing, which reads as the
+    // gap between two parts: a warning of "x", 250 spaces and "y" draws as "x\n\ny" does, and
+    // counted as one part against two, the screen read for one approved the other (Trust review of
+    // #769). Where the text between boxes breaks into parts is never compared, only what it says.
+    public static bool Alike(CopilotDialog a, CopilotDialog b) =>
+        Squeeze(a.Title) == Squeeze(b.Title) && Squeeze(a.Question) == Squeeze(b.Question) && Segments(a).SequenceEqual(Segments(b));
+
+    // The body as boxes and the text between them, each squeezed; text of nothing but white space
+    // draws nothing, so is left out.
+    static IEnumerable<(bool Boxed, string Text)> Segments(CopilotDialog dialog)
     {
-        var (x, y) = (Visible(a), Visible(b));
-        return Squeeze(x.Title) == Squeeze(y.Title) && Squeeze(x.Question) == Squeeze(y.Question) && x.Body.Count == y.Body.Count
-            && x.Body.Zip(y.Body).All(p => p.First.Boxed == p.Second.Boxed && Squeeze(string.Concat(p.First.Lines)) == Squeeze(string.Concat(p.Second.Lines)));
+        string? text = null;
+        foreach (var part in dialog.Body)
+        {
+            if (!part.Boxed) { text = (text ?? "") + Squeeze(string.Concat(part.Lines)); continue; }
+            if (text is { Length: > 0 }) { yield return (false, text); }
+            text = null;
+            yield return (true, Squeeze(string.Concat(part.Lines)));
+        }
+        if (text is { Length: > 0 }) { yield return (false, text); }
     }
 
-    // The dialog as a screen can show it, which is how it is read there (CopilotPermissionScreen)
-    // and compared with others (Alike): a part drawn as text is the runs of its rows between blank
-    // ones, each read as a part of its own, and one of nothing but white space draws nothing at all.
-    // Counted as written, a warning of white space alone made two requests that draw the same, one
-    // with it and one without, compare unlike, and the screen read for one approved the other
-    // (Copilot review of #769). A box is drawn with its edges whatever it holds, so is kept as it is.
+    // Whether a part drawn as text holds a run of spaces that can wrap onto a row of its own, which
+    // the screen cannot tell from the gap between two parts, so this dialog would not be found on
+    // its own screen. Eight is narrower than any dialog Copilot draws.
+    public static bool Unfindable(CopilotDialog dialog) =>
+        dialog.Body.Any(p => !p.Boxed && p.Lines.Any(l => l.Contains(WideGap, StringComparison.Ordinal)));
+
+    const string WideGap = "        ";
+
+    // The dialog as a screen can show it, which is how it is read there (CopilotPermissionScreen):
+    // a part drawn as text is the runs of its rows between blank ones, each read as a part of its
+    // own, and one of nothing but white space draws nothing at all. Counted as written, a warning of
+    // white space alone made two requests that draw the same, one with it and one without, compare
+    // unlike, and the screen read for one approved the other (Copilot review of #769); Alike now
+    // compares the text between boxes whole. A box is drawn with its edges whatever it holds, so is
+    // kept as it is.
     public static CopilotDialog Visible(CopilotDialog dialog) => dialog with
     {
         Body = [.. dialog.Body.SelectMany(p => p.Boxed ? [p] : Runs(p.Lines.Count > 0 ? p.Lines[0] : "").Select(run => new CopilotDialogPart(false, [run])))],
@@ -117,7 +142,7 @@ public static class CopilotDialogs
     // dialog is known, nothing given for any of them is unsafe, and none would draw the same.
     public static bool Identifiable(CopilotPermissionPrompt mine, IEnumerable<CopilotPermissionPrompt> others)
     {
-        if (mine.Dialog is not { } dialog || mine.Drawn.Any(Unsafe)) { return false; }
+        if (mine.Dialog is not { } dialog || Unfindable(dialog) || mine.Drawn.Any(Unsafe)) { return false; }
         return others.All(o => !o.Drawn.Any(Unsafe) && (o.Dialog is not { } theirs || !Alike(dialog, theirs)));
     }
 

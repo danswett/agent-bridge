@@ -444,6 +444,32 @@ public class CopilotTests
         Assert.StartsWith("r1#", crowded.Id);
     }
 
+    // Copilot wraps a warning without trimming it, so 250 spaces draw a row of nothing, and "x", the
+    // spaces and "y" draw as "x\n\ny" does: whichever of the two is listed first is answered at the
+    // machine. Compared part by part they were unlike (Trust review of #769). And one whose spaces
+    // can wrap so is never answered from the screen, whatever waits beside it: the screen cannot
+    // show where its text breaks, so could not find it.
+    [Theory]
+    [InlineData("wide", "blank")]
+    [InlineData("blank", "wide")]
+    [InlineData("wide", "lint")]
+    public async Task A_permission_whose_warning_wraps_into_a_blank_row_is_answered_at_the_machine_beside_another(string first, string second)
+    {
+        await using var s = new Session_();
+        System.Text.Json.Nodes.JsonObject Prompt(string shape)
+        {
+            var o = Copilot.Prompts["commands"].DeepClone().AsObject();
+            o["fullCommandText"] = shape == "lint" ? "npm run lint" : "npm test";
+            if (shape != "lint") { o["warning"] = shape == "wide" ? "x" + new string(' ', 250) + "y" : "x\n\ny"; }
+            return o;
+        }
+
+        var crowded = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Prompt(first), 2), Copilot.Permission("r2", "c2", Prompt(second), 3))).Question!;
+
+        Assert.Equal((true, 2), (crowded.AnswerAtMachine == true, crowded.Waiting));
+        Assert.StartsWith("r1#", crowded.Id);
+    }
+
     // Another waiting request that would be drawn the same (here, the same command with a trailing
     // space, which is not drawn) cannot be told from it on screen, so the first is answered at the
     // machine until that one ends; a distinct one beside it changes nothing (Copilot review of #769).
