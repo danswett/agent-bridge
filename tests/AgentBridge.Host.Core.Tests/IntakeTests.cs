@@ -915,6 +915,24 @@ public sealed class IntakeTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "s.json")));
     }
 
+    // Copilot on #813: standing back because the claim failed is not standing back for the daemon.
+    // Nobody here took the spool in, so a SessionEnd still in it leaves Codex's endings unsettled.
+    [Fact]
+    public void An_intake_that_cannot_claim_the_spool_leaves_endings_unsettled()
+    {
+        _f.CodexRegistration("s", 63, null, updated: Fixture.T0.AddMinutes(-5));
+        Spooled("0001", "codex", "hook", new { session_id = "s", hook_event_name = "SessionEnd" });
+        Directory.CreateDirectory(_f.Runtime);
+        using var taken = new FileStream(Path.Combine(_f.Runtime, HookIntake.ClaimFile), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var intake = Intake();
+
+        Assert.Equal(0, intake.Pass());
+
+        Assert.Contains("another host is taking this spool", intake.Paused);
+        Assert.False(intake.Drained);
+        Assert.False(HookIntake.EndingsSettled(migrated: true, problem: null, () => intake)(AgentKind.Codex));
+    }
+
     [Fact]
     public void The_heartbeat_is_kept_fresh_while_a_long_backlog_drains()
     {

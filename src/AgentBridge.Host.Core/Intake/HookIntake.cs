@@ -156,9 +156,26 @@ public sealed class HookIntake : IAsyncDisposable
     // record still reads endings (KeepEndings), however long the first drain takes. While agent-ha-bridge
     // has the spool, its daemon applies them to the same registrations, and the spool is not even
     // listed from here (G5): settled as far as this host can know.
-    public bool Drained => Paused is not null || (_passed && !_queued && !Waiting());
+    public bool Drained
+    {
+        get
+        {
+            // Stood back for the daemon: it applies the spool. Stood back because the claim failed
+            // (another host, or an I/O or access error): nobody here took the spool in, so a
+            // SessionEnd still in it is not settled. Read as drained, a session that ended cleanly
+            // was judged dead from its stale registration (Copilot on #813).
+            lock (_gate)
+            {
+                if (_paused is not null) { return _pausedForDaemon; }
+            }
+            return _passed && !_queued && !Waiting();
+        }
+    }
 
     volatile bool _passed;
+    // Whether the intake stands back because agent-ha-bridge has the spool, as against a claim that
+    // failed. Under _gate, with _paused.
+    bool _pausedForDaemon;
 
     // A test's way to see each listing of the spool (G5: none once agent-ha-bridge has it).
     internal Action? Listing { get; set; }
@@ -260,7 +277,7 @@ public sealed class HookIntake : IAsyncDisposable
         }
         if (!Claim())
         {
-            StandBack("another host is taking this spool (a second profile migrated from the same installation?)");
+            StandBack("another host is taking this spool (a second profile migrated from the same installation?)", daemon: false);
             return 0;
         }
         lock (_gate)
@@ -294,12 +311,13 @@ public sealed class HookIntake : IAsyncDisposable
         return handled;
     }
 
-    void StandBack(string why)
+    void StandBack(string why, bool daemon = true)
     {
         lock (_gate)
         {
             if (_paused is null) { _log($"standing back from the hook spool: {why}"); }
             _paused = why;
+            _pausedForDaemon = daemon;
         }
         // The heartbeat is the daemon's now; the watcher would only wake passes that do nothing.
         _heartbeatOwned = false;
