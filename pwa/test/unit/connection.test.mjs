@@ -65,6 +65,23 @@ test('out of sight for 15 s, the app closes its relay connection, stays closed, 
   conn.stop();
 });
 
+test('a rest is said before its channels go, so the machines shown still know which of them were current', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { conn, show } = connected();
+  await conn.start();
+  const order = [];
+  const attach = conn.channels.attach.bind(conn.channels);
+  conn.channels.attach = (r) => { order.push(r ? 'attached' : 'detached'); return attach(r); };
+  conn.on('lost', (e) => order.push(e.resting ? 'rest' : 'drop'));
+
+  show(false);
+  t.mock.timers.tick(QUIET_AFTER_MS);
+  await flush();
+
+  assert.deepEqual(order, ['rest', 'detached']);
+  conn.stop();
+});
+
 test('a quick look at another app keeps the connection as it was', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { conn, relays, show } = connected();

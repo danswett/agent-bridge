@@ -11,6 +11,7 @@ import { prepareAttachment } from '../../js/attachments.js';
 import { DemoBlobStore, DemoConnection, DemoHost } from '../../js/demo.js';
 import { ChannelSet, KIND } from '../../js/channels.js';
 import { P256KeyPair } from '../../js/noise-p256.js';
+import { BridgeConnection, QUIET_AFTER_MS } from '../../js/connection.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
 
@@ -992,6 +993,56 @@ test('a rest leaves each machine whose list was current confirming, not reconnec
 
   connection.emit('lost', { code: 1006, reason: '' });
   assert.deepEqual(hosts.staleOf('a'), { reason: 'reconnecting', since: null });
+});
+
+// The relay connection itself, put to rest by the page going out of sight: its channels close the
+// host clients at once (as ChannelSet's do), which the machines shown must not take for a drop.
+test('the app put to rest through its relay connection leaves each machine whose list was current confirming, though its channels close at once', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const visibility = [];
+  const doc = { visibilityState: 'visible', addEventListener(type, fn) { if (type === 'visibilitychange') { visibility.push(fn); } }, removeEventListener() {} };
+  const relays = [];
+  const connection = new BridgeConnection({
+    base: 'http://relay.invalid', key: {}, deviceId: 'me', name: 'phone', account: { token: 't' },
+    win: { document: doc, addEventListener() {}, removeEventListener() {} },
+    makeRelay: () => {
+      const r = { open: false, async connect() { this.open = true; return this; }, close() { this.open = false; this.onClose?.({ code: 1000, reason: 'resting' }); } };
+      relays.push(r);
+      return r;
+    },
+  });
+  const channels = [];
+  connection.channels = {
+    attach(r) { if (!r) { for (const ch of channels.splice(0)) { ch.close(); } } },
+    open(peerId) {
+      const ch = { peerId, peerName: peerId, closed: false, onclose: null, close() { if (!this.closed) { this.closed = true; this.onclose?.(); } } };
+      channels.push(ch);
+      return Promise.resolve(ch);
+    },
+  };
+  const hosts = new HostSession({
+    connection, store: new SessionsStore(), storage: null,
+    makeClient: (ch) => {
+      const closing = [];
+      const c = Object.assign(fakeClient(ch), { synced: true, on(type, fn) { if (type === 'close') { closing.push(fn); } }, close() { ch.close(); } });
+      ch.onclose = () => { for (const fn of closing) { fn(); } };
+      return c;
+    },
+  });
+  await connection.start();
+  relays[0].onPresence([{ id: 'a', kind: 'host' }], null);
+  hosts.select('a');
+  await flush();
+  assert.notEqual(hosts.route('a'), null);
+
+  doc.visibilityState = 'hidden';
+  for (const fn of visibility) { fn(); }
+  t.mock.timers.tick(QUIET_AFTER_MS);
+
+  assert.equal(connection.state, 'resting');
+  assert.equal(channels.length, 0, 'its channels went');
+  assert.deepEqual(hosts.staleOf('a'), { reason: 'confirming', since: null, rested: true });
+  connection.stop();
 });
 
 test('back from a rest, the relay failing to come back turns its machines to reconnecting', async () => {

@@ -152,8 +152,11 @@ export class BridgeConnection {
     this.relay = null;
     this.#setState('resting', 'The app is in the background.');
     if (r) {
-      this.channels.attach(null);
+      // Said before the channels go: detaching them closes every host client at once, and the
+      // machines shown would read as dropped (reconnecting, out of the app badge) before they hear
+      // it was a rest, with nothing left to tell which of them were current.
       this.#emit('lost', { code: 1000, reason: 'resting', resting: true });
+      this.channels.attach(null);
       r.close(1000, 'resting');
     }
   }
