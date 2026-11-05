@@ -65,6 +65,8 @@ public sealed class RosterPropertyTests
         ["partitioned-unconfirmed"] = () => RosterCopyTests.Partitioned(confirmed: false),
         ["copies-across-ids"] = RosterCopyTests.CopiesAcrossIds,
         ["target-cannot-choose"] = RosterCopyTests.TargetCannotChoose,
+        ["duplicate-removed"] = () => RosterCopyTests.DuplicateRemoved(seenByRemover: false),
+        ["duplicate-removed-barred"] = () => RosterCopyTests.DuplicateRemoved(seenByRemover: true),
         ["barred-grants"] = RosterWindowTests.BarredGrants,
         ["raw-chain"] = RosterWindowTests.RawChain,
         ["cascade-voids-winner"] = () => RosterWindowTests.CascadeVoidsWinner(removeCopier: true),
