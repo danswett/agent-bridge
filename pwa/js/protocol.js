@@ -6,6 +6,8 @@
 // one may send a number where a string belongs. Unknown fields are dropped; unknown enum
 // values read as the C# reader's [UnknownAs] value.
 
+import { readAttention, readMachineSignIn } from './auth-state.js';
+
 export const PROTOCOL_VERSION = 1;
 
 export const Ops = Object.freeze({
@@ -236,6 +238,9 @@ export function readSession(raw) {
     subagents: Array.isArray(s.subagents) ? s.subagents.map(readSubagent).filter(Boolean) : null,
     subagentsMore: Number.isSafeInteger(s.subagentsMore) && s.subagentsMore > 0 ? s.subagentsMore : 0,
     waitingOn: str(s.waitingOn),
+    // What is wrong with it (#800): it needs sign-in, its turn ended on an error, or it stopped
+    // answering. Shown over status (status.js); read where every name for it is kept.
+    attention: readAttention(s.attention),
   };
 }
 
@@ -255,7 +260,7 @@ export function readHello(raw) {
     protocol: num(h.protocol),
     // readOnly: why the machine takes nothing from the phone now (agent-ha-bridge runs there).
     // instance: this run of the host, which a reconnect resumes the list of (sessions.subscribe's since).
-    machine: { id: str(m.id), name: str(m.name), os: str(m.os), hostVersion: str(m.hostVersion), dev: m.dev === true, sessions: Number.isSafeInteger(m.sessions) && m.sessions >= 0 ? m.sessions : null, readOnly: str(m.readOnly) || null, instance: str(m.instance) },
+    machine: { id: str(m.id), name: str(m.name), os: str(m.os), hostVersion: str(m.hostVersion), dev: m.dev === true, sessions: Number.isSafeInteger(m.sessions) && m.sessions >= 0 ? m.sessions : null, readOnly: str(m.readOnly) || null, instance: str(m.instance), signIn: readMachineSignIn(m.signIn) },
     capabilities: Array.isArray(h.capabilities) ? h.capabilities.filter((c) => typeof c === 'string') : [],
   };
 }

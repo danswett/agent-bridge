@@ -70,6 +70,9 @@
       <!-- What a status banner says as it appears: a live region already on the page, since one
            unhidden with its words already in it is not reliably read out. -->
       <p id="banner-said" class="sr-only" role="status" aria-live="polite"></p>
+      <!-- Sign-in (#800): said politely, outside the list pane, which a phone hides while a session is open.
+           Each announcement is a line added to it, and only additions are read. -->
+      <div id="sign-in-said" class="sr-only" role="status" aria-live="polite" aria-atomic="false" aria-relevant="additions"></div>
       <div id="update-banner" class="banner" hidden>
         <span>A new version of the app is ready.</span>
         <button type="button" id="reload" class="button">Reload</button>
@@ -121,6 +124,9 @@
             </div>
             <div id="machine-tabs" class="machine-tabs" role="tablist" aria-label="Machines" hidden></div>
             <p id="host-state" class="note" role="status" aria-live="polite"></p>
+            <!-- An agent that needs sign-in (#800): one banner per machine, agent and account. Its
+                 live region is on the page before anything is said in it. -->
+                  <div id="sign-in-banners" class="sign-in-banners" hidden></div>
             <!-- Needs you · N (#165, ui.md §6.1): every pending question, oldest first, at the top of
                  the list pane. It refers to sessions and never moves their rows. -->
             <div id="needs-you" class="needs-you" role="region" aria-labelledby="needs-you-h" hidden>
