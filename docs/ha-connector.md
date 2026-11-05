@@ -712,7 +712,9 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
     at most.
   * **No account, code or URL** is in either one.
   * It is withdrawn from the phones (`clear_notification` by its tag) once none of its sessions
-    needs a person: signed in, recovered or ended. A later need is news again.
+    needs a person: signed in, recovered or ended. A later need is news again. Nothing is withdrawn
+    while the host's session discovery is held. Retirement waits the same way: after a restart
+    under a hold, a session not found yet is missing, not signed in.
   * When it was sent, which destinations have it and which phones hold it are kept in the
     connector's state file. A restart within the hour therefore doesn't send it again, and still
     withdraws it. A destination that missed it (a phone or the push service failing, or a pass

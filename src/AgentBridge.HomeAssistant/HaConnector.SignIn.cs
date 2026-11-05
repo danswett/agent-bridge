@@ -110,7 +110,10 @@ public sealed partial class HaConnector
             else { n.RetryAt = now + options.ButtonsRetry; }
         }
         // Withdrawn once none of its sessions needs a person: signed in, recovered, or ended. A new
-        // need after that is news again.
+        // need after that is news again. Not while the host's discovery is held: a session it has
+        // yet to find again (a restart under a hold) is missing, not signed in, and would be told
+        // of again within the hour once found (found in review; retirement waits the same way).
+        if (source.Held is not null) { return; }
         List<(string Key, SignInNotice N)> over;
         lock (gate) { over = [.. signIns.Where(x => !groups.Any(g => g.Key == x.Key)).Select(x => (x.Key, x.Value))]; }
         foreach (var (key, n) in over)

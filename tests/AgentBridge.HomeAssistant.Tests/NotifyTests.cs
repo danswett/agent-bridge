@@ -1481,6 +1481,28 @@ public sealed class NotifyTests : IDisposable
     }
 
     [Fact]
+    public async Task A_restart_under_a_discovery_hold_neither_withdraws_the_sign_in_notice_nor_sends_it_again_within_the_hour()
+    {
+        await using (var c = Connector(Phones))
+        {
+            Fail(SignInNeeded());
+            await Pass(c);
+            Assert.Single(Notices());
+        }
+        // Restarted while discovery is held: the session isn't found yet, which is not signing in.
+        sessions.End(A);
+        sessions.Held = new DiscoveryHeld("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot]);
+        await using var again = Connector(Phones);
+        await Pass(again, 60);
+        Assert.Equal(0, NoticeClears());
+        sessions.Held = null;
+        Fail(SignInNeeded());
+        await Pass(again);
+        Assert.Single(Notices());
+        Assert.Equal(0, NoticeClears());
+    }
+
+    [Fact]
     public async Task A_destination_that_missed_the_sign_in_notice_is_tried_again_and_one_that_took_it_is_not_told_twice()
     {
         ha.NotifyFailsFor = s => s is Tablet or "notify.notify";
