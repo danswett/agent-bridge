@@ -74,6 +74,7 @@ public sealed class RosterPropertyTests
         ["no-feedback"] = () => RosterStepFourTests.NoFeedback(removeCopier: true),
         ["removed-subordinate-barred"] = () => RosterStepFourTests.RemovedSubordinate(cSawCopy: true),
         ["removed-subordinate"] = () => RosterStepFourTests.RemovedSubordinate(cSawCopy: false),
+        ["voided-merge"] = RosterAdoptionTests.VoidedMerge,
     };
 
     // The labels in a random order in which every entry still follows its parents.
