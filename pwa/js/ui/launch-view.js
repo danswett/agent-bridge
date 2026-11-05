@@ -825,7 +825,9 @@ export class LaunchPanel {
     }
     const shown = entry ? describeLaunch(entry, { machineName: this.#target?.machineName }) : { text: '', tone: '' };
     this.root.dataset.launch = !entry ? 'none' : entry.state !== 'done' ? entry.state : entry.outcome;
-    e.status.textContent = shown.text;
+    // Said once: drawn again unchanged (each listing redraws it), a polite live region would say
+    // it again.
+    if (e.status.textContent !== shown.text) { e.status.textContent = shown.text; }
     e.status.className = `answer-status launch-status${shown.tone ? ` ${shown.tone}` : ''}`;
     this.root.setAttribute('aria-busy', shown.tone === 'progress' ? 'true' : 'false');
     e.resend.hidden = entry?.state !== 'failed';

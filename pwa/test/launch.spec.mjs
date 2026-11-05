@@ -865,8 +865,18 @@ test.describe('a launch followed after it was not confirmed', () => {
     await register(page, 'codex');
     await expect(view(page, LATE)).toBeInViewport();
     await expect(status(page)).toHaveText('Session started.');
+    await expect(status(page)).toHaveClass(/\bok\b/);
     await expect(panel(page)).toHaveAttribute('data-launch', 'started');
     await expect(field(page, 'prompt')).toHaveValue('');
+    // Said once: the machine listed again redraws the status, but leaves its words alone.
+    await page.evaluate(() => {
+      window.__statusChanges = 0;
+      new MutationObserver((m) => { window.__statusChanges += m.length; })
+        .observe(document.querySelector('#launch .launch-status'), { childList: true, characterData: true, subtree: true });
+    });
+    await page.evaluate(() => window.agentBridgeDemo.launchPanel.refresh());
+    await expect(status(page)).toHaveText('Session started.');
+    expect(await page.evaluate(() => window.__statusChanges)).toBe(0);
   });
 
   test('its session registering while elsewhere changes its status and first message quietly, and opens nothing', async ({ page }) => {

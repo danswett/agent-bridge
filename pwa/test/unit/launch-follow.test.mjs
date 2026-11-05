@@ -10,7 +10,12 @@ const question = (over = {}) => ({ id: 'q1', agent: 'claude', folder: 'C:\\repos
 // A LaunchFollow on a clock and timers the test moves, for a Launch page showing h1.
 function setup({ showing = true } = {}) {
   const t = { now: T0, timers: [], relists: 0, started: [], loads: 0, showing, pending: [] };
+  // The page, in front until the test hides it.
+  const heard = [];
+  t.doc = { hidden: false, addEventListener: (type, fn) => { if (type === 'visibilitychange') { heard.push(fn); } } };
+  t.setHidden = (hidden) => { t.doc.hidden = hidden; for (const fn of heard) { fn(); } };
   t.follow = new LaunchFollow({
+    doc: t.doc,
     showing: (hostId) => t.showing && hostId === 'h1',
     relist: () => { t.relists++; t.loads++; return new Promise((resolve) => { t.pending.push(resolve); }); },
     loads: () => t.loads,
@@ -137,6 +142,68 @@ test('sessions registering during a listing make one more listing after it, not 
   t.pending.shift()();
   await flush();
   assert.equal(t.relists, 2);
+});
+
+test('a busy machine is not listed again while the app is in the background, and once when it comes back after its busy can have ended', () => {
+  const t = setup();
+  t.setHidden(true);
+  t.follow.listed('h1', busy([]), ['s1']);
+  assert.equal(t.armed().length, 0);
+  t.advance(BUSY_FOR_MS + BUSY_SLACK_MS + 60000);
+  // Nor does a session registering there list it while hidden.
+  t.follow.session('h1', { id: 's2', agent: 'claude', status: 'working' });
+  assert.equal(t.relists, 0);
+  t.setHidden(false);
+  assert.equal(t.relists, 1);
+  // Shown again with that listing still on its way: no second one.
+  t.setHidden(false);
+  assert.equal(t.relists, 1);
+  assert.equal(t.armed().length, 0);
+});
+
+test('a busy machine hidden partway through its wait is listed again only after what is left of it, once back', () => {
+  const t = setup();
+  t.now = T0 + 30000;
+  t.follow.listed('h1', busy([question()]), []);
+  t.advance(30000);
+  t.setHidden(true);
+  assert.equal(t.armed().length, 0);
+  t.advance(10000);
+  t.setHidden(false);
+  assert.equal(t.relists, 0);
+  t.advance(50999);
+  assert.equal(t.relists, 0);
+  t.advance(1);
+  assert.equal(t.relists, 1);
+});
+
+test('a session registering in the background during a listing asked before it is still listed for once back', async () => {
+  const t = setup();
+  t.follow.listed('h1', busy([]), ['s1']);
+  t.advance(BUSY_FOR_MS + BUSY_SLACK_MS);
+  assert.equal(t.relists, 1);
+  t.setHidden(true);
+  t.follow.session('h1', { id: 's2', agent: 'claude', status: 'working' });
+  // The listing asked before s2 registered comes back still busy.
+  t.follow.listed('h1', busy([]), ['s1', 's2']);
+  t.pending.shift()();
+  await flush();
+  assert.equal(t.relists, 1);
+  t.setHidden(false);
+  assert.equal(t.relists, 2);
+});
+
+test('a newer launch on the same machine replaces the one followed, however it goes', () => {
+  const t = setup();
+  t.follow.follow('h1', unconfirmed(), () => false);
+  t.follow.follow('h1', { state: 'sending', outcome: null, request: 'r2', detail: null }, () => false);
+  t.follow.session('h1', { id: 's9', agent: 'claude', status: 'working' });
+  assert.equal(t.started.length, 0);
+  // Each machine follows its own: one on h2 leaves h1's alone.
+  t.follow.follow('h1', unconfirmed({ request: 'r3' }), () => false);
+  t.follow.follow('h2', unconfirmed({ request: 'r4', detail: { session: 's8' } }), () => false);
+  t.follow.session('h1', { id: 's9', agent: 'claude', status: 'working' });
+  assert.deepEqual(t.started.map((s) => s.request), ['r3']);
 });
 
 test('an unconfirmed launch whose session registers with a Claude agent has started, and its machine is listed again', () => {

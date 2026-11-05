@@ -45,19 +45,60 @@ export class LaunchFollow {
   #late = new Map();
   // By machine, the last outcome looked at, so the same one is never followed twice.
   #seen = new Map();
+  // While the machine shown is busy, when it is next listed: { hostId, at, load }. Kept while the
+  // app is in the background, with no timer running (as fleet.js's probe), so coming back lists
+  // it once if that time has passed, or waits for what is left.
+  #due = null;
+  // A listing a session asked for while the app was in the background, made on its return.
+  #owed = null;
 
   // showing(hostId): the Launch view is showing that machine. relist(): lists the machine shown
   // again, a promise. loads(): how many listings were asked for so far. started(hostId, late):
-  // a launch followed has started.
-  constructor({ showing, relist, loads, started, now = () => Date.now(), setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = (t) => clearTimeout(t) }) {
-    Object.assign(this, { showing, relist, loads, started, now, setTimer, clearTimer });
+  // a launch followed has started. doc: the page, whose visibility pauses the listing.
+  constructor({ showing, relist, loads, started, now = () => Date.now(), setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = (t) => clearTimeout(t), doc = globalThis.document }) {
+    Object.assign(this, { showing, relist, loads, started, now, setTimer, clearTimer, doc });
+    doc?.addEventListener?.('visibilitychange', () => (this.#hidden() ? this.#cancel() : this.#back()));
+  }
+
+  #hidden() { return this.doc?.hidden === true; }
+
+  #arm() {
+    this.#cancel();
+    const due = this.#due;
+    if (!due || this.#hidden()) { return; }
+    this.#timer = this.setTimer(() => {
+      this.#timer = null;
+      if (this.#hidden()) { return; }
+      this.#due = null;
+      if (this.showing(due.hostId) && due.load === this.loads()) { this.#relistBusy(due.hostId); }
+    }, Math.max(0, due.at - this.now()));
+  }
+
+  // In front again: one listing if the busy can have ended (or a session asked for one), else the
+  // wait goes on for what is left of it.
+  #back() {
+    const due = this.#due;
+    const owed = this.#owed;
+    this.#owed = null;
+    if (owed && this.showing(owed.hostId)) {
+      this.#due = null;
+      this.#relistBusy(owed.hostId);
+    } else if (due && due.at <= this.now()) {
+      this.#due = null;
+      if (this.showing(due.hostId) && due.load === this.loads()) { this.#relistBusy(due.hostId); }
+    } else {
+      this.#arm();
+    }
   }
 
   // After each listing of the machine shown: what it lists now (null if nothing), and the ids of
   // its sessions. Returns how long until it is listed again, or null when it isn't busy.
   listed(hostId, options, sessionIds) {
     this.#cancel();
+    // A listing asked for after a session asked for one is that one; one asked before it is not.
+    if (this.#owed && this.loads() > this.#owed.load) { this.#owed = null; }
     if (!options?.busy) {
+      this.#due = null;
       this.#known = null;
       this.#overdue = false;
       return null;
@@ -73,17 +114,16 @@ export class LaunchFollow {
     const most = BUSY_FOR_MS + BUSY_SLACK_MS;
     const wait = overdue && this.#overdue ? most : Math.min(Math.max(left + BUSY_SLACK_MS, BUSY_AT_LEAST_MS), most);
     this.#overdue = overdue;
-    const load = this.loads();
-    this.#timer = this.setTimer(() => {
-      this.#timer = null;
-      if (this.showing(hostId) && load === this.loads()) { this.relist(); }
-    }, wait);
+    this.#due = { hostId, at: this.now() + wait, load: this.loads() };
+    this.#arm();
     return wait;
   }
 
   // The view closed, or another machine picked: nothing is listed again for it.
   stop() {
     this.#cancel();
+    this.#due = null;
+    this.#owed = null;
     this.#known = null;
     this.#overdue = false;
   }
@@ -103,7 +143,10 @@ export class LaunchFollow {
   // A launch's entry (launch-service.js), on any machine. listed(id): that machine lists that
   // session now. True when it is followed.
   follow(hostId, entry, listed) {
-    if (entry?.state !== 'done' || !hostId || this.#seen.get(hostId) === entry.request) { return false; }
+    if (!hostId || !entry) { return false; }
+    // One launch followed per machine: a newer one there, however it goes, replaces it.
+    if (this.#late.get(hostId)?.request !== entry.request) { this.#late.delete(hostId); }
+    if (entry.state !== 'done' || this.#seen.get(hostId) === entry.request) { return false; }
     this.#seen.set(hostId, entry.request);
     const session = entry.detail?.session;
     if (entry.outcome !== 'unconfirmed' || !session || listed(session)) { return false; }
@@ -135,7 +178,11 @@ export class LaunchFollow {
       known.ids.add(s.id);
       relist = true;
     }
-    if (relist) { this.#relistBusy(hostId); }
+    if (relist && this.#hidden()) {
+      this.#owed = { hostId, load: this.loads() };
+    } else if (relist) {
+      this.#relistBusy(hostId);
+    }
   }
 
   // A folder-trust question on that machine answered here, with its outcome: the launch followed
@@ -158,7 +205,7 @@ export class LaunchFollow {
       this.#relisting = false;
       if (this.#again) {
         this.#again = false;
-        if (this.showing(hostId)) { this.#relistBusy(hostId); }
+        if (this.#hidden()) { this.#owed = { hostId, load: this.loads() }; } else if (this.showing(hostId)) { this.#relistBusy(hostId); }
       }
     });
   }
