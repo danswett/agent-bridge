@@ -499,6 +499,28 @@ test.describe('on a phone', () => {
     }
   });
 
+  test('on a phone a fold\'s "still working" opens the earliest started still working on the Delegates tab, in view and focused', async ({ page }, testInfo) => {
+    await openDemo(page);
+    const c = card(page);
+    await addRun(page, RUN);
+    const working = c.locator('.agent-block .delegate-events .delegate-fold-working');
+    await expect(working).toHaveText('3 still working');
+    await working.click();
+    // The witness started 17m ago, before the suite (16m) and the fold's own (3m).
+    await expect(c.getByRole('tab', { name: 'Delegates' })).toHaveAttribute('aria-selected', 'true');
+    await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-witness');
+    const title = pane(page).locator('.delegate-title');
+    await expect(title).toHaveText('Read witness shell logic');
+    await expect(title).toBeFocused();
+    await expect(title).toBeInViewport();
+    for (const scheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await expect(title).toBeFocused();
+      await testInfo.attach(`delegate-fold-link-phone-${scheme}`, { body: await capture(page, c), contentType: 'image/png' });
+    }
+    await page.emulateMedia({ colorScheme: 'light' });
+  });
+
   test.describe('with touch', () => {
     test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
 
@@ -883,16 +905,39 @@ test.describe('at three panes', () => {
     await expect(line).toHaveAttribute('data-kept', 'yes');
   });
 
+  test('an idle delegate the host gave no end time keeps its start line, aged from its start, and says no outcome', async ({ page }, testInfo) => {
+    await openDemo(page);
+    const c = card(page);
+    const events = c.locator('.agent-block .delegate-events');
+    await addRun(page, [{ id: 'idle-a', name: 'Wait for review', status: 'idle', startedAt: 5 }]);
+    const line = events.locator('> li').last();
+    await expect(line).toHaveAttribute('data-kind', 'start');
+    await expect(line).toHaveText(/^Started delegate Wait for review · 5m/);
+    await expect(line).toHaveAttribute('title', /^Started /);
+    await expect(line.locator('.delegate-event-mark [data-icon="delegate"]')).toHaveCount(1);
+    await expect(line.locator('.glyph')).toHaveCount(0);
+    await expect(line).not.toContainText('reported back');
+    for (const scheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await testInfo.attach(`delegate-idle-start-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
+    }
+    await page.emulateMedia({ colorScheme: 'light' });
+  });
+
   test('a run of five or more delegate lines folds into one summary that the keyboard opens and closes, and stays as it was left', async ({ page }, testInfo) => {
     await openDemo(page);
     const c = card(page);
-    await addRun(page, RUN);
+    // The run, and one the host saw end with no outcome, started between two of it.
+    await addRun(page, [...RUN, { id: 'fold-g', name: 'Tidy the branch', status: 'ended', startedAt: 9.5, endedAt: 9 }]);
     const events = c.locator('.agent-block .delegate-events');
     const fold = events.locator('.delegate-fold-toggle');
-    // One line, the whole summary its button's name and its state only in aria-expanded.
+    // One line, the whole summary its button's name and its state only in aria-expanded; failed
+    // and ended counted apart, after reported back, and the chevron inside the button, ending it.
     await expect(events.locator('> li')).toHaveCount(1);
     await expect(events.locator('> li.delegate-fold')).toHaveCount(1);
-    await expect(fold).toHaveAccessibleName('8 delegates · 4 reported back, 1 failed, 3 still working');
+    await expect(fold).toHaveAccessibleName('9 delegates · 4 reported back, 1 failed, 1 ended, 3 still working');
+    await expect(fold).toHaveText('9 delegates · 4 reported back, 1 failed, 1 ended');
+    await expect(fold.locator(':scope > :last-child')).toHaveClass('delegate-fold-chevron');
     await expect(fold).toHaveAttribute('aria-expanded', 'false');
     await expect(events.locator('.delegate-fold-lines')).toBeHidden();
     // The still working link is a target of its own beside the button, and opens one.
@@ -908,7 +953,9 @@ test.describe('at three panes', () => {
     await fold.focus();
     await page.keyboard.press('Enter');
     await expect(fold).toHaveAttribute('aria-expanded', 'true');
-    await expect(events.locator('.delegate-fold-lines > li')).toHaveCount(7);
+    await expect(events.locator('.delegate-fold-lines > li')).toHaveCount(8);
+    await expect(events.locator('.delegate-fold-lines .glyph[data-glyph="failed"]')).toHaveCount(1);
+    await expect(events.locator('.delegate-fold-lines .glyph[data-glyph="ended"]')).toHaveCount(1);
     await expect(fold).toBeFocused();
     for (const scheme of ['light', 'dark']) {
       await page.emulateMedia({ colorScheme: scheme });
@@ -917,9 +964,9 @@ test.describe('at three panes', () => {
     await page.emulateMedia({ colorScheme: 'light' });
     // Drawn again as another starts, it stays open, its new line among the rest.
     await addRun(page, [{ id: 'fold-f', name: 'Write the notes', status: 'working', startedAt: 1 }]);
-    await expect(fold).toHaveAccessibleName('9 delegates · 4 reported back, 1 failed, 4 still working');
+    await expect(fold).toHaveAccessibleName('10 delegates · 4 reported back, 1 failed, 1 ended, 4 still working');
     await expect(fold).toHaveAttribute('aria-expanded', 'true');
-    await expect(events.locator('.delegate-fold-lines > li')).toHaveCount(8);
+    await expect(events.locator('.delegate-fold-lines > li')).toHaveCount(9);
     await expect(events.locator('.delegate-fold-lines')).toBeVisible();
     await page.keyboard.press('Space');
     await expect(fold).toHaveAttribute('aria-expanded', 'false');

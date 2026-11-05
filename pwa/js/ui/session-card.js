@@ -593,17 +593,19 @@ export class SessionCard {
     e.tool = h('p', { class: 'tool-line', hidden: true }, e.toolGlyph, e.toolName, e.toolSummary);
     // Its own delegates starting and reporting back (§6.4, #661): one meta line per delegate, the
     // name opening it; after its words and before what it is running now. More than three lines
-    // fold into one (D3): its button, then a link of its own to a delegate still working.
+    // fold into one (D3): its button, the chevron ending it, then a link of its own to the
+    // earliest delegate still working.
     e.events = h('ol', { class: 'delegate-events', 'aria-label': 'Delegates started and finished', hidden: true });
-    e.foldToggle = h('button', { type: 'button', class: 'delegate-fold-toggle', 'aria-expanded': 'false', 'aria-controls': this.ids.events, onclick: () => this.#toggleEventFold() });
+    e.foldText = h('span', { class: 'delegate-fold-label' });
+    // The button's name is the whole summary (aria-label); the chevron only shows which way it is.
+    e.foldToggle = h('button', { type: 'button', class: 'delegate-fold-toggle', 'aria-expanded': 'false', 'aria-controls': this.ids.events, onclick: () => this.#toggleEventFold() },
+      e.foldText, h('span', { class: 'delegate-fold-chevron', 'aria-hidden': 'true' }, designIcon('chevron', { size: 16 })));
     e.foldWorking = h('button', { type: 'button', class: 'delegate-link delegate-fold-working', hidden: true, onclick: () => this.openDelegate(e.foldWorking.dataset.id) });
     e.foldLines = h('ol', { class: 'delegate-fold-lines', id: this.ids.events, hidden: true });
     e.fold = h('li', { class: 'delegate-fold' },
       h('div', { class: 'delegate-fold-line' },
         h('span', { class: 'delegate-event-mark' }, designIcon('delegate', { size: 16 })),
-        h('span', { class: 'delegate-fold-text' }, e.foldToggle, ' ', e.foldWorking),
-        // The button names it; the chevron only shows which way it is.
-        h('span', { class: 'delegate-fold-chevron', 'aria-hidden': 'true', onclick: () => this.#toggleEventFold() }, designIcon('chevron', { size: 16 }))),
+        h('span', { class: 'delegate-fold-text' }, e.foldToggle, e.foldWorking)),
       e.foldLines);
     e.agentBlock = h('div', { class: 'agent-block' }, e.speaker, e.reasoning, e.truncated, e.dropped, e.response, e.events, e.tool);
     e.question = h('div', { class: 'question-slot' });
@@ -860,7 +862,7 @@ export class SessionCard {
     const items = lines.map((line) => this.#eventLine(old.get(line.key) ?? old.get(was(line)), line, st));
     this.#eventKeys = keys;
     if (fold) {
-      e.foldToggle.textContent = fold.button;
+      e.foldText.textContent = fold.button;
       e.foldToggle.setAttribute('aria-label', fold.label);
       e.foldToggle.setAttribute('aria-expanded', String(st.open));
       e.foldWorking.hidden = !fold.link;

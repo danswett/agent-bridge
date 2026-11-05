@@ -390,17 +390,20 @@ test('each line gives its absolute time in Pacific, for its tooltip and accessib
   assert.equal(pacificTime('2026-07-01T19:41:00Z'), '12:41 PM');
 });
 
-test('more than three lines in a row fold into one that counts them, with a link of its own to the one still working (D3)', () => {
+test('more than three lines in a row fold into one that counts failed and ended apart from reported back, with a link of its own to the earliest still working (D3)', () => {
   const run = lines([
     ...['a', 'b', 'c'].map((id, i) => ({ id, name: id, status: 'ended', outcome: 'done', startedAt: minsAgo(50 - i * 5), endedAt: minsAgo(10) })),
     { id: 'd', name: 'd', status: 'ended', outcome: 'failed', startedAt: minsAgo(30), endedAt: minsAgo(9) },
+    { id: 'f', name: 'f', status: 'ended', startedAt: minsAgo(25), endedAt: minsAgo(8) },
     { id: 'e', name: 'e', status: 'working', startedAt: minsAgo(20) },
+    { id: 'g', name: 'g', status: 'working', startedAt: minsAgo(15) },
   ]);
-  assert.equal(run.length, 5);
-  assert.deepEqual(delegateFold(run), { button: '5 delegates · 3 reported back, 1 failed,', link: '1 still working', workingId: 'e', label: '5 delegates · 3 reported back, 1 failed, 1 still working' });
+  assert.equal(run.length, 7);
+  // The button is the counts alone, its chevron ending it; its name reads on to the link, as drawn.
+  assert.deepEqual(delegateFold(run), { button: '7 delegates · 3 reported back, 1 failed, 1 ended', link: '2 still working', workingId: 'e', label: '7 delegates · 3 reported back, 1 failed, 1 ended, 2 still working' });
   // Three lines are shown as they are.
   assert.equal(delegateFold(run.slice(0, FOLD_AFTER)), null);
-  // With none still working there is no link: the line is the button alone.
+  // With none still working there is no link: the line is the button alone, and a count of 0 is left out.
   const done = run.slice(0, 4);
   assert.deepEqual(delegateFold(done), { button: '4 delegates · 3 reported back, 1 failed', link: null, workingId: null, label: '4 delegates · 3 reported back, 1 failed' });
   // A fold counts delegates, not lines, and never says "working" without a link to one.
@@ -408,7 +411,7 @@ test('more than three lines in a row fold into one that counts them, with a link
     ...['a', 'b', 'c'].map((id, i) => ({ id, name: id, status: 'working', startedAt: minsAgo(50 - i * 5) })),
     { id: 'd', name: 'd', status: 'working', startedAt: minsAgo(30) }, { id: 'x', name: 'x', status: 'waiting', startedAt: minsAgo(29.5) },
   ]);
-  assert.deepEqual(delegateFold(shared), { button: '5 delegates ·', link: '5 still working', workingId: 'a', label: '5 delegates · 5 still working' });
+  assert.deepEqual(delegateFold(shared), { button: '5 delegates', link: '5 still working', workingId: 'a', label: '5 delegates · 5 still working' });
 });
 
 test('a delegate that names itself its parent, from a broken host, is the main agent\'s own in the conversation', () => {

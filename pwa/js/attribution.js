@@ -353,11 +353,13 @@ export function eventParts(line, { expanded = false } = {}) {
   return parts;
 }
 
-// More than FOLD_AFTER lines in a row (D3) fold into one: "5 delegates · 4 reported back, 1 still
-// working". It counts, and never shows the working glyph. The button is the words up to the
-// still-working count, and the count (when any is still working) is a link of its own, after it,
-// to the first of them: two targets side by side, never one inside the other. Its accessible
-// name is the whole line, as shown. Null for a run short enough to show as it is.
+// More than FOLD_AFTER lines in a row (D3) fold into one, drawn "5 delegates · 3 reported back,
+// 1 failed › 1 still working": every delegate in the run counted, failed and ended each apart
+// after reported back, a count of 0 left out. It never shows the working glyph. The button is the
+// counts, its chevron ending it, and the still-working count (when any is) a link of its own
+// after it, to the earliest started of them: two targets side by side, never one inside the
+// other. The button's accessible name is the whole summary, in the order shown, the chevron's
+// place a comma ("…, 1 failed, 1 still working"). Null for a run short enough to show as it is.
 export function delegateFold(lines) {
   if (!Array.isArray(lines) || lines.length <= FOLD_AFTER) { return null; }
   const states = lines.flatMap((l) => l.states ?? []);
@@ -371,8 +373,7 @@ export function delegateFold(lines) {
     if (i >= 0) { workingId = l.names[i]?.id ?? null; break; }
   }
   const link = working ? `${working} still working` : null;
-  const button = link ? `${head}${said.length ? ',' : ' ·'}` : head;
-  return { button, link, workingId, label: link ? `${button} ${link}` : button };
+  return { button: head, link, workingId, label: link ? `${head}${said.length ? ',' : ' ·'} ${link}` : head };
 }
 // "Ask main agent to stop it" (ui.md §6.3, subagents.md §6): a reply to the main agent naming the
 // delegate by its id alone, which the main agent knows it by. Its name is an agent's words, and
