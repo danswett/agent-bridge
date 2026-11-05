@@ -126,7 +126,8 @@ self.addEventListener('fetch', (e) => {
 // running this worker; everywhere else this shows the same fields. Every push must show a
 // notification, even one that cannot be read: iOS revokes notifications from an app whose
 // pushes show nothing.
-const KINDS = ['question', 'finished', 'resolved'];
+// signIn (#800): a machine's sessions need sign-in; it alerts, as a question does.
+const KINDS = ['question', 'finished', 'resolved', 'signIn'];
 
 // Only ever within this app, whatever a payload says.
 function inApp(url) {
