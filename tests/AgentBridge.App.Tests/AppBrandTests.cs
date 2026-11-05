@@ -54,16 +54,19 @@ public class AppBrandTests
         Assert.Contains("$AppIconFile, $AppLogoFile", pack, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void The_hosts_executables_carry_the_products_name_and_keep_their_file_names()
+    // What Task Manager and the file's properties show (FileDescription, from AssemblyTitle), in
+    // brand.md's sentence case as the creative director confirmed on #537.
+    [Theory]
+    [InlineData("AgentBridge.Host", "agent-bridge-host", "host")]
+    [InlineData("AgentBridge.HostLauncher", "agent-bridge-hostw", "host launcher")]
+    [InlineData("AgentBridge.Injector", "agent-bridge-injector", "typing helper")]
+    [InlineData("AgentBridge.Hook", "agent-bridge-host-hook", "agent hook")]
+    public void The_hosts_executables_carry_the_products_name_and_keep_their_file_names(string project, string file, string role)
     {
-        foreach (var (project, file) in new[] { ("AgentBridge.Host", "agent-bridge-host"), ("AgentBridge.HostLauncher", "agent-bridge-hostw"), ("AgentBridge.Injector", "agent-bridge-injector"), ("AgentBridge.Hook", "agent-bridge-host-hook") })
-        {
-            var csproj = XDocument.Load(Path.Combine(Root, "src", project, $"{project}.csproj"));
-            Assert.Equal(Product.Name, csproj.Descendants("Product").Single().Value);
-            Assert.StartsWith($"{Product.Name} ", csproj.Descendants("AssemblyTitle").Single().Value, StringComparison.Ordinal);
-            Assert.Equal(file, csproj.Descendants("AssemblyName").Single().Value);
-        }
+        var csproj = XDocument.Load(Path.Combine(Root, "src", project, $"{project}.csproj"));
+        Assert.Equal(Product.Name, csproj.Descendants("Product").Single().Value);
+        Assert.Equal($"{Product.Name} {role}", csproj.Descendants("AssemblyTitle").Single().Value);
+        Assert.Equal(file, csproj.Descendants("AssemblyName").Single().Value);
     }
 
     // An update to the new name must still be the same install: Windows finds its notifications by
