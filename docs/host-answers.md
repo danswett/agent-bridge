@@ -74,6 +74,40 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     only a string that is plainly a JSON number is read so. Seen in a real session for a number field; a text field is
     assumed to open the same way. Claude's and Codex's prompts take no typed field values, so
     have no such field.
+  * A field's schema constraints (#766): Copilot CLI 1.0.105 draws `ask_user`'s form with
+    `enforceSchemaConstraints` off, so it checks none of them and records whatever is typed.
+    The host checks the answer before any key, on what it would type (text with its line breaks
+    flattened, a number as the plain decimal typed), and refuses one outside them: a number's
+    `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf` and `integer`
+    type, compared exactly; text's `minLength` and `maxLength` in UTF-16 units, `pattern` as
+    JavaScript reads it and `format` `email`, `uri`, `date` and
+    `date-time` with the CLI's own checks (`date-time`'s offset `Z`, `z`, `+HH:MM` or `+HHMM`; dates as real dates, where the CLI's Date.parse rolls `2026-02-30` over); a checkbox list's `minItems` and `maxItems`. A
+    field whose constraints cannot be checked exactly (a bound JavaScript holds as another
+    number, a pattern .NET would read differently, which includes lookbehinds, named groups,
+    back-references, `\b` and `\B`, `^` or `$` followed by a quantifier (no JavaScript pattern at
+    all), a quantified lookahead, a class escape beside a class's hyphen other than one first or last in the class and letter escapes such
+    as `\a`), whose pre-filled default breaks them, or that carries any keyword beyond annotations and those
+    checked for the input the CLI draws (an allow-list: `enum`, `oneOf`, `anyOf`, `allOf`, `not`, `const`,
+    `if`, `dependent*` or an unknown keyword on a number, text or Yes/No field; on a list of choices,
+    or a checkbox list's items, anything but its options, each of their own `type`; on the form, anything
+    but its fields, `required` and `additionalProperties`), is answered at the machine. The CLI draws a
+    number with an `enum` as a box taking any number, and a string with only `anyOf` as a text box. `\d`, `\w`
+    and `\s` are written out as JavaScript's sets, ASCII digits and word characters and Unicode
+    white space. All of one question's patterns share 250 ms, building and matching them alike, so an
+    agent's many slow patterns cannot hold up the reading of every session: once it is spent,
+    every pattern left counts as one that cannot be checked, and the question is answered at the
+    machine (or the answer refused so). Text is checked both as typed and as trimmed
+    (JavaScript's `trim`), and refused if either form breaks a limit: the form passes it on as
+    typed, but a trim where it is recorded is not ruled out, and "  ab" is 4 typed and 2 trimmed.
+    Text of only spaces, tabs or no-break spaces is checked so too, and an empty or blank answer
+    to a required text field is refused, since it records no answer or might. Blank there counts
+    control characters too: the host types them as spaces (`InjectableText.Collapse`), so
+    `"\u0085"` would go as a space that `trim()` empties (`FieldConstraints.BlankOnceTyped`, which
+    the PWA mirrors). A required text field whose default is blank so is therefore answered at
+    the machine: that default is the one answer it can be given from another device, and it is
+    blank. An empty default opens nothing and stays answerable. Whether Copilot trims a text box's words before recording them
+    is not settled: its form passes them on as typed (`Fxn`, and `Uxn`'s accept step), but the
+    native layer after it was not traced, which is why both forms are checked.
   * An option list whose `default` is present but is not one of its options, `null` included,
     opens on its Other box (`Dxn` in 1.0.105), where the walk from the top row ends a row off;
     it is refused, and shown to be answered at the machine. So are a checkbox list with no

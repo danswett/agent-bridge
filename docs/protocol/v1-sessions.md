@@ -572,6 +572,11 @@ Free text, in `text` or `other`, is at most 4 KiB of UTF-8; the whole request is
 Free text of nothing but what shows as nothing (white space, control and format characters,
 default-ignorables such as U+3164, marks with no base; see `session.reply`) is empty, and
 `refused` as such.
+A field's `constraints` (below) are checked too: a value outside them is `refused`, with why.
+An empty or blank value for a `required` `text` field is `refused` as needing an answer: `""`,
+or text that is empty once its control characters (Cc) are made spaces, as a host types them,
+and JavaScript's `trim()` is applied (so `"   "`, `"\u0085"` and `"\u001b "` alike). Typing
+nothing records no answer, and blank text might be recorded trimmed to nothing.
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
 Result: `{ "outcome": "<outcome>", "reason": "<text>" }`, with `reason` present for
@@ -1492,6 +1497,42 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `allowOther` | bool? | `choice` and `multi` also accept free text |
 | `default` | any? | |
 | `required` | bool? | |
+| `constraints` | FieldConstraints? | What the agent's schema allows of the value (#766). Absent when it says nothing a host checks |
+
+### FieldConstraints
+
+A Copilot `ask_user` field's JSON Schema constraints, for the input it draws: bounds for a
+`number`, length, pattern and format for `text`, how many may be ticked for a `multi`. Copilot
+CLI checks none of them on that form and records whatever is typed, so a host checks the answer
+against them (`Answers.Check`, and again on what it would type) and `refused`s one outside
+them before any key. A client may check them first; one that cannot read them sends the answer
+and lets the host refuse it. Not strict: a reader that cannot read them reads the field without.
+
+| Field | Type | Notes |
+|---|---|---|
+| `minimum`, `maximum` | number? | Inclusive bounds |
+| `exclusiveMinimum`, `exclusiveMaximum` | number? | Exclusive bounds |
+| `multipleOf` | number? | Greater than 0 |
+| `integer` | bool? | The value is a whole number (the schema's `"type": "integer"`) |
+| `minLength`, `maxLength` | int? | In UTF-16 code units, as JavaScript counts them |
+| `pattern` | string? | An ECMAScript pattern, as `new RegExp(pattern)` reads it: no flags, unanchored. At most 1,024 characters |
+| `format` | string? | `email`, `uri`, `date` or `date-time`, checked as Copilot CLI does (`^[^\s@]+@[^\s@]+\.[^\s@]+$`; `^https?://.+`; `YYYY-MM-DD`; `YYYY-MM-DDTHH:MM` with optional seconds, fraction and offset `Z`, `z`, `±HH:MM` or `±HHMM`), dates as real dates. Other formats are not carried |
+| `minItems`, `maxItems` | int? | How many options a `multi` takes |
+
+Numbers are compared exactly as written, never as doubles; a host carries only bounds a
+JavaScript client holds exactly. Text is checked unless it is empty (`""`, no answer); text of
+only white space is checked like any other. It is checked both as typed and as trimmed with
+JavaScript's `trim()`, and refused if either form breaks a length, `pattern` or `format` limit:
+Copilot CLI's form passes text on as typed, but a trim where it is recorded is not ruled out,
+and `"  ab"` is 4 characters typed and 2 trimmed. A host checks the text it would type, line
+breaks flattened. A field whose constraints a host cannot check exactly (a bound JavaScript would
+hold as another number, a length that is not a whole number, a pattern it cannot read as
+JavaScript does, or patterns past the 250 ms one question's patterns share), or whose pre-filled
+default breaks them (checked so too), makes its question `answerAtMachine`. So does a `required`
+`text` field whose pre-filled default is blank (non-empty, but blank as above): that default
+is the only answer it can be given from another device, and it is refused as blank. So does a
+`choice` whose schema, or a `multi` whose `items`, has text constraints. A client checking a
+`pattern` reads it as JavaScript does, without flags: `\d` and `\w` are ASCII.
 
 ### Option
 

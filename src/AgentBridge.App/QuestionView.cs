@@ -28,9 +28,34 @@ public sealed class QuestionView : StackPanel
     // heading: who asks (ui.md §6.4, "Main agent asks" or "<delegate> asks"), in place of the
     // question's own Waiting on you or Permission requested.
     readonly TextBlock head;
+    // The heading as where keyboard focus lands when the session is opened for its question (a
+    // toast, Needs you): the question read first, its answers a Tab away. On the first control
+    // instead, an approval's Approve once, the next Enter or Space answered it before the person
+    // had read the command (#484). A tab stop only while it has focus, so Tab and Shift+Tab pass
+    // over it otherwise; named, and a heading, for a screen reader.
+    readonly ContentControl headFocus;
 
     // Who asks, again: a delegate's name can arrive after its question (S1's subagents list).
-    public string Heading { get => head.Text; set => head.Text = value; }
+    public string Heading
+    {
+        get => head.Text;
+        set
+        {
+            head.Text = value;
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(headFocus, value);
+        }
+    }
+
+    // Keyboard focus on the question's heading (#484): never on one of its answers.
+    public bool FocusHeading(FocusState state)
+    {
+        headFocus.IsTabStop = true;
+        if (headFocus.Focus(state)) { return true; }
+        headFocus.IsTabStop = false;
+        return false;
+    }
+
+    internal Control HeadingTarget => headFocus;
 
     // acted: the person activated one of its controls (a click, a key, UI Automation), as the control
     // acts: what the question lays out next is theirs (SessionView's AnswerWatch.Own). Called as the
@@ -49,7 +74,11 @@ public sealed class QuestionView : StackPanel
         AutomationId(this, "Question");
 
         head = new TextBlock { Text = heading ?? vm.Heading, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsHead") };
-        Children.Add(head);
+        headFocus = new ContentControl { Content = head, IsTabStop = false, UseSystemFocusVisuals = true, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+        AutomationProperties(headFocus, head.Text, "QuestionHeading");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetHeadingLevel(headFocus, Microsoft.UI.Xaml.Automation.Peers.AutomationHeadingLevel.Level3);
+        headFocus.LostFocus += (_, _) => headFocus.IsTabStop = false;
+        Children.Add(headFocus);
         // What its escapes stand for, above its text (ui.md §6.4): an escape can be read past while its
         // character still acts.
         foreach (var note in vm.Notes)

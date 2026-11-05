@@ -56,6 +56,7 @@ public static class CopilotPlanner
         var given = answer.Fields ?? new Dictionary<string, JsonElement>();
         var sends = new List<KeySend>();
         var expected = new List<(string, Expected)>();
+        var patterns = new PatternBudget();
         foreach (var field in form.Fields)
         {
             var has = given.TryGetValue(field.Name, out var value) && value.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined);
@@ -82,7 +83,7 @@ public static class CopilotPlanner
             }
             else
             {
-                var (k, r, problem) = Field(form, field, value);
+                var (k, r, problem) = Field(form, field, value, patterns);
                 if (problem is not null) { return (null, $"\"{field.Name}\": {problem}"); }
                 if (k is null) { return Other(field, value); }
                 (keys, record) = (k, r!);
@@ -120,13 +121,18 @@ public static class CopilotPlanner
 
     // The keys that answer one field, each its own send; null keys mean the words go
     // through Other, which is a plan of its own.
-    static (List<string>? Keys, Expected? Record, string? Problem) Field(CopilotForm form, CopilotField field, JsonElement value)
+    static (List<string>? Keys, Expected? Record, string? Problem) Field(CopilotForm form, CopilotField field, JsonElement value, PatternBudget patterns)
     {
         switch (field.Kind)
         {
             case CopilotFieldKind.Text:
                 {
                     var words = InjectableText.Collapse(value.GetString() ?? "");
+                    // Checked as typed, line breaks flattened, which is what Copilot records (#766).
+                    // Whitespace too: Copilot 1.0.105 records "   " as typed (`Fxn`, then the accept
+                    // step in `Uxn`), so spaces were let through a minLength of 5 (review of #844).
+                    // Only nothing typed is nothing recorded.
+                    if (words.Length > 0 && field.Constraints?.TextProblem(words, patterns) is { } outside) { return (null, null, outside); }
                     return ([words], string.IsNullOrWhiteSpace(words) ? new Expected.Omitted() : new Expected.Words(words), null);
                 }
             case CopilotFieldKind.Number:
@@ -140,6 +146,7 @@ public static class CopilotPlanner
                     }
                     // Expected as the text typed, which is what the CLI records, so the verifier
                     // compares the same canonical number the keys produced.
+                    if (field.Constraints?.NumberProblem(typed) is { } outside) { return (null, null, outside); }
                     using var emitted = JsonDocument.Parse(typed);
                     return ([typed], new Expected.Number(emitted.RootElement.Clone()), null);
                 }
@@ -187,6 +194,7 @@ public static class CopilotPlanner
             wanted.Add(at);
         }
         if (wanted.Count == 0 && !field.AllowsEmpty) { return ([], null, "choose at least one option"); }
+        if (field.Constraints?.CountProblem(wanted.Count) is { } outside) { return ([], null, outside); }
         var top = string.Concat(Enumerable.Repeat(KeyPlan.Up, field.Options.Count - 1));
         var keys = new List<string>();
         var cursor = 0;

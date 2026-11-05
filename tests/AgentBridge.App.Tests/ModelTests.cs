@@ -437,7 +437,7 @@ public sealed class MarkdownTests
     [InlineData("(www.a")]
     [InlineData("*a\n")]
     [InlineData("|a|b|\n")]
-    public void Runs_of_markup_the_parser_is_quadratic_on_are_read_in_well_under_a_second(string unit)
+    public void Runs_of_markup_the_parser_is_quadratic_on_are_read_in_linear_time(string unit)
     {
         var text = Repeat(unit, 20000);
 

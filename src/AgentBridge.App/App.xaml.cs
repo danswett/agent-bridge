@@ -246,7 +246,8 @@ public partial class App : Application
     {
         if (window is null) { return; }
         window.ShowInFront();
-        if (sessionId is not null) { main?.Open(machine, sessionId); }
+        // Keyboard focus with it, on its question's heading (#484), as Needs you's open does.
+        if (sessionId is not null) { main?.Open(machine, sessionId, focus: true); }
     }
 
     // The account's other machines through the relay: the app's own device key (kept like the

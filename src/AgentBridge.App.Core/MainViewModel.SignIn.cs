@@ -23,8 +23,13 @@ public sealed partial class MainViewModel
 
     // A polite announcement for the app to make: "Copilot on DEV-VM1 needs sign-in". Never the code.
     public event Action<string>? Announce;
-    // The sheet closed, by its banner's key: focus goes back to that banner.
-    public event Action<string>? SignInSheetClosed;
+    // The sheet closed, by its banner's key: focus goes back to that banner. True when this close is
+    // a person here signing in: focus goes to its status line, never back to Sign in. Decided for
+    // each close, so a later attempt cancelled or failed goes back to its button.
+    public event Action<string, bool>? SignInSheetClosed;
+    // A banner about to be drawn anew for its new state (needed to confirming, say), by its key, while
+    // its old one is still shown: focus inside the old one moves to the new one.
+    public event Action<string>? SignInRedrawing;
 
     // How long a signin.code or signin.done is held for a start whose result hasn't come yet.
     static readonly TimeSpan EarlyHeld = TimeSpan.FromSeconds(10);
@@ -123,12 +128,17 @@ public sealed partial class MainViewModel
         var want = SignInBanners.For(sources, signInFlows, signInResolved, now);
         var shown = SignIns.ToDictionary(b => b.Key, StringComparer.Ordinal);
         var keep = new List<SignInBannerViewModel>();
+        var redrawn = new List<string>();
         foreach (var b in want)
         {
             // A banner that changes between needed, confirming and resolved is a new one: its button goes.
             var kind = b.State is "needed" or "confirming" ? b.State : "resolved";
             if (shown.TryGetValue(b.Key, out var vm) && vm.Kind == kind) { vm.Update(b); }
-            else { vm = new SignInBannerViewModel(b, p => _ = StartSignInAsync(p), (machine, id) => Open(machine, id)); }
+            else
+            {
+                if (shown.ContainsKey(b.Key)) { redrawn.Add(b.Key); }
+                vm = new SignInBannerViewModel(b, p => _ = StartSignInAsync(p), (machine, id) => Open(machine, id));
+            }
             // Busy while this banner's current start is in flight: not one cancelled, whose late result
             // would otherwise hold a new press back.
             vm.Busy = b.Flow?.State == "starting";
@@ -141,6 +151,7 @@ public sealed partial class MainViewModel
                 Announce?.Invoke(words);
             }
         }
+        foreach (var key in redrawn) { SignInRedrawing?.Invoke(key); }
         var had = SignIns.Count;
         var kept = keep.ToHashSet();
         foreach (var gone in SignIns.Where(v => !kept.Contains(v)).ToList())
@@ -443,7 +454,7 @@ public sealed partial class MainViewModel
         else if (done.Outcome == "cancelled") { signInFlows.Remove(key); }
         else { signInFlows[key] = new SignInBanners.Flow("done", Outcome: done.Outcome, Reason: done.Reason); }
         SyncSignIns();
-        CloseSignInSheet(key);
+        CloseSignInSheet(key, signedIn: done.Outcome == "signedIn");
     }
 
     void OpenSignInSheet(string key)
@@ -455,10 +466,10 @@ public sealed partial class MainViewModel
     }
 
     // key: close it only if it is that banner's sheet (a late result never closes another's).
-    void CloseSignInSheet(string key)
+    void CloseSignInSheet(string key, bool signedIn = false)
     {
         if (SignInSheet is not { } sheet || sheet.Key != key) { return; }
         SignInSheet = null;
-        SignInSheetClosed?.Invoke(sheet.Key);
+        SignInSheetClosed?.Invoke(sheet.Key, signedIn);
     }
 }

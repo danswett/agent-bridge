@@ -193,17 +193,39 @@ public sealed class HostConnection : IAsyncDisposable
         });
     }
 
-    async Task RunAsync(CancellationToken ct)
+    // The attempt under way (connecting, or connected), which Reconnect cancels; null between
+    // attempts.
+    CancellationTokenSource? attempt;
+
+    // Ends the attempt under way, connecting or connected, and lets the loop start another, as when
+    // the connection fails: for a link that is not Connected while its host answers on its pipe
+    // (#800: an app sat ~20 h believing its live host was not running). The one loop goes on, so
+    // attempts never overlap, and calling it again, or between attempts, does no more than once.
+    public void Reconnect()
+    {
+        if (Volatile.Read(ref attempt) is { } now)
+        {
+            try { now.Cancel(); }
+            // Ended and disposed meanwhile: the next attempt starts anyway.
+            catch (ObjectDisposedException) { }
+        }
+        RetryNow();
+    }
+
+    async Task RunAsync(CancellationToken stopping)
     {
         // What the host last refused this device with, while every attempt since has been refused
         // the same way: logged once, not at every attempt.
         string? refusal = null;
-        while (!ct.IsCancellationRequested)
+        while (!stopping.IsCancellationRequested)
         {
             IClientChannel? ch = null;
             HelloResult? said = null;
             string? refusedNow = null;
             Volatile.Write(ref poked, 0);
+            var mine = CancellationTokenSource.CreateLinkedTokenSource(stopping);
+            Volatile.Write(ref attempt, mine);
+            var ct = mine.Token;
             try
             {
                 ch = await connect(ct);
@@ -293,7 +315,13 @@ public sealed class HostConnection : IAsyncDisposable
                 }
                 log($"connection to the host ended: {ch.CloseReason?.Message}");
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (OperationCanceledException) when (stopping.IsCancellationRequested) { break; }
+            // Reconnect: whatever the cancellation surfaced as.
+            catch (Exception e) when (mine.IsCancellationRequested && !stopping.IsCancellationRequested && e is not OutOfMemoryException)
+            {
+                log("host connection: the attempt under way was ended to reconnect");
+                ui.Post(() => SetState(LinkState.Connecting, "reconnecting"));
+            }
             catch (LocalRefusedException e) { ui.Post(() => SetState(LinkState.Refused, e.Message)); }
             catch (HostNotRunningException e) { ui.Post(() => SetState(LinkState.NotRunning, e.Message)); }
             catch (HostErrorException e) when (Refusal(said))
@@ -313,6 +341,8 @@ public sealed class HostConnection : IAsyncDisposable
                 Volatile.Write(ref helloChanged, null);
                 Volatile.Write(ref current, null);
                 if (ch is not null) { await ch.DisposeAsync(); }
+                Interlocked.CompareExchange(ref attempt, null, mine);
+                mine.Dispose();
                 if (Volatile.Read(ref connected).Task.IsCompleted) { Volatile.Write(ref connected, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)); }
             }
             refusal = refusedNow;
@@ -320,7 +350,7 @@ public sealed class HostConnection : IAsyncDisposable
             {
                 if (State == LinkState.Connected) { SetState(LinkState.Connecting, "the host went away; reconnecting"); }
             });
-            try { await WaitAsync(refusedNow is not null, ct); }
+            try { await WaitAsync(refusedNow is not null, stopping); }
             catch (OperationCanceledException) { break; }
         }
     }

@@ -50,7 +50,7 @@ Request `data`: `{}`. Result, what `session.launch` can name on this machine now
     { "id": "0f3c…", "agent": "copilot", "launcher": "agency", "title": "Fix the flaky test - bridge", "cwd": "C:\\Users\\me\\repos\\wt\\bridge-20261028-131443", "workspace": "Bridge", "updatedAt": "2026-10-28T04:22:43.182Z" }
   ],
   "defaults": { "agent": "agency", "workspace": "Bridge", "permissions": "ask" },
-  "busy": "Busy: Claude in Bridge is waiting for a person to answer whether to trust that folder, …"
+  "busy": "Claude in Bridge is asking whether to trust its folder. New launches wait until it's answered."
 }
 ```
 
@@ -65,7 +65,7 @@ Request `data`: `{}`. Result, what `session.launch` can name on this machine now
 | `workspaces` | The folders approved at the machine that exist now, at most 64. `label` is what a launch names; `isolate` means each new session starts in a git worktree of its own |
 | `resumable` | Sessions that can be resumed, newest first, at most 50 (12 by default): ended (never live), and only those whose folder is in an approved workspace or a worktree the host made for one. None of an agent whose discovery is held ([below](#while-discovery-is-held)). `launcher` resumes it; `title` is at most 120 characters, unique in the list |
 | `defaults` | `agent` and `workspace` a launch gets when it names none, and `permissions`, `ask` or `allowAll` |
-| `busy` | Present when a launch now would be `busy`, saying why |
+| `busy` | Present when a launch now would be `busy`, saying why, as what the machine is waiting on rather than as a launch turned away: the person reading it may be the one whose launch is waiting. A folder-trust or Bypass Permissions busy lasts at most two minutes from the newest such question (see `session.launch` below), and ends sooner once its agent starts (for Claude and Codex, when its session registers); a client lists again then |
 | `trust` | Present when launched agents are waiting on folder-trust questions: at most 4 [`TrustQuestion`s](#folder-trust), newest first |
 
 The result fits 40 KiB: a host drops the oldest resumable sessions, then the longest model

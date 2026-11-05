@@ -146,12 +146,17 @@ public sealed partial class LaunchService : ISessionLauncher
     // one launch is never bound to another.
     readonly Dictionary<string, Started> launchedOn = new(StringComparer.OrdinalIgnoreCase);
 
-    public LaunchService(ISessionSource source, IAgentHaBridgeProbe probe, IConsoleInjector injector, IAgentStarter starter, IAgentLocator locator,
+    // Test-only compatibility overload; production must pass the shared gate explicitly.
+    internal LaunchService(ISessionSource source, IAgentHaBridgeProbe probe, IConsoleInjector injector, IAgentStarter starter, IAgentLocator locator,
+        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null, DeliveryGate? gate = null)
+        : this(gate ?? new DeliveryGate(), source, probe, injector, starter, locator, agency, options, log, attachments) { }
+
+    public LaunchService(DeliveryGate gate, ISessionSource source, IAgentHaBridgeProbe probe, IConsoleInjector injector, IAgentStarter starter, IAgentLocator locator,
         AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null)
     {
         this.source = source;
         this.probe = probe;
-        this.injector = injector;
+        this.injector = new GateTrackedInjector(injector, gate);
         this.starter = starter;
         this.locator = locator;
         this.agency = agency;
@@ -159,8 +164,11 @@ public sealed partial class LaunchService : ISessionLauncher
         this.log = log ?? (_ => { });
         this.attachments = attachments;
         resumable = new ResumableStore(options.CopilotHome, options.ClaudeHome, options.CodexHome, options.Time);
-        requests = new OutcomeMemory<LaunchResult>(options.Time, options.RememberFor);
-        trustAnswers = new OutcomeMemory<TrustAnswerResult>(options.Time, options.RememberFor);
+        var deliveryGate = gate ?? throw new ArgumentNullException(nameof(gate));
+        requests = new OutcomeMemory<LaunchResult>(options.Time, options.RememberFor, deliveryGate,
+            () => new LaunchResult(LaunchOutcome.Busy, "the host is preparing a departure"));
+        trustAnswers = new OutcomeMemory<TrustAnswerResult>(options.Time, options.RememberFor, deliveryGate,
+            () => new TrustAnswerResult(TrustAnswerOutcome.Refused, "the host is preparing a departure"));
         remoteFolderTrust = options.Config.RemoteFolderTrust;
         TrustDevices = options.Config.RemoteFolderTrustDevices;
     }
@@ -268,7 +276,7 @@ public sealed partial class LaunchService : ISessionLauncher
             Workspaces = workspaces,
             Resumable = resumableList,
             Defaults = new LaunchDefaults { Agent = defaultAgent, Workspace = defaultWorkspace, Permissions = Config.Permissions },
-            Busy = BusyReason(),
+            Busy = BusyReason(status: true),
             Trust = TrustQuestions() is { Count: > 0 } trust ? trust : null,
         };
         // Within its budget, losing the oldest resumable sessions first, then the longest lists.
@@ -1048,8 +1056,10 @@ public sealed partial class LaunchService : ISessionLauncher
 
     // agent-ha-bridge's Test-DaemonTrustAwaitingPress: a launched agent asking whether to trust
     // its folder, within the last two minutes, turns other launches away, so nothing is ever
-    // taken as its answer and nothing new starts over it.
-    string? BusyReason()
+    // taken as its answer and nothing new starts over it. A launch turned away is told so; what
+    // launch.options says (status) reads as the state of the machine, since the person reading it
+    // may be the one whose launch is waiting, and it did start (#122).
+    string? BusyReason(bool status = false)
     {
         var now = options.Time.GetUtcNow();
         lock (pendingGate)
@@ -1057,10 +1067,18 @@ public sealed partial class LaunchService : ISessionLauncher
             // A trust question first: it is the one shown beside the busy (BusyQuestion).
             bool Asking(Pending x, StartupQuestion q) => x.Asks(q) && x.TrustAt is { } at && now - at <= options.TrustBusyFor;
             var p = pending.FirstOrDefault(x => Asking(x, StartupQuestion.Trust)) ?? pending.FirstOrDefault(x => Asking(x, StartupQuestion.BypassPermissions));
-            return p is null ? null
-                : p.Question == StartupQuestion.BypassPermissions
-                ? $"Busy: {p.Launcher.Label} in {p.Where} is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all), so nothing was launched. Try again in a couple of minutes."
-                : $"Busy: {p.Launcher.Label} in {p.Where} is waiting for a person to answer whether to trust that folder, so nothing was launched. Try again in a couple of minutes.";
+            if (p is null) { return null; }
+            var bypass = p.Question == StartupQuestion.BypassPermissions;
+            if (status)
+            {
+                return bypass
+                    ? $"{p.Launcher.Label} in {p.Where} is asking whether to allow Bypass Permissions. New launches wait until it's answered."
+                    : $"{p.Launcher.Label} in {p.Where} is asking whether to trust its folder. New launches wait until it's answered.";
+            }
+            var waiting = bypass
+                ? $"{p.Launcher.Label} in {p.Where} is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all)"
+                : $"{p.Launcher.Label} in {p.Where} is waiting for a person to answer whether to trust that folder";
+            return $"Busy: {waiting}, so nothing was launched. Try again in a couple of minutes.";
         }
     }
 

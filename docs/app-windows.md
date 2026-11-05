@@ -287,6 +287,36 @@ into one folder with one version. An app update is a host update, so they never 
     running or its sessions are not yet read in full (`sessions.synced`), so that it cannot say
     whether they are busy. Just before stopping the host it asks again: `host.status` from the
     host itself, and the processes running from the package.
+  * Those are the machine's refusals, and they don't hold an update silently for ever (#800: a
+    VM's app lost its link to a live host and sat on an old release for ~20 h, one log line
+    saying so). So are sessions never read in full on a connected host. It still checks and
+    downloads behind them (only "Install updates automatically" off stops the checks), and a
+    device's Install waits behind sessions not yet read in full, as before. The six hours run from the first find through
+    them; only the switch turned off restarts them. Once the machine stops refusing an update
+    held that long (the link back, say), it installs as soon as the sessions have been idle for
+    two minutes, or 20 minutes later whatever they are doing (`ReturnGrace`), never at the first
+    tick. A refusal in force is logged again every hour, with the app's link state while the
+    host is the reason. A release held past six hours is told to the owner: the update state the
+    devices see (`waiting`) reads "Needs you: the update to X has waited since T because Y", and
+    the app logs that line at most daily. The wait it shows never names an "installs anyway"
+    time already past.
+  * The link to the host lost (not `Connected`, or no `host.status` on it): before refusing again
+    the app re-attaches, at once and then backing off to every 30 minutes, and logs what it did
+    at most hourly. A connected link is asked for the host's status again. Otherwise, when the
+    host answers on its pipe, the link's attempt under way is ended and a new one started
+    (`HostConnection.Reconnect`, which never runs two attempts at once). The updater never starts
+    a host: whether one runs is the person's, and the app's own start's.
+  * A release check the feed refuses for its rate limit (GitHub's unauthenticated 60 requests an
+    hour per address, which machines behind one address share: a 429, or a 403 whose reason says
+    "rate limit" or when GitHub's free `rate_limit` endpoint shows the limit spent; any other 403
+    is a failure like any other) holds the checks off until GitHub's `Retry-After` or the limit's
+    reset (read from that endpoint, as Velopack's error carries no headers), or otherwise for an
+    hour, then two hours each time, until one succeeds. The next check is made at the hold's end,
+    however recently a press was answered. A press from a device in the meantime is answered with
+    the reason without asking the feed. The reason goes to the devices as the last update's
+    outcome (`failed`), once each time, though never over an update made, or a press answered,
+    in the last day, which the devices may not have seen yet. Velopack's `GithubSource` is given
+    no token, so the checks are unauthenticated.
   * Settings and the automatic updates share one updater, and only the release actually
     downloaded is applied (`IUpdater.Ready`), checked again immediately before the host stops: a
     release replaced since (a check from Settings, or "Include pre-releases" or `feed.txt`
@@ -323,7 +353,7 @@ into one folder with one version. An app update is a host update, so they never 
   release whose download failed is still reported as there, and their downloads take turns
   (Velopack's update lock fails a second rather than waiting): the later one finds the release
   already downloaded. A pressed install's six hours run from no earlier than the press, and any
-  install's from no earlier than installing was last allowed, so turning the switch on hours
+  install's from no earlier than the switch last allowed it (not the machine's refusals), so turning the switch on hours
   after a check found a release still waits for busy sessions. A press within a minute of the last check is answered from it,
   a failed download is not tried again for ten minutes, and the presses taken are remembered
   across restarts (`updateTaken`) so none is carried out twice; the host takes at most three
@@ -549,7 +579,8 @@ it, where no toast would be raised now), and its card rebuilds its controls: not
 what it said is kept, what was typed stays on the card, and an answer that failed to go is not
 offered again ("The question changed since, so answer it again"). A finished turn raises a toast with the start of the main agent's own response, never a delegate's (it can be turned
 off on its own). A click opens the app on that session, waiting for it to arrive if the
-click is what started the app. Nothing is raised while the app's window is in front.
+click is what started the app, with keyboard focus in it: on its question's heading if it
+has one, never on an answer such as Approve once (#484), or else its reply box. Nothing is raised while the app's window is in front.
 Toasts go quietly into Notification Center, without popping up, while Windows says the
 person is busy (Focus Assist, presentation mode, a full-screen app). Every toast is silent
 (`<audio silent="true"/>`, added where `ToastXml` closes each toast, so one put up again
@@ -614,7 +645,7 @@ reaches the real host or its profile.
   page's choices, every setting and the whole prompt sent, resume, Codex's first prompt,
   busy, failed and Try again, a lost response sent again with the same request, no approved folder,
   profile and context, and a launch on another machine, including one whose machine leaves or drops out; and the app reaching another
-  host through the in-process relay with the host's account), toast plans and activation handling, automatic updates (`AutoUpdaterTests`: when one waits for the sessions, when it goes anyway, a read-only host beside agent-ha-bridge updating like any other, the other profiles it never stops, and the host never left down), host lifecycle with a
+  host through the in-process relay with the host's account), toast plans and activation handling, automatic updates (`AutoUpdaterTests`: when one waits for the sessions, when it goes anyway, a read-only host beside agent-ha-bridge updating like any other, the other profiles it never stops, the host never left down and never started by it, a lost link made again, an update held past six hours told as "Needs you", the 20-minute grace once the host is back, and the rate-limit hold), host lifecycle with a
   fake task scheduler and launcher, the Markdown model and the demo host. Platform-neutral,
   so they run on Linux too.
 * CI (`app` jobs, one for x64 on `windows-latest` and one for Arm64 on `windows-11-arm`) runs
@@ -639,12 +670,23 @@ reaches the real host or its profile.
   accent button in Bridge, the caption buttons in the app's theme, the 360×600 minimum), checks the Machines page's rows (#213), draws every page, the Sessions page in three panes with the inspector, in Light and
   Dark and, on CI, turns Windows' high contrast on to draw every page again and check that every role and surface is a
   system colour and the caption buttons the system's, then turns it back off and checks the caption buttons come back in the app's theme, and saves a picture
-  of each page. Last, it measures a live resize (#765): it resizes the window a step a frame, 8 px at a time, from 1560 px to
+  of each page. Whole-window pictures capture the window's composed client, including Mica,
+  rather than only the XAML tree: a translucent page layer without its backdrop otherwise
+  becomes light in a PNG viewer (#785). Isolated-control pictures still use XAML rendering.
+  Before native capture, two distinct XAML rendering ticks and another UI dispatcher turn
+  let a preceding update cycle finish even when the page is already idle; the self-test
+  fails if that frame barrier cannot complete within 10 seconds.
+  The dark page pass reopens each output PNG and checks a page-background pixel is opaque
+  and no lighter, in sRGB relative luminance, than the platform's dark layer token's straight
+  colour (the upper bound for that layer over dark Mica). Encoded white and transparent
+  regression samples exercise that guard too; missing, blank or failed window captures fail
+  the self-test. No capture-only page fill or bitmap recolouring is applied.
+  Last, it measures a live resize (#765): it resizes the window a step a frame, 8 px at a time, from 1560 px to
   400 and back, and keeps every interval between the UI thread's frames (`CompositionTarget.Rendering`) by the window's width
   class, once with the demo's own sessions and once with a window as heavy as a real one (16 more sessions, a conversation of
   over 200 items, 50 tool rows and a strip of 20 delegates, the finished ones unfolded), and writes p50, p95, the longest and how many frames went over
   16.7 and 33 ms into the result's `resize` and `result.resize.json`, the p95 in each width class in its log line, with a picture of where the drag ended. Before the heavy drag it scrolls a block in the middle of the response to the top of the conversation and pictures the conversation (`result.resize.before.png`); after it, it checks that block is where it was in the layout (its top against the viewport within 0.5 DIP, the proof) and pictures it again (`result.resize.after.png`), which must be drawn alike across the reading column: no more than 4 pixels more than 8 apart in a channel, and none more than 96 apart (`PictureDifference`). So a renderer's noise between two renders (a single speck of a card's fill by its rounded corner, or an anti-aliased edge) doesn't count, while a block moved by a pixel, which differs along every edge of its text, does; the log gives the count and the largest difference either way. It then presses Page Down and Down for real on a link in the conversation (`SendInput` with the window in the foreground, else posted to the window with keyboard focus, as the keyboard sends them; the result's `keysPressedBy` says which) and checks the text scrolled with focus where it was and nothing selected; that Tab from the last link or Copy button drawn goes to the first in the next block with one, which it realises (the move made with `FocusManager.TryMoveFocus`, as Tab makes it, not an injected key), that Tab pressed for real onto the Copy button of a code block laid out across the conversation's bottom edge brings the block's start to the leading edge, and onto one wholly in view moves nothing (the result's `tabInViewProblem`), that Shift+Tab pressed for real onto the Copy button of a code block wholly in view, its top 3 DIP below the view's, where the focus manager's 20 DIP padding round a control would scroll it, move nothing (within 0.5 DIP; the result's `tabNearEdgeProblem`), that Tab pressed for real onto the first link of a block taller than the view (a quoted log of 44 lines just before the run of linked paragraphs) brings its start to the leading edge (within 1.5 DIP), and Shift+Tab onto its last link brings that link wholly into view (within 1.5 DIP) at the nearest edge, no further than WinUI's 20 DIP margin past it, the block's start above the view (the result's `tallTabProblem`), and that Tab, pressed for real (`SendInput`, else posted; the result's `linkTabPressedBy` says which) on the last link of the last block the list has realised, goes to the first link of the next block, which it hadn't, and brings that block in at the leading edge numbered in its set, each block found from its link (a link is a text element in its block's text, not a control; the heavy response ends with a run of 110 short linked paragraphs, more than twice the most the list was seen to realise from a view's top, so with the run's first block at the top of the view the last block realised and the next both fall in it wherever the list stops; the check fails with "setup: ..." rather than skips if they don't); that no block's container is a tab stop, selected, filled or drawn with chrome or a focus visual; that the last block, off screen and named as no other block is, is found by its name and brought into view through the peer the search found; and that a screen reader is given every block as a list item numbered 1 to N in a set of N, with the header and footer outside it. WinUI numbers an item only once it is realised, so the check walks the items as a screen reader does: the list's ItemContainer pattern finds each next item (`FindItemByProperty` with no property), and one not yet realised is realised through its VirtualizedItem pattern (`Realize`) before its numbers are read, none of them -1 (the result's `listRealisedByPeer` counts the realised ones, `listWalkSeconds` the walk). A capture of your message and its three-block reply is also taken in high contrast at 1440, 1200 and 400 (`result.yours.<width>.highcontrast.png`), beside the light and dark ones. The frame times are a report, not a
-  bar: the runners draw in software, so they fail it only when it could not measure: when a sweep never reached all three width classes. The two sweeps share 30 s, a hang guard that keeps the self-test well inside its 180 s; a sweep cut short by it is reported (`lightFinished`, `heavyFinished` and the log), not failed. `build/app-self-test.ps1` runs it; when the app ends with anything but 0, or leaves a check unfinished (the result's `unfinished`, even with 0), it fails and prints the exit code as an NTSTATUS, the check it was in, the end of the app's log and the crash Windows recorded, faulting module and offset (#240). On CI it also has Windows Error Reporting keep a minidump of a crash beside the logs, and prints the crashing thread's stack from it with the runner's `cdb` (#242): for a fail fast the event names no module. Then it runs the `Setup.exe` it packed, silently, on the throwaway runner,
+  bar: the runners draw in software, so they fail it only when it could not measure: when a sweep never reached all three width classes. The two sweeps share 30 s, a hang guard that keeps the self-test well inside its 300 s (180 s until #800's sign-in captures: the banner, the sheet and a Needs sign-in row in every state they can be in, in Light, Dark and high contrast); a sweep cut short by it is reported (`lightFinished`, `heavyFinished` and the log), not failed. `build/app-self-test.ps1` runs it; when the app ends with anything but 0, or leaves a check unfinished (the result's `unfinished`, even with 0), it fails and prints the exit code as an NTSTATUS, the check it was in, the end of the app's log and the crash Windows recorded, faulting module and offset (#240). On CI it also has Windows Error Reporting keep a minidump of a crash beside the logs, and prints the crashing thread's stack from it with the runner's `cdb` (#242): for a fail fast the event names no module. Then it runs the `Setup.exe` it packed, silently, on the throwaway runner,
   checks the installed copy's channel and that its executables and `Update.exe` are for that
   machine, and runs the same self-test from the installed copy. Last, it dry-runs publishing
   the package (`build/publish-prerelease.ps1

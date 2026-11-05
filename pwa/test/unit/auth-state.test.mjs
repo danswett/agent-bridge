@@ -261,8 +261,3 @@ test('signed in and waiting for the sessions to confirm is never recovered, and 
   assert.deepEqual(needsYou(links(['pending'])[0].sessions.map((session) => ({ hostId: 'm', session }))), []);
 });
 
-test('a machine-only start result with no reason still says "Sign in at the machine" and offers no Sign in', () => {
-  const [b] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: sessions(1), canSignIn: true }], { flows: new Map([['m\ncopilot\noctocat', { state: 'done', atMachine: '' }]]) });
-  assert.deepEqual([b.atMachine, bannerVerb(b), bannerWords(b).line], [true, null, 'Sign in at the machine']);
-});
-

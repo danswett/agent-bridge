@@ -45,6 +45,44 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Reconnect_ends_a_hung_attempt_and_starts_one_new_attempt_without_overlapping_loops()
+    {
+        // #800: a link not Connected while its host answers. The first attempt's connect hangs
+        // until it is cancelled, as no timeout of the app's own would end it.
+        var attempts = 0;
+        var open = 0;
+        var most = 0;
+        var hungCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lines = new List<string>();
+        await using var link = new HostConnection(async ct =>
+        {
+            var n = Interlocked.Increment(ref attempts);
+            var now = Interlocked.Increment(ref open);
+            lock (lines) { most = Math.Max(most, now); }
+            try
+            {
+                if (n == 1)
+                {
+                    try { await Task.Delay(Timeout.Infinite, ct); }
+                    catch (OperationCanceledException) { hungCancelled.TrySetResult(); throw; }
+                }
+                return await LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromSeconds(1), ct);
+            }
+            finally { Interlocked.Decrement(ref open); }
+        }, new LockedDispatcher(), l => { lock (lines) { lines.Add(l); } }) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+        link.Start();
+        await Wait.UntilAsync(() => Volatile.Read(ref attempts) == 1, "the first attempt under way", TimeSpan.FromSeconds(30));
+
+        link.Reconnect();
+        link.Reconnect();
+
+        await hungCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await Wait.UntilAsync(() => link.State == LinkState.Connected, "the link made again", TimeSpan.FromSeconds(30));
+        Assert.Equal(1, most);
+        lock (lines) { Assert.Contains(lines, l => l.Contains("ended to reconnect", StringComparison.Ordinal)); }
+    }
+
+    [Fact]
     public async Task A_connection_that_follows_no_sessions_stops_when_disposed_rather_than_spinning()
     {
         // The relay loopback's kind (Subscribes = false). Disposed while connected, its wait for a
