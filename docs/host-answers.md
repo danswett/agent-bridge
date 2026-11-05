@@ -212,9 +212,13 @@ request ed05e9d7)" when another's dialog is the one drawn, or why the screen can
 and never typed for the request on screen instead: answer it at the machine. The key is
 held from the frame's top edge. The transcript is checked so before the screen is read and
 again after, so what the screen showed was this request while it was still waiting, and no
-request that arrived meanwhile is drawn in its place. Copilot 1.0.105 shows a waiting shell
-or other request before a waiting path request, whichever was asked first, so a mix of the
-two is answered at the machine until the earlier is. A
+request that arrived meanwhile is drawn in its place. Copilot 1.0.105 keeps a queue for each
+sort of prompt, in the order asked, and draws a waiting shell or other request (edit, read,
+MCP, tool) first, then a hook's, then a path request, then a URL request, whichever was asked
+first (`cli-main.js`: `GCn`'s queues, drawn in `cxo`'s order; `CopilotDialogs.DrawOrder`). So
+the earliest waiting request is listed as answerable only when nothing waiting draws ahead of
+it: a path request asked before a shell, edit, read or MCP one is `answerAtMachine` until that
+is answered, and one asked before a URL request is not. A
 request to run outside the sandbox, a kind not listed
 above, or one whose details cannot be read is `answerAtMachine`.
 

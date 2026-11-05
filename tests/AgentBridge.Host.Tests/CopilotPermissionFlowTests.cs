@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
@@ -388,6 +388,33 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
             Copilot.Permission("r2", "c2", Copilot.Prompts["path"], 6));
         await source.RefreshAsync();
         return Question;
+    }
+
+    // A path request asked first (r3) and a shell or read one after it (r4), once r1 is done:
+    // Copilot draws r4 ahead of r3 (CopilotDialogs.DrawOrder), so r3, listed, is answered at the
+    // machine as the shared vector says, and an answer to it is never typed (Quality's review of
+    // #769: it was offered, and every answer was refused by the screen).
+    [Theory]
+    [InlineData("commands")]
+    [InlineData("read")]
+    public async Task A_path_permission_asked_before_one_Copilot_draws_ahead_of_it_is_listed_as_answered_at_the_machine(string second)
+    {
+        Fixture.Append(events, Copilot.PermissionDone("r1", "c1", "approved", 5),
+            Copilot.ToolStart("c3", "view", new { path = "C:\\elsewhere\\notes.txt" }, 6), Copilot.Permission("r3", "c3", Copilot.Prompts["path"], 7),
+            Copilot.ToolStart("c4", "powershell", new { command = "git push" }, 8), Copilot.Permission("r4", "c4", Copilot.Prompts[second], 9));
+        await source.RefreshAsync();
+        var vector = VectorFiles.Read("sessions.json")["records"]!["Question"]!["valid"]!.AsArray()
+            .Single(v => v!["name"]!.GetValue<string>() == "a-path-permission-listed-while-copilot-draws-another-first")!["json"]!;
+
+        var listed = source.Get(Id)!.Question!;
+
+        Assert.StartsWith("r3#", listed.Id);
+        Assert.Equal((vector["waiting"]!.GetValue<int>(), vector["answerAtMachine"]!.GetValue<bool>()), (listed.Waiting!.Value, listed.AnswerAtMachine == true));
+        // Even with r3's own dialog on the screen, which Copilot does not draw while r4 waits.
+        injector.Screen = CopilotScreen.Path("C:\\elsewhere\\notes.txt", "C:\\elsewhere\\more");
+        var result = await Answerer().AnswerAsync(Request("approve"));
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "Copilot permission prompts can only be answered at the machine"), result);
+        Assert.Empty(injector.Plans);
     }
 
     // r1's dialog and r2's, as Copilot draws them.

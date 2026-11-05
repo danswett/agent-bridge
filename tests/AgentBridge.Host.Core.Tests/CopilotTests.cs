@@ -444,6 +444,27 @@ public class CopilotTests
         Assert.StartsWith("r1#", crowded.Id);
     }
 
+    // Copilot draws a waiting shell, edit, read, MCP or tool request before a hook's, a hook's
+    // before a path request, and a path request before a URL request, whichever was asked first
+    // (cli-main.js 1.0.105, CopilotDialogs.DrawOrder). A path request listed first while one that
+    // draws ahead of it waits was offered as answerable, though its answer could never be typed
+    // (Quality's review of #769); before a URL request it is the one drawn, and stays answerable.
+    [Theory]
+    [InlineData("commands", true)]
+    [InlineData("read", true)]
+    [InlineData("write", true)]
+    [InlineData("mcp", true)]
+    [InlineData("url", false)]
+    public async Task A_path_permission_asked_first_is_answered_at_the_machine_while_Copilot_draws_another_ahead_of_it(string second, bool behind)
+    {
+        await using var s = new Session_();
+
+        var listed = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Copilot.Prompts["path"], 2), Copilot.Permission("r2", "c2", Copilot.Prompts[second], 3))).Question!;
+
+        Assert.StartsWith("r1#", listed.Id);
+        Assert.Equal((behind, 2), (listed.AnswerAtMachine == true, listed.Waiting));
+    }
+
     // Copilot wraps a warning without trimming it, so 250 spaces draw a row of nothing, and "x", the
     // spaces and "y" draw as "x\n\ny" does: whichever of the two is listed first is answered at the
     // machine. Compared part by part they were unlike (Trust review of #769). And one whose spaces

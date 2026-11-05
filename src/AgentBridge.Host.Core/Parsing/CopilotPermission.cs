@@ -138,13 +138,27 @@ public static class CopilotDialogs
     // other than as given (a tab), or hide what is drawn (ShownText.Misleads).
     public static bool Unsafe(string text) => text.Any(c => c is >= '\u2500' and <= '\u257F' or '\t') || AgentBridge.Protocol.ShownText.Misleads(text);
 
-    // Whether the first of several waiting prompts can be told from the others on screen: its
-    // dialog is known, nothing given for any of them is unsafe, and none would draw the same.
+    // Whether the first of several waiting prompts can be told from the others on screen: Copilot
+    // draws it first, its dialog is known, nothing given for any of them is unsafe, and none would
+    // draw the same.
     public static bool Identifiable(CopilotPermissionPrompt mine, IEnumerable<CopilotPermissionPrompt> others)
     {
+        var rest = others.ToList();
+        if (rest.Any(o => DrawOrder(o.Kind) < DrawOrder(mine.Kind))) { return false; }
         if (mine.Dialog is not { } dialog || Unfindable(dialog) || mine.Drawn.Any(Unsafe)) { return false; }
-        return others.All(o => !o.Drawn.Any(Unsafe) && (o.Dialog is not { } theirs || !Alike(dialog, theirs)));
+        return rest.All(o => !o.Drawn.Any(Unsafe) && (o.Dialog is not { } theirs || !Alike(dialog, theirs)));
     }
+
+    // Which waiting prompt Copilot CLI 1.0.105 draws. It keeps a queue for each sort of prompt,
+    // each in the order asked, and takes each queue's first as that queue's current one at once
+    // (cli-main.js `GCn`: permissionRequestQueue, hookPermissionQueue, pathConfirmationQueue,
+    // urlConfirmationQueue, filled by the permission handler by kind). Of the current ones, it
+    // draws the permission request (shell, edit, read, MCP, tool, anything else) before a hook's,
+    // a hook's before a path's, and a path's before a URL's (`cxo`: `if(r)` … `if(l)` … `if(p)` …
+    // `if(g)`), whichever was asked first. So the earliest waiting request is drawn only when none
+    // waiting draws ahead of it: a path request asked before a shell one is drawn after it. Listed
+    // as answerable then, its controls could never deliver (Quality's review of #769).
+    public static int DrawOrder(string kind) => kind switch { "hook" => 1, "path" => 2, "url" => 3, _ => 0 };
 
     static string Squeeze(string text) => string.Concat(text.Where(c => !char.IsWhiteSpace(c)));
 }

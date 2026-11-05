@@ -739,8 +739,11 @@ it runs; the options are inside one round frame whose top edge is on screen; eve
 above the options is this request's dialog (its title, the rule, each part of its body, a
 box's lines one to a row exactly as given, and its question) and nothing else; and the
 request is the earliest still waiting, with no other waiting request that would be drawn the
-same once all white space is gone. Only shell and path prompts are identified so; a listed
-prompt that cannot be told apart so is `answerAtMachine` while that holds, and answerable
+same once all white space is gone. Only shell and path prompts are identified so. Copilot
+draws a waiting shell or other request first, then a hook's, then a path request, then a URL
+request, each in the order asked, so the earliest is drawn only when nothing waiting draws
+ahead of it: a path request asked before a shell one is `answerAtMachine` until the shell one
+is answered. A listed prompt that cannot be told apart so is `answerAtMachine` while that holds, and answerable
 again under the same `id` once it can. Otherwise
 the answer is `refused`, naming the other where its dialog is the one drawn ("the machine is
 showing a different permission (path access, request ed05e9d7)"), and the key is held from
