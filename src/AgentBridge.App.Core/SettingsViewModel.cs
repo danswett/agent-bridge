@@ -54,6 +54,9 @@ public sealed class SettingsViewModel : Observable
     HostStatus? installStatusSeen;
     // Each row's last setup note, by agent: rows are rebuilt from every status, the notes are not.
     readonly Dictionary<string, AgentSetupNote> agentNotes = new(StringComparer.Ordinal);
+    // Each hooks' last setup result, by the agent whose hooks they are (AgentReadinessRow.HooksOf):
+    // Copilot CLI's serve Agency's row too.
+    readonly Dictionary<string, AgentSetupNote> hookResults = new(StringComparer.Ordinal);
     // Counts the times the host was seen gone: a setup that ends after its host went (#705 review)
     // says nothing on the rows of the host that came back.
     int hostsGone;
@@ -97,7 +100,7 @@ public sealed class SettingsViewModel : Observable
     public bool ElevatedWarning => Status?.Elevated == true;
 
     public IReadOnlyList<AgentReadinessRow> Agents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && Status?.Agents is { } report
-        ? [.. report.Agents.Select(a => new AgentReadinessRow(a, CanManageAgents, CanInstallAgents, agentNotes.GetValueOrDefault(a.Id)))] : [];
+        ? [.. report.Agents.Select(a => new AgentReadinessRow(a, CanManageAgents, CanInstallAgents, agentNotes.GetValueOrDefault(a.Id), shared: hookResults.GetValueOrDefault(AgentReadinessRow.HooksOf(a.Id))))] : [];
     public bool CanManageAgents => HostRunning && host.Can(HostOps.AgentSetupCapability) && !Busy && !AgentInstallInProgress
         && Status?.ReadOnly is null && Status?.AgentHaBridge is null;
     public bool CanInstallAgents => HostRunning && host.Can(HostOps.AgentInstallCapability) && !Busy && !AgentInstallInProgress
@@ -415,7 +418,7 @@ public sealed class SettingsViewModel : Observable
     {
         // A setup's result is about the host that ran it: a host gone (stopped, restarted as it said
         // to) takes the rows' notes with it.
-        if (!HostRunning) { agentNotes.Clear(); hostsGone++; }
+        if (!HostRunning) { agentNotes.Clear(); hookResults.Clear(); hostsGone++; }
         if (!installRequestPending && HostRunning && Status is { } status && !ReferenceEquals(status, installStatusSeen))
         {
             installStatusSeen = status;
@@ -468,12 +471,15 @@ public sealed class SettingsViewModel : Observable
         // say (AgentReadinessRow.Keeps): a removal that left the owned record, which keeps Set up, and
         // on an older host a failure on a row it reads as set up and not tested, which keeps Repair
         // (#705 review).
+        // Kept for every row on those hooks, Agency's with Copilot CLI's, and the row that ran it keeps
+        // its words.
+        foreach (var (hooks, result) in hookResults.ToList())
+        {
+            if (fresh?.Agents.Any(a => AgentReadinessRow.HooksOf(a.Id) == hooks && new AgentReadinessRow(a).Keeps(result)) != true) { hookResults.Remove(hooks); }
+        }
         foreach (var (id, note) in agentNotes.ToList())
         {
-            if (fresh?.Agents.FirstOrDefault(a => a.Id == id) is not { } agent || !new AgentReadinessRow(agent).Keeps(note))
-            {
-                agentNotes.Remove(id);
-            }
+            if (hookResults.GetValueOrDefault(AgentReadinessRow.HooksOf(id)) != note) { agentNotes.Remove(id); }
         }
         await host.RefreshStatusAsync();
     });
@@ -566,6 +572,7 @@ public sealed class SettingsViewModel : Observable
     void Note(string agent, AgentSetupNote note)
     {
         agentNotes[agent] = note;
+        if (note.Tone != Tone.Progress) { hookResults[AgentReadinessRow.HooksOf(agent)] = note; }
         Raise(nameof(Agents));
     }
 

@@ -5,8 +5,14 @@ namespace AgentBridge.App.Core;
 // One agent under Settings › Agents on this machine. Each row's buttons are named for its agent and
 // have their own AutomationIds, and its setup's result sits on the row, so Narrator and UI tests can
 // tell which agent a button or a result is about (#678; #670's design review).
-public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = false, bool canInstall = false, AgentSetupNote? note = null, HookSetup? setup = null)
+public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = false, bool canInstall = false, AgentSetupNote? note = null, HookSetup? setup = null, AgentSetupNote? shared = null)
 {
+    // Agency runs on Copilot CLI's hooks: the host sets them up and removes them as Copilot's
+    // (AgentSetupService), so what a setup on either row left is evidence for both (#705 review).
+    public static string HooksOf(string id) => id == "agency" ? "copilot" : id;
+    // The last setup's result for this row's hooks, from whichever row ran it; the row's own note
+    // says only what its own setup said.
+    AgentSetupNote? Result => shared ?? note;
     public string Id => agent.Id;
     public string Label => agent.Label;
     // Whether this profile's setup finished, from the host's `hookSetup` (Unknown from an older host).
@@ -31,18 +37,18 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
         (ReadinessState.Blocked, _) => null,
         // Removing Copilot CLI's connection can leave its owned record, when other entries share the
         // file (StandaloneHooks.RemoveAsync), which a host reads as set up, or as a setup that didn't
-        // finish. This row's own removal, which a fresh check keeps, says it isn't (#705 review).
-        (ReadinessState.Unknown, _) or (_, HookSetup.Incomplete) when note is { Removed: true } => "Set up",
+        // finish. A removal of this row's hooks, which a fresh check keeps, says it isn't (#705 review).
+        (ReadinessState.Unknown, _) or (_, HookSetup.Incomplete) when Result is { Removed: true } => "Set up",
         (_, HookSetup.Incomplete) or (ReadinessState.Failed, _) => "Repair",
         (ReadinessState.Missing or ReadinessState.NeedsAction, _) => "Set up",
         (ReadinessState.Unknown, HookSetup.Completed) => null,
         (ReadinessState.Unknown, HookSetup.NotSetUp) => "Set up",
         // An older host, without `hookSetup`: only its detail says whether it found this profile's
         // owned record (AgentReadinessService.Hooks; AgentReadinessTests holds those words), and a
-        // setup that failed part-way reads the same as one that worked, so this row's own failure,
+        // setup that failed part-way reads the same as one that worked, so a failure on this row's hooks,
         // which a fresh check keeps, still offers Repair.
         (ReadinessState.Unknown, _) when !OwnedRecord => "Set up",
-        (ReadinessState.Unknown, _) when note is { Tone: Tone.Bad } => "Repair",
+        (ReadinessState.Unknown, _) when Result is { Tone: Tone.Bad } => "Repair",
         _ => null,
     };
     bool OwnedRecord => agent.Hooks.Detail.Contains("owned setup record", StringComparison.OrdinalIgnoreCase);
@@ -66,7 +72,7 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     public string SetUpQuestion => $"{SetUpVerb ?? "Set up"} {Label}?";
     public string RemoveQuestion => $"Remove {Label}'s connection?";
     // The last setup's progress or result on this row: a polite live region in the view.
-    public string Status => note?.Text ?? (NotTested ? "Not tested yet" : "");
+    public string Status => note?.Text ?? (NotTested && SetUpVerb is null ? "Not tested yet" : "");
     // Its accessible name says whose it is: a live region is read out on its own, away from the
     // agent's heading (#705 review).
     public string StatusName => Status.Length == 0 ? "" : $"{Label}: {Status}";

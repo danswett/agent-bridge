@@ -561,6 +561,35 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Copilot_CLI_and_Agency_share_what_a_setup_left_of_their_hooks_through_a_fresh_check()
+    {
+        // Agency runs on Copilot CLI's hooks, which an older host reads as set up on both rows.
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = new(DateTimeOffset.UtcNow,
+            [Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn), Agent("agency", "Agency", ReadinessState.Unknown, hooksDetail: RecordIntakeOn)]) });
+        await Wait.UntilAsync(() => settings.Agents.Count == 2, "agent readiness");
+        var outcome = new AgentSetupResult(true, "Removed this installation's hook registrations.", false);
+        host.On(HostOps.AgentsSetup, _ => outcome);
+        host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
+        AgentReadinessRow Row(string id) => settings.Agents.Single(a => a.Id == id);
+
+        await settings.SetUpAgentAsync("copilot", remove: true);
+        await settings.CheckAgentsAsync();
+
+        Assert.Equal("Set up", Row("agency").SetUpVerb);
+        Assert.Equal("", Row("agency").Status);
+        Assert.Equal("Removed this installation's hook registrations.", Row("copilot").Status);
+
+        outcome = new AgentSetupResult(false, "Hook setup incomplete: fixture partial work", true);
+        await settings.SetUpAgentAsync("agency");
+        await settings.CheckAgentsAsync();
+
+        Assert.Equal("Repair", Row("copilot").SetUpVerb);
+        Assert.Equal("Repair", Row("agency").SetUpVerb);
+        Assert.Equal("Hook setup incomplete: fixture partial work", Row("agency").Status);
+        Assert.Equal("", Row("copilot").Status);
+    }
+
+    [Fact]
     public async Task A_removal_that_leaves_the_owned_record_offers_set_up_again_through_a_fresh_check()
     {
         // Copilot CLI's removal keeps its record when other entries share the file, and an older host
