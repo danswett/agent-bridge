@@ -14,8 +14,9 @@ public sealed partial class MainViewModel
     public string NeedsYouHeader => $"Needs you · {NeedsYou.Count}";
     public int Waiting => NeedsYou.Count;
 
-    // The tray icon's tooltip, from the start (nothing waiting yet) and on every tick after.
-    public static string TrayTip(int waiting) => waiting > 0 ? $"{Product.Name}: {waiting} waiting on you" : Product.Name;
+    // The tray icon's tooltip, from the start (nothing waiting yet) and on every tick after: the same
+    // words as Needs you's count (brand.md §3.1, ui.md §7), which a screen reader reads as written.
+    public static string TrayTip(int waiting) => waiting > 0 ? $"{Product.Name} · {waiting} need you" : Product.Name;
 
     // The lane from the cards as they are: an entry per question, kept while its question and what
     // it offers stay the same, so a button with focus is not replaced under it.

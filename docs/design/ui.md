@@ -1106,8 +1106,8 @@ question, as choosing its row does.
 - **Controls:** ListView rows with a 3×16 Bridge pill on selection, SelectorBar for
   machines (those that don't fit under More, §6.1), an Accent button for New, subtle icon buttons
   for header actions, and a `ToggleButton` for Needs you · N.
-- **Tray and toasts:** the tray's tooltip and the rail's Sessions badge carry N ("Agent
-  Bridge · 3 need you"). A question's toast follows the rules above: an approval's toast has
+- **Tray and toasts:** the tray's tooltip and the rail's Sessions badge carry N ("Slipgates
+  · 3 need you"). A question's toast follows the rules above: an approval's toast has
   Open only. Every toast is silent (#754): none plays Windows' default sound, and any sound
   comes back only as an owner-approved spec here first.
 - **Banners** sit over every page, `InfoBar`s in this order (#293):

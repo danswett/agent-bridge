@@ -1640,6 +1640,38 @@ public sealed class RelayFleetLinkTests
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_renamed_app_comes_back_under_its_new_name_as_the_same_device_not_a_second_one()
+    {
+        // An install from before the rebrand (#537) connected as "… · Agent Bridge app"; after the
+        // update it connects with the same key under the new name. The name is display only: the
+        // device is its key, so other machines see one device, renamed, not a new one to approve.
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(7, "octo");
+        await using var host = await relay.ConnectAsync(token, "Build server", "host");
+        var key = P256KeyPair.Generate();
+        RelayAccount Account() => new(relay.Url.ToString(), token, "7", "octo");
+        string id;
+        await using (var before = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(Account()), key, "Test PC · Agent Bridge app"))
+        {
+            before.Start();
+            await Wait.UntilAsync(() => host.Relay.Presence.Any(p => p.Id == before.DeviceId), "the app before the update", Patience);
+            id = before.DeviceId!;
+            Assert.Equal("Test PC · Agent Bridge app", host.Relay.Presence.Single(p => p.Id == id).Name);
+        }
+        await Wait.UntilAsync(() => host.Relay.Presence.All(p => p.Id != id), "the app gone for its update", Patience);
+
+        await using var after = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(Account()), key, Product.DeviceName("Test PC"));
+        after.Start();
+        await Wait.UntilAsync(() => host.Relay.Presence.Any(p => p.Id == after.DeviceId), "the app after the update", Patience);
+
+        Assert.Equal(id, after.DeviceId);
+        var app = Assert.Single(host.Relay.Presence, p => p.Kind == "app");
+        Assert.Equal(id, app.Id);
+        Assert.Equal($"Test PC · {Product.Name}", app.Name);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task The_app_lists_a_machine_that_has_gone_offline_and_as_a_persons_device_can_forget_it()
     {
         await using var relay = await TestRelay.StartAsync();
