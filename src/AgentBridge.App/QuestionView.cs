@@ -205,6 +205,7 @@ public sealed class QuestionView : StackPanel
             if (!string.IsNullOrEmpty(f.Description)) { field.Children.Add(new TextBlock { Text = f.Description, Style = Muted(), TextWrapping = TextWrapping.Wrap }); }
             field.Children.Add(new TextBlock { Text = f.TypeLabel, Style = Muted(), FontSize = 12 });
             field.Children.Add(Control(f));
+            if (f.OtherAtMachineNote is { } note) { field.Children.Add(new TextBlock { Text = note, Style = Muted(), TextWrapping = TextWrapping.Wrap }); }
             var frame = new Border { Child = field, BorderThickness = new Thickness(0, 0, 0, 0), Padding = new Thickness(0, 2, 0, 2) };
             Watch(f, () => FieldInvalid(frame, f));
             FieldInvalid(frame, f);

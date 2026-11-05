@@ -127,6 +127,16 @@ test('a truncated question is read as truncated', () => {
   assert.equal(readSession({ id: 'x', question: { id: 'q', message: 'm', fields: [], truncated: true } }).question.truncated, true);
 });
 
+test('a field\'s Other typed at the machine is read only as true, and never beside allowOther', () => {
+  const fields = (...f) => readSession({ id: 'x', question: { id: 'q', message: 'm', fields: f } }).question.fields.map((x) => x.otherAtMachine);
+  assert.deepEqual(fields(
+    { name: 'a', type: 'choice', otherAtMachine: true },
+    { name: 'b', type: 'multi', otherAtMachine: 'yes' },
+    { name: 'c', type: 'choice' },
+    { name: 'd', type: 'choice', otherAtMachine: true, allowOther: true },
+  ), [true, false, false, false]);
+});
+
 test('hello keeps only string capabilities', () => {
   const h = readHello({ protocol: 1, machine: { name: 'M' }, capabilities: ['sessions.read', 3, null] });
   assert.deepEqual(h.capabilities, ['sessions.read']);

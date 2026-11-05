@@ -94,7 +94,11 @@ internal static class QuestionMapper
             // Every Copilot option list ends in "Other (type your answer)", but words reach
             // it only in a question that is that one list: the Down past its last option
             // opens Other there, and in a tabbed form or a checkbox list it does not.
-            if (fields is [{ Type: FieldType.Choice } only]) { fields = [only with { AllowOther = true }]; }
+            // Elsewhere the person is told Other is typed at the machine, so a missing Other
+            // is not taken for one the agent never offered (#146).
+            fields = fields is [{ Type: FieldType.Choice } only]
+                ? [only with { AllowOther = true }]
+                : [.. fields.Select(f => f.Type is FieldType.Choice or FieldType.Multi && f.Options is { Count: > 0 } ? f with { OtherAtMachine = true } : f)];
             // A field the CLI draws as something other than its schema says, or that cannot be
             // told, is never typed into, so a client shows the question to be answered at the
             // machine rather than offer what the host would then refuse (#662).

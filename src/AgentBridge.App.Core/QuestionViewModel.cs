@@ -303,7 +303,7 @@ public sealed partial class QuestionViewModel : Observable
 
     static bool SameField(Field a, Field b) =>
         a.Name == b.Name && a.Type == b.Type && a.Title == b.Title && a.Description == b.Description
-        && a.AllowOther == b.AllowOther && a.Required == b.Required && a.Default?.GetRawText() == b.Default?.GetRawText()
+        && a.AllowOther == b.AllowOther && a.OtherAtMachine == b.OtherAtMachine && a.Required == b.Required && a.Default?.GetRawText() == b.Default?.GetRawText()
         && (a.Options ?? []).SequenceEqual(b.Options ?? []);
 
     // Whether this client may answer, and if not, why (pwa/js/answers.js, answerability).
@@ -413,6 +413,9 @@ public sealed partial class FieldViewModel : Observable
     public string TypeLabel => TypeLabels[spec.Type];
     public bool Required => spec.Required == true;
     public bool AllowOther => spec.AllowOther == true && spec.Type is FieldType.Choice or FieldType.Multi;
+    // The agent's Other is typed only at the machine (#146): said beside the options, never offered.
+    public string? OtherAtMachineNote => spec.OtherAtMachine == true && !AllowOther && spec.Type is FieldType.Choice or FieldType.Multi
+        ? "To type your own answer, answer at the machine." : null;
     public ObservableCollection<OptionViewModel> Options { get; }
 
     public bool OtherChosen

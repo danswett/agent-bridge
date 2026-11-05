@@ -553,6 +553,8 @@ public sealed record Field
     public IReadOnlyList<Option>? Options { get; init; }
     [Strict(Strictness.Security)]
     public bool? AllowOther { get; init; }
+    // Display only, so not strict: read wrong, a client only leaves out its note (#146).
+    public bool? OtherAtMachine { get; init; }
     public JsonElement? Default { get; init; }
     public bool? Required { get; init; }
 }

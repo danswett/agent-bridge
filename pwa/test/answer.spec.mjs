@@ -122,6 +122,25 @@ test.describe('on a phone', () => {
     expect((await log(page))[0].fields).toEqual({ os: ['win', 'linux', { other: 'FreeBSD' }] });
   });
 
+  test('a choice whose Other is typed only at the machine says so beside its options, which still answer', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, {
+      id: 'q-other-machine', message: 'Set it up',
+      fields: [
+        { name: 'db', title: 'Database', type: 'choice', required: true, otherAtMachine: true, options: [{ value: 'pg', label: 'PostgreSQL' }, { value: 'lite', label: 'SQLite' }] },
+        { name: 'go', title: 'Start now', type: 'boolean' },
+      ],
+    });
+    const db = q.locator('.field[data-field="db"]');
+    await expect(db.locator('.other-at-machine')).toHaveText('To type your own answer, answer at the machine.');
+    await expect(db.getByRole('radio')).toHaveCount(2);
+    await expect(q.locator('.field[data-field="go"] .other-at-machine')).toHaveCount(0);
+    await db.getByRole('radio', { name: 'SQLite' }).check();
+    await q.getByRole('button', { name: 'Send answer' }).tap();
+    await expect(q).toHaveCount(0);
+    expect((await log(page))[0].fields).toEqual({ db: 'lite' });
+  });
+
   test('a required multi choice can be answered with nothing ticked, as an empty list', async ({ page }) => {
     await openDemo(page);
     const q = await ask(page, {

@@ -101,6 +101,8 @@ function readField(raw) {
     type: readFieldType(f.type),
     options: Array.isArray(f.options) ? f.options.map(readOption).filter(Boolean) : [],
     allowOther: f.allowOther === true,
+    // Display only (#146): the agent's Other is typed at the machine, so the field says so.
+    otherAtMachine: f.otherAtMachine === true && f.allowOther !== true,
     // Any JSON value. Views format it as text and never interpret it as markup.
     default: f.default === undefined ? null : f.default,
     required: f.required === true,

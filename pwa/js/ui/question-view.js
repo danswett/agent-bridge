@@ -416,6 +416,9 @@ export class QuestionPanel {
         list.append(h('label', { class: 'opt other' }, other, h('span', { class: 'label' }, 'Other…')), h('div', { class: 'other-box' }, text, counter));
       }
       parts.push(list);
+      if (field.otherAtMachine && !field.allowOther) {
+        parts.push(h('p', { class: 'field-desc other-at-machine' }, 'To type your own answer, answer at the machine.'));
+      }
     } else if (field.type === 'boolean') {
       const yes = h('button', { type: 'button', class: 'toggle', 'aria-pressed': st.value === true ? 'true' : 'false', dataset: { value: 'true' } }, 'Yes');
       const no = h('button', { type: 'button', class: 'toggle', 'aria-pressed': st.value === false ? 'true' : 'false', dataset: { value: 'false' } }, 'No');

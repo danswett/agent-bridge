@@ -137,6 +137,11 @@ public class QuestionMappingTests
         Assert.True(lone.AllowOther);
         Assert.Null(form.Fields[0].AllowOther);
         Assert.Null(list.AllowOther);
+        // Where Other is not offered, the person is told it is typed at the machine (#146).
+        Assert.Null(lone.OtherAtMachine);
+        Assert.Equal([true, null], form.Fields.Select(f => f.OtherAtMachine));
+        Assert.True(list.OtherAtMachine);
+        Assert.Null(Assert.Single(Ask("""{ "question": "x", "choices": ["A"], "allow_freeform": false }""").Fields).OtherAtMachine);
     }
 
     [Fact]
