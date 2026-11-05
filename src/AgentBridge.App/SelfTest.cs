@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
@@ -9,7 +8,6 @@ using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Graphics.Imaging;
 using Windows.Storage.Streams;
 
@@ -897,7 +895,7 @@ static partial class SelfTest
     // setting, not a window's: on CI the self-test turns it on for the pass and back off after.
     static readonly (string Tag, string Pane)[] Pages = [("sessions", "SessionsPage"), ("machines", "MachinesPane"), ("launch", "LaunchPane"), ("usage", "UsagePane"), ("settings", "SettingsPane")];
 
-    static async Task<List<string>> DrawPages(MainWindow window, string theme, string outFile)
+    static async Task<List<string>> DrawPages(MainWindow window, string theme, string outFile, Action<bool, string> check)
     {
         var root = window.RootElement;
         var broken = new List<string>();
@@ -919,7 +917,9 @@ static partial class SelfTest
                 if (!layout.ShowInspector && layout.Mode == PaneMode.Three) { broken.Add("three panes without the inspector"); }
                 await DrawDelegates(window, page, layout, broken, theme, outFile);
             }
-            await Picture(root, Path.ChangeExtension(outFile, $".{tag}.{theme.ToLowerInvariant()}.png"));
+            var picture = Path.ChangeExtension(outFile, $".{tag}.{theme.ToLowerInvariant()}.png");
+            await Picture(root, picture);
+            if (theme == nameof(ElementTheme.Dark)) { await CheckDarkPagePicture(window, picture, check); }
         }
         return broken;
     }
@@ -933,7 +933,7 @@ static partial class SelfTest
             {
                 root.RequestedTheme = theme;
                 await Task.Delay(300);
-                var broken = await DrawPages(window, theme.ToString(), outFile);
+                var broken = await DrawPages(window, theme.ToString(), outFile, check);
                 check(broken.Count == 0 && root.ActualTheme == theme, $"draws every page with its title in {theme}{(broken.Count > 0 ? $": not {string.Join(", ", broken)}" : "")}");
             }
             root.RequestedTheme = ElementTheme.Default;
@@ -960,7 +960,7 @@ static partial class SelfTest
             var on = await Until(() => new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast, TimeSpan.FromSeconds(15));
             await Task.Delay(1500);
             check(on, "sees Windows' high contrast turned on");
-            var hcBroken = await DrawPages(window, "HighContrast", outFile);
+            var hcBroken = await DrawPages(window, "HighContrast", outFile, check);
             check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
             await PictureYoursInHighContrast(window, check, outFile);
             var system = new[] { "SystemColorHighlightColor", "SystemColorHighlightTextColor", "SystemColorWindowTextColor", "SystemColorWindowColor", "SystemColorGrayTextColor", "SystemColorButtonFaceColor", "SystemColorButtonTextColor", "SystemColorHotlightColor" }
@@ -1166,13 +1166,11 @@ static partial class SelfTest
     {
         try
         {
-            var bitmap = new RenderTargetBitmap();
-            await bitmap.RenderAsync(element);
-            var pixels = await bitmap.GetPixelsAsync();
+            var picture = await PicturePixels(element);
             using var stream = new InMemoryRandomAccessStream();
             var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
             var dpi = 96.0;
-            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied, (uint)bitmap.PixelWidth, (uint)bitmap.PixelHeight, dpi, dpi, pixels.ToArray());
+            encoder.SetPixelData(BitmapPixelFormat.Bgra8, picture.Alpha, picture.Width, picture.Height, dpi, dpi, picture.Pixels);
             await encoder.FlushAsync();
             var bytes = new byte[stream.Size];
             using var reader = new DataReader(stream.GetInputStreamAt(0));
@@ -1182,6 +1180,7 @@ static partial class SelfTest
         }
         catch (Exception e) when (e is System.Runtime.InteropServices.COMException or ArgumentException)
         {
+            if (element is FrameworkElement root && ReferenceEquals(root.XamlRoot?.Content, root)) { throw; }
             AppLog.Write($"self-test picture not saved: {e.Message}");
         }
     }
