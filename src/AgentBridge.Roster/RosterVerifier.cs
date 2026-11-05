@@ -38,6 +38,23 @@ public static class Invalid
     public const string Cap = "cap";
     public const string Budget = "budget";
     public const string Evidence = "evidence";
+
+    // A veto (§5.6) naming another reset than the one held.
+    public const string Reset = "reset";
+    // A person command (§7.2): for another action or machine, signed by a device on probation or
+    // held, living over 10 minutes, issued over 2 minutes ahead, expired, issued at or before the
+    // host's floor, without this channel's nonce, naming heads the host lacks, or, for an
+    // attestation, heads that do not include or descend from the last ones the host took.
+    public const string Action = "action";
+    public const string Machine = "machine";
+    public const string Probation = "probation";
+    public const string Lifetime = "lifetime";
+    public const string Future = "future";
+    public const string Expired = "expired";
+    public const string Floor = "floor";
+    public const string Nonce = "nonce";
+    public const string Heads = "heads";
+    public const string Regress = "regress";
 }
 
 // One verifier's copy of a generation (§3.5): the set S of accepted entries, which entries are
@@ -288,13 +305,13 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
         {
             var d = body.Device!;
             if (!Verify(d.Sign!, Entry.SignedBy(e.BodyBytes), e.Sig)) { return Invalid.Signature; }
-            return PresenceOf(e, d, Roster.Presence.RoleBy, e.UvBy);
+            return PresenceProof.Check(e.BodyBytes, d, Roster.Presence.RoleBy, e.UvBy);
         }
 
         if (p.ActiveAdd(body.By) is not { } signer || !_g[signer].Body.Device!.IsPerson) { return Invalid.Signer; }
         var signerDevice = _g[signer].Body.Device!;
         if (!Verify(signerDevice.Sign!, Entry.SignedBy(e.BodyBytes), e.Sig)) { return Invalid.Signature; }
-        if (PresenceOf(e, signerDevice, Roster.Presence.RoleBy, e.UvBy) is { } noPresence) { return noPresence; }
+        if (PresenceProof.Check(e.BodyBytes, signerDevice, Roster.Presence.RoleBy, e.UvBy) is { } noPresence) { return noPresence; }
         var cosigner = -1;
         if (body.Cosigner is { } co)
         {
@@ -302,7 +319,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             cosigner = c;
             var cd = _g[c].Body.Device!;
             if (!Verify(cd.Sign!, Entry.SignedByCosigner(e.BodyBytes), e.Cosig!)) { return Invalid.Signature; }
-            if (PresenceOf(e, cd, Roster.Presence.RoleCosigner, e.UvCosigner) is { } noCoPresence) { return noCoPresence; }
+            if (PresenceProof.Check(e.BodyBytes, cd, Roster.Presence.RoleCosigner, e.UvCosigner) is { } noCoPresence) { return noCoPresence; }
         }
         facts = facts with { Signer = signer, Cosigner = cosigner };
 
@@ -402,23 +419,6 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
     }
 
     static bool Verify(byte[] key, byte[] message, byte[] der) => P256.Verify(key, message, der);
-
-    // Every entry needs each signer's presence: `key`, or `webauthn` with that signer's own
-    // assertion; `none` signs nothing (decision 3(a)).
-    static string? PresenceOf(Entry e, DeviceDescriptor d, string role, Assertion? uv)
-    {
-        switch (d.Presence)
-        {
-            case Roster.Presence.Key:
-                return uv is null ? null : Invalid.Presence;
-            case Roster.Presence.WebAuthn when uv is not null:
-                try { WebAuthnAssertion.Check(uv, d.WebAuthn!, Roster.Presence.Challenge(role, e.BodyBytes)); }
-                catch (RosterFormatException) { return Invalid.Presence; }
-                return null;
-            default:
-                return Invalid.Presence;
-        }
-    }
 
     // ---- quarantine, adoption and the applied state (§3.5) ----
 

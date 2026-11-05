@@ -151,10 +151,10 @@ suites:
     platforms: [win-x64, linux-x64]
     runner: local
     project: tests/AgentBridge.Roster.Tests
-    triggers: [docs/protocol/vectors/roster.json, docs/protocol/vectors/roster-state.json]
-    # Generates docs/protocol/vectors/roster.json and roster-state.json, and fails while either
-    # committed file is stale; pwa-unit replays both (test/unit/roster-vectors.test.mjs and
-    # test/unit/roster-state.test.mjs).
+    triggers: [docs/protocol/vectors/roster.json, docs/protocol/vectors/roster-state.json, docs/protocol/vectors/roster-commands.json]
+    # Generates docs/protocol/vectors/roster.json, roster-state.json and roster-commands.json, and
+    # fails while any committed file is stale; pwa-unit replays them (test/unit/roster-vectors,
+    # roster-state and roster-commands.test.mjs).
     command: dotnet test tests/AgentBridge.Roster.Tests -c Release
     where: ci.yml product
     baseline: { tests: 256, seconds: 90 }
