@@ -111,18 +111,62 @@ public sealed class AgentReadinessTests : IDisposable
         new IntakeState(f.Runtime, Path.Combine(f.Root, "bridge"), "test", f.Time.GetUtcNow()) { Homes = Homes }.Save(Profile);
         Directory.CreateDirectory(f.ClaudeHome);
         var marker = Path.Combine(f.ClaudeHome, "agent-bridge-owner.json");
-        var original = JsonSerializer.Serialize(new { version = 1, profile = Profile });
+        var original = JsonSerializer.Serialize(new { version = 1, profile = Profile, setupCompleted = true });
         File.WriteAllText(marker, original);
         await using var service = Service();
 
         var agent = Agent(await service.RefreshAsync(), "claude");
 
+        Assert.Equal(HookSetupState.Completed, agent.HookSetup);
         Assert.Equal(ReadinessState.Unknown, agent.Hooks.State);
         Assert.Contains("owned setup record", agent.Hooks.Detail);
         Assert.Null(agent.LastHookHandledAt);
         Assert.Equal(ReadinessState.Unknown, agent.Authentication.State);
         Assert.Equal(ReadinessState.Unknown, agent.Activation.State);
         Assert.Equal(original, File.ReadAllText(marker));
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public async Task An_owned_record_without_completed_setup_stays_incomplete_and_repairable_on_every_check(bool intake, bool explicitFalse)
+    {
+        if (intake) { new IntakeState(f.Runtime, Path.Combine(f.Root, "bridge"), "test", f.Time.GetUtcNow()) { Homes = Homes }.Save(Profile); }
+        Directory.CreateDirectory(f.CodexHome);
+        var marker = Path.Combine(f.CodexHome, "agent-bridge-owner.json");
+        // Records written before setupCompleted existed are never migrated to completed on read.
+        var original = explicitFalse ? JsonSerializer.Serialize(new { version = 1, profile = Profile, setupCompleted = false })
+            : JsonSerializer.Serialize(new { version = 1, profile = Profile });
+        File.WriteAllText(marker, original);
+        await using var service = Service();
+
+        foreach (var report in new[] { await service.RefreshAsync(), await service.RefreshAsync(fresh: true) })
+        {
+            var agent = Agent(report, "codex");
+            Assert.Equal(HookSetupState.Incomplete, agent.HookSetup);
+            Assert.Equal(intake ? ReadinessState.Failed : ReadinessState.NeedsAction, agent.Hooks.State);
+            Assert.Contains("did not complete", agent.Hooks.Detail);
+            Assert.DoesNotContain("owned setup record", agent.Hooks.Detail);
+        }
+        Assert.Equal(original, File.ReadAllText(marker));
+    }
+
+    [Fact]
+    public async Task Without_an_ownership_record_setup_is_not_set_up_and_foreign_or_malformed_completion_is_not_trusted()
+    {
+        Directory.CreateDirectory(f.CodexHome);
+        File.WriteAllText(Path.Combine(f.CodexHome, "agent-bridge-owner.json"), JsonSerializer.Serialize(new { version = 1, profile = Profile, setupCompleted = "yes" }));
+        Directory.CreateDirectory(f.ClaudeHome);
+        File.WriteAllText(Path.Combine(f.ClaudeHome, "agent-bridge-owner.json"),
+            JsonSerializer.Serialize(new { version = 1, profile = Path.Combine(f.Root, "other-profile"), setupCompleted = true }));
+        await using var service = Service();
+
+        var report = await service.RefreshAsync();
+
+        Assert.Equal(HookSetupState.NotSetUp, Agent(report, "copilot").HookSetup);
+        Assert.Equal((ReadinessState.Failed, HookSetupState.Unknown), (Agent(report, "codex").Hooks.State, Agent(report, "codex").HookSetup));
+        Assert.Equal((ReadinessState.Blocked, HookSetupState.Unknown), (Agent(report, "claude").Hooks.State, Agent(report, "claude").HookSetup));
     }
 
     [Theory]
@@ -227,7 +271,7 @@ public sealed class AgentReadinessTests : IDisposable
         {
             new IntakeState(f.Runtime, Path.Combine(f.Root, "bridge"), "test", f.Time.GetUtcNow()) { Homes = Homes }.Save(Profile);
             Directory.CreateDirectory(f.ClaudeHome);
-            File.WriteAllText(Path.Combine(f.ClaudeHome, "agent-bridge-owner.json"), JsonSerializer.Serialize(new { version = 1, profile = Profile }));
+            File.WriteAllText(Path.Combine(f.ClaudeHome, "agent-bridge-owner.json"), JsonSerializer.Serialize(new { version = 1, profile = Profile, setupCompleted = true }));
             afterSetup = service.RefreshAsync(fresh: true);
             overlappingCheck = service.RefreshAsync(fresh: true);
         }

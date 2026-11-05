@@ -472,6 +472,47 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.NotNull(IntakeState.Load(Profile).State);
     }
 
+    async Task<AgentReadiness> Readiness(string agent)
+    {
+        await using var service = new AgentReadinessService(Profile, Homes, LaunchConfig.Default,
+            new Locator { Locate = (_, _) => null }, codex, () => null);
+        return (await service.RefreshAsync(fresh: true)).Agents.Single(a => a.Id == agent);
+    }
+
+    [Fact]
+    public async Task Only_a_fully_completed_setup_is_reported_completed_and_a_failed_repair_reverts_it_to_incomplete()
+    {
+        // Intake is already enabled by another agent, as in the #705 review scenario.
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Assert.True((bool?)Read(Owner("claude"))["setupCompleted"]);
+        codex.FailPlugin = true;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
+
+        Assert.True(File.Exists(Owner("codex")));
+        Assert.Null(Read(Owner("codex"))["setupCompleted"]);
+        var interrupted = await Readiness("codex");
+        Assert.Equal(HookSetupState.Incomplete, interrupted.HookSetup);
+        Assert.Equal(ReadinessState.Failed, interrupted.Hooks.State);
+        Assert.DoesNotContain("owned setup record", interrupted.Hooks.Detail);
+        Assert.Equal(HookSetupState.Completed, (await Readiness("claude")).HookSetup);
+
+        codex.FailPlugin = false;
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
+        var repaired = await Readiness("codex");
+        Assert.Equal(HookSetupState.Completed, repaired.HookSetup);
+        // Completed setup is not evidence that hooks run in a new session.
+        Assert.Equal(ReadinessState.Unknown, repaired.Hooks.State);
+        Assert.Equal(ReadinessState.Unknown, repaired.Activation.State);
+
+        codex.FailPlugin = true;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
+
+        Assert.Null(Read(Owner("codex"))["setupCompleted"]);
+        Assert.Equal(HookSetupState.Incomplete, (await Readiness("codex")).HookSetup);
+        Assert.Equal(ReadinessState.Failed, (await Readiness("codex")).Hooks.State);
+    }
+
     [Fact]
     public async Task Settings_setup_refuses_read_only_and_host_shutdown_without_writes()
     {
@@ -971,8 +1012,11 @@ public sealed class StandaloneHooksTests : IDisposable
         var entries = Read(Registration("copilot"))["hooks"]!["agentStop"]!.AsArray();
         Assert.Single(entries);
         Assert.Equal("other-hook", (string?)entries[0]!["exec"]);
+        Assert.Null(Read(Owner("copilot"))["setupCompleted"]);
+        Assert.Equal(HookSetupState.Incomplete, (await Readiness("copilot")).HookSetup);
         await Setup.InstallAsync("copilot", false, TextWriter.Null);
         Assert.Equal(2, Read(Registration("copilot"))["hooks"]!["agentStop"]!.AsArray().Count);
+        Assert.Equal(HookSetupState.Completed, (await Readiness("copilot")).HookSetup);
     }
 
     [Fact]
@@ -1091,6 +1135,46 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.False(File.Exists(Owner("codex")));
         Assert.Equal("[hooks.state]\n\"user-hook\" = \"trusted\"\n", File.ReadAllText(trust));
         Assert.Equal(1, codex.Calls.Count(c => c[2] == "add" && c[1] == "marketplace"));
+    }
+
+    [Fact]
+    public async Task A_cancelled_removal_clears_completion_before_its_first_cleanup_step_and_stays_repairable()
+    {
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
+        Assert.True((bool?)Read(Owner("codex"))["setupCompleted"]);
+        using var stop = new CancellationTokenSource();
+        bool? completedAtFirstCleanup = true;
+        codex.OnPluginRemove = () => { completedAtFirstCleanup = (bool?)Read(Owner("codex"))["setupCompleted"]; stop.Cancel(); };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Setup.RemoveAsync("codex", false, TextWriter.Null, stop.Token));
+
+        Assert.Null(completedAtFirstCleanup);
+        Assert.True(codex.Present);
+        Assert.Null(Read(Owner("codex"))["setupCompleted"]);
+        var interrupted = await Readiness("codex");
+        Assert.Equal(HookSetupState.Incomplete, interrupted.HookSetup);
+        Assert.Equal(ReadinessState.Failed, interrupted.Hooks.State);
+    }
+
+    [Fact]
+    public async Task A_removal_that_removes_the_Codex_plugin_but_not_its_marketplace_stays_owned_and_incomplete()
+    {
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
+        codex.FailMarketplace = true;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.RemoveAsync("codex", false, TextWriter.Null));
+
+        Assert.Contains(codex.Calls, c => c.Length > 1 && c[0] == "plugin" && c[1] == "remove");
+        Assert.True(File.Exists(Owner("codex")));
+        Assert.Null(Read(Owner("codex"))["setupCompleted"]);
+        var partial = await Readiness("codex");
+        Assert.Equal(HookSetupState.Incomplete, partial.HookSetup);
+        Assert.Equal(ReadinessState.Failed, partial.Hooks.State);
+
+        codex.FailMarketplace = false;
+        await Setup.RemoveAsync("codex", false, TextWriter.Null);
+        Assert.False(codex.Present);
+        Assert.False(File.Exists(Owner("codex")));
     }
 
     [Fact]
@@ -1300,6 +1384,7 @@ public sealed class StandaloneHooksTests : IDisposable
         public bool FailMarketplace;
         public bool FailListing;
         public Action? OnList;
+        public Action? OnPluginRemove;
         public Func<Task>? WaitOnList;
         public string? LegacyMarketplace;
         public readonly List<string[]> Calls = [];
@@ -1317,6 +1402,11 @@ public sealed class StandaloneHooksTests : IDisposable
                 if (LegacyMarketplace is { } legacy) { marketplaces.Add(new JsonObject { ["name"] = legacy, ["root"] = Path.Combine(Root, "missing-legacy") }); }
                 return new CommandResult(true, false, 0,
                     new JsonObject { ["marketplaces"] = marketplaces }.ToJsonString());
+            }
+            if (arguments[1] == "remove")
+            {
+                OnPluginRemove?.Invoke();
+                cancellationToken.ThrowIfCancellationRequested();
             }
             if (arguments[1] == "marketplace")
             {
