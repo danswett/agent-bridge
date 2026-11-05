@@ -78,6 +78,37 @@ static partial class SelfTest
             Check(form is not null && ById<Button>(form, "SendAnswer") is not null && ById<TextBox>(form, "Field:notes") is not null,
                 "draws a form question with its fields and Send");
             Check(Message(form) is { Approval: false }, "draws a question that is not an approval as written");
+            if (form?.Card is { } otherCard && otherCard.Session.Question is { } otherQuestion)
+            {
+                var otherOriginal = otherCard.Session;
+                const string otherHint = "To type your own answer, answer at the machine.";
+                try
+                {
+                    foreach (var noteType in new[] { FieldType.Choice, FieldType.Multi })
+                    {
+                        otherCard.Update(otherOriginal with
+                        {
+                            Question = otherQuestion with
+                            {
+                                Id = $"self-test-other-description-{noteType}",
+                                Fields =
+                                [
+                                    new Field { Name = "pick", Type = noteType, OtherAtMachine = true, Options = [new Option("a", "A")] },
+                                    new Field { Name = "ok", Type = FieldType.Boolean },
+                                ],
+                            },
+                        });
+                        var described = await Until(() =>
+                            ById<Microsoft.UI.Xaml.Controls.Primitives.ToggleButton>(form, "Option:pick:a") is { } option
+                            && (noteType == FieldType.Choice ? option is RadioButton : option is CheckBox)
+                            && FrameworkElementAutomationPeer.CreatePeerForElement(option)?.GetHelpText() == otherHint,
+                            TimeSpan.FromSeconds(5));
+                        Check(described, $"describes {noteType} options with the at-machine explanation through their automation peers");
+                    }
+                }
+                finally { otherCard.Update(otherOriginal); }
+            }
+            else { Check(false, "finds the form question to check its at-machine explanation's accessibility"); }
             var withResponse = main.AllCards.FirstOrDefault(c => c.HasResponse);
             var responding = withResponse is null ? null : await Choose(window, main, withResponse.Id, "Response");
             Check(responding is not null && await Until(() => ById<FrameworkElement>(responding, "Response") is MarkdownView { Children.Count: > 0 }, TimeSpan.FromSeconds(5)), "renders a response's Markdown");

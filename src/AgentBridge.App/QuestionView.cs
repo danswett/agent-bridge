@@ -234,12 +234,15 @@ public sealed class QuestionView : StackPanel
             case FieldType.Multi:
                 {
                     var panel = new StackPanel { Spacing = 2 };
+                    var note = f.OtherAtMachineNote;
+                    if (note is not null) { Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(panel, note); }
                     var group = $"{vm.Id}:{f.Name}";
                     foreach (var o in f.Options)
                     {
                         var choice = Acting<ToggleButton>(f.Type == FieldType.Choice ? new RadioButton { GroupName = group } : new CheckBox());
                         choice.Content = new TextBlock { Text = o.Label, TextWrapping = TextWrapping.Wrap };
                         AutomationProperties(choice, o.Label, $"Option:{f.Name}:{o.Value}");
+                        if (note is not null) { Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(choice, note); }
                         choice.IsChecked = o.IsSelected;
                         choice.Checked += (_, _) => o.IsSelected = true;
                         choice.Unchecked += (_, _) => o.IsSelected = false;
