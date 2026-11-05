@@ -1,0 +1,429 @@
+// A phone's session header collapses on scroll (#631, ui.md §6.2, §5.3 Collapse, §9). Below 760 px
+// the header floats over the conversation; near the top it rides the scroll, mid-conversation it
+// goes after 32 px down and comes back after 64 px up. The thresholds' arithmetic is unit-tested
+// (test/unit/collapse-header.test.mjs); here the page: what a person scrolling sees, what they
+// hear, and that from 760 px up nothing is different.
+import { test, expect } from '@playwright/test';
+import { open } from './nav.mjs';
+
+const CODEX = '019a1b2c-codex-example';
+const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
+const later = (ms = 1000) => new Date(Date.now() + ms).toISOString();
+const LONG = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+
+async function openDemo(page) {
+  await page.addInitScript(() => {
+    window.__cspViolations = [];
+    document.addEventListener('securitypolicyviolation', (e) => window.__cspViolations.push(`${e.violatedDirective} ${e.blockedURI}`));
+  });
+  await page.goto('?demo=1&static=1&delegates=1');
+  await page.waitForSelector('html[data-demo-ready]');
+}
+
+test.afterEach(async ({ page }) => {
+  expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
+});
+
+const upsert = (page, id, change) => page.evaluate(({ id, change }) => {
+  const d = window.agentBridgeDemo;
+  const s = d.host.get(id) ?? { id };
+  d.upsert({ ...s, ...change, activity: { ...(s.activity ?? {}), ...(change.activity ?? {}) } });
+}, { id, change });
+
+const choices = (id) => ({
+  id, kind: 'form', message: 'Which?', askedAt: later(60_000),
+  fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+});
+
+// Codex's session, its conversation long enough to scroll with room to spare below, opened and
+// measured by the header.
+async function session(page) {
+  await openDemo(page);
+  await upsert(page, CODEX, { activity: { response: LONG, reasoning: null, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
+  const v = await open(page, CODEX);
+  await v.locator('.stream').evaluate((el) => { el.style.paddingBottom = '1500px'; });
+  await expect.poll(() => v.evaluate((el) => el.style.getPropertyValue('--head-h'))).not.toBe('');
+  await settle(v);
+  return v;
+}
+
+// The conversation not moving: an app-made scroll (to a question) has run its course, too.
+const settle = (v) => v.locator('.stream-scroll').evaluate((sc) => new Promise((resolve) => {
+  let at = sc.scrollTop;
+  let still = 0;
+  const tick = () => {
+    still = sc.scrollTop === at ? still + 1 : 0;
+    at = sc.scrollTop;
+    if (still >= 15) { resolve(); } else { requestAnimationFrame(tick); }
+  };
+  requestAnimationFrame(tick);
+}));
+
+// What the header shows and covers now, and where the conversation is.
+const read = (v) => v.evaluate((el) => {
+  const sc = el.querySelector('.stream-scroll');
+  const top = el.querySelector('.session-top');
+  const bar = el.querySelector('.session-bar');
+  const px = (name) => parseFloat(el.style.getPropertyValue(name) || '0');
+  return {
+    ty: px('--ty'), covered: px('--covered'), full: top.offsetHeight, bar: bar.offsetHeight, scroll: sc.scrollTop,
+    room: top.offsetHeight - bar.offsetHeight, solid: el.hasAttribute('data-solid'), titled: el.hasAttribute('data-titled'),
+  };
+});
+
+// A person's scroll: their touch or wheel first, then one scroll event, so the next move is the next.
+const scrollTo = (v, y, input = true) => v.locator('.stream-scroll').evaluate((sc, [y, input]) => new Promise((resolve) => {
+  if (sc.scrollTop === y) { resolve(); return; }
+  if (input) { sc.dispatchEvent(new WheelEvent('wheel', { deltaY: y - sc.scrollTop, bubbles: true })); }
+  sc.addEventListener('scroll', () => requestAnimationFrame(() => requestAnimationFrame(() => resolve())), { once: true });
+  sc.scrollTo({ top: y, behavior: 'instant' });
+}), [y, input]);
+
+// Scrolled to y, then the header folded to the bar.
+async function folded(v, y = 300) {
+  await scrollTo(v, y);
+  const m = await read(v);
+  expect(m.ty).toBe(-m.room);
+  return m;
+}
+
+for (const scheme of ['light', 'dark']) {
+  test.describe(`on a phone, ${scheme}`, () => {
+    test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, colorScheme: scheme });
+
+    test('a session opens with the whole header, and a pinned bar behind it holds Back and More at a tap each', async ({ page }) => {
+      const v = await session(page);
+      const m = await read(v);
+      expect(m).toMatchObject({ ty: 0, scroll: 0, solid: false, titled: false });
+      expect(m.bar).toBeGreaterThanOrEqual(48);
+      for (const control of ['.back', '.more']) {
+        const box = await v.locator(`.session-bar ${control}`).boundingBox();
+        expect(box.width).toBeGreaterThanOrEqual(44);
+        expect(box.height).toBeGreaterThanOrEqual(44);
+      }
+      // The title and the meta are the header's own: not drawn twice, and the delegate strip not at all.
+      await expect(v.locator('.session-top .session-title')).toBeVisible();
+      await expect(v.locator('.delegate-strip')).toBeHidden();
+      await expect(v.locator('.bar-title')).toBeHidden();
+    });
+
+    test('near the top the header rides the scroll one for one, and the bar fills and names the session once 40 px are under it', async ({ page }, info) => {
+      const v = await session(page);
+      for (const y of [10, 30, 39]) {
+        await scrollTo(v, y);
+        expect(await read(v), `at ${y}`).toMatchObject({ ty: -y, solid: false, titled: false });
+        expect((await v.locator('.session-top').boundingBox()).y, `at ${y}`).toBeCloseTo(-y, 0);
+      }
+      await info.attach(`riding-${scheme}.png`, { body: await page.screenshot(), contentType: 'image/png' });
+      await scrollTo(v, 40);
+      expect(await read(v)).toMatchObject({ ty: -40, solid: true, titled: true });
+      await expect(v.locator('.bar-title')).toBeVisible();
+      await expect(v.locator('.bar-title-text')).toHaveText(await v.locator('.session-title').textContent());
+      // The bar stops the header where it is: the whole of what is above the bar.
+      const m = await folded(v, 400);
+      expect(m.covered).toBe(m.bar);
+      expect(m.bar).toBeGreaterThanOrEqual(48);
+      await info.attach(`folded-${scheme}.png`, { body: await page.screenshot(), contentType: 'image/png' });
+    });
+
+    test('mid-conversation 64 px up brings the header back and 32 px down hides it, and a change of direction restarts the count', async ({ page }, info) => {
+      const v = await session(page);
+      const { room } = await folded(v, 300);
+      const is = async (ty, why) => expect((await read(v)).ty, why).toBe(ty);
+      for (const y of [270, 240, 237]) { await scrollTo(v, y); await is(-room, `up to ${y}`); }
+      await scrollTo(v, 236);
+      await is(0, '64 px up');
+      await info.attach(`returned-${scheme}.png`, { body: await page.screenshot(), contentType: 'image/png' });
+      await scrollTo(v, 267);
+      await is(0, '31 px down');
+      await scrollTo(v, 268);
+      await is(-room, '32 px down');
+      // 40 up, 5 down, 40 up: 80 up in all, but never 64 running.
+      await scrollTo(v, 228);
+      await scrollTo(v, 233);
+      await scrollTo(v, 193);
+      await is(-room, 'a change of direction restarts the count');
+      await scrollTo(v, 128);
+      await is(0, '65 px up since the last change');
+    });
+
+    test('a tap on the bar\'s title brings the header back', async ({ page }) => {
+      const v = await session(page);
+      const { room } = await folded(v, 300);
+      expect(room).toBeGreaterThan(40);
+      await v.locator('.bar-title-text').tap();
+      await expect.poll(async () => (await read(v)).ty).toBe(0);
+      expect((await read(v)).scroll).toBe(300);
+    });
+
+    test('content growing below, and a scroll the app makes to a question, leave the header as it was', async ({ page }) => {
+      const v = await session(page);
+      const { room } = await folded(v, 300);
+      await upsert(page, CODEX, { activity: { response: `${LONG}\n\nAnd more.` }, updatedAt: later(2000) });
+      await expect(v.locator('.stream-scroll')).toContainText('And more.');
+      await settle(v);
+      expect((await read(v)).ty).toBe(-room);
+      // At the end of the conversation a question arrives and is brought into sight, scrolled up
+      // to by the app: 8 px below the bar, with the header still folded.
+      await v.locator('.stream-scroll').evaluate((sc) => { sc.scrollTop = sc.scrollHeight; });
+      await settle(v);
+      const before = await read(v);
+      expect(before.ty).toBe(-room);
+      // Nothing under the pointer: someone reading holds a question where it arrives.
+      await page.mouse.move(1, 1);
+      await upsert(page, CODEX, { status: 'waiting', statusSince: later(3000), updatedAt: later(3000), question: choices('q-folded') });
+      await expect(v.locator('.question-slot .question')).toBeVisible();
+      await settle(v);
+      const after = await read(v);
+      expect(after.scroll).toBeLessThan(before.scroll);
+      expect(after.ty).toBe(-room);
+      const gap = await v.evaluate((el) => el.querySelector('.question-slot .question').getBoundingClientRect().top - el.querySelector('.stream-scroll').getBoundingClientRect().top);
+      expect(gap).toBeGreaterThanOrEqual(after.covered + 8 - 1);
+      expect(gap).toBeLessThanOrEqual(after.covered + 8 + 1);
+    });
+
+    test('the bar\'s glyph is the session\'s, and needs while it waits on you', async ({ page }) => {
+      await openDemo(page);
+      const v = await open(page, COPILOT);
+      await expect(v.locator('.status-line .glyph')).toHaveAttribute('data-glyph', 'needs');
+      await expect(v.locator('.bar-title .glyph')).toHaveAttribute('data-glyph', 'needs');
+      const calm = await open(page, '6f1c2b7e-claude-example');
+      const meta = await calm.locator('.status-line .glyph').getAttribute('data-glyph');
+      expect(meta).not.toBe('needs');
+      await expect(calm.locator('.bar-title .glyph')).toHaveAttribute('data-glyph', meta);
+    });
+
+    test('one heading, the bar\'s copy drawn only, and nothing of the folding announced', async ({ page }) => {
+      const v = await session(page);
+      await expect(v.locator('h2')).toHaveCount(1);
+      await expect(v.locator('.session-bar :is(h1, h2, h3, h4, h5, h6, [role="heading"])')).toHaveCount(0);
+      await expect(v.locator('.bar-title')).toHaveAttribute('aria-hidden', 'true');
+      expect(await v.locator('.bar-title').evaluate((el) => ['aria-label', 'aria-labelledby', 'aria-describedby', 'title', 'role'].filter((a) => el.hasAttribute(a)))).toEqual([]);
+      await expect(v.locator('.session-bar')).not.toHaveAttribute('aria-hidden', /.*/);
+      // The status is read from the meta line; and nothing in the header is a live region.
+      await expect(v.locator('.status-line')).not.toHaveAttribute('aria-hidden', /.*/);
+      await expect(v.locator('.session-head :is([aria-live], [role="status"], [role="alert"]):not([aria-live="off"])')).toHaveCount(0);
+      await folded(v);
+      await expect(v.locator('h2')).toHaveCount(1);
+      await expect(v.locator('.session-top .session-title')).toBeAttached();
+      await expect(v.getByRole('heading', { level: 2 })).toHaveCount(1);
+    });
+
+    test('folded, the header is still read and tabbed to, Back and More, the tabs, then the conversation', async ({ page }) => {
+      const v = await session(page);
+      await v.locator('.stream').evaluate((stream) => {
+        const b = document.createElement('button');
+        b.id = 'probe';
+        b.textContent = 'Probe';
+        stream.prepend(b);
+      });
+      await folded(v);
+      await expect(v.getByRole('tab', { name: 'Conversation' })).toBeAttached();
+      await v.locator('.session-bar .back').focus();
+      const seen = [];
+      for (let i = 0; i < 4; i += 1) {
+        seen.push(await page.evaluate(() => {
+          const a = document.activeElement;
+          if (a.id === 'probe') { return 'conversation'; }
+          return [...a.classList].find((c) => ['back', 'more', 'view-tab'].includes(c)) ?? `${a.tagName}.${a.className}`;
+        }));
+        await page.keyboard.press('Tab');
+      }
+      expect(seen).toEqual(['back', 'more', 'view-tab', 'conversation']);
+    });
+
+    test('focus coming into the header expands it and holds it there until focus leaves', async ({ page }) => {
+      const v = await session(page);
+      const { room } = await folded(v, 300);
+      await v.locator('.session-bar .back').focus();
+      await expect.poll(async () => (await read(v)).ty).toBe(0);
+      // Scrolling with focus in the header leaves it whole.
+      await scrollTo(v, 420, false);
+      await scrollTo(v, 520, false);
+      expect((await read(v)).ty).toBe(0);
+      await v.locator('.stream-scroll').evaluate((sc) => { sc.tabIndex = -1; sc.focus(); });
+      await scrollTo(v, 620);
+      await scrollTo(v, 700);
+      await expect.poll(async () => (await read(v)).ty).toBe(-room);
+    });
+
+    test('scroll-padding-top is what the header covers, plus 8', async ({ page }) => {
+      const v = await session(page);
+      const padding = () => v.locator('.stream-scroll').evaluate((sc) => parseFloat(getComputedStyle(sc).scrollPaddingTop));
+      let m = await read(v);
+      expect(await padding()).toBeCloseTo(m.full + 8, 0);
+      m = await folded(v);
+      expect(await padding()).toBeCloseTo(m.covered + 8, 0);
+      expect(m.covered).toBe(m.bar);
+      await scrollTo(v, 20);
+      m = await read(v);
+      expect(await padding()).toBeCloseTo(m.covered + 8, 0);
+    });
+
+    test('Home, End, Page Up and Page Down are scrolling, and Home brings the full header back', async ({ page }) => {
+      const v = await session(page);
+      const { room } = await read(v);
+      await v.locator('.stream-scroll').evaluate((sc) => { sc.tabIndex = -1; sc.focus(); });
+      await page.keyboard.press('End');
+      await expect.poll(async () => (await read(v)).ty).toBe(-room);
+      await page.keyboard.press('PageUp');
+      await expect.poll(async () => (await read(v)).ty).toBe(0);
+      await page.keyboard.press('PageDown');
+      await expect.poll(async () => (await read(v)).ty).toBe(-room);
+      await page.keyboard.press('PageUp');
+      await expect.poll(async () => (await read(v)).ty).toBe(0);
+      await page.keyboard.press('End');
+      await expect.poll(async () => (await read(v)).ty).toBe(-room);
+      await page.keyboard.press('Home');
+      await expect.poll(async () => (await read(v)).scroll).toBe(0);
+      expect(await read(v)).toMatchObject({ ty: 0, solid: false, titled: false });
+    });
+
+    test('the bar grows with the text, and what it covers with it', async ({ page }) => {
+      const v = await session(page);
+      await folded(v);
+      const was = await read(v);
+      await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+      await expect.poll(async () => (await read(v)).bar).toBeGreaterThan(was.bar * 1.5);
+      await expect.poll(async () => { const m = await read(v); return m.covered === m.bar; }).toBe(true);
+    });
+
+    test('the bar\'s fill and hairline appear once content goes under it', async ({ page }) => {
+      const v = await session(page);
+      const bar = () => v.locator('.session-bar').evaluate((el) => {
+        const s = getComputedStyle(el, '::before');
+        return { fill: s.backgroundColor, opacity: parseFloat(s.opacity), line: s.borderBottomWidth };
+      });
+      expect(await bar()).toMatchObject({ opacity: 0 });
+      await folded(v);
+      await expect.poll(async () => (await bar()).opacity).toBe(1);
+      const solid = await bar();
+      expect(solid.line).toBe('1px');
+      expect(solid.fill).not.toBe('rgba(0, 0, 0, 0)');
+    });
+  });
+}
+
+test.describe('on a phone, with the person\'s settings', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test('focused content stays visible after a rotation: scrolled into sight, clear of the header', async ({ page }) => {
+    const v = await session(page);
+    const { room } = await folded(v);
+    // A control at the foot of what the person sees, which a shorter screen then cuts off.
+    await v.locator('.stream').evaluate((stream) => {
+      const sc = stream.parentElement;
+      const b = document.createElement('button');
+      b.id = 'probe';
+      b.textContent = 'Probe';
+      b.style.cssText = `position:absolute;left:16px;height:44px;top:${sc.scrollTop + sc.clientHeight - 60}px`;
+      stream.style.position = 'relative';
+      stream.append(b);
+      b.focus({ preventScroll: true });
+    });
+    await page.setViewportSize({ width: 667, height: 375 });
+    await expect.poll(() => v.evaluate((el) => {
+      const sc = el.querySelector('.stream-scroll').getBoundingClientRect();
+      const b = el.querySelector('#probe').getBoundingClientRect();
+      const covered = parseFloat(el.style.getPropertyValue('--covered'));
+      return b.top >= sc.top + covered - 1 && b.bottom <= sc.bottom + 1;
+    })).toBe(true);
+    expect((await read(v)).ty).toBe(-room);
+  });
+
+  test('focused content stays visible when the bar grows under it', async ({ page }) => {
+    const v = await session(page);
+    await folded(v);
+    await v.locator('.stream').evaluate((stream) => {
+      const sc = stream.parentElement;
+      const b = document.createElement('button');
+      b.id = 'probe';
+      b.textContent = 'Probe';
+      b.style.cssText = `position:absolute;left:16px;height:44px;top:${sc.scrollTop + 56}px`;
+      stream.style.position = 'relative';
+      stream.append(b);
+      b.focus({ preventScroll: true });
+    });
+    await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+    await expect.poll(() => v.evaluate((el) => {
+      const sc = el.querySelector('.stream-scroll').getBoundingClientRect();
+      const b = el.querySelector('#probe').getBoundingClientRect();
+      return b.top >= sc.top + parseFloat(el.style.getPropertyValue('--covered')) - 1;
+    })).toBe(true);
+  });
+
+  test('a window widened from a phone\'s leaves nothing of the collapse behind', async ({ page }) => {
+    const v = await session(page);
+    await folded(v);
+    await page.setViewportSize({ width: 900, height: 800 });
+    await expect.poll(() => v.evaluate((el) => el.style.getPropertyValue('--head-h'))).toBe('');
+    expect(await v.evaluate((el) => ({ ty: el.style.getPropertyValue('--ty'), state: el.hasAttribute('data-state') }))).toEqual({ ty: '', state: false });
+  });
+
+  test('under reduced motion the header leaves and returns with the 83 ms cross-fade, and does not slide', async ({ page }) => {
+    const v = await session(page);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const { room } = await folded(v, 300);
+    await scrollTo(v, 230);
+    expect((await read(v)).ty).toBe(0);
+    const fade = await v.evaluate((el) => new Promise((resolve) => {
+      const sc = el.querySelector('.stream-scroll');
+      const top = el.querySelector('.session-top');
+      sc.addEventListener('scroll', () => requestAnimationFrame(() => {
+        const s = getComputedStyle(top);
+        resolve({ fading: el.classList.contains('fading'), time: s.transitionDuration, props: s.transitionProperty });
+      }), { once: true });
+      sc.scrollTo({ top: 262, behavior: 'instant' });
+    }));
+    expect(fade).toEqual({ fading: true, time: '0.083s', props: 'opacity' });
+    await expect.poll(async () => (await read(v)).ty).toBe(-room);
+    await expect(v.locator('.session-top')).not.toHaveCSS('opacity', '0');
+  });
+});
+
+test.describe('on a phone, in forced colours', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test('the header and the bar are Canvas and CanvasText', async ({ page, browserName }) => {
+    test.skip(browserName === 'webkit', 'WebKit has no forced-colors emulation');
+    await page.emulateMedia({ forcedColors: 'active' });
+    const v = await session(page);
+    await folded(v);
+    const probe = await page.evaluate(() => {
+      const p = document.createElement('div');
+      p.style.cssText = 'background:Canvas;color:CanvasText;border-color:CanvasText;border-style:solid';
+      document.body.append(p);
+      const s = getComputedStyle(p);
+      const r = { canvas: s.backgroundColor, text: s.color };
+      p.remove();
+      return r;
+    });
+    expect(await v.locator('.session-top').evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(probe.canvas);
+    expect(await v.locator('.session-bar').evaluate((el) => getComputedStyle(el, '::before').backgroundColor)).toBe(probe.canvas);
+    await expect(v.locator('.bar-title')).toHaveCSS('color', probe.text);
+  });
+});
+
+test.describe('from 760 px up', () => {
+  test.use({ viewport: { width: 900, height: 800 } });
+
+  test('nothing is different: no bar, no listeners, no padding, no offset', async ({ page }) => {
+    await openDemo(page);
+    await upsert(page, CODEX, { activity: { response: LONG, reasoning: null, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
+    const v = await open(page, CODEX);
+    const sc = v.locator('.stream-scroll');
+    await expect(v.locator('.session-bar')).toBeHidden();
+    await expect(v.locator('.session-head')).toHaveCSS('display', 'contents');
+    const padding = await sc.evaluate((el) => { const s = getComputedStyle(el); return [s.paddingTop, s.paddingLeft, s.scrollPaddingTop]; });
+    expect(padding[0]).toBe(padding[1]);
+    expect(padding[2]).toBe('auto');
+    await sc.evaluate((el) => { el.scrollTop = 600; });
+    await page.waitForTimeout(150);
+    expect(await v.evaluate((el) => ({
+      style: ['--ty', '--covered', '--head-h', '--stage-h'].map((p) => el.style.getPropertyValue(p)),
+      attributes: ['data-state', 'data-solid', 'data-titled'].filter((a) => el.hasAttribute(a)),
+      classes: [...el.classList].filter((c) => c === 'animating' || c === 'fading'),
+    }))).toEqual({ style: ['', '', '', ''], attributes: [], classes: [] });
+    expect((await v.locator('.session-header').boundingBox()).y).toBeGreaterThanOrEqual(0);
+  });
+});

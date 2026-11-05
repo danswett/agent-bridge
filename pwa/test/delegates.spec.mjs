@@ -406,19 +406,12 @@ test.describe('where the inspector is not a pane of its own', () => {
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test('a chip pressed for its delegate open behind another tab shows it, and pressed again lets it go', async ({ page }) => {
+  test('on a phone there is no chip row: the Delegates tab holds the delegates (owner, #629)', async ({ page }) => {
     await openDemo(page);
     const c = card(page);
-    const chip = c.locator('.delegate-strip .strip-item[data-id="demo-agent-suite"]');
-    await chip.click();
-    await expect(pane(page)).toBeVisible();
-    await c.getByRole('tab', { name: 'Conversation' }).click();
-    await expect(pane(page)).toBeHidden();
-    await chip.click();
-    await expect(pane(page)).toBeVisible();
-    await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-suite');
-    await chip.click();
-    await expect(pane(page)).toHaveCount(0);
+    await expect(c.locator('.delegate-strip')).toBeHidden();
+    await c.getByRole('tab', { name: 'Delegates' }).click();
+    await expect(c.locator('.delegates')).toBeVisible();
   });
 
   test('on a phone each delegate\'s row is a whole tap high', async ({ page }) => {
@@ -453,25 +446,6 @@ test.describe('on a phone', () => {
     }));
     expect(starts.length).toBeGreaterThan(4);
     for (const x of starts) { expect(x).toBeGreaterThan(2); }
-  });
-
-  test('a chip row under the header lists the delegates, and a chip opens its delegate in place of the list', async ({ page }) => {
-    await openDemo(page);
-    const c = card(page);
-    const strip = c.locator('.delegate-strip');
-    await expect(strip).toBeVisible();
-    await expect(strip.locator('.strip-item:not(.strip-fold)')).toHaveText([/^Read witness shell logic/, /^Run full test suite/]);
-    await strip.locator('.strip-item[data-id="demo-agent-suite"]').click();
-    await expect(c.getByRole('tab', { name: 'Delegates' })).toHaveAttribute('aria-selected', 'true');
-    await expect(pane(page)).toBeVisible();
-    await expect(pane(page).locator('.delegate-title')).toHaveText('Run full test suite');
-    await expect(pane(page).locator('.delegate-title')).toBeFocused();
-    await expect(strip.locator('.strip-item[data-id="demo-agent-suite"]')).toHaveAttribute('aria-pressed', 'true');
-    // The chips scroll sideways inside their row; the page never does.
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-    for (const chip of await strip.locator('.strip-item').all()) {
-      expect((await chip.boundingBox()).height).toBeGreaterThanOrEqual(44);
-    }
   });
 });
 

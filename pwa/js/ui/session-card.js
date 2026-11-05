@@ -41,6 +41,7 @@ import { DelegateDetail, DelegatesBlock, DelegateStrip } from './delegates-view.
 import { aloud, backgroundCounts, delegateEvents, mainVoice } from '../attribution.js';
 import { delegateOf } from '../needs-you.js';
 import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
+import { CollapsingHeader } from './collapse-header.js';
 import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js';
 
@@ -514,8 +515,14 @@ export class SessionCard {
     e.detailsButton = h('button', { type: 'button', class: 'icon-button details-button', 'aria-pressed': 'false', 'aria-controls': this.ids.details, 'aria-label': 'Details', title: 'Details', onclick: () => this.showDetails() }, designIcon('inspector', { cls: 'ab-icon-20' }));
     e.inspectorButton = h('button', { type: 'button', class: 'icon-button inspector-button', 'aria-label': 'Hide inspector', title: 'Hide inspector', onclick: () => this.onInspector?.() }, designIcon('sidebar', { cls: 'ab-icon-20' }));
     e.more = h('button', { type: 'button', class: 'icon-button more', 'aria-haspopup': 'menu', 'aria-label': 'More', title: 'More', onclick: () => this.#openMore() }, designIcon('more', { cls: 'ab-icon-20' }));
-    e.actions = h('div', { class: 'header-actions' }, e.pin, e.detailsButton, e.inspectorButton, e.more);
-    e.header = h('header', { class: 'session-header' }, e.back, h('div', { class: 'header-main' }, e.titleText, e.statusLine), e.actions);
+    e.actions = h('div', { class: 'header-actions' }, e.pin, e.detailsButton, e.inspectorButton);
+    e.header = h('header', { class: 'session-header' }, h('div', { class: 'header-main' }, e.titleText, e.statusLine), e.actions);
+    // The pinned bar of a phone's collapsing header (ui.md §6.2): Back and More are the bar's, always
+    // in reach and first in the tab order. Its glyph and title are drawn, not read: the status is
+    // read from the meta line, and the h2 is the one heading. From 760 the bar is not shown.
+    e.barGlyph = glyph('idle', { size: 16 });
+    e.barTitle = h('span', { class: 'bar-title-text' });
+    e.bar = h('div', { class: 'session-bar' }, e.back, h('div', { class: 'bar-title', 'aria-hidden': 'true' }, e.barGlyph, e.barTitle), e.more);
     // The delegate strip (§6.3): at three panes under the header; on a phone a chip row.
     // Its item pressed again lets the delegate go, if it is on screen. Out of sight, it shows it:
     // the inspector hidden, or (with no inspector pane) another tab chosen over it, which a tab
@@ -618,8 +625,13 @@ export class SessionCard {
     // The delegate's pane is in the document only while one is open.
     e.inspector = h('aside', { class: 'inspector', 'aria-label': 'Inspector' }, e.details, e.delegates, e.tools);
 
+    // The header floats over the conversation on a phone (CollapsingHeader); the bar first, so Back and
+    // More come before the tabs.
+    e.top = h('div', { class: 'session-top' }, e.header, this.strip.element, e.tabs);
+    e.head = h('div', { class: 'session-head' }, e.bar, e.top);
     this.view = h('section', { class: 'session-view', 'aria-labelledby': this.ids.title, hidden: true, dataset: { tab: 'conversation' } },
-      e.header, this.strip.element, e.tabs, h('div', { class: 'view-body' }, e.conversation, e.inspector));
+      e.head, h('div', { class: 'view-body' }, e.conversation, e.inspector));
+    this.collapse = new CollapsingHeader({ view: this.view, head: e.head, top: e.top, bar: e.bar, scroller: e.scroll });
     this.#applyTab();
     // A question that stays where it is can still move (#491): a title wrapping, a tool line
     // coming or going, the response or reasoning or your message changing above it, a note,
@@ -710,7 +722,9 @@ export class SessionCard {
 
     // The header: one meta line, glyph · status · machine · repository.
     e.titleText.textContent = title;
+    e.barTitle.textContent = title;
     setGlyph(e.glyph, words.glyph, { size: 16, driven: words.driven });
+    setGlyph(e.barGlyph, words.glyph, { size: 16, driven: words.driven });
     if (this.#changed('meta', [words.text, words.tone, words.driven, s.driverPrincipal, this.machineName, where, s.repository])) {
       e.statusText.dataset.tone = words.tone;
       setFacts(e.statusText, words.facts);
@@ -1098,6 +1112,8 @@ export class SessionCard {
       el.tabIndex = on || (this.#tab === 'details' && tab === 'conversation') ? 0 : -1;
     }
     e.detailsButton.setAttribute('aria-pressed', this.#tab === 'details' ? 'true' : 'false');
+    // The header is whole on every tab but the conversation.
+    this.collapse?.setPaused(this.#tab !== 'conversation');
   }
 
   // Details: in the inspector, where it is a pane (shown, if it was hidden); otherwise in place
@@ -1135,7 +1151,7 @@ export class SessionCard {
   // A phone's overflow menu: Pin, Details and End session (ui.md §6.2).
   #openMore() {
     const end = this.#stop?.pressable ? this.#stop : null;
-    this.#menu.show(this.els.header, [
+    this.#menu.show(this.els.bar, [
       { label: this.#pinned ? 'Unpin' : 'Pin', run: () => this.onPin(this, !this.#pinned) },
       { label: 'Details', run: () => { this.setTab('details'); this.focusDetails(); } },
       ...(end ? [{ label: 'End session', run: () => { this.setTab('details'); end.element.querySelector('.end-button').click(); } }] : []),
@@ -1156,6 +1172,7 @@ export class SessionCard {
     this.delegates.dispose();
     this.detail.dispose();
     this.#moves?.stop();
+    this.collapse?.destroy();
     clearTimeout(this.#history.timer);
   }
 
@@ -1402,9 +1419,14 @@ export class SessionCard {
     this.#scrollEnd = null;
     const v = view.getBoundingClientRect();
     const box = sc.getBoundingClientRect();
+    // What the floating header covers, and the 8 px the scroll leaves below it (scroll-padding-top).
+    const covered = this.collapse?.covered() ?? 0;
+    const top = box.top + (covered > 0 ? covered + 8 : 0);
     // A pixel's rounding is nowhere to go.
-    const moves = sc.getClientRects().length > 0 && (v.top < box.top - 1 || v.bottom > box.bottom + 1);
-    view.scrollIntoView({ block: 'nearest', behavior });
+    const moves = sc.getClientRects().length > 0 && (v.top < top - 1 || v.bottom > box.bottom + 1);
+    const scroll = () => view.scrollIntoView({ block: 'nearest', behavior });
+    // A scroll the app makes leaves the header as it was.
+    if (this.collapse) { this.collapse.appScroll(scroll); } else { scroll(); }
     this.#guard();
     if (!moves || behavior !== 'smooth') { return; }
     // Every step of the scroll re-arms it, so it runs out only after the question has stopped

@@ -21,7 +21,7 @@ const log = (page) => page.evaluate(() => window.agentBridgeDemo.host.stopLog);
 async function showEnd(page, id) {
   const v = await open(page, id);
   if (await end(page, id).isVisible()) { return; }
-  const more = v.locator('.session-header .more');
+  const more = v.locator('.session-bar .more');
   if (await more.isVisible()) {
     await more.click();
     await v.getByRole('menuitem', { name: 'Details' }).click();

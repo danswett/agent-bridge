@@ -237,7 +237,7 @@ test.describe('the system\'s Back on a phone', () => {
     await summary.click();
     await paneShows(page, 'Run full test suite');
     await stepTaken(page);
-    await v.locator('.session-header .back').click();
+    await v.locator('.session-bar .back').click();
     await expect(v).toBeHidden();
     await expect(page.locator('#list-pane')).toBeVisible();
     await page.goBack();
@@ -246,7 +246,7 @@ test.describe('the system\'s Back on a phone', () => {
 
   test('the header\'s Back over a delegate closes it, so Forward to its session shows it closed and Back from there is the list', async ({ page }) => {
     const v = await openDelegate(page, AS.androidInstalled);
-    await v.locator('.session-header .back').click();
+    await v.locator('.session-bar .back').click();
     await expect(page.locator('#list-pane')).toBeVisible();
     await page.goForward();
     await expect(v).toBeVisible();
@@ -323,22 +323,6 @@ test.describe('the system\'s Back on a phone', () => {
     await expect(page.locator('#list-pane')).toBeVisible();
   });
 
-  test('a delegate opened from the phone\'s chip row is a step, and its chip pressed again takes it back', async ({ page }) => {
-    await page.goto('icon.svg');
-    await on(page, AS.androidInstalled, '&delegates=1');
-    const v = await open(page, DELEGATING);
-    const chip = v.locator('.delegate-strip .strip-item[data-id="demo-agent-suite"]');
-    await chip.click();
-    await paneShows(page, 'Run full test suite');
-    await stepTaken(page);
-    await chip.click();
-    await expect(pane(page)).toHaveCount(0);
-    await expect.poll(() => step(page)).toBeNull();
-    await page.goBack();
-    await expect(v).toBeHidden();
-    await expect(page.locator('#list-pane')).toBeVisible();
-  });
-
   test('Back from a delegate opened from its row puts focus back on that row, not on the page', async ({ page }) => {
     await page.goto('icon.svg');
     await on(page, AS.androidInstalled, '&delegates=1');
@@ -362,12 +346,11 @@ test.describe('the system\'s Back on a phone', () => {
     await v.locator('.delegate-events .delegate-link').first().click();
     const opened = await pane(page).locator('.delegate-title').textContent();
     await expect.poll(() => step(page)).not.toBeNull();
-    // Then another from the strip: one step still, now the second's.
-    const other = v.locator('.delegate-strip .strip-item:not(.strip-fold):not([aria-pressed="true"])').first();
-    const otherId = await other.getAttribute('data-id');
-    await other.click();
+    // Then another, from the conversation's events again: one step still, now the second's.
+    await v.getByRole('tab', { name: 'Conversation' }).click();
+    await v.locator('.delegate-events .delegate-link').nth(1).click();
     await expect(pane(page).locator('.delegate-title')).not.toHaveText(opened);
-    await stepTaken(page, otherId);
+    await expect.poll(() => step(page)).not.toBeNull();
     await page.goBack();
     await expect(pane(page)).toHaveCount(0);
     await expect(v).toBeVisible();
