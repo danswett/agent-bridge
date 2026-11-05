@@ -130,7 +130,11 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     bool told;
     RestoreNotice? notice;
     ITimer? writeTimer;
-    DateTimeOffset writeDue;
+    // When the pending write was armed, on the monotonic clock, and how long after: the timer runs
+    // on elapsed time, so its deadline is kept the same way. On the wall clock, one set forward
+    // during a gone session's GoneKept left a new change waiting most of a minute (Copilot on #813).
+    long writeArmed;
+    TimeSpan writeAfter;
     ITimer? judgeTimer;
     bool judgingEvery;
     string? writeProblem;
@@ -286,7 +290,10 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             if (stopped) { return; }
             if (launched.Count >= LaunchesKept)
             {
-                foreach (var id in launched.Keys.Where(id => !live.ContainsKey(id)).ToList()) { launched.Remove(id); }
+                // Never an owed session's: one held undecided is adopted later through From, which
+                // takes its settings from here. Let go, it was written with none (Copilot on #813).
+                var owedIds = owed.Select(w => w.Entry.Id).ToHashSet(StringComparer.Ordinal);
+                foreach (var id in launched.Keys.Where(id => !live.ContainsKey(id) && !owedIds.Contains(id)).ToList()) { launched.Remove(id); }
             }
             launched[sessionId] = launch;
             if (running && live.TryGetValue(sessionId, out var e) && e.Launch != launch)
@@ -539,15 +546,16 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     {
         if (stopped) { return; }
         after = Wait(after);
-        var due = time.GetUtcNow() + after;
         if (writeTimer is not null)
         {
-            if (writeDue <= due) { return; }
-            writeDue = due;
+            if (writeAfter - time.GetElapsedTime(writeArmed) <= after) { return; }
+            writeArmed = time.GetTimestamp();
+            writeAfter = after;
             writeTimer.Change(after, Timeout.InfiniteTimeSpan);
             return;
         }
-        writeDue = due;
+        writeArmed = time.GetTimestamp();
+        writeAfter = after;
         writeTimer = time.CreateTimer(_ => Guarded(() =>
         {
             lock (gate)

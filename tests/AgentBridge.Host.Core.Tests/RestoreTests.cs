@@ -665,6 +665,45 @@ public sealed class RestoreTests : IDisposable
         Assert.All(written, s => Assert.Equal(launch, s.Launch));
     }
 
+    // Copilot on #813: launches past the ones kept let go of those not seen live, and a session held
+    // undecided is not live yet. Let go too, it was adopted with no settings once the hold lifted.
+    [Fact]
+    public async Task A_session_held_undecided_keeps_what_it_was_launched_with_however_many_launches_come_first()
+    {
+        var launch = new RestoreLaunch("agency", "Bridge", true, "work", null, null, null, "ask");
+        Previous(Fixture.T0, false, E("a") with { Launch = launch });
+        source.HeldNow = new DiscoveryHeld("the copilot processes could not be listed", [AgentKind.Copilot]);
+        await using var r = Recorder();
+        r.Start();
+
+        for (var i = 0; i < 300; i++) { r.Launched($"n{i:D3}", new LaunchedWith { Agent = "copilot", Permissions = "ask" }); }
+        source.Sessions.Add(S("a"));
+        source.HeldNow = null;
+        Time.Advance(RestoreRecorder.JudgeEvery);
+        Time.Advance(RestoreRecorder.Coalesce);
+
+        Assert.Equal(launch, Assert.Single(Written().Sessions).Launch);
+    }
+
+    // Copilot on #813: the pending write's deadline is elapsed time, as its timer is. Compared on the
+    // wall clock, one set forward while a gone session's minute ran held a new session back with it.
+    [Fact]
+    public async Task A_clock_set_forward_while_a_gone_session_is_kept_does_not_hold_back_the_next_change()
+    {
+        source.Sessions.AddRange([S("a"), S("b")]);
+        var clock = new SystemLimits(Time);
+        await using var r = Recorder(clock: clock);
+        r.Start();
+        source.Remove("b");
+        clock.Advance(RestoreRecorder.Coalesce);
+
+        clock.SetForward(TimeSpan.FromMinutes(5));
+        source.Upsert(S("c"));
+        clock.Advance(RestoreRecorder.Coalesce);
+
+        Assert.Contains(Written().Sessions, e => e.Id == "c");
+    }
+
     // Whatever stops the start is said, and every worktree is kept for the run: what is owed is not
     // known, and the host goes on serving rather than stop at every start.
     [Fact]
@@ -689,6 +728,7 @@ public sealed class RestoreTests : IDisposable
         TimeSpan offset;
 
         public void SetBack(TimeSpan by) => offset -= by;
+        public void SetForward(TimeSpan by) => offset += by;
         public void Advance(TimeSpan by) => inner.Advance(by);
         public override DateTimeOffset GetUtcNow() => inner.GetUtcNow() + offset;
         // The monotonic clock is not set back.
