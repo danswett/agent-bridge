@@ -256,15 +256,21 @@ test('a session row leaving fades where it was as the row below eases up into it
   expect(await ty(page, `#rows > [data-row="${below}"]`)).toBeGreaterThan(1);
 });
 
-// How far the element's bottom sits below the bottom its panel clips at (positive is clipped).
+// How far the element's bottom sits below its card's bottom edge as drawn, inside the border
+// (positive is outside the card), or below whatever clips it on the way up to its panel.
 const clippedBy = (page, selector) => page.evaluate((s) => {
   const el = document.querySelector(s);
   const panel = el.closest('.panel');
-  const clip = panel.getBoundingClientRect().bottom - parseFloat(getComputedStyle(panel).borderBottomWidth);
-  return el.getBoundingClientRect().bottom - clip;
+  const bottom = el.getBoundingClientRect().bottom;
+  const cap = panel.querySelector(':scope > .face.cap');
+  let over = bottom - (cap.getBoundingClientRect().bottom - parseFloat(getComputedStyle(cap).borderBottomWidth));
+  for (let a = el.parentElement; a && a !== panel.parentElement; a = a.parentElement) {
+    if (getComputedStyle(a).overflowY !== 'visible') { over = Math.max(over, bottom - a.getBoundingClientRect().bottom); }
+  }
+  return over;
 }, selector);
 
-test('the last session row ending stays whole as it fades: its panel keeps its height until the fade is done', async ({ page }) => {
+test('the last session row ending stays whole as it fades: its card\'s bottom edge waits below it until the fade is done', async ({ page }) => {
   // End a row has the second row go, so with two left it is the last.
   while (await page.locator('#rows > .row:not(.ghost)').count() > 2) {
     await page.click('#row-end');
@@ -278,7 +284,7 @@ test('the last session row ending stays whole as it fades: its panel keeps its h
   }
 });
 
-test('the bottom session row easing up into a gap is never clipped by its panel on the way', async ({ page }) => {
+test('the bottom session row easing up into a gap is never clipped or outside its card on the way', async ({ page }) => {
   const bottom = await page.locator('#rows > .row').last().getAttribute('data-row');
   await clickAndFreeze(page, '#row-end', 0);
   expect(await ty(page, `#rows > [data-row="${bottom}"]`)).toBeGreaterThan(1);
@@ -286,6 +292,40 @@ test('the bottom session row easing up into a gap is never clipped by its panel 
     await freezeAt(page, t);
     expect(await clippedBy(page, `#rows > [data-row="${bottom}"]`)).toBeLessThanOrEqual(0.5);
   }
+});
+
+test('a row leaving lays out once: no height changes after the first frame, and only transform and opacity animate', async ({ page }) => {
+  await record(page);
+  const { changed, props } = await page.evaluate(() => new Promise((resolve) => {
+    const sizes = () => {
+      const m = new Map();
+      for (const el of document.querySelectorAll('main *')) {
+        m.set(el, `${el.style.height}|${el.style.minHeight}|${el.style.maxHeight}|${el.offsetHeight}`);
+      }
+      return m;
+    };
+    document.getElementById('row-end').click();
+    const first = sizes();
+    const changed = [];
+    const t0 = performance.now();
+    const tick = () => {
+      for (const [el, v] of sizes()) {
+        if (first.has(el) && first.get(el) !== v && !el.classList.contains('ghost')) { changed.push(`${el.tagName}.${el.className}: ${first.get(el)} -> ${v}`); }
+      }
+      if (performance.now() - t0 < 250) { requestAnimationFrame(tick); return; }
+      const props = new Set();
+      for (const a of window.started) {
+        for (const k of a.effect.getKeyframes()) {
+          for (const p of Object.keys(k)) { if (!['offset', 'computedOffset', 'easing', 'composite'].includes(p)) { props.add(p); } }
+        }
+      }
+      resolve({ changed, props: [...props].sort() });
+    };
+    requestAnimationFrame(tick);
+  }));
+  expect(changed).toEqual([]);
+  expect(props.every((p) => ['opacity', 'transform', 'clipPath'].includes(p))).toBe(true);
+  expect(props).toContain('transform');
 });
 
 test('Needs you arrives as one insertion with its first entry, and its count cross-fades as the next comes', async ({ page }) => {

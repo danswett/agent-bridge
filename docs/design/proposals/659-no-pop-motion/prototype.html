@@ -57,7 +57,16 @@ button { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--bridge); outline-offset: 1px; }
 
 main { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; align-items: start; }
-.panel { background: var(--layer); border: 1px solid var(--stroke); border-radius: 8px; overflow: hidden; }
+/* The card is drawn behind the content, by layers that never clip it, so a leaving item's copy
+   and a row easing up into a gap are never cut off as the card closes. The card's bottom edge
+   (.cap) moves only by transform: the card takes its new height at once, and the cap eases
+   from where the bottom was, over a filler that scales down behind it (§2.7: layout once,
+   then only the compositor). */
+.panel { position: relative; isolation: isolate; border: 1px solid transparent; border-radius: 8px; }
+.panel > .face { position: absolute; z-index: -1; left: -1px; right: -1px; background: var(--layer); border: 1px solid var(--stroke); pointer-events: none; }
+.panel > .face.body { top: -1px; bottom: 7px; border-bottom: 0; border-radius: 8px 8px 0 0; }
+.panel > .face.cap { bottom: -1px; height: 8px; border-top: 0; border-radius: 0 0 8px 8px; }
+.panel > .face.fill { top: calc(100% - 7px); border-top: 0; border-bottom: 0; transform-origin: top; }
 .panel > header { padding: 10px 12px 8px; border-bottom: 1px solid var(--stroke); }
 .panel h2 { margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; }
 .panel h2 span { color: var(--text3); font-weight: 400; }
@@ -72,7 +81,7 @@ main { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)
 
 /* (a) Tools */
 .tools-wrap { position: relative; }
-.tools { height: 340px; overflow-y: auto; overflow-anchor: none; margin: 0; padding: 4px 0; list-style: none; overscroll-behavior: contain; }
+.tools { height: 340px; overflow-y: auto; overflow-anchor: none; margin: 0; padding: 4px 0; list-style: none; overscroll-behavior: contain; border-radius: 0 0 7px 7px; }
 .tool { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; min-height: 32px; padding: 6px 12px; }
 .tool svg { width: 12px; height: 12px; display: block; }
 .tool .what { font-family: var(--mono); font-size: 12px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -256,6 +265,11 @@ const h = (tag, attrs = {}, ...kids) => {
 
 // ---- Motion -------------------------------------------------------------------------------
 
+// Each panel's card: its body and its bottom edge, behind the content (see .panel's CSS).
+for (const p of document.querySelectorAll('main > .panel')) {
+  p.prepend(h('div', { class: 'face body', 'aria-hidden': 'true' }), h('div', { class: 'face cap', 'aria-hidden': 'true' }));
+}
+
 // Arriving: a fade (listItem, decelerate), with travel only where the entry has some (a toast's
 // 12). Under reduced motion, the cross-fade and no travel.
 function fadeIn(el, { dur = T.itemIn, dy = 0 } = {}) {
@@ -283,7 +297,8 @@ function drawn(container) {
 // gapFade: under reduced motion, a leaving item's gap closes with a cross-fade instead of at
 // once: the children that moved fade in where they now are, with no travel (Arriving and
 // leaving's reduced-motion column). Without it they jumped into the gap as the copy faded.
-function flip(container, mutate, { gapFade = false } = {}) {
+// hold: how long a leaving item's copy fades, which the card's bottom waits for (closeCard).
+function flip(container, mutate, { gapFade = false, hold = 0 } = {}) {
   const before = drawn(container);
   const moving = new Set();
   for (const k of before.keys()) {
@@ -292,8 +307,24 @@ function flip(container, mutate, { gapFade = false } = {}) {
     a?.cancel();
     shifts.delete(k);
   }
+  // What is below the list moves with it: the panels after it, and the card's own bottom edge.
+  const panels = new Map();
+  for (const p of document.querySelectorAll('main > .panel')) {
+    panels.set(p, p.getBoundingClientRect().top);
+    shifts.get(p)?.cancel();
+    shifts.delete(p);
+  }
+  const panel = container.closest('.panel');
+  const capDrawn = panel ? cardOverhang(panel) : 0;
+  const was = panel ? panel.offsetHeight : 0;
+  if (panel) { cancelClose(panel); }
   mutate();
-  if (today() || (S.reduced && !gapFade)) { return; }
+  if (today()) { return; }
+  if (panel) {
+    const gap = was + capDrawn - panel.offsetHeight;
+    if (gap > 0.5 && (!S.reduced || gapFade)) { closeCard(panel, gap, hold); }
+  }
+  if (S.reduced && !gapFade) { return; }
   let any = false;
   for (const k of container.children) {
     if (!before.has(k) || !k.getClientRects().length) { continue; }
@@ -312,6 +343,55 @@ function flip(container, mutate, { gapFade = false } = {}) {
     any = true;
   }
   if (any) { shiftCount += 1; }
+  if (S.reduced) { return; }
+  for (const [p, top] of panels) {
+    const dy = top - p.getBoundingClientRect().top;
+    if (Math.abs(dy) < 0.5) { continue; }
+    const a = p.animate([{ transform: `translateY(${dy}px)` }, { transform: 'translateY(0)' }], { duration: T.shift, easing: E.std });
+    a.id = 'shift';
+    shifts.set(p, a);
+  }
+}
+
+// The card takes its new height at once, and its bottom edge eases up from where it was drawn.
+// The panel used to clip its content and close by tweening min-height, which laid out on every
+// frame; before that it closed at once and cut off the copy of a last row mid-fade and the
+// bottom row mid-move. Now nothing clips them: the cap waits for the copy's fade (hold), then
+// closes over the rest of the shift, never above the rows still easing up into the gap (they
+// are further along their own ease), over a filler that scales down behind it. Under reduced
+// motion the old bottom stays for the cross-fade, then the card is at its new height at once.
+const closing = new WeakMap();
+function cardOverhang(panel) {
+  return panel.querySelector(':scope > .face.cap').getBoundingClientRect().bottom - panel.getBoundingClientRect().bottom;
+}
+function cancelClose(panel) {
+  const c = closing.get(panel);
+  if (!c) { return; }
+  closing.delete(panel);
+  for (const a of c.anims) { a.onfinish = null; a.cancel(); }
+  c.fill.remove();
+  c.cap.style.transform = '';
+}
+function closeCard(panel, gap, hold) {
+  const cap = panel.querySelector(':scope > .face.cap');
+  const fill = h('div', { class: 'face fill', 'aria-hidden': 'true' });
+  fill.style.height = `${gap}px`;
+  panel.prepend(fill);
+  const c = { cap, fill, anims: [] };
+  closing.set(panel, c);
+  const end = () => { if (closing.get(panel) === c) { cancelClose(panel); } };
+  if (S.reduced) {
+    cap.style.transform = `translateY(${gap}px)`;
+    const t = fill.animate([{ opacity: 1 }, { opacity: 1 }], { duration: T.cross });
+    c.anims.push(t);
+    t.onfinish = end;
+    return;
+  }
+  const at = Math.min(hold / T.shift, 1);
+  const frames = (a, b) => (at > 0 ? [{ transform: a }, { transform: a, offset: at, easing: E.std }, { transform: b }] : [{ transform: a }, { transform: b }]);
+  const opts = { duration: T.shift, easing: at > 0 ? 'linear' : E.std };
+  c.anims.push(cap.animate(frames(`translateY(${gap}px)`, 'translateY(0)'), opts), fill.animate(frames('scaleY(1)', 'scaleY(0)'), opts));
+  c.anims[0].onfinish = end;
 }
 
 // Leaving: a copy nothing can find or tap fades where the item was (listItem's fast exit), as
@@ -333,9 +413,6 @@ function depart(container, els, { dy = 0, dur = T.itemOut } = {}) {
     Object.assign(g.style, { top: `${el.offsetTop + new DOMMatrix(cs.transform).m42}px`, left: `${el.offsetLeft}px`, width: `${el.offsetWidth}px`, margin: '0' });
     return g;
   });
-  // The container is measured as drawn (a hold in flight included) before it shrinks.
-  const was = container.offsetHeight;
-  holds.get(container)?.cancel();
   flip(container, () => {
     els.forEach((e) => e.remove());
     container.prepend(...ghosts);
@@ -346,8 +423,7 @@ function depart(container, els, { dy = 0, dur = T.itemOut } = {}) {
       g.style.top = `${parseFloat(g.style.top) + g.drawn.top - now.top}px`;
       g.style.left = `${parseFloat(g.style.left) + g.drawn.left - now.left}px`;
     }
-  }, { gapFade: true });
-  hold(container, was, dur);
+  }, { gapFade: true, hold: dur });
   for (const g of ghosts) {
     const to = dy && !S.reduced ? { opacity: 0, transform: `translateY(${dy}px)` } : { opacity: 0 };
     const a = g.animate([{ opacity: Number(g.dataset.from), transform: 'translateY(0)' }, to],
@@ -355,24 +431,6 @@ function depart(container, els, { dy = 0, dur = T.itemOut } = {}) {
     a.onfinish = () => g.remove();
     a.oncancel = () => g.remove();
   }
-}
-// The panel clips what overflows it, so a container that shrank at once cut off the copy of
-// its last item mid-fade, and the bottom row mid-move. It keeps the height it was drawn at
-// until the copy has faded, then closes over the rest of the shift, never above the rows still
-// easing up into the gap (they are further along their own ease than this closes).
-// Under reduced motion it holds for the cross-fade and then closes at once.
-const holds = new WeakMap();
-function hold(container, was, fade) {
-  const now = container.offsetHeight;
-  if (today() || was - now < 0.5) { return; }
-  // Everything here is border-box, so min-height is the height as drawn.
-  const from = `${was}px`;
-  const to = `${now}px`;
-  const a = S.reduced
-    ? container.animate([{ minHeight: from }, { minHeight: from }], { duration: T.cross })
-    : container.animate([{ minHeight: from }, { minHeight: from, offset: fade / T.shift, easing: E.std }, { minHeight: to }], { duration: T.shift });
-  a.id = 'hold';
-  holds.set(container, a);
 }
 function arrive(container, els, place) {
   flip(container, () => place(els));
