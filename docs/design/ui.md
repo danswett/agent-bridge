@@ -1107,6 +1107,17 @@ question, as choosing its row does.
 - **Tray and toasts:** the tray's tooltip and the rail's Sessions badge carry N ("Agent
   Bridge · 3 need you"). A question's toast follows the rules above: an approval's toast has
   Open only.
+- **Banners** sit over every page, `InfoBar`s in this order (#293):
+  - What stops the app from its job: the host not running, refusing the app, connecting, or
+    view only. Warning, with no close button: it goes once that is put right.
+  - "Discovery held: …" ([v1-sessions.md](../protocol/v1-sessions.md#discovery-held)), one per
+    held machine, its name first when there is more than one. Informational, with the
+    `InfoBar`'s close button, named "Dismiss Discovery held on *machine*" (§9.1 A1) and reached
+    by Tab. It hides that banner only, and only how it is shown: the host still holds, and is
+    told nothing. It stays hidden while that machine's hold has the same reason, and comes back
+    when the reason changes, when the hold clears and comes back, or when the app restarts;
+    dismissals are never saved. Focus goes on to what Tab reaches next: the next banner's close
+    button, or the page (§9.1 A4). Nothing is announced.
 
 **macOS (SwiftUI, #260):**
 - **Sidebar:** a translucent source list (a Needs You · N filter item, Pinned, Sessions,

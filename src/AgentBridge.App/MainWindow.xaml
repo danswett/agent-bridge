@@ -126,6 +126,7 @@
                 </Grid.RowDefinitions>
                 <!-- What stops the app doing its job, over every page. -->
                 <StackPanel Grid.Row="0">
+                    <!-- Never closable (#293): it says what keeps the app from its job, and goes once that is put right. -->
                     <InfoBar
                         x:Name="Banner"
                         Margin="24,12,24,0"
@@ -134,14 +135,28 @@
                         Severity="Warning"
                         IsOpen="{x:Bind ViewModel.HasBanner, Mode=OneWay}"
                         Message="{x:Bind ViewModel.Banner, Mode=OneWay}" />
-                    <InfoBar
-                        x:Name="DiscoveryHeld"
-                        Margin="24,12,24,0"
+                    <!-- Each machine's discovery hold, one banner each, closable (#293; ui.md §7, Windows). -->
+                    <ItemsControl
+                        x:Name="HeldList"
                         AutomationProperties.AutomationId="DiscoveryHeld"
-                        IsClosable="False"
-                        Severity="Informational"
-                        IsOpen="{x:Bind ViewModel.IsHeld, Mode=OneWay}"
-                        Message="{x:Bind ViewModel.HeldWhy, Mode=OneWay}" />
+                        IsTabStop="False"
+                        ItemsSource="{x:Bind ViewModel.HeldNotices}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="core:HeldNotice">
+                                <InfoBar
+                                    Margin="24,12,24,0"
+                                    Tag="{x:Bind}"
+                                    AutomationProperties.AutomationId="{x:Bind AutomationId}"
+                                    IsClosable="True"
+                                    IsOpen="True"
+                                    Severity="Informational"
+                                    Message="{x:Bind Text, Mode=OneWay}"
+                                    Loaded="OnHeldLoaded"
+                                    Closing="OnHeldClosing"
+                                    Closed="OnHeldClosed" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                 </StackPanel>
 
                 <!-- Sessions (ui.md §5.2, §6): the list, the session and its inspector, by the window's width. -->

@@ -191,16 +191,18 @@ public sealed class DemoHost : IAsyncDisposable
                 {
                     List<Session> snapshot;
                     long rev;
+                    DiscoveryHeld? holds;
                     lock (gate)
                     {
                         snapshot = [.. sessions.Values];
                         rev = revision;
+                        holds = held;
                         if (!subscribers.Contains(ch)) { subscribers.Add(ch); }
                     }
                     return Done(new ChannelReply(new SubscribeResult(rev, snapshot.Count), async c =>
                     {
                         foreach (var s in snapshot) { await c.SendEventAsync(Events.SessionUpsert, s.WithoutHistory()); }
-                        await c.SendEventAsync(Events.SessionsSynced, new SessionsSynced(rev));
+                        await c.SendEventAsync(Events.SessionsSynced, new SessionsSynced(rev, holds));
                     }));
                 }
             case Ops.SessionGet:
@@ -389,6 +391,21 @@ public sealed class DemoHost : IAsyncDisposable
             to = [.. subscribers.Where(s => s.IsOpen)];
         }
         foreach (var ch in to) { try { await ch.SendEventAsync(Events.SessionRemove, new SessionRemoved(id)); } catch (IOException) { } }
+    }
+
+    // What the demo says holds its discovery, if anything: the self-test's, for the Discovery held
+    // banner (#293). The demo has no discovery to hold; nothing else changes with it.
+    DiscoveryHeld? held;
+
+    public async Task HoldAsync(DiscoveryHeld? next)
+    {
+        IProtocolChannel[] to;
+        lock (gate)
+        {
+            held = next;
+            to = [.. subscribers.Where(s => s.IsOpen)];
+        }
+        foreach (var ch in to) { try { await ch.SendEventAsync(Events.DiscoveryChanged, new DiscoveryChanged(next)); } catch (IOException) { } }
     }
 
     static IReadOnlyList<ToolCall> History(DateTimeOffset now) =>
