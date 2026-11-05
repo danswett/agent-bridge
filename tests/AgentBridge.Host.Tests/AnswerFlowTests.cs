@@ -578,6 +578,57 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.True(HasEnterOnly(injector.Plans[^1].Plan));
     }
 
+    // A form of one text field titled "Data", whose box shows `typed`, and with `elsewhere` a
+    // row above the form, where the session's own output is.
+    async Task AskDataAsync()
+    {
+        Fixture.Append(events, Recorded("q1", new { pick = "a" }), Copilot.ToolDone("q1", second++), Copilot.ToolStart("q2", "ask_user", new
+        {
+            message = "Notes?",
+            requestedSchema = new { properties = new { data = new { type = "string", title = "Data" } } },
+        }, second++));
+        await source.RefreshAsync();
+    }
+
+    static List<string> DataScreen(string typed, string? elsewhere = null) =>
+        [.. elsewhere is null ? Array.Empty<string>() : [elsewhere], .. Framed("Notes?", ["Data"], 0, ["╭──────╮", $"│ {typed,-4} │", "╰──────╯"], colon: false)];
+
+    [Fact]
+    public async Task Words_are_looked_for_in_the_field_they_are_typed_into_not_across_the_rows_beside_it()
+    {
+        // The title over the box ends "a", and the hints under it start "e": read across the
+        // whole screen as one, "Data" and "enter accept" already showed "ae", so the "ae" typed
+        // between them never showed more often and their Enter was never pressed (#510 review,
+        // Copilot 4480874526).
+        await AskDataAsync();
+        injector.Screen = () => DataScreen(injector.Plans.Any(p => p.Plan.Sends.Any(s => s.Text == "ae")) ? "ae" : "");
+        injector.OnInject = () => { if (HasEnterOnly(injector.Plans[^1].Plan)) { Fixture.Append(events, Recorded("q2", new { data = "ae" })); } };
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, new { data = "ae" }, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(2, injector.Plans.Count);
+        Assert.True(HasEnterOnly(injector.Plans[^1].Plan));
+    }
+
+    [Fact]
+    public async Task Words_that_show_beside_the_field_but_not_in_it_get_no_Enter()
+    {
+        // The CLI never draws them in the box; the session's output above the form shows them
+        // once they are typed. That is not the field taking them in, so their Enter stays
+        // unpressed: read across the whole screen, it went.
+        await AskDataAsync();
+        injector.Screen = () => DataScreen("", injector.Plans.Count > 0 ? "ae" : null);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, new { data = "ae" }, Guid.NewGuid().ToString());
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        Assert.Contains("not submitted", result.GetProperty("reason").GetString());
+        Assert.Equal(("ae", false), (Assert.Single(Assert.Single(injector.Plans).Plan.Sends).Text, injector.Plans[0].Plan.Sends[0].Enter));
+    }
+
     [Fact]
     public async Task A_list_that_repaints_before_it_takes_its_Enter_is_not_taken_for_the_field_the_words_go_to()
     {

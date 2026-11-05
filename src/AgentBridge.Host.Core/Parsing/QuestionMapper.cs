@@ -128,13 +128,15 @@ internal static class QuestionMapper
             // A field the CLI draws as something other than its schema says, or that cannot be
             // told, is never typed into, so a client shows the question to be answered at the
             // machine rather than offer what the host would then refuse (#662).
-            atMachine = !drivable;
+            atMachine = !drivable || !Drivable(schema);
         }
-        // Neither a form nor a list: free text, which the host does not type (AnswerService),
-        // since there is no form on screen to hold its keys to, so a client shows it to be
-        // answered at the machine rather than offer a box whose answer is always refused
-        // (#510 review, Copilot 5784910042).
-        else { atMachine = true; }
+        // What the host does not type, listed for the machine rather than offered with a box or
+        // list whose answer is always refused, as CopilotForm.Read refuses it, in its order: the
+        // older format (`choices` present at all, an empty list or one beside a schema included),
+        // then a question with no fields once its schema is read: free text, with no form on
+        // screen to hold its keys to, or a schema that is empty, not an object, or whose
+        // properties are none of them objects (#510 review, Copilot 5784910042, 4480874464).
+        if (Json.Get(arguments, "choices") is not null || fields.Count == 0) { atMachine = true; }
         return new Question
         {
             Id = id,
@@ -202,6 +204,25 @@ internal static class QuestionMapper
             fields.Add(field);
         }
         return (fields, drivable);
+    }
+
+    // Whether every field of a schema reads as one input Copilot CLI is known to draw for it.
+    static bool Drivable(JsonElement schema)
+    {
+        if (schema.ValueKind == JsonValueKind.String)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(schema.GetString() ?? "");
+                return Drivable(doc.RootElement);
+            }
+            catch (JsonException) { return true; }
+        }
+        if (Json.Obj(schema, "properties") is not { } properties) { return true; }
+        // A property that is not an object is refused too (CopilotForm.Schema), even beside one
+        // that is: listed as answerable, that form was refused every time (#510 review, Copilot
+        // 4480874464).
+        return properties.EnumerateObject().All(p => p.Value.ValueKind == JsonValueKind.Object && CopilotFieldSchema.Read(p.Value).Problem is null);
     }
 
     // A required text box that opens with only spaces in it has no answer from another device: its

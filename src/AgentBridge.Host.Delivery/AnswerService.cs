@@ -541,10 +541,15 @@ public sealed class AnswerService : ISessionAnswerer
         // picking what it highlights (#510 review).
         string? OffForm(IReadOnlyList<string> rows)
         {
-            if (CopilotFormScreen.Showing(rows, form, Math.Min(at, Math.Max(0, form.Fields.Count - 1))) is not { } off) { return null; }
+            if (CopilotFormScreen.Showing(rows, form, Field()) is not { } off) { return null; }
             log($"the screen of {Short(sessionId)} (pid {pid}) is not the form at its next field: {off}; nothing more is typed");
             return off;
         }
+        int Field() => Math.Min(at, Math.Max(0, form.Fields.Count - 1));
+        // How often tail shows in the input of the field the next keys go to; none on rows that
+        // do not show the form at that field, so words are never taken to have shown there.
+        Func<IReadOnlyList<string>, int> Shows(string tail) => rows =>
+            CopilotFormScreen.Input(rows, form, Field()) is { } input ? WordsOnScreen.Count(input, tail) : 0;
         // The field the next keys go to: the one the form moved to, or the screen as it stands
         // before anything has been pressed. Its rows, how often tail shows on it, or why not.
         async Task<(IReadOnlyList<string>? Rows, int Count, string? Why)> NextFieldAsync(string tail)
@@ -552,9 +557,9 @@ public sealed class AnswerService : ISessionAnswerer
             if (leaving is null)
             {
                 if (await ReadRowsAsync(pid) is not { } rows) { return (null, 0, "the session's screen could no longer be read"); }
-                return OffForm(rows) is { } off ? (null, 0, off) : (rows, WordsOnScreen.Count(rows, tail), null);
+                return OffForm(rows) is { } off ? (null, 0, off) : (rows, Shows(tail)(rows), null);
             }
-            var moved = await FieldShownAsync(pid, leaving, tail);
+            var moved = await FieldShownAsync(pid, leaving, Shows(tail));
             leaving = null;
             if (moved.Rows is null) { log($"the next field in {Short(sessionId)} (pid {pid}) did not show: {moved.Why}; nothing more is typed"); }
             else if (OffForm(moved.Rows) is { } off) { return (null, 0, off); }
@@ -616,7 +621,7 @@ public sealed class AnswerService : ISessionAnswerer
                 pending[0] = pending[0] with { Expect = Rows(shown), Checks = Below(shown) };
                 if (await WriteAsync(pending, false) is { } walked) { return walked; }
                 pending = [];
-                var (rows, count, why) = await FieldShownAsync(pid, shown, tail);
+                var (rows, count, why) = await FieldShownAsync(pid, shown, Shows(tail));
                 if (rows is null)
                 {
                     log($"the field the words go to in {Short(sessionId)} (pid {pid}) did not show: {why}; nothing more is typed");
@@ -626,7 +631,7 @@ public sealed class AnswerService : ISessionAnswerer
                 (field, before) = (rows, count);
             }
             if (await WriteAsync([send with { Enter = false, EnterDelayMs = 0, PauseAfterMs = 0, Expect = Rows(field), Checks = Below(field) }], false) is { } held) { return held; }
-            if (await AwaitOnScreenAsync(pid, tail, before) is not { } showing)
+            if (await AwaitOnScreenAsync(pid, Shows(tail), before) is not { } showing)
             {
                 log($"the words typed into {Short(sessionId)} (pid {pid}) did not show on its screen within {options.WordsWait.TotalSeconds:0.#} s; their Enter is not pressed");
                 return (new InjectionResult(InjectionStatus.Typed, "ok"), $"the words did not show on the session's screen within {options.WordsWait.TotalSeconds:0.#} seconds");
@@ -692,11 +697,11 @@ public sealed class AnswerService : ISessionAnswerer
         }
     }
 
-    // The field the words go to, and how often their end shows on it: once the screen has
+    // The field the words go to, and how often their end shows in its input (shows): once the screen has
     // changed from how it stood before the keys that open that field, and reads the same twice
     // running. No rows, and why, if that does not happen within WordsWait or the screen cannot
     // be read.
-    async Task<(IReadOnlyList<string>? Rows, int Count, string? Why)> FieldShownAsync(int pid, IReadOnlyList<string> shown, string tail)
+    async Task<(IReadOnlyList<string>? Rows, int Count, string? Why)> FieldShownAsync(int pid, IReadOnlyList<string> shown, Func<IReadOnlyList<string>, int> shows)
     {
         var started = options.Time.GetTimestamp();
         IReadOnlyList<string>? last = null;
@@ -705,7 +710,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (await ReadRowsAsync(pid) is not { } rows) { return (null, 0, "the session's screen could no longer be read"); }
             // Two reads running, of a screen that has changed: last follows every read, so a
             // repaint that went back to how it stood (B, then A, then B) does not count as B twice.
-            if (!rows.SequenceEqual(shown) && last is not null && rows.SequenceEqual(last)) { return (rows, WordsOnScreen.Count(rows, tail), null); }
+            if (!rows.SequenceEqual(shown) && last is not null && rows.SequenceEqual(last)) { return (rows, shows(rows), null); }
             last = rows;
             if (options.Time.GetElapsedTime(started) >= options.WordsWait)
             {
@@ -715,14 +720,14 @@ public sealed class AnswerService : ISessionAnswerer
         }
     }
 
-    // The screen once the words' end shows on it more often than it did before they were typed,
+    // The screen once the words' end shows in the field's input (shows) more often than it did before they were typed,
     // within WordsWait; null if it does not.
-    async Task<IReadOnlyList<string>?> AwaitOnScreenAsync(int pid, string tail, int before)
+    async Task<IReadOnlyList<string>?> AwaitOnScreenAsync(int pid, Func<IReadOnlyList<string>, int> shows, int before)
     {
         var started = options.Time.GetTimestamp();
         while (true)
         {
-            if (await ReadRowsAsync(pid) is { } rows && WordsOnScreen.Count(rows, tail) > before) { return rows; }
+            if (await ReadRowsAsync(pid) is { } rows && shows(rows) > before) { return rows; }
             if (options.Time.GetElapsedTime(started) >= options.WordsWait) { return null; }
             await Task.Delay(options.ScreenPollInterval ?? options.PollInterval, options.Time);
         }

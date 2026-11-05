@@ -26,5 +26,9 @@ public static class WordsOnScreen
         return count;
     }
 
+    // How often the tail shows in each of these runs of rows, each read on its own: the rows of
+    // the field's input (CopilotFormScreen.Input), never joined to a title or a hint beside it.
+    public static int Count(IEnumerable<IReadOnlyList<string>> runs, string tail) => runs.Sum(run => Count(run, tail));
+
     static string Dense(string text) => string.Concat(text.Where(c => !char.IsWhiteSpace(c) && c is not (>= '\u2500' and <= '\u257F')));
 }

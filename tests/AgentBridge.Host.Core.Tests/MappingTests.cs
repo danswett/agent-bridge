@@ -38,8 +38,37 @@ public class QuestionMappingTests
         Assert.True(Ask("""{ "question": "What next?" }""").AnswerAtMachine);
 
         Assert.Null(Ask("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] } } } }""").AnswerAtMachine);
-        Assert.Null(Ask("""{ "question": "Which?", "choices": ["a", "b"] }""").AnswerAtMachine);
     }
+
+    [Theory]
+    // What CopilotForm.Read refuses, or reads as no fields at all, the host never types, so each
+    // is shown to be answered at the machine rather than offered and refused every time (#510
+    // review, Copilot 4480874464): an empty schema, one with no properties, one that is not an
+    // object, properties none or only some of which are objects, and the older `choices` format,
+    // an empty list or one beside a schema included.
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": {} } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": {} }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": [] }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": "not json" }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": "{\"properties\":{}}" }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": [] } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "a": "text", "b": 1 } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "boolean" }, "b": 1 } } }""")]
+    [InlineData("""{ "question": "Which?", "choices": ["a", "b"] }""")]
+    [InlineData("""{ "message": "m", "choices": [], "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""")]
+    [InlineData("""{ "message": "m", "choices": ["a"], "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""")]
+    public void A_question_the_host_would_refuse_to_type_is_shown_to_be_answered_at_the_machine(string arguments) =>
+        Assert.True(Ask(arguments).AnswerAtMachine);
+
+    [Theory]
+    // Forms the host types are offered as before: one field or several, from an object schema or
+    // one sent as a JSON string, and a `choices` of null is no older format.
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "name": { "type": "string" }, "n": { "type": "number" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": "{\"properties\":{\"go\":{\"type\":\"boolean\"}}}" }""")]
+    [InlineData("""{ "message": "m", "choices": null, "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""")]
+    public void A_form_the_host_types_is_offered_to_be_answered_from_a_client(string arguments) =>
+        Assert.Null(Ask(arguments).AnswerAtMachine);
 
     [Theory]
     // A list Copilot opens on its Other box (a null default, or one naming no option), and lists

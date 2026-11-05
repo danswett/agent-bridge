@@ -38,8 +38,35 @@ public static partial class CopilotFormScreen
     // Null when the rows show this form at field `index`; otherwise why not, said as a reason
     // for stopping before the next key. The parts are looked for in the order the CLI draws
     // them, each below the last.
-    public static string? Showing(IReadOnlyList<string> rows, CopilotForm form, int index)
+    public static string? Showing(IReadOnlyList<string> rows, CopilotForm form, int index) => Locate(rows, form, index, out _, out _);
+
+    // The rows of the field being answered, between its heading and the hints, where what is
+    // typed into it is drawn: each run of a box's rows (a vertical edge first, `qc`'s or a
+    // border's, the rows a long answer wraps onto) joined, every other row on its own. Null when
+    // the rows do not show this form at that field. Words are looked for here alone: counted
+    // across the whole screen, a field titled "Data" over hints starting "enter" read "ae" across
+    // the two, and the words "ae" typed between them hid it, so their Enter was never pressed
+    // (#510 review, Copilot 4480874526). It can only find fewer than the whole screen did, so it
+    // never shows words the field does not.
+    public static List<List<string>>? Input(IReadOnlyList<string> rows, CopilotForm form, int index)
     {
+        if (Locate(rows, form, index, out var heading, out var hints) is not null) { return null; }
+        var runs = new List<List<string>>();
+        char? edge = null;
+        foreach (var row in rows.Skip(heading + 1).Take(hints - heading - 1))
+        {
+            var first = row.TrimStart(' ') is { Length: > 0 } text ? text[0] : ' ';
+            var boxed = first is '\u2502' or '\u2503' or '\u2551' or '|';
+            if (boxed && edge == first) { runs[^1].Add(row); }
+            else { runs.Add([row]); }
+            edge = boxed ? first : null;
+        }
+        return runs;
+    }
+
+    static string? Locate(IReadOnlyList<string> rows, CopilotForm form, int index, out int fieldHeading, out int hintsStart)
+    {
+        (fieldHeading, hintsStart) = (-1, -1);
         const string Prompted = "a permission prompt showed on the session's screen in place of the question's form";
         const string NotForm = "the session's screen no longer showed the question's form";
         const string Under = "something other than the question's form was drawn under it on the session's screen";
@@ -94,7 +121,8 @@ public static partial class CopilotFormScreen
         }
         at = Next(rows, at);
         if (at >= rows.Count || Collapse(rows[at]) != heading) { return off; }
-        if (Hints(rows, at + 1, index, form.Fields.Count) is not { } end) { return off; }
+        if (Hints(rows, at + 1, index, form.Fields.Count) is not var (start, end)) { return off; }
+        (fieldHeading, hintsStart) = (at, start);
         // A permission prompt drawn beside the form, above its heading or below its hints. What
         // is inside the form (an option, or words typed into a field, reading "1. Yes") is the
         // form's own.
@@ -159,11 +187,11 @@ public static partial class CopilotFormScreen
     // one field, next and prev as the field's place says. Read from the hints row alone, never
     // from the question or what is typed into the field, either of which may say "tab next".
     // The hints row's last row, or null when the hints do not say this field.
-    static int? Hints(IReadOnlyList<string> rows, int from, int index, int count)
+    static (int Start, int End)? Hints(IReadOnlyList<string> rows, int from, int index, int count)
     {
-        if (HintParts(rows, from) is not ({ } parts, var end)) { return null; }
+        if (HintParts(rows, from) is not ({ } parts, var start, var end)) { return null; }
         if (!parts.Contains("enter accept") || !parts.Contains("ctrl+d decline") || !parts.Contains("esc cancel")) { return null; }
-        return count <= 1 || (parts.Contains("tab next") == index < count - 1 && parts.Contains("shift+tab prev") == index > 0) ? end : null;
+        return count <= 1 || (parts.Contains("tab next") == index < count - 1 && parts.Contains("shift+tab prev") == index > 0) ? (start, end) : null;
     }
 
     // What `Ft` can say under the form (`Uxn`'s hints), each "<key> <action>".
@@ -175,7 +203,7 @@ public static partial class CopilotFormScreen
     // The hints row's parts: the last row below `from` that ends with "esc cancel", the hints'
     // last, and the rows it wrapped from just above it, as far up as every part read is one of
     // the hints. Null when there is no such row.
-    static (List<string> Parts, int End)? HintParts(IReadOnlyList<string> rows, int from)
+    static (List<string> Parts, int Start, int End)? HintParts(IReadOnlyList<string> rows, int from)
     {
         for (var end = rows.Count - 1; end >= from; end--)
         {
@@ -183,7 +211,7 @@ public static partial class CopilotFormScreen
             for (var start = Math.Max(from, end - 3); start <= end; start++)
             {
                 var parts = Collapse(string.Join(' ', rows.Skip(start).Take(end - start + 1))).Split('\u00B7').Select(p => p.Trim()).ToList();
-                if (parts.All(HintItems.Contains)) { return (parts, end); }
+                if (parts.All(HintItems.Contains)) { return (parts, start, end); }
             }
             return null;
         }

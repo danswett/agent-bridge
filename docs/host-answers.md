@@ -9,11 +9,11 @@ how the host does it and what it refuses.
 
 | Agent | Question | Answered |
 |---|---|---|
-| Copilot CLI | `ask_user` with no form or list: free text | Refused, `answerAtMachine`: there is no form on screen to hold its keys to (below) |
+| Copilot CLI | `ask_user` with no form or list: free text, or a `requestedSchema` with no fields the host can read (empty, not an object, or with a property that is not an object) | Refused, `answerAtMachine`: there is no form on screen to hold its keys to (below), or one the host cannot read |
 | Copilot CLI | `ask_user` form (`requestedSchema`): `choice` (`type: string` with `enum` or `oneOf`), `boolean`, `multi` (`type: array`, items `anyOf` or `enum`), `text`, `number`, any number of fields | Yes |
 | Copilot CLI | Other words for a question that is one option list | Yes (`allowOther` is set on exactly that shape) |
 | Copilot CLI | Other in a form of several fields, or in a checkbox list | Refused: no walk reaches it |
-| Copilot CLI | The older `question` / `choices` format | Refused: agent-ha-bridge never drove it, and no current build writes it |
+| Copilot CLI | The older `question` / `choices` format (any `choices`, an empty list or one beside a `requestedSchema` included) | Refused, `answerAtMachine`: agent-ha-bridge never drove it, and no current build writes it |
 | Copilot CLI | Permission prompts: a shell command, path access, a file edit or read, a URL, an MCP tool, a custom tool | Yes, beyond agent-ha-bridge (below): approve once or deny. Refused, `answerAtMachine`, when `permissions.remoteApproval` is off. A character not drawn where it runs and a right-to-left letter are shown escaped (#220); such an approval carries `escaped`, and Approve on it takes the two-step confirmation from a person's device this machine approved, through the relay only, or is held at the machine by `permissions.escapedApproval` (#803, [v1-sessions.md](protocol/v1-sessions.md#escaped-approvals)). Deny goes as for any approval. While other permission requests wait, such a character in the text Copilot was given for any of them, the listed one's own included, makes the listed one `answerAtMachine`, Deny included, unless it is only in a path request's access kind (#690, below) |
 | Copilot CLI | Other permission prompts (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read | Refused, `answerAtMachine` |
 | Claude Code | `AskUserQuestion`, one to four questions, each one option (`choice`) or several (`multi`, at least one, the first nine rows) | Yes |
@@ -65,7 +65,12 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     once the screen has changed from how it stood before the keys that open that field, and
     reads the same twice running (two reads in a row, not two reads with another between).
     Counted before, a label of the new field reading like the words could pass for them, and
-    the same words given to the field before could hide them.
+    the same words given to the field before could hide them. They are counted only in that
+    field's input, between its heading and the hints, each run of a box's rows joined (a long
+    answer wraps across them) and every other row read alone: across the whole screen, a
+    field titled "Data" over hints starting "enter" read "ae" across the two, so the words
+    "ae" typed between them never showed more often and their Enter was never pressed (#510
+    review). Read in less of the screen, words only ever show less, never where they are not.
   * Every answer, a single list or Yes/No included, goes field by field, each field its own
     writes, never batched with another's:
     its keys, held to the field they were planned for, then its Enter alone once the screen
