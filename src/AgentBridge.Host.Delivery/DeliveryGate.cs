@@ -52,9 +52,13 @@ public sealed class DeliveryGate
         {
             if (Interlocked.Exchange(ref disposed, 1) != 0) { return; }
             lock (owner.state) { owner.deliveries--; }
+            owner.AdmissionReleased?.Invoke();
         }
-
     }
+
+    // Test hook: runs right after a delivery's admission is released, so a test can assert
+    // the outcome had already completed (a quiet grant could otherwise overtake it).
+    internal Action? AdmissionReleased;
 
     internal void Complete<T>(IDisposable admission, TaskCompletionSource<T> outcome, T result, Exception? error = null) =>
         ((Delivery)admission).Complete(outcome, result, error);

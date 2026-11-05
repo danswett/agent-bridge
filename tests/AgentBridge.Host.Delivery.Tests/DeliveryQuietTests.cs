@@ -38,30 +38,20 @@ public sealed class DeliveryQuietTests
     }
 
     [Fact]
-    public async Task Quiet_cannot_overtake_the_completion_of_an_accepted_outcome()
+    public async Task An_accepted_outcome_is_complete_before_its_admission_is_released()
     {
         var gate = new DeliveryGate();
         var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var settling = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var finishSettlement = new ManualResetEventSlim();
+        var completedAtRelease = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var memory = new OutcomeMemory<int>(TimeProvider.System, TimeSpan.FromMinutes(15), gate, () => -1);
-        var request = memory.Once(Guid.NewGuid(), () => release.Task, _ =>
-        {
-            settling.SetResult();
-            Assert.True(finishSettlement.Wait(TimeSpan.FromSeconds(3)));
-        });
+        Task<int>? request = null;
+        gate.AdmissionReleased = () => completedAtRelease.TrySetResult(request!.IsCompleted);
+        request = memory.Once(Guid.NewGuid(), () => release.Task, _ => { });
         release.SetResult(7);
-        await settling.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        try
-        {
-            Assert.False(request.IsCompleted);
-            Assert.Null(gate.TryExclude(TimeSpan.FromSeconds(30), out _));
-        }
-        finally { finishSettlement.Set(); }
+        Assert.True(await completedAtRelease.Task.WaitAsync(TimeSpan.FromSeconds(2)));
         Assert.Equal(7, await request.WaitAsync(TimeSpan.FromSeconds(2)));
         using var fence = gate.TryExclude(TimeSpan.FromSeconds(30), out _);
         Assert.NotNull(fence);
-        Assert.True(request.IsCompletedSuccessfully);
     }
 
     [Fact]

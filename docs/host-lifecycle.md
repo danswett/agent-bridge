@@ -24,8 +24,9 @@ one-typing-worker rules remain. Outcome completion and admission release are
 atomic with respect to the gate, so a quiet grant cannot overtake settlement.
 Unexpected worker failure makes quiet acquisition fail closed with
 `JournalUncertain` for this process. The shared-gate injector wrapper also marks
-uncertainty before a service can normalize an injector exception into a result;
-an unconfirmed helper exit must not become permission to restart.
+uncertainty before a service can normalize an input-injection exception into a
+result; an unconfirmed helper exit must not become permission to restart. Screen
+reads pass through unmarked: the read-only worker never sends keys.
 
 Quiet means **no delivery/mutation in flight and no typing now**. Running turns,
 questions and session `Working`/`Idle` state are not consulted. #819 and #801

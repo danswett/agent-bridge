@@ -403,19 +403,17 @@ public sealed class LifecycleCoordinatorTests
     }
 
     [Fact]
-    public async Task Abort_and_commit_compete_atomically_and_abort_never_returns_an_unfinished_committed_task()
+    public async Task A_commit_forced_into_aborts_check_point_cannot_strand_the_abort()
     {
         var coordinator = new LifecycleCoordinator(new DeliveryGate(), Conditions());
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value!;
         await coordinator.AnnouncePlanned(lease);
-        using var start = new ManualResetEventSlim();
-        var aborting = Task.Run(async () => { start.Wait(); return await coordinator.Abort(lease); });
-        var committing = Task.Run(() => { start.Wait(); return coordinator.CommitDeparture(lease); });
-        start.Set();
-        var commit = await committing.WaitAsync(TimeSpan.FromSeconds(2));
-        var abort = await aborting.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Equal(commit.Committed ? CancellationOutcome.CancelUnsent : CancellationOutcome.NotRequired, abort);
-        if (commit.Committed) { Assert.Equal(CancellationOutcome.CancelUnsent, await coordinator.Abort(lease).WaitAsync(TimeSpan.FromSeconds(2))); }
+        var commit = new TaskCompletionSource<DepartureResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        coordinator.AbortChecked = () => commit.SetResult(coordinator.CommitDeparture(lease));
+        var abort = coordinator.Abort(lease);
+        Assert.True(commit.Task.IsCompleted);
+        Assert.False((await commit.Task).Committed);
+        Assert.Equal(CancellationOutcome.NotRequired, await abort.WaitAsync(TimeSpan.FromSeconds(2)));
     }
 
     [Fact]

@@ -10,9 +10,8 @@ internal sealed class GateTrackedInjector(IConsoleInjector inner, DeliveryGate g
         catch { gate.MarkJournalUncertain(); throw; }
     }
 
-    public async Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
-    {
-        try { return await inner.ReadScreenAsync(processId, cancellationToken).ConfigureAwait(false); }
-        catch { gate.MarkJournalUncertain(); throw; }
-    }
+    // The --screen worker never sends keys, so a failed read proves nothing was typed. Marking
+    // here made one transient launch follow-up read block quiet acquisition until restart.
+    public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) =>
+        inner.ReadScreenAsync(processId, cancellationToken);
 }

@@ -291,6 +291,10 @@ public sealed class LifecycleCoordinator
         return result;
     }
 
+    // Test hook: runs once Abort has decided, outside the lock, so a test can force a
+    // CommitDeparture into exactly the gap that used to sit between the check and EndLease.
+    internal Action? AbortChecked;
+
     public Task<CancellationOutcome> Abort(QuietLease lease)
     {
         CancellationWork? cancel;
@@ -300,6 +304,7 @@ public sealed class LifecycleCoordinator
             { return Task.FromResult(CancellationOutcome.CancelUnsent); }
             cancel = EndLease(lease);
         }
+        AbortChecked?.Invoke();
         Dispatch(cancel);
         return lease.Cancellation;
     }

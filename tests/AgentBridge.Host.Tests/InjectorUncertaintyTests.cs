@@ -29,6 +29,30 @@ public sealed class InjectorUncertaintyTests
             (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Reason);
     }
 
+    [Fact]
+    public async Task A_failed_screen_read_leaves_quiet_available_but_a_failed_injection_blocks_it()
+    {
+        var gate = new DeliveryGate();
+        var injector = new GateTrackedInjector(new ThrowingInjector(), gate);
+        var coordinator = new LifecycleCoordinator(gate, new DepartureConditions());
+        await Assert.ThrowsAsync<Win32Exception>(() => injector.ReadScreenAsync(100));
+        using (var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value)
+        {
+            Assert.NotNull(lease);
+        }
+        await Assert.ThrowsAsync<Win32Exception>(() => injector.InjectAsync(100, null!));
+        Assert.Equal(QuietBlockedReason.JournalUncertain,
+            (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Reason);
+    }
+
+    sealed class ThrowingInjector : IConsoleInjector
+    {
+        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default) =>
+            throw new Win32Exception("worker termination could not be confirmed");
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) =>
+            throw new Win32Exception("screen worker cleanup failed");
+    }
+
     sealed class NoBridge : IAgentHaBridgeProbe { public string? Active() => null; }
     sealed class NoGuard : ITargetGuard { public string? Refuse(int processId) => null; }
     sealed class UncertainInjector : IConsoleInjector
