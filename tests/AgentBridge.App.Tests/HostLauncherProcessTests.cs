@@ -147,6 +147,32 @@ public sealed class HostLauncherProcessTests : IDisposable
         Assert.False(File.Exists(marker));
     }
 
+    // The marker's lock (#478 review): a launcher clears an earlier stop only while it holds it,
+    // and leaves the stop in place when it cannot have it; the lock's file, left behind by a
+    // holder that has gone, blocks nothing.
+    [Fact]
+    public void A_launcher_clears_an_earlier_stop_only_under_the_markers_lock_and_a_lock_left_behind_blocks_nothing()
+    {
+        var marker = Path.Combine(folder, HostLauncherContract.StopMarker);
+        var started = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
+        var logged = new List<string>();
+        using var files = new LauncherFiles(folder, logged.Add);
+        File.WriteAllText(marker, "");
+        File.SetLastWriteTimeUtc(marker, started.AddSeconds(-1));
+
+        using (var held = HostLauncherContract.LockStopMarker(folder, TimeSpan.Zero))
+        {
+            Assert.NotNull(held);
+            files.ClearStoppedBefore(started);
+            Assert.True(files.Stopped());
+            Assert.Contains(logged, l => l.Contains("left in place", StringComparison.Ordinal));
+        }
+
+        Assert.True(File.Exists(Path.Combine(folder, HostLauncherContract.StopMarkerLock)));
+        files.ClearStoppedBefore(started);
+        Assert.False(files.Stopped());
+    }
+
     [Fact]
     public void Only_one_launcher_at_a_time_holds_the_record_which_the_app_can_read_and_which_goes_with_it()
     {

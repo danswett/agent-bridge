@@ -24,15 +24,35 @@ public sealed class LauncherFiles(string profileFolder, Action<string> log) : ID
     // Forgets a stop asked for before this launcher started: starting one (at sign-in, or the
     // app's Start, which clears the marker itself first) is a start on purpose. Not one asked for
     // since, by an app that could not yet find this launcher (it had not reached its record):
-    // that stop stands, and the look before each start honours it (#420's review).
+    // that stop stands, and the look before each start honours it (#420's review). The look at
+    // its time and the delete are one step under the marker's lock, which the app writes it
+    // under: between them, a Stop's new marker was deleted as the earlier one (#478 review,
+    // Copilot 4470090733). Without the lock nothing is deleted, and the stop stands.
     public void ClearStoppedBefore(DateTime startedUtc)
     {
         try
         {
-            if (File.Exists(Marker) && File.GetLastWriteTimeUtc(Marker) < startedUtc) { File.Delete(Marker); }
+            if (!File.Exists(Marker)) { return; }
+            using var held = HostLauncherContract.LockStopMarker(profileFolder, LockWait);
+            if (held is null)
+            {
+                log("an earlier stop was left in place: its lock could not be had");
+                return;
+            }
+            if (File.Exists(Marker) && File.GetLastWriteTimeUtc(Marker) < startedUtc)
+            {
+                BetweenReadAndDelete?.Invoke();
+                File.Delete(Marker);
+            }
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log($"an earlier stop could not be cleared: {e.Message}"); }
     }
+
+    static readonly TimeSpan LockWait = TimeSpan.FromSeconds(2);
+
+    // For a test alone, set by reflection: a Stop put between the look at the marker's time and
+    // its delete. Nothing in the launcher sets it.
+    internal Action? BetweenReadAndDelete { get; set; }
 
     // So an app opened after this started, with no logon task to ask, can find and end it (#420).
     // Held open, readable by others but writable by none, and deleted as its handle closes: a

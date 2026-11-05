@@ -27,6 +27,38 @@ static class HostLauncherContract
     // purpose; one written since stands.
     public const string StopMarker = "host.stopped";
 
+    // The lock the app writes StopMarker under and a launcher clears an earlier one under, beside
+    // it (LockStopMarker). Unlocked, a launcher read an earlier marker's time, the app's Stop
+    // wrote a new one in the same file before the launcher had recorded itself (so Stop found no
+    // launcher to end, and said the host was stopped), and the launcher's delete then took the
+    // new one, and it started the host (#478 review, Copilot 4470090733). An empty file, left in
+    // place; only a handle open on it holds it, and a process that ends lets go of its handle, so
+    // one left behind by any end blocks nothing, and is deleted with the folder like any other.
+    public const string StopMarkerLock = "host.stopped.lock";
+
+    // StopMarkerLock, held until the stream is disposed, or null when it could not be had within
+    // `wait`: held by the other side only for a look at the marker and a write or a delete, so
+    // waiting longer than that means something is wrong, and each side then does what is safe for
+    // it (the launcher leaves the marker; the app writes it anyway).
+    public static FileStream? LockStopMarker(string profileFolder, TimeSpan wait)
+    {
+        var path = Path.Combine(profileFolder, StopMarkerLock);
+        var until = Environment.TickCount64 + (long)wait.TotalMilliseconds;
+        while (true)
+        {
+            try
+            {
+                Directory.CreateDirectory(profileFolder);
+                return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                if (Environment.TickCount64 >= until) { return null; }
+                Thread.Sleep(10);
+            }
+        }
+    }
+
     // The launcher's record of itself, in the profile's folder: "<pid> <start time, UTC ticks>".
     // Held open by the serving launcher for as long as it runs, so no second launcher can write
     // over it, and deleted when its handle closes, however the launcher ends. An app opened after

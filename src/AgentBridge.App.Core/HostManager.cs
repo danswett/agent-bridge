@@ -318,11 +318,17 @@ public sealed class HostManager
     // that is between crash restarts, or whose host has just ended, starts no host (#106).
     string StopMarker => Path.Combine(layout.ProfileFolder, HostLauncherContract.StopMarker);
 
+    // Written under the marker's lock (HostLauncherContract.StopMarkerLock), which a launcher
+    // clears an earlier marker under, so its delete never takes this one (#478 review, Copilot
+    // 4470090733). A lock not had within 2 s (a launcher holds it only for a look and a delete)
+    // is written past: writing it never starts a host, and only a launcher still in the middle of
+    // clearing an earlier marker all that time could then delete it.
     void MarkStopped()
     {
         try
         {
             Directory.CreateDirectory(layout.ProfileFolder);
+            using var held = HostLauncherContract.LockStopMarker(layout.ProfileFolder, TimeSpan.FromSeconds(2));
             File.WriteAllText(StopMarker, "");
         }
         // The launcher is still ended below; the marker only spares it being ended by force.

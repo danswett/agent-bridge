@@ -229,7 +229,13 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   profile's folder, held open so no second launcher can write over it and deleted as its handle
   closes, however it ends; an app opened after it started, with no logon task, finds it to wait
   for or end, and a process since given its pid is told apart by its start time. A `shadow run`
-  launcher neither records itself nor touches the marker. A launcher looks for the marker again
+  launcher neither records itself nor touches the marker. The app writes the marker, and a
+  launcher looks at an earlier one's time and clears it, each under `host.stopped.lock` beside
+  it (held open with no sharing, so a process that ends lets it go, and the empty file left
+  blocks nothing): unlocked, a Stop's new marker written between a launcher's look and its
+  delete was deleted, and the host started after Stop had said it was stopped (#478). A
+  launcher that cannot have the lock within 2 s leaves the marker; an app that cannot writes
+  it anyway. A launcher looks for the marker again
   before every start of the host, once its record is held, so a Stop that came just after it
   cleared the last one is honoured even when the app could not find it yet. A host the launcher cannot vouch for
   (one it could not create in its job, which is then also not told it is watched, or one started

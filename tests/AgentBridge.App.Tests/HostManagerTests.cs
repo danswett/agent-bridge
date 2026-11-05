@@ -285,6 +285,57 @@ public sealed class HostManagerTests : IAsyncLifetime
 
     string StopMarker => Path.Combine(manager.Layout.ProfileFolder, HostLauncherContract.StopMarker);
 
+    // A Stop between a launcher's look at an earlier marker's time and its delete (#478 review,
+    // Copilot 4470090733). The launcher has not recorded itself yet, so the Stop finds nothing to
+    // end and says the host is stopped: its marker has to outlast that delete, or the launcher's
+    // look before starting the host finds none and starts it.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_stop_asked_for_while_a_launcher_clears_an_earlier_one_stands_and_keeps_the_host_from_starting()
+    {
+        var startedUtc = DateTime.UtcNow;
+        Directory.CreateDirectory(manager.Layout.ProfileFolder);
+        File.WriteAllText(StopMarker, "");
+        File.SetLastWriteTimeUtc(StopMarker, startedUtc.AddMinutes(-5));
+        using var launcherFiles = new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { });
+        Task? stop = null;
+        BetweenReadAndDelete(launcherFiles, () =>
+        {
+            stop = Task.Run(() => manager.StopAsync());
+            // Until the Stop has written its marker, or for a second: one that waits for the
+            // launcher to finish is still waiting then.
+            SpinWait.SpinUntil(() => File.GetLastWriteTimeUtc(StopMarker) >= startedUtc, TimeSpan.FromSeconds(1));
+        });
+
+        launcherFiles.ClearStoppedBefore(startedUtc);
+        await stop!.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.True(File.Exists(StopMarker));
+        Assert.True(launcherFiles.Stopped());
+    }
+
+    // A lock held past its 2 s (nothing holds it longer than a look and a delete) does not keep
+    // the Stop from writing its marker: writing it never starts a host.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_stop_writes_its_marker_even_past_a_lock_that_is_not_let_go()
+    {
+        using var held = HostLauncherContract.LockStopMarker(manager.Layout.ProfileFolder, TimeSpan.Zero);
+        Assert.NotNull(held);
+
+        await manager.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.True(File.Exists(StopMarker));
+    }
+
+    // The launcher's seam for that test, internal to it, so set by reflection: an
+    // InternalsVisibleTo would show these tests the launcher's own copy of HostLauncherContract
+    // beside AgentBridge.Local's.
+    static void BetweenReadAndDelete(AgentBridge.HostLauncher.LauncherFiles files, Action between) =>
+        typeof(AgentBridge.HostLauncher.LauncherFiles)
+            .GetProperty("BetweenReadAndDelete", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(files, between);
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Stopping_while_the_launcher_waits_to_restart_a_crashed_host_ends_its_task_run()
