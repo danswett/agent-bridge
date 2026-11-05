@@ -96,4 +96,21 @@ public class CopilotFieldSchemaTests
 
         Assert.True(QuestionMapper.FromCopilotAskUser("q", doc.RootElement, DateTimeOffset.UnixEpoch).AnswerAtMachine);
     }
+
+    // A required text box that opens with only spaces can be given nothing but that default from
+    // another device, which is refused as blank, so it is answered at the machine (review of #844).
+    [Theory]
+    [InlineData("\"   \"", true, true)]
+    [InlineData("\" \\t\\u00A0\"", true, true)]
+    [InlineData("\"\"", true, false)]
+    [InlineData("\" a \"", true, false)]
+    [InlineData("\"   \"", false, false)]
+    public void A_required_text_box_that_opens_with_only_spaces_is_answered_at_the_machine(string def, bool required, bool atMachine)
+    {
+        using var doc = JsonDocument.Parse($$"""
+            { "message": "m", "requestedSchema": { "properties": { "t": { "type": "string", "default": {{def}} } }{{(required ? ", \"required\": [\"t\"]" : "")}} } }
+            """);
+
+        Assert.Equal(atMachine ? true : null, QuestionMapper.FromCopilotAskUser("q", doc.RootElement, DateTimeOffset.UnixEpoch).AnswerAtMachine);
+    }
 }

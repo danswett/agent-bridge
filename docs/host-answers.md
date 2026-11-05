@@ -100,9 +100,12 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     (JavaScript's `trim`), and refused if either form breaks a limit: the form passes it on as
     typed, but a trim where it is recorded is not ruled out, and "  ab" is 4 typed and 2 trimmed.
     Text of only spaces, tabs or no-break spaces is checked so too, and an empty or blank answer
-    to a required text field is refused, since it records no answer or might. Whether Copilot trims a text box's words before recording
-    them is not settled: its form passes them on as typed (`Fxn`, and `Uxn`'s accept step), but
-    the native layer after it was not traced, so lengths are counted untrimmed.
+    to a required text field is refused, since it records no answer or might. A required text
+    field whose default is only such spaces is therefore answered at the machine: that default is
+    the one answer it can be given from another device, and it is blank. An empty default opens
+    nothing and stays answerable. Whether Copilot trims a text box's words before recording them
+    is not settled: its form passes them on as typed (`Fxn`, and `Uxn`'s accept step), but the
+    native layer after it was not traced, which is why both forms are checked.
   * An option list whose `default` is present but is not one of its options, `null` included,
     opens on its Other box (`Dxn` in 1.0.105), where the walk from the top row ends a row off;
     it is refused, and shown to be answered at the machine. So are a checkbox list with no

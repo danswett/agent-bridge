@@ -161,11 +161,20 @@ internal static class QuestionMapper
             if (property.Value.ValueKind != JsonValueKind.Object) { continue; }
             var read = CopilotFieldSchema.Read(property.Value);
             var (limits, uncheckable) = CopilotFieldConstraints.Read(property.Value, patterns);
-            drivable &= read.Problem is null && uncheckable is null;
-            fields.Add(SchemaField(property.Name, property.Value, required.Contains(property.Name), read, limits));
+            var field = SchemaField(property.Name, property.Value, required.Contains(property.Name), read, limits);
+            drivable &= read.Problem is null && uncheckable is null && !BlankRequiredDefault(field);
+            fields.Add(field);
         }
         return (fields, drivable);
     }
+
+    // A required text box that opens with only spaces in it has no answer from another device: its
+    // default is the one answer it can be given there (#662), and Answers.Check refuses that as
+    // blank, since it might be recorded trimmed to nothing. Offered anyway, every answer to the form
+    // was refused (review of #844). An empty default opens nothing, so it stays answerable.
+    static bool BlankRequiredDefault(Field field) =>
+        field is { Required: true, Type: FieldType.Text, Default: { ValueKind: JsonValueKind.String } d }
+        && d.GetString()!.Length > 0 && FieldConstraints.Trimmed(d.GetString()!).Length == 0;
     // Each field as the input Copilot CLI draws for it (CopilotFieldSchema), which is not
     // always what its keywords suggest: a number with an `enum` is still a number box, and a
     // string with only `anyOf` a text box.
