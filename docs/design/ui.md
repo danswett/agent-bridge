@@ -910,9 +910,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   or a delegate list); otherwise the label is the agent's name ("Claude"), as such a host may
   send a delegate's words as the response.
 - **Delegate events** (#661, decided by the owner on 2026-11-04): a past-tense record of the
-  main agent's own delegates starting and reporting back. The strip, tab or chips (§6.3) are the
-  present tense and the only live status, and the inspector holds the detail, so a line never
-  says a delegate is working and never shows the working glyph. Each line is meta style, with
+  main agent's own delegates starting and reporting back. The strip, the Delegates tab and
+  the chips (§6.3) are the present tense and the only live status, and the
+  inspector holds the detail, so a line never says a delegate is working and never shows the
+  working glyph. A fold's "still working" count (D3, below) is the one exception: a live count
+  taken from the same delegate state (`subagents`), with no glyph. Each line is meta style, with
   the delegate icon for a start and the outcome's glyph for a report-back. Each name links to its
   delegate, and the word "Delegate" stays outside the link.
   - **Where (D1):** each event sits between messages by its time. A report-back sits just above
@@ -929,19 +931,29 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     "Started *Tidy changelog* and *Update screenshots* · 9m". With three or more it reads
     "Started 3 delegates: *A*, *B* and 1 more", and "1 more" expands the line to name the rest.
     One that reports back in the same gap leaves the shared line for its own merged line, in place.
-  - **Runs fold (D3):** more than 3 lines in a row between two messages fold into one, "5
-    delegates · 4 reported back, 1 still working ›". It counts and shows no working glyph; "1
-    still working" links to that delegate's strip item. It expands in place to its lines,
-    indented under a rule (Disclosure, §5.3), and is remembered open or closed per session.
-    The line is two sibling targets, never one inside the other: the fold's button, then the
-    "1 still working" link after it in the tab order, which opens that delegate. The link has
-    its own focus ring, and each target meets §9.1 A11's size. With no delegate still working
-    there is no link, and the line is the button alone.
+  - **Runs fold (D3):** more than 3 lines in a row between two messages fold into one, drawn
+    "5 delegates · 4 reported back › 1 still working". It shows no working glyph. It expands in
+    place to its lines, indented under a rule (Disclosure, §5.3), and is remembered open or
+    closed per session.
+    - **The count is live.** "*n* reported back" and "*n* still working" are counted from the
+      delegates' current state, not frozen when the line was drawn, and change in place. A
+      delegate that started in this run and reports back later moves from one count to the
+      other. At 0 still working the link goes, and the line is the button alone.
+    - **Two sibling targets, never one inside the other:** the fold's button, then the "1 still
+      working" link after it in the tab order.
+    - **The chevron is the button's.** It ends the button's text, inside its target and focus
+      ring, and turns as it opens. The link follows after a 12 gap, with its own focus ring.
+      Each target meets §9.1 A11's size, and the link's target never covers the chevron.
+    - **The link opens that delegate** where the live status shows it (§6.3): its strip item,
+      or its chip on a phone. If the phone's chips give way to the Delegates tab (#629), it
+      opens the delegate's entry there.
   - **Earlier (D4):** until history loads (below, #292), the events older than the oldest message
     shown fold into one line at the top of the conversation, "Earlier · 4 delegates started, 3
     reported back ›". It expands to their lines, in time order, which don't fold again.
   - **Time and access:** the age is relative; the tooltip and the accessible name give the
-    absolute time in Pacific ("Started 12:41 PM, reported back 12:55 PM PT"). A fold is a
+    absolute time in the viewer's local time ("Started 12:41 PM, reported back 12:55 PM"). The
+    zone is added only where a time could be misread, such as a machine in another zone ("12:41
+    PM PST"). Repository records stay in Pacific; this is the product's display. A fold is a
     button opened and closed with Enter or Space, with the "1 still working" link beside it,
     not in it (above). The button's accessible name is the whole summary, in the order shown
     ("5 delegates · 4 reported back, 1 still working"), as §9.1 A1 asks. Whether it is open is
@@ -1128,7 +1140,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       what is shown kept;
     - a host that sends no history: "Earlier messages aren't available from this machine",
       above the oldest message shown;
-    - the start reached: "Start of session · Mon, Nov 9, 8:31 AM PT";
+    - the start reached: "Start of session · Mon, Nov 9, 8:31 AM", in local time as above;
     - a turn the host couldn't read: "A turn here couldn't be read", in its place, the turns
       around it kept;
     - a turn cut short (over the host's cap): its text as sent, ending "Cut short · see the

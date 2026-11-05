@@ -166,8 +166,10 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
 - **A sub-agent's events in the conversation are a past-tense record (#661).** The main
   agent's own delegates starting and reporting back sit between messages by time, one line per
   delegate per gap, every delegate named, runs of more than 3 folded, and older events in one
-  "Earlier" line until history loads (#292). The strip, tab or chips are the only live status,
-  so no conversation line says a delegate is working ([ui.md §6.4](ui.md#64-conversation)).
+  "Earlier" line until history loads (#292). The strip, the Delegates tab and the chips are
+  the only live status, so no conversation line says a delegate is working.
+  The one exception is a fold's live "still working" count, taken from the same `subagents`
+  state ([ui.md §6.4](ui.md#64-conversation)).
 - **A sub-agent's `name` is its own words.** A prompt-injected sub-agent picks it, so clients
   never show it as sent and never quote it into a reply. They show the safe label of
   [ui.md §6.3](ui.md#63-delegates-84): bidi, zero-width and other invisible characters

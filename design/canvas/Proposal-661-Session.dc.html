@@ -86,7 +86,7 @@ button,textarea,input{font:inherit}
               <sc-if value="{{l.isLine}}"><div title="{{l.tip}}" style="display: flex; gap: 8px; align-items: flex-start; position: relative"><span style="flex: none; width: 16px; height: {{metaLine}}; display: flex; align-items: center; justify-content: center"><sc-if value="{{l.icon}}"><dc-import name="Icon" icon="delegate" size="16" hint-size="16px,16px"></dc-import></sc-if><sc-if value="{{l.glyph}}"><dc-import name="Glyph" kind="{{l.glyph}}" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import></sc-if></span><span style="position: relative"><sc-for list="{{l.segs}}" as="s"><sc-if value="{{s.link}}"><a href="#" style="color: {{t.link}}; text-decoration: none">{{s.t}}</a></sc-if><sc-if value="{{s.plain}}">{{s.t}}</sc-if></sc-for><sc-if value="{{l.showTip}}"><div role="tooltip" style="position: absolute; left: calc(100% + 12px); top: -5px; z-index: 2; padding: 6px 10px; border-radius: 4px; background: {{t.tipBg}}; border: 1px solid {{t.stroke2}}; color: {{t.text}}; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,0.18)">{{l.tip}}</div></sc-if></span></div></sc-if>
               <sc-if value="{{l.isFold}}">
               <div>
-                <div style="display: inline-flex; max-width: 100%; gap: 8px; align-items: flex-start; margin: -2px -4px; padding: 2px 4px"><span aria-hidden="true" style="flex: none; width: 16px; height: {{metaLine}}; display: flex; align-items: center; justify-content: center"><dc-import name="Icon" icon="delegate" size="16" hint-size="16px,16px"></dc-import></span><span><span role="button" tabindex="0" aria-expanded="{{l.expanded}}" aria-label="{{l.label}}" style="border-radius: 4px; outline: {{l.focus}}; outline-offset: 1px"><sc-for list="{{l.btnSegs}}" as="s">{{s.t}}</sc-for></span><sc-for list="{{l.linkSegs}}" as="s"> <a href="#" style="color: {{t.link}}; text-decoration: none">{{s.t}}</a></sc-for></span><span aria-hidden="true" style="flex: none; height: {{metaLine}}; display: flex; align-items: center; transform: rotate({{l.rot}}deg)"><dc-import name="Icon" icon="chevron" size="12" hint-size="12px,12px"></dc-import></span></div>
+                <div style="display: inline-flex; max-width: 100%; gap: 8px; align-items: flex-start; margin: -2px -4px; padding: 2px 4px"><span aria-hidden="true" style="flex: none; width: 16px; height: {{metaLine}}; display: flex; align-items: center; justify-content: center"><dc-import name="Icon" icon="delegate" size="16" hint-size="16px,16px"></dc-import></span><span><span role="button" tabindex="0" aria-expanded="{{l.expanded}}" aria-label="{{l.label}}" style="display: inline-flex; gap: 4px; align-items: flex-start; border-radius: 4px; outline: {{l.focus}}; outline-offset: 1px"><span><sc-for list="{{l.btnSegs}}" as="s">{{s.t}}</sc-for></span><span aria-hidden="true" style="flex: none; height: {{metaLine}}; display: flex; align-items: center; transform: rotate({{l.rot}}deg)"><dc-import name="Icon" icon="chevron" size="12" hint-size="12px,12px"></dc-import></span></span><sc-for list="{{l.linkSegs}}" as="s"><a href="#" style="margin-left: 12px; color: {{t.link}}; text-decoration: none">{{s.t}}</a></sc-for></span></div>
                 <sc-if value="{{l.open}}">
                 <div style="margin: 8px 0 0 7px; padding-left: 16px; border-left: 1px solid {{t.stroke2}}; display: flex; flex-direction: column; gap: 8px">
                   <sc-for list="{{l.kids}}" as="k">
@@ -124,7 +124,7 @@ button,textarea,input{font:inherit}
           <div style="display: flex; align-items: center; gap: 8px"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><h3 style="margin: 0; font-size: 16px; line-height: 22px; font-weight: 600">Watch overnight soak</h3></div>
           <dl style="margin: 12px 0 0; display: grid; grid-template-columns: 72px 1fr; gap: 4px 12px; font-size: 12px; line-height: 16px">
             <dt style="color: {{t.text2}}">Status</dt><dd style="margin: 0">Running for 52m</dd>
-            <dt style="color: {{t.text2}}">Started</dt><dd style="margin: 0">1:48 PM PT</dd>
+            <dt style="color: {{t.text2}}">Started</dt><dd style="margin: 0">1:48 PM</dd>
             <dt style="color: {{t.text2}}">Kind</dt><dd style="margin: 0">Background</dd>
             <dt style="color: {{t.text2}}">ID</dt><dd style="margin: 0; font-family: {{mono}}">agent-7c20</dd>
           </dl>
@@ -180,11 +180,12 @@ class Component extends DCLogic {
     };
     const t = theme === 'light' ? light : dark;
 
-    // Fictional session, now 2:40 PM PT. Times are minutes since midnight.
+    // Fictional session, now 2:40 PM. Times are the viewer's local time; a zone is added only where it could be misread.
+    // D holds clock strings (h:mm).
     const NOW = 14 * 60 + 40;
     const m = (s) => { const [h, mm] = s.split(':').map(Number); return h * 60 + mm; };
     const age = (s) => { const d = NOW - m(s); return d < 60 ? d + 'm' : Math.floor(d / 60) + 'h'; };
-    const pt = (s) => { const [h, mm] = s.split(':').map(Number); return ((h + 11) % 12 + 1) + ':' + String(mm).padStart(2, '0') + (h < 12 ? ' AM' : ' PM'); };
+    const clock = (s) => { const [h, mm] = s.split(':').map(Number); return ((h + 11) % 12 + 1) + ':' + String(mm).padStart(2, '0') + (h < 12 ? ' AM' : ' PM'); };
     const ran = (a, b) => { const d = m(b) - m(a); return d < 60 ? d + 'm' : Math.floor(d / 60) + 'h ' + (d % 60) + 'm'; };
     const D = {
       map: ['Map settings screens', '8:35', '8:43'], inv: ['Inventory icon exports', '8:35', '8:48'], notes: ['Draft release notes', '8:35', '8:46'],
@@ -196,14 +197,15 @@ class Component extends DCLogic {
     const P = (x) => ({ t: x, plain: true }); const L = (x) => ({ t: x, link: true });
     const line = (segs, tip, mark) => ({ isLine: true, segs, tip, icon: mark === 'icon', glyph: mark === 'icon' ? '' : mark });
     // After (D1–D4).
-    const merged = (k) => { const [n, s, e] = D[k]; return line([P('Delegate '), L(n), P(' · ran ' + ran(s, e) + ', reported back · ' + age(e))], 'Started ' + pt(s) + ', reported back ' + pt(e) + ' PT', 'done'); };
-    const started = (k) => { const [n, s] = D[k]; return line([P('Started delegate '), L(n), P(' · ' + age(s))], 'Started ' + pt(s) + ' PT', 'icon'); };
-    const reported = (k) => { const [n, s, e] = D[k]; return line([P('Delegate '), L(n), P(' reported back · ' + age(e))], 'Started ' + pt(s) + ', reported back ' + pt(e) + ' PT', 'done'); };
-    const startedTwo = (a, b) => line([P('Started '), L(D[a][0]), P(' and '), L(D[b][0]), P(' · ' + age(D[a][1]))], 'Started ' + pt(D[a][1]) + ' PT', 'icon');
-    const startedMany = (ks) => line([P('Started ' + ks.length + ' delegates: '), L(D[ks[0]][0]), P(', '), L(D[ks[1]][0]), P(' and '), L((ks.length - 2) + ' more'), P(' · ' + age(D[ks[0]][1]))], 'Started ' + pt(D[ks[0]][1]) + ' PT', 'icon');
+    const merged = (k) => { const [n, s, e] = D[k]; return line([P('Delegate '), L(n), P(' · ran ' + ran(s, e) + ', reported back · ' + age(e))], 'Started ' + clock(s) + ', reported back ' + clock(e), 'done'); };
+    const started = (k) => { const [n, s] = D[k]; return line([P('Started delegate '), L(n), P(' · ' + age(s))], 'Started ' + clock(s), 'icon'); };
+    const reported = (k) => { const [n, s, e] = D[k]; return line([P('Delegate '), L(n), P(' reported back · ' + age(e))], 'Started ' + clock(s) + ', reported back ' + clock(e), 'done'); };
+    const startedTwo = (a, b) => line([P('Started '), L(D[a][0]), P(' and '), L(D[b][0]), P(' · ' + age(D[a][1]))], 'Started ' + clock(D[a][1]), 'icon');
+    const startedMany = (ks) => line([P('Started ' + ks.length + ' delegates: '), L(D[ks[0]][0]), P(', '), L(D[ks[1]][0]), P(' and '), L((ks.length - 2) + ' more'), P(' · ' + age(D[ks[0]][1]))], 'Started ' + clock(D[ks[0]][1]), 'icon');
     // The button's name is the whole visible summary (§9.1 A1); open or closed is aria-expanded alone.
     // A link in the summary ("1 still working") is the button's sibling, never inside it (ARIA forbids nesting).
-    const fold = (segs, open, kids, focus) => ({ isFold: true, segs, label: segs.map((s) => s.t).join(''), btnSegs: segs.filter((s) => !s.link).map((s) => ({ t: s.t.trimEnd() })), linkSegs: segs.filter((s) => s.link), open, expanded: open ? 'true' : 'false', rot: open ? 90 : 0, kids, focus: focus ? '2px solid ' + t.accent : 'none' });
+    // The chevron is the button's own expand cue, inside its target and focus ring; the link follows it.
+    const fold = (segs, open, kids, focus) => ({ isFold: true, segs, label: segs.map((s) => s.t).join(''), btnSegs: segs.filter((s) => !s.link).map((s) => ({ t: s.t.trimEnd().replace(/,$/, '') })), linkSegs: segs.filter((s) => s.link), open, expanded: open ? 'true' : 'false', rot: open ? 90 : 0, kids, focus: focus ? '2px solid ' + t.accent : 'none' });
     // Before: what the PWA does today (attribution.js delegateEvents), every event under the latest reply.
     const bStart = (n, s) => line([P('Started delegate '), L(n), P(' · ' + age(s))], '', 'icon');
     const bMany = (c, s) => line([P('Started ' + c + ' delegates · ' + age(s))], '', 'icon');
@@ -272,7 +274,7 @@ class Component extends DCLogic {
       { label: 'First page loading', text: 'Loading conversation…', where: 'Centred. The reply box stays usable.' },
       { label: 'An earlier page failed', text: 'Couldn’t load earlier messages', action: 'Try again', where: 'At the top. What is shown stays.' },
       { label: 'Host without history', text: 'Earlier messages aren’t available from this machine', where: 'At the top, above the oldest message shown.' },
-      { label: 'Start reached', text: 'Start of session · Mon, Nov 9, 8:31 AM PT', where: 'At the top, once nothing is older.' },
+      { label: 'Start reached', text: 'Start of session · Mon, Nov 9, 8:31 AM', where: 'At the top, once nothing is older.' },
       { label: 'Past the limit', text: 'Start of available history', where: 'At the top, when the host’s transcript ends first.' },
       { label: 'A turn the host couldn’t read', text: 'A turn here couldn’t be read', where: 'In its place. The turns around it stay.' },
       { label: 'A turn cut short', text: 'Cut short · see the machine', where: 'At the end of the turn’s text, over the host’s cap.' }

@@ -36,14 +36,18 @@ strip already, so a line under the reply can read as live when it isn't.
 - **D2** One line per delegate per gap: "Delegate *X* · ran 1m, reported back · 9m". A
   start-only line gains "reported back" in place, easing.
 - **D3** Every delegate named ("Started *A* and *B*"; "Started 3 delegates: *A*, *B* and 1
-  more"). More than 3 lines in a row fold into "5 delegates · 4 reported back, 1 still working
-  ›", which expands in place and is remembered per session.
+  more"). More than 3 lines in a row fold into "5 delegates · 4 reported back › 1 still
+  working", which expands in place and is remembered per session. The chevron belongs to the
+  fold's button; its counts are live.
 - **D4** Until history (#292), events older than the oldest message shown fold into "Earlier ·
   N delegates started, M reported back" at the top, never under the latest reply.
-- **Framing:** the strip, tab or chips are the present tense and the only live status; lines are
-  a past-tense record in meta style; the inspector holds the detail. The tooltip or accessible
-  name gives the absolute Pacific time. A fold is one keyboard-expandable button; its "1 still
-  working" link is a separate target beside it, never inside it.
+- **Framing:** the strip, the Delegates tab and the chips are the present
+  tense and the only live status, apart from a fold's live count; lines are a past-tense record
+  in meta style; the inspector holds the detail. The tooltip or accessible name gives the
+  absolute time in the viewer's local time, with a zone only where it could be misread. A fold
+  is one keyboard-expandable button that owns its chevron; its "1 still working" link is a
+  separate target after it, never inside it, and opens the delegate's strip item or chip (its
+  Delegates-tab entry if #629 removes the phone's chips).
 
 | | Phone | Desktop |
 |---|---|---|
