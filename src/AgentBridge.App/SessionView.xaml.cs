@@ -312,7 +312,7 @@ public sealed partial class SessionView : UserControl
             // it moves nowhere, and the heading with focus stays out of sight (#893 review, Copilot
             // 4481392664, the PWA's revealQuestion).
             var inQuestion = Motion.Within(target, QuestionCard);
-            var tall = ConversationScroll.ViewportHeight > 0 && QuestionCard.ActualHeight > ConversationScroll.ViewportHeight;
+            var tall = ConversationScroll is { ViewportHeight: > 0 } scroll && QuestionCard.ActualHeight > scroll.ViewportHeight;
             (inQuestion && !(tall && target == heading) ? (UIElement)QuestionCard : target).StartBringIntoView(new BringIntoViewOptions { AnimationDesired = Ready && Motion.Scrolls });
             if (inQuestion) { GuardAnswer(); }
             questionScrolled |= inQuestion;
