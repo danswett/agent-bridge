@@ -1311,18 +1311,22 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
   It goes when the notice is gone or replaced.
 - **No notice** when nothing died: the host sends none, and the client shows none.
 
-**Continue** (`restored.midTurn`, `restored.continue`, `sessions.reply`)
+**Continue** (`restored.midTurn`, `restored.continue`, the `session.reply` operation)
 
 - **Where:** a small secondary button, "Continue", in the session pane directly above the reply
   box (§6.5), left-aligned with it. Never in the row, the card, the notice or a notification.
 - **When:** only while the session's `restored.midTurn` is true. The host clears it once a reply
   is delivered or the session starts working, and the button goes with it.
 - **What it does:** sends `restored.continue`, verbatim, through the reply box's ordinary Send
-  path: `sessions.reply` with `{ id, request, text: restored.continue, progress: true }`. The
+  path: the `session.reply` operation (capability `sessions.reply`) with
+  `{ id, request, text: restored.continue, progress: true }`. The
   client does not edit, translate or rebuild the text. Whatever is typed in the reply box stays
   there, unsent.
-- **Progress:** the §6.5 receipt (ring, check, Try again; #600, #617). Try again resends the same
-  `request`. While it is in flight the button is disabled and keeps focus (A4).
+- **Progress:** the §6.5 receipt (ring, check, Try again; #600, #617). Resending after a lost
+  response reuses the same `request`, so the host returns the first outcome without typing
+  again. Try again after a `busy`, `refused` or failed outcome sends a **new** `request`, because
+  the host remembers each outcome for ten minutes and would only repeat it. While it is in
+  flight the button is disabled and keeps focus (A4).
 - **In the conversation:** shown as the person's own message, exactly as a typed reply is. It is
   not agent-driven, so #489's marking does not apply.
 - **After:** the button goes once the reply is delivered, with no "Sent" state, and focus moves
@@ -1336,7 +1340,9 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
 - **Text:** title "*machine* restarted", body "Restored *n* sessions · *m* need you" when there
   are lost questions or failures, else "Restored *n* sessions". When offered only: "*n* sessions
   can be restored at the machine".
-- **Sound:** the ordinary notification sound (decision #764). No new sound.
+- **Sound:** none. Decision #764 keeps sound for pending questions and approvals only, so this
+  notice is silent on every platform. The push payload sets `notification.silent: true`, so an
+  older service worker that shows kind `restored` as a `question` stays silent too.
 - **Opening it** opens the machine's session list, where the notice is.
 - An older service worker shows kind `restored` as a `question`; that is accepted.
 
@@ -1395,8 +1401,9 @@ arrives, as a `question`.
 
 - **Windows app:** InfoBar (Informational) above the list; Continue a standard secondary
   Button; the toast through the app's ordinary notification path (§7).
-- **PWA:** the same banner. It is an exception to §7's "no icon and no dismiss" app banners,
-  as Discovery held's is (#786). The push through `sw.js`, kind `restored`.
+- **PWA:** the same banner. The restore notice alone is an exception to §7's "no icon and no
+  dismiss" app banners; every other PWA banner, Discovery held included, keeps §7's rule. The
+  push through `sw.js`, kind `restored`.
 - **Apple (#260, owner welshofer):** note only. The same fields; the native form is that track's
   decision.
 - **Home Assistant:** read only. `sensor.agent_bridge_<machine>_restore` (state: the last restore
