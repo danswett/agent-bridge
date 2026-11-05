@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json.Nodes;
 using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 using Xunit;
@@ -101,6 +102,54 @@ public class AttentionTests
         var session = await s.After(lines);
 
         Assert.True(session.Attention?.Kind == AttentionKind.SignInNeeded, what);
+    }
+
+    // VM1's Quality session (#800, 6646932234), as event types and times only: signed out at
+    // 16:45:05.967, a turn_end at 16:50:55.495, signed out again at 16:50:55.546; restored by the
+    // owner, its prompt at 16:57:44.130 ran a model call, a system message and usage before the
+    // model's first message of its own, with a tool request, at 16:58:01.264. Only that clears it.
+    [Fact]
+    public async Task Vm1s_quality_session_needs_sign_in_until_the_models_first_message_after_it_was_restored()
+    {
+        await using var s = new Session_();
+        await s.After(Copilot.User("Carry on", 1), Copilot.TurnStart(2), At(Error(SignedOut, 0), -349_579), At(Copilot.TurnEnd(0), -51), At(Error(SignedOut, 0), 0));
+
+        var before = await s.After(
+            At(Copilot.User("Carry on", 0), 408_584),
+            At(Copilot.Event("model.turn_started", new { }, 0), 408_609),
+            At(Copilot.Event("system.message", new { content = "Context." }, 0), 408_617),
+            At(Copilot.Event("model.model_call_started", new { }, 0), 408_614),
+            At(Copilot.TurnStart(0), 408_667),
+            At(Copilot.Event("model.captured_assignment_context", new { }, 0), 410_002),
+            At(Copilot.Event("model.model_call_success", new { }, 0), 410_002),
+            At(Copilot.Event("model.message", new { }, 0), 410_003),
+            At(Copilot.Event("model.response", new { }, 0), 410_003),
+            At(Copilot.Event("model.turn_ended", new { }, 0), 410_003),
+            At(Copilot.Event("model.messages_snapshot", new { }, 0), 410_004),
+            At(Copilot.Event("session.usage_record", new { }, 0), 425_668));
+
+        Assert.Equal(AttentionKind.SignInNeeded, before.Attention?.Kind);
+        Assert.Equal(Failed, before.Attention?.Since);
+
+        var after = await s.After(
+            At(Copilot.Assistant("Checking CI.", 0, tools: ["call-1"]), 425_718),
+            At(Copilot.ToolStart("call-1", "powershell", new { }, 0), 425_785),
+            At(Copilot.Event("hook.start", new { }, 0), 425_842),
+            At(Copilot.Event("hook.end", new { }, 0), 425_843),
+            At(Copilot.Event("tool.execution_complete", new { toolCallId = "call-1", success = true }, 0), 430_906),
+            At(Copilot.TurnEnd(0), 431_209));
+
+        Assert.Null(after.Attention);
+    }
+
+    // The later of VM1's two failures, as the fixture's times are taken from it.
+    static readonly DateTimeOffset Failed = Fixture.T0.AddSeconds(400);
+
+    static string At(string line, int ms)
+    {
+        var o = JsonNode.Parse(line)!.AsObject();
+        o["timestamp"] = Failed.AddMilliseconds(ms).ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'");
+        return o.ToJsonString();
     }
 
     [Fact]
