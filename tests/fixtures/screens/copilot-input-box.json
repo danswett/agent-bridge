@@ -1,0 +1,169 @@
+{
+  "about": "Copilot CLI 1.0.105 input-box screens for #825, built only from captured screens and cli-main.js rendering code; no live probes.",
+  "cases": [
+    {
+      "name": "empty-interactive",
+      "source": "captured live with Copilot CLI 1.0.105 (the repo's LaunchFlowTests.CopilotReady screen: rail box and footer)",
+      "rows": [
+        "● Done: the build is green.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+      ],
+      "expect": "ok"
+    },
+    {
+      "name": "draft-one-line",
+      "source": "the captured rail box, with its text drawn one column in, as cli-main.js qc's rail variant draws it (paddingLeft 1)",
+      "rows": [
+        "● Done: the build is green.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃ half a thought",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+      ],
+      "expect": "draft",
+      "content": "half a thought"
+    },
+    {
+      "name": "draft-two-lines",
+      "source": "the captured rail box, with its text drawn one column in, as cli-main.js qc's rail variant draws it (paddingLeft 1); one '┃' per line",
+      "rows": [
+        "● Done: the build is green.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃ first line",
+        "┃ second line",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+      ],
+      "expect": "draft",
+      "content": "first line\nsecond line"
+    },
+    {
+      "name": "draft-hidden-character",
+      "source": "the captured rail box, with its text drawn one column in, as cli-main.js qc's rail variant draws it (paddingLeft 1)",
+      "rows": [
+        "● Done: the build is green.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃ a‮b",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+      ],
+      "expect": "draft",
+      "content": "a‮b",
+      "shown": "a\\u202Eb"
+    },
+    {
+      "name": "shell-empty",
+      "source": "the captured rail box, with its text drawn one column in, as cli-main.js qc's rail variant draws it (paddingLeft 1); shell mode's placeholder (W: 'Execute shell command'), footer label (vEe/CQ: 'Shell · Allow All') and hint ('esc exit shell mode')",
+      "rows": [
+        "● Done: the build is green.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃ Execute shell command",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ← open sidebar · Shell · Allow All · esc exit shell mode"
+      ],
+      "expect": "shell"
+    },
+    {
+      "name": "shell-with-text",
+      "source": "the captured rail box, with its text drawn one column in, as cli-main.js qc's rail variant draws it (paddingLeft 1); shell mode's footer label and hint, as shell-empty",
+      "rows": [
+        "● Done: the build is green.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃ ls -la",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ← open sidebar · Shell · Allow All · esc exit shell mode"
+      ],
+      "expect": "shell"
+    },
+    {
+      "name": "plain-empty",
+      "source": "cli-main.js qc with the frame off (COPILOT_PROMPT_FRAME=0): the prompt glyph '❯ ' between two single rules, under the captured footer",
+      "rows": [
+        "● Done: the build is green.",
+        "",
+        "────────────────────────────────────────",
+        "❯",
+        "────────────────────────────────────────",
+        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+      ],
+      "expect": "ok"
+    },
+    {
+      "name": "plain-draft",
+      "source": "as plain-empty, with text after the glyph",
+      "rows": [
+        "● Done: the build is green.",
+        "",
+        "────────────────────────────────────────",
+        "❯ half a thought",
+        "────────────────────────────────────────",
+        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+      ],
+      "expect": "draft",
+      "content": "half a thought"
+    },
+    {
+      "name": "plain-shell",
+      "source": "as plain-empty, with shell mode's glyph ('! ', SUn's Y)",
+      "rows": [
+        "● Done: the build is green.",
+        "",
+        "────────────────────────────────────────",
+        "! ls",
+        "────────────────────────────────────────",
+        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+      ],
+      "expect": "shell"
+    },
+    {
+      "name": "permission-prompt",
+      "source": "a Copilot permission prompt in the box's place (CopilotPermissionTests' captured option rows)",
+      "rows": [
+        "● Done: the build is green.",
+        "",
+        "Allow Copilot to run this command?",
+        " ❯ 1. Yes",
+        "   2. No (Esc)"
+      ],
+      "expect": "unidentified"
+    },
+    {
+      "name": "two-boxes",
+      "source": "the captured rail box twice: a queued message being edited over the prompt's box",
+      "rows": [
+        "● Done: the build is green.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃ queued words",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        "editing queued item — enter save",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+      ],
+      "expect": "unidentified"
+    },
+    {
+      "name": "no-footer",
+      "source": "the captured rail box without the prompt's footer under it",
+      "rows": [
+        "● Done: the build is green.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"
+      ],
+      "expect": "unidentified"
+    }
+  ]
+}

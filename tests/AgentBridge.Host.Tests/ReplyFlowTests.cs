@@ -974,14 +974,112 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         public Action<KeyPlan>? OnInject;
         public Task Gate = Task.CompletedTask;
         public InjectionResult Result = new(InjectionStatus.Typed, "ok");
+        // Each session's screen by its process: Copilot's (pid 100) ready for a prompt, as captured
+        // live; null, a host that cannot read it, for anything else.
+        public Func<int, IReadOnlyList<string>?> Screen = pid => pid == 100 ? CopilotIdle : null;
+        // Runs once a plan has the typing slot, before the worker reads the screen.
+        public Action? Holding;
+        // Plans the worker refused before their first key: held to rows the screen no longer read.
+        public readonly List<KeyPlan> Refused = [];
 
         public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
         {
             lock (Plans) { Plans.Add((processId, plan)); }
             await Gate;
+            Holding?.Invoke();
+            // As the worker does: the rows a send is held to, read in the same attach, just before
+            // its first key; nothing of it typed if they read otherwise.
+            if (plan.Sends.Count > 0 && plan.Sends[0].Expect is { Count: > 0 } expect
+                && (Screen(processId) is not { } rows || expect.Any(e => e.Row >= rows.Count || rows[e.Row].TrimEnd() != e.Text.TrimEnd())))
+            {
+                lock (Plans) { Plans.RemoveAt(Plans.FindLastIndex(p => ReferenceEquals(p.Plan, plan))); Refused.Add(plan); }
+                return new InjectionResult(InjectionStatus.NothingTyped, AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChanged);
+            }
             if (Result.Status == InjectionStatus.Typed) { OnInject?.Invoke(plan); }
             return Result;
         }
+
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
+        {
+            var rows = Screen(processId);
+            return Task.FromResult(new ConsoleScreen(rows, rows is null ? "this host cannot read the session's screen; answer at the machine" : null));
+        }
+    }
+
+    // Copilot CLI 1.0.105 ready for a prompt, as captured live (LaunchFlowTests.CopilotReady):
+    // its rail input box, empty, and the prompt's footer.
+    static readonly IReadOnlyList<string> CopilotIdle = ["\u25CF Done.", "", "\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584", "\u2503", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580", " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 tab next tab"];
+
+    // The same screen with words in the box (a person's draft), or in shell mode.
+    static IReadOnlyList<string> CopilotBox(string line, bool shell = false) =>
+        [.. CopilotIdle.Take(3), $"\u2503 {line}", CopilotIdle[4], shell ? " \u2190 open sidebar \u00B7 Shell \u00B7 Allow All \u00B7 esc exit shell mode" : CopilotIdle[5]];
+
+    // ---- Copilot's input box, read before a reply is typed (#825) ----
+
+    [Fact]
+    public async Task A_reply_to_Copilot_whose_input_box_holds_a_draft_is_refused_with_the_draft_shown_and_nothing_typed()
+    {
+        injector.Screen = _ => CopilotBox("half a thought \u202E");
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("refused", outcome);
+        Assert.Equal("something is already typed in Copilot's input box at the machine (\"half a thought \\u202E\"); send or clear it there first", reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_reply_to_Copilot_in_shell_mode_is_refused_and_nothing_is_typed()
+    {
+        // In shell mode Enter runs what the box holds as a shell command.
+        injector.Screen = _ => CopilotBox("Execute shell command", shell: true);
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "rm -rf ~");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("shell mode", reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_reply_to_Copilot_whose_screen_cannot_be_read_is_refused_and_nothing_is_typed()
+    {
+        injector.Screen = _ => null;
+        var ch = await OpenAsync();
+
+        Assert.Equal(("refused", "this host cannot read the session's screen; answer at the machine"), await ReplyAsync(ch, "go on"));
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_reply_to_Copilot_with_its_input_box_empty_is_typed_held_to_that_box_and_delivered()
+    {
+        injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text));
+        var ch = await OpenAsync();
+
+        Assert.Equal("delivered", (await ReplyAsync(ch, "go on")).Outcome);
+        var send = Assert.Single(Assert.Single(injector.Plans).Plan.Sends);
+        Assert.Equal(["\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584", "\u2503", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580"], send.Expect!.Select(r => r.Text));
+    }
+
+    [Theory]
+    // Words typed at the machine, or shell mode entered, after the host read the box and before
+    // the first key: the worker reads the box again in the same attach, and types nothing.
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_Copilot_input_box_that_changes_after_it_was_read_gets_none_of_the_reply(bool shell)
+    {
+        injector.Holding = () => injector.Screen = _ => shell ? CopilotBox("Execute shell command", shell: true) : CopilotBox("typed at the machine");
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("input box changed just as the reply was to be typed", reason);
+        Assert.Empty(injector.Plans);
+        Assert.Single(injector.Refused);
     }
 
     // ---- large files, through the relay's blob store ----

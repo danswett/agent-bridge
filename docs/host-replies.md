@@ -11,7 +11,7 @@ one session at once.
 
 | Agent | Replies | Why |
 |---|---|---|
-| Copilot CLI | Yes | agent-ha-bridge has long typed replies into it, and its transcript records every prompt (`user.message`) with the text as typed, which confirms one by identity |
+| Copilot CLI | Yes, typed only into its input box as seen on screen, and only while it is empty and outside shell mode | agent-ha-bridge has long typed replies into it, and its transcript records every prompt (`user.message`) with the text as typed, which confirms one by identity |
 | Claude Code | Yes, typed only into its input box as seen on screen | Its transcript records a prompt typed while idle as a `user` entry whose content is the line as typed, and one typed while it works as a `queue-operation` `enqueue` with that content (2.1.312, seen live), which confirms one by identity. agent-ha-bridge confirmed only that *some* prompt was submitted |
 | Codex | Yes, typed only into its input box as seen on screen, and only while it is empty | Its rollout records every prompt, idle or mid-turn, as an `item_completed` `UserMessage` with the line as typed (0.165, seen live), which confirms one by identity. agent-ha-bridge typed with no confirmation at all |
 | Any, on macOS or Linux | Refused, and `sessions.reply` is not offered | Delivery through tmux comes later |
@@ -38,6 +38,32 @@ running now have finished (239 of the 267 steering prompts in this machine's tra
 right after a turn start), or `queued` after the turn ends. One typed while idle is recorded
 at once (`delivery: "idle"`). The host therefore waits up to 60 s for the prompt, and frees
 the session for answers as soon as the keys have gone.
+
+**The input box (#825).** A reply is typed only into Copilot's own input box, read off the
+screen (`Copilot/CopilotInputBox.cs`), and only while that box is empty and outside shell
+mode. Words a person left in the box would be sent with the reply, and in shell mode Enter
+runs what the box holds as a shell command. agent-ha-bridge typed without looking; so did
+this host until #825. From CLI 1.0.105's own rendering code, the box is drawn one of two
+ways: by default as a "rail" (`╻`, `┃` per line, `╹`) beside a `▄`/`▀` box with no prompt
+glyph, and with the prompt frame off as a row between two `─` rules led by `❯ ` (or `! ` in
+shell mode). Shell mode shows as that glyph, as the empty box's placeholder "Execute shell
+command", or as the footer's "Shell" label or "esc exit shell mode" hint. The reply is
+`refused`, with nothing typed:
+
+* when the box holds anything: the reason shows what, escaped (`ShownText.Reveal`) and cut
+  to 500 characters;
+* in shell mode;
+* when the screen cannot be read, or shows no single prompt box with the prompt's footer
+  ("open sidebar" or "/ commands") under it: it may be asking something there.
+
+The box is read when the reply arrives, so a draft or shell mode is refused at once, and
+read again once the typing turn has come, after the other checks. The words are held to
+that read's box rows (`KeySend.Expect`): the worker reads them again in the same attach,
+just before the first key, and if anything was typed or shell mode entered in between,
+nothing is typed and the reply is `refused` ("input box changed just as the reply was to be
+typed"). Only the box's rows are held, not the footer, which can change on its own. The
+screens the tests read are in `tests/fixtures/screens/copilot-input-box.json`, built from
+the captured live screen and the CLI's rendering code, each naming its source.
 
 ## Attachments (Copilot)
 

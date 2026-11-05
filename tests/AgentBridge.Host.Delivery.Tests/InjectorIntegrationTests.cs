@@ -156,6 +156,19 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         Assert.Equal(expected, got.Where(k => k.StartsWith("key 1", StringComparison.Ordinal)).Select(k => int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture)));
     }
 
+    // Copilot CLI 1.0.105 ready for a prompt, as captured live (LaunchFlowTests.CopilotReady):
+    // its rail input box, empty, and the prompt's footer. A Copilot reply is typed only into
+    // that box, read off the screen first (#825).
+    static readonly string[] CopilotIdle =
+    [
+        "\u25CF Done.",
+        "",
+        "\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584",
+        "\u2503",
+        "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580",
+        " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 tab next tab",
+    ];
+
     // A Copilot permission prompt drawn on a real console: the worker reads the screen, the
     // host finds the plain Yes on it, and the digit goes only while that row still reads so.
     static readonly string[] PermissionPrompt =
@@ -261,7 +274,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         // The longest reply allowed: 16 KiB of UTF-8, every byte a key down and up.
         text ??= string.Concat(Enumerable.Repeat("abcdefgh", AgentBridge.Protocol.Limits.ReplyText / 8));
         typed ??= text;
-        var echo = StartEcho();
+        var echo = StartEcho(show: CopilotIdle);
         using var f = new Fixture();
         const string Id = "33333333-3333-4333-8333-333333333333";
         // The lock is newer than the process, as a live CLI's is; an older one is a dead CLI's.
@@ -288,12 +301,35 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Delivered, (string?)null), (result.Outcome, result.Reason));
     }
 
+    // A person's draft in Copilot's input box on a real console, read by the real worker: the
+    // reply is refused with the draft shown, and not one key reaches the console (#825).
+    [WindowsFact]
+    public async Task A_reply_to_a_real_console_whose_Copilot_input_box_holds_a_draft_types_nothing()
+    {
+        string[] draft = [.. CopilotIdle.Take(3), "\u2503 half a thought", .. CopilotIdle.Skip(4)];
+        var echo = StartEcho(show: draft);
+        using var f = new Fixture();
+        const string Id = "55555555-5555-4555-8555-555555555555";
+        var events = f.CopilotSession(Id, echo.Pid, lockWrite: DateTimeOffset.UtcNow);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
+        f.Processes.Run(AgentBridge.Protocol.AgentKind.Copilot, echo.Pid);
+        await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
+        await source.RefreshAsync();
+        var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
+            new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true });
+
+        var result = await replies.ReplyAsync(new AgentBridge.Protocol.ReplyRequest { Id = Id, Request = Guid.NewGuid().ToString(), Text = "go on" });
+
+        Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Refused, "something is already typed in Copilot's input box at the machine (\"half a thought\"); send or clear it there first"), (result.Outcome, result.Reason));
+        Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
+    }
+
     // A reply with a file: staged privately, its path typed as an @ mention ahead of the words
     // by the real worker, and delivered once the "CLI" records the prompt with it attached.
     [WindowsFact]
     public async Task A_reply_with_an_attachment_types_its_staged_path_as_an_at_mention_and_is_delivered_once_attached()
     {
-        var echo = StartEcho();
+        var echo = StartEcho(show: CopilotIdle);
         using var f = new Fixture();
         const string Id = "44444444-4444-4444-8444-444444444444";
         var events = f.CopilotSession(Id, echo.Pid);
