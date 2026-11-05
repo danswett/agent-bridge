@@ -724,8 +724,7 @@ public sealed class PushNotifier : IAsyncDisposable
 
     void EnqueueSignIn(string key, List<Session> affected, DateTimeOffset now)
     {
-        var latest = affected.MaxBy(s => s.Attention!.Since)!;
-        var agent = latest.Attention!.Agent ?? latest.Agent;
+        var agent = affected[0].Attention!.Agent ?? affected[0].Agent;
         foreach (var sub in store.All)
         {
             if (!MayNotify(sub)) { continue; }
@@ -739,9 +738,9 @@ public sealed class PushNotifier : IAsyncDisposable
                     // one of these sessions as a question would, so not silent.
                     Title = $"{AgentName(agent)} on {machine.Name} needs sign-in",
                     Body = count == 1 ? "1 session affected" : $"{count} sessions affected",
-                    Navigate = PushNotice.SignInNavigate(sub.App, machine.Id, agent, latest.Id),
+                    Navigate = PushNotice.SignInNavigate(sub.App, machine.Id, agent),
                     Tag = PushNotice.Tag(machine.Id, key),
-                    Data = new PushNoticeData { Kind = NoticeKind.SignIn, Machine = machine.Id, Session = latest.Id, Agent = agent, Sessions = count, At = now },
+                    Data = new PushNoticeData { Kind = NoticeKind.SignIn, Machine = machine.Id, Agent = agent, Sessions = count, At = now },
                 },
             });
             outbox.RemoveAll(o => o.Device == sub.Device && o.Session == key);

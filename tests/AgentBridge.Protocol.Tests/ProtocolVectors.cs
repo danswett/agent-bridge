@@ -540,12 +540,12 @@ public static class ProtocolVectors
             .Valid("sign-in", new PushNotification
             {
                 Title = "Copilot on DEV-VM1 needs sign-in", Body = "3 sessions affected", Tag = PushNotice.Tag(MachineId, PushNotice.SignInKey(AgentKind.Copilot, null)), Data = SignInData,
-                Navigate = PushNotice.SignInNavigate("https://danswett.github.io/agent-bridge/", MachineId, AgentKind.Copilot, SessionId),
+                Navigate = PushNotice.SignInNavigate("https://danswett.github.io/agent-bridge/", MachineId, AgentKind.Copilot),
             });
         f.Record<PushMessage>(Host).Valid("question", new PushMessage { Notification = notification });
     }
 
-    static PushNoticeData SignInData => new() { Kind = NoticeKind.SignIn, Machine = MachineId, Session = SessionId, Agent = AgentKind.Copilot, Sessions = 3, At = T0 };
+    static PushNoticeData SignInData => new() { Kind = NoticeKind.SignIn, Machine = MachineId, Agent = AgentKind.Copilot, Sessions = 3, At = T0 };
 
     // ---- launching ----
 

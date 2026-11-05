@@ -70,8 +70,9 @@ public sealed record PushNoticeData
     public int V { get; init; } = 1;
     public required NoticeKind Kind { get; init; }
     public required string Machine { get; init; }
-    // SignIn: the affected session that failed most recently.
-    public required string Session { get; init; }
+    // Absent for SignIn, which is about a machine, never a session (#800 6646515428): an older
+    // client then opens the machine rather than a session view.
+    public string? Session { get; init; }
     public string? Question { get; init; }
     // SignIn: whose sign-in it is, and how many sessions it stops. Never the account.
     public AgentKind? Agent { get; init; }
@@ -110,11 +111,10 @@ public static class PushNotice
     public static string SignInKey(AgentKind agent, string? account) =>
         $"signin:{agent.ToString().ToLowerInvariant()}:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(account ?? "")))[..8].ToLowerInvariant()}";
 
-    // Opens the machine at the affected session that failed most recently, which a client that
-    // knows no sign-in link already routes to and shows as Needs sign-in; signin names the agent
-    // for one that can open its banner.
-    public static string SignInNavigate(string app, string machine, AgentKind agent, string session) =>
-        Link(app, $"host={Uri.EscapeDataString(machine)}&session={Uri.EscapeDataString(session)}&signin={agent.ToString().ToLowerInvariant()}");
+    // Opens the machine, never a session or a question (#800 6646515428): an older client, which
+    // reads the kind as a question, then shows no question view or answer controls.
+    public static string SignInNavigate(string app, string machine, AgentKind agent) =>
+        Link(app, $"host={Uri.EscapeDataString(machine)}&signin={agent.ToString().ToLowerInvariant()}");
 
     public static string Navigate(string app, string machine, string session, string? question) =>
         Link(app, $"host={Uri.EscapeDataString(machine)}&session={Uri.EscapeDataString(session)}" +
