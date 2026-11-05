@@ -319,3 +319,4 @@ check to change:
 | The origin an assertion must name | Exactly `https://` + `rpId` |
 | The challenge role for person commands and vetoes | Decided in R1c |
 | How the QR identifies N's `sign` key when N shows it | Decided with R3 |
+| §10's "partial cascade with a fabricated pair": the bullet keeps E and E2 active; §3.5 voids E, since J's and K's removal revokes D and E's add is not its ancestor, and the person's rank-1 removal shields only its descendants | §3.5's rules, which the other §10 scenarios also follow; asked of the Trust lead |

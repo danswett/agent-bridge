@@ -51,6 +51,12 @@ public sealed class RosterPropertyTests
         ["genesis-self-removal"] = () => RosterForkTests.SelfRemovalAfterRecovery(genesis: true),
         ["senior-self-removal"] = () => RosterForkTests.SelfRemovalAfterRecovery(genesis: false),
         ["void-confirm"] = RosterForkTests.VoidConfirm,
+        ["fabricated-outrank"] = RosterFabricationTests.FabricatedOutrank,
+        ["fabricated-old-head"] = RosterFabricationTests.FabricatedOnOldHead,
+        ["remove-p-after-sync"] = () => RosterFabricationTests.RemoveP(afterSync: true),
+        ["tie-through-p"] = () => RosterFabricationTests.RemoveP(afterSync: false),
+        ["partial-cascade"] = RosterFabricationTests.PartialCascade,
+        ["quarantined-descendant"] = RosterFabricationTests.QuarantinedDescendant,
     };
 
     // The labels in a random order in which every entry still follows its parents.
