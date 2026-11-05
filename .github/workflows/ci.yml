@@ -8,6 +8,14 @@ on:
     # ready_for_review on top of the defaults: a draft runs only the fast ring (the plan job), so
     # marking it ready must run the PR gate on the same head without waiting for another push.
     types: [opened, synchronize, reopened, ready_for_review]
+  # By hand, only to prove pwa-ui's apt fallback on a branch (quality/README.md §4.7). A run by
+  # hand is never a release (APP_RELEASE), writes no cache and, like main, runs every job.
+  workflow_dispatch:
+    inputs:
+      force-apt-fallback:
+        description: pwa-ui takes the Azure apt mirror off at once and downloads from https://archive.ubuntu.com (a branch other than main only)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -62,6 +70,17 @@ jobs:
       product-os: ${{ steps.whole-ring.outputs.whole-ring == 'true' && '["ubuntu-latest","windows-latest","windows-11-arm"]' || steps.select.outputs.product-os }}
       test-filter: ${{ steps.select.outputs.test-filter }}
     steps:
+      # force-apt-fallback proves pwa-ui's fallback on a branch. Asked for on main, which
+      # publishes, or on a tag, it fails the run here, before any job starts, rather than being
+      # ignored.
+      - name: force-apt-fallback only on a branch other than main
+        if: github.event_name == 'workflow_dispatch' && inputs.force-apt-fallback
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" = refs/heads/main ] || [ "${REF#refs/heads/}" = "$REF" ]; then
+            echo "::error title=force-apt-fallback::only on a branch other than main, not $REF"; exit 1
+          fi
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
@@ -1011,11 +1030,15 @@ jobs:
       # Playwright's system packages, downloaded before its install so a slow apt mirror can be
       # left after five minutes for Canonical's HTTPS archive (#799; the action's download.sh says
       # how). The install below then finds them all downloaded; it, and the packages, are as before.
+      # force-apt-fallback (workflow_dispatch, a branch only; quality/README.md §4.7) skips the five
+      # minutes and takes that fallback before any package is downloaded, to prove it once. It is
+      # false on every push and pull request run, which run the action exactly as before.
       - name: Download Playwright's system packages
         uses: ./.github/actions/playwright-system-packages
         with:
           browsers: ${{ matrix.project }}
           working-directory: pwa
+          force-apt-fallback: ${{ github.event_name == 'workflow_dispatch' && inputs.force-apt-fallback }}
       - run: npx playwright install --with-deps "$PROJECT"
       - name: Save Playwright's browsers to main's cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'

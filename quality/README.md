@@ -343,7 +343,17 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `https://archive.ubuntu.com` (main run 41927187905 lost a WebKit shard to that mirror at
      100 kB/s, and main run 41952998347 `pwa-e2e`). Each of those jobs gets 35 minutes, so a
      fallback download still leaves time for the tests; the browsers' own download, on a cache
-     miss, is unchanged.
+     miss, is unchanged. To prove that
+     fallback once on a branch, without waiting for a slow mirror:
+     `gh workflow run ci.yml --ref <branch> -f force-apt-fallback=true`. Each `pwa-ui` leg then
+     takes the Azure mirror off before downloading anything (the action's `force-apt-fallback`;
+     `pwa-e2e` and `spikes-linux` download as before), says in its log that it was forced and not
+     timed out, fails if apt still fetches a package from Azure, and counts the packages that
+     came from `https://archive.ubuntu.com` (a leg with none, everything already installed,
+     warns that it proves nothing; the WebKit legs are the proof). Use a
+     throwaway branch with no pull request: a run by hand runs every job, as on `main`, and
+     posts its checks on the branch's head. Asked for on `main` or a tag, the plan job fails
+     the run before anything starts; a run by hand is never a release and writes no cache.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
