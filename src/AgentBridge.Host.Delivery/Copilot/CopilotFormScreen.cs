@@ -46,7 +46,6 @@ public static partial class CopilotFormScreen
             if (at >= rows.Count || Collapse(rows[at]) is not { Length: > 0 } shown || !first.StartsWith(shown, StringComparison.Ordinal)) { return NotForm; }
             at++;
         }
-        if (form.Fields.Count == 0) { return Hints(rows, at, 0, 0) ? null : NotForm; }
         if (index < 0 || index >= form.Fields.Count) { return "the question's form has no such field"; }
         if (form.Fields.Any(f => f.Label is null))
         {
@@ -67,15 +66,38 @@ public static partial class CopilotFormScreen
         return Hints(rows, at + 1, index, form.Fields.Count) ? null : off;
     }
 
-    // The form's key hints, below `from`: always decline and cancel, and with more than one
-    // field, next and prev as the field's place says.
+    // The form's key hints, below `from`: accept, decline and cancel always, and with more than
+    // one field, next and prev as the field's place says. Read from the hints row alone, never
+    // from the question or what is typed into the field, either of which may say "tab next".
     static bool Hints(IReadOnlyList<string> rows, int from, int index, int count)
     {
-        var text = Collapse(string.Join(' ', rows.Skip(from)));
-        if (!text.Contains("ctrl+d decline", StringComparison.Ordinal) || !text.Contains("esc cancel", StringComparison.Ordinal)) { return false; }
-        return count <= 1
-            || (text.Contains("tab next", StringComparison.Ordinal) == index < count - 1
-                && text.Contains("shift+tab prev", StringComparison.Ordinal) == index > 0);
+        if (HintParts(rows, from) is not { } parts) { return false; }
+        if (!parts.Contains("enter accept") || !parts.Contains("ctrl+d decline") || !parts.Contains("esc cancel")) { return false; }
+        return count <= 1 || (parts.Contains("tab next") == index < count - 1 && parts.Contains("shift+tab prev") == index > 0);
+    }
+
+    // What `Ft` can say under the form (`Uxn`'s hints), each "<key> <action>".
+    static readonly HashSet<string> HintItems = new(StringComparer.Ordinal)
+    {
+        "\u2191/\u2193 select", "\u2191/\u2193 adjust", "space toggle", "enter accept", "tab next", "shift+tab prev", "ctrl+d decline", "esc cancel",
+    };
+
+    // The hints row's parts: the last row below `from` that ends with "esc cancel", the hints'
+    // last, and the rows it wrapped from just above it, as far up as every part read is one of
+    // the hints. Null when there is no such row.
+    static List<string>? HintParts(IReadOnlyList<string> rows, int from)
+    {
+        for (var end = rows.Count - 1; end >= from; end--)
+        {
+            if (!Collapse(rows[end]).EndsWith("esc cancel", StringComparison.Ordinal)) { continue; }
+            for (var start = Math.Max(from, end - 3); start <= end; start++)
+            {
+                var parts = Collapse(string.Join(' ', rows.Skip(start).Take(end - start + 1))).Split('\u00B7').Select(p => p.Trim()).ToList();
+                if (parts.All(HintItems.Contains)) { return parts; }
+            }
+            return null;
+        }
+        return null;
     }
 
     static int Next(IReadOnlyList<string> rows, int from)

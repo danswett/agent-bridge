@@ -333,6 +333,10 @@ public sealed class AnswerService : ISessionAnswerer
 
             var (form, unreadable) = CopilotForm.Read(arguments);
             if (form is null) { return Refused(unreadable!); }
+            // An ask_user with no form schema: how Copilot CLI 1.0.105 draws it cannot be told
+            // from its code (its elicitations require a schema), so there is nothing to hold the
+            // keys to, and they are not typed blind (#510 review).
+            if (form.Fields.Count == 0) { return Refused("this question has no form the host can recognise on the session's screen; answer it at the machine"); }
             if (!form.Matches(question)) { return Refused("the question's form reads differently here than the client was shown; answer at the machine"); }
             var (planned, problem) = CopilotPlanner.Plan(form, request);
             if (planned is null) { return Refused(problem!); }

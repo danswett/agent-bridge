@@ -707,10 +707,10 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
     // q1 answered and done, then a form of these fields asked as q2, recorded once every field
     // has taken its Enter.
-    async Task AskFieldsAsync(object properties, int fields, object answer)
+    async Task AskFieldsAsync(object properties, int fields, object answer, string message = "Tell me")
     {
         Fixture.Append(events, Recorded("q1", new { pick = "a" }), Copilot.ToolDone("q1", second++),
-            Copilot.ToolStart("q2", "ask_user", new { message = "Tell me", requestedSchema = new { properties } }, second++));
+            Copilot.ToolStart("q2", "ask_user", new { message, requestedSchema = new { properties } }, second++));
         await source.RefreshAsync();
         injector.OnInject = () => { if (Enters() == fields) { Fixture.Append(events, Recorded("q2", answer)); } };
     }
@@ -912,6 +912,50 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     // ---- a single field, held to the form like any other (#510 review) ----
+
+    [Fact]
+    public async Task A_question_with_no_form_schema_is_refused_for_the_machine_with_nothing_typed()
+    {
+        // How the CLI draws an ask_user with no requestedSchema cannot be told from its code, so
+        // there is no form to hold the keys to.
+        Fixture.Append(events, Recorded("q1", new { pick = "a" }), Copilot.ToolDone("q1", second++),
+            Copilot.ToolStart("q2", "ask_user", new { message = "What should I call it?" }, second++));
+        await source.RefreshAsync();
+        injector.Screen = () => Framed("What should I call it?", ["answer"], 0, ["\u2502  \u2502"]);
+        var ch = await OpenAsync();
+
+        var response = await ch.RequestAsync(Ops.SessionAnswer, new { id = Id, question = "q2", request = Guid.NewGuid().ToString(), text = "Bridge" });
+
+        Assert.True(response.GetProperty("ok").GetBoolean(), response.GetRawText());
+        var result = response.GetProperty("result");
+        Assert.Equal("refused", result.GetProperty("outcome").GetString());
+        Assert.EndsWith("answer it at the machine", result.GetProperty("reason").GetString());
+        Assert.Empty(injector.Attempts);
+    }
+
+    [Theory]
+    // The position hints are read from the hints row alone: the question, or the words typed
+    // into a field, may say "tab next" or "shift+tab prev" too (#510 review).
+    [InlineData("question")]
+    [InlineData("answer")]
+    public async Task Tab_hints_in_the_question_or_the_answer_do_not_move_the_field_the_form_is_taken_to_be_at(string where)
+    {
+        var question = where == "question";
+        object answer = question ? new { first = "b", second = "c" } : new { one = "go back with shift+tab prev", two = "then tab next" };
+        string[] names = question ? ["first", "second"] : ["one", "two"];
+        var message = question ? "Use tab next or shift+tab prev to move" : "Tell me";
+        await AskFieldsAsync(question
+            ? new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, second = new { type = "string", @enum = new[] { "a", "b", "c" } } }
+            : new { one = new { type = "string" }, two = new { type = "string" } },
+            2, answer, message);
+        injector.Screen = () => FieldsScreen(names, message: message);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(2, Enters());
+    }
 
     [Fact]
     public async Task A_single_list_is_not_typed_at_all_into_a_screen_the_host_cannot_read()

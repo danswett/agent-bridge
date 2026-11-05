@@ -81,10 +81,14 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     with its own name, and may have a field of the same name), the question's own first line
     (as much of it as the row holds where it wraps), with more than one field the tab bar
     naming exactly this form's fields in order, the field's own heading (`<title ?? name>:`,
-    on a row of its own; only the field being answered is drawn), and under it the
-    "ctrl+d decline" and "esc cancel" hints, with the field's place by "tab next" and
-    "shift+tab prev" when there is more than one; and no numbered "1. Yes" row of a
-    permission prompt, bare or between a box's sides. A screen that has settled
+    on a row of its own; only the field being answered is drawn), and under it the hints
+    row (the last row ending "esc cancel", with the rows it wrapped from, every part one of
+    the form's hints): "enter accept", "ctrl+d decline" and "esc cancel", with the field's
+    place by "tab next" and "shift+tab prev" when there is more than one, read from that row
+    alone, since the question or the words typed may say them too; and no numbered "1. Yes"
+    row of a permission prompt, bare or between a box's sides. An `ask_user` with no form
+    schema is refused, `answer it at the machine`: how 1.0.105 draws one cannot be told from
+    its code (its elicitations require a schema), so there is no form to hold the keys to. A screen that has settled
     or moved on is not enough: a permission prompt that opens before its transcript entry is
     written reads just as steady, and keys held to its own rows would go into it, the Enter
     approving what it highlights (#510 review). Anything else stops the answer there, as
