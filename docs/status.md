@@ -40,11 +40,19 @@ with rollback, and the publication writer (DSWETT-HOME) moves last.
 **Current goal (decided 2026-10-29):** parity with agent-ha-bridge first, then migrate
 real machines. New features wait, except the few marked "beyond parity" in parity.md.
 
-**HA retention (owner, 2026-11-02):** the optional HA dashboard must keep working
-without any legacy daemon. #317 tracks native fenced publication (#318) followed by
-writer migration, rollback and rehearsal (#319). This replaces the planned dashboard
-retirement, not the current G7 migration refusal. Copilot CLI session
-`d5ac689c-a9f6-4618-8e8f-9220793487f4` owns this implementation; coordination is on #170.
+**HA redirect (owner, 2026-11-02; reconciled 2026-11-05):** HA functionality must
+remain without any legacy daemon. #387 redirects delivery to the separate
+[HA integration and companion card](https://github.com/danswett/agent-bridge-home-assistant/issues/1);
+HA owns entities/actions/presentation and Bridge remains generic at protocol/core.
+The current host connector is compatibility, not that target implemented.
+#318's permanent native publisher direction is superseded, not completed.
+#317 remains the parent goal, #319 the verified reversible production cutover,
+and #389 cleanup only after replacement. G7 still refuses writer migration.
+[Disposition and dependencies](ha-connector.md#retaining-ha-without-a-legacy-daemon-317)
+retain #322 and preserve held #331/#337/#345 and existing owners. #394's overlapping
+architecture/enrollment PR is still held; #522 is merged design and #534 a draft
+read profile with reference fixtures, not proof of installable HA delivery.
+Copilot CLI session `d5ac689c-a9f6-4618-8e8f-9220793487f4` retains coordination.
 
 ## 2. Where things are (2026-11-02)
 
@@ -233,13 +241,14 @@ legacy daemon or HA changes. Scope is coordinated on #170.
 - **Next on track A:** S2 (#174), using the sub-agent transcripts the soak recorded (in `~/repos/wt/agent-bridge-soak-transcripts`, not committed). #175 still needs its live check.
 - **Queued backend:** #231 (agents installed later), #257 (provider-neutral account ID), #239, #206, #207, #241.
 
-In flight on #317 (publication owner above):
-- #318: first slice is the native protocol-1 policy/fence contract, verified against
-  legacy-function recordings (`PublicationTests`). It does not enable publication.
-  Next: protected receipts and actual HA resource/dashboard observation, renderer and
-  versioned card publication, then integration into the connector.
-- #319: writer cutover remains blocked until #318 and the disposable-HA handover/
-  rollback rehearsal pass. No live HA or legacy-install changes during development.
+Historical native publication work under #317, superseded by #387's redirect:
+- #322's merged protocol-1 policy/fence contract and recordings are retained
+  compatibility evidence, not publication enablement. #331/#337/#345 remain held;
+  [retain/extract/supersede boundaries](ha-connector.md#publisher-work-disposition-387)
+  replace the former instruction to continue that stack.
+- #319 still gates writer cutover on the replacement integration/card and
+  disposable-HA handover/rollback verification. No live HA or legacy-install
+  changes during development; no cleanup under #389 before that gate.
 
 ## 3. Shadow gate (#40)
 
@@ -283,9 +292,10 @@ the machine and migration steps within it.
 2. ~~**HOME view-only install**~~ Done 2026-11-01: the PWA lists HOME online and read-only.
 3. **Migrate machines while the soak runs** (owner, 2026-11-01): ~~ARM8~~ done. ~~DEV-VM1~~ done 11-02 14:16 PT. Its keep-awake has landed (#224), and the commands are with the owner. Then DASDESK when it's online, and the Mac after P5. Repeat rehearsal step E6-07 (worktree reclaim) on one of them.
 4. **The VM soak's gate** (§3): report it when it passes, then run `-Finish` to deallocate.
-5. **Writer migration** (P7, #317): native shared publication first (#318), then a
-   reversible, verified handover (#319). Keep the HA dashboard working without a
-   legacy daemon; do not bypass G7 or retire the dashboard as a migration prerequisite.
+5. **Writer migration** (P7, #317): verify the separate HA integration/card
+   replacement (#387), then reversible handover/rollback (#319). Do not resume
+   superseded #318 publication work, bypass G7, or retire HA functionality as a
+   migration prerequisite. Cleanup remains gated under #389.
 6. **UI design track** (§5).
 7. **Later:** code signing, macOS (P5), native phone apps (P8), relay scale (S9), observability (§5.10), and decommissioning the old relay stamp in the trial subscription (awaiting the owner's approval).
 
