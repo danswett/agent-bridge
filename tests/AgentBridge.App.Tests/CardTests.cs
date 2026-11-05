@@ -251,6 +251,75 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Equal("truncated", q.Why);
     }
 
+    // So does a Codex approval a host from #209 had to cut, though it is no longer whole in its block.
+    [Fact]
+    public void A_codex_approval_a_host_had_to_cut_says_that_part_of_it_is_missing()
+    {
+        var q = new QuestionViewModel(Make.Approval() with { Message = "Allow **Bash**?\n\n```\necho one\necho tw", Truncated = true }, "s1", AgentKind.Codex,
+            [.. connection.Capabilities, Capabilities.SessionsApprove], deliveries, "Test PC");
+
+        Assert.False(q.Answerable);
+        Assert.Equal("truncated", q.Why);
+    }
+
+    // The security review's commands (tests/fixtures/approvals/codex-commands.json, #209): all
+    // ASCII, yet as Markdown prose each draws a link's words or an image in place of what runs. The
+    // card draws either exactly as written (#323); as a host sends it, Markdown too would draw the
+    // whole command as code, with no link, and the card may approve it; as an older host sent it,
+    // the card leaves it to the machine.
+    public static TheoryData<string> CodexCommands => [.. CodexCases().Select(c => (string)c["name"]!)];
+
+    static IEnumerable<System.Text.Json.Nodes.JsonObject> CodexCases() =>
+        System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "approvals", "codex-commands.json")))!["cases"]!
+            .AsArray().Select(c => c!.AsObject());
+
+    [Theory]
+    [MemberData(nameof(CodexCommands))]
+    public void A_codex_command_Markdown_would_draw_as_a_link_or_image_is_drawn_whole_as_code_and_an_older_hosts_prose_is_never_approved(string name)
+    {
+        var c = CodexCases().Single(c => (string)c["name"]! == name);
+        var command = (string)c["command"]!;
+        IReadOnlyList<string> caps = [.. connection.Capabilities, Capabilities.SessionsApprove];
+        QuestionViewModel Codex(string message) => new(Make.Approval() with { Message = message }, "s1", AgentKind.Codex, caps, deliveries, "Test PC");
+
+        var sent = Codex((string)c["message"]!);
+        Assert.True(sent.Answerable);
+        // As QuestionView draws it (MarkdownModel.Approval, #323): the whole message as written.
+        Assert.Equal((string)c["message"]!, Assert.IsType<MdCode>(Assert.Single(MarkdownModel.Approval(sent.Message))).Text);
+        // And as Markdown draws it (Home Assistant's card): the command whole as code, no link.
+        var blocks = MarkdownModel.Parse(sent.Message);
+        Assert.Equal(command, Assert.Single(blocks.OfType<MdCode>()).Text);
+        Assert.DoesNotContain(blocks.OfType<MdParagraph>().SelectMany(p => p.Inlines), i => i is MdLink);
+
+        var legacy = Codex((string)c["legacy"]!);
+        Assert.False(legacy.Answerable);
+        Assert.Equal("atMachine", legacy.Why);
+        Assert.Equal((string)c["legacy"]!, Assert.IsType<MdCode>(Assert.Single(MarkdownModel.Approval(legacy.Message))).Text);
+    }
+
+    // An older host sent a Codex approval as "Needs approval: " and the hook's 300-character preview,
+    // cut to 297 and "..." with nothing marking it truncated (codex-commands.json, olderHostPreview).
+    // Nothing in it is Markdown, so it draws as written, yet the curl past the cut is what Approve
+    // once would run as well (#209 security review).
+    [Fact]
+    public void An_older_hosts_Codex_preview_cut_short_of_what_runs_is_answered_at_the_machine_and_drawn_exactly_as_written()
+    {
+        var c = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "approvals", "codex-commands.json")))!["olderHostPreview"]!;
+        var preview = (string)c["legacy"]!;
+        IReadOnlyList<string> caps = [.. connection.Capabilities, Capabilities.SessionsApprove];
+        QuestionViewModel Codex(string message) => new(Make.Approval() with { Message = message }, "s1", AgentKind.Codex, caps, deliveries, "Test PC");
+
+        var legacy = Codex(preview);
+        Assert.False(legacy.Answerable);
+        Assert.Equal("atMachine", legacy.Why);
+        Assert.Equal(preview, Assert.IsType<MdCode>(Assert.Single(MarkdownModel.Approval(legacy.Message))).Text);
+        Assert.False(QuestionViewModel.Answerability(Make.Approval() with { Message = preview }, caps, AgentKind.Codex).Ok);
+
+        var sent = Codex((string)c["message"]!);
+        Assert.True(sent.Answerable);
+        Assert.Equal((string)c["message"]!, Assert.IsType<MdCode>(Assert.Single(MarkdownModel.Approval(sent.Message))).Text);
+    }
+
     [Fact]
     public void A_question_cut_to_fit_or_a_host_that_takes_no_answers_is_shown_read_only()
     {

@@ -609,7 +609,7 @@ permission prompts goes beyond it, at the user's request:
 | Copilot CLI | Any other permission request (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read, or any on a host with `permissions.remoteApproval` off | `approval` | No: `answerAtMachine` | |
 | Claude Code | `AskUserQuestion`: one to four questions, each a `choice` or a `multi` of its options | `form` | Yes, but not with free text (no field has `allowOther`), and a `multi` needs at least one option | The `tool_result` for its `tool_use` id records every question's answer as typed |
 | Claude Code | Permission prompt (from agent-ha-bridge's hook) | `approval` | No: `answerAtMachine` | |
-| Codex | Approval recorded by agent-ha-bridge's hook | `approval` | Yes | Never: Codex records nothing that says how an approval was answered, so a typed one is `unconfirmed` |
+| Codex | Approval recorded by its `PermissionRequest` hook (agent-ha-bridge's, or this host's intake) | `approval`: `Allow **<tool>**?` and the whole command in a fence longer than any run of backticks inside it. One whose marker holds only the hook's 300-character preview, or whose command is past 16,384 characters, is `truncated` (#209) | Yes, unless `truncated` | Never: Codex records nothing that says how an approval was answered, so a typed one is `unconfirmed` |
 | Codex | Approval seen only in the rollout, or one agent-ha-bridge already typed into | `approval` | No: `answerAtMachine` | |
 
 #### Copilot permission prompts
@@ -665,8 +665,12 @@ command's fence, a link, an image or HTML, text after a block, or a line in a bl
 fence; `ApprovalShape`), and both say a `truncated` approval is cut before they judge its shape,
 since one cut usually ends inside its block. These rules cover characters only, not Markdown:
 whether an approval's prose can be drawn as Markdown (a link or image hiding what runs) is #212
-for Copilot's intention and #209 for a Codex approval's command, which until then is sent as
-Markdown prose (`Needs approval: <command>`).
+for Copilot's intention, and #209 for a Codex approval's command, which a host now sends whole in a
+fence longer than any run of backticks inside it. An older host sent it as Markdown prose
+(`Needs approval: <command>`), the hook's 300-character preview cut to 297 characters and `...`
+with nothing marking it `truncated`, so every client answers a Codex approval not in the new form
+(`ApprovalShape.IsFencedCommand`) at the machine: the PWA draws it exactly as written, and the app
+and Home Assistant cards show it as its source.
 
 The answer is `{ "decision": "approve" }` or `{ "decision": "deny" }`, nothing else.
 Approve is the prompt's plain "Yes", once: no option that grants more ("don't ask again",

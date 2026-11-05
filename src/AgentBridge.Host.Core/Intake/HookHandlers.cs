@@ -22,7 +22,7 @@ namespace AgentBridge.Host.Core.Intake;
 // agent-ha-bridge wrote the Codex approval marker only after reaching Home Assistant, because
 // only its card could answer one. Here a client of this host answers it, so it is written for
 // every approval Codex asks for.
-internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProcessInspector processes, TimeProvider time)
+internal sealed partial class HookHandlers(string runtimeRoot, string claudeHome, IProcessInspector processes, TimeProvider time)
 {
     public string ClaudeRoot { get; } = Path.Combine(runtimeRoot, SpoolContract.ClaudeFolder);
     public string CodexRoot { get; } = Path.Combine(runtimeRoot, SpoolContract.CodexFolder);
@@ -124,6 +124,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
         string status;
         var activity = "";
         var approval = false;
+        string? asked = null;
         switch (eventName)
         {
             case "SessionStart":
@@ -138,7 +139,8 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
             case "PermissionRequest":
                 (status, approval) = ("waiting", true);
                 activity = $"Needs approval: {Str(e, "tool_name") ?? ""}";
-                if (Command(e) is { Length: > 0 } asked) { activity = $"Needs approval: {Cut(asked, 300)}"; }
+                asked = ApprovedCommand(e);
+                if (asked is { Length: > 0 }) { activity = $"Needs approval: {Cut(asked, 300)}"; }
                 break;
             case "PreToolUse":
                 status = "working";
@@ -182,7 +184,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
             // agent-ha-bridge's generation: the session's node id and the time, so an answer
             // made for one approval is never typed into the next.
             approvalId = $"{NodeId(sessionId)}-{NextDecisionMs()}";
-            WriteApprovalMarker(sessionId, approvalId, activity, At(spooled));
+            WriteApprovalMarker(sessionId, approvalId, activity, At(spooled), Str(e, "tool_name"), asked);
         }
         return notice with { OwnerPid = owner > 0 ? owner : null, Status = status, ApprovalId = approvalId };
     }
@@ -246,15 +248,28 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
     }
 
     // As Write-CodexApprovalMarker: the gate an answer is typed through (AnswerService reads it
-    // afresh before typing, and agent-ha-bridge's Set-CodexApprovalAttempt claims it).
-    void WriteApprovalMarker(string sessionId, string decisionId, string question, string at) =>
+    // afresh before typing, and agent-ha-bridge's Set-CodexApprovalAttempt claims it). Question
+    // stays the activity line agent-ha-bridge's reader expects; the tool and the whole command go
+    // beside it, so what a client approves is all of what runs (#209). A command past CommandMax
+    // (more than any question can carry) is kept to its start, and says so.
+    void WriteApprovalMarker(string sessionId, string decisionId, string question, string at, string? tool, string? command) =>
         WriteJson(ApprovalPath(sessionId), w =>
         {
             w.WriteString("SessionId", sessionId);
             w.WriteString("DecisionId", decisionId);
             w.WriteString("Question", question);
             w.WriteString("Created", at);
+            if (!string.IsNullOrEmpty(tool)) { w.WriteString("Tool", tool); }
+            if (!string.IsNullOrEmpty(command))
+            {
+                w.WriteString("Command", command.Length > CommandMax ? command[..CommandMax] : command);
+                if (command.Length > CommandMax) { w.WriteBoolean("CommandCut", true); }
+            }
         });
+
+    // Twice the most a question's message carries (Limits.QuestionMessage): whatever is cut here is
+    // cut again there, and marked truncated either way.
+    internal const int CommandMax = 2 * AgentBridge.Protocol.Limits.QuestionMessage;
 
 
     // Approval markers a lifecycle event retired but that could not be removed yet (a reader held
@@ -530,6 +545,41 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
     static string? Command(JsonElement e) =>
         e.ValueKind == JsonValueKind.Object && e.TryGetProperty("tool_input", out var input) && input.ValueKind == JsonValueKind.Object
             ? Json.Str(input, "command") : null;
+
+    // The command an approval runs, recorded only when it is the whole of what is approved: the
+    // shell's or apply_patch's tool_input holding a command and nothing else but its description,
+    // which is the agent's words about it and changes nothing that runs. The hook fires for MCP tools
+    // too, whose tool_input is the tool's own arguments: `mcp__ssh__exec {host, command}` showed only
+    // the command, and Approve once ran it on a host nobody saw (#338). Anything else records none,
+    // and its approval is held at the machine (QuestionMapper.CodexApproval).
+    static readonly HashSet<string> CommandTools = new(["Bash", "shell", "apply_patch"], StringComparer.Ordinal);
+    static readonly HashSet<string> CommandKeys = new(["command", "description"], StringComparer.Ordinal);
+
+    static string? ApprovedCommand(JsonElement e)
+    {
+        if (e.ValueKind != JsonValueKind.Object || Str(e, "tool_name") is not { } tool || !CommandTools.Contains(tool)) { return null; }
+        if (!e.TryGetProperty("tool_input", out var input) || input.ValueKind != JsonValueKind.Object) { return null; }
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var p in input.EnumerateObject())
+        {
+            // A repeated or unknown key is something else in what runs.
+            if (!CommandKeys.Contains(p.Name) || !names.Add(p.Name)) { return null; }
+        }
+        // A description is the agent's words, except where Codex writes its own: a network approval
+        // comes as Bash with `description: "network-access <target>"`
+        // (PermissionRequestPayload::bash(cmd, Some(format!("network-access {target}")))), and the
+        // person approves access to that target, which a card showing the command alone hid (#338).
+        if (input.TryGetProperty("description", out var d) && (d.ValueKind != JsonValueKind.String || NetworkAccess(d.GetString()!))) { return null; }
+        return input.TryGetProperty("command", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
+    }
+
+    // "network-access ..." however Codex or an older or newer build may write it: any case, any
+    // leading space, a hyphen, an underscore or a space between the words, then anything or nothing.
+    internal static bool NetworkAccess(string description) =>
+        NetworkAccessPrefix().IsMatch(description);
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^\s*network[-_\s]?access(?:\s|:|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex NetworkAccessPrefix();
 
     static string Cut(string text, int max) => text.Length > max ? text[..(max - 3)] + "..." : text;
 

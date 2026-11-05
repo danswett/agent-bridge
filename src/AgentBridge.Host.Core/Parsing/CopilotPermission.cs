@@ -199,7 +199,7 @@ public static partial class CopilotPermission
 
     // A code block that the text cannot close early: its fence is longer than any run of
     // backticks inside.
-    static string Fence(string text, string language = "")
+    internal static string Fence(string text, string language = "")
     {
         var longest = 0;
         var run = 0;
@@ -214,7 +214,7 @@ public static partial class CopilotPermission
 
     // A name inside **bold**: one line of it, literal (Literal). Hidden characters are shown
     // escaped first, so collapsing the name to one line cannot drop them.
-    static string Plain(string text) => Literal(Text.OneLine(ShownText.Reveal(text, rightToLeft: true))) ?? "";
+    internal static string Plain(string text) => Literal(Text.OneLine(ShownText.Reveal(text, rightToLeft: true))) ?? "";
 
     // The agent's own words (an intention, a tool's title or description) drawn as the words they
     // are, never as Markdown (#212). Joined in as they were, an intention holding a line that
@@ -226,7 +226,7 @@ public static partial class CopilotPermission
     // where it would start a block (a heading, a quote, a list, a rule or a setext underline), and
     // a line's leading whitespace, which would make it indented code, is dropped. What is left is
     // paragraphs of text.
-    static string? Literal(string? text)
+    internal static string? Literal(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) { return null; }
         var b = new StringBuilder(text.Length + 16);

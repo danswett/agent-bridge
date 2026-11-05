@@ -195,15 +195,14 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                 {
                     var id = Json.Str(p, "call_id");
                     if (id is null) { break; }
-                    var command = ToolSummary.From(p) ?? "a command";
-                    Approve(id, $"Run `{command}`?", Json.Str(p, "reason"), at);
+                    Approve(id, "Allow **Codex** to run a command?", Json.Str(p, "reason"), ToolSummary.From(p), at);
                     break;
                 }
             case "apply_patch_approval_request":
                 {
                     var id = Json.Str(p, "call_id");
                     if (id is null) { break; }
-                    Approve(id, $"Apply changes to {Files(p) ?? "files"}?", Json.Str(p, "reason"), at);
+                    Approve(id, "Allow **Codex** to change files?", Json.Str(p, "reason"), Files(p), at);
                     break;
                 }
             case "item_completed" when Json.Obj(p, "item") is { } item:
@@ -461,12 +460,14 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         S.Activity(at);
     }
 
-    void Approve(string id, string message, string? reason, DateTimeOffset? at)
+    void Approve(string id, string ask, string? reason, string? subject, DateTimeOffset? at)
     {
         // Answered only at the machine: what agent-ha-bridge answers is the approval its
         // hook recorded (the marker, which SessionTracker prefers), since only that has a
         // generation to check before typing. A request seen only in the rollout has none.
-        S.Ask(QuestionMapper.Approval(id, string.IsNullOrWhiteSpace(reason) ? message : $"{message}\n\n{reason}", Now(at), atMachine: true));
+        // Codex's reason is its own words, literal; the command or files are code (#209).
+        var parts = new[] { ask, CopilotPermission.Literal(reason), subject is { Length: > 0 } s ? CopilotPermission.Fence(s) : null };
+        S.Ask(QuestionMapper.Approval(id, string.Join("\n\n", parts.Where(x => !string.IsNullOrWhiteSpace(x))), Now(at), atMachine: true));
     }
 
     static string? Files(JsonElement p) =>

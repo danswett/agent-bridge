@@ -134,7 +134,7 @@ internal sealed class SessionTracker
                     // A permission prompt, which agent-ha-bridge's Notification hook reports
                     // and only mirrors: it offers the reply box at best, never a proven
                     // answer, so it is answered at the machine.
-                    question = QuestionMapper.Approval(tool.Id, tool.Summary is null ? $"Allow **{tool.Name}**?" : $"Allow **{tool.Name}**?\n\n`{tool.Summary}`", hookAt, atMachine: true);
+                    question = QuestionMapper.Approval(tool.Id, tool.Summary is null ? $"Allow **{CopilotPermission.Plain(tool.Name)}**?" : $"Allow **{CopilotPermission.Plain(tool.Name)}**?\n\n{CopilotPermission.Fence(tool.Summary)}", hookAt, atMachine: true);
                     hintAt = hookAt;
                     break;
             }
@@ -147,7 +147,7 @@ internal sealed class SessionTracker
             // already typed into is never typed into again, so it is answered at the machine.
             if (reg.Approval is { } marker && (question is null || question.Kind == QuestionKind.Approval))
             {
-                question = QuestionMapper.Approval(marker.DecisionId, marker.Question, marker.Created ?? reg.Updated ?? now, atMachine: marker.Attempted);
+                question = QuestionMapper.CodexApproval(marker.DecisionId, marker.Tool, marker.Command, marker.CommandCut, marker.Question, marker.Created ?? reg.Updated ?? now, atMachine: marker.Attempted);
                 hintAt = question.AskedAt;
             }
             // Codex's hooks report status directly, at UserPromptSubmit and Stop.

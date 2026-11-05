@@ -37,6 +37,32 @@ internal static class QuestionMapper
         };
     }
 
+    // A Codex approval from its hook's marker (#209): the whole command, literal, in a fence longer
+    // than any run of backticks inside it, under the tool that asked. A marker that does not carry
+    // the whole command (agent-ha-bridge's hook and older hosts wrote only a 300-character preview,
+    // and a command past the hook's CommandMax is kept to its start) is truncated, so no client
+    // approves what it cannot show; one with no command at all (a tool that runs none) shows the
+    // tool and is answered at the machine.
+    public static Question CodexApproval(string id, string? tool, string? command, bool cut, string preview, DateTimeOffset askedAt, bool atMachine)
+    {
+        var who = $"Allow **{CopilotPermission.Plain(string.IsNullOrWhiteSpace(tool) ? "Codex" : tool)}**?";
+        if (command is not { Length: > 0 })
+        {
+            var legacy = preview.StartsWith("Needs approval: ", StringComparison.Ordinal) ? preview["Needs approval: ".Length..] : preview;
+            var held = Approval(id, legacy.Length > 0 ? $"{who}\n\n{CopilotPermission.Fence(legacy)}" : who, askedAt, atMachine);
+            return tool is null && command is null ? held with { Truncated = true } : held with { AnswerAtMachine = true };
+        }
+        var q = Approval(id, $"{who}\n\n{CopilotPermission.Fence(command)}", askedAt, atMachine);
+        if (cut) { q = q with { Truncated = true }; }
+        // Whatever the command, what is sent is that shape, which every client checks before it
+        // offers Approve; one that is not would be answered nowhere else, so it is held here. One
+        // already truncated is refused for that, and is left so: cut past the message's limit, it
+        // has lost its closing fence, and held here too, a client said only that it is answered at
+        // the machine, not that part of it is missing.
+        if (q.Truncated != true && !ApprovalShape.IsFencedCommand(q.Message)) { q = q with { AnswerAtMachine = true }; }
+        return q;
+    }
+
     // Copilot's ask_user. Current builds pass `message` and `requestedSchema` (a JSON
     // Schema form); older ones passed `question` and a `choices` list, sometimes as a
     // JSON string. Without reading both, a multiple choice became a free-text box titled

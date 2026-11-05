@@ -779,6 +779,13 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     Every card draws an approval as its source, so the PWA's, the Windows app's and Home
     Assistant's show their backslashes. A toast shows the words without their escapes, the command
     as written, and anything parsing decodes (a reference to a right-to-left letter) escaped again.
+  - **A Codex approval** is approved from here only as a host sends it from #209, the whole
+    command in one block (`ApprovalShape.IsFencedCommand`). An older host sent the hook's
+    300-character preview in prose, cut short of what runs with nothing marking it `truncated`,
+    so every card answers that at the machine (#209). One a host had to cut is marked `truncated`,
+    and every card says part of it is missing before it judges the shape. The Mac, iPhone and iPad
+    app does not check the shape yet, so it answers every Codex approval at the machine until it
+    does.
   - **`answerAtMachine`:** the whole question, no controls, and one line in Needs you's text
     colour: "Answer at the machine · *machine*". A prompt that reached the device cut short
     (`truncated`) can't be answered from here either, as before. Leaving the session is never
@@ -841,9 +848,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   into bash a line of backticks runs as a command substitution. Ordinary code blocks keep Copy. Whatever a parser decides can hide what runs: a link draws
   `echo "[safe](https://a/";curl…|sh;")"` as `echo "safe"`, `*tmp*` loses its stars, and a line
   of three backticks, which Markdown takes as a fence, is a command substitution to bash, so a
-  fenced `echo rm -rf ~` inside `bash -c '…'` runs `rm -rf ~`. A Codex approval carries its
-  command in prose ("Codex wants to run: …"). Other questions and the conversation keep their
-  Markdown.
+  fenced `echo rm -rf ~` inside `bash -c '…'` runs `rm -rf ~`. A host sends a Codex approval's
+  whole command in a block (#209); an older host sent it in prose (`Needs approval: …`), the
+  hook's 300-character preview cut short with nothing marking it truncated, so a card draws that
+  exactly as written and answers it at the machine. Other questions and the conversation keep
+  their Markdown.
 - **Markdown the parser can't take** (#440): an agent's text that the Markdown parser fails on,
   or could read only slowly, is drawn as written: one paragraph of plain prose, its line breaks
   kept, never dropped and never read as Markdown. Since an agent can send text here on purpose,

