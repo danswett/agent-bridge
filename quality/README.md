@@ -59,7 +59,9 @@ The gaps this plan closes:
    `dotnet test AgentBridge.slnx`.
 2. **No rings.** Every merge to `main` is a pre-release that installed apps take within
    30 minutes. So PR CI is the only gate before real machines run the code. The live and
-   VM checks run only by hand.
+   VM checks run only by hand. The clean-VM lab (§6) has an agreed contract
+   ([lab/README.md](lab/README.md)) but no run: only a provisioning draft that refuses to
+   apply exists.
 3. **No coverage, no timing history, no flake record.** #101, #129, #241 and #266 were each
    found and chased by hand.
 4. **Security is review-only.** There's no CodeQL, dependency scanning, secret scanning,
@@ -683,8 +685,14 @@ Today `build/rehearsal-azure-vmw.ps1` and `build/shadow-soak-vm.ps1` build and d
 Windows VMs well: idempotent, `az vm run-command` instead of SSH, snapshots, auto-shutdown,
 one secret DPAPI-protected. The lab generalizes them rather than replacing them.
 
-- **`quality/lab/fleet.yml`:** the machines, by role. Each image is built once, snapshotted
-  as S0, restored for every run and deallocated after.
+The contract agreed on #357 and #736 (ownership, v1 and v2 coverage, `result.json`, outcomes,
+lifecycle, evidence) and what of it exists are in [lab/README.md](lab/README.md), which wins
+where this section differs. Of the pieces below, only a draft of the provisioning step exists
+(`quality/lab/provision.ps1`), and it refuses to apply.
+
+- **`quality/lab/fleet.yml`:** the machines, by role. Each image is built once and
+  snapshotted as S0; every run makes its own disk from S0 and deletes it after. v1 needs
+  `win-x64` and native `win-arm64` only.
 
   | Role | Image | Used by |
   |---|---|---|
@@ -695,17 +703,20 @@ one secret DPAPI-protected. The lab generalizes them rather than replacing them.
   | `ha` | VM-W's role: disposable Home Assistant and Mosquitto | HA E2E and soak |
   | `perf` | A fixed-size VM kept only for benchmarks | §3.2 comparisons |
   | `macos` | See §9: hosted `macos-latest`, a self-hosted Mac mini, or EC2 Mac | macOS host and app E2E |
-- **`quality/lab/run.ps1 -Role <r> -Build <artifact> -Scenario <s>`:** restore S0, install the
-  build under test from the CI artifact, run the scenario, collect artifacts (logs,
-  transcripts, Hyperloop recordings), then deallocate. It runs from a workflow through OIDC,
-  like `relay.yml`, with a `lab` environment and its own principal scoped to
+- **`quality/lab/run.ps1 -Subscription <id> -Role <r> -Build <artifact> -Scenario <s> -Relay <staging|ppe|url>`:**
+  make the run's VM from S0, install the build under test from the CI artifact, run the
+  scenario, collect artifacts (logs, transcripts, Hyperloop recordings), then delete the VM.
+  The subscription and relay are always named, never defaulted. It runs from a workflow
+  through OIDC, like `relay.yml`, with a `lab` environment and its own principal scoped to
   `rg-agent-bridge-lab` only. Nothing in it can reach the owner's machines, Home Assistant or
   broker.
-- **Accounts:** dedicated test accounts for GitHub and each agent, with per-agent caps (the
-  soak already caps Codex). Their tokens are `lab` environment secrets, never printed, as
-  AGENTS.md requires.
-- **Cost guard:** a nightly budget alert on the resource group. Every run deallocates in a
-  `finally`, and a sweeper deallocates anything left running past 4 hours.
+- **Accounts:** for v1, the owner's GitHub account through a dedicated lab token (owner
+  decision B3, [lab/README.md §8](lab/README.md#8-outcomes-retries-and-credentials)); for v2,
+  test accounts for each agent, with per-agent caps (the soak already caps Codex). Tokens are
+  `lab` environment secrets, never printed, as AGENTS.md requires.
+- **Cost guard:** cost and age alerts on the resource group (SRE). Every run deletes its
+  resources in a `finally`, but that is best effort, so a durable sweeper deletes run-owned
+  resources past their expiry (at most 4 hours) before any run may start.
 - **iOS:** the simulator on macOS runners for XCUITest. Real-device runs are the owner's
   iPhone and a checklist (`pwa-iphone`). A device cloud only if the owner wants one (§9).
 
@@ -759,6 +770,14 @@ Each phase is a few PRs, and each PR leaves CI green and useful on its own.
 6. Threat and invariant traits, and the generated traceability table.
 
 **Phase 3: the lab and nightly (weeks 5–8)**
+
+State (2026-11-04): the lab's contract is agreed and written down
+([lab/README.md](lab/README.md)); Platform owns items 1, 2 and 4, SRE the PPE, cut and
+promotion they feed (#590, #451). Built: the nightly flake hunt (item 6, #509). Partial: a
+draft of item 1's provisioning step that refuses to apply, checked against a stand-in `az`
+(`lab-scripts`); `lab-e2e-agents` only as the shadow soak. Unbuilt: the rest of items 1–5.
+What blocks the first run is listed in [lab/README.md §10](lab/README.md#10-before-anything-runs).
+
 1. `quality/lab/`: fleet, `run.ps1` and the `lab` OIDC environment, starting from the
    rehearsal scripts. Add Linux, Arm64 and Windows 10.
 2. Simulated agents (`tests/AgentBridge.AgentSim`) and `lab-e2e-simulated` on every OS.
@@ -769,6 +788,10 @@ Each phase is a few PRs, and each PR leaves CI green and useful on its own.
    report on #357) and the selection-miss report.
 
 **Phase 4: releases (weeks 8–10)**
+
+State (2026-11-04): promotion is unbuilt. SRE owns the cut, freeze and promotion (Dev to Beta,
+#451) and PPE (#590). Lab results count toward Beta1 only as v2 ([lab/README.md §3](lab/README.md#3-coverage)).
+
 1. `dev`, `beta` and `stable` channels with promotion by digest. Migrated machines move to
    `beta` with the owner.
 2. The release-readiness report, and the iPhone and screen-reader checklists.
@@ -804,4 +827,6 @@ Each phase is a few PRs, and each PR leaves CI green and useful on its own.
    ruleset with no bypass, and sessions use auto-merge, on since 2026-11-04 00:50 PT now that the
    merge-rule App posts `merge-rule` (§4.9). Open: when each advisory gate (diff
    coverage, axe, perf) becomes required.
-6. **Lab budget.** A monthly ceiling for `rg-agent-bridge-lab`.
+6. **Lab budget.** Decided 2026-11-04 (#357 B1): $75 a month for `rg-agent-bridge-lab`, with
+   both Windows roles nightly. Execution and spend are not yet authorized
+   ([lab/README.md §10](lab/README.md#10-before-anything-runs)).

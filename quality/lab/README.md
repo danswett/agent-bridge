@@ -1,0 +1,224 @@
+# The clean-VM lab: contract and status
+
+The shared end-to-end lab of [quality/README.md §6](../README.md#6-the-lab-disposable-machines):
+clean Windows machines that install the product as a person would and drive it end to end.
+This file is its contract, written down from the agreement on #357 and #736, and an honest
+account of what of it exists. Nothing in the lab runs yet.
+
+The agreement it records:
+
+- Ownership and model: [#689 charter](https://github.com/danswett/agent-bridge/issues/689#issuecomment-6643979469).
+- The lab: [SRE's proposal](https://github.com/danswett/agent-bridge/issues/357#issuecomment-6643996552),
+  [the six accepted amendments](https://github.com/danswett/agent-bridge/issues/357#issuecomment-6644204208)
+  and [the joint ACK](https://github.com/danswett/agent-bridge/issues/357#issuecomment-6644696961).
+- Coverage: [Product's v1 and v2](https://github.com/danswett/agent-bridge/issues/736#issuecomment-6644011273).
+- The owner's decisions B1, B3 and B4: [#357](https://github.com/danswett/agent-bridge/issues/357#issuecomment-6645343882),
+  accepted by Platform [here](https://github.com/danswett/agent-bridge/issues/357#issuecomment-6646500327).
+
+Where this file and those comments disagree, the comments win and this file is fixed.
+
+## 1. What exists
+
+| Piece | State | Owner |
+|---|---|---|
+| This contract | **Written** (this file) | Platform |
+| `provision.ps1`: the resources of one run of one role | **Draft.** Plans only; `-Apply` refuses before any Azure call until §10's prerequisites are met. Never run against Azure | Platform |
+| `test-provision.ps1`: its checks against a stand-in `az` | **Written**, catalog suite `lab-scripts`, ci.yml `product`. Runs in CI only | Platform |
+| `run.ps1` (§5) | **Unbuilt**: the interface is design only | Platform |
+| `fleet.yml`, the images and their S0 snapshots | **Unbuilt** | Platform |
+| Scenarios and the simulated agent (`tests/AgentBridge.AgentSim`) | **Unbuilt** | Platform |
+| The `lab` environment, OIDC principal and reusable workflow | **Unbuilt**; nothing is scheduled or dispatchable | Platform, owner (bootstrap) |
+| The expiry sweeper (§4) | **Unbuilt**, and required before anything is created | Platform |
+| The temporary nightly cut and schedule (§6) | **Unbuilt**; no cron is enabled | Platform, until SRE's #590 replaces it |
+| PPE, cut freeze, promotion and monitoring (#590, #451) | **Pending**, not part of this folder | SRE |
+| Lab cost and age alerts (`infra/modules/monitoring.bicep`) | **Unbuilt** | SRE |
+| Dogfood's checks (#736) | Consume this same lab, never a second lab or runner | Dogfood |
+| Admission of lab evidence | Quality alone | Quality |
+
+The catalog's `lab-e2e-simulated` stays `planned` and `lab-e2e-agents` stays `partial` (the
+shadow soak, not this lab) until a scenario runs here.
+
+## 2. Ownership
+
+- **Platform** owns the fleet, images and S0 snapshots, `run.ps1`, the scenarios, the `lab`
+  environment, its OIDC principal and reusable workflow, and bounded cleanup (the sweeper).
+- **SRE** owns PPE (#590), the cut, freeze and promotion consumers (Dev to Beta, #451), and
+  the lab's cost and age alerts in `infra/modules/monitoring.bicep`.
+- **Dogfood** consumes the same lab and its results. There is never a second lab, runner or
+  set of timers.
+- **Quality** alone decides what lab evidence is admitted (quality/README.md §4.9).
+
+## 3. Coverage
+
+| | v1 | v2 |
+|---|---|---|
+| Machines | Clean Windows 11 x64, and **native** Windows 11 Arm64 | The same |
+| Agent | Simulated: real-format transcripts through the real hook | A real agent on lab accounts |
+| Steps | launch, reply, answer, stop, update, with a relay test client on the other end | v1's, plus the download page (#735), the real first run (#384), a phone-equivalent client and uninstall |
+| Bar | Recorded; results in the weekly #357 report | Under 10 minutes; for Beta1, green on 3 consecutive Beta releases |
+| Waits for | Nothing: not #735, not #384 | #735, #384 |
+
+A v1 result is never v2, real-provider or Beta1 evidence. The simulation stands in for the
+agent only: it never fakes the interactive WinUI session, session 0 or a provider. A step that
+needs an interactive desktop runs in a real signed-in desktop session on the VM, or is
+`skipped`; it is never simulated from a service.
+
+## 4. Machines and their lifecycle
+
+| Role | Size (B1's price check, westus2) | Architecture | State |
+|---|---|---|---|
+| `win-x64` | `Standard_D4s_v5` | x64 | No image or S0 yet |
+| `win-arm64` | `Standard_D4ps_v5` | Arm64, native | **Unproven**: no image, size, Trusted Launch or licence receipt (§10) |
+
+Arm64 is native Windows Arm64 only. x64 emulation and Linux are no substitute, and no Arm64
+size is assumed to run Windows until the feasibility receipt shows it in this subscription.
+
+Every run:
+
+1. Creates its OS disk from the role's S0 snapshot (`snap-lab-<x64|a64>-s0`), a NIC on the lab
+   subnet, and the VM, all named `<kind>-lab-<x64|a64>-<runId>` in `rg-agent-bridge-lab` and
+   tagged with the run and an expiry **at most 4 hours** out. Only S0 snapshots persist
+   between runs: a deallocated VM's disk still costs money.
+2. Has no public IP, no NSG of its own and no inbound from the Internet; the bootstrap's
+   subnet NSG denies it. No admin user or password is passed: the disk is a specialized copy
+   of S0, which itself holds no reusable credential.
+3. Deletes all three by exact name when it ends.
+
+Cleanup in a `finally` is **best effort only**: a cancelled or killed job never reaches it. So
+before anything is created, a **durable sweeper** must exist, independent of the run, that
+deletes expired run-owned resources by exact name from a trusted inventory of runs (never by
+listing the group or matching a pattern or tag), and forgets their lab devices (§8). Tags
+label resources; they don't make them the lab's.
+
+Restoring S0 must be proven, not assumed: a run from S0 has no previous run's device
+identity, hooks, settings or processes. That proof is part of the S0 receipt (§10).
+
+## 5. `run.ps1`: the interface (design only)
+
+```
+quality/lab/run.ps1 -Subscription <id> -Role <win-x64|win-arm64> -Build <immutable CI artifact or release>
+                    -Scenario <name> -Relay <staging|ppe|https://...> [-RunId <id>] [-Out <folder>]
+```
+
+There is no `run.ps1` yet, and nothing here pretends to be one.
+
+- `-Subscription` is required and has no default. Every Azure call names the owner-approved
+  Visual Studio Enterprise subscription; the CLI's default (a trial on this machine) never
+  decides anything.
+- `-Build` names an immutable, provenance-verified artifact of a protected CI run or a
+  release (§6), never a PR's or a dispatched run's.
+- `-Relay` is required: `staging` until PPE exists, then `ppe`. Never production, and never a
+  default.
+- `-RunId` defaults to a fresh id; `-Out` holds `result.json` (§7) and the artifacts.
+
+## 6. One cut, one nightly source
+
+Both roles of a nightly run test **one** cut: the same immutable, provenance-verified build
+from a protected CI run or release, against the same relay digest. A PR's or a dispatched
+run's artifacts are never a cut.
+
+There is one nightly source. Until SRE's #590 delivers the cut and promotion path, Platform
+may add one temporary default-branch schedule and cut resolver; #590 replaces it in one
+coordinated change, so there are never two timers or two cuts. Neither exists yet, and nothing
+is scheduled by this folder.
+
+The nominal start is 01:00 Pacific. GitHub's cron is in UTC, so a fixed `0 9 * * *` starts at
+01:00 PST and 02:00 PDT; GitHub may also start a scheduled run late. `result.json` records the
+actual UTC times, and the cut is whatever the resolver picks when the run starts.
+
+Owner decision B1 (2026-11-04, replacing the weekly Arm64 budgeted on 11-03): both roles
+nightly, Arm64 included, within $75/month. Its price check assumes about an hour a run and
+only S0 snapshots kept between runs (§4). Actual cost is unmeasured, and whether the Windows
+licence is billed is checked at bootstrap.
+
+## 7. `result.json`, schema version 1
+
+One per run per role. Fields are only ever added to version 1, never renamed or removed.
+
+| Field | Meaning |
+|---|---|
+| `schemaVersion` | `1` |
+| `runId`, `cutId` | This run, and the cut both roles test |
+| `source` | The CI run (id, attempt, workflow, protected ref) and the artifacts (name, id, digest) the build came from |
+| `build` | `version`, `channel`, `sha` and `digests` of what was installed |
+| `role`, `architecture` | `win-x64` or `win-arm64`; `x64` or `arm64` as the VM reports it |
+| `agentMode` | `simulated` (v1) or `real` (v2) |
+| `coverageVersion` | `v1` or `v2` |
+| `updatePair` | The explicit `from` and `to` (version and digest) the update step installs |
+| `relay` | `target` (`staging`, `ppe` or the URL), `digestAtStart`, `digestAtEnd` |
+| `steps` | One per step (`launch`, `reply`, `answer`, `stop`, `update`, and v2's): `name`, `outcome` (`pass`, `fail` or `skipped`), `startedAt`, `endedAt`, sanitized `detail` |
+| `outcome` | `pass`, `fail` or `invalid` (§8) |
+| `artifacts` | Paths relative to `-Out`, sanitized, with a SHA-256 each |
+| `startedAt`, `endedAt` | UTC |
+
+## 8. Outcomes, retries and credentials
+
+- `pass` only when every step of the coverage version passes. A missing update pair, or an
+  update that didn't change the installed version, is a `skipped` or failed `update` step, and
+  the run is not `pass`.
+- `invalid` when the run can't count either way: the relay digest changed during the run
+  (B5: staging churn will make this common until PPE), the VM was lost, or the build's
+  provenance didn't verify. If either role's run is `invalid`, the cut is invalid.
+- `invalid` is never admission or promotion evidence. A cut gets at most one retry, after a
+  diagnosis, under a new run id; the original result is kept.
+- Accounts (owner decision B3): the owner's own GitHub account through a dedicated,
+  fine-grained lab token held only as a `lab` environment secret, never the interactive
+  sign-in; the relay pinned to staging or PPE. Devices are named `lab-<role>-<runId>`, a label
+  and not an authorization. Each run signs out and forgets its devices, and the sweeper
+  forgets those of crashed runs. Only the relay is shared: the lab has no path to the owner's
+  machines, Home Assistant or broker. Real agent accounts are v2 only.
+- PPE (owner decision B4) also serves the owner's Beta machines, so it is not disposable: the
+  lab consumes an immutable cut there and never rolls PPE or touches a Beta machine.
+
+## 9. Evidence: access, retention and redaction
+
+Recordings and raw logs are **not public**. The repository is public, and so are its workflow
+artifacts, so they are never uploaded as workflow artifacts. Proposed here, for Quality's and
+SRE's review, and unbuilt:
+
+- **Public:** `result.json` (§7) and the weekly #357 summary, which carry no recording, raw log,
+  account, token, IP, host name beyond `lab-<role>-<runId>`, or private path.
+- **Private:** recordings and raw logs in a private container in `rg-agent-bridge-lab`, with no
+  anonymous access, read by the owner, Platform and SRE.
+- **Retention:** 14 days for a `pass`, 30 for a `fail` or `invalid`, then deleted by policy. A
+  Beta1 record keeps `result.json` and the artifacts' digests, not the recordings.
+- **Redaction:** recording starts after sign-in and never shows a sign-in, token, device code
+  or account. Logs have tokens, account names, IP addresses and user-profile paths replaced
+  before they are written to `-Out`.
+
+## 10. Before anything runs
+
+Each item blocks execution, not this draft. `provision.ps1 -Apply` lists the ones it needs and
+refuses while any is unmet; each is marked met only by the reviewed change that delivers its
+receipt.
+
+| Item | State | Owner |
+|---|---|---|
+| Owner authorization to execute and spend | **Absent**. Accepting the contract and this draft authorized neither | owner |
+| Cadence and budget (B1) | **Decided**: nightly, both roles, $75/month. Cost unmeasured | owner |
+| Native Windows Arm64: image, size, Trusted Launch, licence billing in this subscription | **Unproven** | Platform, owner |
+| Bootstrap (B2): `rg-agent-bridge-lab`, its network, the `lab` environment, an OIDC principal scoped to that group only, a subscription receipt | **Absent** | owner, Platform |
+| S0 snapshots per role, with the restore proof (§4) | **Absent** | Platform |
+| Durable expiry sweeper (§4) | **Absent** | Platform |
+| Cost and age alerts | **Absent** | SRE |
+| Lab token as a `lab` secret, and proof the credential, relay and device guards hold (B3) | **Absent**, unverified | owner, Platform |
+| PPE: population, keys, DNS, deploy (B4, #590) | **Pending**; staging until then | SRE, owner |
+| Relay churn (B5) | **Open**: makes runs `invalid` | SRE |
+
+## 11. The provisioning draft
+
+```
+pwsh quality/lab/provision.ps1 -Subscription <id> -Role win-arm64 -RunId <id> | ConvertTo-Json -Depth 5
+pwsh quality/lab/test-provision.ps1
+```
+
+`provision.ps1` returns the plan for one run of one role: the three creates and three deletes
+it would run, every one naming the subscription, the group and a run-owned name, and the
+prerequisites still unmet. Planning calls nothing in Azure. It never creates or changes a
+resource group, network, identity, role assignment, public IP, NSG or credential, and it
+holds no subscription id or account of its own.
+
+`test-provision.ps1` checks that against a stand-in `az`: planning makes no call; every
+command stays in scope; expiry is at most 4 hours; `win-arm64` is native; a missing, default
+or placeholder subscription, an unknown role and a malformed run id are refused; and `-Apply`
+refuses before any Azure call, listing what's missing.

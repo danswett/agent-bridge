@@ -363,6 +363,11 @@ jobs:
         if: runner.os == 'Windows' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'build-scripts'))
         shell: pwsh
         run: pwsh -NoProfile -File build/test-publish-prerelease.ps1
+      - name: The lab's provisioning draft plans only run-owned resources and refuses to apply
+        # Against a stand-in for az: nothing reaches Azure.
+        if: runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-scripts'))
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/lab/test-provision.ps1
       - name: The NativeAOT hook replies and spools as an agent runs it
         # The hook every agent waits on, as it ships: NativeAOT, started fresh for each event.
         if: runner.os == 'Windows' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'hook-aot'))
