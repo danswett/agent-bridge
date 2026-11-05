@@ -293,6 +293,18 @@ test('a session row is named for the words it draws, in the order drawn, then fo
   await expect(named(COPILOT)).toHaveAccessibleName(/^Plan Migration to Windows App, Waiting on you, Demo machine, \d+d ago$/);
 });
 
+// Rules 10-12 over rule 7 (#800): the row draws what is wrong, not "Driven by an agent", so its
+// name starts with that too, and says it is driven only after its age (A1).
+test('a driven session that needs sign-in or is not responding is named for the status its row draws, with its driver after its age', async ({ page }) => {
+  await openDemo(page, '&signin=1');
+  const named = (id) => row(page, id).locator('.row-main');
+  await upsert(page, 'signin-1', { driver: 'agent', driverPrincipal: 'homeassistant:demo' });
+  await expect(row(page, 'signin-1').locator('.row-status')).toHaveText('Needs sign-in');
+  await expect(named('signin-1')).toHaveAccessibleName(/^Coordinate the Shiproom, Needs sign-in, danswett\/agent-bridge, [^,]+, Copilot · @demo-user, driven by an agent, Demo machine$/);
+  await expect(row(page, 'stalled').locator('.row-status')).toHaveText('Not responding');
+  await expect(named('stalled')).toHaveAccessibleName(/^Re-run the flaky suite, Not responding, [^,]+, since [^,]+, driven by an agent, Demo machine$/);
+});
+
 test('the latest response is rendered as Markdown', async ({ page }) => {
   await openDemo(page);
   const response = card(page, COPILOT).locator('.response');

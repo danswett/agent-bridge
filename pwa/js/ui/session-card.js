@@ -674,10 +674,11 @@ export class SessionCard {
     // The row.
     e.rowTitle.textContent = title;
     setGlyph(e.rowGlyph, words.glyph, { size: 16, driven: words.driven, label: statusLabel(words, { title: s.title, machine: this.machineName }) });
+    // Rule 7 on a row: "Driven by an agent" in agent colour, in place of the status words; not over
+    // rules 10-12 (#800), which say what is wrong. The glyph keeps the driven badge either way.
+    const drivenDrawn = words.driven && !ATTENTION_RULES.has(words.rule);
     if (this.#changed('row', [words.text, words.tone, words.driven, words.rule, s.driverPrincipal, where, s.repository, this.labelled ? this.machineName : null])) {
-      // Rule 7 on a row: "Driven by an agent" in agent colour, in place of the status words; not over
-      // rules 10-12 (#800), which say what is wrong. The glyph keeps the driven badge either way.
-      const status = words.driven && !ATTENTION_RULES.has(words.rule)
+      const status = drivenDrawn
         ? h('span', { class: 'row-status driver', dataset: { tone: 'agent' }, title: s.driverPrincipal ?? null }, 'Driven by an agent')
         : h('span', { class: 'row-status', dataset: { tone: words.tone } }, words.facts[0]);
       setFacts(e.rowFacts, [status, this.labelled && this.machineName ? h('span', { class: 'machine-label' }, this.machineName) : whereView()]);
@@ -685,11 +686,18 @@ export class SessionCard {
     // The row's name (ui.md §9.1 A1, #365) starts with the words it draws, in the order drawn:
     // its title, its second line's facts, then its age (#nameRow). What else §9.2's name holds
     // follows, so nothing it said before goes unsaid: the status's later facts, or all of it
-    // under "Driven by an agent", and its machine while the row doesn't show it. A status fact
-    // can carry a delegate's name, read without its commas there, as in the glyph's name (§9.2).
+    // under "Driven by an agent", the driver under a rule 10-12 status drawn in its place, and
+    // its machine while the row doesn't show it. Both halves key off drivenDrawn, as the row
+    // does, or a driven row needing sign-in reads "Driven by an agent" over "Needs sign-in".
+    // A status fact can carry a delegate's name, read without its commas there, as in the
+    // glyph's name (§9.2).
     this.#rowName = {
-      drawn: [title, words.driven ? 'Driven by an agent' : aloud(words.facts[0]), this.labelled && this.machineName ? this.machineName : where],
-      unsaid: [words.driven ? words.spoken : words.facts.slice(1).map(aloud).join(' \u00b7 '), this.labelled ? null : this.machineName],
+      drawn: [title, drivenDrawn ? 'Driven by an agent' : aloud(words.facts[0]), this.labelled && this.machineName ? this.machineName : where],
+      unsaid: [
+        drivenDrawn ? words.spoken : words.facts.slice(1).map(aloud).join(' \u00b7 '),
+        words.driven && !drivenDrawn ? 'driven by an agent' : null,
+        this.labelled ? null : this.machineName,
+      ],
     };
 
     // The header: one meta line, glyph · status · machine · repository.
