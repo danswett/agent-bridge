@@ -11,8 +11,10 @@ Home Assistant.
 > **The name.** The product is called Slipgates ([brand](docs/design/brand.md)). The
 > repository (`danswett/agent-bridge`), project and namespace names (`AgentBridge.*`),
 > commands (`agent-bridge-host`), install paths, environment variables and the web app's
-> address keep the legacy name until [#541](https://github.com/danswett/agent-bridge/issues/541) migrates them
-> ([what stays](docs/design/brand.md#33-never-renamed-by-the-brand)).
+> address are legacy names, kept until Phase 3
+> ([#541](https://github.com/danswett/agent-bridge/issues/541)) migrates them
+> ([what stays](docs/design/brand.md#33-never-renamed-by-the-brand)). The protocol's name,
+> Bridge Protocol v1, is also a legacy name kept until Phase 3.
 
 > **Status: in use on a first migrated machine (2026-11-01).** The host, Windows app, phone
 > PWA and relay are built to parity with agent-ha-bridge, and machines are moving over
@@ -39,7 +41,8 @@ standing.
   options.
 * **Phone**: the Slipgates web app (a PWA) first, native apps later.
 
-The protocol between them is specified in [docs/protocol](docs/protocol/v1-sessions.md).
+Slipgates' protocol (Bridge Protocol v1) connects them, and is specified in
+[docs/protocol](docs/protocol/v1-sessions.md).
 
 ## Product code so far
 

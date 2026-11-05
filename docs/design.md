@@ -11,8 +11,11 @@
 >
 > **The name.** The product was renamed from Agent Bridge to Slipgates on 2026-11-03
 > ([brand.md](design/brand.md)). This page uses the new name for the product and its parts.
-> Code identifiers, commands, paths, the repository slug and other legacy names keep
-> `agent-bridge` / `AgentBridge` until #541 ([brand.md §3.3](design/brand.md#33-never-renamed-by-the-brand)).
+> Code identifiers, commands, paths, the repository slug and other legacy names keep their
+> names until Phase 3, #541 ([brand.md §3.3](design/brand.md#33-never-renamed-by-the-brand)).
+> The protocol's name, Bridge Protocol v1, is also a legacy name kept until Phase 3 (§4). The
+> "Agent Bridge" OAuth app and "Agent Bridge (dev)" GitHub App keep the names GitHub shows,
+> and change here when the owner renames the Apps.
 
 ## 0. Summary
 
@@ -198,6 +201,8 @@ A scheduled task at logon (Windows), a LaunchAgent (macOS) or a systemd user ser
 ---
 
 ## 4. Bridge Protocol v1
+
+This is Slipgates' protocol. Bridge Protocol v1 is its legacy name, kept until Phase 3 (#541).
 
 A single protocol is used by app↔host, phone↔host and host↔host traffic, on every
 transport. It replaces MQTT discovery, retained topics, `/api/states` polling,
