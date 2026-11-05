@@ -54,6 +54,40 @@ public sealed class RosterStateTests
     }
 
     [Fact]
+    public void A_rename_by_a_device_on_probation_or_held_stays_pending_until_its_hold_ends()
+    {
+        var w = new World();
+        w.Genesis();
+        w.Add("+A", "G", "A", "G");
+        w.Add("+C", "A", "C", "+A");
+        w.Rename("nA", "A", "+A", "+C", "G");
+        w.Rename("nC", "C", "+C", "nA", "Kitchen laptop");
+        var v = w.Verifier();
+        Assert.Equal("A", v.Name(w.Id("A")));
+        Assert.Equal("G", v.PendingName(w.Id("A")));
+        Assert.Equal("C", v.Name(w.Id("C")));
+        Assert.Equal("G", v.State.Name(w.Id("A")));
+        w.Now = Later;
+        Assert.Equal("G", v.Name(w.Id("A")));
+        Assert.Equal("Kitchen laptop", v.Name(w.Id("C")));
+        Assert.Null(v.PendingName(w.Id("A")));
+    }
+
+    [Fact]
+    public void A_trusted_approvers_rename_of_a_device_on_probation_applies_at_once_as_does_one_after_its_confirm()
+    {
+        var w = new World();
+        w.Genesis();
+        w.Add("+A", "G", "A", "G");
+        w.Rename("gA", "G", "+A", "+A", "Desk Mac");
+        Assert.Equal("Desk Mac", w.Verifier().Name(w.Id("A")));
+        w.Rename("nA", "A", "+A", "gA", "Travel Mac");
+        Assert.Equal("Desk Mac", w.Verifier().Name(w.Id("A")));
+        w.Confirm("cA", "G", "+A", "nA");
+        Assert.Equal("Travel Mac", w.Verifier().Name(w.Id("A")));
+    }
+
+    [Fact]
     public void A_probationary_devices_removal_of_a_junior_device_applies_at_once()
     {
         var w = new World();

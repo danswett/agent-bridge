@@ -530,6 +530,20 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
         return false;
     }
 
+    // A device's name as this verifier shows it. A rename signed by a device on probation, or by
+    // a held device, stays pending until that hold ends (decided by A, Trust lead, 2026-11-04): a
+    // device not yet trusted must not change how approvers see it, by renaming itself to look
+    // like a device they already know, say. Kept even where the name rules would catch that, as
+    // defence in depth.
+    public string? Name(string id)
+    {
+        var held = Held;
+        return State.Name(id, r => OnProbation(_g[r].Signer) || held.Contains(_g[_g[r].Signer].DeviceId!));
+    }
+
+    // The name a pending rename would give the device once its signer's hold ends, if any.
+    public string? PendingName(string id) => State.Name(id) is { } named && named != Name(id) ? named : null;
+
     // The devices a host serves: active and not held.
     public IReadOnlyDictionary<string, int> Serving
     {

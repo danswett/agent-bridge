@@ -57,6 +57,18 @@ public sealed class RosterStateVectorTests
                 return w;
             },
             w => [.. All(w), new Step(Hours: 71), new Step(Hours: 73)]);
+        yield return new("held-rename", "a rename by a device on probation, or a held one, is pending until the hold ends",
+            () =>
+            {
+                var w = new World();
+                w.Genesis();
+                w.Add("+A", "G", "A", "G");
+                w.Add("+C", "A", "C", "+A");
+                w.Rename("nA", "A", "+A", "+C", "G");
+                w.Rename("nC", "C", "+C", "nA", "Kitchen laptop");
+                return w;
+            },
+            w => [.. All(w), new Step(Hours: 0), new Step(Hours: 73)]);
         yield return new("ninth-rename", "the ninth rename of one add is refused",
             () =>
             {
@@ -80,8 +92,9 @@ public sealed class RosterStateVectorTests
             {
                 ["add"] = labels[Codec.Base64Url(v.Graph[add].Hash)],
                 ["confirmed"] = s.IsConfirmed(add),
-                ["name"] = s.Name(id),
+                ["name"] = v.Name(id),
             };
+            if (v.PendingName(id) is { } pending) { active[w.NameOf(id)]!["pending"] = pending; }
         }
         string[] Where(Func<int, bool> pick) =>
             [.. Enumerable.Range(0, v.Graph.Count).Where(pick).Select(i => labels[Codec.Base64Url(v.Graph[i].Hash)]).Order(StringComparer.Ordinal)];
@@ -131,6 +144,7 @@ public sealed class RosterStateVectorTests
             else
             {
                 o["serving"] = new JsonArray([.. w.Serving(v).Select(n => (JsonNode)n)]);
+                o["names"] = new JsonObject([.. v.State.Active.Keys.Select(id => KeyValuePair.Create(w.NameOf(id), (JsonNode?)v.Name(id))).OrderBy(p => p.Key, StringComparer.Ordinal)]);
             }
             outSteps.Add(o);
         }
@@ -151,7 +165,7 @@ public sealed class RosterStateVectorTests
 
     static JsonObject Generate() => new()
     {
-        ["about"] = "The device roster's acceptance rule and state (#55 R1b): each scenario's entries offered in order, each step's verdict (accepted, quarantined, duplicate or refused) and refusal code, and the state the verifier then applies. Steps with hours move the verifier's running-time clock first; a step with only hours records who is served then; a step with adopt adopts that head locally. Every entry is in entries, by label, whether or not a step offers it.",
+        ["about"] = "The device roster's acceptance rule and state (#55 R1b): each scenario's entries offered in order, each step's verdict (accepted, quarantined, duplicate or refused) and refusal code, and the state the verifier then applies. Steps with hours move the verifier's running-time clock first; a step with only hours records who is served then and the names shown; a name is what the verifier shows, with a rename by a device on probation or held left pending; a step with adopt adopts that head locally. Every entry is in entries, by label, whether or not a step offers it.",
         ["spec"] = "devices.md",
         ["generatedBy"] = "tests/AgentBridge.Roster.Tests/RosterStateVectorTests.cs",
         ["account"] = Account,

@@ -12,6 +12,7 @@ public sealed class RosterState
     readonly Dictionary<string, int> _active = new(StringComparer.Ordinal);
     readonly HashSet<int> _confirmed = [];
     readonly Dictionary<string, string> _names = new(StringComparer.Ordinal);
+    readonly Dictionary<string, List<int>> _renames = new(StringComparer.Ordinal);
     readonly HashSet<string> _renamedConcurrently = new(StringComparer.Ordinal);
     readonly HashSet<string> _conflicted = new(StringComparer.Ordinal);
     readonly Dictionary<int, int> _subordinateTo = [];
@@ -155,11 +156,29 @@ public sealed class RosterState
         {
             var target = group.Key;
             if (g[target].DeviceId is not { } id || !_active.TryGetValue(id, out var a) || a != target) { continue; }
-            var latest = group.Where(x => !group.Any(y => y != x && g.IsAncestor(x, y))).ToList();
-            var pick = latest.OrderBy(x => g[x].Hash, Ids.HeadOrder).First();
-            _names[id] = g[pick].Body.Name!;
-            if (latest.Count > 1) { _renamedConcurrently.Add(id); }
+            _renames[id] = [.. group];
+            if (Latest(group.ToList(), _ => false) is { } named)
+            {
+                _names[id] = g[named.Pick].Body.Name!;
+                if (named.Concurrent) { _renamedConcurrently.Add(id); }
+            }
         }
+    }
+
+    (int Pick, bool Concurrent)? Latest(List<int> renames, Func<int, bool> pending)
+    {
+        var applied = renames.Where(x => !pending(x)).ToList();
+        var latest = applied.Where(x => !applied.Any(y => y != x && _g.IsAncestor(x, y))).ToList();
+        if (latest.Count == 0) { return null; }
+        return (latest.OrderBy(x => _g[x].Hash, Ids.HeadOrder).First(), latest.Count > 1);
+    }
+
+    // An active device's name with some renames left pending: the latest of the others, or the
+    // name it was enrolled with.
+    internal string? Name(string id, Func<int, bool> pending)
+    {
+        if (!_renames.TryGetValue(id, out var renames)) { return Device(id)?.Name; }
+        return Latest(renames, pending) is { } named ? _g[named.Pick].Body.Name : Device(id)?.Name;
     }
 
     static void Append(Dictionary<int, List<int>> map, int key, int value)
