@@ -116,13 +116,70 @@ public static class Registrations
     // registers: { "description", "hooks": { "<event>": [ { hooks: [ { type, command, timeout }
     // ] } ] } }. Codex runs the command unquoted (a quoted path fails), so a hook whose path has
     // a space cannot be registered at all, and agent-ha-bridge's stays.
-    public static FilePlan Codex(AgentHaBridgeInstall install, string hook)
+    public static FilePlan Codex(AgentHaBridgeInstall install, string hook) => Codex(install, hook, "codex", install.CodexHooksFile);
+
+    // Codex's own copies of that plugin, which are what it runs (#123): each version's hooks.json
+    // under its plugin cache, re-pointed as the source is, entry by exact entry, and snapshotted
+    // and restored with the rest. Every version folder is planned, since which one Codex loads is
+    // Codex's to choose; one with none of this installation's entries is left as it is. The cache
+    // is plain folders and files Codex writes itself, so a symbolic link or junction anywhere on
+    // the way to it, codexHome included, refuses the migration rather than be followed out of it.
+    public static IReadOnlyList<FilePlan> CodexCache(AgentHaBridgeInstall install, string hook)
     {
-        var plan = Plan("codex", install.CodexHooksFile, root =>
+        var plans = new List<FilePlan>();
+        FilePlan Refused(string path) => new("codex-cache", path, true, [], null, [], [])
+        {
+            Refusal = $"{path}, on the way to Codex's plugin cache, is a symbolic link or junction, which Codex does not make; it is not followed. Make it a plain folder or file (or delete agent-ha-bridge's cache folder, {install.CodexPluginCache}, and let Codex copy the plugin again) and migrate again",
+        };
+        // From the filesystem root down to codexHome, wherever it is (inside the home or a custom
+        // one outside it), then the cache folders below it: a linked .codex, or any linked folder
+        // above it, carries every path below out of the cache, though each still looks contained
+        // by name. Checked before anything below is enumerated or planned.
+        var cache = install.CodexPluginCache;
+        // No cache of agent-ha-bridge's plugin (Codex has not loaded it) leaves nothing to re-point,
+        // linked folders or not.
+        if (!Directory.Exists(cache)) { return plans; }
+        if (FirstLink(cache) is { } linked) { return [Refused(linked)]; }
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(cache)) + Path.DirectorySeparatorChar;
+        foreach (var version in new DirectoryInfo(cache).EnumerateDirectories().OrderBy(d => d.Name, StringComparer.Ordinal))
+        {
+            if (version.Attributes.HasFlag(FileAttributes.ReparsePoint)) { return [Refused(version.FullName)]; }
+            var file = new FileInfo(Path.Combine(version.FullName, "hooks.json"));
+            if (!Path.GetFullPath(file.FullName).StartsWith(root, PathCase)) { continue; }
+            if (!file.Exists) { continue; }
+            if (file.Attributes.HasFlag(FileAttributes.ReparsePoint)) { return [Refused(file.FullName)]; }
+            var plan = Codex(install, hook, $"codex-cache-{version.Name}", file.FullName);
+            if (plan.Refusal is not null) { return [plan]; }
+            if (plan.Changes.Count > 0 || plan.KeptGoHook) { plans.Add(plan); }
+        }
+        return plans;
+    }
+
+    // The first symbolic link or junction on the way to path, from the filesystem root down to
+    // path itself; null when there is none, or the way stops at something that does not exist.
+    // Codex's cache is checked with it when planning and again before a rollback writes to it.
+    public static string? FirstLink(string path)
+    {
+        var way = new List<string>();
+        for (var at = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)); at is not null; at = Path.GetDirectoryName(at)) { way.Insert(0, at); }
+        foreach (var step in way)
+        {
+            FileAttributes attributes;
+            // Not followed: a link's own attributes, dangling or not.
+            try { attributes = File.GetAttributes(step); }
+            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return null; }
+            if (attributes.HasFlag(FileAttributes.ReparsePoint)) { return step; }
+        }
+        return null;
+    }
+
+    static FilePlan Codex(AgentHaBridgeInstall install, string hook, string role, string path)
+    {
+        var plan = Plan(role, path, root =>
         {
             var changes = new List<EntryChange>();
             if (hook.Any(char.IsWhiteSpace) || root["hooks"] is not JsonObject hooks) { return changes; }
-            var native = $"{install.GoHook} codex hook {install.CodexHookScript}";
+            var native = CodexNative(install);
             var pwsh = CodexPowerShell(install);
             foreach (var (eventName, list) in hooks)
             {
@@ -148,13 +205,17 @@ public static class Registrations
             // Left alone, an entry that runs agent-ha-bridge's PowerShell directly would go on
             // writing registrations and approval markers (and to Home Assistant) beside the host.
             // Only the Go hook's entries hand their events to whoever takes the spool.
-            if (CodexRunsPowerShell(install))
+            if (CodexRuns(install, path, CodexPowerShell(install)))
             {
                 return plan with
                 {
-                    Refusal = $"Codex runs agent-ha-bridge's PowerShell hook directly ({install.CodexHooksFile}), and cannot run this product's hook from a path with a space ({hook}), so it would go on running beside the host. Install the app where its path has no space, or let agent-ha-bridge register Codex through its native hook, and migrate again",
+                    Refusal = $"Codex runs agent-ha-bridge's PowerShell hook directly ({path}), and cannot run this product's hook from a path with a space ({hook}), so it would go on running beside the host. Install the app where its path has no space, or let agent-ha-bridge register Codex through its native hook, and migrate again",
                 };
             }
+            // Only a file holding this installation's own native entry keeps agent-ha-bridge's hook
+            // (and has its write time weighed against running sessions); one with only a person's
+            // hooks, or another installation's, holds nothing of this one's to keep.
+            if (!CodexRuns(install, path, CodexNative(install))) { return plan; }
             return plan with { KeptGoHook = true, Notes = [.. plan.Notes, $"Codex's hooks are left on agent-ha-bridge's: Codex cannot run a command whose path has a space ({hook}); they spool to the host while it runs and fall back to PowerShell when it does not"] };
         }
         if (plan.Changes.Count > 0)
@@ -199,15 +260,17 @@ public static class Registrations
 
     static string CodexPowerShell(AgentHaBridgeInstall install) => $"pwsh -NoProfile -ExecutionPolicy Bypass -File {install.CodexHookScript}";
 
-    static bool CodexRunsPowerShell(AgentHaBridgeInstall install)
+    static string CodexNative(AgentHaBridgeInstall install) => $"{install.GoHook} codex hook {install.CodexHookScript}";
+
+    // Whether path's Codex hooks hold an entry running exactly this command.
+    static bool CodexRuns(AgentHaBridgeInstall install, string path, string expected)
     {
         try
         {
-            if (JsonNode.Parse(Decode(File.ReadAllBytes(install.CodexHooksFile)), documentOptions: Lenient) is not JsonObject { } root || root["hooks"] is not JsonObject hooks) { return false; }
-            var pwsh = CodexPowerShell(install);
+            if (JsonNode.Parse(Decode(File.ReadAllBytes(path)), documentOptions: Lenient) is not JsonObject { } root || root["hooks"] is not JsonObject hooks) { return false; }
             return hooks.Select(e => e.Value).OfType<JsonArray>().SelectMany(g => g.OfType<JsonObject>())
                 .Select(g => g["hooks"]).OfType<JsonArray>().SelectMany(h => h.OfType<JsonObject>())
-                .Any(h => Text(h["command"]) is { } command && SameCommand(command, pwsh));
+                .Any(h => Text(h["command"]) is { } command && SameCommand(command, expected));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return false; }
     }
