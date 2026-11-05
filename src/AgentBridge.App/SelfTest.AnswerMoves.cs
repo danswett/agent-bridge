@@ -161,6 +161,41 @@ static partial class SelfTest
             }
             else { check(false, $"draws a question with Other to open ({size})"); }
 
+            // Other the CLI offers and this machine cannot send yet (#908): shown, its label
+            // unchanged, never pressable, with why under the choices and as their description.
+            card.Update(original with
+            {
+                Question = new Question
+                {
+                    Id = "self-test-other-unavailable",
+                    Kind = QuestionKind.Form,
+                    Message = "Which store should the sessions use?",
+                    AskedAt = DateTimeOffset.UtcNow,
+                    Fields = [new Field { Name = "answer", Type = FieldType.Choice, OtherUnavailable = AnswerReasons.OtherNotSendable, Options = [new Option("pg", "PostgreSQL"), new Option("sqlite", "SQLite")] }],
+                },
+            });
+            var why = AnswerReasons.Text(AnswerReasons.OtherNotSendable);
+            var unavailableShown = await Until(() => ById<ToggleButton>(view, "OtherUnavailable") is { ActualWidth: > 0 } && ById<TextBlock>(view, "OtherUnavailableNote") is { ActualWidth: > 0 }, TimeSpan.FromSeconds(5));
+            if (unavailableShown && ById<ToggleButton>(view, "OtherUnavailable") is { } unavailableOther && ById<TextBlock>(view, "OtherUnavailableNote") is { } unavailableNote)
+            {
+                var peer = new Microsoft.UI.Xaml.Automation.Peers.ToggleButtonAutomationPeer(unavailableOther);
+                var option = ById<Button>(view, "Option:pg");
+                var described = peer.GetHelpText() == why && option is not null && new Microsoft.UI.Xaml.Automation.Peers.ButtonAutomationPeer(option).GetHelpText() == why;
+                check(!unavailableOther.IsEnabled && !peer.IsEnabled() && unavailableOther.Content as string == "Other…" && unavailableNote.Text == why && described,
+                    $"shows Other the machine cannot send yet disabled, its label unchanged, with why under the choices and as their description (enabled: {unavailableOther.IsEnabled}; note: {unavailableNote.Text}; described: {described})");
+                if (view.QuestionShown is FrameworkElement unavailableForm)
+                {
+                    foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
+                    {
+                        window.RootElement.RequestedTheme = theme;
+                        await Task.Delay(300);
+                        await Picture(unavailableForm, Path.ChangeExtension(outFile, $".other-unavailable.{theme.ToString().ToLowerInvariant()}.png"));
+                    }
+                    window.RootElement.RequestedTheme = ElementTheme.Default;
+                }
+            }
+            else { check(false, $"draws a question whose Other the machine cannot send yet ({size})"); }
+
             // A second Send marks the next required field: its box stays where it was, so the
             // person's click into it isn't held. Marking it pushed the box right without the
             // question resizing, which the guard held as a move (Copilot on ced8dfb).

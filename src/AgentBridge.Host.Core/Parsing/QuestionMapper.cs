@@ -121,10 +121,16 @@ internal static class QuestionMapper
         else if (Json.Get(arguments, "requestedSchema") is { } schema)
         {
             (fields, var drivable) = SchemaForm(schema, patterns);
-            // Every Copilot option list ends in "Other (type your answer)", but words reach
-            // it only in a question that is that one list: the Down past its last option
-            // opens Other there, and in a tabbed form or a checkbox list it does not.
-            if (fields is [{ Type: FieldType.Choice } only]) { fields = [only with { AllowOther = true }]; }
+            // Every Copilot option list ends in "Other (type your answer)", and a lone list's
+            // Other takes words at the CLI, but not from here yet. In a live 1.0.105 session the
+            // Down past its last option opens Other as a label in the form ("Other (type your
+            // answer below)") and takes the words in a box of the session's own, drawn apart from
+            // the form (`Dxn`'s onExternalFreeform, `bOe` in pinnedFooterContent), above or below
+            // it by the footer's mode; the host holds keys only to the form, so it refuses the
+            // words before any key (AnswerService). The field says so rather than leave Other out:
+            // a client shows it disabled, with why (#510 review, Trust on 5c1d5147; #908). Typed
+            // blind, as agent-ha-bridge did, the words reached that box.
+            if (fields is [{ Type: FieldType.Choice } only]) { fields = [only with { OtherUnavailable = AnswerReasons.OtherNotSendable }]; }
             // A field the CLI draws as something other than its schema says, or that cannot be
             // told, is never typed into, so a client shows the question to be answered at the
             // machine rather than offer what the host would then refuse (#662).

@@ -819,7 +819,12 @@ public class CopilotPlannerTests
     [Fact]
     public void Words_through_Other_walk_up_to_the_top_then_down_past_the_last_option_and_submit_separately()
     {
-        var plan = Plan(Pick, Answer(new { pick = new { other = "none of these 🙂" } }));
+        // Planned as before, and marked as going through Other, which the host refuses before any
+        // key for now and the listing does not offer (#510 review, Trust on 5c1d5147).
+        var (form, _) = Ask(Pick);
+        var plan = CopilotPlanner.Plan(form, Answer(new { pick = new { other = "none of these 🙂" } })).Plan!;
+        Assert.True(CopilotPlanner.ThroughOther(form, plan));
+        Assert.False(CopilotPlanner.ThroughOther(form, Plan(Pick, Answer(new { pick = "b" }))));
 
         // Four options: three Ups reach the top from any row, four Downs open Other.
         Assert.Equal([(U + U + U + D + D + D + D, false), ("none of these 🙂", true)], Keys(plan));

@@ -47,6 +47,54 @@ const choice = (extra = {}) => ({
   fields: [{ name: 'answer', title: 'Database', type: 'choice', required: true, options: [{ value: 'sqlite', label: 'SQLite' }, { value: 'pg', label: 'PostgreSQL (Recommended)' }, { value: 'none', label: 'Neither' }], ...extra }],
 });
 
+// #908: Other the CLI offers and the machine can't send yet, shown disabled with why.
+const OTHER_NOT_SENDABLE = "Your own answer can't be sent from here yet. Pick an option, or answer at the machine.";
+
+test('Other the machine cannot send yet is shown disabled, its label unchanged, with why under the choices and as their description', async ({ page }, info) => {
+  await openDemo(page);
+  const q = await ask(page, choice({ required: false, otherUnavailable: 'otherNotSendable' }));
+  const other = q.locator('.choices .other-unavailable');
+  await expect(other).toHaveText('Other…');
+  await expect(other).toBeDisabled();
+  const note = q.locator('.other-unavailable-note');
+  await expect(note).toHaveText(OTHER_NOT_SENDABLE);
+  await expect(note).toHaveClass(/field-desc/);
+  // Read as the choices' description, and the disabled Other's own.
+  const described = (loc) => loc.evaluate((el) => (el.getAttribute('aria-describedby') ?? '').split(' ').map((i) => document.getElementById(i)?.textContent ?? '').join(' '));
+  expect(await described(q.locator('.choices'))).toBe(OTHER_NOT_SENDABLE);
+  expect(await described(other)).toBe(OTHER_NOT_SENDABLE);
+  // No box to type in, and the options still answer on a tap.
+  await expect(q.locator('.other-box')).toHaveCount(0);
+  await expect(q.locator('.choice[data-value="sqlite"]')).toBeEnabled();
+  // The acceptance captures, light and dark. WebKit's screenshot adds an inline style of
+  // Playwright's own, which the page's CSP reports: the page's own reports are kept around it.
+  const reported = await page.evaluate(() => [...window.__cspViolations]);
+  // Tall enough that the reply box under the conversation covers none of the question.
+  await page.setViewportSize({ width: 900, height: 1600 });
+  await q.locator('.other-unavailable-note').scrollIntoViewIfNeeded();
+  for (const colorScheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme });
+    await page.waitForTimeout(150);
+    await page.screenshot({ path: info.outputPath(`other-unavailable-${colorScheme}.png`), caret: 'initial', clip: await q.boundingBox() });
+  }
+  await page.evaluate((r) => { window.__cspViolations = r; }, reported);
+  await page.emulateMedia({ colorScheme: null });
+  await q.locator('.choice[data-value="sqlite"]').click();
+  await expect.poll(() => log(page)).toHaveLength(1);
+});
+
+test('a refusal for Other the machine cannot send yet is said in the same words, after Not sent', async ({ page }) => {
+  await openDemo(page);
+  const q = await ask(page, choice({ required: false, allowOther: true }));
+  await script(page, { outcome: 'refused', reason: OTHER_NOT_SENDABLE, code: 'otherNotSendable' });
+  await q.locator('.other-toggle').click();
+  await q.locator('.other-box textarea').fill('DuckDB');
+  await q.locator('button.send').click();
+  await expect(q.locator('.answer-status')).toHaveText(`Not sent · ${OTHER_NOT_SENDABLE}`);
+  // A refusal: nothing went, so the person may answer again.
+  await expect(q.locator('button.send')).toBeEnabled();
+});
+
 test.afterEach(async ({ page }) => {
   expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
 });

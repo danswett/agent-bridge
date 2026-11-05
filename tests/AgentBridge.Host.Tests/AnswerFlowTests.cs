@@ -638,6 +638,25 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal(("ae", false), (Assert.Single(Assert.Single(injector.Plans).Plan.Sends).Text, injector.Plans[0].Plan.Sends[0].Enter));
     }
 
+    [Theory]
+    // A text box draws no placeholder: words reading as an Other box's, whole or cut short, are
+    // the answer, not an empty box (#510 review, Copilot 4482568470).
+    [InlineData("Type your answer...")]
+    [InlineData("Type\u2026")]
+    public async Task Words_in_a_text_box_reading_as_an_Other_boxs_placeholder_get_their_Enter(string words)
+    {
+        await AskDataAsync();
+        injector.Screen = () => DataScreen(injector.Plans.Any(p => p.Plan.Sends.Any(s => s.Text == words)) ? words : "");
+        injector.OnInject = () => { if (HasEnterOnly(injector.Plans[^1].Plan)) { Fixture.Append(events, Recorded("q2", new { data = words })); } };
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, new { data = words }, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(2, injector.Plans.Count);
+        Assert.True(HasEnterOnly(injector.Plans[^1].Plan));
+    }
+
     [Fact]
     public async Task Words_the_field_wraps_onto_a_second_row_are_found_across_the_wrap_and_get_their_Enter()
     {
@@ -673,126 +692,51 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal(("ae", false), (Assert.Single(Assert.Single(injector.Plans).Plan.Sends).Text, injector.Plans[0].Plan.Sends[0].Enter));
     }
 
-    // ---- Other words in a lone option list (#510 review, Copilot 4481687126) ----
+    // ---- Other words in a lone option list (#510 review, Trust on 5c1d5147) ----
 
     const string OtherWords = "DuckDB, for the analytics";
 
-    // q1's list as Copilot CLI 1.0.105 draws it (`Dxn`): its options and the Other row, closed
-    // (null); then, once the walk's Down past the last option has opened Other, its box on that
-    // row, empty with its placeholder ("") or holding the words.
-    static List<string> OtherScreen(string? other) => Framed("Which one?", ["pick"], 0, other is null
-        ? ["  ❯ a", "    b", "    c", "    Other (type your answer)"]
-        : ["    a", "    b", "    c", $"  ❯ {(other.Length == 0 ? "Type your answer..." : other)}"]);
+    // q1's list as a live Copilot CLI 1.0.105 session draws it (`Dxn` with onExternalFreeform):
+    // its options and the Other row; once the Down past the last option opens Other, that row is
+    // a label alone, and the words are taken in a box of the session's own (`bOe`, in
+    // pinnedFooterContent) drawn apart from the form, above or below it by the footer's mode,
+    // which is not drawn here: nothing is typed into it.
+    static List<string> OtherScreen(bool open) => Framed("Which one?", ["pick"], 0, open
+        ? ["    a", "    b", "    c", "  ❯ Other (type your answer below)"]
+        : ["  ❯ a", "    b", "    c", "    Other (type your answer)"]);
 
     [Fact]
-    public async Task Other_words_wait_for_the_Other_box_to_open_and_their_one_Enter_waits_for_them_to_show()
+    public async Task An_Other_answer_to_a_lone_list_is_refused_before_any_key_saying_why_as_the_list_already_does()
     {
-        // A busy CLI opens Other well after the walk, and draws the words well after they are
-        // typed: the words go only once the box shows, and their Enter alone, held to the rows
-        // that show them, only once they do.
-        var openAt = DateTime.MaxValue;
-        var drawAt = DateTime.MaxValue;
-        injector.Screen = () => OtherScreen(DateTime.UtcNow < openAt ? null : DateTime.UtcNow < drawAt ? "" : OtherWords);
-        injector.OnInject = () =>
-        {
-            switch (injector.Plans.Count)
-            {
-                case 1: openAt = DateTime.UtcNow.AddMilliseconds(600); break;
-                case 2: drawAt = DateTime.UtcNow.AddMilliseconds(600); break;
-                case 3: Fixture.Append(events, Recorded("q1", new { pick = OtherWords })); break;
-            }
-        };
+        // Live, the words go into a box drawn apart from the form, which no key is held to; the
+        // host typed them into the form it modelled, which the session never draws, and either
+        // stopped with Other left open or withheld the Enter. The listing shows Other unavailable,
+        // and the refusal carries the same reason, as a code and its sentence (#908).
+        injector.Screen = () => OtherScreen(injector.Plans.Count > 0);
         var ch = await OpenAsync();
 
         var result = await AnswerResultAsync(ch, new { pick = new { other = OtherWords } }, Guid.NewGuid().ToString(), question: "q1");
 
+        Assert.Equal("refused", result.GetProperty("outcome").GetString());
+        Assert.Equal(AnswerReasons.OtherNotSendable, result.GetProperty("code").GetString());
+        Assert.Equal(AnswerReasons.Text(AnswerReasons.OtherNotSendable), result.GetProperty("reason").GetString());
+        Assert.Empty(injector.Attempts);
+        var field = Assert.Single(source.Get(Id)!.Question!.Fields);
+        Assert.Equal((null, AnswerReasons.OtherNotSendable), (field.AllowOther, field.OtherUnavailable));
+    }
+
+    [Fact]
+    public async Task An_option_of_a_lone_list_drawn_with_its_Other_row_is_still_answered()
+    {
+        injector.Screen = () => OtherScreen(open: false);
+        injector.OnInject = () => { if (HasEnterOnly(injector.Plans[^1].Plan)) { Fixture.Append(events, Recorded("q1", new { pick = "b" })); } };
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, new { pick = "b" }, Guid.NewGuid().ToString(), question: "q1");
+
         Assert.Equal("delivered", result.GetProperty("outcome").GetString());
-        Assert.Equal(3, injector.Plans.Count);
-        // The walk, with no Enter and no words; the words alone, with no Enter; then one Enter.
-        Assert.DoesNotContain(injector.Plans[0].Plan.Sends, s => s.Enter || s.Text.Contains(OtherWords, StringComparison.Ordinal));
-        Assert.Equal((OtherWords, false), (Assert.Single(injector.Plans[1].Plan.Sends).Text, injector.Plans[1].Plan.Sends[0].Enter));
-        Assert.True(HasEnterOnly(injector.Plans[2].Plan));
         Assert.Equal(1, injector.Plans.Sum(p => p.Plan.Sends.Count(s => s.Enter)));
-        Assert.True(injector.At[1] >= openAt, $"words at {injector.At[1]:O}, Other open at {openAt:O}");
-        Assert.True(injector.At[2] >= drawAt, $"Enter at {injector.At[2]:O}, words drawn at {drawAt:O}");
-        // Each write held to the screen it was looked at on: the Enter to the rows showing the words.
-        Assert.Contains(injector.Plans[2].Plan.Sends[0].Expect!, r => r.Text.Contains($"❯ {OtherWords}", StringComparison.Ordinal));
-    }
-
-    [Theory]
-    // Words the empty box's placeholder ("Type your answer...") already reads: counted with it,
-    // they showed once before they were typed and once after, so their Enter was withheld
-    // (#510 review, Copilot 4482280064). Narrow: a row too narrow for the placeholder cuts it
-    // short with an ellipsis.
-    [InlineData("answer", false)]
-    [InlineData("your answer", false)]
-    [InlineData("Type", false)]
-    [InlineData("Type your answer", false)]
-    [InlineData("answer", true)]
-    public async Task Other_words_the_empty_boxs_placeholder_reads_get_their_Enter_once_they_show_in_its_place(string words, bool narrow)
-    {
-        injector.Screen = () => OtherScreen(injector.Plans.Count switch { 0 => null, 1 => narrow ? "Type your answer\u2026" : "", _ => words });
-        injector.OnInject = () => { if (injector.Plans.Count == 3) { Fixture.Append(events, Recorded("q1", new { pick = words })); } };
-        var ch = await OpenAsync();
-
-        var result = await AnswerResultAsync(ch, new { pick = new { other = words } }, Guid.NewGuid().ToString(), question: "q1");
-
-        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
-        Assert.Equal(3, injector.Plans.Count);
-        Assert.True(HasEnterOnly(injector.Plans[2].Plan));
-    }
-
-    [Fact]
-    public async Task Other_words_that_read_as_the_empty_boxs_placeholder_get_no_Enter()
-    {
-        // The box reads the same with the words as without them: nothing says they were taken
-        // in, so their Enter is withheld and the answer left for the machine.
-        const string Words = "Type your answer...";
-        injector.Screen = () => OtherScreen(injector.Plans.Count switch { 0 => null, 1 => "", _ => Words });
-        var ch = await OpenAsync();
-
-        var result = await AnswerResultAsync(ch, new { pick = new { other = Words } }, Guid.NewGuid().ToString(), question: "q1");
-
-        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
-        Assert.Contains("not submitted", result.GetProperty("reason").GetString());
-        Assert.Equal(2, injector.Plans.Count);
-        Assert.Equal(0, injector.Plans.Sum(p => p.Plan.Sends.Count(s => s.Enter)));
-    }
-
-    [Fact]
-    public async Task Other_words_are_not_typed_when_the_Other_box_never_opens()
-    {
-        // The walk went and the list never moved: whatever the keys did, the words are not for it.
-        injector.Screen = () => OtherScreen(null);
-        var ch = await OpenAsync();
-
-        var result = await AnswerResultAsync(ch, new { pick = new { other = OtherWords } }, Guid.NewGuid().ToString(), question: "q1");
-
-        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
-        Assert.Contains("did not show", result.GetProperty("reason").GetString());
-        var walk = Assert.Single(injector.Plans);
-        Assert.DoesNotContain(walk.Plan.Sends, s => s.Enter || s.Text.Contains(OtherWords, StringComparison.Ordinal));
-    }
-
-    [Theory]
-    // The walk went, and in place of the Other box a permission prompt, or another question's
-    // form, came up.
-    [InlineData("permission")]
-    [InlineData("ask")]
-    public async Task Other_words_are_not_typed_into_a_prompt_that_came_up_in_place_of_the_Other_box(string instead)
-    {
-        injector.Screen = () => injector.Plans.Count == 0 ? OtherScreen(null)
-            : instead == "permission" ? PermissionPrompt
-            : Framed("Which colour?", ["colour"], 0, ["  ❯ red", "    blue", "    Other (type your answer)"]);
-        var ch = await OpenAsync();
-
-        var result = await AnswerResultAsync(ch, new { pick = new { other = OtherWords } }, Guid.NewGuid().ToString(), question: "q1");
-
-        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
-        Assert.Contains(instead == "permission" ? "permission prompt" : "no longer showed the question's form", result.GetProperty("reason").GetString());
-        var walk = Assert.Single(injector.Plans);
-        Assert.DoesNotContain(walk.Plan.Sends, s => s.Enter || s.Text.Contains(OtherWords, StringComparison.Ordinal));
-        Assert.DoesNotContain(injector.Attempts, a => a.Sends.Any(s => s.Text.Contains(OtherWords, StringComparison.Ordinal)));
+        Assert.DoesNotContain(injector.Plans, p => p.Plan.Sends.Any(s => s.Text.Contains("Other", StringComparison.Ordinal)));
     }
 
     [Fact]

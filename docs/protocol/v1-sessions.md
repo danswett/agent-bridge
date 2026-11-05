@@ -628,9 +628,10 @@ and JavaScript's `trim()` is applied (so `"   "`, `"\u0085"` and `"\u001b "` ali
 nothing records no answer, and blank text might be recorded trimmed to nothing.
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
-Result: `{ "outcome": "<outcome>", "reason": "<text>", "stage": "<stage>" }`, with `reason`
-present for anything but `delivered`, `stage` only on `unconfirmed` (below), and `timings`
-for a request that asked for progress ([Progress](#progress)):
+Result: `{ "outcome": "<outcome>", "reason": "<text>", "stage": "<stage>", "code": "<code>" }`,
+with `reason` present for anything but `delivered`, `stage` only on `unconfirmed` (below),
+`code` only on a `refused` whose reason is one of the [answer reasons](#answer-reasons), and
+`timings` for a request that asked for progress ([Progress](#progress)):
 
 | `outcome` | Meaning | Typed? |
 |---|---|---|
@@ -650,6 +651,23 @@ An `unconfirmed` answer also carries `stage`, how far it is known to have got
 |---|---|
 | `typed` | The keys were typed into the prompt and the session has recorded nothing for that question since. It may not have been submitted: Copilot's form once took an answer's last Enter as a new line in its text field |
 | `recorded` | The session recorded an answer to that very question, but not the one typed (or the call ended in an error) |
+
+### Answer reasons
+
+Some reasons a client says in fixed words of its own, the same in every client: on a field, as
+`otherUnavailable`, and on a refusal, as its `code` beside a `reason` that is the same
+sentence (so a client that knows neither still says why). A client that doesn't know a code
+reads it as absent: no disabled Other, and the `reason` as usual.
+
+| Code | Sentence | A client shows |
+|---|---|---|
+| `otherNotSendable` | "Your own answer can't be sent from here yet. Pick an option, or answer at the machine." | On a field: Other, its label unchanged, disabled, and the sentence as one muted line under the choices and as their accessible description. On a refusal: "Not sent · " and the sentence |
+
+`otherNotSendable` is a **temporary exception to #876** ("offer Other exactly when the CLI
+does"), decided by Product for #510 and removed when
+[#908](https://github.com/danswett/agent-bridge/issues/908) lands: Copilot CLI 1.0.105 offers
+Other on a lone option list, but a live session takes its words in a box drawn apart from the
+form, which the host cannot yet hold its keys to ([host answers](../host-answers.md)).
 
 Accepted by the session is `delivered`, never a stage. A stage a client does not know reads as
 `typed`; an older host sends none. A repeat of a request whose outcome was `unconfirmed`
@@ -674,7 +692,7 @@ permission prompts goes beyond it, at the user's request:
 
 | Agent | Prompt | `kind` | Answered | `delivered` when |
 |---|---|---|---|---|
-| Copilot CLI | `ask_user`: free text, or a form of `choice`, `multi`, `boolean`, `text` and `number` fields | `form` | Yes | Its `human_response.recorded` (or, for free text, its completion) holds the answer typed |
+| Copilot CLI | `ask_user`: free text, or a form of `choice`, `multi`, `boolean`, `text` and `number` fields | `form` | Yes, for a form the host can read on screen; free text, and a form it cannot, is `answerAtMachine` ([host answers](../host-answers.md)). Not with Other words for now: a lone list has `otherUnavailable` (`otherNotSendable`, a temporary exception to #876 until #908), since a live session takes them in a box drawn apart from the form | Its `human_response.recorded` (or, for free text, its completion) holds the answer typed |
 | Copilot CLI | Permission request for a shell command, path access, a file edit or read, a URL, an MCP tool or a custom tool | `approval` | Yes, with `sessions.approve`: approve once or deny, nothing that grants more | Its `permission.completed` for that request records `approved` (approve), or `denied-interactively-by-user` with no message or `cancelled` followed by the session's abort of the turn (deny) |
 | Copilot CLI | Any other permission request (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read, or any on a host with `permissions.remoteApproval` off | `approval` | No: `answerAtMachine` | |
 | Claude Code | `AskUserQuestion`: one to four questions, each a `choice` or a `multi` of its options | `form` | Yes, but not with free text (no field has `allowOther`), and a `multi` needs at least one option | The `tool_result` for its `tool_use` id records every question's answer as typed |
@@ -2000,6 +2018,7 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `type` | `"choice"` \| `"multi"` \| `"boolean"` \| `"text"` \| `"number"` | `choice` takes one of `options`, `multi` any number of them |
 | `options` | Option[]? | For `choice` and `multi` |
 | `allowOther` | bool? | `choice` and `multi` also accept free text |
+| `otherUnavailable` | string? | A reason code: the agent offers Other here and this machine can't send it yet ([Answer reasons](#answer-reasons)). Only where `allowOther` is not `true`. Display only: a client shows Other disabled, with the reason's sentence; it never enables Other or changes what an answer may hold |
 | `default` | any? | |
 | `required` | bool? | |
 | `constraints` | FieldConstraints? | What the agent's schema allows of the value (#766). Absent when it says nothing a host checks |

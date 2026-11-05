@@ -203,14 +203,18 @@ public class QuestionMappingTests
     }
 
     [Fact]
-    public void A_question_that_is_one_option_list_also_takes_words_through_Other_and_a_form_does_not()
+    public void A_lone_Copilot_list_shows_its_Other_unavailable_with_why_and_a_form_or_checkbox_list_does_not()
     {
         var lone = Assert.Single(Ask("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] } } } }""").Fields);
         var form = Ask("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] }, "go": { "type": "boolean" } } } }""");
         var list = Assert.Single(Ask("""{ "message": "m", "requestedSchema": { "properties": { "many": { "type": "array", "items": { "enum": ["a", "b"] } } } } }""").Fields);
 
-        Assert.True(lone.AllowOther);
-        Assert.Null(form.Fields[0].AllowOther);
+        // A live session takes a lone list's Other words in a box of its own, drawn apart from the
+        // form, which the host cannot hold its keys to yet (#510 review, Trust on 5c1d5147): the
+        // CLI offers Other, so the field says why it can't be sent rather than leave it out (#908).
+        Assert.Equal((null, AnswerReasons.OtherNotSendable), (lone.AllowOther, lone.OtherUnavailable));
+        Assert.Equal((null, null), (form.Fields[0].AllowOther, form.Fields[0].OtherUnavailable));
+        Assert.Null(list.OtherUnavailable);
         Assert.Null(list.AllowOther);
     }
 

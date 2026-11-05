@@ -231,6 +231,11 @@ public static class CopilotPlanner
         return (new CopilotPlan(keys, null, [(field.Name, new Expected.Words(words))]), null);
     }
 
+    // Whether the plan types words through a list's Other, which a live session takes in a box
+    // drawn apart from the form (QuestionMapper; #510 review, Trust on 5c1d5147).
+    public static bool ThroughOther(CopilotForm form, CopilotPlan plan) =>
+        plan.Fields.Any(f => f.Value is Expected.Words && form.Fields.Any(x => x.Name == f.Name && x.Kind == CopilotFieldKind.Choice));
+
     // To a row of an option list from wherever its caret rests: Up far enough to reach the
     // top from any row (Up stops at the first option, as the Other walk relies on), then
     // Down to the row. Counting from the schema default instead would land one row off

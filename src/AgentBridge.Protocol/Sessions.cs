@@ -635,6 +635,11 @@ public sealed record Field
     public IReadOnlyList<Option>? Options { get; init; }
     [Strict(Strictness.Security)]
     public bool? AllowOther { get; init; }
+    // Why the agent offers Other here but this machine cannot send it (AnswerReasons), for a
+    // field whose AllowOther is not true: a client shows Other disabled, with the reason's
+    // sentence. Display only, so not strict: read wrong, a client only leaves Other out, as one
+    // that predates it does. It never enables Other or changes what Answers.Check takes (#908).
+    public string? OtherUnavailable { get; init; }
     public JsonElement? Default { get; init; }
     public bool? Required { get; init; }
     // What the agent's schema allows (#766). Not strict: a client that cannot read them checks
@@ -726,6 +731,9 @@ public sealed record AnswerRequest
 
 public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null, AnswerStage? Stage = null)
 {
+    // Why, as a code a client says in its own fixed words (AnswerReasons), beside Reason; absent
+    // for every other reason. A client that does not know the code shows Reason.
+    public string? Code { get; init; }
     // Only for a request that asked for progress.
     public DeliveryTimings? Timings { get; init; }
 }

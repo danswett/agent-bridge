@@ -378,6 +378,13 @@ public sealed class AnswerService : ISessionAnswerer
             if (!form.Matches(question)) { return Refused("the question's form reads differently here than the client was shown; answer at the machine"); }
             var (planned, problem) = CopilotPlanner.Plan(form, request);
             if (planned is null) { return Refused(problem!); }
+            // Other's words go into a box the session draws apart from the form, which no key here
+            // is held to: refused before any key, as the listing (Other unavailable) already says;
+            // Answers.Check refuses it first for a field listed so, and this for one listed before.
+            if (CopilotPlanner.ThroughOther(form, planned))
+            {
+                return Refused(AnswerReasons.Text(AnswerReasons.OtherNotSendable));
+            }
             (plan, from) = (planned, call.ScannedTo);
 
             if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
@@ -1184,7 +1191,8 @@ public sealed class AnswerService : ISessionAnswerer
     // new line in the words.
     string NotRecorded => $"the answer was typed into the prompt, but the session did not record an answer within {options.ConfirmTimeout.TotalSeconds:0} seconds, so it may not have been submitted";
 
-    static AnswerResult Refused(string reason) => new(AnswerOutcome.Refused, reason);
+    // With the code a client says in its own words, for a reason that has one (AnswerReasons).
+    static AnswerResult Refused(string reason) => new(AnswerOutcome.Refused, reason) { Code = AnswerReasons.Code(reason) };
     static AnswerResult Stale(string reason) => new(AnswerOutcome.Stale, reason);
     static AnswerResult Busy() => new(AnswerOutcome.Busy, "another answer or reply to this session is being delivered");
     // Every unconfirmed answer was typed, at least in part; its stage is recorded only once the session

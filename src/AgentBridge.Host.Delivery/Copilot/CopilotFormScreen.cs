@@ -50,15 +50,21 @@ public static partial class CopilotFormScreen
     // across the whole screen, a field titled "Data" over hints starting "enter" read "ae" across
     // the two, and the words "ae" typed between them hid it, so their Enter was never pressed
     // (Copilot 4480874526). The heading and hints are never part of it; it is less than the
-    // whole screen, so it never shows words the screen does not. An empty Other box's placeholder
-    // is read as the empty box it is: counted, it was the words "answer" already showing before
-    // they were typed, and once they replaced it they showed no more often, so their Enter was
-    // withheld (#510 review, Copilot 4482280064). Taken out of every read alike, it can only
-    // make a box showing it read as empty, never words show that are not there.
-    public static List<string>? Input(IReadOnlyList<string> rows, CopilotForm form, int index) =>
-        Locate(rows, form, index, out var heading, out var hints) is null
-            ? [.. rows.Skip(heading + 1).Take(hints - heading - 1).Select(Unplaceheld)]
-            : null;
+    // whole screen, so it never shows words the screen does not. In an option list's rows, an
+    // empty Other box's placeholder is read as the empty box it is: counted, it was the words
+    // "answer" already showing before they were typed, and once they replaced it they showed no
+    // more often, so their Enter was withheld (#510 review, Copilot 4482280064). Taken out of
+    // every read alike, it can only make a box showing it read as empty, never words show that
+    // are not there. A list's alone: a text or number box draws no placeholder, so there it was
+    // an answer reading "Type your answer..." that was taken out, and its Enter withheld
+    // (Copilot 4482568470). Kept while Other is refused (AnswerService), for the box a live
+    // session takes Other's words in, which draws the same placeholder.
+    public static List<string>? Input(IReadOnlyList<string> rows, CopilotForm form, int index)
+    {
+        if (Locate(rows, form, index, out var heading, out var hints) is not null) { return null; }
+        var region = rows.Skip(heading + 1).Take(hints - heading - 1);
+        return form.Fields[index].Kind == CopilotFieldKind.Choice ? [.. region.Select(Unplaceheld)] : [.. region];
+    }
 
     static string? Locate(IReadOnlyList<string> rows, CopilotForm form, int index, out int fieldHeading, out int hintsStart)
     {
