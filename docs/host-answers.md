@@ -79,6 +79,10 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     it is refused, and shown to be answered at the machine. So are a checkbox list with no
     options (no `items` object, or one naming none) and one whose default does not name its
     options.
+  * A Yes / No field whose `default` is not `true`, `false` or `null` (#768): ask_user's form
+    is drawn without schema constraints, which gives its Yes / No list (`Oxn`) a third row,
+    Other, and a text default opens on it. Walked from there, Yes recorded No and No reopened
+    Other. It is refused, and shown to be answered at the machine.
   * Every field is read as Copilot CLI draws it, which is by its `type` alone (`cli-main.js`
     `tle` in 1.0.105): a `number` or `integer` is a number box even with an `enum` (whose Up
     and Down add or take one, so walking it as a list recorded a different number), and a

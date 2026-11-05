@@ -44,6 +44,23 @@ public class QuestionMappingTests
     }
 
     [Theory]
+    // A Yes / No field whose default is not Yes or No: a text default opens it on its Other row
+    // (#768), so the person is told up front.
+    [InlineData("""{ "type": "boolean", "default": "yes" }""", true)]
+    [InlineData("""{ "type": "boolean", "default": "" }""", true)]
+    [InlineData("""{ "type": "boolean", "default": 1 }""", true)]
+    [InlineData("""{ "type": "boolean", "default": true }""", false)]
+    [InlineData("""{ "type": "boolean", "default": false }""", false)]
+    [InlineData("""{ "type": "boolean", "default": null }""", false)]
+    [InlineData("""{ "type": "boolean" }""", false)]
+    public void A_yes_or_no_field_is_offered_only_when_its_default_is_yes_no_or_none(string field, bool atMachine)
+    {
+        var q = Ask($$"""{ "message": "m", "requestedSchema": { "properties": { "ok": {{field}} } } }""");
+
+        Assert.Equal(atMachine ? true : null, q.AnswerAtMachine);
+    }
+
+    [Theory]
     // A checkbox list whose `items` yield no options: nothing to offer, and nothing the keys
     // could walk (Copilot review of 318c7334).
     [InlineData("""{ "type": "array" }""")]
