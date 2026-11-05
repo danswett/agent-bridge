@@ -29,6 +29,8 @@ public sealed partial class SessionView
     double? anchoring;
     // Where the last scrolling key is taking the conversation, until that scroll has stopped.
     double? keyTarget;
+    // While Tab is sent on past a block that could not be realised, so it isn't held again for it.
+    bool lettingTabPass;
 
     void ShowResponse(bool reset)
     {
@@ -84,8 +86,10 @@ public sealed partial class SessionView
 
     // Tab and Shift+Tab stop in every block with a link or a Copy button, in order: one the list
     // has not realised yet is passed by the focus search, so the move is held, the block realised
-    // and focus put on its first stop (its last, going back). The list's handlers see a move into
-    // it (GettingFocus) and out of or within it (LosingFocus); whichever comes first holds it.
+    // and focus put on its first stop (its last, going back). The session's handlers see every move
+    // out of (LosingFocus) or into (GettingFocus) anything in it, handled or not, so a Tab that passes
+    // the whole list, nothing in it a stop until a block is realised, is held too; whichever comes
+    // first holds it.
     void OnLeavingBlock(UIElement sender, LosingFocusEventArgs e)
     {
         if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } index) { e.Cancel = true; FocusBlock(index, e.Direction == FocusNavigationDirection.Next); }
@@ -99,27 +103,63 @@ public sealed partial class SessionView
     int? TabPassed(DependencyObject? from, DependencyObject? to, FocusNavigationDirection direction)
     {
         if (direction is not (FocusNavigationDirection.Next or FocusNavigationDirection.Previous)) { return null; }
+        // Not while the list is hidden (the Delegates or Tools tab), nor for a move made on from a
+        // block that could not be realised.
+        if (lettingTabPass || ConversationList.Visibility != Visibility.Visible || !ConversationList.IsLoaded) { return null; }
         var forward = direction == FocusNavigationDirection.Next;
-        var outside = forward ? -1 : blocks.Count;
-        return ConversationKeyboard.Passed(blocks, PlaceOf(from) ?? outside, PlaceOf(to) ?? (forward ? blocks.Count : -1), forward, i => ConversationList.ContainerFromIndex(i) is not null);
+        var (was, now) = (PlaceOf(from), PlaceOf(to));
+        // A move with neither end in the conversation's tree (within a flyout, say) isn't ours.
+        if (was is null && now is null) { return null; }
+        var (f, t) = ConversationKeyboard.Ends(was, now, blocks.Count, forward);
+        return ConversationKeyboard.Passed(blocks, f, t, forward, i => ConversationList.ContainerFromIndex(i) is not null);
     }
 
-    // Where in the conversation an element is: -1 its header, a block's index, the block count its
-    // footer, or null outside it. A link is a text element, in its text block.
+    // Where in the conversation an element is: -1 its header or anything before the list, a block's
+    // index, the block count its footer or anything after the list; null on the list itself, or in
+    // another tree (a popup). A link is a text element, in its text block.
     int? PlaceOf(DependencyObject? element)
     {
-        for (var node = element is TextElement t ? t.ContentStart?.VisualParent : element; node is not null; node = VisualTreeHelper.GetParent(node))
+        var start = element is TextElement t ? t.ContentStart?.VisualParent : element;
+        for (var node = start; node is not null; node = VisualTreeHelper.GetParent(node))
         {
             if (node == ConversationHeader) { return -1; }
             if (node == ConversationFooter) { return blocks.Count; }
             if (node is ListViewItem item && ItemsControl.ItemsControlFromItemContainer(item) == ConversationList) { return ConversationList.IndexFromContainer(item); }
             if (node == ConversationList) { return null; }
         }
+        return start is null ? null : Before(start, ConversationList) is { } before ? (before ? -1 : blocks.Count) : null;
+    }
+
+    // Whether a comes before b in the visual tree, as the focus search orders them: by where their
+    // branches part. Null when they are in different trees.
+    static bool? Before(DependencyObject a, DependencyObject b)
+    {
+        static List<DependencyObject> Chain(DependencyObject node)
+        {
+            var chain = new List<DependencyObject>();
+            for (DependencyObject? n = node; n is not null; n = VisualTreeHelper.GetParent(n)) { chain.Add(n); }
+            chain.Reverse();
+            return chain;
+        }
+        var (ca, cb) = (Chain(a), Chain(b));
+        if (ca[0] != cb[0]) { return null; }
+        var i = 0;
+        while (i < ca.Count && i < cb.Count && ca[i] == cb[i]) { i++; }
+        if (i == ca.Count) { return true; }
+        if (i == cb.Count) { return false; }
+        var parent = ca[i - 1];
+        for (var k = 0; k < VisualTreeHelper.GetChildrenCount(parent); k++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, k);
+            if (child == ca[i]) { return true; }
+            if (child == cb[i]) { return false; }
+        }
         return null;
     }
 
     // The block brought into view and laid out, then focus on its first stop (or last, going back),
-    // as the keyboard had put it there. Should it hold none after all, Tab goes on from where it was.
+    // as the keyboard had put it there. Should it hold none after all, Tab goes on from where it was;
+    // should it not be realised even so, Tab goes on past it rather than staying where it was.
     void FocusBlock(int index, bool forward)
     {
         var wanted = blocks;
@@ -128,12 +168,19 @@ public sealed partial class SessionView
             if (blocks != wanted || index >= blocks.Count) { return; }
             ConversationList.ScrollIntoView(blocks[index]);
             ConversationList.UpdateLayout();
-            var container = ConversationList.ContainerFromIndex(index);
-            if (container is null) { return; }
+            var direction = forward ? FocusNavigationDirection.Next : FocusNavigationDirection.Previous;
+            if (ConversationList.ContainerFromIndex(index) is not { } container)
+            {
+                if (XamlRoot?.Content is not { } within) { return; }
+                lettingTabPass = true;
+                try { FocusManager.TryMoveFocus(direction, new FindNextElementOptions { SearchRoot = within }); }
+                finally { lettingTabPass = false; }
+                return;
+            }
             var stop = forward ? FocusManager.FindFirstFocusableElement(container) : FocusManager.FindLastFocusableElement(container);
             if (stop is not null) { _ = FocusManager.TryFocusAsync(stop, FocusState.Keyboard); }
             // Realised now, so the search passes it this time rather than coming back to it.
-            else if (XamlRoot?.Content is { } root) { FocusManager.TryMoveFocus(forward ? FocusNavigationDirection.Next : FocusNavigationDirection.Previous, new FindNextElementOptions { SearchRoot = root }); }
+            else if (XamlRoot?.Content is { } root) { FocusManager.TryMoveFocus(direction, new FindNextElementOptions { SearchRoot = root }); }
         });
     }
 

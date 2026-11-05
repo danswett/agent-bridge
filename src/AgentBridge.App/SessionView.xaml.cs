@@ -54,8 +54,8 @@ public sealed partial class SessionView : UserControl
             HookConversation();
             if (e.PreviousSize.Width != e.NewSize.Width) { KeepAnchor(); }
         };
-        ConversationList.LosingFocus += OnLeavingBlock;
-        ConversationList.GettingFocus += OnReachingBlock;
+        AddHandler(LosingFocusEvent, new Windows.Foundation.TypedEventHandler<UIElement, LosingFocusEventArgs>(OnLeavingBlock), true);
+        AddHandler(GettingFocusEvent, new Windows.Foundation.TypedEventHandler<UIElement, GettingFocusEventArgs>(OnReachingBlock), true);
         ConversationList.AddHandler(PointerPressedEvent, new PointerEventHandler((_, e) =>
         {
             if (Touch(e)) { follow.TouchDown(e.Pointer.PointerId); }

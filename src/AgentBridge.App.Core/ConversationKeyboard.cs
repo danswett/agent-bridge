@@ -74,6 +74,18 @@ public static class ConversationKeyboard
         }
         return null;
     }
+
+    // The ends of a Tab as Passed reads them, from the places of what had focus and what gets it
+    // (null outside the conversation's tree: entering from a popup, or leaving for one). A move that
+    // went the wrong way wrapped round the window, so it went on to the end (or the start, going
+    // back) of the conversation: Tab from the last stop drawn to the window's first control passes
+    // every block after it.
+    public static (int From, int To) Ends(int? from, int? to, int count, bool forward)
+    {
+        var f = from ?? (forward ? -1 : count);
+        var t = to ?? (forward ? count : -1);
+        return (forward ? t < f : t > f) ? (f, forward ? count : -1) : (f, t);
+    }
 }
 
 public enum ReadingKey { LineUp, LineDown, PageUp, PageDown, Top, End, Still }

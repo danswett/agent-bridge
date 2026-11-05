@@ -84,7 +84,7 @@ static partial class SelfTest
         var problems = new List<string>();
         if (list.ItemsPanelRoot is ItemsStackPanel { FirstVisibleIndex: >= 0 } panel && list.ContainerFromIndex(panel.FirstVisibleIndex) is ListViewItem shown)
         {
-            if (Said(shown, panel.FirstVisibleIndex, count) is { } wrong) { problems.Add(wrong); }
+            if (Said(peer, shown, panel.FirstVisibleIndex, count) is { } wrong) { problems.Add(wrong); }
         }
         else { problems.Add("a block in view"); }
         var last = (ConversationBlock)list.Items[count - 1];
@@ -96,13 +96,15 @@ static partial class SelfTest
         if (peer.CreateItemAutomationPeer(last)?.GetPattern(PatternInterface.VirtualizedItem) is IVirtualizedItemProvider virtualised) { virtualised.Realize(); }
         else { problems.Add("the last block realisable"); }
         if (!await Until(() => list.ContainerFromIndex(count - 1) is ListViewItem, TimeSpan.FromSeconds(5))) { problems.Add("the last block realised"); }
-        else if (Said(list.ContainerFromIndex(count - 1) as ListViewItem, count - 1, count) is { } wrong) { problems.Add(wrong); }
+        else if (Said(peer, list.ContainerFromIndex(count - 1) as ListViewItem, count - 1, count) is { } wrong) { problems.Add(wrong); }
         return problems.Count > 0 ? string.Join(", ", problems) : null;
 
-        static string? Said(ListViewItem? item, int index, int count)
+        // As a screen reader is given it: the list's peer for the item, which works out its place in
+        // the set, not the container's own, which knows nothing of the list.
+        static string? Said(ItemsControlAutomationPeer peer, ListViewItem? item, int index, int count)
         {
-            var itemPeer = item is null ? null : FrameworkElementAutomationPeer.CreatePeerForElement(item);
             var text = item?.Content is ConversationBlock b ? b.Text : null;
+            var itemPeer = item?.Content is { } content ? peer.CreateItemAutomationPeer(content) : null;
             return itemPeer is null ? $"block {index + 1} as an item"
                 : itemPeer.GetPositionInSet() != index + 1 || itemPeer.GetSizeOfSet() != count || itemPeer.GetName() != text
                     ? $"block {index + 1} said as \"{Clip(itemPeer.GetName())}\", {itemPeer.GetPositionInSet()} of {itemPeer.GetSizeOfSet()}"
@@ -140,10 +142,19 @@ static partial class SelfTest
                 await Task.Delay(300);
                 if (list.ContainerFromIndex(next) is not null) { continue; }
                 FocusManager.TryMoveFocus(FocusNavigationDirection.Next, new FindNextElementOptions { SearchRoot = root });
-                if (await Until(() => BlockOf(list, FocusManager.GetFocusedElement(list.XamlRoot)) == next, TimeSpan.FromSeconds(3))) { return null; }
+                // In the block, on a stop inside it. Focus seen on a block's container or the list at
+                // any point fails the check, even should it move on into the block after.
+                object? container = null;
+                var landed = await Until(() =>
+                {
+                    var f = FocusManager.GetFocusedElement(list.XamlRoot);
+                    if (f is ListViewItem or ListView) { container = f; return true; }
+                    return BlockOf(list, f) == next;
+                }, TimeSpan.FromSeconds(3));
+                if (container is not null) { return $"focus on a block's container: {container.GetType().Name}"; }
+                if (landed) { return null; }
                 var focused = FocusManager.GetFocusedElement(list.XamlRoot);
-                return focused is ListViewItem or ListView ? $"focus on a block's container: {focused.GetType().Name}"
-                    : $"Tab from block {from + 1} to block {next + 1}: it went to {(BlockOf(list, focused) is { } at ? $"block {at + 1}" : focused?.GetType().Name ?? "nothing")}";
+                return $"Tab from block {from + 1} to block {next + 1}: it went to {(BlockOf(list, focused) is { } at ? $"block {at + 1}" : focused?.GetType().Name ?? "nothing")}";
             }
             return "the next block with a stop unrealised when Tab was pressed";
         }

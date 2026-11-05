@@ -30,7 +30,7 @@ public sealed class CodeCopy : Observable
     // hold it open). Its timer's callback comes back through ui, on the UI thread in the app.
     public CodeCopy(MdCode code, Func<string, bool> put, IUiDispatcher? ui = null, TimeProvider? time = null)
     {
-        Text = WithoutTrailingBlankLines(HiddenText.Reveal(code.Text, rightToLeft: true));
+        Text = Drawn(code.Text);
         RightToLeft = HiddenText.HasRightToLeft(code.Text);
         Hidden = HiddenText.HasHidden(code.Text);
         this.put = put;
@@ -43,6 +43,9 @@ public sealed class CodeCopy : Observable
     // only line breaks left `echo safe\n    ` copying its newline (#429). Spaces and tabs on the last
     // line with anything else on it stay, as they are part of it.
     public string Text { get; }
+
+    // A code block's text as it is drawn, for Copy and for the name a screen reader is given (#765).
+    public static string Drawn(string code) => WithoutTrailingBlankLines(HiddenText.Reveal(code, rightToLeft: true));
 
     // From the end, past whitespace back to the first line break with only whitespace after it; a
     // backward scan, as a regex trim backtracks quadratically over long runs of blank lines.

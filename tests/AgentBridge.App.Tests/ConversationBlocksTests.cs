@@ -10,6 +10,14 @@ public sealed class ConversationBlocksTests
     static ObservableCollection<ConversationBlock> Shown(string markdown) => [.. MarkdownModel.Parse(markdown).Select(b => new ConversationBlock(b))];
 
     [Fact]
+    public void A_code_block_is_named_by_the_text_it_draws_with_hidden_characters_as_their_escapes_nested_or_not()
+    {
+        var shown = Shown("```\necho ok \u2067# note\n```\n\n> ```\n> run\u200B\n> ```");
+
+        Assert.Equal(["echo ok \\u2067# note", "run\\u200B"], shown.Select(b => b.Text));
+    }
+
+    [Fact]
     public void Every_top_level_block_is_its_own_item_and_a_list_keeps_its_points_inside_it()
     {
         var shown = Shown("# Title\n\nFirst paragraph.\n\n- one\n- two\n\nLast.");
@@ -52,6 +60,32 @@ public sealed class ConversationBlocksTests
 
         Assert.Equal(["Two.", "Three.", "Four."], shown.Select(b => b.Text));
         Assert.Same(three, shown[1]);
+    }
+
+    [Fact]
+    public void A_cut_that_falls_between_two_blocks_alike_keeps_the_run_that_is_left()
+    {
+        var shown = Shown("A.\n\n---\n\nB.\n\n---\n\nC.");
+        var (rule, c) = (shown[3], shown[4]);
+
+        Assert.True(ConversationBlocks.Update(shown, MarkdownModel.Parse("---\n\nC.\n\nD.")));
+
+        Assert.Equal(["Separator", "C.", "D."], shown.Select(b => b.Text));
+        Assert.Same(rule, shown[0]);
+        Assert.Same(c, shown[1]);
+    }
+
+    [Fact]
+    public void A_cut_partway_through_the_first_block_replaces_it_and_keeps_the_blocks_after_it()
+    {
+        var shown = Shown("One.\n\nTwo.\n\nThree.");
+        var (two, three) = (shown[1], shown[2]);
+
+        Assert.True(ConversationBlocks.Update(shown, MarkdownModel.Parse("ne.\n\nTwo.\n\nThree.\n\nFour.")));
+
+        Assert.Equal(["ne.", "Two.", "Three.", "Four."], shown.Select(b => b.Text));
+        Assert.Same(two, shown[1]);
+        Assert.Same(three, shown[2]);
     }
 
     [Fact]
@@ -212,5 +246,23 @@ public sealed class ConversationKeyboardTests
         Assert.Null(ConversationKeyboard.Passed(blocks, from: 0, to: 2, forward: true, i => false));
         Assert.Null(ConversationKeyboard.Passed(blocks, from: 0, to: blocks.Count, forward: true, i => true));
         Assert.Null(ConversationKeyboard.Passed(blocks, from: -1, to: -1, forward: true, i => false));
+    }
+
+    [Fact]
+    public void Tab_across_the_whole_response_with_no_block_realised_stops_in_its_first_block_with_a_link()
+    {
+        var blocks = Blocks("Plain.\n\n[b](https://a.b)\n\n[c](https://a.b)");
+        var (from, to) = ConversationKeyboard.Ends(-1, null, blocks.Count, forward: true);
+
+        Assert.Equal(1, ConversationKeyboard.Passed(blocks, from, to, forward: true, i => false));
+    }
+
+    [Fact]
+    public void Tab_that_wraps_round_the_window_goes_on_to_the_end_of_the_response_first()
+    {
+        Assert.Equal((2, 5), ConversationKeyboard.Ends(2, -1, 5, forward: true));
+        Assert.Equal((2, -1), ConversationKeyboard.Ends(2, 5, 5, forward: false));
+        Assert.Equal((-1, 3), ConversationKeyboard.Ends(null, 3, 5, forward: true));
+        Assert.Equal((2, 4), ConversationKeyboard.Ends(2, 4, 5, forward: true));
     }
 }

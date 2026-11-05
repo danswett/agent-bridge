@@ -27,28 +27,29 @@ public static class ConversationBlocks
     // The list's items made to match a response's blocks, keeping each block already shown that
     // is still there: one realised stays as it is, where it is, and the list keeps the block at the
     // top of the viewport in place (KeepItemsInView). A response that grew keeps its head; one that
-    // lost its earliest blocks (cut at the start to fit, SessionBudget) keeps the rest. False, with
-    // nothing changed, when nothing can be kept: the caller replaces the items whole, in one reset
-    // rather than an add for each block.
+    // lost its earliest blocks (cut at the start to fit, SessionBudget) keeps the rest, the cut
+    // falling between two blocks alike or partway through what is now its first block included.
+    // The longest run of blocks kept wins. False, with nothing changed, when nothing can be kept:
+    // the caller replaces the items whole, in one reset rather than an add for each block.
     public static bool Update(ObservableCollection<ConversationBlock> shown, IReadOnlyList<MdBlock> next)
     {
-        var start = next.Count == 0 ? -1 : IndexOf(shown, next[0]);
-        var kept = 0;
-        if (start >= 0)
+        // The run kept: from shown[start] and next[from] on. next[0] is new when a cut fell inside it.
+        var (start, from, kept) = (0, 0, 0);
+        for (var lead = 0; lead < Math.Min(2, next.Count); lead++)
         {
-            while (start + kept < shown.Count && kept < next.Count && Same(shown[start + kept].Block, next[kept])) { kept++; }
+            for (var s = 0; s < shown.Count; s++)
+            {
+                var run = 0;
+                while (s + run < shown.Count && lead + run < next.Count && Same(shown[s + run].Block, next[lead + run])) { run++; }
+                if (run > kept) { (start, from, kept) = (s, lead, run); }
+            }
         }
         if (kept == 0) { return false; }
         for (var i = shown.Count - 1; i >= start + kept; i--) { shown.RemoveAt(i); }
         for (var i = 0; i < start; i++) { shown.RemoveAt(0); }
-        for (var i = kept; i < next.Count; i++) { shown.Add(new ConversationBlock(next[i])); }
+        for (var i = from - 1; i >= 0; i--) { shown.Insert(0, new ConversationBlock(next[i])); }
+        for (var i = from + kept; i < next.Count; i++) { shown.Add(new ConversationBlock(next[i])); }
         return true;
-    }
-
-    static int IndexOf(ObservableCollection<ConversationBlock> shown, MdBlock block)
-    {
-        for (var i = 0; i < shown.Count; i++) { if (Same(shown[i].Block, block)) { return i; } }
-        return -1;
     }
 
     // The same block, drawn the same: records compare lists by reference, so their contents here.
@@ -80,7 +81,7 @@ public static class ConversationBlocks
         {
             case MdParagraph p: Inlines(text, p.Inlines); break;
             case MdHeading h: Inlines(text, h.Inlines); break;
-            case MdCode c: text.Append(c.Text); break;
+            case MdCode c: text.Append(CodeCopy.Drawn(c.Text)); break;
             case MdQuote q: Lines(text, q.Blocks); break;
             case MdList l:
                 var n = l.Start;
