@@ -50,7 +50,7 @@ const choice = (extra = {}) => ({
 // #908: Other the CLI offers and the machine can't send yet, shown disabled with why.
 const OTHER_NOT_SENDABLE = "Your own answer can't be sent from here yet. Pick an option, or answer at the machine.";
 
-test('Other the machine cannot send yet is shown disabled, its label unchanged, with why under the choices and as their description', async ({ page }, info) => {
+test('Other the machine cannot send yet is shown disabled, its label unchanged, with why under the choices and as their description', async ({ page }) => {
   await openDemo(page);
   const q = await ask(page, choice({ required: false, otherUnavailable: 'otherNotSendable' }));
   const other = q.locator('.choices .other-unavailable');
@@ -63,24 +63,34 @@ test('Other the machine cannot send yet is shown disabled, its label unchanged, 
   const described = (loc) => loc.evaluate((el) => (el.getAttribute('aria-describedby') ?? '').split(' ').map((i) => document.getElementById(i)?.textContent ?? '').join(' '));
   expect(await described(q.locator('.choices'))).toBe(OTHER_NOT_SENDABLE);
   expect(await described(other)).toBe(OTHER_NOT_SENDABLE);
-  // No box to type in, and the options still answer on a tap.
+  // No box to type in, and the options still answer on a tap. Tapped as open() left it, with
+  // the question's arrival wait over: nothing has moved it since.
   await expect(q.locator('.other-box')).toHaveCount(0);
-  await expect(q.locator('.choice[data-value="sqlite"]')).toBeEnabled();
-  // The acceptance captures, light and dark. WebKit's screenshot adds an inline style of
-  // Playwright's own, which the page's CSP reports: the page's own reports are kept around it.
+  await q.locator('.choice[data-value="sqlite"]').click();
+  await expect.poll(() => log(page)).toHaveLength(1);
+  expect((await log(page))[0].fields).toEqual({ answer: 'sqlite' });
+});
+
+// The acceptance captures, apart from the tap above: resizing the page and scrolling the note
+// into view move the question, which starts its arrival wait again (#491), and a tap after
+// them was dropped on a slow runner, as it should be.
+test('Other the machine cannot send yet is captured disabled with why under it, light and dark', async ({ page }, info) => {
+  await openDemo(page);
+  const q = await ask(page, choice({ required: false, otherUnavailable: 'otherNotSendable' }));
+  // WebKit's screenshot adds an inline style of Playwright's own, which the page's CSP reports:
+  // the page's own reports are kept around it.
   const reported = await page.evaluate(() => [...window.__cspViolations]);
   // Tall enough that the reply box under the conversation covers none of the question.
   await page.setViewportSize({ width: 900, height: 1600 });
   await q.locator('.other-unavailable-note').scrollIntoViewIfNeeded();
   for (const colorScheme of ['light', 'dark']) {
     await page.emulateMedia({ colorScheme });
-    await page.waitForTimeout(150);
-    await page.screenshot({ path: info.outputPath(`other-unavailable-${colorScheme}.png`), caret: 'initial', clip: await q.boundingBox() });
+    await expect(q.locator('.other-unavailable-note')).toHaveText(OTHER_NOT_SENDABLE);
+    await page.screenshot({ path: info.outputPath(`other-unavailable-${colorScheme}.png`), caret: 'initial', animations: 'disabled', clip: await q.boundingBox() });
   }
   await page.evaluate((r) => { window.__cspViolations = r; }, reported);
-  await page.emulateMedia({ colorScheme: null });
-  await q.locator('.choice[data-value="sqlite"]').click();
-  await expect.poll(() => log(page)).toHaveLength(1);
+  // Nothing was sent by looking.
+  expect(await log(page)).toEqual([]);
 });
 
 test('a refusal for Other the machine cannot send yet is said in the same words, after Not sent', async ({ page }) => {
