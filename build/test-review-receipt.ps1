@@ -9,7 +9,10 @@
 # captures green CI on the head (AGENTS.md rule 5) and then starts a code-review agent, which reads
 # two changed files and the diff and ends `VERDICT: CLEAN`; checks.json is the pull request's checks
 # as read again afterwards; ledger.json is the read ledger the script must replay from that log.
-# Each case changes one thing in memory and expects the script to refuse it.
+# Each case changes one thing in memory and expects the script to refuse it, or, for a change it
+# must take (a view the CLI cut short and read on later, report text after the verdict, a DELTA
+# from an authorized receipt), still to print the receipt. For DELTA the stand-in also answers for
+# main's quality/merge-rule.yml (synthetic posters) and -Since's statuses.
 #
 # What it guards (#929): a receipt only from a complete, identified reviewer run on the confirmed
 # model, every read after the captured green CI, on the exact head, with every changed file read
@@ -59,6 +62,14 @@ function global:gh {
         foreach ($f in $global:RrFiles) { $f | ConvertTo-Json -Compress }
     } elseif ($a[0] -eq 'api' -and $a[1] -eq "repos/$repo/compare/$($global:RrBase)...$($global:RrHead)") {
         $global:RrMergeBase
+    } elseif ($a[0] -eq 'api' -and $a[1] -eq '-H' -and $a[2] -eq 'Accept: application/vnd.github.raw+json' -and $a[3] -eq "repos/$repo/contents/quality/merge-rule.yml?ref=main") {
+        if ($null -eq $global:RrPolicy) { $global:LASTEXITCODE = 1; return }
+        $global:RrPolicy -split "`n"
+    } elseif ($a[0] -eq 'api' -and $a[1] -eq "repos/$repo/commits/$($global:RrSince)/statuses?per_page=100") {
+        if ($a -notcontains '--paginate') { throw 'stand-in gh: statuses read without --paginate' }
+        foreach ($s in $global:RrSinceStatuses) { $s | ConvertTo-Json -Compress }
+    } elseif ($a[0] -eq 'api' -and $a[1] -eq "repos/$repo/compare/$($global:RrSince)...$($global:RrHead)") {
+        @{ status = 'ahead'; files = @($global:RrFiles) } | ConvertTo-Json -Depth 5 -Compress
     } elseif ($a[0] -eq 'api' -and $a[1] -eq '-H' -and $a[2] -eq 'Accept: application/vnd.github.raw+json' -and $a[3] -like "repos/$repo/contents/*") {
         $path = [uri]::UnescapeDataString(($a[3] -replace "^repos/$repo/contents/", '' -replace '\?ref=.*$', ''))
         if ($a[3] -notlike "*?ref=$($global:RrHead)") { throw "stand-in gh: contents not at the head: $($a[3])" }
@@ -106,18 +117,24 @@ function Reset([string]$text = $events) {
     $global:RrReviewPages = @(, @(@{ author = @{ login = 'a-reviewer' }; state = 'COMMENTED'; submittedAt = '2025-06-01T10:34:00Z'; commit = @{ oid = $global:RrHead } }))
     $global:RrComment = $null
     $global:RrStatus = $null
+    # For DELTA: -Since is the fixture's diff base, and main's merge rule names who may post.
+    $global:RrSince = $global:RrMergeBase
+    $global:RrPolicy = "version: 1`n`n# Who may post the receipt.`nindependent_review:`n  context: independent-review`n  # synthetic logins`n  posters: [a-poster, `"another-poster`"]`n`nsecurity_labels: [security]`n"
+    $global:RrSinceStatuses = @(@{ state = 'success'; creator = 'a-poster'; created_at = '2025-06-01T09:00:00Z' })
     if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
     New-Item -ItemType Directory -Force $scratch | Out-Null
     [IO.File]::WriteAllText($log, $text, [Text.UTF8Encoding]::new($false))
 }
 
-function Invoke-Receipt([switch]$Post) {
-    (& $tool -Pr 929 -Head $global:RrHead -EventLog $log -ReviewerAgentId $agent -Root $root -Scope FULL -Repository $global:RrRepo -Post:$Post 6>$null) -join "`n"
+function Invoke-Receipt([switch]$Post, [string]$Scope = 'FULL', [string]$Since) {
+    $sinceArgs = @{}
+    if ($Since) { $sinceArgs.Since = $Since }
+    (& $tool -Pr 929 -Head $global:RrHead -EventLog $log -ReviewerAgentId $agent -Root $root -Scope $Scope @sinceArgs -Repository $global:RrRepo -Post:$Post 6>$null) -join "`n"
 }
 
 # The message the script refused with, or $null when it didn't.
-function Get-Refusal([switch]$Post) {
-    try { $null = Invoke-Receipt -Post:$Post; $null } catch { $_.Exception.Message }
+function Get-Refusal([switch]$Post, [string]$Scope = 'FULL', [string]$Since) {
+    try { $null = Invoke-Receipt -Post:$Post -Scope $Scope -Since $Since; $null } catch { $_.Exception.Message }
 }
 
 function Format-Read($at) {
@@ -205,9 +222,23 @@ Check 'A head that moves while the checks are read is refused' {
     Assert-Refused (Get-Refusal) "*the head moved: #929 is at $moved*after reading the checks*"
 }
 
-Check 'A task call that asked for no model is refused: a model the session inherited is not a requested one' {
-    Reset ($events.Replace('"name":"reviewer","model":"claude-opus-5.5",', '"name":"reviewer",'))
+Check 'A task call that asked for no model is refused, though its prompt names one: a model the session inherited is not a requested one' {
+    Reset ($events.Replace('"name":"reviewer","model":"claude-opus-5.5",', '"name":"reviewer",').Replace('"prompt":"Synthetic prompt."', '"prompt":"Synthetic prompt. Review on claude-opus-5.5."'))
     Assert-Refused (Get-Refusal) '*asked for no model*'
+    # The task call's argument, but a reviewer that doesn't say its model came from it.
+    Reset ($events.Replace('"taskModelSource":"task_argument"', '"taskModelSource":"unset"'))
+    Assert-Refused (Get-Refusal) '*subagent.started doesn''t say its model came from the task call*'
+}
+
+Check 'One standalone VERDICT: CLEAN line anywhere in the last message is the verdict, with report text after it; two, or none standalone, are refused' {
+    Reset ($events.Replace('VERDICT: CLEAN","model"', 'VERDICT: CLEAN\n\nWhat was read: every changed file whole, and the diff.","model"'))
+    $receipt = Invoke-Receipt
+    Assert ($receipt.StartsWith('<!-- agent-bridge review-receipt v1 -->')) "receipt: $receipt"
+    Assert ($receipt.Contains('sec-929 CLEAN')) 'no verdict line'
+    Reset ($events.Replace('VERDICT: CLEAN","model"', 'VERDICT: CLEAN\nVERDICT: CLEAN","model"'))
+    Assert-Refused (Get-Refusal) '*has 2 VERDICT lines; exactly one is needed*'
+    Reset ($events.Replace('no findings.\n\nVERDICT: CLEAN","model"', 'no findings. VERDICT: CLEAN","model"'))
+    Assert-Refused (Get-Refusal) '*has 0 VERDICT lines; exactly one is needed*'
 }
 
 Check 'A reviewer whose completion confirms another model is refused' {
@@ -261,6 +292,39 @@ Check 'A view the CLI refused as too large reads nothing, so the file is unread'
     Assert-Refused (Get-Refusal) '*didn''t read src/Example.cs*'
 }
 
+# Copilot CLI 1.0.105 cuts a long view short mid-line and appends this notice, success still true.
+$whole = '"content":"namespace Example;\n\npublic static class Greeting { }\n"'
+$cut = '"content":"namespace Example;\n\npublic sta\n\n[Output truncated. Use view_range=[3, ...] to continue reading. (synthetic remainder)]"'
+$rest = @(
+    '{"type":"tool.execution_start","data":{"toolCallId":"toolu_synthetic_view_0004","toolName":"view","arguments":{"path":"C:\\checkouts\\agent-bridge\\src\\Example.cs","view_range":[3,-1]},"model":"claude-opus-5.5","parentToolCallId":"toolu_synthetic_task_0001"},"agentId":"AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE","id":"00000000-0000-4000-8000-000000000105","timestamp":"2025-06-01T10:31:02.000Z","parentId":"00000000-0000-4000-8000-000000000005"}',
+    '{"type":"tool.execution_complete","data":{"toolCallId":"toolu_synthetic_view_0004","model":"claude-opus-5.5","success":true,"result":{"content":"public static class Greeting { }","detailedContent":"public static class Greeting { }"},"parentToolCallId":"toolu_synthetic_task_0001"},"agentId":"AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE","id":"00000000-0000-4000-8000-000000000106","timestamp":"2025-06-01T10:31:03.000Z","parentId":"00000000-0000-4000-8000-000000000105"}')
+function Add-AfterFirstView([string]$text) {
+    $out = [Collections.Generic.List[string]]::new()
+    foreach ($line in $text -split "`n") {
+        $out.Add($line)
+        if ($line.Contains('"type":"tool.execution_complete"') -and $line.Contains('toolu_synthetic_view_0001')) { $out.AddRange([string[]]$rest) }
+    }
+    $out -join "`n"
+}
+
+Check 'A view the CLI cut short counts for the whole lines before the cut, and a later read of the rest completes the file' {
+    Reset (Add-AfterFirstView ($events.Replace($whole, $cut)))
+    $receipt = Invoke-Receipt
+    Assert ($receipt.StartsWith('<!-- agent-bridge review-receipt v1 -->')) "receipt: $receipt"
+    Assert ($receipt.Contains('| `src/Example.cs` | 1-2 (cut short) | 2025-06-01T10:31:00.000Z | `toolu_synthetic_view_0001` |')) 'the cut view is not listed for its whole lines'
+    Assert ($receipt.Contains('| `src/Example.cs` | 3-3 | 2025-06-01T10:31:02.000Z | `toolu_synthetic_view_0004` |')) 'the read of the rest is not listed'
+}
+
+Check 'A view cut short alone leaves the rest of the file unread' {
+    Reset ($events.Replace($whole, $cut))
+    Assert-Refused (Get-Refusal) '*didn''t read src/Example.cs (lines 3-3 of 3)*'
+}
+
+Check 'A view cut short whose lines before the cut are another version is refused, though the rest is read later' {
+    Reset (Add-AfterFirstView ($events.Replace($whole, $cut.Replace('namespace Example;', 'namespace Older;'))))
+    Assert-Refused (Get-Refusal) '*view of src/Example.cs*isn''t the head''s content*'
+}
+
 Check 'An unresolved thread on the second page is found and refused' {
     Reset
     $global:RrThreadPages = @(@(@{ isResolved = $true; isOutdated = $false }), @(@{ isResolved = $false; isOutdated = $false }))
@@ -273,6 +337,54 @@ Check 'Pending CI is refused' {
     $global:RrChecks = $checks.Replace('"bucket":"pass","completedAt":"2025-06-01T10:19:00Z"', '"bucket":"pending","completedAt":"0001-01-01T00:00:00Z"')
     $global:RrChecksExit = 8
     Assert-Refused (Get-Refusal) '*CI isn''t green: light is pending*'
+}
+
+Check 'DELTA from a CLEAN receipt by an account in main''s posters prints a receipt, the login matched in any case' {
+    Reset
+    $global:RrSinceStatuses = @(
+        @{ state = 'success'; creator = 'A-Poster'; created_at = '2025-06-01T09:00:00Z' },
+        @{ state = 'failure'; creator = 'a-poster'; created_at = '2025-06-01T08:00:00Z' })
+    $receipt = Invoke-Receipt -Scope DELTA -Since $global:RrSince
+    Assert ($receipt.StartsWith('<!-- agent-bridge review-receipt v1 -->')) "receipt: $receipt"
+    Assert ($receipt.Contains("DELTA: the diff since $($global:RrSince)")) 'the scope is not the delta'
+    Assert ([bool]($global:RrCalls | Where-Object { $_ -like '*contents/quality/merge-rule.yml?ref=main' })) 'the posters were not read from main'
+    Assert (@(Posts).Count -eq 0) "a dry run posted: $(Posts)"
+}
+
+Check 'DELTA refuses a latest receipt status that isn''t an authorized success, never falling back to an older one' {
+    Reset
+    $global:RrSinceStatuses = @(
+        @{ state = 'success'; creator = 'someone-else'; created_at = '2025-06-01T09:00:00Z' },
+        @{ state = 'success'; creator = 'a-poster'; created_at = '2025-06-01T08:00:00Z' })
+    Assert-Refused (Get-Refusal -Scope DELTA -Since $global:RrSince) '*posted by someone-else, who isn''t in independent_review.posters on main*'
+    Reset
+    $global:RrSinceStatuses = @(
+        @{ state = 'failure'; creator = 'a-poster'; created_at = '2025-06-01T09:00:00Z' },
+        @{ state = 'success'; creator = 'a-poster'; created_at = '2025-06-01T08:00:00Z' })
+    Assert-Refused (Get-Refusal -Scope DELTA -Since $global:RrSince) '*the latest independent-review status on * is failure, not success*'
+    Reset
+    $global:RrSinceStatuses = @(@{ state = 'success'; creator = $null; created_at = '2025-06-01T09:00:00Z' })
+    Assert-Refused (Get-Refusal -Scope DELTA -Since $global:RrSince) '*names no creator*'
+    Reset
+    $global:RrSinceStatuses = @()
+    Assert-Refused (Get-Refusal -Scope DELTA -Since $global:RrSince) '*has no independent-review status to be a delta from*'
+}
+
+Check 'DELTA refuses when main''s merge rule names no posters it understands, or can''t be read' {
+    Reset
+    $global:RrPolicy = $global:RrPolicy.Replace('  posters: [a-poster, "another-poster"]', "  posters:`n    - a-poster")
+    Assert-Refused (Get-Refusal -Scope DELTA -Since $global:RrSince) '*no independent_review.posters list this understands*'
+    Reset
+    $global:RrPolicy = $global:RrPolicy.Replace('posters: [a-poster, "another-poster"]', 'posters: []')
+    Assert-Refused (Get-Refusal -Scope DELTA -Since $global:RrSince) '*posters has '''', which isn''t a GitHub login*'
+    Reset
+    $global:RrPolicy = $global:RrPolicy.Replace('independent_review:', 'other_review:')
+    Assert-Refused (Get-Refusal -Scope DELTA -Since $global:RrSince) '*has 0 independent_review blocks*'
+    Reset
+    $global:RrPolicy = $null
+    $refusal = Get-Refusal -Scope DELTA -Since $global:RrSince
+    Assert ($refusal -like 'review-receipt: gh api -H failed (1)') "refusal: $refusal"
+    Assert (@(Posts).Count -eq 0) "posted anyway: $(Posts)"
 }
 
 Check '-Post refuses to run in GitHub Actions, before reading anything' {

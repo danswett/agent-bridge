@@ -20,9 +20,11 @@
 #  - Its role: a code-review or security-review agent (AGENTS.md rule 5), that edited nothing,
 #    from a session that edited nothing in the checkout it reviewed and wrote none of the pull
 #    request's commits (no `Copilot-Session: <this session>` trailer in them).
-#  - Its model: the model the task call asked for, which subagent.started, the first
-#    subagent.completed, any subagent.configured, and every tool call and message of the reviewer
-#    must all name. The log is the only source; nothing typed in stands in for it.
+#  - Its model: the model the task call asked for in its own `model` argument (a model only named
+#    in the prompt is no requested model, and subagent.started must say `taskModelSource`
+#    task_argument), which subagent.started, the first subagent.completed, any
+#    subagent.configured, and every tool call and message of the reviewer must all name. The log
+#    is the only source; nothing typed in stands in for it.
 #  - CI, before any read: the coordinator's own capture of it in the same session, run as a
 #    powershell tool call before it starts the reviewer, exactly (an optional leading
 #    `$env:GH_TOKEN=(gh auth token --user <login>);` aside):
@@ -39,7 +41,8 @@
 #  - Coverage, from the reviewer's own view calls (the read ledger, below), checked against the
 #    head's contents from GitHub: each file the scope needs, read whole after the CI capture, and
 #    the diff read.
-#  - The verdict: the reviewer's last message has exactly one line `VERDICT: CLEAN`.
+#  - The verdict: the reviewer's last message has exactly one standalone line `VERDICT: CLEAN`,
+#    anywhere in it (report text may follow); no other VERDICT line.
 #  - The pull request: open, its head still -Head when the checks, threads and reviews are read,
 #    and every review thread resolved.
 #  Before it posts the comment, and again before the status, it reads the head again; if the head
@@ -50,21 +53,26 @@
 # reviewer whose path is under -Root. A read counts for a changed file when the content it
 # returned is the head's own content of that file (with CRLF taken as LF and trailing newlines
 # ignored), whole or the lines of its view_range; a file is read whole when those reads together
-# cover every line. A view the CLI refused as too large covers nothing; a view whose content is
-# neither the head's nor that refusal fails the receipt, since the reviewer read another version.
+# cover every line. A view the CLI refused as too large covers nothing. A view the CLI cut short
+# (its content ends in "[Output truncated. Use view_range=[<n>, ...] to continue reading.") covers
+# only the whole lines before the cut, less the last, which the cut may have split; each must be
+# the head's, and later reads can cover the rest. A view whose content is neither the head's nor
+# one of those fails the receipt, since the reviewer read another version.
 # Each read is listed in the receipt with its path, lines, time and toolCallId.
 #
 # Scopes (Quality's coverage rule, #689): the diff and each file it leaves (not deleted) read whole.
 #  ENTIRE and FULL  the pull request's files; the diff is `git diff <merge base> <head>`.
-#  DELTA            the files changed since -Since, which must carry a successful
-#                   independent-review status; the diff is `git diff <since> <head>`.
+#  DELTA            the files changed since -Since, whose latest independent-review status must
+#                   be a success posted by an account in independent_review.posters as main's
+#                   quality/merge-rule.yml has it (any case); the diff is `git diff <since> <head>`.
 # The diff read is a successful powershell tool call of the reviewer, exit code 0, with output,
 # whose command runs git diff with both full SHAs (A B, A..B or A...B). Its output may be cut
 # short by the CLI, so the receipt proves the command, not that every line of it was read.
 #
 # The conventions this asks of the coordinator and a reviewer's prompt, then: capture CI as above
-# once it's green, then start the reviewer; read each file with `view` (in ranges when it's large);
-# run that git diff with full SHAs; end with a `VERDICT: CLEAN` line or the findings.
+# once it's green, then start the reviewer with a task call that passes its `model` argument; read
+# each file with `view` (in ranges when it's large); run that git diff with full SHAs; give exactly
+# one standalone `VERDICT: CLEAN` line in the last message, or the findings.
 #
 # Needs gh, signed in as an account in independent_review.posters (quality/merge-rule.yml) to post.
 # Only events.jsonl schema version 1 (session.start's version, as Copilot CLI 1.0.105 writes it) is
@@ -159,6 +167,18 @@ function Format-Instant($at) { $at.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.f
 
 function Get-Normalized([string] $text) { ($text -replace "`r`n", "`n").TrimEnd("`n") }
 
+# Copilot CLI 1.0.105 cuts a long view's output short, often mid-line, and appends a notice:
+# "\n\n[Output truncated. Use view_range=[<n>, ...] to continue reading. ...". The whole lines
+# before the cut, less the last one (which the cut may have split), are what the reviewer saw;
+# $null when the text doesn't end in that notice.
+function Get-ShownLines([string] $seen) {
+    $at = $seen.LastIndexOf("`n`n[Output truncated. Use view_range=[", [StringComparison]::Ordinal)
+    if ($at -lt 0 -or $seen.Substring($at) -cnotmatch '^\n\n\[Output truncated\. Use view_range=\[\d+, \.\.\.\] to continue reading\.') { return $null }
+    $before = [string[]]$seen.Substring(0, $at).Split("`n")
+    if ($before.Count -le 1) { return , [string[]]@() }
+    return , [string[]]$before[0..($before.Count - 2)]
+}
+
 function ConvertTo-SlashPath([string] $path) { ($path -replace '\\', '/').TrimEnd('/') }
 $rootPath = ConvertTo-SlashPath $Root
 $rootPrefix = "$rootPath/"
@@ -210,6 +230,38 @@ function Get-GreenCi($checks, [string] $what) {
     }
     if (-not @($counted | Where-Object { (Get-Field $_ 'name') -ceq $gateCheck -and (Get-Field $_ 'bucket') -ceq 'pass' })) { Stop-Receipt "$gateCheck hasn't passed on $Head in $what (a draft's fast ring isn't it)" }
     [pscustomobject]@{ Considered = $counted; GreenAt = $greenAt }
+}
+
+# Who may post the receipt: independent_review.posters in quality/merge-rule.yml as main has it,
+# never the pull request's own copy, which the change under review could rewrite; the merge rule
+# (tools/AgentBridge.Quality/MergeRule.cs) takes a receipt only from them, matching logins in any
+# case. Only the form main writes is read, one `independent_review:` block with its `context:` and
+# a `posters: [a, b]` list; anything else is refused rather than guessed at.
+function Get-ReceiptPosters {
+    $policy = @(Invoke-Gh api -H 'Accept: application/vnd.github.raw+json' "repos/$Repository/contents/quality/merge-rule.yml?ref=main") -join "`n"
+    $policyLines = (Get-Normalized $policy).Split("`n")
+    $blocks = @(for ($i = 0; $i -lt $policyLines.Count; $i++) { if ($policyLines[$i] -cmatch '^independent_review:[ \t]*(#.*)?$') { $i } })
+    if ($blocks.Count -ne 1) { Stop-Receipt "main's quality/merge-rule.yml has $($blocks.Count) independent_review blocks; exactly one is needed" }
+    $contexts = [Collections.Generic.List[string]]::new()
+    $lists = [Collections.Generic.List[string]]::new()
+    for ($i = $blocks[0] + 1; $i -lt $policyLines.Count; $i++) {
+        $line = $policyLines[$i]
+        if ($line -match '^[ \t]*(#.*)?$') { continue }
+        if ($line -notmatch '^[ \t]') { break }
+        if ($line -cmatch '^[ \t]+context:(.*)$') { $contexts.Add($Matches[1]) }
+        elseif ($line -cmatch '^[ \t]+posters:(.*)$') { $lists.Add($Matches[1]) }
+    }
+    if ($contexts.Count -ne 1 -or $contexts[0] -cnotmatch ('^[ \t]*([''"]?)' + [regex]::Escape($receiptContext) + '\1[ \t]*(#.*)?$')) {
+        Stop-Receipt "main's quality/merge-rule.yml doesn't give independent_review the one context $receiptContext"
+    }
+    $list = $null
+    if ($lists.Count -eq 1) { $list = [regex]::Match($lists[0], '^[ \t]*\[([^\[\]#]*)\][ \t]*(#.*)?$') }
+    if ($null -eq $list -or -not $list.Success) { Stop-Receipt "main's quality/merge-rule.yml has no independent_review.posters list this understands" }
+    $logins = @($list.Groups[1].Value.Split(',') | ForEach-Object { $_.Trim() -replace '^([''"])(.*)\1$', '$2' })
+    foreach ($login in $logins) {
+        if ($login -cnotmatch '^[A-Za-z0-9][A-Za-z0-9-]*$') { Stop-Receipt "main's independent_review.posters has '$login', which isn't a GitHub login" }
+    }
+    $logins
 }
 
 # --- The log, as bytes once: the hash covers exactly the lines read. A live session may be
@@ -445,8 +497,27 @@ if ($live.GreenAt -gt $captureAt) {
 
 # --- What the scope needs read.
 if ($Scope -eq 'DELTA') {
-    $state = @(Invoke-Gh api "repos/$Repository/commits/$Since/statuses?per_page=100" --paginate --jq ".[] | select(.context == `"$receiptContext`") | .state" | Where-Object { $_ })
-    if ($state.Count -eq 0 -or $state[0] -cne 'success') { Stop-Receipt "$Since has no successful $receiptContext status to be a delta from" }
+    # -Since must carry a CLEAN receipt: its latest independent-review status a success, posted by
+    # an account main's merge rule lets post one. The latest alone is judged; an older status never
+    # stands in for it.
+    $posters = @(Get-ReceiptPosters)
+    $sinceStatuses = @(Invoke-Gh api "repos/$Repository/commits/$Since/statuses?per_page=100" --paginate --jq ".[] | select(.context == `"$receiptContext`") | {state, creator: .creator.login, created_at}" |
+            Where-Object { $_ } | ForEach-Object { ConvertFrom-GhJson $_ "a $receiptContext status on $Since" })
+    if ($sinceStatuses.Count -eq 0) { Stop-Receipt "$Since has no $receiptContext status to be a delta from" }
+    $latestAt = $null
+    foreach ($s in $sinceStatuses) {
+        $statusAt = Get-Instant (Get-Field $s 'created_at')
+        if (-not $statusAt) { Stop-Receipt "a $receiptContext status on $Since has no time" }
+        if ($null -eq $latestAt -or $statusAt -gt $latestAt) { $latestAt = $statusAt }
+    }
+    $latest = @($sinceStatuses | Where-Object { (Get-Instant (Get-Field $_ 'created_at')) -eq $latestAt })
+    if ($latest.Count -ne 1) { Stop-Receipt "$Since has $($latest.Count) $receiptContext statuses at $(Format-Instant $latestAt); which is the latest is ambiguous" }
+    $sinceCreator = Get-Field $latest[0] 'creator'
+    if ($sinceCreator -isnot [string] -or -not $sinceCreator) { Stop-Receipt "the latest $receiptContext status on $Since names no creator" }
+    if (-not @($posters | Where-Object { [string]::Equals($_, $sinceCreator, [StringComparison]::OrdinalIgnoreCase) })) {
+        Stop-Receipt "the latest $receiptContext status on $Since was posted by $sinceCreator, who isn't in independent_review.posters on main"
+    }
+    if ((Get-Field $latest[0] 'state') -cne 'success') { Stop-Receipt "the latest $receiptContext status on $Since is $(Get-Field $latest[0] 'state'), not success: no CLEAN receipt to be a delta from" }
     $compare = ConvertFrom-GhJson (Invoke-Gh api "repos/$Repository/compare/$Since...$Head" --jq '{status, files: [.files[] | {filename, status}]}') "$Since...$Head"
     if ((Get-Field $compare 'status') -cne 'ahead') { Stop-Receipt "$Head isn't ahead of $Since ($(Get-Field $compare 'status')): no delta to read" }
     $files = Get-Field $compare 'files'
@@ -505,7 +576,15 @@ foreach ($call in $calls.Values) {
     if ($from -le $to) { $expected = Get-Normalized ($lines[($from - 1)..($to - 1)] -join "`n") }
     if ($seen -cne $expected) {
         if ($seen.StartsWith($tooLargeNotice, [StringComparison]::Ordinal)) { continue }
-        Stop-Receipt "the reviewer's view of $path at $(Format-Instant $call.Start.At) ($($call.Id)) isn't the head's content: it read another version"
+        $wrongVersion = "the reviewer's view of $path at $(Format-Instant $call.Start.At) ($($call.Id)) isn't the head's content: it read another version"
+        $kept = Get-ShownLines $seen
+        if ($null -eq $kept) { Stop-Receipt $wrongVersion }
+        # A view cut short counts for the whole lines it showed, each the head's own, and no more.
+        if ($kept.Count -gt $to - $from + 1) { Stop-Receipt $wrongVersion }
+        if ($kept.Count -gt 0 -and ((@($lines[($from - 1)..($from + $kept.Count - 2)]) -join "`n") -cne ($kept -join "`n"))) { Stop-Receipt $wrongVersion }
+        if ($kept.Count -eq 0) { continue }
+        $to = $from + $kept.Count - 1
+        $shownLines = "$from-$to (cut short)"
     }
     $covered[$path].Add([pscustomobject]@{ From = $from; To = $to })
     $ledger.Add([pscustomobject]@{ Path = $path; Lines = $shownLines; At = $call.Start.At; Id = $call.Id })
