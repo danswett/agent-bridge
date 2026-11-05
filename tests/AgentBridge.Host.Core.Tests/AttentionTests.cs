@@ -243,18 +243,71 @@ public class AttentionTests
         Assert.Equal(AttentionKind.SignInNeeded, session.Attention?.Kind);
     }
 
-    // Past MaxSkimBytes the host reads nothing until the tail: a failure seen before that stretch
-    // may have been answered in it, and a session that wrote so much since was reaching its model.
-    [Fact]
-    public async Task A_failure_read_before_a_stretch_the_host_never_read_is_not_taken_as_current()
+    // Past MaxSkimBytes the host reads nothing until the tail. Bytes never read prove nothing (a
+    // retry loop writes plenty with no reply), so a failure skimmed before them is kept, and only
+    // what the tail itself shows clears or refreshes it (#800 ruling).
+    static List<string> SkimmedFailureThenUnread()
     {
-        await using var s = new Session_(tailBytes: 4096, maxSkim: 2048);
         var lines = new List<string> { Copilot.User("Carry on", 1), Copilot.TurnStart(2), Error(SignedOut, 3) };
         lines.AddRange(Enumerable.Range(0, 60).Select(i => Copilot.Assistant("Still bisecting " + new string('x', 200), 20 + i, agentId: "agent-1")));
+        return lines;
+    }
+
+    [Fact]
+    public async Task A_skimmed_failure_is_cleared_by_a_model_reply_in_the_tail_read_after_an_unread_stretch()
+    {
+        await using var s = new Session_(tailBytes: 4096, maxSkim: 2048);
+        var lines = SkimmedFailureThenUnread();
+        lines.Add(Copilot.Assistant("Done.", 100));
+
+        Assert.Null((await s.After([.. lines])).Attention);
+    }
+
+    [Fact]
+    public async Task A_skimmed_failure_followed_by_a_new_401_in_the_tail_holds_from_the_new_one()
+    {
+        await using var s = new Session_(tailBytes: 4096, maxSkim: 2048);
+        var lines = SkimmedFailureThenUnread();
+        lines.Add(Error(new { errorType = "session", message = "Unauthorized", statusCode = 401 }, 100));
 
         var session = await s.After([.. lines]);
 
-        Assert.Null(session.Attention);
+        Assert.Equal(AttentionKind.SignInNeeded, session.Attention?.Kind);
+        Assert.Equal(Fixture.T0.AddSeconds(100), session.Attention?.Since);
+    }
+
+    [Fact]
+    public async Task A_skimmed_failure_holds_when_the_tail_has_only_turn_ends_hooks_delegates_and_context()
+    {
+        await using var s = new Session_(tailBytes: 4096, maxSkim: 2048);
+        var lines = SkimmedFailureThenUnread();
+        lines.AddRange([Copilot.TurnEnd(100), Copilot.Event("hook.start", new { }, 101), Copilot.Event("hook.end", new { }, 102),
+            Copilot.Assistant("Delegate done.", 103, agentId: "agent-1"), Copilot.Event("user.message", new { content = "Context.", source = "memory" }, 104)]);
+
+        var session = await s.After([.. lines]);
+
+        Assert.Equal(AttentionKind.SignInNeeded, session.Attention?.Kind);
+        Assert.Equal(Fixture.T0.AddSeconds(3), session.Attention?.Since);
+    }
+
+    // read_agent's arguments name an agentId: the main reply asking for it was skimmed past, and
+    // a host restart kept the sign-in it had answered.
+    [Fact]
+    public async Task A_skimmed_model_tool_request_naming_an_agent_still_clears_sign_in()
+    {
+        await using var s = new Session_(tailBytes: 4096);
+        var lines = new List<string> { Copilot.User("Carry on", 1), Copilot.TurnStart(2), Error(SignedOut, 3),
+            Copilot.Event("assistant.message", new { messageId = "m10", content = "", toolRequests = new[] { new { toolCallId = "t1", name = "read_agent", arguments = new { agentId = "agent-1" } } } }, 10) };
+        lines.AddRange(Enumerable.Range(0, 40).Select(i => Copilot.Assistant("Still bisecting " + new string('x', 200), 20 + i, agentId: "agent-1")));
+
+        Assert.Null((await s.After([.. lines])).Attention);
+    }
+
+    [Fact]
+    public void A_credential_whose_value_is_a_link_does_not_leave_the_next_secret_showing()
+    {
+        Assert.Equal("Failed: [token] and [token]",
+            AgentErrors.Shown("Failed: token=\"https://example.invalid/login\" and password=\"synthetic phrase 7\""));
     }
 
     // Another error is about the turn it ended: the next one starting leaves it behind.

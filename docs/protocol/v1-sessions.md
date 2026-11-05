@@ -1216,8 +1216,10 @@ status rather than instead of it.
     sign-in failures 51 ms apart. A sign-in alone never clears it: once one finishes
     (`signin.done` `signedIn`, when `sessions.signin` comes) or a still-valid credential is found,
     it stays `signInNeeded` with `recovery` `pending` until that same evidence, and no newer
-    failure, shows the session can reach its model. A host that did not read part of a long transcript (past its skim
-    budget) does not keep a failure it read before that part: whatever followed was not seen.
+    failure, shows the session can reach its model. A host that did not read part of a long
+    transcript (past its skim budget) keeps a failure it read before that part: bytes never read
+    are no evidence. Only what it does read after them clears it, by the same evidence, and a
+    newer failure there moves `since`.
 * A change to it moves `updatedAt`. It is a few hundred bytes and never trimmed by the
   [session budget](#session-budget).
 * **Older clients** ignore it and read the status, so a signed-out session reads as idle to them.

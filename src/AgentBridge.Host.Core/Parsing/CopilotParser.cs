@@ -61,10 +61,12 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
 
     // The main agent's replies too, for activity.own: a session whose delegates filled the
     // parsed window had no reply of the main agent's in it. A delegate's carries an agentId,
-    // and is not wanted; a main reply quoting that word is merely missed. And a delegate's
+    // and is not wanted; a main reply quoting that word is merely missed, except while the
+    // session needs sign-in, when that reply (a read_agent request names an agentId) is what
+    // clears it: Count reads the stamp itself. And a delegate's
     // tool calls, whose permission prompts can fall in the window when the calls do not.
     protected override bool SkimWants(ReadOnlySpan<byte> line) =>
-        base.SkimWants(line) || (line.IndexOf(AssistantMessage) >= 0 && line.IndexOf(Stamped) < 0)
+        base.SkimWants(line) || (line.IndexOf(AssistantMessage) >= 0 && (line.IndexOf(Stamped) < 0 || S.Attention is { Kind: AttentionKind.SignInNeeded }))
         || (line.IndexOf(ToolStart) >= 0 && line.IndexOf(Stamped) >= 0);
 
     public override void Reset()
@@ -230,9 +232,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         S.OwnResponseCut = false;
         S.OwnReasoning = null;
         S.OwnAt = null;
-        // A failure the skim read may have been answered in the bytes never read: a session that
-        // wrote that much since was reaching its model. Left for the window to say again.
-        S.Attention = null;
+        // A sign-in failure the skim read is kept: bytes never read are no evidence the model
+        // answered, as a retry loop can write plenty without one (#800). The tail clears it only
+        // with a main reply after it, and a newer failure there moves its since.
     }
 
     protected override bool Apply(JsonElement e, DateTimeOffset? at)

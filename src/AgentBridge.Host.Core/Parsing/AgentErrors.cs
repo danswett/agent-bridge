@@ -60,11 +60,13 @@ internal static partial class AgentErrors
         return text.Length == 0 ? null : Limits.KeepStart(text, Limits.AttentionMessage);
     }
 
-    // In this order: a link holds paths and tokens, and an id's hex would otherwise read as a code.
+    // In this order: a keyed secret's quoted value may be a link, and taking the link first left
+    // its closing quote to open the next secret's; a link holds paths and tokens; and an id's hex
+    // would otherwise read as a code.
     static readonly (Regex Pattern, string Mark)[] Redactions =
     [
-        (Link(), "[link]"),
         (Keyed(), "[token]"),
+        (Link(), "[link]"),
         (Basic(), "[token]"),
         (Prefixed(), "[token]"),
         (Jwt(), "[token]"),
