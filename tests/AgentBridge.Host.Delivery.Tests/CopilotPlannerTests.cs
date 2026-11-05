@@ -473,6 +473,28 @@ public class CopilotPlannerTests
         Assert.Equal([("a@b.c", true)], Keys(Plan(Schema("t", """{ "type": "string", "format": "email" }"""), Answer(new { t = "a@b.c" }))));
         Assert.Equal("\"t\": must be an email address", Outside(Schema("t", """{ "type": "string", "format": "email" }"""), Answer(new { t = "a@b." })));
     }
+    // Found while checking #844's cost per refresh: an option list's oneOf was matched against its
+    // enum, and uniqueItems checked, each option against every other, on the thread that refreshes
+    // every session. 40,000 numbers each ran past this 5 s bound; matched by key, under one second.
+    [Fact]
+    public async Task Long_option_lists_are_checked_in_linear_time()
+    {
+        const int N = 40_000;
+        var numbers = string.Join(", ", Enumerable.Range(0, N));
+        var consts = string.Join(", ", Enumerable.Range(0, N).Select(i => $$"""{ "const": {{i}} }"""));
+        foreach (var (property, machine) in new[]
+        {
+            ($$"""{ "type": "string", "enum": [{{numbers}}], "oneOf": [{{consts}}] }""", true),
+            ($$"""{ "type": "array", "items": { "enum": [{{numbers}}] }, "uniqueItems": true }""", false),
+        })
+        {
+            using var doc = JsonDocument.Parse(Schema("f", property));
+            var root = doc.RootElement.Clone();
+            var question = await Task.Run(() => QuestionMapper.FromCopilotAskUser("call-1", root, Fixture.T0)).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(machine, question.AnswerAtMachine == true);
+        }
+    }
+
     [Fact]
     public void Many_quick_patterns_in_one_question_fit_its_budget()
     {

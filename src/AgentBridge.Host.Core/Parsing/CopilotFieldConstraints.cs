@@ -111,8 +111,8 @@ public static class CopilotFieldConstraints
                 // Two options of one value can both be ticked, which `uniqueItems` forbids.
                 if (Has(p, "uniqueItems", out var unique) && unique.ValueKind != JsonValueKind.False)
                 {
-                    var options = Options(items, "anyOf", "enum").ToList();
-                    if (unique.ValueKind != JsonValueKind.True || options.Where((o, i) => options.Take(i).Any(x => CopilotFieldSchema.SameScalar(o, x))).Any()) { return "uniqueItems"; }
+                    var seen = new HashSet<string>(StringComparer.Ordinal);
+                    if (unique.ValueKind != JsonValueKind.True || Options(items, "anyOf", "enum").Any(o => Key(o) is { } k && !seen.Add(k))) { return "uniqueItems"; }
                 }
                 return null;
             default:
@@ -146,9 +146,26 @@ public static class CopilotFieldConstraints
 
     // With both lists, the CLI draws the first and ignores the second, so each option drawn must be
     // one the second allows.
-    static bool Within(JsonElement o, string consts, string values) =>
-        !(Has(o, consts, out _) && Has(o, values, out var v) && v.ValueKind == JsonValueKind.Array)
-        || Options(o, consts, values).All(c => v.EnumerateArray().Any(x => CopilotFieldSchema.SameScalar(c, x)));
+    // Matched by key, not pair by pair: a question is read on every refresh of every session, and
+    // tens of thousands of options compared each with each held that up.
+    static bool Within(JsonElement o, string consts, string values)
+    {
+        if (!(Has(o, consts, out _) && Has(o, values, out var v) && v.ValueKind == JsonValueKind.Array)) { return true; }
+        var allowed = v.EnumerateArray().Select(Key).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        return Options(o, consts, values).All(c => Key(c) is { } k && allowed.Contains(k));
+    }
+
+    // A scalar as CopilotFieldSchema.SameScalar compares it: equal keys exactly when SameScalar
+    // holds. Null for one equal to nothing, as a number it cannot read exactly is.
+    static string? Key(JsonElement v) => v.ValueKind switch
+    {
+        JsonValueKind.String => "s" + v.GetString(),
+        JsonValueKind.Number => CopilotFieldSchema.ExactNumber(v.GetRawText()) is { } n ? "n" + n : null,
+        JsonValueKind.True => "t",
+        JsonValueKind.False => "f",
+        JsonValueKind.Null => "z",
+        _ => null,
+    };
 
     // What the form itself carries besides its fields: anything but annotations, "required" and
     // "additionalProperties" (answers name only its fields) limits them in a way the host does not
