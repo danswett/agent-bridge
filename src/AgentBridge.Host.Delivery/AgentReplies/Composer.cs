@@ -63,8 +63,12 @@ public static class ClaudeComposer
         return t.Length >= 10 && t.All(c => c == '─');
     }
 
+    // The rows a reply is held to, Claude's and Codex's, as the injector worker reads them: only
+    // the window's padding, ASCII spaces, trimmed. Claude Code draws its prompt as the pointer and
+    // a no-break space (`[pointer,"\xA0"]`); trimmed with every white space, it was held as ">"
+    // while the worker read ">\u00A0", and every Claude reply was refused (#843 review).
     internal static List<ScreenRow> Span(IReadOnlyList<string> rows, int from, int to) =>
-        [.. Enumerable.Range(from, to - from + 1).Select(r => new ScreenRow(r, rows[r].TrimEnd()))];
+        [.. Enumerable.Range(from, to - from + 1).Select(r => new ScreenRow(r, rows[r].TrimEnd(' ')))];
 }
 
 // Codex 0.165: the input row starts with '›' (U+203A) at the left edge, any wrapped lines

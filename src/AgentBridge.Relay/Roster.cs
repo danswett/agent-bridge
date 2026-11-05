@@ -329,7 +329,9 @@ public sealed class MachineRoster
         lock (a)
         {
             if (!a.Loaded) { return null; }
-            return [.. a.Machines.Values.Where(m => !online(m.Id) && !a.Online.ContainsKey(m.Id)).OrderByDescending(m => m.LastSeen)];
+            // Presence's slots are authoritative. Online counts can still include a replaced
+            // socket whose teardown lags behind its replacement leaving the slots.
+            return [.. a.Machines.Values.Where(m => !online(m.Id)).OrderByDescending(m => m.LastSeen)];
         }
     }
 
@@ -476,7 +478,9 @@ public sealed class MachineRoster
                 string? etag;
                 lock (a)
                 {
+                    var shown = Shown(a);
                     Prune(a);
+                    announce |= Shown(a) != shown;
                     doc = new RosterDocument { Machines = [.. a.Machines.Values.OrderByDescending(m => m.LastSeen)], Forgotten = new(a.Forgotten) };
                     etag = a.ETag;
                     a.Dirty = false;
@@ -555,6 +559,7 @@ public sealed class MachineRoster
         bool changed;
         lock (a)
         {
+            var wasLoaded = a.Loaded;
             var shown = Shown(a);
             a.ETag = stored?.ETag;
             // Soon after the first read, for a relay handing over; then now and then.
@@ -596,7 +601,7 @@ public sealed class MachineRoster
             // What this relay held that storage did not have has to reach it; a device that only
             // reads (a phone opening the app) writes nothing.
             a.Dirty = a.Dirty || Signature(a) != StoredSignature(doc);
-            changed = Shown(a) != shown;
+            changed = !wasLoaded || Shown(a) != shown;
         }
         metrics.Roster("load", "ok");
         return changed;

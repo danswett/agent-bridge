@@ -1,4 +1,4 @@
-/* Agent Bridge PWA. Mobile first (an iPhone on the Home Screen), fine on a desktop.
+/* The Slipgates web app (PWA). Mobile first (an iPhone on the Home Screen), fine on a desktop.
    Colours are the design language's roles and surfaces, from design/tokens.css (generated from
    design/tokens.json; docs/design/ui.md §3): never a colour of this file's own. Controls,
    links, focus and selection are bridge. Status is a glyph from the generated sprite and the
@@ -564,6 +564,46 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .needs-status { margin: 4px 0 0; font-size: .85rem; color: var(--ab-text); overflow-wrap: anywhere; }
 @media (forced-colors: active) {
   .needs-you { border-color: Highlight; }
+}
+/* An agent that needs sign-in (#800): a banner per machine, agent and account, in the Needs you
+   role, above the lane. Its words aren't selected by a press (§9.1 A13); the code is, whole. */
+.sign-in-banners { display: grid; gap: 8px; margin: 8px 0 0; }
+.sign-in-banner {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; align-items: start;
+  border-color: var(--ab-needs); background: var(--ab-needs-fill); user-select: none;
+}
+.sign-in-mark { display: flex; margin-top: 2px; }
+.sign-in-body > p { margin: 0; overflow-wrap: anywhere; }
+.sign-in-head { font-weight: 600; color: var(--ab-needs-head); }
+.sign-in-line, .sign-in-expiry, .sign-in-where, .sign-in-uri { font-size: .875rem; color: var(--ab-text); }
+.sign-in-sessions { list-style: none; margin: 4px 0 0; padding: 0; }
+.sign-in-session {
+  min-height: 32px; padding: 0; text-align: left; overflow-wrap: anywhere;
+  font: inherit; color: var(--ab-text); background: none; border: 0; cursor: pointer;
+}
+@media (pointer: coarse) { .sign-in-session { min-height: var(--tap); } }
+.sign-in-session:hover { text-decoration: underline; }
+.sign-in-code-line { margin: 4px 0; }
+.sign-in-code { font: 600 1.5rem var(--ab-font-mono); letter-spacing: .12em; -webkit-user-select: all; user-select: all; color: var(--ab-text); }
+.sign-in-actions, .sign-in-flow-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.sign-in-problem { color: var(--ab-needs-text); font-size: .875rem; }
+.sign-in-copied:empty { display: none; }
+.sign-in-banner [aria-disabled="true"] { opacity: .6; cursor: progress; }
+/* The sign-in sheet (#800, ui.md §6.13): modal, so focus stays in it, and Cancel is where it
+   starts. Its code is selectable whole. */
+.sign-in-sheet {
+  width: min(28rem, calc(100vw - 32px)); padding: 16px 20px; border: 1px solid var(--ab-needs);
+  border-radius: var(--radius); background: var(--ab-card); color: var(--ab-text);
+}
+.sign-in-sheet::backdrop { background: var(--ab-shadow); }
+.sign-in-sheet-title { margin: 0 0 8px; font-size: 1rem; font-weight: 600; }
+.sign-in-sheet-body > p { margin: 0 0 4px; overflow-wrap: anywhere; }
+.sign-in-sheet-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+@media (forced-colors: active) {
+  .sign-in-sheet { border-color: CanvasText; }
+}
+@media (forced-colors: active) {
+  .sign-in-banner { border-color: Highlight; }
 }
 /* Moving rows: a grip on hover with a mouse, and a line where a dragged row will go. */
 .drag-handle { display: none; }

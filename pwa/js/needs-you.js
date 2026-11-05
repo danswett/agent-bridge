@@ -12,6 +12,7 @@
 import { answerability, tapToAnswer } from './answers.js';
 import { parseMarkdown } from './markdown.js';
 import { delegateTitle } from './attribution.js';
+import { needsSignIn } from './auth-state.js';
 import { hasHidden, hasRightToLeft, reveal, unescapeShown } from './hidden-text.js';
 
 export { reveal };
@@ -195,6 +196,18 @@ export function needsYou(entries, { capabilities = () => [], nameOf = () => '', 
   const out = [];
   for (const { hostId, session: s } of entries) {
     const q = s?.question;
+    // An agent that needs sign-in waits on a person as a question does (#800): one entry, which
+    // offers no answer here. Signing in is the machine's banner's (ui/sign-in-view.js).
+    if (!q && needsSignIn(s?.attention) && current(hostId)) {
+      const machine = nameOf(hostId) ?? '';
+      out.push({
+        key: `${hostId}\n${s.id}`, hostId, sessionId: s.id, questionId: null, question: null, kind: 'signIn',
+        title: s.title || 'Untitled session', machine: labelled ? machine : '', sortName: machine,
+        agent: AGENT_NAME[s.agent] ?? AGENT_NAME.unknown, delegate: null,
+        askedAt: s.attention.since ?? s.statusSince ?? s.updatedAt ?? '', line: 'Needs sign-in', prompt: null, mode: 'signIn', decisions: null,
+      });
+      continue;
+    }
     if (!q || !current(hostId)) { continue; }
     const machine = nameOf(hostId) ?? '';
     const able = answerability(q, capabilities(hostId) ?? [], s.agent);

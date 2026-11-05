@@ -237,7 +237,10 @@ public sealed partial class MainViewModel : Observable
         Action<string> removed = id => OnRemoved(m, id);
         Action synced = () => Synced(m);
         Action changed = () => OnHostChanged(m);
-        Action begun = () => Restale(m);
+        // A snapshot begun or done changes whether this machine's sign-ins can be shown (#800), which
+        // its currency alone doesn't say for this machine.
+        Action begun = () => { Restale(m); SyncNeedsYou(); SyncSignIns(); };
+        Action<string, System.Text.Json.JsonElement> signIn = (ev, data) => OnAgentSignIn(m.Key, ev, data);
         sessions.Upserted += upsert;
         sessions.Removed += removed;
         sessions.Synced += synced;
@@ -246,6 +249,7 @@ public sealed partial class MainViewModel : Observable
         // Its Machines row says "Discovery held" while the hold stands (#788).
         sessions.HeldChanged += SyncMachineRows;
         m.Host.Changed += changed;
+        m.Host.AgentSignIn += signIn;
         // After the machine's own handler (Machine, made before it is added) has unconfirmed its rows.
         m.Host.Gapped += begun;
         unhook[m] = () =>
@@ -257,6 +261,7 @@ public sealed partial class MainViewModel : Observable
             sessions.HeldChanged -= OnHeldChanged;
             sessions.HeldChanged -= SyncMachineRows;
             m.Host.Changed -= changed;
+            m.Host.AgentSignIn -= signIn;
             m.Host.Gapped -= begun;
         };
         Machines.Add(new MachineChoice(m.Key, m.Name));
@@ -307,6 +312,7 @@ public sealed partial class MainViewModel : Observable
         MachineRemoved?.Invoke(key);
         // A launch's open stays: the machine may be back in a moment, with the session it started.
         pendingOpens.RemoveWhere(p => p.Machine == key);
+        focusOpens.RemoveWhere(p => p.Machine == key);
         unhook.Remove(m, out var undo);
         undo?.Invoke();
         machines.Remove(m);
@@ -364,22 +370,33 @@ public sealed partial class MainViewModel : Observable
     // after such a list (a folder-trust question answered at the machine).
     readonly HashSet<(string Machine, string Session)> pendingOpens = [];
     readonly HashSet<(string Machine, string Session)> launchOpens = [];
+    // Of those, the ones whose session takes keyboard focus once it opens (a toast's).
+    readonly HashSet<(string Machine, string Session)> focusOpens = [];
 
     public void Open(string? sessionId) => Open(null, sessionId);
 
-    public void Open(string? machineKey, string? sessionId, bool untilItArrives = false)
+    // focus: keyboard focus goes with it (SessionCardViewModel.WantsFocus), as Needs you's does: on
+    // its question's heading, never one of its answers (#484), so the next Tab is in the session.
+    public void Open(string? machineKey, string? sessionId, bool untilItArrives = false, bool focus = false)
     {
         if (sessionId is null) { return; }
         var wanted = (machineKey ?? Machine.LocalKey, sessionId);
-        if (!byId.TryGetValue(CardKey(wanted.Item1, sessionId), out var card)) { (untilItArrives ? launchOpens : pendingOpens).Add(wanted); return; }
+        if (!byId.TryGetValue(CardKey(wanted.Item1, sessionId), out var card))
+        {
+            (untilItArrives ? launchOpens : pendingOpens).Add(wanted);
+            if (focus) { focusOpens.Add(wanted); }
+            return;
+        }
         pendingOpens.Remove(wanted);
         launchOpens.Remove(wanted);
+        focus |= focusOpens.Remove(wanted);
         // A card the picker hides is shown: it is what was asked for.
         if (!Visible(card)) { SelectedMachine = Machines[0]; }
         // Unfolded too, as before the panes: the fold store still keeps it, and Needs you's tests
         // (#165) hold opening to it.
         card.Folded = false;
         Selected = card;
+        if (focus) { card.WantsFocus = true; }
         OpenRequested?.Invoke(card);
     }
 
@@ -411,6 +428,8 @@ public sealed partial class MainViewModel : Observable
         Raise(nameof(FleetNote));
         Raise(nameof(HasFleetNote));
         OnHeldChanged();
+        // Its sign-ins needed (#800) come as a change to the host.
+        SyncSignIns();
     }
 
     // Each machine's readings marked with the machine that took them, merged, and kept between runs
@@ -554,10 +573,13 @@ public sealed partial class MainViewModel : Observable
         m.Cards.Folds.Keep(owner.Where(p => p.Value == m).Select(p => p.Key.Id));
         // The session a toast asked for has ended since.
         pendingOpens.RemoveWhere(p => p.Machine == m.Key && !byId.ContainsKey(CardKey(p.Machine, p.Session)));
+        focusOpens.RemoveWhere(p => p.Machine == m.Key && !byId.ContainsKey(CardKey(p.Machine, p.Session)) && !launchOpens.Contains(p));
         Order.Synced(m.Key, owner.Where(p => p.Value == m).Select(p => p.Key.Id).ToHashSet(StringComparer.Ordinal));
         Rearrange();
         RefreshLabels();
         Restale(m);
+        SyncNeedsYou();
+        SyncSignIns();
     }
 
     bool Shows(Machine m) => SelectedMachine?.Key is not { } key || key == m.Key;
@@ -581,6 +603,8 @@ public sealed partial class MainViewModel : Observable
             foreach (var c in byId.Values) { c.RefreshTimes(); }
             RefreshEnded();
             RefreshNeedsYou();
+            // A code runs out, and "signed in" goes, with nothing from the machine (#800).
+            SyncSignIns();
             // A machine kept offline says when it was last seen, which moves on.
             if (machines.Any(m => m.Offline)) { SyncMachineRows(); }
             Order.Flush();

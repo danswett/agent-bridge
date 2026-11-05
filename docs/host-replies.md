@@ -11,7 +11,7 @@ one session at once.
 
 | Agent | Replies | Why |
 |---|---|---|
-| Copilot CLI | Yes | agent-ha-bridge has long typed replies into it, and its transcript records every prompt (`user.message`) with the text as typed, which confirms one by identity |
+| Copilot CLI | Yes, typed only into its input box as seen on screen, and only while it is empty and outside shell mode | agent-ha-bridge has long typed replies into it, and its transcript records every prompt (`user.message`) with the text as typed, which confirms one by identity |
 | Claude Code | Yes, typed only into its input box as seen on screen | Its transcript records a prompt typed while idle as a `user` entry whose content is the line as typed, and one typed while it works as a `queue-operation` `enqueue` with that content (2.1.312, seen live), which confirms one by identity. agent-ha-bridge confirmed only that *some* prompt was submitted |
 | Codex | Yes, typed only into its input box as seen on screen, and only while it is empty | Its rollout records every prompt, idle or mid-turn, as an `item_completed` `UserMessage` with the line as typed (0.165, seen live), which confirms one by identity. agent-ha-bridge typed with no confirmation at all |
 | Any, on macOS or Linux | Refused, and `sessions.reply` is not offered | Delivery through tmux comes later |
@@ -38,6 +38,85 @@ running now have finished (239 of the 267 steering prompts in this machine's tra
 right after a turn start), or `queued` after the turn ends. One typed while idle is recorded
 at once (`delivery: "idle"`). The host therefore waits up to 60 s for the prompt, and frees
 the session for answers as soon as the keys have gone.
+
+**The input box (#825).** A reply is typed only into Copilot's own input box, read off the
+screen (`Copilot/CopilotInputBox.cs`), and only while that box is empty and outside shell
+mode. Words a person left in the box would be sent with the reply, and in shell mode Enter
+runs what the box holds as a shell command. agent-ha-bridge typed without looking; so did
+this host until #825. From CLI 1.0.105's own rendering code, the box is drawn one of two
+ways: by default as a "rail" (`╻`, `┃` per line, `╹`) beside a `▄`/`▀` box with no prompt
+glyph, and with the prompt frame off as a row between two `─` rules led by `❯ ` (or `! ` in
+shell mode). Shell mode shows as that glyph, as the empty box's placeholder "Execute shell
+command", or as the footer's "Shell" label or "esc exit shell mode" hint. The reply is
+`refused`, with nothing typed:
+
+* when the box holds anything, Unicode spaces included (no-break, figure, narrow no-break,
+  ideographic): only ASCII spaces, the box's and the window's padding, are trimmed, by the
+  worker reading the screen and by the reader. A draft of ASCII spaces alone, or of tabs (the
+  CLI draws a tab as four spaces), cannot be told from padding, and reads as empty; idle, the
+  footer then drops "/ commands", and the reply is refused all the same. The requesting
+  client's reply result says how many
+  characters, and shows what, escaped (`ShownText.Reveal`) and cut to 500 characters. That
+  text goes nowhere else: the host's log and Home Assistant (which keeps it in its history)
+  get the fixed reason and the length only (`ReplyReasons.Shared`), since a draft can hold a
+  pasted password or token;
+* in shell mode;
+* in vim's normal mode (the footer's "-- NORMAL --"), where typed keys are commands;
+* when the screen cannot be read, or does not show exactly one box, rail and plain counted
+  together, at the bottom: its bottom edge directly over Copilot's footer row (the sidebar,
+  mode, commands, shell, or file and issue hints), with nothing but blank rows under that.
+  The CLI draws everything else above its input area, and code in the agent's output is
+  drawn as plain text, so the agent can print rows that look like the box and its footer;
+  printed above the real box, or above a dialog in its place, they are not anchored there.
+  An empty box must also show "/ commands" in the footer, which the CLI draws only while
+  the box is empty. While a turn runs, the footer's place holds the turn's own row (spinner,
+  "esc interrupt" or another Esc hint, "ctrl+q enqueue"; `LMe`'s activity layout) instead,
+  never with "/ commands": that row is taken for the footer when it carries Esc's or the
+  enqueue hint, the box's own rows decide whether it is empty, and its vim and shell labels
+  are read as in the idle footer, so a reply can still steer a working session. In a
+  window under 80 columns (measured by the box's own bottom edge, which spans the frame) the
+  turn's row leaves those labels out, and a box holding only spaces in shell mode draws as
+  empty, so a reply to a working session there is refused ("too narrow to check its input
+box; reply once the turn ends, or widen it"). With the
+  CLI's hints hidden (`hideToggleHelp`), the idle footer is drawn empty and a reply to an
+  idle session is refused; a turn being cancelled shows no hints either, and is refused.
+
+Whenever the screen shows exactly one box, refused or not, the reader also describes it
+(`CopilotInputBoxState`, for #804's Clear and send): its rows, its full text and how many
+lines it draws, whether it is in shell mode, its vim mode as the footer shows it (none,
+insert or normal), whether it is the prompt's own box at the bottom over the footer, and
+whether it is all on screen. A rail box taller than the window,
+its top edge scrolled away, is described as cut off; it is refused as before. A plain box
+cut off the same way cannot be told from output, so it is not described.
+
+The box is read when the reply arrives, so a draft or shell mode is refused at once, and
+read again once the typing turn has come, after the other checks. The words are held to
+that read's box rows (`KeySend.Expect`), and to the footer under them (`KeySend.Checks`):
+in the same attach, just before the first key, the worker reads the box's rows again, which
+must read exactly so, and the footer, which must still be there (one of its own hints or
+labels) and show neither shell mode ("Shell", "shell", "esc exit shell mode") nor vim's
+normal mode ("-- NORMAL --"), with nothing but blank rows under it to the window's bottom, as
+the reader required: the agent can print rows that read like the box and its footer, and
+with only those rows held, a real box holding a draft, or a permission dialog, drawn under
+them afterwards passed. The box's rows alone cannot say so: '!' then a space enters
+shell mode with only a space in the box, which draws as an empty box, and Esc into vim's
+normal mode changes only the footer. In a window under 80 columns (the box's bottom edge)
+the footer must also not have become a running turn's row (Esc's hint, the enqueue hint):
+there that row leaves out the mode labels, so a turn starting after the read would hide
+them, and it is refused as one running at the read is. Anything else in the footer (its
+spinner, its hints) may change. If a check fails, nothing is typed and the reply is `refused` ("input box
+changed just as the reply was to be typed"). The Enter is a send of its own, after
+Copilot's 300 ms pause, held to the box's bottom edge and to the same footer checks, and
+to the box's first text row not starting with '!' (the frame-off box's shell glyph): if
+any fails (a dialog drawn in the input area's place, Home then '!' while the words were
+typed, Esc), no Enter goes, and the reply is `unconfirmed`, its words left in the box for
+the person to send or clear. A box that grows down the screen with the words (a short
+screen, a long reply) moves its edge too, and is reported the same way; one that grows up a
+full screen moves its first text row, which then leaves the '!' check to the footer's. What
+no check can close is the moment between the worker's read and the CLI taking the key: a
+mode changed at the machine in that moment is not seen. The
+screens the tests read are in `tests/fixtures/screens/copilot-input-box.json`, built from
+the captured live screen and the CLI's rendering code, each naming its source.
 
 ## Attachments (Copilot)
 
@@ -107,7 +186,10 @@ own. What guards them is new. agent-ha-bridge's hooks tell it when a permission 
 (words pick an option; Enter accepts the highlighted one). Each of them takes the input
 box's place on screen, so the host reads the screen first (`AgentReplies/Composer.cs`) and
 types only into an **input box that is positively on screen**, with the first send
-held to those rows (`KeySend.Expect`), so nothing is typed if they change in between:
+held to those rows (`KeySend.Expect`), so nothing is typed if they change in between. The
+rows are held as the worker reads them, with only the window's padding (ASCII spaces)
+trimmed: Claude Code draws its prompt as the pointer and a no-break space, and held with
+that space trimmed away, every Claude reply read as a box that had changed and was refused:
 
 - Claude Code 2.1: a row starting `>` at the left edge between two full-width rules. A
   permission prompt shows indented options under one rule; an `AskUserQuestion` shows tabs

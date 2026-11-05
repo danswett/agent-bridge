@@ -134,13 +134,14 @@ function takeLink() {
 }
 
 // Opens the session a notification was about, with its question ready to answer: on its own
-// machine, shown alone or with every other. Its answers take focus only once that machine
-// takes them (#269: not while its list is still being confirmed), and only while the session
+// machine, shown alone or with every other. Its question takes focus only once that machine
+// takes answers (#269: not while its list is still being confirmed), and only while the session
 // is still the one shown.
-// Focus goes to an answer only for the question the notification was about, and only if the
-// person has not moved focus since: a tap choice sends on Enter or Space, and while the machine
-// was held the question could have been answered at the machine and another asked, which a
-// focus moved later would have them approve unseen (#269 security review).
+// Focus goes to the question's heading, never an answer: a tap choice sends on Enter or Space,
+// so a key pressed as the page came up would answer a question nobody had read (#484). And only
+// for the question the notification was about, and only if the person has not moved focus
+// since: while the machine was held the question could have been answered at the machine and
+// another asked (#269 security review).
 function focusLinked() {
   if (!linked || !page?.hosts.shows(linked.host)) { return; }
   const card = page.view.card(linked.host, linked.session);
@@ -165,13 +166,13 @@ function focusLinked() {
   const now = document.activeElement;
   if (now && now !== document.body && now !== left) { return; }
   if (!question || card.session?.question?.id !== question) { return; }
-  // The question's answer controls, not a code block's Copy button in its message: Enter on
-  // a notification's question must answer it, not copy the command it shows.
-  const el = card.view;
-  const target = el.querySelector('.question-slot button:not([disabled]):not(.md-copy), .question-slot input:not([disabled]), .question-slot textarea:not([disabled])');
-  target?.focus({ preventScroll: true });
+  // Read first by a screen reader, and Tab from it reaches the answers.
+  const target = card.view.querySelector('.question-slot .question-head');
+  if (!target) { return; }
+  target.tabIndex = -1;
+  target.focus({ preventScroll: true });
   // Brought into sight as Needs you brings a question, so its answers wait before a click counts.
-  if (target) { card.revealQuestion('auto', target); }
+  card.revealQuestion('auto', target);
 }
 
 // A tap on a notification while the app is open: the worker says where to go.
@@ -278,7 +279,7 @@ const demoStorage = {
 
 async function startDemo() {
   // Only the demo loads its pretend hosts: the live app never fetches or parses them (#609).
-  const { DemoBlobStore, DemoConnection, DemoHost, demoDelegating, demoMachines, demoTransfers, demoTrust, runScript } = await import('./demo.js');
+  const { DemoBlobStore, DemoConnection, DemoHost, demoDelegating, demoMachines, demoSignIn, demoTransfers, demoTrust, runScript } = await import('./demo.js');
   $('demo-banner').hidden = false;
   $('demo-settings').hidden = false;
   shell.setSignedIn(true);
@@ -313,10 +314,18 @@ async function startDemo() {
     // ?updates=1: a host whose app installs updates asked for from here (#51). Never a
     // read-only one, which offers none.
     updating: params.get('updates') === '1' && !ahb,
+    // ?signin=1: a host that runs an agent's own device-code sign-in when asked (#800), with four
+    // sessions waiting on one, a quota error and a session not responding (demoSignIn).
+    signingIn: params.get('signin') === '1',
   });
+  if (params.get('signin') === '1') { demoSignIn(host); }
   host.updateStepMs = Number(params.get('updateStep')) || host.updateStepMs;
   // ?machines=2 or 3: the account's other machines, after this one.
   const machines = [host, ...demoMachines(Number(params.get('machines')) || 1, { answerDelayMs, stopWindowMs })];
+  // With ?signin=1, each other machine that takes answers needs a sign-in too (#800).
+  if (params.get('signin') === '1') {
+    for (const m of machines.slice(1).filter((x) => x.capabilities.includes('sessions.answer'))) { m.capabilities.push('sessions.signin'); demoSignIn(m); }
+  }
   // ?attachDelay= slows each file chunk, so its progress can be watched.
   for (const m of machines) { m.attachmentDelayMs = Number(params.get('attachDelay')) || 0; }
   // The relay's blob store, in the page. ?blobMax= sets the largest blob it takes (stored bytes),
@@ -441,6 +450,23 @@ async function startDemo() {
     scriptTrust: (...outcomes) => host.scriptTrust(outcomes),
     upsert: (s) => host.upsert(s),
     remove: (id) => host.remove(id),
+    // Sign-in (#800): how the person's sign-in at github.com went (signin.done's outcome:
+    // 'signedIn', 'expired', 'failed' or 'refused', with a reason); a stored credential that still
+    // worked (recovered by itself); every start and cancel received; the code the next flow shows;
+    // the next starts' outcomes in place of started ({ outcome: 'machine', reason }), and failures.
+    finishSignIn: (outcome, reason = null) => host.finishSignIn(outcome, reason),
+    recoverSignIn: () => host.recoverSignIn(),
+    confirmSignIn: () => host.confirmSignIn(),
+    failSignInAgain: () => host.failSignInAgain(),
+    needSignInAgain: () => host.needSignInAgain(),
+    get signInLog() { return [...host.signInLog]; },
+    set nextCode(code) { host.nextCode = code; },
+    scriptSignIns: (...outcomes) => host.signInOutcomes.push(...outcomes),
+    failSignIns: (...errors) => host.signInFailures.push(...errors),
+    delaySignIns: (...ms) => host.signInDelays.push(...ms),
+    delayCancels: (...ms) => host.signInCancelDelays.push(...ms),
+    signInElsewhere: () => host.signInElsewhere(),
+    get signInCodesHeld() { return page?.signIns?.codesHeld; },
     hold: (held) => host.hold(held),
     frame: (f) => host.frame(f),
     get calls() { return [...host.calls]; },

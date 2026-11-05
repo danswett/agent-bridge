@@ -12,6 +12,13 @@ inputs:
   working-directory:
     description: The folder whose node_modules holds that Playwright.
     required: true
+  force-apt-fallback:
+    description: >
+      'true' only in ci.yml's pwa-ui legs on a run by hand that asks for it (quality/README.md
+      §4.7): leave the Azure mirror before downloading anything, to prove the fallback once.
+      Anything else downloads as before.
+    required: false
+    default: 'false'
 
 runs:
   using: composite
@@ -20,6 +27,7 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       env:
         BROWSERS: ${{ inputs.browsers }}
+        PLAYWRIGHT_APT_FORCE_FALLBACK: ${{ inputs.force-apt-fallback }}
       run: |
         read -ra browsers <<< "$BROWSERS"
         bash "$GITHUB_ACTION_PATH/download.sh" "${browsers[@]}"

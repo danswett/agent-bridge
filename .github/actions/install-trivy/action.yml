@@ -3,6 +3,15 @@ description: >
   Puts a pinned, checksum-verified Trivy on PATH, on Linux x64 and Windows (x64, and Arm64 through
   x64 emulation), for the relay image's scan and SBOM and the Windows app's SBOMs
   (quality/README.md §3.3, "Supply chain").
+inputs:
+  vulnerability-db:
+    description: >
+      'true' to also download the vulnerability database into TRIVY_CACHE_DIR, from mirror.gcr.io or,
+      failing that, ghcr.io (download-db.ps1 says why Trivy's own fallback is not enough), and fail
+      if neither serves it. For vulnerability scans, which then run with --skip-db-update. SBOMs
+      need no database.
+    required: false
+    default: 'false'
 
 # The release archive, not aquasecurity/trivy-action or setup-trivy: in March 2026 an attacker
 # force-pushed 76 of trivy-action's 77 tags and all of setup-trivy's to credential-stealing code,
@@ -19,6 +28,7 @@ runs:
         TRIVY_VERSION: 0.76.1
         TRIVY_LINUX_X64_SHA256: c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
         TRIVY_WINDOWS_X64_SHA256: 1051f49cb22d5284f43425f72aad9cda63ca12ceb92e7caa06903490c82dc9bf
+        VULNERABILITY_DB: ${{ inputs.vulnerability-db }}
       run: |
         $ErrorActionPreference = 'Stop'
         if ($env:RUNNER_OS -eq 'Linux' -and $env:RUNNER_ARCH -eq 'X64') {
@@ -42,4 +52,10 @@ runs:
         }
         Add-Content -Path $env:GITHUB_PATH -Value $dir
         # Its cache, vulnerability database included, in the runner's temp, emptied after each job.
-        Add-Content -Path $env:GITHUB_ENV -Value "TRIVY_CACHE_DIR=$(Join-Path $env:RUNNER_TEMP 'trivy-cache')"
+        $cache = Join-Path $env:RUNNER_TEMP 'trivy-cache'
+        Add-Content -Path $env:GITHUB_ENV -Value "TRIVY_CACHE_DIR=$cache"
+        if ($env:VULNERABILITY_DB -eq 'true') {
+          $env:PATH = "$dir$([IO.Path]::PathSeparator)$env:PATH"
+          . (Join-Path $env:GITHUB_ACTION_PATH 'download-db.ps1')
+          Save-TrivyDb -CacheDir $cache
+        }

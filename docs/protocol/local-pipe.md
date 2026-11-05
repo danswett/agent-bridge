@@ -196,10 +196,20 @@ the rest of the protocol.
 
 The shared first-run/Settings contract is `{ checkedAt, agents: [...], readOnlyReason? }`.
 Each agent has `id`, `label`, `home`, optional `executable` and `version`, checks named
-`installation`, `versionCheck`, `hooks`, `authentication` and `activation`, and optional
-`lastHookHandledAt`. Each check is `{ state, detail }`; states are `unknown`, `missing`,
+`installation`, `versionCheck`, `hooks`, `authentication` and `activation`, optional
+`lastHookHandledAt`, and `hookSetup`. Each check is `{ state, detail }`; states are `unknown`, `missing`,
 `needsAction`, `working`, `blocked` and `failed`. Unknown future states read as `unknown`.
 There is deliberately no aggregate "ready" bit.
+
+`hookSetup` is this profile's own setup record for the agent home: `notSetUp` (no ownership
+record), `incomplete` (an owned record without completed setup: an interrupted or failed
+setup, repair or removal, or a record from before completion was recorded; offer Repair),
+`completed` (the last setup wrote every registration, Codex's plugin and intake) or
+`unknown` (not determined: older hosts omit the field, a read-only host, unreadable intake
+or ownership records, or another profile's record). Unknown future values read as `unknown`.
+With intake enabled, `incomplete` has `hooks.state` `failed`, and `completed` keeps
+`hooks.state` `unknown`: setup completion is not evidence that hooks run in a new session.
+With intake off, both report `needsAction`. Clients use `hookSetup`, not `detail` text.
 
 The running host scans at startup, every ten minutes and when the app asks. It uses
 Launch's executable locator and running launch configuration, not an app-side PATH probe.

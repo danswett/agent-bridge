@@ -16,6 +16,12 @@ public sealed class Machine : IAsyncDisposable
         Host = host;
         Cards = cards;
         Toasts = toasts;
+        // Nor are rows a gap in its events may have left out of date (#427): the recovery's snapshot
+        // begins only once it has read hello, status and usage again, and until then the list looked
+        // whole, so answers, replies, End session and toasts' buttons went on against it. This
+        // machine's too, for its sign-ins only (Confirmed): Current still counts its rows as its
+        // host's word, so its questions are as before.
+        host.Gapped += Unconfirm;
         if (IsLocal) { return; }
         // Another machine's rows are acted on only while they are its host's word now (#269): its
         // cards, its toasts and its deliveries all ask, so a press, a toast's button or Needs you
@@ -33,10 +39,6 @@ public sealed class Machine : IAsyncDisposable
             if (up && !now) { Unconfirm(); }
             up = now;
         };
-        // Nor are rows a gap in its events may have left out of date (#427): the recovery's snapshot
-        // begins only once it has read hello, status and usage again, and until then the list looked
-        // whole, so answers, replies, End session and toasts' buttons went on against it.
-        host.Gapped += Unconfirm;
     }
 
     // "local" for this machine; another machine's relay device id.
@@ -83,6 +85,10 @@ public sealed class Machine : IAsyncDisposable
     }
 
     void Unconfirm() => confirmFrom = Host.Sessions.Snapshots + 1;
+
+    // No snapshot owed: none since it was last away or its events last had a gap, or one has begun
+    // since. This machine too, which Current always counts as its host's word (#800's sign-ins).
+    internal bool Confirmed => Host.Sessions.Snapshots >= confirmFrom;
 
     // Whether its rows are its host's word now, and so can be acted on: this machine's always (an
     // answer there waits for the host over the pipe, as before #269); another's only while it is in
@@ -518,18 +524,14 @@ public sealed class RelayFleetLink : IFleetLink
 
     public IReadOnlyList<KnownMachine>? Offline => current?.Relay.Known;
 
-    // RelayClient sets Presence and then Known from each presence message. Known is read first, so
-    // where those stores stay in order (x64), a machine coming online between the two reads is in
-    // one list or the other, never neither, which would read as forgotten. Should it be in neither
-    // anyway, it is online: its own report says it is the account's again (UsageCache.Present).
+    // Capture one presence message rather than mix the lists from before and after a reconnect.
     public (IReadOnlyList<FleetHost> Hosts, IReadOnlyList<KnownMachine>? Offline) Snapshot
     {
         get
         {
             if (current is not { } c) { return ([], null); }
-            var known = c.Relay.Known;
-            Interlocked.MemoryBarrier();
-            return (HostsOf(c, c.Relay.Presence), known);
+            var snap = c.Relay.Snapshot;
+            return (HostsOf(c, snap.Presence), snap.Known);
         }
     }
 

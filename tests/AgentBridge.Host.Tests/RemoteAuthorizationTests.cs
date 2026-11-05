@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.SignIn;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
@@ -63,6 +64,36 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         var response = await channel.RequestAsync(op, new { }, Patience);
         Assert.False(response.GetProperty("ok").GetBoolean());
         Assert.Equal("the peer role does not allow this operation", response.GetProperty("error").GetString());
+    }
+
+    [Theory]
+    [InlineData("person", "app", true, true, false, true)]
+    [InlineData("person", "pwa", true, true, false, true)]
+    [InlineData("person", "app", false, true, false, false)]
+    [InlineData("person", "app", true, false, false, false)]
+    [InlineData("person", "app", true, true, true, false)]
+    [InlineData("service", "app", true, true, false, false)]
+    [InlineData("host", "app", true, true, false, false)]
+    [InlineData("person", "host", true, true, false, false)]
+    public async Task Phone_sign_in_requires_a_current_person_pin_read_and_write_not_the_claimed_kind(
+        string role, string kind, bool read, bool write, bool g5, bool allowed)
+    {
+        var peer = await PeerAsync(kind);
+        Pin(peer, role);
+        var accepted = new TaskCompletionSource<SecureChannel>(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.Hub.Accepted += ch => accepted.TrySetResult(ch);
+        await peer.Hub.OpenAsync(host.Id, Patience);
+        var channel = await accepted.Task.WaitAsync(Patience);
+        var authority = new PersonSignInAuthority(store, () => g5, _ => read, _ => write);
+        var grant = authority.Current(channel);
+        Assert.Equal(allowed, grant is not null);
+        if (allowed)
+        {
+            store.Revoke(peer.Key.Public);
+            Assert.Null(authority.Current(channel));
+            store.Put(peer.Key.Public, role, time.GetUtcNow().AddHours(1));
+            Assert.NotEqual(grant, authority.Current(channel));
+        }
     }
 
     [Theory]

@@ -55,6 +55,8 @@ public sealed class HostControlOptions
     public AgentReadinessService? Agents { get; init; }
     public AgentSetupService? AgentSetup { get; init; }
     public AgentInstallService? AgentInstall { get; init; }
+    // Host-only seam for graceful departures; it is not exposed as a pipe/relay operation.
+    public LifecycleCoordinator? Lifecycle { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -62,6 +64,7 @@ public sealed class HostControlOptions
 // and stopping or restarting it. The relay's channels never reach this.
 public sealed class HostControl
 {
+    public LifecycleCoordinator? Lifecycle => options.Lifecycle;
     readonly HostControlOptions options;
     readonly Action<string> log;
     readonly object gate = new();

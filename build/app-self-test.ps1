@@ -13,7 +13,10 @@ param(
     [Parameter(Mandatory)][string]$Result,
     # Where the app's logs are copied; the result's folder unless given.
     [string]$Logs,
-    [int]$TimeoutSeconds = 180
+    # Arm64 CI took 146 s of 180 before #800's sign-in captures (every state in Light and Dark, about
+    # 30 s, and again in high contrast on CI, about 25 s) added about 55 s; the live resize pass runs
+    # last and is the one a tight limit cuts off (reported as unfinished).
+    [int]$TimeoutSeconds = 300
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest

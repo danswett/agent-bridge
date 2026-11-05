@@ -4,7 +4,7 @@ The scripted migrate-and-rollback rehearsal on the disposable Hyperloop VM: desi
 issue #39. A person or an agent driving Hyperloop runs it step by step. It goes in order:
 
 1. Install agent-ha-bridge.
-2. Install agent-bridge beside it, read-only.
+2. Install Slipgates beside it, read-only.
 3. Migrate.
 4. Check each row of [parity.md](parity.md) against a disposable Home Assistant, the Windows
    app and the PWA.
@@ -49,7 +49,7 @@ two-user arrangement in [ha-connector.md](ha-connector.md) › Validation plan. 
 | Machine | Computer name (slug) | Runs |
 |---|---|---|
 | **VM-W** | `REHEARSAL-W` (`rehearsal_w`) | Docker with the disposable Home Assistant and Mosquitto ([ha-connector.md](ha-connector.md) › Validation plan, when #60 lands). agent-ha-bridge as the **publication writer** of that instance. Edge for the HA dashboard and the PWA |
-| **VM-M** | `REHEARSAL-M` (`rehearsal_m`) | The machine being migrated: one Windows user, `rehearsal`, with Copilot CLI, Claude Code, Codex, agent-ha-bridge (participant), then agent-bridge. Reaches VM-W's Home Assistant through `ssh -N -L 8123:127.0.0.1:8123 rehearsal@VM-W`, so every address stays `127.0.0.1` |
+| **VM-M** | `REHEARSAL-M` (`rehearsal_m`) | The machine being migrated: one Windows user, `rehearsal`, with Copilot CLI, Claude Code, Codex, agent-ha-bridge (participant), then Slipgates. Reaches VM-W's Home Assistant through `ssh -N -L 8123:127.0.0.1:8123 rehearsal@VM-W`, so every address stays `127.0.0.1` |
 | **Phone** | — | An iPhone with the PWA installed and signed in to the same GitHub account (push) |
 
 Never the live Home Assistant, broker or relay account's other machines (design G6). The
@@ -298,7 +298,7 @@ $base = 'C:\rehearsal\evidence\baseline-S1.json'
   happens to match.
 * Session ids: `$cp`, `$cl` and `$cx` hold the Copilot, Claude and Codex sessions in use. Set
   them with `sessions … --id-only`, which prints only the id of the one matching session and
-  fails otherwise. Before agent-bridge is installed, use `newest <agent>`, which reads the
+  fails otherwise. Before Slipgates is installed, use `newest <agent>`, which reads the
   transcripts instead.
 * **Screenshots.** Take them with Hyperloop and keep them with
   `agent-bridge-rehearsal note --step <id> --result pass --detail "…" --screenshot <file>`.
@@ -331,7 +331,7 @@ $base = 'C:\rehearsal\evidence\baseline-S1.json'
 | **B-03** | | Tool (VM-M) | Check G5 sees agent-ha-bridge | Active, naming the daemon task | `agent-bridge-rehearsal g5 --expect active --step B-03` | |
 | **B-04** | | Machine, HA | In `$repo`, start `copilot` from a normal (unelevated) terminal and type prompt **P1**: agent-ha-bridge will not type into an elevated one (`attach-failed:5:elevated`). Then run `$cp = agent-bridge-rehearsal newest copilot` (from the transcripts: no host is installed yet) and `agent-bridge-rehearsal mark $cp`. Answer **rehearsal-old** from the HA card | The old bridge delivers the answer and Copilot records it | `agent-bridge-rehearsal expect answer $cp --text rehearsal-old --step B-04` | |
 | **B-05** | | Machine, HA | Launch from the HA launch card into **Rehearsal** with prompt **P11**, then `/exit` both sessions at their terminals | An isolated worktree marked by agent-ha-bridge | `agent-bridge-rehearsal worktrees $repo --expect-old-trees 1 --step B-05` | |
-| **B-06** | | Tool (VM-M) | With no session running, hash what agent-ha-bridge installed | The baseline is written; the tool prints file and task counts per category | `agent-bridge-rehearsal baseline save --out $base --step B-06` | |
+| **B-06** | | Tool (VM-M) | With no session running, hash what agent-ha-bridge installed | The baseline is written; the tool prints file and task counts per category. Save it with this build's rehearsal tool, before anything is migrated: it hashes Codex's cached plugin hooks too (#123), in the Codex home `installation.json` records, and `baseline compare` refuses one saved by an older tool with an error. Saved after migrating, it cannot show the files as they were before | `agent-bridge-rehearsal baseline save --out $base --step B-06` | |
 | **B-07** | | VM-M | Snapshot VM-M: **S1** (agent-ha-bridge installed, baseline taken; in Azure: `-Role M -Snapshot -SnapshotName S1`) | | `agent-bridge-rehearsal note --step B-07 --result pass --detail "S1 taken"` | |
 
 On the first run, compare the baseline again after five idle minutes:
@@ -346,7 +346,7 @@ with `--ignore` from then on. `runtime/`, `logs/` and `*.log*` are already exclu
 
 Volatile files found so far: none. In run 1 (2026-10-31) B-08 was identical, byte for byte, after five idle minutes.
 
-## Phase C: agent-bridge beside it, read-only
+## Phase C: Slipgates beside it, read-only
 
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
@@ -360,10 +360,10 @@ Volatile files found so far: none. In run 1 (2026-10-31) B-08 was identical, byt
 
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
-| **D-01** | §14 "Migrate an existing" | VM-W | Install agent-bridge on VM-W too, and run `agent-bridge-host migrate --dry-run` there | Refused: VM-W is the publication writer (G7). Nothing changes | `agent-bridge-rehearsal note --step D-01 --result pass --detail "<refusal text>"` | #38 |
+| **D-01** | §14 "Migrate an existing" | VM-W | Install Slipgates on VM-W too, and run `agent-bridge-host migrate --dry-run` there | Refused: VM-W is the publication writer (G7). Nothing changes | `agent-bridge-rehearsal note --step D-01 --result pass --detail "<refusal text>"` | #38 |
 | **D-02** | §14 "Migrate an existing" | VM-M | `agent-bridge-host migrate --dry-run` | Lists the task to disable, the hook fallback to move and each `newSession.*` key with its `launch.*` target. Keys with no equivalent (`usage.*`, `homeAssistant.*`, `answerButtons.*`, …) are reported as kept in the old file. Nothing changes | `agent-bridge-rehearsal baseline compare --baseline $base --step D-02` | #38 |
 | **D-03** | §14 "Migrate an existing" | VM-M | `agent-bridge-host migrate` | Exit 0. The daemon stopped; its task is **disabled, not deleted** | `agent-bridge-rehearsal g5 --expect inactive --timeout 30 --step D-03` | #38 |
-| **D-04** | §14 "Migrate an existing" | Tool | What changed | Only hook registrations, agent config and the tasks (disabled). `~/.agent-ha-bridge` is untouched but for Codex's registration, `codex-bridge/plugins/agent-ha-bridge/hooks.json`, which agent-ha-bridge's installer keeps there; the tool counts it as a hook | `agent-bridge-rehearsal baseline compare --baseline $base --allow hooks --allow agents --allow tasks --step D-04` | #38 |
+| **D-04** | §14 "Migrate an existing" | Tool | What changed | Only hook registrations, agent config and the tasks (disabled). `~/.agent-ha-bridge` is untouched but for Codex's registration, `codex-bridge/plugins/agent-ha-bridge/hooks.json`, which agent-ha-bridge's installer keeps there, and Codex's cached copies of it, `~/.codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/<version>/hooks.json` (#123); the tool counts them as hooks | `agent-bridge-rehearsal baseline compare --baseline $base --allow hooks --allow agents --allow tasks --step D-04` | #38 |
 | **D-05** | §14 "configure:" | VM-M | `agent-bridge-host workspace list` and `agent-bridge-host config show` | **Rehearsal** imported with its path and isolation. The default agent, permissions and worktree settings match the old `newSession.*` | `agent-bridge-rehearsal note --step D-05 --result pass --detail "<imported keys>"` | #38 |
 | **D-06** | §12 "A native hook spools", §12 "PowerShell fallback" | Tool | The host now delivers | Every capability, and delivering | `agent-bridge-rehearsal host --expect-delivering --timeout 60 --expect-cap sessions.answer --expect-cap sessions.approve --expect-cap sessions.reply --expect-cap sessions.attach --expect-cap sessions.stop --expect-cap sessions.launch --step D-06` | #38, #37 |
 | **D-07** | §18 "Per-machine online" | VM-M | `agent-bridge-host config set homeAssistant.baseUrl http://127.0.0.1:8123`, `… homeAssistant.disposable true`, `… homeAssistant.enabled true`, `agent-bridge-host ha token set`, then restart the host from the app | The connector is on. The machine stays online on the disposable instance with the same ids, none numbered `_2` | `agent-bridge-rehearsal ha --token-file $ha --slug $m --expect-online --expect-no-duplicates --timeout 120 --step D-07` | HA1 |
@@ -489,7 +489,7 @@ That also marks the host log, which `log` then reads from.
 
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
-| **E11-01** | §11 "Copy a session", §11 "Resume choices shared" | PWA | Copy `$cp` to VM-W (with agent-bridge installed there) and resume it | Forked under a new id on VM-W, with its history | `agent-bridge-rehearsal note --step E11-01 --result pass --detail "…"` | Transfer |
+| **E11-01** | §11 "Copy a session", §11 "Resume choices shared" | PWA | Copy `$cp` to VM-W (with Slipgates installed there) and resume it | Forked under a new id on VM-W, with its history | `agent-bridge-rehearsal note --step E11-01 --result pass --detail "…"` | Transfer |
 
 ### E12. Hooks
 
@@ -542,7 +542,7 @@ That also marks the host log, which `log` then reads from.
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
 | **F-01** | §14 "Migrate an existing" | VM-M | Leave `$cp` running. `agent-bridge-host rollback` | Exit 0. The daemon's task is enabled and running | `agent-bridge-rehearsal g5 --expect active --timeout 60 --step F-01` | #38 |
-| **F-02** | §14 "Migrate an existing" | Tool | Compare with the baseline taken before migrating, then again without `~/.codex/config.toml` | **Identical, byte for byte**: install, hooks, agent config and tasks. One exception, which is not the migration's: when Codex's hooks were trusted at its prompt during the run, Codex itself adds `[hooks.state]` entries to `~/.codex/config.toml`, and F-02 fails on that file alone. Then check that only `[hooks.state]` grew. F-02b, run every time, must be identical whatever Codex did. The second exception is Claude's own: its first run adds `theme`, and its Bypass confirmation `skipDangerousModePermissionPrompt`, to `~/.claude/settings.json`. F-02b may fail on that file alone only when removing those keys gives exactly the baseline's hash; F-02c records that check, or that the file was unchanged | `agent-bridge-rehearsal baseline compare --baseline $base --step F-02`, then `agent-bridge-rehearsal baseline compare --baseline $base --ignore "~/.codex/config.toml" --step F-02b`. Quote the path: PowerShell 7 expands a bare `~` for a native command, and then nothing is ignored. Then `agent-bridge-rehearsal note --step F-02c --result pass --detail "<~/.claude/settings.json unchanged, or: only theme/skipDangerousModePermissionPrompt added; without them sha256 <first 8> equals the baseline's>"` (the baseline's hash is in `$base`) | #38 |
+| **F-02** | §14 "Migrate an existing" | Tool | Compare with the baseline taken before migrating (B-06), then again without `~/.codex/config.toml` | **Identical, byte for byte**: install, hooks, agent config and tasks. One exception, which is not the migration's: when Codex's hooks were trusted at its prompt during the run, Codex itself adds `[hooks.state]` entries to `~/.codex/config.toml`, and F-02 fails on that file alone. Then check that only `[hooks.state]` grew. F-02b, run every time, must be identical whatever Codex did. The second exception is Claude's own: its first run adds `theme`, and its Bypass confirmation `skipDangerousModePermissionPrompt`, to `~/.claude/settings.json`. F-02b may fail on that file alone only when removing those keys gives exactly the baseline's hash; F-02c records that check, or that the file was unchanged | `agent-bridge-rehearsal baseline compare --baseline $base --step F-02`, then `agent-bridge-rehearsal baseline compare --baseline $base --ignore "~/.codex/config.toml" --step F-02b`. Quote the path: PowerShell 7 expands a bare `~` for a native command, and then nothing is ignored. Then `agent-bridge-rehearsal note --step F-02c --result pass --detail "<~/.claude/settings.json unchanged, or: only theme/skipDangerousModePermissionPrompt added; without them sha256 <first 8> equals the baseline's>"` (the baseline's hash is in `$base`) | #38 |
 | **F-03** | §13 "Never writes" | Tool | The host is read-only again | Reading only | `agent-bridge-rehearsal host --expect-read-only --timeout 60 --expect-no-cap sessions.answer --expect-no-cap sessions.reply --expect-no-cap sessions.stop --expect-no-cap sessions.launch --step F-03` | |
 | **F-04** | §18 "Per-machine and per-session MQTT" | HA, Tool | Open `/agent-decisions` | The daemon adopted `$cp`: its card is back with the daemon's controls and the launch card. No `_2`; nothing left unavailable | `agent-bridge-rehearsal ha --token-file $ha --slug $m --expect-online --expect-sessions 1 --expect-no-duplicates --timeout 180 --step F-04`; screenshot | HA1 |
 | **F-05** | | HA | Wait until agent-ha-bridge's heartbeat is fresh (`agent-ha-bridge status` shows the daemon running and `~/.agent-ha-bridge/runtime/agent-bridge-daemon.heartbeat` was written in the last 30 s): for about 30 s after F-01 restarts its daemon, a hook finds no heartbeat and gives the fixed safe reply, so the question stays at the terminal. Then mark `$cp`; type **P1** at the machine; answer **rehearsal-back** from the HA card | The old bridge answers as in B-04 | `agent-bridge-rehearsal expect answer $cp --text rehearsal-back --step F-05` | |
@@ -593,6 +593,7 @@ These rows have no step. Each has its reason. A row moves into a step when its i
 | §1 "Spinner verbs" | Missing (#53). The step would only confirm absence |
 | §1 "Unknown statuses" | Only seen when two versions meet: the first update after the rehearsal, E9-02 |
 | §2 "Cancel request", §2 "Claude free text" | Missing (#56, #42) |
+| §4 "A Copilot reply is typed only into its empty input box" | Implemented (#825), untested live: a step would leave a draft, shell mode or vim's normal mode in a live CLI's box, a test-VM check that needs the owner's approval. Covered offline by `CopilotInputBoxTests`, `ReplyFlowTests` and `InjectorIntegrationTests`, on screens built from the captured one and CLI 1.0.105's rendering code |
 | §8 "usage.keychain" | Missing (#52) |
 | §8 "Only the publication writer" | N/A: tied to the HA writer role |
 | §9 "Offline machines" | Missing (#50, #51) |

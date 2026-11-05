@@ -90,6 +90,11 @@ public sealed class SessionService
     // update.*, through the relay only, and never on a read-only machine (UpdateService).
     public UpdateService? Updates { get; init; }
 
+    // Framework only: no production auth factory/entrypoint is registered. Both gates
+    // remain off until Engineering approves the agent-owned private login path.
+    internal SignIn.AgentSignInService? SignIn { get; init; }
+    internal bool SignInEntrypointApproved { get; init; } = AgentSignIn.EnabledByDefault;
+
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
         UsageService? usage = null, ISessionLauncher? launcher = null, SessionTransfers? transfers = null)
@@ -149,6 +154,12 @@ public sealed class SessionService
                 return Attach(channel, op, data);
             case Ops.SessionStop:
                 return await StopAsync(data);
+            case AgentSignIn.Start:
+                return SignInEntrypointApproved && SignIn is not null ? SignIn.Start(channel, data)
+                    : new { outcome = "refused", reason = "agent sign-in is not enabled" };
+            case AgentSignIn.Cancel:
+                return SignInEntrypointApproved && SignIn is not null ? await SignIn.CancelAsync(channel, data)
+                    : new { outcome = "refused", reason = "agent sign-in is not enabled" };
             case Ops.PushSubscribe or Ops.PushUnsubscribe or Ops.PushList when push is not null:
                 return await push.HandleAsync(channel, op, data);
             // Notifications turned off on this machine (push.enabled), or never set up: a device
@@ -465,6 +476,7 @@ public sealed class SessionService
     List<string> Offered(IProtocolChannel channel)
     {
         List<string> offered = [Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus];
+        if (SignInEntrypointApproved && SignIn?.Offered(channel) == true) { offered.Add(AgentSignIn.Capability); }
         if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }
         if (answers?.ApprovesPermissions == true) { offered.Add(Capabilities.SessionsApprove); }
         if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }

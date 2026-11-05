@@ -504,6 +504,11 @@ public sealed class StopFlowTests : IAsyncLifetime
             OnInject?.Invoke(processId, plan);
             return new InjectionResult(InjectionStatus.Typed, "ok");
         }
+
+        // Copilot CLI 1.0.105 ready for a prompt, as captured live: a reply to Copilot is typed
+        // only into its empty input box, read from the screen (#825).
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ConsoleScreen(["\u25CF Done.", "", "\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584", "\u2503", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580", " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 tab next tab"], null));
     }
 
     // The agent processes the tests pretend run, and nothing else: Open finds only these.

@@ -54,20 +54,52 @@ public class AppBrandTests
         Assert.Contains("$AppIconFile, $AppLogoFile", pack, StringComparison.Ordinal);
     }
 
+    // What Task Manager and the file's properties show (FileDescription, from AssemblyTitle), in
+    // brand.md's sentence case as the creative director confirmed on #537.
+    [Theory]
+    [InlineData("AgentBridge.Host", "agent-bridge-host", "host")]
+    [InlineData("AgentBridge.HostLauncher", "agent-bridge-hostw", "host launcher")]
+    [InlineData("AgentBridge.Injector", "agent-bridge-injector", "typing helper")]
+    [InlineData("AgentBridge.Hook", "agent-bridge-host-hook", "agent hook")]
+    public void The_hosts_executables_carry_the_products_name_and_keep_their_file_names(string project, string file, string role)
+    {
+        var csproj = XDocument.Load(Path.Combine(Root, "src", project, $"{project}.csproj"));
+        Assert.Equal(Product.Name, csproj.Descendants("Product").Single().Value);
+        Assert.Equal($"{Product.Name} {role}", csproj.Descendants("AssemblyTitle").Single().Value);
+        Assert.Equal(file, csproj.Descendants("AssemblyName").Single().Value);
+    }
+
+    // An update to the new name must still be the same install: Windows finds its notifications by
+    // the AUMID and activator, Velopack its feed by the pack id and its Start shortcut by the exe it
+    // points at, and pairing, keys and settings live under the data folder (#537's "Do not rename
+    // in Phase 1"; #541 migrates them deliberately).
+    [Fact]
+    public void Renaming_the_product_leaves_what_an_installed_copy_is_found_by()
+    {
+        var toasts = Read("src", "AgentBridge.App", "Toasts.cs");
+        Assert.Contains("Aumid = \"velopack.AgentBridgeApp\"", toasts, StringComparison.Ordinal);
+        Assert.Contains("new(\"671f58d4-187e-47c8-bd8f-ca6103448929\")", toasts, StringComparison.Ordinal);
+        Assert.Contains("$AppPackId = 'AgentBridgeApp'", Read("build", "app-channels.ps1"), StringComparison.Ordinal);
+        Assert.Equal("AgentBridge", ProjectProperty("AssemblyName"));
+        Assert.Contains("-e AgentBridge.exe", Read("build", "pack-app.ps1"), StringComparison.Ordinal);
+        Assert.Contains("\"AgentBridge\")", Read("src", "AgentBridge.Transport", "ProfileFolders.cs"), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void The_tray_tooltip_names_the_product_and_how_many_wait()
     {
         Assert.Equal(Product.Name, MainViewModel.TrayTip(0));
-        Assert.Equal($"{Product.Name}: 3 waiting on you", MainViewModel.TrayTip(3));
+        Assert.Equal($"{Product.Name} · 3 need you", MainViewModel.TrayTip(3));
     }
 
-    // Copy in the Windows app, the host and its launcher that names the product or the host service
-    // by hand, rather than through Product: what the rename would miss. Comments may name it; the
+    // Copy in the Windows app, the host and its launcher that names the product (old or new) or the
+    // host service by hand, rather than through Product and the brand token: what a rename would miss. The
+    // bundled fonts' family names (Slipgates Sans and Mono) are the fonts', not the product's. Comments may name it; the
     // generated design resources name the bundled font, which is the design's to rename (#544).
     [Fact]
     public void No_windows_app_or_host_copy_types_the_product_name_by_hand()
     {
-        var literal = new Regex("\"[^\"\\r\\n]*(Agent Bridge|Bridge Host)[^\"\\r\\n]*\"");
+        var literal = new Regex("\"[^\"\\r\\n]*(Agent Bridge|Bridge Host|Slipgates(?! ?(Sans|Mono)))[^\"\\r\\n]*\"");
         string[] projects = ["AgentBridge.App", "AgentBridge.App.Core", "AgentBridge.Host", "AgentBridge.Host.Core", "AgentBridge.Host.Delivery", "AgentBridge.HostLauncher", "AgentBridge.Local"];
         var generated = Path.Combine("src", "AgentBridge.App", "Design") + Path.DirectorySeparatorChar;
         List<string> typed = [];

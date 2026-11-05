@@ -9,6 +9,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>AgentBridge.HostLauncher</RootNamespace>
     <AssemblyName>agent-bridge-hostw</AssemblyName>
+    <!-- What Task Manager and the file's properties call it (docs/design/brand.md §3.1, #537). The
+         file's name is an identifier that installers, tasks and the updater find it by, and stays (#539). -->
+    <Product>Slipgates</Product>
+    <AssemblyTitle>Slipgates host launcher</AssemblyTitle>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <InvariantGlobalization>true</InvariantGlobalization>
     <DefineConstants>$(DefineConstants);AGENT_BRIDGE_HOSTW</DefineConstants>
@@ -22,7 +26,7 @@
     <Compile Include="..\AgentBridge.Transport\ProfileFolders.cs" Link="ProfileFolders.cs" />
     <!-- And the product's name, for what its log tells the person to do. -->
     <Compile Include="..\AgentBridge.Protocol\Product.cs" Link="Product.cs" />
-    <!-- And the generated brand constants (design/tokens.json) that Product reads from once #537 adopts them. -->
+    <!-- And the generated brand constants (design/tokens.json) that Product's name reads from. -->
     <Compile Include="..\AgentBridge.Protocol\DesignBrand.cs" Link="DesignBrand.cs" />
   </ItemGroup>
 
