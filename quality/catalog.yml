@@ -657,6 +657,7 @@ suites:
     kind: unit
     ring: 0
     select: affected
+    security_sensitive: true
     platforms: [linux-x64]
     runner: local
     triggers: [tools/epic-dashboard/**]
@@ -670,8 +671,8 @@ suites:
     select: always
     platforms: [linux-x64]
     runner: hosted
-    command: see epic-dashboard.yml dashboard (hourly and on issue/release events; rewrites only issue 755's body)
-    where: epic-dashboard.yml dashboard
+    command: see epic-dashboard.yml read and write (hourly, issue close/reopen, main-push CI completion and dispatch; rewrites only issue 755's body)
+    where: epic-dashboard.yml read, write
     status: exists
 
   - id: ops-probe
