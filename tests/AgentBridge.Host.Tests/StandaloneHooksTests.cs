@@ -604,6 +604,7 @@ public sealed class StandaloneHooksTests : IDisposable
     [Theory]
     [InlineData("{broken")]
     [InlineData("[]")]
+    [InlineData("{\"model\":\"user-model\",\"model\":\"user-model\"}")]
     public async Task Claude_removal_warns_about_an_unreadable_backup_and_still_removes_only_owned_hooks(string damaged)
     {
         var backup = Path.Combine(Profile, "hooks", "backups", "claude-settings.json");
