@@ -113,17 +113,24 @@ public sealed class LifecycleCoordinator
     readonly DepartureConnection connection;
     readonly TimeProvider time;
     readonly IReadOnlyDictionary<DeparturePurpose, (DepartureBlocker Kind, IDepartureCondition Condition)[]> conditions;
+    readonly DepartureWatchdog watchdog;
     bool evaluatingConditions, reentryFault;
     long sequence;
 
-    public LifecycleCoordinator(DeliveryGate delivery, DepartureConditions conditions, IPlannedStateTransport? transport = null, TimeProvider? time = null)
+    // Without a watchdog, a state-only one on the same clock still records the commit for the status.
+    public LifecycleCoordinator(DeliveryGate delivery, DepartureConditions conditions, IPlannedStateTransport? transport = null, TimeProvider? time = null,
+        DepartureWatchdog? watchdog = null)
     {
         this.delivery = delivery;
         this.conditions = conditions.Freeze();
         this.transport = transport ?? new UnnegotiatedPlannedStateTransport();
         connection = this.transport.Connection ?? throw new ArgumentException("transport connection state is required", nameof(transport));
         this.time = time ?? TimeProvider.System;
+        this.watchdog = watchdog ?? new DepartureWatchdog(time: this.time);
     }
+
+    // None, Committed (with when) or Stuck: for the host's status report, never the relay.
+    public DepartureStatus Departure => watchdog.Status;
 
     public Task<QuietResult<QuietLease>> TryAcquireQuiet(DeparturePurpose purpose, CancellationToken cancellationToken = default) =>
         TryAcquireQuiet(DefaultWait, purpose, cancellationToken);
@@ -295,6 +302,7 @@ public sealed class LifecycleCoordinator
             if (!result.Committed) { cancel = EndLease(lease); }
         }
         Dispatch(cancel);
+        if (result.Committed) { watchdog.Arm(); }
         return result;
     }
 

@@ -5,7 +5,8 @@ draft [#815](https://github.com/danswett/agent-bridge/pull/815).
 [SRE's slice decision](https://github.com/danswett/agent-bridge/pull/815#issuecomment-6654417590)
 permits **graceful, process-local** exclusion only; Connection may veto.
 Engineering's independent review is required. No scheduler, installer, apply loop,
-remote management command or forced watchdog restart is added.
+remote management command or forced-recovery watchdog is added; the only restart
+added is the committed-departure watchdog below, through the existing `host.restart` path.
 
 ## One host, one delivery gate
 
@@ -37,7 +38,7 @@ must not add an `AutoUpdater.IdleFor`/whole-session idle test or another fence.
 | API | Result / bound |
 |---|---|
 | `DepartureConditions.Register(DeparturePurpose, params IDepartureCondition[])` | Once per purpose, at composition. Invalid kinds, duplicate registration or registration after coordinator construction are refused. |
-| `LifecycleCoordinator(DeliveryGate, DepartureConditions, IPlannedStateTransport?, TimeProvider?)` | Freezes/copies the composition-time conditions. Not a grant of remote authority. |
+| `LifecycleCoordinator(DeliveryGate, DepartureConditions, IPlannedStateTransport?, TimeProvider?, DepartureWatchdog?)` | Freezes/copies the composition-time conditions. Not a grant of remote authority. |
 | `TryAcquireQuiet(TimeSpan maxWait, DeparturePurpose purpose, CancellationToken, DepartureMode)` | `Task<QuietResult<QuietLease>>`; default-wait overload takes purpose only. Wait 0–10 s, default 5. Returns `Value` or typed `Reason`, never a free-text error. |
 | `AnnouncePlanned(QuietLease, CancellationToken)` | `Task<QuietResult<PlannedStateReceipt>>`; five seconds for durable acceptance, inside the lease lifetime. |
 | `CommitDeparture(QuietLease)` | `DepartureResult`: `Guard` on commit, otherwise closed `Kind`. Checks/marks `Committing` under the gate lock, evaluates snapshots under the coordinator lock only, then re-takes the gate lock to commit the same exclusion. No call-site delegate or condition list. |
@@ -85,6 +86,36 @@ the host remains fenced until exit; there is no guard-release/abort API.
 Prepare/download/verify outside the lease. Suspend invalidation must be supplied
 by the future OS consumer through cancellation/abort; no OS event adapter is
 installed by this slice.
+
+### Committed-departure watchdog (#805 N1)
+
+A committed guard fences deliveries until the process exits, so a follow-on action
+that fails after commit (an update apply that throws, a restart that never happens)
+would leave the host refusing deliveries for ever. `DepartureWatchdog` notices that.
+
+- `LifecycleCoordinator(..., DepartureWatchdog? watchdog)` arms it when
+  `CommitDeparture` commits, and only then. It runs on an injected `TimeProvider`;
+  the bound defaults to **2 minutes** (`DepartureWatchdog(handler, time, bound)`).
+  Without one, the coordinator keeps a state-only watchdog on its own clock.
+- When the bound passes with the process still alive, the state becomes `Stuck` with
+  the closed reason `departure-stuck`, and `IDepartureStuckHandler.DepartureStuck`
+  is called **once**. A throwing handler is contained; the state stays `Stuck`.
+  Stuck never reopens deliveries in this process.
+- `ServeAsync`'s default, `RestartingDepartureStuckHandler`, logs one fixed line
+  (`departure stuck: committed departure did not exit; restarting the host`, with
+  no exception text or path) and calls the host's **existing `host.restart` path**
+  (`HostHandover.Request()` then the serve stop token): a host under the logon
+  task's launcher exits with `HostLauncherContract.Restart` for the launcher to
+  restart; an unsupervised one starts its replacement after it has stopped and
+  let go of its lock. No new restart or exit path is added. This is not
+  `WatchdogRecovery`/forced recovery: commit required no accepted work in flight,
+  and the fence has refused new work since, so the restart carries no input.
+  With no restart action the handler only logs that deliveries stay refused.
+- `LifecycleCoordinator.Departure` and `HostControl.Departure` expose
+  `DepartureStatus(State: None | Committed | Stuck, CommittedAt, Reason)` to the
+  host's status/health readers. It is **not** added to `HostStatus` (the local-pipe
+  contract) or any relay message; showing it on the app or Fleet row (#755) is a
+  separate contract change.
 
 ### Hard slice boundary
 
