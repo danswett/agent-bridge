@@ -362,7 +362,8 @@ async Task<int> ServeAsync(HostHandover handover)
     // types, stops or launches still looks afresh, immediately before it acts.
     var haProbe = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : null;
     var g5 = new SharedAgentHaBridgeProbe((IAgentHaBridgeProbe?)haProbe ?? new NoAgentHaBridge());
-    var (answers, replies, attachments, stops) = Typists(source, g5, processes, writes, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled);
+    var deliveryGate = new DeliveryGate();
+    var (answers, replies, attachments, stops) = Typists(source, g5, processes, writes, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled, deliveryGate);
     using var attachmentsLifetime = attachments;
     // Notifications: the account's phones hear of questions and finished turns even with the
     // app closed. Subscriptions live in the profile's own folder, for this account only. None at
@@ -416,7 +417,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // through the relay's blob store (docs/host-transfer.md). Bundles wait in the profile's own
     // private folder, never a shared temporary one.
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log) { Trust = trustedPeers };
-    var launcher = Launcher(source, g5, attachments, transfers);
+    var launcher = Launcher(source, g5, attachments, transfers, deliveryGate);
     transfers.Launcher = launcher;
     // Folder-trust questions answered by a person from their devices, where config.json allows it.
     var trustAnswers = new FolderTrustAnswers(identity.Key, launcher, Log) { Trust = trustedPeers };
@@ -545,6 +546,7 @@ async Task<int> ServeAsync(HostHandover handover)
         Agents = agentReadiness,
         AgentSetup = agentSetup,
         AgentInstall = agentInstall,
+        Lifecycle = new LifecycleCoordinator(deliveryGate, new DepartureConditions()),
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
@@ -721,7 +723,7 @@ async Task<int> ServeAsync(HostHandover handover)
 // Launching and resuming sessions from other devices (docs/host-launch.md): only in the folders
 // the profile's config.json approves, and on Windows only for now. The agent starts in a console
 // of its own on this desktop, so the host must run here, as the user, unelevated.
-LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers)
+LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers, DeliveryGate deliveryGate)
 {
     foreach (var problem in settings.LaunchProblems) { Log($"config.json: {problem}"); }
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
@@ -737,7 +739,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         WorktreeUsage = new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots),
         Transfers = transfers,
         TransferStaging = transfers.Staging,
-    }, Log, attachments);
+    }, Log, attachments, deliveryGate);
     var why = !settings.Launch.Enabled ? "turned off (launch.enabled)" : starter.Unavailable() ?? probe.Active();
     var count = settings.Launch.Workspaces.Count;
     Log(why is null
@@ -822,7 +824,7 @@ static string OsName() =>
 // session at once. Files sent with replies are staged in the profile's own folder, private
 // to this user (docs/host-replies.md), and the prompts already
 // answered are recorded there too, so none is typed into twice.
-(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, IAgentHaBridgeProbe g5, IProcessInspector processes, TranscriptWrites writes, string staging, string attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled)
+(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, IAgentHaBridgeProbe g5, IProcessInspector processes, TranscriptWrites writes, string staging, string attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled, DeliveryGate gate)
 {
     if (!OperatingSystem.IsWindows())
     {
@@ -832,7 +834,6 @@ static string OsName() =>
     var probe = new ReadOnlyGate(g5, ReadOnlyReason());
     var injector = new WorkerInjector();
     var guard = new TargetGuard();
-    var gate = new DeliveryGate();
     if (!File.Exists(Path.Combine(AppContext.BaseDirectory, WorkerInjector.FileName))) { Log($"{WorkerInjector.FileName} is missing beside the host; answers and replies will be refused"); }
     Log(probe.Active() is { } active ? $"answering, replying and ending sessions are off for now: {active}" : "answering, replying and ending sessions are on");
     if (settingsProblem is not null) { Log(settingsProblem); }

@@ -116,7 +116,7 @@ public sealed class StopService : ISessionStopper
         this.options = options;
         this.log = log ?? (_ => { });
         this.gate = gate ?? new DeliveryGate();
-        requests = new OutcomeMemory<StopResult>(options.Time, options.RememberFor);
+        requests = new OutcomeMemory<StopResult>(options.Time, options.RememberFor, this.gate, Busy);
     }
 
     public bool Available => options.PlatformSupported && probe.Recent() is null;

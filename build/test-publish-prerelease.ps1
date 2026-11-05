@@ -256,6 +256,8 @@ Check 'A new version goes up as a draft, then is published as a pre-release of t
     Assert ((Get-Delta) -eq 'delta 0.1.503->0.1.600') "delta: $(Get-Delta)"
     Assert (@(Uploads).Count -eq 2) "uploads: $(Uploads)"
     Assert ([bool]($global:PpCalls | Where-Object { $_ -like 'gh release upload v0.1.600 *assets.win.json*' })) 'assets.win.json was not uploaded'
+    $haltUpload = CallIndex 'gh release upload v0.1.600 *halts.json*'
+    Assert ($haltUpload -ge 0 -and $haltUpload -lt (CallIndex 'gh api -X PATCH*')) 'the shared halt policy must be uploaded before publication'
     $r = $global:PpReleases | Where-Object tag_name -EQ 'v0.1.600'
     Assert ($r -and -not $r.draft -and $r.prerelease) "release: $($r | ConvertTo-Json -Compress)"
     Assert ($global:PpPublishedBody.Contains($commit)) 'the notes do not name the commit'

@@ -147,7 +147,7 @@ public sealed partial class LaunchService : ISessionLauncher
     readonly Dictionary<string, Started> launchedOn = new(StringComparer.OrdinalIgnoreCase);
 
     public LaunchService(ISessionSource source, IAgentHaBridgeProbe probe, IConsoleInjector injector, IAgentStarter starter, IAgentLocator locator,
-        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null)
+        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null, DeliveryGate? gate = null)
     {
         this.source = source;
         this.probe = probe;
@@ -159,8 +159,11 @@ public sealed partial class LaunchService : ISessionLauncher
         this.log = log ?? (_ => { });
         this.attachments = attachments;
         resumable = new ResumableStore(options.CopilotHome, options.ClaudeHome, options.CodexHome, options.Time);
-        requests = new OutcomeMemory<LaunchResult>(options.Time, options.RememberFor);
-        trustAnswers = new OutcomeMemory<TrustAnswerResult>(options.Time, options.RememberFor);
+        var deliveryGate = gate ?? new DeliveryGate();
+        requests = new OutcomeMemory<LaunchResult>(options.Time, options.RememberFor, deliveryGate,
+            () => new LaunchResult(LaunchOutcome.Busy, "the host is preparing a departure"));
+        trustAnswers = new OutcomeMemory<TrustAnswerResult>(options.Time, options.RememberFor, deliveryGate,
+            () => new TrustAnswerResult(TrustAnswerOutcome.Refused, "the host is preparing a departure"));
         remoteFolderTrust = options.Config.RemoteFolderTrust;
         TrustDevices = options.Config.RemoteFolderTrustDevices;
     }
