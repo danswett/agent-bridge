@@ -38,12 +38,26 @@ public sealed class DeliveryGate
     sealed class Delivery(DeliveryGate owner) : IDisposable
     {
         int disposed;
+        internal void Complete<T>(TaskCompletionSource<T> outcome, T result, Exception? error)
+        {
+            lock (owner.state)
+            {
+                if (error is null) { outcome.SetResult(result); }
+                else { outcome.TrySetException(error); }
+                Dispose();
+            }
+        }
+
         public void Dispose()
         {
             if (Interlocked.Exchange(ref disposed, 1) != 0) { return; }
             lock (owner.state) { owner.deliveries--; }
         }
+
     }
+
+    internal void Complete<T>(IDisposable admission, TaskCompletionSource<T> outcome, T result, Exception? error = null) =>
+        ((Delivery)admission).Complete(outcome, result, error);
 
     internal Exclusion? TryExclude(TimeSpan lifetime, out Blocker blocker)
     {
@@ -105,16 +119,21 @@ public sealed class DeliveryGate
             }
         }
 
-        internal bool TryCommit()
+        internal bool TryCommit(DepartureConnection connection, long generation, bool negotiated, long revision, out bool connectionChanged)
         {
             lock (owner.state)
             {
+                connectionChanged = false;
                 if (!ReferenceEquals(owner.exclusion, this) || !Committing || Committed
                     || owner.uncertain || owner.isTyping || owner.deliveries > 0 || !owner.sessions.IsEmpty
                     || owner.time.GetElapsedTime(Started) >= Lifetime) { return false; }
-                Committed = true;
-                Committing = false;
-                return true;
+                lock (connection.Sync)
+                {
+                    if (!connection.Matches(generation, negotiated, revision)) { connectionChanged = true; return false; }
+                    Committed = true;
+                    Committing = false;
+                    return true;
+                }
             }
         }
 
@@ -217,14 +236,15 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
                 lock (gate) { entry.Settled = time.GetUtcNow(); }
                 settled(result);
                 entry.Timeline?.Settled();
-                delivery?.Dispose();
-                entry.Outcome.SetResult(result);
+                if (delivery is not null) { deliveryGate!.Complete(delivery, entry.Outcome, result); }
+                else { entry.Outcome.SetResult(result); }
             }
             catch (Exception e)
             {
                 deliveryGate?.MarkJournalUncertain();
                 lock (gate) { entry.Settled = time.GetUtcNow(); }
-                entry.Outcome.TrySetException(e);
+                if (delivery is not null) { deliveryGate!.Complete(delivery, entry.Outcome, default!, e); }
+                else { entry.Outcome.TrySetException(e); }
             }
             finally { delivery?.Dispose(); }
         }, CancellationToken.None);

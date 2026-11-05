@@ -32,6 +32,8 @@ public sealed record PlannedStateMessage(
 // message. Generation is an in-memory connection snapshot, never an I/O-performing getter.
 public interface IPlannedStateTransport
 {
+    // Stable for this transport's lifetime. Publish every reconnect/capability change here.
+    DepartureConnection Connection { get; }
     bool Negotiated { get; }
     long Generation { get; }
     Task<bool> SendAsync(PlannedStateMessage message, CancellationToken cancellationToken);
@@ -39,6 +41,7 @@ public interface IPlannedStateTransport
 
 public sealed class UnnegotiatedPlannedStateTransport : IPlannedStateTransport
 {
+    public DepartureConnection Connection { get; } = new();
     public bool Negotiated => false;
     public long Generation => 0;
     public Task<bool> SendAsync(PlannedStateMessage message, CancellationToken cancellationToken) => Task.FromResult(false);
@@ -49,7 +52,9 @@ public sealed class PlannedStateReceipt
     public Guid Transition { get; }
     public bool Legacy { get; }
     internal long Generation { get; }
-    internal PlannedStateReceipt(Guid transition, bool legacy, long generation) => (Transition, Legacy, Generation) = (transition, legacy, generation);
+    internal long Revision { get; }
+    internal PlannedStateReceipt(Guid transition, bool legacy, long generation, long revision) =>
+        (Transition, Legacy, Generation, Revision) = (transition, legacy, generation, revision);
 }
 
 public sealed class QuietLease : IDisposable
@@ -58,6 +63,7 @@ public sealed class QuietLease : IDisposable
     internal DeliveryGate.Exclusion Fence { get; }
     internal bool Sent, CancelScheduled, Committed, Disposed;
     internal long Generation;
+    internal long ConnectionRevision;
     internal PlannedStateReceipt? Receipt;
     readonly TaskCompletionSource<CancellationOutcome> cancellation = new(TaskCreationOptions.RunContinuationsAsynchronously);
     int cancellationStatus;
@@ -101,6 +107,7 @@ public sealed class LifecycleCoordinator
     readonly Lock state = new();
     readonly DeliveryGate delivery;
     readonly IPlannedStateTransport transport;
+    readonly DepartureConnection connection;
     readonly TimeProvider time;
     readonly IReadOnlyDictionary<DeparturePurpose, (DepartureBlocker Kind, IDepartureCondition Condition)[]> conditions;
     bool evaluatingConditions, reentryFault;
@@ -111,6 +118,7 @@ public sealed class LifecycleCoordinator
         this.delivery = delivery;
         this.conditions = conditions.Freeze();
         this.transport = transport ?? new UnnegotiatedPlannedStateTransport();
+        connection = this.transport.Connection ?? throw new ArgumentException("transport connection state is required", nameof(transport));
         this.time = time ?? TimeProvider.System;
     }
 
@@ -127,23 +135,21 @@ public sealed class LifecycleCoordinator
         if (purpose == DeparturePurpose.WatchdogRecovery || mode != DepartureMode.SelfInitiatedGraceful)
         { return QuietResult<QuietLease>.Blocked(QuietBlockedReason.JournalUncertain); }
         var started = time.GetTimestamp();
+        var probed = false;
+        DeliveryGate.Blocker blocker = default;
         while (true)
         {
             if (cancellationToken.IsCancellationRequested) { return QuietResult<QuietLease>.Blocked(QuietBlockedReason.Cancelled); }
-            if (delivery.TryExclude(LeaseLifetime, out var blocker) is { } fence)
+            if (probed && time.GetElapsedTime(started) >= maxWait) { return QuietResult<QuietLease>.Blocked(Map(blocker)); }
+            if (delivery.TryExclude(LeaseLifetime, out blocker) is { } fence)
             {
                 return QuietResult<QuietLease>.Granted(new QuietLease(this, fence, purpose));
             }
+            probed = true;
             var remaining = maxWait - time.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero)
             {
-                return QuietResult<QuietLease>.Blocked(blocker switch
-                {
-                    DeliveryGate.Blocker.Typing => QuietBlockedReason.Typing,
-                    DeliveryGate.Blocker.DeliveryInFlight => QuietBlockedReason.DeliveryInFlight,
-                    DeliveryGate.Blocker.JournalUncertain => QuietBlockedReason.JournalUncertain,
-                    _ => QuietBlockedReason.LifecycleInProgress,
-                });
+                return QuietResult<QuietLease>.Blocked(Map(blocker));
             }
             try { await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(25, remaining.TotalMilliseconds)), time, cancellationToken).ConfigureAwait(false); }
             catch (OperationCanceledException) { return QuietResult<QuietLease>.Blocked(QuietBlockedReason.Cancelled); }
@@ -162,16 +168,21 @@ public sealed class LifecycleCoordinator
             {
                 if (!Current(lease) || lease.Committed) { checkFailure = QuietBlockedReason.LeaseExpired; }
                 else if (cancellationToken.IsCancellationRequested) { checkFailure = QuietBlockedReason.Cancelled; }
-                else if (lease.Receipt is { } receipt) { return QuietResult<PlannedStateReceipt>.Granted(receipt); }
+                else if (lease.Receipt is { } receipt)
+                {
+                    if (ReceiptCurrent(receipt)) { return QuietResult<PlannedStateReceipt>.Granted(receipt); }
+                    checkFailure = QuietBlockedReason.AnnounceUnacked;
+                }
                 else if (lease.Sent) { checkFailure = QuietBlockedReason.AnnounceUnacked; }
                 else
                 {
                     lease.Generation = transport.Generation;
+                    lease.ConnectionRevision = connection.Snapshot.Revision;
                     if (!transport.Negotiated)
                     {
                         if (lease.Purpose is DeparturePurpose.RemoteRestart or DeparturePurpose.RemoteStop)
                         {
-                            lease.Receipt = new PlannedStateReceipt(lease.Transition, true, lease.Generation);
+                            lease.Receipt = new PlannedStateReceipt(lease.Transition, true, lease.Generation, lease.ConnectionRevision);
                             return QuietResult<PlannedStateReceipt>.Granted(lease.Receipt);
                         }
                         checkFailure = QuietBlockedReason.AnnounceUnavailable;
@@ -206,9 +217,9 @@ public sealed class LifecycleCoordinator
                 if (!Current(lease)) { failure = QuietBlockedReason.LeaseExpired; }
                 else if (cancellationToken.IsCancellationRequested) { failure = QuietBlockedReason.Cancelled; }
                 else if (timeout.IsCancellationRequested || time.GetElapsedTime(started) >= AnnounceTimeout) { failure = QuietBlockedReason.AnnounceUnacked; }
-                else if (accepted && transport.Negotiated && transport.Generation == lease.Generation)
+                else if (accepted && ReceiptCurrent(new PlannedStateReceipt(lease.Transition, false, lease.Generation, lease.ConnectionRevision)))
                 {
-                    lease.Receipt = new PlannedStateReceipt(lease.Transition, false, lease.Generation);
+                    lease.Receipt = new PlannedStateReceipt(lease.Transition, false, lease.Generation, lease.ConnectionRevision);
                     return QuietResult<PlannedStateReceipt>.Granted(lease.Receipt);
                 }
             }
@@ -264,12 +275,13 @@ public sealed class LifecycleCoordinator
                     }
                     finally { evaluatingConditions = false; }
                     if (reentryFault) { blocked = DepartureBlocker.ConditionFault; }
-                    if (blocked is null && lease.Fence.TryCommit())
+                    var changed = false;
+                    if (blocked is null && lease.Fence.TryCommit(connection, lease.Receipt!.Generation, !lease.Receipt.Legacy, lease.Receipt.Revision, out changed))
                     {
                         lease.Committed = true;
                         result = DepartureResult.Commit(new DepartureGuard(lease));
                     }
-                    else { result = DepartureResult.Abort(blocked ?? DepartureBlocker.ConditionFault); }
+                    else { result = DepartureResult.Abort(blocked ?? (changed ? DepartureBlocker.AnnounceUnacked : DepartureBlocker.ConditionFault)); }
                 }
             }
             catch { result = DepartureResult.Abort(DepartureBlocker.ConditionFault); }
@@ -281,12 +293,14 @@ public sealed class LifecycleCoordinator
 
     public Task<CancellationOutcome> Abort(QuietLease lease)
     {
+        CancellationWork? cancel;
         lock (state)
         {
             if (RejectReentry() || !ReferenceEquals(lease.Owner, this) || lease.Committed)
             { return Task.FromResult(CancellationOutcome.CancelUnsent); }
+            cancel = EndLease(lease);
         }
-        Release(lease);
+        Dispatch(cancel);
         return lease.Cancellation;
     }
 
@@ -347,6 +361,21 @@ public sealed class LifecycleCoordinator
     }
 
     bool Current(QuietLease lease) => ReferenceEquals(lease.Owner, this) && lease.IsCurrent;
+
+    bool ReceiptCurrent(PlannedStateReceipt receipt)
+    {
+        var snapshot = connection.Snapshot;
+        return transport.Generation == receipt.Generation && transport.Negotiated == !receipt.Legacy
+            && snapshot.Generation == receipt.Generation && snapshot.Negotiated == !receipt.Legacy && snapshot.Revision == receipt.Revision;
+    }
+
+    static QuietBlockedReason Map(DeliveryGate.Blocker blocker) => blocker switch
+    {
+        DeliveryGate.Blocker.Typing => QuietBlockedReason.Typing,
+        DeliveryGate.Blocker.DeliveryInFlight => QuietBlockedReason.DeliveryInFlight,
+        DeliveryGate.Blocker.JournalUncertain => QuietBlockedReason.JournalUncertain,
+        _ => QuietBlockedReason.LifecycleInProgress,
+    };
 
     bool RejectReentry()
     {

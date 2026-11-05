@@ -156,7 +156,7 @@ public sealed partial class LaunchService : ISessionLauncher
     {
         this.source = source;
         this.probe = probe;
-        this.injector = injector;
+        this.injector = new GateTrackedInjector(injector, gate);
         this.starter = starter;
         this.locator = locator;
         this.agency = agency;

@@ -10,7 +10,7 @@ public sealed class DeliveryQuietTests
         var gate = new DeliveryGate(new FakeTimeProvider());
         using var exclusion = gate.TryExclude(TimeSpan.FromSeconds(30), out _)!;
         Assert.True(exclusion.TryBeginCommit(out _));
-        Assert.True(exclusion.TryCommit());
+        Assert.True(exclusion.TryCommit(new DepartureConnection(), 0, false, 0, out _));
         exclusion.Dispose();
         ((IDisposable)exclusion).Dispose();
         Assert.Null(gate.TryEnterDelivery());
@@ -35,6 +35,33 @@ public sealed class DeliveryQuietTests
         Assert.Equal(-1, await memory.Once(next, () => Task.FromResult(8), _ => { }));
         quiet.Dispose();
         Assert.Equal(8, await memory.Once(next, () => Task.FromResult(8), _ => { }));
+    }
+
+    [Fact]
+    public async Task Quiet_cannot_overtake_the_completion_of_an_accepted_outcome()
+    {
+        var gate = new DeliveryGate();
+        var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var settling = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var finishSettlement = new ManualResetEventSlim();
+        var memory = new OutcomeMemory<int>(TimeProvider.System, TimeSpan.FromMinutes(15), gate, () => -1);
+        var request = memory.Once(Guid.NewGuid(), () => release.Task, _ =>
+        {
+            settling.SetResult();
+            Assert.True(finishSettlement.Wait(TimeSpan.FromSeconds(3)));
+        });
+        release.SetResult(7);
+        await settling.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            Assert.False(request.IsCompleted);
+            Assert.Null(gate.TryExclude(TimeSpan.FromSeconds(30), out _));
+        }
+        finally { finishSettlement.Set(); }
+        Assert.Equal(7, await request.WaitAsync(TimeSpan.FromSeconds(2)));
+        using var fence = gate.TryExclude(TimeSpan.FromSeconds(30), out _);
+        Assert.NotNull(fence);
+        Assert.True(request.IsCompletedSuccessfully);
     }
 
     [Fact]

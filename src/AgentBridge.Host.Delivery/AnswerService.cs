@@ -109,7 +109,7 @@ public sealed class AnswerService : ISessionAnswerer
         this.processes = processes;
         this.probe = probe;
         this.guard = guard;
-        this.injector = injector;
+        this.injector = new GateTrackedInjector(injector, gate);
         this.options = options;
         this.log = log ?? (_ => { });
         this.gate = gate ?? throw new ArgumentNullException(nameof(gate));

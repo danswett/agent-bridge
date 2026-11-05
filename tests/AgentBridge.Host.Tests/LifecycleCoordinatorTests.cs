@@ -402,6 +402,77 @@ public sealed class LifecycleCoordinatorTests
         Assert.Equal(CancellationOutcome.NotRequired, await lease.Cancellation.WaitAsync(TimeSpan.FromSeconds(2)));
     }
 
+    [Fact]
+    public async Task Abort_and_commit_compete_atomically_and_abort_never_returns_an_unfinished_committed_task()
+    {
+        var coordinator = new LifecycleCoordinator(new DeliveryGate(), Conditions());
+        using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value!;
+        await coordinator.AnnouncePlanned(lease);
+        using var start = new ManualResetEventSlim();
+        var aborting = Task.Run(async () => { start.Wait(); return await coordinator.Abort(lease); });
+        var committing = Task.Run(() => { start.Wait(); return coordinator.CommitDeparture(lease); });
+        start.Set();
+        var commit = await committing.WaitAsync(TimeSpan.FromSeconds(2));
+        var abort = await aborting.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(commit.Committed ? CancellationOutcome.CancelUnsent : CancellationOutcome.NotRequired, abort);
+        if (commit.Committed) { Assert.Equal(CancellationOutcome.CancelUnsent, await coordinator.Abort(lease).WaitAsync(TimeSpan.FromSeconds(2))); }
+    }
+
+    [Fact]
+    public async Task A_late_retry_returns_the_last_blocker_even_if_the_delivery_has_finished()
+    {
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
+        var coordinator = new LifecycleCoordinator(gate, Conditions(), time: time);
+        using var delivery = gate.TryEnterDelivery();
+        var waiting = coordinator.TryAcquireQuiet(TimeSpan.FromSeconds(1), DeparturePurpose.RemoteRestart);
+        delivery!.Dispose();
+        time.Advance(TimeSpan.FromSeconds(2));
+        Assert.Equal(QuietBlockedReason.DeliveryInFlight, (await waiting.WaitAsync(TimeSpan.FromSeconds(2))).Reason);
+        using var firstProbe = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value;
+        Assert.NotNull(firstProbe);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_connection_change_during_condition_evaluation_invalidates_the_final_commit(bool generation)
+    {
+        var gate = new DeliveryGate();
+        var transport = new Transport();
+        var condition = new Condition(DepartureBlocker.ChannelChanged, () =>
+        {
+            transport.Connection.Publish(generation ? transport.Generation + 1 : transport.Generation, generation);
+            return false;
+        });
+        var coordinator = new LifecycleCoordinator(gate, Conditions(condition), transport);
+        using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value!;
+        await coordinator.AnnouncePlanned(lease);
+        Assert.Equal(DepartureBlocker.AnnounceUnacked, coordinator.CommitDeparture(lease).Kind);
+        Assert.Equal(1, condition.Calls);
+        using var admitted = gate.TryEnterDelivery();
+        Assert.NotNull(admitted);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public async Task A_cached_receipt_is_not_reused_after_generation_or_capability_changes(bool generation, bool legacy)
+    {
+        var gate = new DeliveryGate();
+        var transport = new Transport();
+        if (legacy) { transport.Connection.Publish(1, false); }
+        var coordinator = new LifecycleCoordinator(gate, Conditions(), transport);
+        using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, legacy ? DeparturePurpose.RemoteRestart : DeparturePurpose.Update)).Value!;
+        Assert.True((await coordinator.AnnouncePlanned(lease)).Succeeded);
+        transport.Connection.Publish(generation ? 2 : 1, generation || legacy);
+        Assert.Equal(QuietBlockedReason.AnnounceUnacked, (await coordinator.AnnouncePlanned(lease)).Reason);
+        Assert.False(lease.IsCurrent);
+        using var admitted = gate.TryEnterDelivery();
+        Assert.NotNull(admitted);
+    }
+
     sealed class Condition(DepartureBlocker kind, Func<bool> blocking) : IDepartureCondition
     {
         public DepartureBlocker Kind => kind;
@@ -411,14 +482,14 @@ public sealed class LifecycleCoordinatorTests
 
     sealed class Transport : IPlannedStateTransport
     {
-        long generation = 1;
+        public DepartureConnection Connection { get; } = new(1, true);
         public bool ThrowGeneration { get; set; }
         public bool ThrowNegotiated { get; set; }
-        public bool Negotiated => ThrowNegotiated ? throw new NotSupportedException("snapshot fault") : true;
+        public bool Negotiated => ThrowNegotiated ? throw new NotSupportedException("snapshot fault") : Connection.Snapshot.Negotiated;
         public long Generation
         {
-            get => ThrowGeneration ? throw new NotSupportedException("snapshot fault") : generation;
-            set => generation = value;
+            get => ThrowGeneration ? throw new NotSupportedException("snapshot fault") : Connection.Snapshot.Generation;
+            set => Connection.Publish(value, Connection.Snapshot.Negotiated);
         }
         public List<PlannedStateMessage> Messages { get; } = [];
         public TaskCompletionSource CancelCalled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -20,8 +20,12 @@ claim inside the worker was too late: a quiet probe could miss accepted work
 that had not yet reached `TryClaim`. Repeated requests still return their existing
 outcome. A new request refused while quiet is not remembered as accepted/busy
 forever; a later explicit retry may be admitted. Existing per-session and
-one-typing-worker rules remain. Unexpected worker failure makes quiet acquisition
-fail closed with `JournalUncertain` for this process.
+one-typing-worker rules remain. Outcome completion and admission release are
+atomic with respect to the gate, so a quiet grant cannot overtake settlement.
+Unexpected worker failure makes quiet acquisition fail closed with
+`JournalUncertain` for this process. The shared-gate injector wrapper also marks
+uncertainty before a service can normalize an injector exception into a result;
+an unconfirmed helper exit must not become permission to restart.
 
 Quiet means **no delivery/mutation in flight and no typing now**. Running turns,
 questions and session `Working`/`Idle` state are not consulted. #819 and #801
@@ -88,8 +92,18 @@ carried to another process by this API.
 
 ### Announcement abstraction
 
-`IPlannedStateTransport` supplies `Negotiated`, connection `Generation`, and
+`IPlannedStateTransport` supplies `Negotiated`, connection `Generation`, one stable
+`DepartureConnection Connection` object for its lifetime, and
 `SendAsync(PlannedStateMessage, CancellationToken) -> Task<bool>`.
+The transport publishes every reconnect/capability change through
+`Connection.Publish(generation, negotiated)` before exposing it elsewhere.
+Generation cannot decrease; the library-owned snapshot revision also invalidates
+capability changes that return to their previous value. Cached receipts are
+revalidated against the current generation, capability and revision.
+Commit's final gate-locked step compares the receipt with this sealed object's
+snapshot and commits under its lock: no transport/owner getter runs under the
+gate. Lock order is coordinator, gate, then connection state; `Publish` takes
+only the connection-state lock and invokes no callbacks.
 Its implementation must serialize controls in sequence order and return true
 only for matching durable relay acceptance of that message. No relay handler or
 capability is implemented here. The default `UnnegotiatedPlannedStateTransport`
@@ -111,6 +125,9 @@ the next quiet acquisition. `QuietLease.CancellationStatus` and the awaitable
 that network operation. The transport must reject a stale/late lower-sequence
 plan; failed cancellation does not make an old receipt usable again.
 Late receipts and receipts from a different connection/lease cannot commit.
+Abort competes atomically with commit under the coordinator lock; cancellation
+is dispatched after unlocking, and aborting an already committed lease returns
+immediately rather than waiting on an unstarted cancellation.
 Update plans are `reason: update`, default return 90 s; host restart 60 s,
 OS reboot 300 s. Other reasons have no expected return. No actor, input or
 command request ID is in the relay-visible record.

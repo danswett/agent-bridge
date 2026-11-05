@@ -253,7 +253,8 @@ foreach ($invalid in @(
     @{ Name = 'A string schema version is refused'; Json = '{"v":"1","halted":[]}' },
     @{ Name = 'A decimal schema version is refused'; Json = '{"v":1.0,"halted":[]}' },
     @{ Name = 'An extra halt policy property is refused'; Json = '{"v":1,"halted":[],"extra":false}' },
-    @{ Name = 'A halted version with a trailing newline is refused'; Json = '{"v":1,"halted":["0.1.600\n"]}' }
+    @{ Name = 'A halted version with a trailing newline is refused'; Json = '{"v":1,"halted":["0.1.600\n"]}' },
+    @{ Name = 'A halted version above Int64 MaxValue is refused'; Json = '{"v":1,"halted":["0.1.9223372036854775808"]}' }
 )) {
     Check $invalid.Name {
         New-Item -ItemType Directory -Force $scratch | Out-Null
