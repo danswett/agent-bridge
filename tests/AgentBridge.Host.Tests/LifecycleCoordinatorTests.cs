@@ -7,6 +7,10 @@ using Xunit;
 
 public sealed class LifecycleCoordinatorTests
 {
+    // Real time is only ever a failure bound, never the expected path: Windows CI starved the
+    // pool past 3 s and turned correct interleavings into failures.
+    static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     static DepartureConditions Conditions(params IDepartureCondition[] registered)
     {
         var conditions = new DepartureConditions();
@@ -57,7 +61,7 @@ public sealed class LifecycleCoordinatorTests
         using var delivery = gate.TryEnterDelivery();
         var attempt = coordinator.TryAcquireQuiet(TimeSpan.FromSeconds(10), DeparturePurpose.RemoteRestart);
         time.Advance(TimeSpan.FromSeconds(10));
-        Assert.Equal(QuietBlockedReason.DeliveryInFlight, (await attempt.WaitAsync(TimeSpan.FromSeconds(2))).Reason);
+        Assert.Equal(QuietBlockedReason.DeliveryInFlight, (await attempt.WaitAsync(Bound)).Reason);
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => coordinator.TryAcquireQuiet(TimeSpan.FromSeconds(11), DeparturePurpose.RemoteRestart));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => coordinator.TryAcquireQuiet(TimeSpan.Zero, (DeparturePurpose)int.MaxValue));
         Assert.Equal(["DeliveryInFlight", "Typing", "AnnounceUnacked", "JournalUncertain", "AppRunning",
@@ -73,10 +77,10 @@ public sealed class LifecycleCoordinatorTests
         var coordinator = new LifecycleCoordinator(gate, Conditions(), transport, time);
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value!;
         var announcing = coordinator.AnnouncePlanned(lease);
-        await transport.PlannedCalled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await transport.PlannedCalled.Task.WaitAsync(Bound);
         time.Advance(TimeSpan.FromSeconds(5));
-        Assert.Equal(QuietBlockedReason.AnnounceUnacked, (await announcing.WaitAsync(TimeSpan.FromSeconds(2))).Reason);
-        Assert.Equal(CancellationOutcome.Sent, await lease.Cancellation.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal(QuietBlockedReason.AnnounceUnacked, (await announcing.WaitAsync(Bound)).Reason);
+        Assert.Equal(CancellationOutcome.Sent, await lease.Cancellation.WaitAsync(Bound));
         Assert.Equal(["planned", "cancelled"], transport.Messages.Select(m => m.Phase));
         Assert.Equal(lease.Transition, transport.Messages[1].Transition);
         Assert.True(transport.Messages[1].Sequence > transport.Messages[0].Sequence);
@@ -155,7 +159,7 @@ public sealed class LifecycleCoordinatorTests
         await coordinator.AnnouncePlanned(lease);
         Assert.Equal(DepartureBlocker.AppRunning, coordinator.CommitDeparture(lease).Kind);
         Assert.Equal((1, 1), (first.Calls, second.Calls));
-        Assert.Equal(CancellationOutcome.Sent, await lease.Cancellation.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal(CancellationOutcome.Sent, await lease.Cancellation.WaitAsync(Bound));
         Assert.Equal("cancelled", transport.Messages[^1].Phase);
         using var admitted = gate.TryEnterDelivery();
         Assert.NotNull(admitted);
@@ -233,11 +237,11 @@ public sealed class LifecycleCoordinatorTests
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value!;
         await coordinator.AnnouncePlanned(lease);
         Assert.Equal(DepartureBlocker.AppRunning, coordinator.CommitDeparture(lease).Kind);
-        await transport.CancelCalled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await transport.CancelCalled.Task.WaitAsync(Bound);
         using var next = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value;
         Assert.NotNull(next);
         time.Advance(TimeSpan.FromSeconds(5));
-        Assert.Equal(CancellationOutcome.CancelUnsent, await lease.Cancellation.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal(CancellationOutcome.CancelUnsent, await lease.Cancellation.WaitAsync(Bound));
         Assert.Equal(CancellationOutcome.CancelUnsent, lease.CancellationStatus);
     }
 
@@ -266,8 +270,8 @@ public sealed class LifecycleCoordinatorTests
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value!;
         await coordinator.AnnouncePlanned(lease);
         time.Advance(TimeSpan.FromSeconds(30));
-        await transport.CancelCalled.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Equal(CancellationOutcome.CancelUnsent, await lease.Cancellation.WaitAsync(TimeSpan.FromSeconds(2)));
+        await transport.CancelCalled.Task.WaitAsync(Bound);
+        Assert.Equal(CancellationOutcome.CancelUnsent, await lease.Cancellation.WaitAsync(Bound));
         Assert.Equal("cancelled", transport.Messages[^1].Phase);
     }
 
@@ -276,7 +280,9 @@ public sealed class LifecycleCoordinatorTests
     {
         var time = new FakeTimeProvider();
         var gate = new DeliveryGate(time);
-        using var release = new ManualResetEventSlim();
+        // No real-time bound inside the send: a timed release once let a starved continuation
+        // see `true` before the fake clock advanced. The finally below always releases it.
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var sendEnded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var transport = new Transport
         {
@@ -284,7 +290,7 @@ public sealed class LifecycleCoordinatorTests
             {
                 if (m.Phase == "planned")
                 {
-                    try { release.Wait(TimeSpan.FromSeconds(3)); return Task.FromResult(true); }
+                    try { return Task.FromResult(release.Task.GetAwaiter().GetResult()); }
                     finally { sendEnded.TrySetResult(); }
                 }
                 return new TaskCompletionSource<bool>().Task;
@@ -295,20 +301,20 @@ public sealed class LifecycleCoordinatorTests
         try
         {
             var announcing = coordinator.AnnouncePlanned(lease);
-            await transport.PlannedCalled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await transport.PlannedCalled.Task.WaitAsync(Bound);
             time.Advance(TimeSpan.FromSeconds(5));
-            Assert.Equal(QuietBlockedReason.AnnounceUnacked, (await announcing.WaitAsync(TimeSpan.FromSeconds(2))).Reason);
+            Assert.Equal(QuietBlockedReason.AnnounceUnacked, (await announcing.WaitAsync(Bound)).Reason);
             using var next = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value;
             Assert.NotNull(next);
-            await transport.CancelCalled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await transport.CancelCalled.Task.WaitAsync(Bound);
             time.Advance(TimeSpan.FromSeconds(5));
-            Assert.Equal(CancellationOutcome.CancelUnsent, await lease.Cancellation.WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.Equal(CancellationOutcome.CancelUnsent, await lease.Cancellation.WaitAsync(Bound));
             Assert.Equal(DepartureBlocker.ConditionFault, coordinator.CommitDeparture(lease).Kind);
         }
         finally
         {
-            release.Set();
-            await sendEnded.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            release.TrySetResult(true);
+            await sendEnded.Task.WaitAsync(Bound);
         }
     }
 
@@ -328,7 +334,7 @@ public sealed class LifecycleCoordinatorTests
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update)).Value!;
         Assert.Equal(QuietBlockedReason.AnnounceUnacked, (await coordinator.AnnouncePlanned(lease)).Reason);
         Assert.False(coordinator.CommitDeparture(lease).Committed);
-        Assert.Equal(CancellationOutcome.Sent, await lease.Cancellation.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal(CancellationOutcome.Sent, await lease.Cancellation.WaitAsync(Bound));
     }
 
     [Fact]
@@ -338,7 +344,6 @@ public sealed class LifecycleCoordinatorTests
         var ownerLock = new object();
         using var ownerHeld = new ManualResetEventSlim();
         using var conditionEntered = new ManualResetEventSlim();
-        Task<IDisposable?>? admission = null;
         var condition = new Condition(DepartureBlocker.TransferInFlight, () =>
         {
             conditionEntered.Set();
@@ -347,24 +352,27 @@ public sealed class LifecycleCoordinatorTests
         var coordinator = new LifecycleCoordinator(gate, Conditions(condition));
         using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value!;
         await coordinator.AnnouncePlanned(lease);
-        var owner = Task.Run(() =>
+        // Dedicated threads: a starved pool once kept the commit from starting within the
+        // owner's wait, so the owner gave up its lock and the race never happened.
+        var owner = Task.Factory.StartNew(() =>
         {
             lock (ownerLock)
             {
                 ownerHeld.Set();
-                if (!conditionEntered.Wait(TimeSpan.FromSeconds(3))) { return false; }
-                admission = Task.Run(gate.TryEnterDelivery);
-                // A broken implementation times out, releases ownerLock and fails rather
-                // than leaving a deadlocked helper in the test process.
-                return admission.Wait(TimeSpan.FromSeconds(2));
+                if (!conditionEntered.Wait(Bound)) { throw new TimeoutException("the commit never reached its condition"); }
+                // Holding ownerLock while the condition waits for it: a gate lock held across
+                // condition evaluation would deadlock here, and the test's bound reports it.
+                return gate.TryEnterDelivery();
             }
-        });
-        Assert.True(ownerHeld.Wait(TimeSpan.FromSeconds(3)));
-        var committing = Task.Run(() => coordinator.CommitDeparture(lease));
-        Assert.True((await committing.WaitAsync(TimeSpan.FromSeconds(5))).Committed);
-        Assert.True(await owner.WaitAsync(TimeSpan.FromSeconds(5)));
-        using var admitted = await admission!;
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        var committing = Task.Factory.StartNew(() =>
+        {
+            if (!ownerHeld.Wait(Bound)) { throw new TimeoutException("the owner never took its lock"); }
+            return coordinator.CommitDeparture(lease);
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        using var admitted = await owner.WaitAsync(Bound);
         Assert.Null(admitted);
+        Assert.True((await committing.WaitAsync(Bound)).Committed);
         Assert.Equal(1, condition.Calls);
     }
 
@@ -384,7 +392,7 @@ public sealed class LifecycleCoordinatorTests
         using var admitted = gate.TryEnterDelivery();
         Assert.NotNull(admitted);
         Assert.Equal(generation ? CancellationOutcome.CancelUnsent : CancellationOutcome.Sent,
-            await lease.Cancellation.WaitAsync(TimeSpan.FromSeconds(2)));
+            await lease.Cancellation.WaitAsync(Bound));
     }
 
     [Theory]
@@ -399,7 +407,7 @@ public sealed class LifecycleCoordinatorTests
         Assert.Equal(QuietBlockedReason.ConditionFault, (await coordinator.AnnouncePlanned(lease)).Reason);
         using var admitted = gate.TryEnterDelivery();
         Assert.NotNull(admitted);
-        Assert.Equal(CancellationOutcome.NotRequired, await lease.Cancellation.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal(CancellationOutcome.NotRequired, await lease.Cancellation.WaitAsync(Bound));
     }
 
     [Fact]
@@ -413,7 +421,7 @@ public sealed class LifecycleCoordinatorTests
         var abort = coordinator.Abort(lease);
         Assert.True(commit.Task.IsCompleted);
         Assert.False((await commit.Task).Committed);
-        Assert.Equal(CancellationOutcome.NotRequired, await abort.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal(CancellationOutcome.NotRequired, await abort.WaitAsync(Bound));
     }
 
     [Fact]
@@ -426,7 +434,7 @@ public sealed class LifecycleCoordinatorTests
         var waiting = coordinator.TryAcquireQuiet(TimeSpan.FromSeconds(1), DeparturePurpose.RemoteRestart);
         delivery!.Dispose();
         time.Advance(TimeSpan.FromSeconds(2));
-        Assert.Equal(QuietBlockedReason.DeliveryInFlight, (await waiting.WaitAsync(TimeSpan.FromSeconds(2))).Reason);
+        Assert.Equal(QuietBlockedReason.DeliveryInFlight, (await waiting.WaitAsync(Bound)).Reason);
         using var firstProbe = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value;
         Assert.NotNull(firstProbe);
     }

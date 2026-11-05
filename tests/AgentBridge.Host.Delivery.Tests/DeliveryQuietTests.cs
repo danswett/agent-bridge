@@ -4,6 +4,9 @@ using Xunit;
 
 public sealed class DeliveryQuietTests
 {
+    // Real time is only ever a failure bound: a starved CI pool must not decide the result.
+    static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     [Fact]
     public void A_committed_exclusion_cannot_be_released_even_through_IDisposable()
     {
@@ -48,8 +51,8 @@ public sealed class DeliveryQuietTests
         gate.AdmissionReleased = () => completedAtRelease.TrySetResult(request!.IsCompleted);
         request = memory.Once(Guid.NewGuid(), () => release.Task, _ => { });
         release.SetResult(7);
-        Assert.True(await completedAtRelease.Task.WaitAsync(TimeSpan.FromSeconds(2)));
-        Assert.Equal(7, await request.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.True(await completedAtRelease.Task.WaitAsync(Bound));
+        Assert.Equal(7, await request.WaitAsync(Bound));
         using var fence = gate.TryExclude(TimeSpan.FromSeconds(30), out _);
         Assert.NotNull(fence);
     }
