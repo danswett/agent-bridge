@@ -101,6 +101,16 @@ Write-Host "Ring $Ring on $platform, mode $($selection.mode): $($selection.suite
 if ($selection.unclaimed.Count -gt 0) {
     Write-Host "No rule claims $($selection.unclaimed -join ', '), so the whole ring runs." -ForegroundColor Yellow
 }
+# Warnings only (#929): a changed test file that waits in real time or reads the real clock, before
+# any suite runs, whichever are selected. It never changes the exit code, even when it can't run.
+try {
+    . (Join-Path $PSScriptRoot 'realtime-lint.ps1')
+    Get-RealTimeTestWarning -Root $root -Changed @($selection.files | Where-Object { $_ }) |
+        ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
+}
+catch {
+    Write-Host "The real-time lint (quality/realtime-lint.ps1) couldn't run: $($_.Exception.Message)" -ForegroundColor DarkYellow
+}
 
 $results = [System.Collections.Generic.List[object]]::new()
 foreach ($s in $selection.skipped) {

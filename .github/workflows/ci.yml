@@ -932,7 +932,10 @@ jobs:
     #  - pwa-site-csp: the Pages build's CSP;
     #  - playwright-apt: the download of Playwright's system packages leaves a slow apt mirror only
     #    when it should (.github/actions/playwright-system-packages);
-    #  - docs-links: relative links and their #anchors in every Markdown file resolve.
+    #  - docs-links: relative links and their #anchors in every Markdown file resolve;
+    #  - review-receipt, realtime-lint: build/review-receipt.ps1 against a stand-in gh and
+    #    synthetic fixtures (it never posts here), and quality/realtime-lint.ps1 on a made-up tree
+    #    (#929).
     # Not in plan's own runner: a failing check there would skip every job that needs the plan.
     needs: plan
     if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.light == 'true'
@@ -957,6 +960,12 @@ jobs:
       - name: Connector read-contract mock
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'connector-conformance')) }}
         run: node --test tools/connector-conformance/mock-host.test.mjs
+      - name: Review receipts and their refusals, against a stand-in gh
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'review-receipt')) }}
+        run: pwsh -NoProfile -File build/test-review-receipt.ps1
+      - name: The real-time lint for tests
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'realtime-lint')) }}
+        run: pwsh -NoProfile -File quality/test-realtime-lint.ps1
       - name: Playwright's system packages leave a slow apt mirror only for Canonical's archive
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'playwright-apt')) }}
         run: bash .github/actions/playwright-system-packages/test.sh

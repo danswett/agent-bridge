@@ -1,0 +1,5 @@
+[
+  { "path": "src/Example.cs", "lines": "whole", "read": "2025-06-01T10:31:00.000Z", "toolCallId": "toolu_synthetic_view_0001" },
+  { "path": "docs/notes.md", "lines": "1-2", "read": "2025-06-01T10:31:10.000Z", "toolCallId": "toolu_synthetic_view_0002" },
+  { "path": "docs/notes.md", "lines": "3-4", "read": "2025-06-01T10:31:20.000Z", "toolCallId": "toolu_synthetic_view_0003" }
+]
