@@ -97,13 +97,13 @@ export async function parseBody(bytes) {
   return { op, account, generation, seq, prev, by, cosigner, at, device, approval, target, keep, name, adopt };
 }
 
-function id(node, what) {
+export function id(node, what) {
   const value = string(node, what);
   if (!isId(value)) throw new RosterFormatError(REFUSAL.id, what);
   return value;
 }
 
-function hashes(node, what, min, max) {
+export function hashes(node, what, min, max) {
   if (node.t !== 'array') throw new RosterFormatError(REFUSAL.type, what);
   if (node.items.length < min || node.items.length > max) throw new RosterFormatError(REFUSAL.count, what);
   const list = node.items.map((item) => fromBase64Url(string(item, what), what, 32));
@@ -224,13 +224,13 @@ const WRAPPER_FIELDS = ['body', 'sig', 'cosig', 'uv'];
 const UV_FIELDS = ['by', 'cosigner'];
 const ASSERTION_FIELDS = ['authenticatorData', 'clientDataJSON', 'signature'];
 
-function signature(node, what) {
+export function signature(node, what) {
   const der = fromBase64Url(string(node, what), what);
   checkRosterSignature(der, what);
   return der;
 }
 
-function parseAssertion(node, what) {
+export function parseAssertion(node, what) {
   const a = object(node, what);
   members(a, ASSERTION_FIELDS, ASSERTION_FIELDS, what);
   const authenticatorData = fromBase64Url(string(a.get('authenticatorData'), `${what}.authenticatorData`), `${what}.authenticatorData`);

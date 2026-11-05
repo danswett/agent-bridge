@@ -43,12 +43,12 @@ public sealed class World
     }
 
     // A device's descriptor; `signWith` names another sign key, as a copy carries its maker's.
-    public JsonObject Device(string device, string kind = "phone", string? signWith = null)
+    public JsonObject Device(string device, string kind = "phone", string? signWith = null, string presence = Presence.Key)
     {
         var (dh, sign) = Keys(device);
         Id(device);
         if (kind == "host") { return HostDevice(dh, "windows", device); }
-        return Person(dh, signWith is null ? sign : Keys(signWith).Sign, kind, kind == "pwa" ? "windows" : "ios", device, Presence.Key);
+        return Person(dh, signWith is null ? sign : Keys(signWith).Sign, kind, kind == "pwa" ? "windows" : "ios", device, presence);
     }
 
     Signed Put(string label, JsonObject body, string by, string? cosigner = null, string? signAs = null)
@@ -69,10 +69,10 @@ public sealed class World
 
     // An add of `device` by `by`. A copy (`copyBy`) carries the device's dh with the copier's own
     // sign key, as a hostile approver's copy would.
-    public Signed Add(string label, string by, string device, string parent, string kind = "phone", string? signAs = null, bool copy = false)
+    public Signed Add(string label, string by, string device, string parent, string kind = "phone", string? signAs = null, bool copy = false, string presence = Presence.Key)
     {
         var b = Body("add", by, [parent]);
-        b["device"] = Device(device, kind, copy ? by : null);
+        b["device"] = Device(device, kind, copy ? by : null, presence);
         b["approval"] = new JsonObject { ["method"] = "code", ["transcript"] = Codec.Base64Url(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(label))) };
         return Put(label, b, by, signAs: signAs);
     }

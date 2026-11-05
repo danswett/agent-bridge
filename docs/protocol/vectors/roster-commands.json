@@ -1,0 +1,561 @@
+{
+  "about": "The device roster's vetoes (design §5.6), person commands (§7.2) and head attestations (§6.3) (#55 R1c). Each veto and command is checked against the roster in entries, every entry accepted at running time 0 and checked an hour later, so N is on probation. A case with refusal is refused by the parser with that code; otherwise code is the check's (null: accepted). A veto vetoes the held reset heldReset. An attestation's key is HKDF from ECDH between attester and host, as a signed command's; command is a signed command's body and MAC under the same key, which must not verify the attestation, and the attestation's message must not parse as a command body.",
+  "spec": "devices.md",
+  "generatedBy": "tests/AgentBridge.Roster.Tests/RosterCommandTests.cs",
+  "account": "owner@example",
+  "generation": "ab4fb3cc24a3cc99249ab0694c361a88",
+  "devices": {
+    "G": "425207365333a6bd3e6ba85b37981cee",
+    "A": "0d78e6f5de08cfe1e2bfa6a4e5065024",
+    "P": "168f7ef90103063ef1d241f79294adf4",
+    "H": "c69c83474da2ac399b19623b26479f44",
+    "R": "e731c3a09f80abc6a0530d5ff6827ab6",
+    "N": "93efee42fd1e60de206b8a2d5df77194",
+    "H2": "aafcd86566b2c1c13a1fd4cc05525b53"
+  },
+  "entries": [
+    {
+      "label": "G",
+      "hash": "h8R764RL38lL-BgC_2L3XwtFJaMhF_hrSWHv_2LOCtI",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImdlbmVzaXMiLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInNlcSI6MCwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowMFoiLCJkZXZpY2UiOnsiaWQiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImRoIjoiQkE4c0VkZ2JuYU52NDdqMUlRYkxCR2JUNXZnekhQMnFYT1l4OXl5Q040MFNuUVpjSXVyVE43Y1hMclFuZ2Nyc0J6VS1HRzFFa3pnUGRhdTltclVoTTFzIiwic2lnbiI6IkJJRW1Lb0REWk9zZHFqMVMxLTFrZ0d5b2k2ZHJnUVE1RExYaFd3LXJvdWdfck40SXBfT0VXaDNHYUhRTEpKUUJVM0lwWG9hZVZfNUsyZlJKYWtGM2lIcyIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6IkcifSwiYXBwcm92YWwiOnsibWV0aG9kIjoiZ2VuZXNpcyJ9fQ\",\"sig\":\"MEUCIQDwJYK2Bw7DzqfsYaTjisdFiC5BCAodf9r-8WDE0osTxgIgdKd19XOoaKbIr233x6H54hK_y_kXT3z-qaigvVMdlDg\"}"
+    },
+    {
+      "label": "+A",
+      "hash": "VQc-MnMuaqySdka1x2KgzE880wz0SUNPpxd2jlvrxfk",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjoxLCJwcmV2IjpbImg4Ujc2NFJMMzhsTC1CZ0NfMkwzWHd0RkphTWhGX2hyU1dIdl8yTE9DdEkiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowMVoiLCJkZXZpY2UiOnsiaWQiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsImRoIjoiQkRlclJQcUI0anYycjFjRUFtNDBkaUoxR2xQdHFpd0lad2tkcnphNnppTkpIUGhMaWdRMEVsdjBnTkxxU3lHV3ZMX0gwUnNqU2piOHpBSWV1NVdXa2NJIiwic2lnbiI6IkJGckVLRmM5WTJONEJJNVE3TndtbmE4WnhCaFlnUjFGQmN5SktqZjZOWUFCeUlMaHZtX2x3UHpfVFpMalRRSWQ1NHRhUlZYcXlDc0d4SDR0UzYxb3ZtYyIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6IkEifSwiYXBwcm92YWwiOnsibWV0aG9kIjoiY29kZSIsInRyYW5zY3JpcHQiOiJGZXdvZ21fanZSeFN2b3d3TzRnQllzeURCcnpBV0FvMnlTdFR4MVoxLVlRIn19\",\"sig\":\"MEUCIQC7Q_App61I6SMYEt0OMis4UEab78ORtDNVX5PSL5DlDQIgdIfcopwNLlRg7xEQcISRnu69w3_LyBakWHMRk-4r3oc\"}"
+    },
+    {
+      "label": "cA",
+      "hash": "Jq3Zmgv8Pq_DfBXXfI4_duMWu4nlNuGlxvUuud9kdr4",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImNvbmZpcm0iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInNlcSI6MiwicHJldiI6WyJWUWMtTW5NdWFxeVNka2ExeDJLZ3pFODgwd3owU1VOUHB4ZDJqbHZyeGZrIl0sImJ5IjoiNDI1MjA3MzY1MzMzYTZiZDNlNmJhODViMzc5ODFjZWUiLCJhdCI6IjIwMjYtMTEtMDRUMTA6MDA6MDJaIiwidGFyZ2V0Ijp7ImlkIjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJhZGQiOiJWUWMtTW5NdWFxeVNka2ExeDJLZ3pFODgwd3owU1VOUHB4ZDJqbHZyeGZrIn19\",\"sig\":\"MEMCIE8i5zvB8deOxnbD8yGsKri0i5URJv4X2wyo2J-aKTHXAh9MBUKEN1WzF3YY76RE3h9NPHBxrVxe295Y3l_ahzfX\"}"
+    },
+    {
+      "label": "+P",
+      "hash": "R4jq6x8nHXVPSsb-tLesURnXDX-OVDQ1NVqqAk16NOo",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjozLCJwcmV2IjpbIkpxM1ptZ3Y4UHFfRGZCWFhmSTRfZHVNV3U0bmxOdUdseHZVdXVkOWtkcjQiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowM1oiLCJkZXZpY2UiOnsiaWQiOiIxNjhmN2VmOTAxMDMwNjNlZjFkMjQxZjc5Mjk0YWRmNCIsImRoIjoiQk05UG5vU21nQjBBUEpNbFZNdFRJNEJLOHYybk1ZNk92bnA2bEwtemhyMVhkWHg0RjM1RHpzWnBTN0R0UjlHZ1E4QjVZT0NFSGUtV2hxMFNNNWJPdDJFIiwic2lnbiI6IkJITThxekhIR01hVVN2M2lydVNtRzVIOWJqT2tJUEdfbVhJdkVJR28zbDRzUm9ESFpkRjJqSDc1SWljMTBvazZpbjkzVVp6eFNsTG5rMi1YNFJBVFM5byIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6IndlYmF1dGhuIiwid2ViYXV0aG4iOnsicnBJZCI6ImJyaWRnZS5leGFtcGxlIiwiY3JlZGVudGlhbElkIjoiV0xJSjl6alpsMmFJdm5xRmxETVdzY2pfclpSeGVrRjhkUzJIRGd6MXFQUSIsImtleSI6IkJObGFIclo0TlNfMzRGellFQlBqcXFjS1BNbGZOZUxjSjAxbVFHUXlkZy1KMWJrdmtjQ1B3OXFVSlpDcjBIU0hLRk85Q25NT1QxX3RuNVl6Q1R1MnljWSIsImF0dGVzdGVkIjpmYWxzZSwiYmFja3VwRWxpZ2libGUiOmZhbHNlfSwia2luZCI6InB3YSIsInBsYXRmb3JtIjoid2luZG93cyIsIm5hbWUiOiJQIn0sImFwcHJvdmFsIjp7Im1ldGhvZCI6ImNvZGUiLCJ0cmFuc2NyaXB0IjoiWk5CTGNzWWJPMHZFQXR0Q19iOWRrdWRqWTBFa2tZOWVDOV9EV2VKQk84TSJ9fQ\",\"sig\":\"MEUCIQCLiM-IGIawdhGjlJDbvwKRIv5Bc1-k1khUZBjDneMRIQIgU1YLbHNQqPk9gwCTnAutbBX5J9Rj7StW3G6yVMHNsag\"}"
+    },
+    {
+      "label": "cP",
+      "hash": "xisw5OJapyJ6aWasXTmtQnM8S-G95miq4c9wwfVVuFY",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImNvbmZpcm0iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInNlcSI6NCwicHJldiI6WyJSNGpxNng4bkhYVlBTc2ItdExlc1VSblhEWC1PVkRRMU5WcXFBazE2Tk9vIl0sImJ5IjoiNDI1MjA3MzY1MzMzYTZiZDNlNmJhODViMzc5ODFjZWUiLCJhdCI6IjIwMjYtMTEtMDRUMTA6MDA6MDRaIiwidGFyZ2V0Ijp7ImlkIjoiMTY4ZjdlZjkwMTAzMDYzZWYxZDI0MWY3OTI5NGFkZjQiLCJhZGQiOiJSNGpxNng4bkhYVlBTc2ItdExlc1VSblhEWC1PVkRRMU5WcXFBazE2Tk9vIn19\",\"sig\":\"MEUCIQC0yJa2CLMXn9GEvDbQWpjSmT5YQuARMRqqLQkvpgn1aQIge8iurrFJ4cR-7c7TmUATU1U1_I3wfc88LkXlA4jlAfE\"}"
+    },
+    {
+      "label": "+H",
+      "hash": "avmJHodAWxk-YF3uUew6_EA0prkt9xpZV_y800IOzi8",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjo1LCJwcmV2IjpbInhpc3c1T0phcHlKNmFXYXNYVG10UW5NOFMtRzk1bWlxNGM5d3dmVlZ1RlkiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowNVoiLCJkZXZpY2UiOnsiaWQiOiJjNjljODM0NzRkYTJhYzM5OWIxOTYyM2IyNjQ3OWY0NCIsImRoIjoiQkVMb2tEdHljR01FeHpVNlo1d3J4RDlvZFdlT2RRa2Yyb2N3dktlNnEtRzV4Rmx1Mkx4dDVEellqOVlWREFVbmlkbEthTldDVGJRcFA0SG5XcE5qdWZJIiwia2luZCI6Imhvc3QiLCJwbGF0Zm9ybSI6IndpbmRvd3MiLCJuYW1lIjoiSCJ9LCJhcHByb3ZhbCI6eyJtZXRob2QiOiJjb2RlIiwidHJhbnNjcmlwdCI6ImplMDd2U2o4b1Z6RDd3TU1ndDM2NGdJTXp4ZWtDUnVxTGRFUUNDZGN3UTQifX0\",\"sig\":\"MEUCIQC76OZFid0uIQKHhWGTLpZNhfJR6odPWTsYlA-VjxYqjAIgPhfdaDzqiuSVMC8yZ0P8QSDrQyiA14h__RLAt8WsLhQ\"}"
+    },
+    {
+      "label": "+R",
+      "hash": "grj7PiHXSp8Gu7K0olB-JQ5QZCv0eV9a72okIaO7-eE",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjo2LCJwcmV2IjpbImF2bUpIb2RBV3hrLVlGM3VVZXc2X0VBMHBya3Q5eHBaVl95ODAwSU96aTgiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowNloiLCJkZXZpY2UiOnsiaWQiOiJlNzMxYzNhMDlmODBhYmM2YTA1MzBkNWZmNjgyN2FiNiIsImRoIjoiQkVpRnpKZVhoVktOYlRPQUFpRjVoWUM4QloySW50OFFyWHMyZ29JZ2VtNWNkelVUcmdwRUd6WTUwUGhhRVRZTnhJZkVWYm40UEc4b1NBM0M5N01pbkdvIiwic2lnbiI6IkJOWG5YeEFlaHRnM1hIUmxENGhCUW96UDVCVFQtOTVvbDNBUjZXY1NvYXdRcGhJX0VmMXBKX2YxcXRfUTFlQXFYY0ptMUtucXlzOURrTWtkaU5GRElBbyIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6IlIifSwiYXBwcm92YWwiOnsibWV0aG9kIjoiY29kZSIsInRyYW5zY3JpcHQiOiJtYWsyM3RhUmdWckZlT1dxX3BiaHNPUkhRelZPdkp5LUFUU2pPX3ZyZEZ3In19\",\"sig\":\"MEQCIFEYePNmPnSuBB824OOI2D09MRrPiyKYpQ6iygbn-cXQAiAlBhkRtEv5RxlnUEkX1Ui9vEFJVncvHMjx2zO-3RdUmQ\"}"
+    },
+    {
+      "label": "G-R",
+      "hash": "LekR4gcNcolJ47t32g6XQpttiWkGZtko-_T8v3MaJiU",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InJlbW92ZSIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjo3LCJwcmV2IjpbImdyajdQaUhYU3A4R3U3SzBvbEItSlE1UVpDdjBlVjlhNzJva0lhTzctZUUiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowN1oiLCJ0YXJnZXQiOnsiaWQiOiJlNzMxYzNhMDlmODBhYmM2YTA1MzBkNWZmNjgyN2FiNiIsImFkZCI6ImdyajdQaUhYU3A4R3U3SzBvbEItSlE1UVpDdjBlVjlhNzJva0lhTzctZUUifSwia2VlcCI6W119\",\"sig\":\"MEQCICX7bpPzBPPdW6M1205goYEFo13ocg-VRzYlqTQj5kyUAiA8OSjBYzWLT99ReIwQd9HG3XLmVIZwv0XlPAG-w9g5lw\"}"
+    },
+    {
+      "label": "+N",
+      "hash": "DEwLzLJVWhS4d11CTl1FT7DidjhOpgrpPJaehzmXLQc",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjo4LCJwcmV2IjpbIkxla1I0Z2NOY29sSjQ3dDMyZzZYUXB0dGlXa0dadGtvLV9UOHYzTWFKaVUiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowOFoiLCJkZXZpY2UiOnsiaWQiOiI5M2VmZWU0MmZkMWU2MGRlMjA2YjhhMmQ1ZGY3NzE5NCIsImRoIjoiQkhKeVZKeEk0dWRKNjd1dGo3b1pHNWNndFNMUXlndnJMQmNEc04xZGQtQUtUVFRtSlZHREVUMk9NaEJGY1JfcFR5VkZKY3dUVy1VeWRLSTFrZUNjUHVrIiwic2lnbiI6IkJJTzJlejVTVnNhVVhGTlc4NmJoZko5d1kzcnBuM2NFOXRPN1U1VU5hd2xYN3BSQWJKS2JvVGhyM0hXRXMzRVZGT2FEYm5SM3o3S25nYjdVWmZDaGp6cyIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6Ik4ifSwiYXBwcm92YWwiOnsibWV0aG9kIjoiY29kZSIsInRyYW5zY3JpcHQiOiJMN3UwQ1JuYkpwUHhjY3VlMGtCTnU1ZWpHRGdtS0JzbHl6Mno4UFdjOFIwIn19\",\"sig\":\"MEUCIQCSn7zGcojb6ghJJ7F8lKVKm2_98Ng2OY32r9uiPJJuwgIgJiQ04bEnex4GQSuzDPvvVsdCXiGzOHPTySNysz-kjSo\"}"
+    }
+  ],
+  "heldReset": "Jsg3mM9MaDViSbftgkqFzDHpL0tfGqePHPVAbd8-6-U",
+  "vetoes": [
+    {
+      "name": "by-a-key-device",
+      "about": "a confirmed person's device with a key vetoes",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoiSnNnM21NOU1hRFZpU2JmdGdrcUZ6REhwTDB0ZkdxZVBIUFZBYmQ4LTYtVSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIn0\",\"sig\":\"MEUCIQCOm1nmVsCqLhNSk9u2lOTpQCufF2muATiOl_yIIIqHVgIgLrw_q5Xw6PeHrqZPcAbSCy2tRB4KQAFm4x_uftCl9jU\"}",
+      "code": null
+    },
+    {
+      "name": "by-a-device-on-probation",
+      "about": "any active person's device may veto, on probation too",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoiSnNnM21NOU1hRFZpU2JmdGdrcUZ6REhwTDB0ZkdxZVBIUFZBYmQ4LTYtVSIsImJ5IjoiOTNlZmVlNDJmZDFlNjBkZTIwNmI4YTJkNWRmNzcxOTQiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIn0\",\"sig\":\"MEUCIQDBxUkO2nZiPDeQkt_kgsnvrFqSo8j_lxSHaiUOGG4nKQIgYpfI3KjxpSfocdyOui4mrfTgt2NbSgJz8T61q8LDEn0\"}",
+      "code": null
+    },
+    {
+      "name": "by-a-webauthn-device",
+      "about": "a WebAuthn device vetoes with its assertion for the veto role",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoiSnNnM21NOU1hRFZpU2JmdGdrcUZ6REhwTDB0ZkdxZVBIUFZBYmQ4LTYtVSIsImJ5IjoiMTY4ZjdlZjkwMTAzMDYzZWYxZDI0MWY3OTI5NGFkZjQiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIn0\",\"sig\":\"MEQCICsHRMeiaDH8lWLow1pW0JYe4URKLd0Vkx_CnpqJgM1MAiADYudne4-dimn8WEZmUKxo6rcauwrJwEu3Z-CG5g72Rw\",\"uv\":{\"by\":{\"authenticatorData\":\"kRg76zu95dX54yfdNS8Lkd-vNW32AAp2L-OUG3mZl-cFAAAABw\",\"clientDataJSON\":\"eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicmFyUjROdVB0bGQ3cng1bmZDVXZ1YkhCYlBaN2VBTW9qWWo2RXZlNU9UTSIsIm9yaWdpbiI6Imh0dHBzOi8vYnJpZGdlLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9\",\"signature\":\"MEUCIQCZu04_BpK713fo1aeS-ft3Ck3L55msSA-fKDxoZQMzuQIgMhLyKZOlqrBsJO33YhJKA25I8ySGG9XqWBo8g_MivGM\"}}}",
+      "code": null
+    },
+    {
+      "name": "assertion-for-another-role",
+      "about": "an assertion made for a person command does not prove presence for a veto",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoiSnNnM21NOU1hRFZpU2JmdGdrcUZ6REhwTDB0ZkdxZVBIUFZBYmQ4LTYtVSIsImJ5IjoiMTY4ZjdlZjkwMTAzMDYzZWYxZDI0MWY3OTI5NGFkZjQiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIn0\",\"sig\":\"MEQCICsHRMeiaDH8lWLow1pW0JYe4URKLd0Vkx_CnpqJgM1MAiADYudne4-dimn8WEZmUKxo6rcauwrJwEu3Z-CG5g72Rw\",\"uv\":{\"by\":{\"authenticatorData\":\"kRg76zu95dX54yfdNS8Lkd-vNW32AAp2L-OUG3mZl-cFAAAABw\",\"clientDataJSON\":\"eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiN0hCMjk0d3phakhWWVo5MUQzcWtCZl9YOHpGVDFsWmdQcG1LZ0Vqc1M3MCIsIm9yaWdpbiI6Imh0dHBzOi8vYnJpZGdlLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9\",\"signature\":\"MEUCIQCbCnnckL-GbRwOSnejscndoqtuwLTGQeNschYutv6WVgIgU_Ps71QuTW3QeBBqZ4F95LPPNUE8eN3cx6-LjRjIqaU\"}}}",
+      "code": "presence"
+    },
+    {
+      "name": "webauthn-without-assertion",
+      "about": "a WebAuthn device's veto without its assertion",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoiSnNnM21NOU1hRFZpU2JmdGdrcUZ6REhwTDB0ZkdxZVBIUFZBYmQ4LTYtVSIsImJ5IjoiMTY4ZjdlZjkwMTAzMDYzZWYxZDI0MWY3OTI5NGFkZjQiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIn0\",\"sig\":\"MEQCICsHRMeiaDH8lWLow1pW0JYe4URKLd0Vkx_CnpqJgM1MAiADYudne4-dimn8WEZmUKxo6rcauwrJwEu3Z-CG5g72Rw\"}",
+      "code": "presence"
+    },
+    {
+      "name": "another-reset",
+      "about": "a veto of another reset than the one held",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoicmtTS3lHeE9qazNzWkZjcGNJNzBHSE91ZWNiZi1FN19jellKaVVoX0NPVSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIn0\",\"sig\":\"MEQCIH_pN3UtCZesgIUaeG1C_8aJGvNKp1RAQFwOkVoqy6CUAiBB7QvM9JLp6En3-4Sd2Firc8wdS4JoiEepyCC2JCaAOg\"}",
+      "code": "reset"
+    },
+    {
+      "name": "another-generation",
+      "about": "a veto in another generation",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMCIsInJlc2V0IjoiSnNnM21NOU1hRFZpU2JmdGdrcUZ6REhwTDB0ZkdxZVBIUFZBYmQ4LTYtVSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIn0\",\"sig\":\"MEUCIQDRxh9OhUarxVgB4hbePmBwCLjm4sjTNVeu5XBSHOUPdQIgGqi2abl5CMiCqge3LSd66b8L-GSAiGJLjReD9F2Lc8A\"}",
+      "code": "generation"
+    },
+    {
+      "name": "another-account",
+      "about": "a veto for another account",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoic29tZW9uZS1lbHNlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4IiwicmVzZXQiOiJKc2czbU05TWFEVmlTYmZ0Z2txRnpESHBMMHRmR3FlUEhQVkFiZDgtNi1VIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsImF0IjoiMjAyNi0xMS0wNFQxMTowMDowMFoifQ\",\"sig\":\"MEUCIQD-BT4VD7FJxBSALe271qThwy0unKFhOhfMAqFRKPn3tgIgWRb8EaHsjyvBH6Jjo-k60gW39TXdl4c_mr8isyS3xp4\"}",
+      "code": "account"
+    },
+    {
+      "name": "by-a-removed-device",
+      "about": "a removed device's veto",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoiSnNnM21NOU1hRFZpU2JmdGdrcUZ6REhwTDB0ZkdxZVBIUFZBYmQ4LTYtVSIsImJ5IjoiZTczMWMzYTA5ZjgwYWJjNmEwNTMwZDVmZjY4MjdhYjYiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIn0\",\"sig\":\"MEQCIGvu9Qz7bXbIcAxKaR1bTWFKEoMr3tXPQccWPRqX1XBZAiBSCBsz4lOAd9_XUucbrHFLoyyKIzOschYDSvc2ViZ5Eg\"}",
+      "code": "signer"
+    },
+    {
+      "name": "by-a-host",
+      "about": "a host is not a person's device",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoiSnNnM21NOU1hRFZpU2JmdGdrcUZ6REhwTDB0ZkdxZVBIUFZBYmQ4LTYtVSIsImJ5IjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIn0\",\"sig\":\"MEQCIC13syuvnMELIE-nQrcZ-3WzInPqVB8zTW1ART-iUDf3AiBeQy4XMKE5MJbA4CKwvQ3_19ktCwx2-34IE7BIIuZIlw\"}",
+      "code": "signer"
+    },
+    {
+      "name": "signed-by-another-key",
+      "about": "a veto signed by a key that is not by's",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoiSnNnM21NOU1hRFZpU2JmdGdrcUZ6REhwTDB0ZkdxZVBIUFZBYmQ4LTYtVSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIn0\",\"sig\":\"MEUCIQDozqqM0pP6rT4sPp8AnWy1-NAEO9Las4nqdBxECdfwFQIgaELfbr1R9ZFga8XEs56t9Nm6HjdDcsLbxHYAdhiOVJ8\"}",
+      "code": "signature"
+    },
+    {
+      "name": "op-not-veto",
+      "about": "a body whose op is not veto",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InJlbW92ZSIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4IiwicmVzZXQiOiJKc2czbU05TWFEVmlTYmZ0Z2txRnpESHBMMHRmR3FlUEhQVkFiZDgtNi1VIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsImF0IjoiMjAyNi0xMS0wNFQxMTowMDowMFoifQ\",\"sig\":\"MEQCIA1AtHsqHEDiXbbafftKI2JyzDQdUUHB3xZN7NiFJwe-AiAvUt86OwpQ3979kGINcfhwG-1WaJCDS7xqaenyJ9Jp7A\"}",
+      "refusal": "value"
+    },
+    {
+      "name": "unknown-member",
+      "about": "a body with a member a veto does not have",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoiSnNnM21NOU1hRFZpU2JmdGdrcUZ6REhwTDB0ZkdxZVBIUFZBYmQ4LTYtVSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIiwia2VlcCI6W119\",\"sig\":\"MEUCIQD1cSR33y7MzlSzR7rIzVKnzNpmtS-YFnEQx5AwiZQjRAIgb3Nam3-xjJ-bIBR_LbwdgDKQC4W55JieMsmaccHkQNQ\"}",
+      "refusal": "unknown-member"
+    },
+    {
+      "name": "reset-too-short",
+      "about": "a reset that is not 32 bytes",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsImF0IjoiMjAyNi0xMS0wNFQxMTowMDowMFoifQ\",\"sig\":\"MEQCIDRpdTeO8vr2i8qdU-6MszMsQpSG3AgOtnJcYETnum1dAiAd05Phm12eWoyPKFjBMUc6B4e3RUmdNc8AfhRCBJhqqg\"}",
+      "refusal": "length"
+    },
+    {
+      "name": "empty-uv",
+      "about": "a uv with no assertion",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6InZldG8iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInJlc2V0IjoiSnNnM21NOU1hRFZpU2JmdGdrcUZ6REhwTDB0ZkdxZVBIUFZBYmQ4LTYtVSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJhdCI6IjIwMjYtMTEtMDRUMTE6MDA6MDBaIn0\",\"sig\":\"MEUCIQCOm1nmVsCqLhNSk9u2lOTpQCufF2muATiOl_yIIIqHVgIgLrw_q5Xw6PeHrqZPcAbSCy2tRB4KQAFm4x_uftCl9jU\",\"uv\":{}}",
+      "refusal": "value"
+    }
+  ],
+  "commands": [
+    {
+      "name": "update",
+      "about": "a confirmed key device asks for an update with this channel's nonce",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEQCICCw4pJJvgxKxnvRkxUiTkwG7H5OECRVKTO0Hkc-dVJXAiA7AtqHBGUL08lmsq6ipXYm5tNJhS_SaztMwGBWC4cOTw\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": null
+    },
+    {
+      "name": "transfer-with-webauthn",
+      "about": "a WebAuthn device's transfer with its assertion for the command role",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ0cmFuc2ZlciIsInJlcXVlc3QiOiIwZjhmYWQ1Yi1kOWNiLTQ2OWYtYTE2NS03MDg2NzcyODk1MGUiLCJieSI6IjE2OGY3ZWY5MDEwMzA2M2VmMWQyNDFmNzkyOTRhZGY0IiwidGFyZ2V0Ijp7Im1hY2hpbmUiOiJjNjljODM0NzRkYTJhYzM5OWIxOTYyM2IyNjQ3OWY0NCIsInNlc3Npb24iOiI1YjBjOGU5ZS0zZjRhLTRjNTUtOWExZS0yZDdmNmI4YzlkMDEifSwidG8iOiJhYWZjZDg2NTY2YjJjMWMxM2ExZmQ0Y2MwNTUyNWI1MyIsImlzc3VlZEF0IjoiMjAyNi0xMS0wNFQxMTo1OTowMFoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA0OjAwWiIsImhlYWRzIjpbIkRFd0x6TEpWV2hTNGQxMUNUbDFGVDdEaWRqaE9wZ3JwUEphZWh6bVhMUWMiXX0\",\"sig\":\"MEUCIQD6Saf1URGZPaE2ggfX5ned8ix0J-xfqlhEMyBUznkjgQIgTGWGK5g4hjNnL-AkG0rtrQv4pa-gg_LqS-PgelhjR-U\",\"uv\":{\"by\":{\"authenticatorData\":\"kRg76zu95dX54yfdNS8Lkd-vNW32AAp2L-OUG3mZl-cFAAAABw\",\"clientDataJSON\":\"eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoibnNxQy1zb2hCcUN4QVBNS2lndUNTVzBGSEhDTS1QaWp1d0VaZlFUZXlNQSIsIm9yaWdpbiI6Imh0dHBzOi8vYnJpZGdlLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9\",\"signature\":\"MEQCIAzjwDjn00F5bvPt17Mag3Qcdj0Tw0TkI7sJup1V4iSDAiBOpRiJnoF9NcirZHGK91DHRGTSOg3wvDd6F-Z-F3ynJA\"}}}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "transfer",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": null
+    },
+    {
+      "name": "folder-trust-answer",
+      "about": "a folder-trust answer names its question and choice",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJmb2xkZXItdHJ1c3QtYW5zd2VyIiwicmVxdWVzdCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJ0YXJnZXQiOnsibWFjaGluZSI6ImM2OWM4MzQ3NGRhMmFjMzk5YjE5NjIzYjI2NDc5ZjQ0IiwicXVlc3Rpb24iOiJ0cnVzdC0xIn0sImNob2ljZSI6Im9uY2UiLCJub25jZSI6IkhULXZMdFRsa0d5S3BSVzkxWVJUb19UWFV6UkxBU1NTMzhmNXB4NTlMblUiLCJpc3N1ZWRBdCI6IjIwMjYtMTEtMDRUMTE6NTk6MDBaIiwiZXhwaXJlc0F0IjoiMjAyNi0xMS0wNFQxMjowNDowMFoiLCJoZWFkcyI6WyJERXdMekxKVldoUzRkMTFDVGwxRlQ3RGlkamhPcGdycFBKYWVoem1YTFFjIl19\",\"sig\":\"MEQCIDURXxj-v-kBIwergq3ji6Q5SbcNlEj6MtmCHpvW1NfwAiBFjUekQ3JG51uABRlnYM23Nyrr_BgcI1ylkyE_F8au3A\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "folder-trust-answer",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": null
+    },
+    {
+      "name": "forget",
+      "about": "forget carries no nonce",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJmb3JnZXQiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEUCIQDwzbQrqvX5vZ_mX0w35umBYOZAhh84SaTsQXtdCU3iIQIgdwPcLwPKdxXgwOZjCZfpsVaZAqla9I3dYr_DuERutzY\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "forget",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": null
+    },
+    {
+      "name": "webauthn-without-assertion",
+      "about": "a WebAuthn device's command without its assertion",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIxNjhmN2VmOTAxMDMwNjNlZjFkMjQxZjc5Mjk0YWRmNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEQCID-_5lKSYdpNqh7f4rsb_ZeFYOK3v4tGzvLXQ0k_p9ztAiAo_DuU2bNH1uNFDFoIFuTIACv_xrMML14M8iXdDVEp7Q\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": "presence"
+    },
+    {
+      "name": "key-device-with-assertion",
+      "about": "a key device's command carrying an assertion",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEQCICCw4pJJvgxKxnvRkxUiTkwG7H5OECRVKTO0Hkc-dVJXAiA7AtqHBGUL08lmsq6ipXYm5tNJhS_SaztMwGBWC4cOTw\",\"uv\":{\"by\":{\"authenticatorData\":\"kRg76zu95dX54yfdNS8Lkd-vNW32AAp2L-OUG3mZl-cFAAAABw\",\"clientDataJSON\":\"eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiVFZhTktzVDFXNG15YVJlU3kyZG9TV2xoTHJZSUFKRFNoRUI1ckVDcmhPbyIsIm9yaWdpbiI6Imh0dHBzOi8vYnJpZGdlLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9\",\"signature\":\"MEUCIQCnmPc4sYzsMhkgB9mqiZ7BQ-SVxURSbA138P8B1sYb5QIgOJPJCk9F8qviT_ALw8VAjMAa3OT6s3NcsTTLd5ktCkM\"}}}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": "presence"
+    },
+    {
+      "name": "for-another-action",
+      "about": "a command for another action than the op asking",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEQCICCw4pJJvgxKxnvRkxUiTkwG7H5OECRVKTO0Hkc-dVJXAiA7AtqHBGUL08lmsq6ipXYm5tNJhS_SaztMwGBWC4cOTw\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "attest",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": "action"
+    },
+    {
+      "name": "for-another-machine",
+      "about": "a command for another machine",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiNDI1MjA3MzY1MzMzYTZiZDNlNmJhODViMzc5ODFjZWUifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEUCIQDZ5ccAZn1EpbDNRl1zdMBxsNLRsPFacK4JFmRluMVMdQIgWONRc86vF1X8ZqLF2nEY_U1Ux65FjKrv7sT8WqTdnnk\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": "machine"
+    },
+    {
+      "name": "on-probation",
+      "about": "a device on probation cannot command",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiI5M2VmZWU0MmZkMWU2MGRlMjA2YjhhMmQ1ZGY3NzE5NCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEUCIQDx28umEAcZB2lNnhAsi3ozlJ6jPIqXueqz5vdujYzDkAIgUp71ZkACUfNlx0MEtnwUyijn6xhWzj78HPrRVVCtdTQ\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": "probation"
+    },
+    {
+      "name": "removed",
+      "about": "a removed device cannot command",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiJlNzMxYzNhMDlmODBhYmM2YTA1MzBkNWZmNjgyN2FiNiIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEUCIQCQzHtgH4au0VdzGBVs1KcPYqi0uQBz5OV5jVdhGXKwSQIgFUgz3Yes_VXEEXve6bf63Uk7jkpwjwUUcyA5NC4tojw\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": "signer"
+    },
+    {
+      "name": "to-itself",
+      "about": "a transfer whose signer is the machine it goes to",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ0cmFuc2ZlciIsInJlcXVlc3QiOiIwZjhmYWQ1Yi1kOWNiLTQ2OWYtYTE2NS03MDg2NzcyODk1MGUiLCJieSI6IjBkNzhlNmY1ZGUwOGNmZTFlMmJmYTZhNGU1MDY1MDI0IiwidGFyZ2V0Ijp7Im1hY2hpbmUiOiJjNjljODM0NzRkYTJhYzM5OWIxOTYyM2IyNjQ3OWY0NCIsInNlc3Npb24iOiI1YjBjOGU5ZS0zZjRhLTRjNTUtOWExZS0yZDdmNmI4YzlkMDEifSwidG8iOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsImlzc3VlZEF0IjoiMjAyNi0xMS0wNFQxMTo1OTowMFoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA0OjAwWiIsImhlYWRzIjpbIkRFd0x6TEpWV2hTNGQxMUNUbDFGVDdEaWRqaE9wZ3JwUEphZWh6bVhMUWMiXX0\",\"sig\":\"MEUCIQDnMHo7JegcswkY3quPBu6HGLlxAVm5qpm89XbdDGOcCwIgL7eCO8sKkRPIpY_qOZ6Q3jgEp7vpDKdm25k-PE5stxI\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "transfer",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": "signer"
+    },
+    {
+      "name": "signed-by-another-key",
+      "about": "signed by a key that is not by's",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEQCICR2L1u3VSYG6DUEz3bU0xZDXMTRbS1jB8AoumVNJouoAiA8DycOsEkWpNICXvxMkk8YWqf1EpVislnOnRwrtwBlQw\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": "signature"
+    },
+    {
+      "name": "ten-minutes",
+      "about": "a lifetime of exactly ten minutes, to the nanosecond",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwLjVaIiwiZXhwaXJlc0F0IjoiMjAyNi0xMS0wNFQxMjowOTowMC41MDAwMDAwMDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEQCIGEjk1FlAzyV3b1VqtSAzYoynNTkzZY-iW56SbUdKIY2AiASMicz3mQ7e5P5V6lyzyi5ZR6wEzxh7n5nFj9r0o_-jQ\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": null
+    },
+    {
+      "name": "ten-minutes-and-a-nanosecond",
+      "about": "a lifetime one nanosecond over ten minutes",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwLjVaIiwiZXhwaXJlc0F0IjoiMjAyNi0xMS0wNFQxMjowOTowMC41MDAwMDAwMDFaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEUCIQD-OA9qtsxMyhNGsrN_p5NXiDG5P0JwL12iDBBpU5dQVQIgWa3gbddZr1FWgh_e5GkFrBV0LYYtO5qvs7B-ncqzy6U\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": "lifetime"
+    },
+    {
+      "name": "expires-when-issued",
+      "about": "a command that expires as it is issued",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTE6NTk6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEQCIH_g7aWDu00ItK2hlkpI9Zwix1MMIcfUq9JrQyPqnXgNAiA0giZV319xaoK4hjc7AoLYJ8b1Hgn_P7XI3N4ZhyLNhg\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": "lifetime"
+    },
+    {
+      "name": "two-minutes-ahead",
+      "about": "issued exactly two minutes in the host's future",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDEyOjAyOjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDU6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEQCIDSrHb1MFTgYv1eIVtMm0ubcb2h2vTsaEbftAMToH4QAAiB1xxygSA_6Q8cMtDJR0g9uyGwPChsDwVhTqTvcSJl0HQ\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": null
+    },
+    {
+      "name": "further-ahead",
+      "about": "issued over two minutes in the host's future",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDEyOjAyOjAwLjAwMDAwMDAwMVoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA1OjAwWiIsImhlYWRzIjpbIkRFd0x6TEpWV2hTNGQxMUNUbDFGVDdEaWRqaE9wZ3JwUEphZWh6bVhMUWMiXX0\",\"sig\":\"MEUCIQDOn-nhsz1rUxLt87sSog5WIQhD06wlsfsJwkJgkfCwxAIgQZLCQyw-oV_Dp6uYXrhkh_p7fJeUppEhtuuI7Y5Qy8M\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": "future"
+    },
+    {
+      "name": "expired",
+      "about": "expired before now",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjUwOjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTE6NTk6NTkuOTk5OTk5OTk5WiIsImhlYWRzIjpbIkRFd0x6TEpWV2hTNGQxMUNUbDFGVDdEaWRqaE9wZ3JwUEphZWh6bVhMUWMiXX0\",\"sig\":\"MEUCIQCbhxTI_HvU1Fn-A0g1jUgaEKWVqNgRwBiHPo7054wi9gIgBjXv_IQRoPHGTdisqyOt0u84n7sRnycFO48l54I8kH4\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": "expired"
+    },
+    {
+      "name": "expires-now",
+      "about": "expiring exactly now is still in time",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU1OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDA6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEUCIQChESxP_bRIlk1dxIHGbU2_ONjlDEJVfJVOtoCFpDn14QIgYfl9Rnm9TvBCPIT8ocY8sWrAugxqBb3LcsAGUWsHneY\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": null
+    },
+    {
+      "name": "at-the-floor",
+      "about": "issued at the floor a local clock reset set",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEQCICCw4pJJvgxKxnvRkxUiTkwG7H5OECRVKTO0Hkc-dVJXAiA7AtqHBGUL08lmsq6ipXYm5tNJhS_SaztMwGBWC4cOTw\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "floor": "2026-11-04T11:59:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": "floor"
+    },
+    {
+      "name": "after-the-floor",
+      "about": "issued after the floor",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEQCICCw4pJJvgxKxnvRkxUiTkwG7H5OECRVKTO0Hkc-dVJXAiA7AtqHBGUL08lmsq6ipXYm5tNJhS_SaztMwGBWC4cOTw\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "floor": "2026-11-04T11:58:59.999999999Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": null
+    },
+    {
+      "name": "another-nonce",
+      "about": "a nonce this channel was not given",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEQCICCw4pJJvgxKxnvRkxUiTkwG7H5OECRVKTO0Hkc-dVJXAiA7AtqHBGUL08lmsq6ipXYm5tNJhS_SaztMwGBWC4cOTw\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "M9NnqTlNP4kbcXj_mocw0YgAXZmx6b0ibUkMOAoS6Yo"
+      },
+      "code": "nonce"
+    },
+    {
+      "name": "an-unknown-head",
+      "about": "a head the host does not hold",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsic2pwcWhEbkEzZVZSV0pQbnlRd2VNak80WVc1alJIRHlEY1NTaTg4MkNidyJdfQ\",\"sig\":\"MEQCIBD5l6scKeJ8q4uCMY6UPgmID7nKHkgjfeStIwJOfpn9AiBsBALV4NZ4HgfEB53UDFKANh9ku1Xl0C_FeEisjI0shQ\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": "heads"
+    },
+    {
+      "name": "attest-forward",
+      "about": "an attestation whose heads descend from the last one taken",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJhdHRlc3QiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEQCIGBzf28iuOvvG0jf3UXjDLg9Mx3iOeb4V9Gvj3OEraS2AiAQPfPsmK78sMxC2qzbvcLdMW0f7mzjwo73nLMuJgi3JQ\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "attest",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU",
+        "previous": [
+          "xisw5OJapyJ6aWasXTmtQnM8S-G95miq4c9wwfVVuFY"
+        ]
+      },
+      "code": null
+    },
+    {
+      "name": "attest-back",
+      "about": "an attestation that would move the host back",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJhdHRlc3QiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsieGlzdzVPSmFweUo2YVdhc1hUbXRRbk04Uy1HOTVtaXE0Yzl3d2ZWVnVGWSJdfQ\",\"sig\":\"MEQCIFM-zQRD3e1jboEUGo-4uZBvAzC_gslCur-q1cBbevhjAiB9rpg50TJ45xU-pi7wAcpgmmtwLS17Aqz8YBn_BjM3OQ\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "attest",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU",
+        "previous": [
+          "DEwLzLJVWhS4d11CTl1FT7DidjhOpgrpPJaehzmXLQc"
+        ]
+      },
+      "code": "regress"
+    },
+    {
+      "name": "unknown-action",
+      "about": "an action person commands do not have",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJsYXVuY2giLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEQCIFViXvE8yddzlPGPk5Auab2R7v6-LD0vvQyW-ysWDVWnAiAwmU2f7EnokAVSr-AI952Jsx0Iww45Oa5Ud30EUyduSw\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "value"
+    },
+    {
+      "name": "missing-choice",
+      "about": "a folder-trust answer without its choice",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJmb2xkZXItdHJ1c3QtYW5zd2VyIiwicmVxdWVzdCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJ0YXJnZXQiOnsibWFjaGluZSI6ImM2OWM4MzQ3NGRhMmFjMzk5YjE5NjIzYjI2NDc5ZjQ0IiwicXVlc3Rpb24iOiJ0cnVzdC0xIn0sIm5vbmNlIjoiSFQtdkx0VGxrR3lLcFJXOTFZUlRvX1RYVXpSTEFTU1MzOGY1cHg1OUxuVSIsImlzc3VlZEF0IjoiMjAyNi0xMS0wNFQxMTo1OTowMFoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA0OjAwWiIsImhlYWRzIjpbIkRFd0x6TEpWV2hTNGQxMUNUbDFGVDdEaWRqaE9wZ3JwUEphZWh6bVhMUWMiXX0\",\"sig\":\"MEUCIQCC3qCYEtxEVQIB-3OpnfjpP1F5YkAmfDkBQT3wIiXOzgIgAKvRFJEvw1KIy36MXqJWXQwkxSd_LCS-H05uqo3_uuE\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "folder-trust-answer",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "missing-member"
+    },
+    {
+      "name": "transfer-with-a-nonce",
+      "about": "a transfer carries no nonce",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ0cmFuc2ZlciIsInJlcXVlc3QiOiIwZjhmYWQ1Yi1kOWNiLTQ2OWYtYTE2NS03MDg2NzcyODk1MGUiLCJieSI6IjBkNzhlNmY1ZGUwOGNmZTFlMmJmYTZhNGU1MDY1MDI0IiwidGFyZ2V0Ijp7Im1hY2hpbmUiOiJjNjljODM0NzRkYTJhYzM5OWIxOTYyM2IyNjQ3OWY0NCIsInNlc3Npb24iOiI1YjBjOGU5ZS0zZjRhLTRjNTUtOWExZS0yZDdmNmI4YzlkMDEifSwidG8iOiJhYWZjZDg2NTY2YjJjMWMxM2ExZmQ0Y2MwNTUyNWI1MyIsImlzc3VlZEF0IjoiMjAyNi0xMS0wNFQxMTo1OTowMFoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA0OjAwWiIsImhlYWRzIjpbIkRFd0x6TEpWV2hTNGQxMUNUbDFGVDdEaWRqaE9wZ3JwUEphZWh6bVhMUWMiXSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIn0\",\"sig\":\"MEQCIFAOVuR3aUPDRHVDZ8diTYwNNS3YazDXKhdNwe8xTmwkAiBj1rj8bIPjV-R0PRbFTP7H2pcb87Db8CiOnye8fT5TKg\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "transfer",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "unknown-member"
+    },
+    {
+      "name": "request-not-a-uuid",
+      "about": "a request that is not a lowercase UUID",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMEY4RkFENUItRDlDQi00NjlGLUExNjUtNzA4Njc3Mjg5NTBFIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ\",\"sig\":\"MEQCIFSoKzU1RAn0qXPOVkzABLzueXsGejTOEu96VB-SsSDrAiBqRCBPOTre7bk8AGpLBqlkEmqnL22v9PhMRxWPU0AKJQ\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "value"
+    },
+    {
+      "name": "five-heads",
+      "about": "more than four heads",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiQ0VfdENMbDRyMDE5R1dwMFJxaHJXQUNlWTJ0aEhiRmlFYlphbXEzX0tjVSIsIlNfVVNMelJGVk1VNzNpNjdqTkszNDlGZ0N0WXh3NFdsMTh6aVBIZUZSWm8iLCJialFMblAtemVwaWNwVVRtdTNnS0xIaVFIVC16TnpoMmhSR2pCaGV2b0IwIiwiMjhHMHlRRF81STFYVzEybHhqZ0VBU1gyWGJELVBpUkpTM2JxbUdSWDJZWSIsIjVTMmNVSXhRSTBjMFRZd0hyWkhMMWdhS19IWF9ZcEx3WXFDY280SElubkUiXX0\",\"sig\":\"MEQCIA69vMu4K37xN4zytVnbSsCjAyRUi5qbpeU-zgrMzbP0AiAMKy94S-YO9YZeTx4l0RBRYOGZwvvQlUPzJsqJEgOdcg\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "count"
+    },
+    {
+      "name": "an-offset-time",
+      "about": "a time with an offset instead of Z",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwKzAwOjAwIiwiZXhwaXJlc0F0IjoiMjAyNi0xMS0wNFQxMjowNDowMFoiLCJoZWFkcyI6WyJERXdMekxKVldoUzRkMTFDVGwxRlQ3RGlkamhPcGdycFBKYWVoem1YTFFjIl19\",\"sig\":\"MEUCIQDK4rKVj-3mEUpBsCAfV83qSj_eH3gPiRAAl0LfT4lLMAIgJ6xCqEKszPIwUwT3zO-L_S6WEgKxNCSq-DHM8aIwPkQ\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "time"
+    }
+  ],
+  "attestation": {
+    "attester": "0d78e6f5de08cfe1e2bfa6a4e5065024",
+    "attesterPrivate": "sRLn6tayINRUme00Qc9CBm2NsrA1sVNJJZtEFiFyANY",
+    "attesterPublic": "BDerRPqB4jv2r1cEAm40diJ1GlPtqiwIZwkdrza6ziNJHPhLigQ0Elv0gNLqSyGWvL_H0RsjSjb8zAIeu5WWkcI",
+    "host": "c69c83474da2ac399b19623b26479f44",
+    "hostPublic": "BELokDtycGMExzU6Z5wrxD9odWeOdQkf2ocwvKe6q-G5xFlu2Lxt5DzYj9YVDAUnidlKaNWCTbQpP4HnWpNjufI",
+    "key": "a0c37de1d0bfd715ad04682c42c7727e53f1eaf07fa2c52f23b4542d4a0c4061",
+    "account": "owner@example",
+    "generation": "ab4fb3cc24a3cc99249ab0694c361a88",
+    "heads": [
+      "DEwLzLJVWhS4d11CTl1FT7DidjhOpgrpPJaehzmXLQc"
+    ],
+    "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU",
+    "revoked": [
+      "grj7PiHXSp8Gu7K0olB-JQ5QZCv0eV9a72okIaO7-eE"
+    ],
+    "message": "0000001b6167656e742d62726964676520726f7374657220686561642076310000000d6f776e6572406578616d706c65000000206162346662336363323461336363393932343961623036393463333631613838000000200c4c0bccb2555a14b8775d424e5d454fb0e276384ea60ae93c969e8739972d07000000206336396338333437346461326163333939623139363233623236343739663434000000201d3faf2ed4e5906c8aa515bdd58453a3f4d753344b012492dfc7f9a71e7d2e750000002082b8fb3e21d74a9f06bbb2b4a2507e250e50642bf4795f5aef6a2421a3bbf9e1",
+    "mac": "sa8rxCuR3ojcqvxl8KDAeKpyY7ielqQDeMtqJhP3Qvc",
+    "command": {
+      "body": "eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ",
+      "mac": "nzaC16shvNty6Jrq91LVtvhjSGng2BkKWhhwPSPJzN0"
+    }
+  }
+}

@@ -1,0 +1,39 @@
+// Why the acceptance rule refuses an entry, or a veto's or person command's check refuses it: the
+// C# library's codes (Invalid in src/AgentBridge.Roster/RosterVerifier.cs).
+export const INVALID = Object.freeze({
+  parent: 'parent',
+  account: 'account',
+  generation: 'generation',
+  genesis: 'genesis',
+  seq: 'seq',
+  signer: 'signer',
+  signature: 'signature',
+  presence: 'presence',
+  readded: 'readded',
+  target: 'target',
+  seniority: 'seniority',
+  cosign: 'cosign',
+  keep: 'keep',
+  confirm: 'confirm',
+  merge: 'merge',
+  activeCap: 'active-cap',
+  cap: 'cap',
+  budget: 'budget',
+  evidence: 'evidence',
+  // A veto (§5.6) naming another reset than the one held.
+  reset: 'reset',
+  // A person command (§7.2): for another action or machine, by a device on probation or held,
+  // living over 10 minutes, issued over 2 minutes ahead, expired, issued at or before the host's
+  // floor, without this channel's nonce, naming heads the host lacks, or, for an attestation,
+  // heads that do not include or descend from the last ones the host took.
+  action: 'action',
+  machine: 'machine',
+  probation: 'probation',
+  lifetime: 'lifetime',
+  future: 'future',
+  expired: 'expired',
+  floor: 'floor',
+  nonce: 'nonce',
+  heads: 'heads',
+  regress: 'regress',
+});
