@@ -137,6 +137,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal("Test host", hello.Machine.Name);
         Assert.Contains(Capabilities.SessionsRead, hello.Capabilities);
         Assert.Contains(HostOps.Capability, hello.Capabilities);
+        Assert.Contains(HostOps.LaunchSettingsCapability, hello.Capabilities);
         Assert.DoesNotContain(Capabilities.Push, hello.Capabilities);
     }
 
@@ -204,6 +205,51 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(SignInState.Idle, status.SignIn.State);
         Assert.Equal(new HostSettingsView(true), status.Settings);
         Assert.False(status.RestartRequired);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Oversized_existing_launch_settings_do_not_break_subscription_or_unrelated_settings_or_erase_authorizations(bool oversizedDefault)
+    {
+        var workspaces = Enumerable.Range(0, oversizedDefault ? 0 : LaunchProtocol.MaxWorkspaces).Select(i => new ApprovedWorkspace($"Repo{i}",
+            Path.Combine([profile, $"repo{i}", .. Enumerable.Repeat(new string('x', 100), 10)]))).ToList();
+        var defaultWorkspace = oversizedDefault ? new string('d', 70_000) : null;
+        var root = new JsonObject
+        {
+            ["launch"] = new JsonObject
+            {
+                ["workspaces"] = JsonSerializer.SerializeToNode(workspaces, ProtocolJson.Options),
+                ["defaultWorkspace"] = defaultWorkspace,
+            },
+        };
+        var path = Path.Combine(profile, HostSettings.FileName);
+        File.WriteAllText(path, root.ToJsonString());
+        var ch = await ConnectAsync();
+
+        var subscribed = await ch.CallAsync<HostStatus>(HostOps.Subscribe);
+        Assert.Null(subscribed.Settings.Launch);
+        Assert.Contains("too large", subscribed.Settings.LaunchProblem);
+        var conflict = await ch.CallAsync<SettingsResult>(HostOps.Settings, new SettingsRequest(
+            Launch: HostLaunchSettings.Default, LaunchBaseline: HostLaunchSettings.Default.Baseline, LaunchConfirmed: true));
+        Assert.True(conflict.Conflict);
+        Assert.Equal(subscribed.Settings.LaunchProblem, conflict.Settings.LaunchProblem);
+        var saved = await ch.CallAsync<SettingsResult>(HostOps.Settings, new SettingsRequest(Name: "Still editable"));
+        Assert.Equal("Still editable", saved.Settings.Name);
+        Assert.Null(saved.Settings.Launch);
+        Assert.Equal(subscribed.Settings.LaunchProblem, saved.Settings.LaunchProblem);
+        var pushed = (await NextAsync(ch)).Data.Deserialize<HostStatus>(ProtocolJson.Options)!;
+        Assert.Equal(saved.Settings, pushed.Settings);
+        Assert.Equal(workspaces, LaunchSettingsEditor.View(HostSettings.Load(profile).Settings.Launch).Workspaces);
+        Assert.Equal(defaultWorkspace, LaunchSettingsEditor.View(HostSettings.Load(profile).Settings.Launch).DefaultWorkspace);
+
+        root["launch"]!["workspaces"] = JsonSerializer.SerializeToNode(workspaces.Take(1), ProtocolJson.Options);
+        root["launch"]!["defaultWorkspace"] = null;
+        File.WriteAllText(path, root.ToJsonString());
+        control.Refresh();
+        var recovered = (await NextAsync(ch)).Data.Deserialize<HostStatus>(ProtocolJson.Options)!;
+        Assert.Null(recovered.Settings.LaunchProblem);
+        Assert.Equal(workspaces.Take(1), recovered.Settings.Launch!.Workspaces);
     }
 
     [Fact]
@@ -433,14 +479,17 @@ public sealed class LocalApiTests : IAsyncLifetime
     {
         File.WriteAllText(Path.Combine(profile, "config.json"), """{ "launch": { "workspaces": ["C:\\src"] } }""");
         var ch = await ConnectAsync();
-        Assert.False((await ch.CallAsync<HostStatus>(HostOps.Status)).Settings.RemoteFolderTrust);
+        var before = await ch.CallAsync<HostStatus>(HostOps.Status);
+        Assert.False(before.Settings.RemoteFolderTrust);
 
         var result = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrust = true });
 
         Assert.True(result.Settings.RemoteFolderTrust);
         // Applied to the running host at once, so it can be allowed while a question waits.
         Assert.Equal([true], applied);
-        Assert.False(result.RestartRequired);
+        // The workspace file changed after this fixture host started; applying trust at once
+        // must not add or clear its existing launch-config restart requirement.
+        Assert.Equal(before.RestartRequired, result.RestartRequired);
         var saved = JsonNode.Parse(File.ReadAllText(Path.Combine(profile, "config.json")))!;
         Assert.Equal("C:\\src", saved["launch"]!["workspaces"]![0]!.GetValue<string>());
         Assert.True(HostSettings.Load(profile).Settings.Launch.RemoteFolderTrust);
@@ -456,7 +505,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         var devices = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrustDevices = new[] { phone, phone } });
         Assert.Equal([phone], devices.Settings.RemoteFolderTrustDevices!);
         Assert.Equal([phone], Assert.Single(approved));
-        Assert.False(devices.RestartRequired);
+        Assert.Equal(before.RestartRequired, devices.RestartRequired);
         Assert.Equal([phone], HostSettings.Load(profile).Settings.Launch.RemoteFolderTrustDevices);
         Assert.Equal([phone], (await ch.CallAsync<HostStatus>(HostOps.Status)).Settings.RemoteFolderTrustDevices!);
     }

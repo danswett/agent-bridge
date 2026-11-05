@@ -48,6 +48,7 @@ public static class ConfigCommands
         var path = Path.Combine(folder, HostSettings.FileName);
         try
         {
+            using var write = Writes(args) ? HostConfigFile.Lock(folder) : null;
             return (args.ElementAtOrDefault(0), args.ElementAtOrDefault(1)) switch
             {
                 ("workspace", "list") => List(path, output),

@@ -78,6 +78,13 @@ optional HA and end-to-end readiness remain to be planned together with Settings
 
 The work has been built phone-first. All merged PRs are listed in §7.
 
+Windows Settings also has an explicit workspace/default editor: folder approvals,
+isolation, default agent/workspace, launch enablement and standard-versus-bypass
+permissions share the host's local-App management boundary. Drafts require confirmation,
+stale edits cannot restore revoked folders, and applying changes requires a separate
+restart. This is a shared first-run operation, not a completed wizard or clean-machine
+readiness verdict; HA onboarding remains excluded.
+
 | Area | State |
 |---|---|
 | Spikes S1–S6 | Done. S7 (macOS), S8 (corporate policy, parked) and S9 (relay at scale) not started |

@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Local;
@@ -15,6 +18,7 @@ public static class HostOps
     public const string AgentInstallCapability = "host.agents.install";
     public const string AgentsInstall = "host.agents.install";
     public const string AgentsInstallCancel = "host.agents.install.cancel";
+    public const string LaunchSettingsCapability = "host.launch.settings";
 
     public const string Status = "host.status";
     // Answers with the status, then sends a host.status event whenever it changes.
@@ -73,16 +77,50 @@ public sealed record SignInStatus(SignInState State, string? UserCode = null, st
 // them; null when none is.
 // DevBoxKeepAwake: devBox.keepAwake, keeping this Dev Box from hibernating on disconnect.
 public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, bool RemoteFolderTrust = false, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
-    bool DevBoxKeepAwake = false)
+    bool DevBoxKeepAwake = false, HostLaunchSettings? Launch = null, string? LaunchProblem = null)
 {
     // By the devices in it, not the list object, so a restart is not asked for because two reads
     // of the same file made two lists.
     public bool Equals(HostSettingsView? other) =>
         other is not null && RemoteApproval == other.RemoteApproval && Name == other.Name && RemoteFolderTrust == other.RemoteFolderTrust
         && (RemoteFolderTrustDevices ?? []).SequenceEqual(other.RemoteFolderTrustDevices ?? [], StringComparer.Ordinal)
-        && DevBoxKeepAwake == other.DevBoxKeepAwake;
+        && DevBoxKeepAwake == other.DevBoxKeepAwake && (Launch ?? HostLaunchSettings.Default) == (other.Launch ?? HostLaunchSettings.Default)
+        && LaunchProblem == other.LaunchProblem;
 
-    public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0, DevBoxKeepAwake);
+    public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0, DevBoxKeepAwake, Launch ?? HostLaunchSettings.Default, LaunchProblem);
+}
+
+public sealed record ApprovedWorkspace(string Label, string Path, bool Isolate = false);
+
+public sealed record HostLaunchSettings(IReadOnlyList<ApprovedWorkspace> Workspaces, string DefaultAgent = "auto",
+    string? DefaultWorkspace = null, string Permissions = LaunchProtocol.Ask, bool Enabled = true)
+{
+    public static readonly HostLaunchSettings Default = new([]);
+
+    [JsonIgnore]
+    public string Baseline => Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(this, ProtocolJson.Options)));
+
+    [JsonIgnore]
+    public bool FitsMessage => JsonSerializer.SerializeToUtf8Bytes(new { workspaces = Workspaces }, ProtocolJson.Options).Length <= LaunchProtocol.MaxOptionsBytes;
+
+    // Keep the full allowed workspace budget plus room for validated defaults, while
+    // reserving the rest of the pipe frame for the surrounding settings/status.
+    [JsonIgnore]
+    public bool FitsSnapshot => JsonSerializer.SerializeToUtf8Bytes(this, ProtocolJson.Options).Length <= LaunchProtocol.MaxOptionsBytes + 1024;
+
+    public void CheckMessageBudget()
+    {
+        if (!FitsMessage)
+        {
+            throw new ArgumentException("The workspace list is too large for launch settings. Choose fewer folders or shorter labels and paths; nothing was saved.");
+        }
+    }
+
+    public bool Equals(HostLaunchSettings? other) => other is not null && DefaultAgent == other.DefaultAgent
+        && DefaultWorkspace == other.DefaultWorkspace && Permissions == other.Permissions && Enabled == other.Enabled
+        && (Workspaces ?? []).SequenceEqual(other.Workspaces ?? []);
+
+    public override int GetHashCode() => HashCode.Combine(DefaultAgent, DefaultWorkspace, Permissions, Enabled, Workspaces?.Count ?? 0);
 }
 
 // The Dev Box keep-awake (devBox.*, docs/host-config.md), present when this machine is a Microsoft
@@ -142,7 +180,8 @@ public sealed record SignInRequest(string? Relay = null);
 // elsewhere is never approved again by a list made before. DevBoxKeepAwake: devBox.keepAwake,
 // applied at once.
 public sealed record SettingsRequest(bool? RemoteApproval = null, string? Name = null, bool? RemoteFolderTrust = null, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
-    IReadOnlyList<string>? RemoteFolderTrustDevicesWas = null, bool? DevBoxKeepAwake = null);
+    IReadOnlyList<string>? RemoteFolderTrustDevicesWas = null, bool? DevBoxKeepAwake = null,
+    HostLaunchSettings? Launch = null, string? LaunchBaseline = null, bool LaunchConfirmed = false);
 
 public sealed record SettingsResult(HostSettingsView Settings, bool RestartRequired, bool Conflict = false);
 

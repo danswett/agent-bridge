@@ -59,6 +59,7 @@ public sealed class SettingsTests : IAsyncLifetime
         host.StopsWhenAsked();
         host.Capabilities.Add(HostOps.AgentSetupCapability);
         host.Capabilities.Add(HostOps.AgentInstallCapability);
+        host.Capabilities.Add(HostOps.LaunchSettingsCapability);
         host.Start();
         connection = host.Connect(ui);
         // Start and stop timeouts on a clock that never moves, as in AutoUpdaterTests: they wait
@@ -286,6 +287,205 @@ public sealed class SettingsTests : IAsyncLifetime
         await Wait.UntilAsync(() => !reopened.AgentInstallInProgress, "cleanup block");
         Assert.Contains("cleanup is unconfirmed", reopened.AgentInstallStatus);
         Assert.False(reopened.CanInstallAgents);
+    }
+
+    [Fact]
+    public async Task Workspace_drafts_need_confirmation_preserve_safe_defaults_and_remove_their_default_with_the_folder()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, Launch: HostLaunchSettings.Default) });
+        Assert.False(settings.CanSaveLaunchSettings);
+        settings.WorkspaceLabel = "Project";
+        settings.WorkspaceFolder = Path.Combine(app, "project");
+        settings.AddWorkspace();
+        settings.DefaultWorkspace = "Project";
+        settings.DefaultAgent = "claude";
+        Assert.True(settings.CanSaveLaunchSettings);
+        Assert.False(settings.UnrestrictedPermissions);
+        await settings.SaveLaunchSettingsAsync();
+        Assert.Empty(host.Sent(HostOps.Settings));
+
+        Saves(d =>
+        {
+            var request = d.Deserialize<SettingsRequest>(ProtocolJson.Options)!;
+            Assert.True(request.LaunchConfirmed);
+            Assert.Equal(HostLaunchSettings.Default.Baseline, request.LaunchBaseline);
+            Assert.Equal(LaunchProtocol.Ask, request.Launch!.Permissions);
+            return host.Status.Settings with { Launch = request.Launch };
+        });
+        await settings.SaveLaunchSettingsAsync(confirmed: true);
+        Assert.False(settings.HasError, settings.Error);
+        Assert.False(settings.CanSaveLaunchSettings);
+        Assert.Contains("nothing was restarted or trusted", settings.LaunchSettingsStatus);
+        settings.RemoveWorkspace(settings.Workspaces.Single().Path);
+        Assert.Empty(settings.Workspaces);
+        Assert.Equal("", settings.DefaultWorkspace);
+        Assert.True(settings.CanSaveLaunchSettings);
+    }
+
+    [Fact]
+    public async Task A_large_workspace_list_can_change_defaults_and_remove_folders_over_the_real_pipe()
+    {
+        var workspaces = Enumerable.Range(0, LaunchProtocol.MaxWorkspaces).Select(i => new ApprovedWorkspace($"Repo{i}",
+            Path.Combine(app, $"repo{i}", new string('x', 100), new string('x', 100),
+                new string('x', 100), new string('x', 100), new string('x', 50)))).ToList();
+        var saved = HostLaunchSettings.Default with { Workspaces = workspaces };
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, Launch: saved) });
+        Saves(d =>
+        {
+            var request = d.Deserialize<SettingsRequest>(ProtocolJson.Options)!;
+            Assert.Equal(host.Status.Settings.Launch!.Baseline, request.LaunchBaseline);
+            return host.Status.Settings with { Launch = request.Launch };
+        });
+
+        settings.DefaultAgent = "claude";
+        await settings.SaveLaunchSettingsAsync(confirmed: true);
+        Assert.False(settings.HasError, settings.Error);
+        settings.RemoveWorkspace(workspaces[0].Path);
+        await settings.SaveLaunchSettingsAsync(confirmed: true);
+
+        Assert.False(settings.HasError, settings.Error);
+        Assert.Equal(2, host.Sent(HostOps.Settings).Count);
+        Assert.Equal("claude", settings.DefaultAgent);
+        Assert.Equal(workspaces.Skip(1), settings.Workspaces);
+        Assert.False(settings.CanSaveLaunchSettings);
+    }
+
+    [Fact]
+    public async Task An_oversized_saved_workspace_list_blocks_launch_edits_without_losing_a_draft_or_other_Settings_access()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, Launch: HostLaunchSettings.Default) });
+        settings.WorkspaceLabel = "Draft";
+        settings.WorkspaceFolder = Path.Combine(app, "draft");
+        settings.AddWorkspace();
+        var draft = Assert.Single(settings.Workspaces);
+        const string problem = "The configured workspace list is too large. Edit config.json, then reload.";
+        await ConnectedWith(host.Status with { Settings = host.Status.Settings with { Launch = null, LaunchProblem = problem } });
+
+        Assert.True(settings.HostRunning);
+        Assert.False(settings.CanEditLaunchSettings);
+        Assert.False(settings.CanSaveLaunchSettings);
+        Assert.Equal(problem, settings.LaunchSettingsState);
+        await settings.ReloadLaunchSettingsAsync();
+        Assert.Equal(problem, settings.Error);
+        Assert.Equal(draft, Assert.Single(settings.Workspaces));
+        Assert.Empty(host.Sent(HostOps.Settings));
+
+        Saves(d => host.Status.Settings with { Name = d.Deserialize<SettingsRequest>(ProtocolJson.Options)!.Name });
+        settings.MachineName = "Still editable";
+        await settings.SaveNameAsync();
+        Assert.False(settings.HasError, settings.Error);
+        Assert.Equal("Still editable", host.Status.Settings.Name);
+
+        await ConnectedWith(host.Status with { Settings = host.Status.Settings with { Launch = HostLaunchSettings.Default, LaunchProblem = null } });
+        await settings.ReloadLaunchSettingsAsync();
+        Assert.False(settings.HasError, settings.Error);
+        Assert.True(settings.CanEditLaunchSettings);
+        Assert.Empty(settings.Workspaces);
+    }
+
+    [Fact]
+    public async Task Removing_a_workspace_does_not_clear_another_workspaces_default_label_that_matches_its_path()
+    {
+        var removedPath = Path.Combine(app, "removed");
+        var retained = new ApprovedWorkspace(removedPath, Path.Combine(app, "retained"), false);
+        var saved = HostLaunchSettings.Default with
+        {
+            Workspaces = [new ApprovedWorkspace("Removed", removedPath, false), retained],
+            DefaultWorkspace = retained.Label,
+        };
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, Launch: saved) });
+
+        settings.RemoveWorkspace(removedPath);
+
+        Assert.Equal(retained, Assert.Single(settings.Workspaces));
+        Assert.Equal(retained.Label, settings.DefaultWorkspace);
+        Assert.True(settings.CanSaveLaunchSettings);
+    }
+
+    [Fact]
+    public async Task An_overlapping_sign_in_preference_change_cannot_unlock_or_replace_an_in_flight_launch_save()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, Launch: HostLaunchSettings.Default) });
+        settings.DefaultAgent = "claude";
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(HostOps.Settings, async d =>
+        {
+            var request = d.Deserialize<SettingsRequest>(ProtocolJson.Options)!;
+            await release.Task.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+            host.Status = host.Status with { Settings = host.Status.Settings with { Launch = request.Launch } };
+            return new SettingsResult(host.Status.Settings, true);
+        });
+
+        var pending = settings.SaveLaunchSettingsAsync(confirmed: true);
+        try
+        {
+            await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1, "the pending launch save");
+            settings.AppStartsAtSignIn = true;
+
+            Assert.Equal(new[] { true }, atSignIn.Sets);
+            Assert.True(settings.Busy);
+            Assert.False(settings.CanEditLaunchSettings);
+            Assert.False(settings.CanReloadLaunchSettings);
+            Assert.False(settings.CanSaveLaunchSettings);
+            settings.DefaultAgent = "codex";
+            Assert.Equal("claude", settings.DefaultAgent);
+        }
+        finally { release.TrySetResult(); await pending; }
+
+        Assert.False(settings.HasError, settings.Error);
+        Assert.False(settings.Busy);
+        Assert.True(settings.CanEditLaunchSettings);
+        Assert.True(settings.CanReloadLaunchSettings);
+        Assert.False(settings.CanSaveLaunchSettings);
+        Assert.Equal("claude", settings.DefaultAgent);
+    }
+
+    [Fact]
+    public async Task Workspace_conflicts_keep_the_draft_and_require_a_deliberate_reload_instead_of_overwriting()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, Launch: HostLaunchSettings.Default) });
+        settings.DefaultAgent = "claude";
+        var changed = HostLaunchSettings.Default with { DefaultAgent = "codex" };
+        host.On(HostOps.Settings, _ =>
+        {
+            host.Status = host.Status with { Settings = host.Status.Settings with { Launch = changed } };
+            return new SettingsResult(host.Status.Settings, true, Conflict: true);
+        });
+        await settings.SaveLaunchSettingsAsync(confirmed: true);
+        Assert.True(settings.HasError);
+        Assert.Equal("claude", settings.DefaultAgent);
+        Assert.True(settings.LaunchChangedElsewhere);
+        Assert.False(settings.CanSaveLaunchSettings);
+        await settings.SaveLaunchSettingsAsync(confirmed: true);
+        Assert.Single(host.Sent(HostOps.Settings));
+        await settings.ReloadLaunchSettingsAsync();
+        Assert.Equal("codex", settings.DefaultAgent);
+        Assert.False(settings.CanSaveLaunchSettings);
+        Assert.False(settings.HasError, settings.Error);
+    }
+
+    [Fact]
+    public async Task Workspace_editing_stands_back_for_older_or_read_only_hosts()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with
+        {
+            Settings = new HostSettingsView(true, Launch: HostLaunchSettings.Default),
+            ReadOnly = "fixture coexistence guard",
+        });
+        Assert.False(settings.CanEditLaunchSettings);
+        settings.DefaultAgent = "claude";
+        Assert.Equal("auto", settings.DefaultAgent);
+        await settings.SaveLaunchSettingsAsync(confirmed: true);
+        Assert.Empty(host.Sent(HostOps.Settings));
+        await using var older = new FakeHost();
+        older.Start();
+        await using var oldConnection = older.Connect(ui);
+        var oldPage = new SettingsViewModel(oldConnection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.example");
+        await Wait.UntilAsync(() => oldPage.HostRunning && oldConnection.Status is not null, "older host");
+        Assert.False(oldPage.CanEditLaunchSettings);
+        Assert.Contains("does not support", oldPage.LaunchSettingsState);
+        await oldPage.SaveLaunchSettingsAsync(confirmed: true);
+        Assert.Empty(older.Sent(HostOps.Settings));
     }
 
     [Fact]

@@ -180,7 +180,7 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `signIn` | `{ state, userCode?, verificationUri?, expiresAt?, error? }`; `state` is `idle`, `pending` or `failed` |
 | `agentHaBridge` | Why answering, replying and stopping are off: agent-ha-bridge runs for this user (design G5). Absent when not |
 | `homeAssistant` | Why the Home Assistant connector is not reaching Home Assistant: it rejected the token, or has banned this machine's address, with what to do and when it is next tried ([ha-connector.md](../ha-connector.md#troubleshooting)). Absent when nothing is refused |
-| `settings` | `{ remoteApproval, name?, remoteFolderTrust, remoteFolderTrustDevices?, devBoxKeepAwake }` as `config.json` says now (`launch.remoteFolderTrust`, the approved device ids, absent when none, and `devBox.keepAwake`) |
+| `settings` | `{ remoteApproval, name?, remoteFolderTrust, remoteFolderTrustDevices?, devBoxKeepAwake, launch? }` as `config.json` says now (`launch.remoteFolderTrust`, the approved device ids, absent when none, and `devBox.keepAwake`). `launch` is the editable workspace/default snapshot below; absent on older hosts |
 | `restartRequired` | `config.json` differs from what the running host read, or agent setup has been attempted in this host run and may have changed registrations. A partial failure also conservatively requests restart; this is not evidence that setup completed |
 | `log` | Path of the host's log file |
 | `readOnly` | Why the host acts on nothing from other devices now (`delivery.readOnly`, or agent-ha-bridge running, G5); absent when it does. The app carries out no install a device asked for while it is set, and checks it again just before stopping the host |
@@ -191,6 +191,48 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 
 Unknown fields are ignored, and unknown enum values read as the first value listed, as in
 the rest of the protocol.
+
+### Workspace and launch settings
+
+Only the authenticated local App's hello offers `host.launch.settings`. A supporting
+host includes `settings.launch`: `{ workspaces: [{ label, path, isolate }], defaultAgent,
+defaultWorkspace?, permissions, enabled }`. Paths are absolute, workspace order is
+preserved, and an absent default workspace means no configured default. Standard
+`permissions: "ask"` is the default; `"allowAll"` is an explicitly selected bypass.
+
+`host.settings` additionally accepts `launch`, `launchBaseline` and
+`launchConfirmed: true`. All three are required for launch edits. The baseline is the
+64-character uppercase hex SHA-256 of the baseline launch snapshot's UTF-8 protocol JSON,
+without a baseline field; the complete snapshot is not sent twice. The host
+rechecks read-only/legacy coexistence, validates new physical folder approvals and isolation,
+and compares the current launch snapshot's hash with `launchBaseline`. A difference returns the normal
+`SettingsResult` with `conflict: true` and changes nothing in the request. The app preserves
+its draft for review and requires a deliberate reload, never blindly retries.
+Malformed/newer/invalid configuration and invalid proposals are refused without writing.
+Unknown unrelated fields and metadata on retained workspaces remain intact.
+Workspace lists are bounded to the existing 40 KiB launch JSON budget before and after path
+normalization, leaving room for defaults, the request envelope, baseline token and host
+settings/status fields within the pipe's frame limit. Defaults do not consume the workspace
+budget. Oversized proposals fail explicitly without writing;
+paths and labels are never silently truncated, and accepted lists remain editable.
+Existing CLI/manual configurations can exceed that budget or contain oversized defaults.
+The complete outbound launch snapshot is also bounded to 41 KiB: the allowed workspace
+list plus 1 KiB for validated defaults, reserving the rest of the pipe frame for status.
+In status and settings results,
+`settings.launch` is then absent and `settings.launchProblem` explains that the full list
+or defaults could not be loaded and must be reduced in this profile's `config.json` before reloading.
+The host retains all authorizations and computes restart requirements from the full
+configuration; it does not truncate or rewrite it. The app keeps the connection and other
+Settings available, preserves any draft, and blocks launch edits instead of treating the
+missing snapshot as an empty list.
+
+The existing local-App authorization boundary applies to the whole request; this grants
+no relay or agent-session management access. App settings and config/workspace CLI edits
+share the profile's exclusive `config.write.lock` for the whole read/validate/write
+operation. Launch changes require a separate host restart and participate in
+`restartRequired`; they do not stop sessions, approve provider folder/hook trust or prove
+end-to-end readiness. Approval is for the exact workspace or its managed isolated
+worktrees, not arbitrary subfolders.
 
 ### Agent readiness evidence
 

@@ -58,6 +58,48 @@ public sealed partial class SettingsView : UserControl
         if (await dialog.ShowAsync() == ContentDialogResult.Primary) { await v.InstallAgentAsync(id); }
     }
 
+    void OnAddWorkspace(object sender, RoutedEventArgs e) => viewModel?.AddWorkspace();
+    async void OnChooseWorkspace(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is not { CanEditLaunchSettings: true } v) { return; }
+        await v.ChooseWorkspaceAsync(async () =>
+        {
+            var picker = new Windows.Storage.Pickers.FolderPicker();
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, MainWindow.CurrentHandle);
+            picker.FileTypeFilter.Add("*");
+            var selected = await picker.PickSingleFolderAsync();
+            return selected is null ? null : (selected.Name, selected.Path);
+        });
+    }
+    void OnRemoveWorkspace(object sender, RoutedEventArgs e) { if (sender is Button { Tag: string path }) { viewModel?.RemoveWorkspace(path); } }
+    async void OnReloadLaunchSettings(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.ReloadLaunchSettingsAsync(); } }
+
+    async void OnSaveLaunchSettings(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is not { CanSaveLaunchSettings: true } v) { return; }
+        var folders = v.Workspaces.Count == 0 ? "No folders will be approved." : string.Join("\n", v.Workspaces.Select(w => $"{w.Label}: {w.Path}{(w.Isolate ? " (isolated worktrees)" : "")}"));
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Save launch authorizations and defaults?",
+            Content = new ScrollViewer
+            {
+                MaxHeight = 400,
+                Content = new TextBlock
+                {
+                    TextWrapping = TextWrapping.Wrap,
+                    Text = $"{folders}\n\nLaunching: {(v.LaunchEnabled ? "enabled" : "off")}. Default agent: {v.DefaultAgent}. Default workspace: {(v.DefaultWorkspace.Length == 0 ? "none" : v.DefaultWorkspace)}.\n\n"
+                        + (v.UnrestrictedPermissions ? "WARNING: supported agents will bypass permission prompts by default.\n\n" : "Standard CLI permission prompts remain.\n\n")
+                        + "Approval is for these exact folders, or managed isolated worktrees, not their subfolders. CLI folder and hook trust stay separate. Nothing restarts or accepts trust automatically; restart the host when ready to apply these changes.",
+                },
+            },
+            PrimaryButtonText = "Save launch settings",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary) { await v.SaveLaunchSettingsAsync(confirmed: true); }
+    }
+
     async Task ConfirmAgentAsync(object sender, bool remove)
     {
         if (viewModel is not { CanManageAgents: true } v || sender is not Button { Tag: string id }) { return; }
