@@ -348,6 +348,28 @@ public class RosterTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_host_receives_confirmation_when_its_first_complete_roster_was_delayed()
+    {
+        var store = new FlakyStore { Down = true };
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        await using var relay = await TestRelay.StartAsync(o =>
+        {
+            o.TokenKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+            o.Roster.Store = store;
+            o.Roster.Time = time;
+            o.Roster.StoreTimeout = TimeSpan.FromMilliseconds(100);
+        });
+        var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "Desk", "host");
+        Assert.Null(host.Relay.Snapshot.Known);
+
+        store.Down = false;
+        await relay.App.Services.GetRequiredService<MachineRoster>().FlushAsync();
+
+        await Wait.UntilAsync(() => host.Relay.Snapshot is { Known: not null, Previous.Known: not null }, "the first complete roster and its confirmation");
+    }
+
+    [Fact]
     public async Task A_stored_roster_needs_the_token_key_so_it_can_be_found_after_a_restart()
     {
         var o = new RelayOptions { Roster = { Store = new ThrowingStore() } };

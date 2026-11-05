@@ -66,8 +66,9 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         // last word: a machine forgotten a moment earlier listed again (#151), or a device that
         // left listed as here. One older than what was sent is dropped instead.
         long presenceSent;
+        bool rosterConfirmed;
 
-        public async Task SendPresenceAsync(byte[] data, long version)
+        public async Task SendPresenceAsync(byte[] data, long version, bool hasRoster)
         {
             await sendLock.WaitAsync();
             try
@@ -75,6 +76,14 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                 if (version <= presenceSent) { return; }
                 presenceSent = version;
                 await SendLockedAsync(data, WebSocketMessageType.Text);
+                // A returning host may have missed a forget while offline. Confirm its first
+                // complete roster, including one loaded late, without weakening its two-frame guard.
+                if (!hasRoster) { rosterConfirmed = false; }
+                else if (Kind == "host" && !rosterConfirmed)
+                {
+                    await SendLockedAsync(data, WebSocketMessageType.Text);
+                    rosterConfirmed = true;
+                }
             }
             finally { sendLock.Release(); }
         }
@@ -333,6 +342,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         if (!accounts.TryGetValue(accountId, out var devices)) { return; }
         byte[] message;
         long version;
+        bool hasRoster;
         Connection[] to;
         // Taken and numbered under the lock admission and removal hold, so a higher number is
         // always a later view of the account (Connection.SendPresenceAsync).
@@ -343,12 +353,14 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             var list = to.Select(c => new { id = c.DeviceId, name = c.Name, kind = c.Kind, since = c.Since }).ToArray();
             // known: the account's machines that are not here, with when each was last seen. Only
             // with a roster; older clients read devices alone and ignore it.
-            object snapshot = roster.Known(accountId, devices.ContainsKey) is { } known
+            var known = roster.Known(accountId, devices.ContainsKey);
+            hasRoster = known is not null;
+            object snapshot = known is not null
                 ? new { t = "presence", devices = list, known = known.Select(k => new { id = k.Id, name = k.Name, kind = k.Kind, lastSeen = k.LastSeen }).ToArray() }
                 : new { t = "presence", devices = list };
             message = JsonSerializer.SerializeToUtf8Bytes(snapshot);
         }
-        await Task.WhenAll(to.Select(c => c.SendPresenceAsync(message, version)));
+        await Task.WhenAll(to.Select(c => c.SendPresenceAsync(message, version, hasRoster)));
     }
 
     static string Clean(string? name)

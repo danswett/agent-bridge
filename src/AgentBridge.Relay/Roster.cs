@@ -557,6 +557,7 @@ public sealed class MachineRoster
         bool changed;
         lock (a)
         {
+            var wasLoaded = a.Loaded;
             var shown = Shown(a);
             a.ETag = stored?.ETag;
             // Soon after the first read, for a relay handing over; then now and then.
@@ -598,7 +599,7 @@ public sealed class MachineRoster
             // What this relay held that storage did not have has to reach it; a device that only
             // reads (a phone opening the app) writes nothing.
             a.Dirty = a.Dirty || Signature(a) != StoredSignature(doc);
-            changed = Shown(a) != shown;
+            changed = !wasLoaded || Shown(a) != shown;
         }
         metrics.Roster("load", "ok");
         return changed;

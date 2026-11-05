@@ -512,6 +512,29 @@ public sealed class UsageSharingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_reconnecting_host_confirms_a_forget_it_missed_while_its_cached_usage_was_offline()
+    {
+        var desk = await HostAsync("Desk", []);
+        var old = await relay.ConnectAsync(token, "Old laptop", "host");
+        await SeeAsync(desk.Device, old.Id);
+        Assert.Equal(1, desk.Store.Take([Claude(12, Now)], new UsageReader(old.Id, "Old laptop")));
+        await desk.Device.DisposeAsync();
+        await old.DisposeAsync();
+        var phone = await relay.ConnectAsync(token, "Phone", "pwa");
+        await Wait.UntilAsync(() => phone.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true, "the offline laptop", Patience);
+        Assert.Null(await phone.Relay.ForgetAsync(old.Id));
+        Assert.Single(desk.Store.Entries);
+
+        var returning = await relay.ConnectAsync(token, "Desk", "host", desk.Device.Key);
+        desk.Peers.Attach(returning.Relay, returning.Hub);
+        desk.Peers.Start();
+
+        await Wait.UntilAsync(() => desk.Store.Entries.Count == 0, "the returning host's roster confirmation", Patience);
+        Assert.NotNull(returning.Relay.Snapshot.Known);
+        Assert.NotNull(returning.Relay.Snapshot.Previous!.Known);
+    }
+
+    [Fact]
     public async Task A_reading_taken_by_a_machine_the_account_has_forgotten_is_neither_kept_nor_taken_from_another_host()
     {
         var desk = await HostAsync("Desk", [() => Copilot(40, Now)]);

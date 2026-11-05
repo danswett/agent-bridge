@@ -80,6 +80,10 @@ forgetting. Repeated polls of one snapshot do not count twice, and an intervenin
 message breaks the omission even if a poll skipped it. This protects cached readings
 from an older relay's disconnect window. Missing `known` remains null and breaks that
 confirmation; a relay without a roster never causes cached usage to be forgotten.
+Each host connection also receives two consecutive copies of its first complete
+roster, under its send lock. This confirms forgets it missed while offline without
+requiring another account change. If the roster store was unavailable at admission,
+the first loaded roster is announced even when empty, then confirmed for that host.
 On an older relay that sends only one snapshot for a real forget, cached usage can
 conservatively linger until another presence change confirms it or the readings expire.
 
