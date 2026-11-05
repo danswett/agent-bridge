@@ -489,6 +489,20 @@ public class CopilotTests
         Assert.Null(shown.AtMachine);
     }
 
+    [Theory]
+    [InlineData("Check the tree &#x202E;desrever", "Check the tree \\&\\#x202E;desrever")]
+    [InlineData("Check the tree &#x0000000202E;desrever", "Check the tree \\&\\#x0000000202E;desrever")]
+    [InlineData("Check the tree &#8238desrever", "Check the tree \\&\\#8238desrever")]
+    public void An_intentions_numeric_character_reference_is_shown_as_written_never_decoded(string intention, string shown)
+    {
+        // The intention is literal text (#212): with its "#" escaped, neither Markdown nor an HTML
+        // renderer reads "&#x202E;" in it as a reference.
+        var prompt = DescribeCommand("git status", intention);
+
+        Assert.Contains(shown, prompt.Message);
+        Assert.Null(prompt.AtMachine);
+    }
+
     // A name is shown escaped and on one line, so a real U+202E and the six characters "\u202E"
     // draw alike; the identity holds the name as Copilot wrote it, so they are not one prompt.
     [Fact]
@@ -506,6 +520,36 @@ public class CopilotTests
 
         Assert.Equal(hidden.Message, spelled.Message);
         Assert.NotEqual(hidden.Digest, spelled.Digest);
+    }
+
+    // An intention is made literal one character at a time, its line never copied at each one: a
+    // line of 100,000 periods copied some 10 GB, before the question's limit applies.
+    [Fact]
+    public void An_intention_of_many_periods_is_made_literal_without_copying_its_line_at_each_one()
+    {
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var shown = DescribeCommand("npm test", new string('.', 20_000));
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.StartsWith("Allow **shell**?\n\n....", shown.Message, StringComparison.Ordinal);
+        Assert.True(allocated < 50_000_000, $"{allocated:N0} bytes");
+    }
+
+    // A custom tool with no arguments shows only its description of what runs: as written, in a block
+    // the cards take, not escaped as prose ("Deploy\: prod"), which every card shows as its source and
+    // the cards held at the machine as a command in prose.
+    [Fact]
+    public void A_custom_tool_with_no_arguments_shows_its_description_as_written_in_a_block()
+    {
+        var prompt = Copilot.Prompts["custom-tool"].DeepClone().AsObject();
+        prompt.Remove("args");
+        prompt["toolDescription"] = "Deploy: prod";
+        using var doc = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r1", "c1", prompt, 1));
+
+        var message = CopilotPermission.Describe(doc.RootElement.GetProperty("data"))!.Message;
+
+        Assert.Equal("Allow **deploy\\_site**?\n\n```\nDeploy: prod\n```", message);
+        Assert.True(ApprovalShape.DrawsAsWritten(message));
     }
 
     // Appended as text after the message, "\n\0at-machine" could be written by the message itself: a
@@ -606,10 +650,10 @@ public class CopilotTests
         var hebrew = Copilot.Prompts["mcp"].DeepClone().AsObject();
         hebrew["toolTitle"] = "Get \u05D0\u05D1 file";
 
-        Assert.StartsWith("Allow **Get file\\u2028Delete repo**?", Describe(title).Message);
+        Assert.StartsWith("Allow **Get file\\\\u2028Delete repo**?", Describe(title).Message);
         Assert.Contains("README.md\\u0007", Describe(bell).Message);
         Assert.Contains("env\\u202E", Describe(bidi).Message);
-        Assert.StartsWith("Allow **Get \\u05D0\\u05D1 file**?", Describe(hebrew).Message);
+        Assert.StartsWith("Allow **Get \\\\u05D0\\\\u05D1 file**?", Describe(hebrew).Message);
         foreach (var p in new[] { title, bell, bidi, hebrew })
         {
             var d = Describe(p);
@@ -656,6 +700,50 @@ public class CopilotTests
         Assert.Null(q.AnswerAtMachine);
         Assert.Contains("echo safe #\\u202E hs", q.Message);
         Assert.DoesNotContain('\u202E', q.Message);
+    }
+
+    // The shared vectors (tests/fixtures/approvals/literal-intentions.json) whose messages the app's
+    // and the PWA's renderers are held to: what a host sends for each is exactly that message.
+    public static TheoryData<string> LiteralIntentions => [.. LiteralCases().Select(c => (string)c["name"]!)];
+
+    static IEnumerable<System.Text.Json.Nodes.JsonObject> LiteralCases() =>
+        System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "approvals", "literal-intentions.json")))!["cases"]!
+            .AsArray().Select(c => c!.AsObject());
+
+    [Theory]
+    [MemberData(nameof(LiteralIntentions))]
+    public void An_intention_cannot_open_a_fence_or_draw_Markdown_around_what_is_approved(string name)
+    {
+        var c = LiteralCases().Single(c => (string)c["name"]! == name);
+        var prompt = new System.Text.Json.Nodes.JsonObject { ["kind"] = (string)c["kind"]!, ["intention"] = (string)c["intention"]! };
+        if ((string)c["kind"]! == "commands") { prompt["fullCommandText"] = (string)c["command"]!; }
+        else { prompt["fileName"] = (string)c["file"]!; prompt["diff"] = (string)c["diff"]!; }
+        using var doc = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r1", "c1", prompt, 1));
+
+        var shown = CopilotPermission.Describe(doc.RootElement.GetProperty("data"))!;
+
+        Assert.Null(shown.AtMachine);
+        Assert.Equal((string)c["message"]!, shown.Message);
+        // No line of the intention can open a block: the first fence is the host's own, holding
+        // exactly what is approved, to the end.
+        var lines = shown.Message.Split('\n');
+        var first = Array.FindIndex(lines, l => System.Text.RegularExpressions.Regex.IsMatch(l, @"^ {0,3}(`{3,}|~{3,})"));
+        Assert.EndsWith((string)c["kind"]! == "commands"
+            ? $"\n\n{lines[first]}\n{(string)c["command"]!}\n{lines[first]}"
+            : $"\n\n```\n{(string)c["file"]!}\n```\n\n```diff\n{(string)c["diff"]!}\n```", shown.Message, StringComparison.Ordinal);
+        Assert.All(lines[1..first], l => Assert.DoesNotMatch(@"^([#>+=*_|~`-]|\d+[.)]|[ \t])", l));
+    }
+
+    [Fact]
+    public void A_tools_title_and_description_are_drawn_as_the_words_they_are()
+    {
+        var mcp = new System.Text.Json.Nodes.JsonObject { ["kind"] = "mcp", ["serverName"] = "github", ["toolName"] = "get", ["toolTitle"] = "[safe](https://other.example) <b>x</b>", ["args"] = new System.Text.Json.Nodes.JsonObject() };
+        var custom = new System.Text.Json.Nodes.JsonObject { ["kind"] = "custom-tool", ["toolName"] = "deploy", ["toolDescription"] = "```\n[safe](https://other.example)", ["args"] = new System.Text.Json.Nodes.JsonObject { ["env"] = "prod" } };
+        using var a = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r1", "c1", mcp, 1));
+        using var b = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r2", "c2", custom, 1));
+
+        Assert.StartsWith("Allow **\\[safe\\](https\\://other.example) \\<b\\>x\\</b\\>**?", CopilotPermission.Describe(a.RootElement.GetProperty("data"))!.Message);
+        Assert.StartsWith("Allow **deploy**?\n\n\\`\\`\\`\n\\[safe\\](https\\://other.example)\n\n```json\n", CopilotPermission.Describe(b.RootElement.GetProperty("data"))!.Message, StringComparison.Ordinal);
     }
 
     [Fact]

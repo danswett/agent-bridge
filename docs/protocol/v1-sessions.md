@@ -618,7 +618,15 @@ A Copilot permission prompt's `message` carries in full what it would allow: the
 the path or paths, the file and its diff (or, without one, its whole new contents; an edit
 showing neither is `answerAtMachine`), the URL, or the tool with its arguments, and the
 intention Copilot gave. One too large to send whole is `truncated`, and refused like any
-truncated question. Its `id` is `<requestId>#<digest>`: Copilot's request id and a hash of
+truncated question. The intention, and an MCP tool's title or a custom tool's description, are
+the agent's own words, sent as literal text (#212): every character that would start Markdown
+(code, emphasis, a link, an image or an address made a link, raw HTML, an entity, a table, a
+heading, quote, list or rule at a line's start) is backslash-escaped and a line's leading
+whitespace dropped, so they render as the words they are and can never open a fence that the
+command's own fence would then close. What is approved is always in fenced code after them, the
+fence longer than any run of backticks inside it; a custom tool with no arguments has its
+description, all it shows of what runs, in that block as written instead (shared vectors:
+`tests/fixtures/approvals/literal-intentions.json`). Its `id` is `<requestId>#<digest>`: Copilot's request id and a hash of
 the message as built from Copilot's own words, before anything in it is escaped for display.
 An answer is bound to both, so the host refuses (`stale`) if that request is
 no longer waiting or now reads differently from what the client was shown.

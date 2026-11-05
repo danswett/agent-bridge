@@ -278,7 +278,7 @@ public static partial class ToastXml
         var q = s.Question!;
         var (answerable, _) = QuestionViewModel.Answerability(q, capabilities, s.Agent);
         var what = q.AnswerAtMachine == true ? "waiting at the machine" : q.Kind == QuestionKind.Approval ? "waiting for your approval" : "waiting on you";
-        var body = Plain(q.Kind == QuestionKind.Approval ? ShownText.Reveal(q.Message, rightToLeft: true) : q.Message, 300);
+        var body = q.Kind == QuestionKind.Approval ? Words(ShownText.Reveal(q.Message, rightToLeft: true), 300) : Plain(q.Message, 300);
         var open = Args(machineKey, ("action", "open"), ("session", s.Id));
         var b = Start(open, Title(s), $"{Machine(machine)}{what}", body.Length > 0 ? body : "This session is waiting for an answer.");
         b.Append("<actions>");
@@ -392,7 +392,43 @@ public static partial class ToastXml
         if (string.IsNullOrEmpty(markdown)) { return ""; }
         var text = Marks().Replace(markdown, "");
         text = Spaces().Replace(text, " ").Trim();
-        return text.Length <= max ? text : text[..(char.IsHighSurrogate(text[max - 1]) ? max - 1 : max)].TrimEnd() + "…";
+        return Cut(text, max);
+    }
+
+    static string Cut(string text, int max) => text.Length <= max ? text : text[..(char.IsHighSurrogate(text[max - 1]) ? max - 1 : max)].TrimEnd() + "…";
+
+    // An approval read as the card reads it, as words: the prose as it is drawn (the agent's own
+    // words, which a host escapes, without their backslashes, #212) and code exactly as written,
+    // never with its * and _ taken for marks. Whitespace runs collapsed.
+    public static string Words(string? markdown, int max)
+    {
+        if (string.IsNullOrEmpty(markdown)) { return ""; }
+        var b = new StringBuilder();
+        void Inlines(IEnumerable<MdInline> inlines)
+        {
+            foreach (var i in inlines) { b.Append(i switch { MdText t => t.Text, MdLink l => l.Text == l.Url ? l.Text : $"{l.Text} ({l.Url})", _ => " " }); }
+            b.Append(' ');
+        }
+        void Blocks(IEnumerable<MdBlock> blocks)
+        {
+            foreach (var block in blocks)
+            {
+                switch (block)
+                {
+                    case MdParagraph p: Inlines(p.Inlines); break;
+                    case MdHeading h: Inlines(h.Inlines); break;
+                    case MdCode c: b.Append(c.Text).Append(' '); break;
+                    case MdQuote q: Blocks(q.Blocks); break;
+                    case MdList l: foreach (var item in l.Items) { Blocks(item); } break;
+                    case MdTable t: foreach (var cell in t.Rows.SelectMany(r => r)) { Inlines(cell); } break;
+                }
+            }
+        }
+        Blocks(MarkdownModel.Parse(markdown));
+        // Revealed again once parsed: parsing decodes a reference an older host left in an approval
+        // (&#x5D0;, &nbsp;) into the character it stands for, which would reorder the preview or be
+        // collapsed with the spaces around it.
+        return Cut(Spaces().Replace(ShownText.Reveal(b.ToString(), rightToLeft: true), " ").Trim(), max);
     }
 
     [GeneratedRegex(@"[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]")]

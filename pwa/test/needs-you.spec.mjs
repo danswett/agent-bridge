@@ -3,6 +3,7 @@
 // exactly as the card's buttons do; forms opening their session; prompts only the machine can
 // answer saying so; delegates named; and the app badge carrying the count.
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import { open } from './nav.mjs';
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
@@ -286,6 +287,25 @@ test.describe('what an entry offers', () => {
     await expect(e.locator('.needs-prompt')).toHaveCount(0);
     await expect(e.locator('.needs-line')).toHaveText('Allow shell? echo \\u202E done');
     expect(await e.locator('.needs-line').evaluate((el) => [getComputedStyle(el).unicodeBidi, getComputedStyle(el).direction])).toEqual(['plaintext', 'ltr']);
+  });
+
+  // The shared vectors (tests/fixtures/approvals/literal-intentions.json, #212): an intention that
+  // opens a fence or hides a link is drawn exactly as the host wrote it, escapes and all (#429), with
+  // nothing in it a link, and Approve once still offered.
+  test('an approval whose intention tries to open a fence or hide a link is drawn as written, with no link', async ({ page }) => {
+    const { cases } = JSON.parse(readFileSync(new URL('../../tests/fixtures/approvals/literal-intentions.json', import.meta.url), 'utf8'));
+    const fence = cases.find((c) => c.name === 'a fence opened by three backticks');
+    const link = cases.find((c) => c.name === 'a link whose words hide where it goes');
+    await openDemo(page);
+    const e = await ask(page, LAND, permission({ message: fence.message }));
+    await expect(e).toHaveAttribute('data-mode', 'approve');
+    expect(await e.locator('.needs-prompt').textContent()).toBe(fence.message);
+    const l = await ask(page, COPILOT, permission({ id: 'r2#link', message: link.message }));
+    await l.locator('.needs-title').click();
+    const q = card(page, COPILOT).locator('.question');
+    await expect(q.locator('.question-message a')).toHaveCount(0);
+    expect(await q.locator('.question-message').textContent()).toBe(link.message);
+    await expect(q.locator('.choice[data-value="approve"]')).toBeEnabled();
   });
 
   test('a Codex approval opens its session: its command may have reached the host cut short', async ({ page }) => {
