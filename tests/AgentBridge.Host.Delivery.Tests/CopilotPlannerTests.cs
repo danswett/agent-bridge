@@ -224,6 +224,8 @@ public class CopilotPlannerTests
     [InlineData("""{ "type": "string", "format": "uri" }""", "https://example.com/a")]
     [InlineData("""{ "type": "string", "format": "date" }""", "2028-02-29")]
     [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:30:05.123-08:00")]
+    // Date.parse reads any number of fraction digits.
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34.746123Z")]
     // The CLI knows four formats and ignores the rest; so does the host.
     [InlineData("""{ "type": "string", "format": "hostname" }""", "not a host name")]
     public void Text_inside_its_constraints_is_typed_as_before(string property, string text)
@@ -292,6 +294,37 @@ public class CopilotPlannerTests
         var (form, problem) = CopilotForm.Read(doc.RootElement);
         Assert.Null(form);
         Assert.EndsWith("; answer it at the machine", problem);
+    }
+
+    static string Fields(int count, string property) =>
+        $$"""{ "message": "m", "requestedSchema": { "properties": { {{string.Join(", ", Enumerable.Range(0, count).Select(i => $"\"f{i}\": {property}"))}} } } }""";
+
+    // Found in review of #844: each field's pattern ran on its default with 250 ms a match, and the
+    // question was read twice, so an agent's ask_user of many slow patterns held up the refresh of
+    // every session. All of a question's patterns now share one 250 ms.
+    [Fact]
+    public void Many_slow_patterns_in_one_question_cost_one_budget_and_answer_it_at_the_machine()
+    {
+        var slow = $$"""{ "type": "string", "pattern": "^(a+)+$", "default": "{{new string('a', 40)}}!" }""";
+        using var doc = JsonDocument.Parse(Fields(40, slow));
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var question = QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0);
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+        clock.Stop();
+
+        Assert.True(question.AnswerAtMachine);
+        Assert.Null(form);
+        Assert.EndsWith("has limits the host cannot check exactly; answer it at the machine", problem);
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3), $"took {clock.Elapsed}");
+    }
+
+    [Fact]
+    public void Many_quick_patterns_in_one_question_fit_its_budget()
+    {
+        var (_, question) = Ask(Fields(50, """{ "type": "string", "pattern": "^[a-z]+$" }"""));
+        Assert.Null(question.AnswerAtMachine);
+        Assert.Equal(50, question.Fields.Count(f => f.Constraints?.Pattern is not null));
     }
 
     [Fact]

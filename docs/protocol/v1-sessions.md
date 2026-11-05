@@ -1331,15 +1331,15 @@ and lets the host refuse it. Not strict: a reader that cannot read them reads th
 | `integer` | bool? | The value is a whole number (the schema's `"type": "integer"`) |
 | `minLength`, `maxLength` | int? | In UTF-16 code units, as JavaScript counts them |
 | `pattern` | string? | An ECMAScript pattern, as `new RegExp(pattern)` reads it: no flags, unanchored. At most 1,024 characters |
-| `format` | string? | `email`, `uri`, `date` or `date-time`, checked as Copilot CLI does (`^[^\s@]+@[^\s@]+\.[^\s@]+$`; `^https?://.+`; `YYYY-MM-DD`; `YYYY-MM-DDTHH:MM` with optional seconds, milliseconds and offset), dates as real dates. Other formats are not carried |
+| `format` | string? | `email`, `uri`, `date` or `date-time`, checked as Copilot CLI does (`^[^\s@]+@[^\s@]+\.[^\s@]+$`; `^https?://.+`; `YYYY-MM-DD`; `YYYY-MM-DDTHH:MM` with optional seconds, fraction and offset), dates as real dates. Other formats are not carried |
 | `minItems`, `maxItems` | int? | How many options a `multi` takes |
 
 Numbers are compared exactly as written, never as doubles; a host carries only bounds a
 JavaScript client holds exactly. Text is checked unless it is blank (no answer), a host's on
 the text it would type, line breaks flattened. A field whose constraints a host cannot check
 exactly (a bound JavaScript would hold as another number, a length that is not a whole number,
-a pattern it cannot read as JavaScript does), or whose pre-filled default breaks them, makes
-its question `answerAtMachine`.
+a pattern it cannot read as JavaScript does, or patterns past the 250 ms one question's patterns
+share), or whose pre-filled default breaks them, makes its question `answerAtMachine`.
 
 ### Option
 

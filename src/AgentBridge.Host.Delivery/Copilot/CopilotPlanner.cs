@@ -56,6 +56,7 @@ public static class CopilotPlanner
         var given = answer.Fields ?? new Dictionary<string, JsonElement>();
         var sends = new List<KeySend>();
         var expected = new List<(string, Expected)>();
+        var patterns = new PatternBudget();
         foreach (var field in form.Fields)
         {
             var has = given.TryGetValue(field.Name, out var value) && value.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined);
@@ -82,7 +83,7 @@ public static class CopilotPlanner
             }
             else
             {
-                var (k, r, problem) = Field(form, field, value);
+                var (k, r, problem) = Field(form, field, value, patterns);
                 if (problem is not null) { return (null, $"\"{field.Name}\": {problem}"); }
                 if (k is null) { return Other(field, value); }
                 (keys, record) = (k, r!);
@@ -120,7 +121,7 @@ public static class CopilotPlanner
 
     // The keys that answer one field, each its own send; null keys mean the words go
     // through Other, which is a plan of its own.
-    static (List<string>? Keys, Expected? Record, string? Problem) Field(CopilotForm form, CopilotField field, JsonElement value)
+    static (List<string>? Keys, Expected? Record, string? Problem) Field(CopilotForm form, CopilotField field, JsonElement value, PatternBudget patterns)
     {
         switch (field.Kind)
         {
@@ -128,7 +129,7 @@ public static class CopilotPlanner
                 {
                     var words = InjectableText.Collapse(value.GetString() ?? "");
                     // Checked as typed, line breaks flattened, which is what Copilot records (#766).
-                    if (!string.IsNullOrWhiteSpace(words) && field.Constraints?.TextProblem(words) is { } outside) { return (null, null, outside); }
+                    if (!string.IsNullOrWhiteSpace(words) && field.Constraints?.TextProblem(words, patterns) is { } outside) { return (null, null, outside); }
                     return ([words], string.IsNullOrWhiteSpace(words) ? new Expected.Omitted() : new Expected.Words(words), null);
                 }
             case CopilotFieldKind.Number:

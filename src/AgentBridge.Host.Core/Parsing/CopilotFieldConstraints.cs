@@ -14,10 +14,12 @@ namespace AgentBridge.Host.Core.Parsing;
 // `maxItems` to a checkbox list. Problem is set when a keyword is there but cannot be checked
 // exactly (a bound that is not a number JavaScript holds exactly, a length that is not a whole
 // number, a pattern that cannot be read as JavaScript reads it), or when the default a field
-// opens with breaks them: such a field is answered at the machine.
+// opens with breaks them: such a field is answered at the machine. Patterns share the budget of
+// the whole ask_user they are read for (PatternBudget), so an agent's slow patterns cost at most
+// that much however many fields carry them.
 public static class CopilotFieldConstraints
 {
-    public static (FieldConstraints? Constraints, string? Problem) Read(JsonElement p)
+    public static (FieldConstraints? Constraints, string? Problem) Read(JsonElement p, PatternBudget budget)
     {
         if (p.ValueKind != JsonValueKind.Object) { return (null, null); }
         var (input, _, unread) = CopilotFieldSchema.Read(p);
@@ -43,7 +45,7 @@ public static class CopilotFieldConstraints
                 {
                     MinLength = Count(p, "minLength", ref problem),
                     MaxLength = Count(p, "maxLength", ref problem),
-                    Pattern = Pattern(p, ref problem),
+                    Pattern = Pattern(p, budget, ref problem),
                     Format = Format(p, ref problem),
                 };
                 break;
@@ -55,7 +57,12 @@ public static class CopilotFieldConstraints
         }
         if (problem is not null) { return (null, problem); }
         if (c == new FieldConstraints()) { return (null, null); }
-        return Kept(p, input, c) is { } broken ? (null, $"has a default outside its own limits ({broken})") : (c, null);
+        return Kept(p, input, c, budget) switch
+        {
+            null => (c, null),
+            FieldConstraints.Unchecked => (null, Uncheckable),
+            var broken => (null, $"has a default outside its own limits ({broken})"),
+        };
     }
 
     const string Uncheckable = "has limits the host cannot check exactly";
@@ -64,7 +71,7 @@ public static class CopilotFieldConstraints
     // another device (#662), checked as what it would be recorded as: a number box's as the number
     // the CLI holds, a text box's as the words in it. One the host cannot read exactly is refused
     // elsewhere (CopilotForm.Keeps), so it is not judged here.
-    static string? Kept(JsonElement p, CopilotFieldSchema.Input input, FieldConstraints c)
+    static string? Kept(JsonElement p, CopilotFieldSchema.Input input, FieldConstraints c, PatternBudget budget)
     {
         if (!p.TryGetProperty("default", out var def) || def.ValueKind == JsonValueKind.Null) { return null; }
         if (def.ValueKind == JsonValueKind.String && def.GetString()!.Length == 0) { return null; }
@@ -75,7 +82,7 @@ public static class CopilotFieldConstraints
         }
         if (input != CopilotFieldSchema.Input.Text) { return null; }
         var words = def.ValueKind == JsonValueKind.String ? def.GetString()! : def.GetRawText();
-        return string.IsNullOrWhiteSpace(words) ? null : c.TextProblem(words);
+        return string.IsNullOrWhiteSpace(words) ? null : c.TextProblem(words, budget);
     }
 
     static bool Has(JsonElement p, string name, out JsonElement value) =>
@@ -102,10 +109,10 @@ public static class CopilotFieldConstraints
         return ExactDecimal.Compare(n, new ExactDecimal(int.MaxValue, 0)) > 0 ? int.MaxValue : (int)(n.Mantissa * System.Numerics.BigInteger.Pow(10, (int)n.Exponent));
     }
 
-    static string? Pattern(JsonElement p, ref string? problem)
+    static string? Pattern(JsonElement p, PatternBudget budget, ref string? problem)
     {
         if (!Has(p, "pattern", out var v)) { return null; }
-        if (v.ValueKind != JsonValueKind.String || FieldConstraints.Compile(v.GetString()!) is null) { problem ??= Uncheckable; return null; }
+        if (v.ValueKind != JsonValueKind.String || !FieldConstraints.Readable(v.GetString()!, budget)) { problem ??= Uncheckable; return null; }
         return v.GetString();
     }
 

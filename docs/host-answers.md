@@ -80,12 +80,17 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     flattened, a number as the plain decimal typed), and refuses one outside them: a number's
     `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf` and `integer`
     type, compared exactly; text's `minLength` and `maxLength` in UTF-16 units, `pattern` as
-    JavaScript reads it (with a 250 ms limit) and `format` `email`, `uri`, `date` and
+    JavaScript reads it and `format` `email`, `uri`, `date` and
     `date-time` with the CLI's own checks; a checkbox list's `minItems` and `maxItems`. A
     field whose constraints cannot be checked exactly (a bound JavaScript holds as another
     number, a pattern .NET would read differently, which includes lookbehinds, named groups and
     letter escapes such as `\a`), or whose pre-filled default breaks them, is answered at the
-    machine. A pattern that runs past its limit is refused the same way.
+    machine. All of one question's patterns share 250 ms, building and matching them alike, so an
+    agent's many slow patterns cannot hold up the reading of every session: once it is spent,
+    every pattern left counts as one that cannot be checked, and the question is answered at the
+    machine (or the answer refused so). Whether Copilot trims a text box's words before recording
+    them is not settled: its form passes them on as typed (`Fxn`, and `Uxn`'s accept step), but
+    the native layer after it was not traced, so lengths are counted untrimmed.
   * An option list whose `default` is present but is not one of its options, `null` included,
     opens on its Other box (`Dxn` in 1.0.105), where the walk from the top row ends a row off;
     it is refused, and shown to be answered at the machine. So are a checkbox list with no

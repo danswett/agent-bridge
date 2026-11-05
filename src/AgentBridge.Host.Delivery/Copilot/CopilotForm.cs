@@ -63,17 +63,18 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
             return (new CopilotForm([]), null);
         }
         var fields = new List<CopilotField>();
+        var patterns = new PatternBudget();
         foreach (var property in properties.EnumerateObject())
         {
             if (property.Value.ValueKind != JsonValueKind.Object) { return (null, $"the question's field \"{property.Name}\" could not be read"); }
-            var (field, problem) = Field(property.Name, property.Value);
+            var (field, problem) = Field(property.Name, property.Value, patterns);
             if (field is null) { return (null, problem); }
             fields.Add(field);
         }
         return (new CopilotForm(fields), null);
     }
 
-    static (CopilotField?, string?) Field(string name, JsonElement p)
+    static (CopilotField?, string?) Field(string name, JsonElement p, PatternBudget patterns)
     {
         // The input Copilot draws for it, read as the CLI reads it (CopilotFieldSchema): a
         // field the keys would drive as something it is not is not typed into at all.
@@ -81,7 +82,7 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
         if (problem is not null) { return (null, $"\"{name}\" {problem}; answer it at the machine"); }
         // Copilot checks none of the field's constraints itself, so the host checks the answer
         // against them before a key goes (#766).
-        var (limits, unlimited) = CopilotFieldConstraints.Read(p);
+        var (limits, unlimited) = CopilotFieldConstraints.Read(p, patterns);
         if (unlimited is not null) { return (null, $"\"{name}\" {unlimited}; answer it at the machine"); }
         var options = choices.Select(c => new CopilotOption(Scalar(c.Value), c.Value)).ToList();
         var hasDefault = p.TryGetProperty("default", out var def);

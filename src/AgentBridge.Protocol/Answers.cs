@@ -27,6 +27,7 @@ public static class Answers
         }
         if (answer.Text is not null) { return "this question takes fields, not a text answer"; }
         var given = answer.Fields ?? new Dictionary<string, JsonElement>();
+        var patterns = new PatternBudget();
         foreach (var name in given.Keys)
         {
             if (!question.Fields.Any(f => f.Name == name)) { return $"the question has no field \"{name}\""; }
@@ -38,7 +39,7 @@ public static class Answers
                 if (field.Required == true) { return $"\"{Label(field)}\" needs an answer"; }
                 continue;
             }
-            if ((ValueProblem(field, value) ?? field.Constraints?.Problem(field.Type, value)) is { } problem) { return $"\"{Label(field)}\": {problem}"; }
+            if ((ValueProblem(field, value) ?? field.Constraints?.Problem(field.Type, value, patterns)) is { } problem) { return $"\"{Label(field)}\": {problem}"; }
         }
         return given.Count == 0 ? "the answer is empty" : null;
     }

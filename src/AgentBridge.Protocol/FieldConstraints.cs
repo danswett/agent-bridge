@@ -36,16 +36,15 @@ public sealed partial record FieldConstraints
     // The longest pattern carried; a longer one is answered at the machine.
     public const int MaxPatternLength = 1024;
 
-    static readonly TimeSpan PatternTimeout = TimeSpan.FromMilliseconds(250);
-
-    const string Unchecked = "its limits cannot be checked here; answer it at the machine";
+    public const string Unchecked = "its limits cannot be checked here; answer it at the machine";
 
     // Why a field's value is outside these constraints, or null. A value of the wrong kind is
-    // Answers.Check's to name, and blank text is no answer, so neither is judged here.
-    public string? Problem(FieldType type, JsonElement value) => type switch
+    // Answers.Check's to name, and blank text is no answer, so neither is judged here. Budget is the
+    // pattern time left for the whole question being checked (PatternBudget).
+    public string? Problem(FieldType type, JsonElement value, PatternBudget? budget = null) => type switch
     {
         FieldType.Number when value.ValueKind == JsonValueKind.Number => NumberProblem(value.GetRawText()),
-        FieldType.Text when value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()) => TextProblem(value.GetString()!),
+        FieldType.Text when value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()) => TextProblem(value.GetString()!, budget),
         FieldType.Multi when value.ValueKind == JsonValueKind.Array => CountProblem(Ticked(value)),
         _ => null,
     };
@@ -74,18 +73,14 @@ public sealed partial record FieldConstraints
     }
 
     // Text, as it would be recorded.
-    public string? TextProblem(string text)
+    public string? TextProblem(string text, PatternBudget? budget = null)
     {
         if (MinLength is { } min && text.Length < min) { return $"must be at least {min} characters"; }
         if (MaxLength is { } max && text.Length > max) { return $"must be at most {max} characters"; }
         if (Pattern is { } pattern)
         {
-            if (Compile(pattern) is not { } regex) { return Unchecked; }
-            try
-            {
-                if (!regex.IsMatch(text)) { return "does not match the form the question asks for"; }
-            }
-            catch (RegexMatchTimeoutException) { return Unchecked; }
+            if (Translate(pattern) is not { } translated || (budget ?? new PatternBudget()).Match(translated, text) is not { } matched) { return Unchecked; }
+            if (!matched) { return "does not match the form the question asks for"; }
         }
         return Format switch
         {
@@ -124,12 +119,7 @@ public sealed partial record FieldConstraints
     // final \n, and `\a` or `\p{L}` mean something there that they do not in JavaScript, where an
     // unknown escape is the letter itself. So those are written out as JavaScript means them, and
     // any group, escape or class this cannot vouch for answers at the machine.
-    public static Regex? Compile(string pattern)
-    {
-        if (Translate(pattern) is not { } translated) { return null; }
-        try { return new Regex(translated, RegexOptions.ECMAScript, PatternTimeout); }
-        catch (ArgumentException) { return null; }
-    }
+    public static bool Readable(string pattern, PatternBudget budget) => Translate(pattern) is { } translated && budget.Compiles(translated);
 
     // JavaScript's \s: WhiteSpace and LineTerminator.
     const string JsSpace = @"\t\n\v\f\r \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF";
@@ -192,14 +182,15 @@ public sealed partial record FieldConstraints
     }
 
     // Copilot CLI 1.0.105's own checks for these formats (`g1e`), with JavaScript's \s and $, and
-    // its Date.parse made a strict ISO 8601 read: a host refuses a date that could not be one.
+    // its Date.parse made a strict ISO 8601 read: a host refuses a date that could not be one. V8's
+    // Date.parse takes any number of fraction digits (it reads the first three), so this does too.
     [GeneratedRegex(@"\A[^\t\n\v\f\r \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF@]+@[^\t\n\v\f\r \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF@]+\.[^\t\n\v\f\r \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF@]+\z", RegexOptions.CultureInvariant)]
     private static partial Regex Email();
 
     [GeneratedRegex(@"\Ahttps?://[^\n\r\u2028\u2029]", RegexOptions.CultureInvariant)]
     private static partial Regex Uri();
 
-    [GeneratedRegex(@"\A([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2}:[0-9]{2})(:[0-9]{2}(\.[0-9]{1,3})?)?(Z|[+-]([0-9]{2}):([0-9]{2}))?\z", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\A([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2}:[0-9]{2})(:[0-9]{2}(\.[0-9]+)?)?(Z|[+-]([0-9]{2}):([0-9]{2}))?\z", RegexOptions.CultureInvariant)]
     private static partial Regex DateTimeText();
 
     static bool IsDate(string text) =>
@@ -212,6 +203,38 @@ public sealed partial record FieldConstraints
         var time = m.Groups[2].Value + (m.Groups[3].Success ? m.Groups[3].Value[..3] : "");
         if (!DateTime.TryParseExact(time, m.Groups[3].Success ? "HH:mm:ss" : "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out _)) { return false; }
         return !m.Groups[6].Success || (int.Parse(m.Groups[6].Value, CultureInfo.InvariantCulture) <= 23 && int.Parse(m.Groups[7].Value, CultureInfo.InvariantCulture) <= 59);
+    }
+}
+
+// The time an agent's patterns may take, shared by every field of one question or one answer:
+// 250 ms for each match was about 100 s for one ask_user of 200 slow patterns with defaults, on
+// the thread that refreshes every session (#844 review). Building a pattern counts too. Once the
+// budget is spent, a pattern is one that cannot be checked, and its field is answered at the
+// machine. Not thread-safe: one per question or answer being read.
+public sealed class PatternBudget(TimeSpan total)
+{
+    public static readonly TimeSpan Total = TimeSpan.FromMilliseconds(250);
+
+    TimeSpan _left = total;
+
+    public PatternBudget() : this(Total) { }
+
+    public bool Spent => _left <= TimeSpan.Zero;
+
+    // Whether .NET can build the pattern, within what is left.
+    internal bool Compiles(string translated) => Run(() => new Regex(translated, RegexOptions.ECMAScript, _left) is not null) == true;
+
+    // Whether text matches, or null when that cannot be told within what is left.
+    internal bool? Match(string translated, string text) => Run(() => new Regex(translated, RegexOptions.ECMAScript, _left).IsMatch(text));
+
+    bool? Run(Func<bool> work)
+    {
+        if (Spent) { return null; }
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try { return work(); }
+        catch (RegexMatchTimeoutException) { _left = TimeSpan.Zero; return null; }
+        catch (ArgumentException) { return null; }
+        finally { _left -= System.Diagnostics.Stopwatch.GetElapsedTime(started); }
     }
 }
 

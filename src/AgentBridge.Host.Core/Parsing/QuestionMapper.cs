@@ -90,7 +90,7 @@ internal static class QuestionMapper
         }
         else if (Json.Get(arguments, "requestedSchema") is { } schema)
         {
-            fields = SchemaFields(schema);
+            (fields, var drivable) = SchemaForm(schema);
             // Every Copilot option list ends in "Other (type your answer)", but words reach
             // it only in a question that is that one list: the Down past its last option
             // opens Other there, and in a tabbed form or a checkbox list it does not.
@@ -98,7 +98,7 @@ internal static class QuestionMapper
             // A field the CLI draws as something other than its schema says, or that cannot be
             // told, is never typed into, so a client shows the question to be answered at the
             // machine rather than offer what the host would then refuse (#662).
-            atMachine = !Drivable(schema);
+            atMachine = !drivable;
         }
         return new Question
         {
@@ -131,53 +131,46 @@ internal static class QuestionMapper
 
     // One Field per schema property, in order. A schema that arrived as text (the model
     // wrote it as a string) is parsed first.
-    public static IReadOnlyList<Field> SchemaFields(JsonElement schema)
+    public static IReadOnlyList<Field> SchemaFields(JsonElement schema) => SchemaForm(schema).Fields;
+
+    // The fields, and whether every one reads as one input Copilot CLI is known to draw for it
+    // with constraints the host can check. Each property is read once, and its patterns share one
+    // budget for the whole ask_user: read twice with 250 ms a match, 200 slow patterns stalled the
+    // refresh of every session for minutes (#844 review).
+    static (IReadOnlyList<Field> Fields, bool Drivable) SchemaForm(JsonElement schema)
     {
         if (schema.ValueKind == JsonValueKind.String)
         {
             try
             {
                 using var doc = JsonDocument.Parse(schema.GetString() ?? "");
-                return SchemaFields(doc.RootElement);
+                return SchemaForm(doc.RootElement);
             }
-            catch (JsonException) { return []; }
+            catch (JsonException) { return ([], true); }
         }
-        if (Json.Obj(schema, "properties") is not { } properties) { return []; }
+        if (Json.Obj(schema, "properties") is not { } properties) { return ([], true); }
         var required = Json.Arr(schema, "required") is { } r
             ? r.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToHashSet(StringComparer.Ordinal)
             : [];
+        var patterns = new PatternBudget();
         var fields = new List<Field>();
+        var drivable = true;
         foreach (var property in properties.EnumerateObject())
         {
             if (property.Value.ValueKind != JsonValueKind.Object) { continue; }
-            fields.Add(SchemaField(property.Name, property.Value, required.Contains(property.Name)));
+            var read = CopilotFieldSchema.Read(property.Value);
+            var (limits, uncheckable) = CopilotFieldConstraints.Read(property.Value, patterns);
+            drivable &= read.Problem is null && uncheckable is null;
+            fields.Add(SchemaField(property.Name, property.Value, required.Contains(property.Name), read, limits));
         }
-        return fields;
+        return (fields, drivable);
     }
-
-    // Whether every field of a schema reads as one input Copilot CLI is known to draw for it.
-    static bool Drivable(JsonElement schema)
-    {
-        if (schema.ValueKind == JsonValueKind.String)
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(schema.GetString() ?? "");
-                return Drivable(doc.RootElement);
-            }
-            catch (JsonException) { return true; }
-        }
-        if (Json.Obj(schema, "properties") is not { } properties) { return true; }
-        return properties.EnumerateObject().All(p => p.Value.ValueKind != JsonValueKind.Object
-            || (CopilotFieldSchema.Read(p.Value).Problem is null && CopilotFieldConstraints.Read(p.Value).Problem is null));
-    }
-
     // Each field as the input Copilot CLI draws for it (CopilotFieldSchema), which is not
     // always what its keywords suggest: a number with an `enum` is still a number box, and a
     // string with only `anyOf` a text box.
-    static Field SchemaField(string name, JsonElement p, bool required)
+    static Field SchemaField(string name, JsonElement p, bool required, (CopilotFieldSchema.Input Input, IReadOnlyList<CopilotFieldSchema.Choice> Choices, string? Problem) read, FieldConstraints? limits)
     {
-        var (input, choices, _) = CopilotFieldSchema.Read(p);
+        var (input, choices, _) = read;
         var kind = input switch
         {
             CopilotFieldSchema.Input.Multi => FieldType.Multi,
@@ -198,7 +191,7 @@ internal static class QuestionMapper
             Options = options,
             Default = Json.Get(p, "default") is { } d ? Json.Detach(d) : null,
             Required = required ? true : null,
-            Constraints = CopilotFieldConstraints.Read(p).Constraints,
+            Constraints = limits,
         };
     }
 
