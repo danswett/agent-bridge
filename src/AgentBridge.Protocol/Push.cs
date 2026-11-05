@@ -130,6 +130,30 @@ public static class PushNotice
         return app + (app.Contains('?') ? "&" : "?") + q;
     }
 
+    // To a machine and no session (the restore notice, #780). The subscribed URL may already route
+    // somewhere (installed from a session's page): its host, session and question are replaced, never
+    // appended to, which left a second host and a session or question the notice never meant.
+    // Anything else in the query stays.
+    public static string NavigateMachine(string app, string machine)
+    {
+        var hash = app.IndexOf('#');
+        if (hash >= 0) { app = app[..hash]; }
+        var mark = app.IndexOf('?');
+        var kept = new List<string>();
+        if (mark >= 0)
+        {
+            foreach (var part in app[(mark + 1)..].Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var eq = part.IndexOf('=');
+                var key = Uri.UnescapeDataString(eq >= 0 ? part[..eq] : part);
+                if (key is not ("host" or "session" or "question")) { kept.Add(part); }
+            }
+            app = app[..mark];
+        }
+        kept.Add($"host={Uri.EscapeDataString(machine)}");
+        return app + "?" + string.Join('&', kept);
+    }
+
     // Whitespace runs collapse to one space: a lock screen shows a few lines, and newlines
     // and indentation would spend them on nothing.
     public static string Flatten(string? text) =>

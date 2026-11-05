@@ -159,6 +159,17 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         }
     }
 
+    // Whether a Claude or Codex session of an earlier run is still being judged without its ending
+    // read: the hook intake prunes nothing meanwhile (HookIntakeOptions.KeepEndings), since an
+    // ended session's registration, pruned first, would be read as a death.
+    public bool JudgingEndings
+    {
+        get
+        {
+            lock (gate) { return owed.Any(w => !w.Decided && w.EndedSeen is null && w.Entry.Agent is AgentKind.Claude or AgentKind.Codex); }
+        }
+    }
+
     public IReadOnlyList<string>? Folders()
     {
         lock (gate)

@@ -878,10 +878,7 @@ public sealed class PushNotifier : IAsyncDisposable
         var lost = n.Offered.Where(o => o.QuestionLost == true).Select(Named).ToList();
         if (lost.Count > 0) { lines.Add($"A question went unanswered in {string.Join(", ", lost)}."); }
         lines.Add(n.Why == RestoreWhy.ReadOnly ? "They can be resumed once the machine takes launches." : "Resume them from Launch.");
-        var url = app;
-        var hash = url.IndexOf('#');
-        if (hash >= 0) { url = url[..hash]; }
-        url += (url.Contains('?') ? "&" : "?") + $"host={Uri.EscapeDataString(machine.Id)}";
+        var url = PushNotice.NavigateMachine(app, machine.Id);
         return PushNotice.Fit(new PushMessage
         {
             Notification = new PushNotification

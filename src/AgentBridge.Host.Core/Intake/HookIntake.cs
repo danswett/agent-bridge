@@ -27,6 +27,12 @@ public sealed class HookIntakeOptions
     // does (Get-ClaudeSessionRegistrations, Get-CodexSessionRegistrations).
     public TimeSpan PruneInterval { get; init; } = TimeSpan.FromSeconds(60);
 
+    // Whether the restore record still reads Claude's and Codex's endings from their registrations
+    // (#780, RestoreRecorder.JudgingEndings): nothing is pruned until it has. A first drain that took
+    // PruneInterval or longer once pruned in the same pass that made the intake Drained, so an
+    // ended session's registration was gone before it was read, and read as a death.
+    public Func<bool> KeepEndings { get; init; } = () => false;
+
     // A Claude registration whose process has gone is deleted once it is this old; a Codex one
     // with no process recorded likewise. ($script:ClaudeSessionStaleMinutes, CodexSessionStaleMinutes.)
     public TimeSpan StaleAfter { get; init; } = TimeSpan.FromMinutes(240);
@@ -146,8 +152,8 @@ public sealed class HookIntake : IAsyncDisposable
     // Whether the hook events spooled so far have been taken in, so a registration says what its
     // session's hooks said. The restore record reads a Claude or Codex session's ending only then
     // (#780): a SessionEnd written while the host was down sits in the spool until a pass applies
-    // it to the registration. The first pass runs at once and the first prune (which deletes ended
-    // registrations) PruneInterval later, so the ending is read in between. While agent-ha-bridge
+    // it to the registration. Nothing is pruned (which deletes ended registrations) while the
+    // record still reads endings (KeepEndings), however long the first drain takes. While agent-ha-bridge
     // has the spool, its daemon applies them to the same registrations, and the spool is not even
     // listed from here (G5): settled as far as this host can know.
     public bool Drained => Paused is not null || (_passed && !_queued && !Waiting());
@@ -264,7 +270,7 @@ public sealed class HookIntake : IAsyncDisposable
         // Each deletion asks first: the markers are the daemon's once it has started.
         if (_handlers.WithdrawalsPending && Paused is null) { _handlers.RetryWithdrawals(); }
         var now = _time.GetUtcNow();
-        if (now - _prunedAt >= _options.PruneInterval)
+        if (now - _prunedAt >= _options.PruneInterval && !_options.KeepEndings())
         {
             // The registrations are the daemon's again if it started during this pass.
             if (Paused is not null) { return handled; }

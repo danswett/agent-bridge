@@ -493,7 +493,7 @@ async Task<int> ServeAsync(HostHandover handover)
     {
         Log(refreshed);
     }
-    await using var intake = StartIntake(haProbe, stop.Token);
+    await using var intake = StartIntake(haProbe, () => restore.JudgingEndings, stop.Token);
     runningIntake = intake;
 
     // The desktop app's way in (docs/protocol/local-pipe.md): the same sessions ops, and the
@@ -815,7 +815,7 @@ void RestartSelf()
 // Hook intake (docs/host-hooks.md): only for a profile that has migrated from agent-ha-bridge,
 // and only where agent-ha-bridge's daemon can be seen, since the intake must stand back
 // whenever it runs (G5). Null when off.
-HookIntake? StartIntake(AgentHaBridgeProbe? probe, CancellationToken cancellationToken)
+HookIntake? StartIntake(AgentHaBridgeProbe? probe, Func<bool> keepEndings, CancellationToken cancellationToken)
 {
     if (intakeProblem is not null) { Log(intakeProblem); }
     if (intakeState is null) { return null; }
@@ -830,6 +830,7 @@ HookIntake? StartIntake(AgentHaBridgeProbe? probe, CancellationToken cancellatio
         RuntimeRoot = intakeState.RuntimeRoot,
         ClaudeHome = options.ClaudeHome,
         AgentHaBridgeActive = active,
+        KeepEndings = keepEndings,
     }, new SystemProcessInspector(), log: Log);
     intake.Start(cancellationToken);
     var owner = intakeState.Standalone ? "this fresh installation" : $"agent-ha-bridge installation {intakeState.InstallationId}";

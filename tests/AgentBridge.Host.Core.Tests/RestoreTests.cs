@@ -467,7 +467,7 @@ public sealed class RestoreTests : IDisposable
     }
 
     [Fact]
-    public async Task A_claude_session_waits_until_its_hooks_endings_are_taken_in_before_it_is_judged()
+    public async Task A_claude_session_waits_until_its_hooks_endings_are_taken_in_before_it_is_judged_and_keeps_registrations_from_being_pruned_till_then()
     {
         Previous(Fixture.T0, false, E("a", AgentKind.Claude));
         var settled = false;
@@ -475,6 +475,7 @@ public sealed class RestoreTests : IDisposable
         r.Start();
         var judging = r.Notice!;
         Assert.Equal((1, 0), (judging.Waiting, judging.Offered.Count));
+        Assert.True(r.JudgingEndings);
 
         ends.Of["a"] = true;
         settled = true;
@@ -482,6 +483,7 @@ public sealed class RestoreTests : IDisposable
 
         Assert.Null(r.Notice);
         Assert.Empty(told);
+        Assert.False(r.JudgingEndings);
     }
 
     [Fact]

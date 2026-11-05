@@ -5320,20 +5320,6 @@
           }
         },
         {
-          "name": "missing-id",
-          "json": {
-            "agent": "copilot",
-            "title": "Fix the login page",
-            "midTurn": true
-          },
-          "reads": {
-            "id": "",
-            "agent": "copilot",
-            "title": "Fix the login page",
-            "midTurn": true
-          }
-        },
-        {
           "name": "missing-agent",
           "json": {
             "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
@@ -5346,6 +5332,17 @@
             "title": "Fix the login page",
             "midTurn": true
           }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-id",
+          "json": {
+            "agent": "copilot",
+            "title": "Fix the login page",
+            "midTurn": true
+          },
+          "refusedBy": "parse"
         },
         {
           "name": "wrong-type-id",
@@ -5355,15 +5352,9 @@
             "title": "Fix the login page",
             "midTurn": true
           },
-          "reads": {
-            "id": "",
-            "agent": "copilot",
-            "title": "Fix the login page",
-            "midTurn": true
-          }
+          "refusedBy": "parse"
         }
-      ],
-      "refused": []
+      ]
     },
     "RestoreNotice": {
       "direction": "host",

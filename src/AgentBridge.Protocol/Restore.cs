@@ -35,6 +35,9 @@ public enum RestoreWhy { Pending, ReadOnly, Off }
 // or approval was waiting in it, and went with it; the title names it, never the question's words.
 public sealed record RestoreSession
 {
+    // What a client resumes it by (Launch): read as "" when missing, it would be offered under no
+    // session at all.
+    [Strict(Strictness.Identity)]
     public required string Id { get; init; }
     public required AgentKind Agent { get; init; }
     public string? Title { get; init; }

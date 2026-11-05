@@ -866,6 +866,40 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_first_drain_longer_than_the_prune_interval_keeps_an_ended_Codex_registration_until_restore_has_read_it()
+    {
+        // A Codex session that ended while the host was down: its SessionEnd waits in the spool.
+        _f.CodexRegistration("s", 63, null, updated: Fixture.T0.AddMinutes(-5));
+        Spooled("0001", "codex", "hook", new { session_id = "s", hook_event_name = "SessionEnd" });
+        var judging = true;
+        var looked = false;
+        var intake = new HookIntake(new HookIntakeOptions
+        {
+            RuntimeRoot = _f.Runtime,
+            ClaudeHome = _f.ClaudeHome,
+            // The first pass's drain takes over a minute (the prune interval) from the host's start.
+            AgentHaBridgeActive = () =>
+            {
+                if (!looked) { looked = true; _f.Time.Advance(TimeSpan.FromSeconds(61)); }
+                return null;
+            },
+            UseFileSystemWatcher = false,
+            KeepEndings = () => judging,
+        }, _f.Processes, _f.Time, _log.Add);
+        _intakes.Add(intake);
+
+        intake.Pass();
+
+        Assert.True(intake.Drained);
+        Assert.True(Registration("agent-bridge-codex", "s").GetProperty("Ended").GetBoolean());
+
+        // Read: pruned as before.
+        judging = false;
+        intake.Pass();
+        Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "s.json")));
+    }
+
+    [Fact]
     public void The_heartbeat_is_kept_fresh_while_a_long_backlog_drains()
     {
         Spooled("0001", "copilot", "agent_stop", new { });
