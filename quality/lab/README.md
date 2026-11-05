@@ -23,7 +23,7 @@ Where this file and those comments disagree, the comments win and this file is f
 |---|---|---|
 | This contract | **Written** (this file) | Platform |
 | `provision.ps1`: the resources of one run of one role | **Draft.** Plans only; `-Apply` refuses before any Azure call until §10's prerequisites are met. Never run against Azure | Platform |
-| `test-provision.ps1`: its checks against a stand-in `az` | **Written**, catalog suite `lab-scripts`, ci.yml `product`. Runs in CI only | Platform |
+| `test-provision.ps1`: its checks against a stand-in `az` | **Written**, catalog suite `lab-scripts` (ring 0, ci.yml `light` on Linux, so a draft's fast ring runs it). Never run against Azure | Platform |
 | `run.ps1` (§5) | **Unbuilt**: the interface is design only | Platform |
 | `fleet.yml`, the images and their S0 snapshots | **Unbuilt** | Platform |
 | Scenarios and the simulated agent (`tests/AgentBridge.AgentSim`) | **Unbuilt** | Platform |

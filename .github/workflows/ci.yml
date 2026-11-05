@@ -363,11 +363,6 @@ jobs:
         if: runner.os == 'Windows' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'build-scripts'))
         shell: pwsh
         run: pwsh -NoProfile -File build/test-publish-prerelease.ps1
-      - name: The lab's provisioning draft plans only run-owned resources and refuses to apply
-        # Against a stand-in for az: nothing reaches Azure.
-        if: runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-scripts'))
-        shell: pwsh
-        run: pwsh -NoProfile -File quality/lab/test-provision.ps1
       - name: The NativeAOT hook replies and spools as an agent runs it
         # The hook every agent waits on, as it ships: NativeAOT, started fresh for each event.
         if: runner.os == 'Windows' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'hook-aot'))
@@ -935,6 +930,7 @@ jobs:
     #  - pwa-unit: the PWA's unit tests in Node, then again for coverage, beside the Playwright
     #    jobs rather than before them (#457);
     #  - pwa-site-csp: the Pages build's CSP;
+    #  - lab-scripts: the clean-VM lab's provisioning draft, against a stand-in for az;
     #  - playwright-apt: the download of Playwright's system packages leaves a slow apt mirror only
     #    when it should (.github/actions/playwright-system-packages);
     #  - docs-links: relative links and their #anchors in every Markdown file resolve.
@@ -962,6 +958,11 @@ jobs:
       - name: Connector read-contract mock
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'connector-conformance')) }}
         run: node --test tools/connector-conformance/mock-host.test.mjs
+      - name: The lab's provisioning draft plans only run-owned resources and refuses to apply
+        # Against a stand-in for az: nothing reaches Azure.
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-scripts')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/lab/test-provision.ps1
       - name: Playwright's system packages leave a slow apt mirror only for Canonical's archive
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'playwright-apt')) }}
         run: bash .github/actions/playwright-system-packages/test.sh

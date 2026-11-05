@@ -367,15 +367,15 @@ suites:
 
   - id: lab-scripts
     kind: unit
-    ring: 1
+    ring: 0
     select: affected
     # The clean-VM lab's provisioning draft (quality/lab/README.md) against a stand-in for az:
-    # nothing reaches Azure. Both Windows runners run it, as they do build-scripts.
-    platforms: [win-x64, win-arm64]
-    runner: hosted
+    # nothing reaches Azure. Ring 0 on Linux, so a draft's fast ring runs it too.
+    platforms: [win-x64, linux-x64]
+    runner: local
     triggers: [quality/lab/**]
     command: pwsh quality/lab/test-provision.ps1
-    where: ci.yml product
+    where: ci.yml light
     status: exists
 
   - id: relay-container
