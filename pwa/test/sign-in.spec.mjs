@@ -385,6 +385,24 @@ test('the live region reads only the lines added, never again those already said
   await expect(region.locator('.sign-in-said-line').first()).toHaveAttribute('data-mark', 'first');
 });
 
+test('Not responding\'s row age counts from when the host last heard from the agent, else since, and Details gives the time (ui.md §6.13, #878)', async ({ page }) => {
+  await openDemo(page);
+  const s = await page.evaluate(() => window.agentBridgeDemo.host.get('stalled'));
+  const age = row(page, 'stalled').locator('.row-age');
+  await expect(age).toHaveAttribute('datetime', s.attention.lastEventAt);
+  await expect(age).toHaveText(/^10\s?m/);
+  const clock = (iso) => page.evaluate((t) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), iso);
+  await row(page, 'stalled').click();
+  const silent = page.locator('#session-views .session-view[data-id="stalled"] .fact-silent dd');
+  await expect(silent).toHaveText(await clock(s.attention.lastEventAt));
+  await page.evaluate(() => { const d = window.agentBridgeDemo; const x = d.host.get('stalled'); const { lastEventAt, ...attention } = x.attention; d.upsert({ ...x, attention }); });
+  await expect(age).toHaveAttribute('datetime', s.attention.since);
+  await expect(silent).toHaveText(await clock(s.attention.since));
+  // Any other row counts from its update.
+  const quota = await page.evaluate(() => window.agentBridgeDemo.host.get('error-quota').updatedAt);
+  await expect(row(page, 'error-quota').locator('.row-age')).toHaveAttribute('datetime', quota);
+});
+
 test('two machines\' changes in one update are both said, not the second over the first', async ({ page }) => {
   await openDemo(page, '&machines=2');
   await expect(banner(page)).toHaveCount(2);
@@ -724,4 +742,76 @@ test('the banner\'s and the sheet\'s names are the words shown, and a tap draws 
   await expect(sheet(page).locator('.sign-in-code')).toBeVisible();
   expect((await new AxeBuilder({ page }).include('dialog.sign-in-sheet').withRules(['label-content-name-mismatch', 'button-name', 'link-name', 'aria-dialog-name']).analyze()).violations).toEqual([]);
   await context.close();
+});
+
+// The captures owed before sessions.signin is turned on (#800, Creative 6655285995), the app's
+// beside them in its self-test: the banner and the sheet in Dark and in forced colours, and every
+// state they can be in (no claim, the code shown, Failed, an expired code, confirming). Each is
+// checked to be what it says before it is taken, and attached to the test's results.
+async function capture(locator, name, testInfo) {
+  const path = testInfo.outputPath(name);
+  await locator.screenshot({ path, animations: 'disabled' });
+  await testInfo.attach(name, { path, contentType: 'image/png' });
+}
+
+for (const look of [{ name: 'dark', media: { colorScheme: 'dark' } }, { name: 'forced-colors', media: { colorScheme: 'light', forcedColors: 'active' } }]) {
+  test(`captures the banner and the sheet in ${look.name} (#800)`, async ({ page, browserName }, testInfo) => {
+    test.skip(Boolean(look.media.forcedColors) && browserName !== 'chromium', 'forced colours are emulated in Chromium only');
+    await page.emulateMedia(look.media);
+    await openDemo(page);
+    await expect(signIn(page)).toBeVisible();
+    await capture(banner(page), `signin-banner.${look.name}.png`, testInfo);
+    await signIn(page).click();
+    await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
+    await expect(banner(page).locator('.sign-in-line')).toHaveText(/^Waiting for sign-in/);
+    await capture(sheet(page), `signin-sheet.${look.name}.png`, testInfo);
+    await capture(banner(page), `signin-code-shown.${look.name}.png`, testInfo);
+  });
+}
+
+test('captures every state of the banner and the sheet: no claim, the code shown, Failed, an expired code and confirming (#800)', async ({ page }, testInfo) => {
+  await openDemo(page);
+  await expect(signIn(page)).toBeVisible();
+
+  // A way to sign in this client doesn't know: no claim, so nothing to press, never "at the machine".
+  await page.evaluate((ids) => {
+    const d = window.agentBridgeDemo;
+    for (const id of ids) { const s = d.host.get(id); d.upsert({ ...s, attention: { ...s.attention, signIn: 'rdp' } }); }
+  }, SESSIONS);
+  await expect(banner(page).locator('.sign-in-start')).toHaveCount(0);
+  await expect(banner(page)).not.toContainText('at the machine');
+  await capture(banner(page), 'signin-no-claim.png', testInfo);
+  await page.evaluate((ids) => {
+    const d = window.agentBridgeDemo;
+    for (const id of ids) { const s = d.host.get(id); d.upsert({ ...s, attention: { ...s.attention, signIn: 'phone' } }); }
+  }, SESSIONS);
+
+  await signIn(page).click();
+  await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
+  await expect(banner(page).locator('.sign-in-line')).toHaveText(/^Waiting for sign-in/);
+  await capture(sheet(page), 'signin-sheet.png', testInfo);
+  await capture(banner(page), 'signin-code-shown.png', testInfo);
+
+  await page.evaluate(() => window.agentBridgeDemo.finishSignIn('failed'));
+  await expect(sheet(page)).toBeHidden();
+  await expect(banner(page).locator('.sign-in-line')).toHaveText('Sign-in failed');
+  const again = banner(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' });
+  await expect(again).toBeVisible();
+  await capture(banner(page), 'signin-failed.png', testInfo);
+
+  await page.evaluate(() => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 1500).toISOString() }; });
+  await again.click();
+  await expect(sheet(page).locator('.sign-in-expired')).toHaveText('Code expired', { timeout: 8000 });
+  await expect(sheet(page)).not.toContainText('WDJB');
+  await capture(sheet(page), 'signin-expired.png', testInfo);
+  await page.keyboard.press('Escape');
+  await expect(sheet(page)).toBeHidden();
+
+  await page.evaluate(() => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() }; });
+  // Cancelled, the expired attempt is gone: Sign in again.
+  await signIn(page).click();
+  await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
+  await page.evaluate(() => window.agentBridgeDemo.finishSignIn('signedIn'));
+  await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
+  await capture(banner(page), 'signin-confirming.png', testInfo);
 });

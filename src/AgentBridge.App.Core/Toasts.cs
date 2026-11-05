@@ -43,6 +43,9 @@ public sealed class ToastPlanner
         public Question? ShownQuestion;
         public HashSet<string> Notified = new(StringComparer.Ordinal);
         public string? FinishedKey;
+        // The session ran (left idle) after its finished toast went up: a failure now ends a later
+        // turn, not the one that toast is for (#878).
+        public bool RanSinceFinished;
         public (ToastKind Kind, DateTimeOffset At, string? Question)? Due;
         // While a delegate's question is pending (NoteWait).
         public bool WaitFromTurn;
@@ -114,12 +117,17 @@ public sealed class ToastPlanner
     static bool Stopped(Session s) => AuthState.Of(s)?.Kind is AuthState.Error or AuthState.SignInNeeded;
 
     // One due is dropped, and one up is withdrawn, when the attention comes after the turn ended.
+    // Only the toast for this same turn: one for an earlier turn that really finished (the session
+    // ran since, or its turn and answer were others) stays (#878).
     void Unfinish(Tracked t, Session s)
     {
+        if (s.Status != SessionStatus.Idle) { t.RanSinceFinished = true; }
         if (!Stopped(s)) { return; }
         if (t.Due is { Kind: ToastKind.Finished }) { t.Due = null; }
-        if (finished.Remove(s.Id) && t.Shown is null) { sink.Withdraw(TagOf(s.Id)); }
+        if (t.Shown is null && !t.RanSinceFinished && t.FinishedKey == FinishedKeyOf(s) && finished.Remove(s.Id)) { sink.Withdraw(TagOf(s.Id)); }
     }
+
+    static string FinishedKeyOf(Session s) => $"{s.Activity.TurnCount}|{MainResponse(s)}";
 
     public void Upsert(Session s)
     {
@@ -244,13 +252,14 @@ public sealed class ToastPlanner
             }
             else
             {
-                var key = $"{s.Activity.TurnCount}|{MainResponse(s)}";
+                var key = FinishedKeyOf(s);
                 // The main agent's words may have gone in the wait (a delegate wrote last, or the
                 // budget left them out): an empty toast says nothing.
                 if (s.Status != SessionStatus.Idle || t.FinishedKey == key || string.IsNullOrEmpty(MainResponse(s)) || Stopped(s)) { continue; }
                 t.FinishedKey = key;
                 if (!Enabled() || !FinishedEnabled() || WindowActive()) { continue; }
                 finished.Add(id);
+                t.RanSinceFinished = false;
                 sink.Show(new ToastNotice(TagOf(id), ToastXml.Finished(s, MachineName(), MachineKey), Quiet()));
             }
         }

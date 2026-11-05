@@ -276,6 +276,32 @@ public sealed class ToastTests
         Assert.Equal([ToastPlanner.Tag("s4", null)], sink.Withdrawn);
     }
 
+    // #878: a later turn that fails withdraws nothing of an earlier turn that really finished, even
+    // with that turn's answer still the session's latest; and raises no toast of its own.
+    [Fact]
+    public void A_later_turn_that_fails_leaves_an_earlier_turns_finished_toast_up()
+    {
+        static Session Stopped(string id, int turns) =>
+            AuthState.Attach(Make.Session(id, response: "Done.", turns: turns), JsonSerializer.SerializeToElement(new { attention = new { kind = "signInNeeded", agent = "copilot" } }));
+        var p = Planner();
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s1", response: "Done.", turns: 2));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        // The next turn runs, and ends on a 401 with the old answer still there, its turn count the
+        // same or moved on.
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working, response: "Done.", turns: 2));
+        p.Upsert(Stopped("s1", 2));
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working, response: "Done.", turns: 2));
+        p.Upsert(Stopped("s1", 3));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Empty(sink.Withdrawn);
+        Assert.Single(sink.Shown);
+    }
+
     [Fact]
     public void A_finished_turn_whose_main_agent_words_are_gone_when_it_is_due_raises_nothing()
     {

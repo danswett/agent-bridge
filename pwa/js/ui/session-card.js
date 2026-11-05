@@ -28,7 +28,8 @@ import { h } from './dom.js';
 import { designIcon, drivenBadge, glyph, setGlyph } from './glyph.js';
 import { ago, duration, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
-import { ATTENTION_RULES, sessionStatus, statusLabel } from '../status.js';
+import { ATTENTION_RULES, rowAt, sessionStatus, silentSince, statusLabel } from '../status.js';
+import { clockTime } from '../auth-state.js';
 import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.js';
 import { answerability } from '../answers.js';
 import { ReplyBox } from './reply-view.js';
@@ -691,8 +692,8 @@ export class SessionCard {
     const said = mainVoice(s).at ?? s.updatedAt;
     e.agentAge.dateTime = said;
     e.agentAge.title = localTime(said);
-    e.rowAge.dateTime = s.updatedAt;
-    e.rowAge.title = localTime(s.updatedAt);
+    e.rowAge.dateTime = rowAt(s);
+    e.rowAge.title = localTime(rowAt(s));
     this.refreshTimes();
 
     const t = s.activity.currentTool;
@@ -732,7 +733,7 @@ export class SessionCard {
     // prompt you didn't type is no bubble of yours and never rises.
     if (!first && echoed && !e.user.hidden) { enter(e.user, 'acknowledge', { dy: 1 }); }
 
-    if (this.#changed('facts', [s.agent, s.model, s.repository, s.branch, s.cwd, this.machineName, s.startedAt, s.activity.turnCount, s.activity.compactions, s.activity.background, s.processId, s.attention?.message])) {
+    if (this.#changed('facts', [s.agent, s.model, s.repository, s.branch, s.cwd, this.machineName, s.startedAt, s.activity.turnCount, s.activity.compactions, s.activity.background, s.processId, s.attention?.message, silentSince(s)])) {
       this.#renderFacts(s);
     }
     this.#bringQuestion(atEnd);
@@ -911,6 +912,8 @@ export class SessionCard {
     // never a link, and only here, never on its row.
     // The host's sentence for what is wrong (6649775484), as it is: never the agent's own text.
     add('Message', s.attention?.message ? h('span', { class: 'attention-message', dir: 'ltr' }, s.attention.message) : null, 'attention');
+    // Not responding: the time it went silent, which the row's age counts from (ui.md §6.13).
+    add('Not responding since', clockTime(silentSince(s)) || null, 'silent');
     e.facts.replaceChildren(...rows);
     this.refreshTimes();
   }
@@ -1448,7 +1451,7 @@ export class SessionCard {
       e.since.textContent = since ? `for ${since}` : '';
       e.since.closest('.fact')?.toggleAttribute('hidden', !since);
     }
-    e.rowAge.textContent = ago(s.updatedAt, now);
+    e.rowAge.textContent = ago(rowAt(s), now);
     e.agentAge.textContent = ago(mainVoice(s).at ?? s.updatedAt, now);
     if (this.#promptAt) { e.promptAge.textContent = ago(this.#promptAt, now); }
     this.delegates.refreshTimes(now);
