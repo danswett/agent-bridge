@@ -94,7 +94,12 @@ export class NeedsYouLane {
     while (prev ? prev.nextSibling : this.list.firstChild) { (prev ? prev.nextSibling : this.list.firstChild).remove(); }
     this.head.textContent = `Needs you \u00b7 ${lane.length}`;
     this.container.hidden = lane.length === 0 && lingering.length === 0;
-    this.badge.set(lane.length);
+    // The badge also counts what a machine stale only from a rest (#610) last asked: the app rests
+    // while out of sight, which is when the badge is all there is to see, and nothing is known to
+    // have changed. Those questions are neither listed nor answerable meanwhile; a real drop
+    // still takes them out of the count.
+    const rested = this.sessions.list().some(({ hostId }) => this.answering(hostId)?.stale?.rested === true);
+    this.badge.set(rested ? needsYou(this.sessions.list(), { current: (hostId) => { const stale = this.answering(hostId)?.stale; return !stale || stale.rested === true; } }).length : lane.length);
     this.onRender?.(lane.length);
   }
 

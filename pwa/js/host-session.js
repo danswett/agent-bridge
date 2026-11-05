@@ -66,6 +66,11 @@ export class HostLink {
   // Its list may be out of date: no channel open now has delivered a whole snapshot (none has
   // opened yet, its channel went, or the machine left presence). Nothing is sent to it meanwhile.
   stale = true;
+  // Stale only because the app rested (#610): nothing is known to have gone wrong with it, so it
+  // is confirming rather than reconnecting, and its questions still count in the app badge (a
+  // rest that emptied the badge took the count away just when the app is out of sight). Until a
+  // whole list is in, its channel fails, or the relay doesn't come back.
+  rested = false;
   // Its hello changed (hello.changed) while its channel was still being set up: asked for again
   // once open, as the host says so only once.
   helloChanged = false;
@@ -100,7 +105,14 @@ export class HostSession {
     Object.assign(this, { connection, me, storage, makeClient, makeStore, maxOpening, retryMs, reopenMs, maxRetryMs, keepOfflineMs, now });
     connection.on('ready', () => this.#pump());
     connection.on('presence', () => this.#onPresence());
-    connection.on('lost', (e) => this.#detachAll(e?.resting ? 'Paused while the app is in the background.' : 'The relay connection dropped; reconnecting.'));
+    connection.on('lost', (e) => this.#detachAll(e?.resting ? 'Paused while the app is in the background.' : 'The relay connection dropped; reconnecting.', e?.resting === true));
+    // Back from a rest, the relay itself failing to come back is a drop after all.
+    connection.on('state', ({ state } = {}) => {
+      if (!['reconnecting', 'signed-out', 'replaced', 'stopped'].includes(state)) { return; }
+      let changed = false;
+      for (const link of this.#links.values()) { if (link.rested) { link.rested = false; changed = true; } }
+      if (changed) { this.#emit(); }
+    });
     // The sessions on screen, from every machine shown, as one list.
     const self = this;
     this.sessions = {
@@ -140,11 +152,13 @@ export class HostSession {
   // roster says, else when this device saw it go). 'unsupported': in presence, but it says it
   // has no sessions to give; not tried again. 'reconnecting': in presence, and no channel to it
   // is open. 'confirming': open, and its snapshot (a new channel's first, or the one a gap asked
-  // for again) has not finished.
+  // for again) has not finished, or the app rested and nothing has gone wrong since (rested: true,
+  // whatever its channel's phase).
   staleOf(id) {
     const link = this.#links.get(id);
     if (!link || this.route(id)) { return null; }
     if (link.offlineSince === null) {
+      if (link.rested && link.phase !== 'unsupported') { return { reason: 'confirming', since: null, rested: true }; }
       const reason = link.phase === 'open' ? 'confirming' : link.phase === 'unsupported' ? 'unsupported' : 'reconnecting';
       return { reason, since: null };
     }
@@ -328,6 +342,7 @@ export class HostSession {
         // Still away: a relay drop meanwhile said so on it, which this presence answers.
         if (link.offlineSince !== null) { if (link.phase === 'waiting') { link.error = ''; } continue; }
         link.offlineSince = this.now();
+        link.rested = false;
         this.#cancel(link);
         clearTimeout(link.timer);
         link.timer = null;
@@ -391,14 +406,18 @@ export class HostSession {
     c?.close();
   }
 
-  #detachAll(reason) {
+  #detachAll(reason, rested = false) {
     for (const link of this.#links.values()) {
+      // Only a machine whose list was current when the app rested: one already away or failing
+      // stays as it was.
+      const current = this.route(link.id) !== null;
       this.#cancel(link);
       clearTimeout(link.timer);
       link.timer = null;
       this.#detach(link);
       link.phase = 'waiting';
       link.error = reason;
+      link.rested = rested && current;
     }
     if (this.#links.size) { this.#emit(); }
   }
@@ -481,6 +500,7 @@ export class HostSession {
         link.client = null;
         link.channel = null;
         link.stale = true;
+        link.rested = false;
         // One closing while it is being set up fails that attempt, which retries it once.
         if (!settled) { return; }
         this.#set(link, 'waiting', 'The channel to this machine closed; reopening.');
@@ -526,6 +546,7 @@ export class HostSession {
         return;
       }
       if (link.client === client) { link.client = null; link.channel = null; link.stale = true; }
+      link.rested = false;
       client?.close();
       this.#set(link, 'failed', e.message);
       this.#later(link, this.retryMs);
@@ -544,6 +565,7 @@ export class HostSession {
   #confirm(link, client) {
     if (this.#links.get(link.id) !== link || link.client !== client || !link.stale || link.phase !== 'open' || link.offlineSince !== null) { return; }
     link.stale = false;
+    link.rested = false;
     this.#emit();
     this.#opened(link.id);
   }

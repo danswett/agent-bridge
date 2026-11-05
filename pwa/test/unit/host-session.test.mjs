@@ -968,6 +968,49 @@ test('a relay connection put to rest says so on each machine shown, rather than 
   assert.equal(hosts.link('a').error, 'Paused while the app is in the background.');
 });
 
+test('a rest leaves each machine whose list was current confirming, not reconnecting, until its list is whole again, and a real drop says reconnecting', async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }, { id: 'b', kind: 'host' }]);
+  const hosts = new HostSession({ connection, store: new SessionsStore(), storage: null, makeClient: (ch) => Object.assign(fakeClient(ch), { synced: true }) });
+  hosts.select(ALL);
+  await flush();
+  // b's channel never opens: it is reconnecting when the app rests, and stays so.
+  connection.opens.find((o) => o.peerId === 'a').resolve();
+  await flush();
+  assert.notEqual(hosts.route('a'), null);
+  connection.emit('lost', { code: 1000, reason: 'resting', resting: true });
+  assert.deepEqual(hosts.staleOf('a'), { reason: 'confirming', since: null, rested: true });
+  assert.deepEqual(hosts.staleOf('b'), { reason: 'reconnecting', since: null });
+  connection.emit('state', { state: 'connecting' });
+  assert.equal(hosts.staleOf('a').rested, true, 'coming back is not trouble');
+
+  connection.emit('ready');
+  await flush();
+  connection.opens.filter((o) => o.peerId === 'a').at(-1).resolve();
+  await flush();
+  assert.equal(hosts.staleOf('a'), null, 'its whole list is in');
+  assert.equal(hosts.link('a').rested, false);
+
+  connection.emit('lost', { code: 1006, reason: '' });
+  assert.deepEqual(hosts.staleOf('a'), { reason: 'reconnecting', since: null });
+});
+
+test('back from a rest, the relay failing to come back turns its machines to reconnecting', async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }]);
+  const hosts = new HostSession({ connection, store: new SessionsStore(), storage: null, makeClient: (ch) => Object.assign(fakeClient(ch), { synced: true }) });
+  let changes = 0;
+  hosts.onChange(() => { changes++; });
+  hosts.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  connection.emit('lost', { code: 1000, reason: 'resting', resting: true });
+  assert.equal(hosts.staleOf('a').rested, true);
+  const before = changes;
+  connection.emit('state', { state: 'reconnecting' });
+  assert.deepEqual(hosts.staleOf('a'), { reason: 'reconnecting', since: null });
+  assert.ok(changes > before, 'whoever draws it hears so');
+});
+
 test('a hello that changes while the channel is still subscribing is asked for again once it is open', async () => {
   const connection = fakeConnection([{ id: 'a', kind: 'host' }]);
   const asked = [];
