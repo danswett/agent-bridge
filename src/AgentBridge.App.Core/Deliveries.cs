@@ -318,15 +318,22 @@ public sealed class Deliveries
 
     static string? KindOf(string op) => op == Ops.SessionReply ? "reply" : op == Ops.SessionAnswer ? "answer" : null;
 
-    // The host measures an answer, flag and all, against its 16 KiB (Answers.Check): an answer
-    // that fits only without "progress": true goes without it, and shows Sending until its
-    // outcome, rather than be refused for asking how it went.
+    // The host measures an answer, flag and all, against its 16 KiB (Answers.Check), and no message
+    // may be over the protocol's 48 KiB (ProtocolJson.MaxMessageBytes), which ReplyViewModel.Send
+    // checked without the flag: a request that fits only without "progress": true goes without
+    // it, and shows Sending until its outcome, rather than be refused, or overrun the budget, for
+    // asking how it went. As the PWA's #withProgress does.
     static object AskProgress(object data) => data switch
     {
         AnswerRequest a when JsonSerializer.SerializeToUtf8Bytes(a with { Progress = true }, ProtocolJson.Options).Length <= Limits.AnswerRequest => a with { Progress = true },
-        ReplyRequest r => r with { Progress = true },
+        ReplyRequest r when Envelope(Ops.SessionReply, r with { Progress = true }) <= ProtocolJson.MaxMessageBytes => r with { Progress = true },
         _ => data,
     };
+
+    // A request as the channel sends it, escaped as it is sent, with room for any request id it
+    // could be given.
+    static int Envelope(string op, object data) =>
+        JsonSerializer.SerializeToUtf8Bytes(new { id = long.MaxValue, op, data }, ProtocolJson.Options).Length;
 
     static int Rank(string? stage) => stage switch
     {

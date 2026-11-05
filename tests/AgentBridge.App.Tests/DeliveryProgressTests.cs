@@ -144,6 +144,33 @@ public sealed class DeliveryProgressTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_reply_that_fits_the_48_KiB_message_budget_only_without_the_progress_flag_goes_without_it()
+    {
+        await StartAsync(progress: true);
+        host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Delivered));
+        static int Envelope(object data) => JsonSerializer.SerializeToUtf8Bytes(new { id = 1, op = Ops.SessionReply, data }, ProtocolJson.Options).Length;
+
+        // 8 bytes under the budget as it is, request id and all: "progress":true would put it 8
+        // over. Most of it is escaping, six bytes for each control character, so its text is well
+        // within session.reply's 16 KiB.
+        var full = deliveries.Submit("reply|s1|full", Ops.SessionReply, r =>
+        {
+            var reply = new ReplyRequest { Id = "s1", Request = r, Text = new string('\u0001', 8000) };
+            return reply with { Text = reply.Text + new string('x', ProtocolJson.MaxMessageBytes - 8 - Envelope(reply)) };
+        }, _ => false, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get(full.Key)!.State == DeliveryState.Done, "an outcome");
+        var small = deliveries.Submit("reply|s1|small", Ops.SessionReply, r => new ReplyRequest { Id = "s1", Request = r, Text = "and a short one" }, _ => false, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get(small.Key)!.State == DeliveryState.Done, "an outcome");
+
+        Assert.Equal("delivered", deliveries.Get(full.Key)!.Outcome);
+        var sent = host.Sent(Ops.SessionReply);
+        Assert.Equal(2, sent.Count);
+        Assert.Equal(ProtocolJson.MaxMessageBytes - 8, Envelope(sent[0].Deserialize<ReplyRequest>(ProtocolJson.Options)!));
+        Assert.False(sent[0].TryGetProperty("progress", out _));
+        Assert.True(sent[1].GetProperty("progress").GetBoolean());
+    }
+
+    [Fact]
     public async Task A_host_s_outcome_or_timing_name_with_a_line_break_cannot_forge_a_line_in_the_app_s_log()
     {
         await StartAsync(progress: true);
