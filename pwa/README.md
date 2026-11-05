@@ -19,6 +19,12 @@ once, and shows each machine's updates with Check, Install and Check all, per
 [v1-update.md](../docs/protocol/v1-update.md).
 Larger files come next.
 
+The app was called Agent Bridge before it became Slipgates (#538). The app shows the new name
+as soon as it updates, and an installed app takes the new name and icon too, except that an
+installed iPhone/iPad app keeps its old icon until you choose to reinstall it, with the name
+Agent Bridge under it. Apple gives a Home Screen app no way to change either, and reinstalling
+makes it a new device, signed in and approved again, so keeping it is fine.
+
 | Light | Dark | Answering | A permission request | All machines | Needs you |
 |---|---|---|---|---|---|
 | ![Demo mode, light](docs/demo-light.png) | ![Demo mode, dark](docs/demo-dark.png) | ![Answering the worked example's question](docs/answer.png) | ![An approval, answered with a tap](docs/approval.png) | ![Every machine's sessions at once, each row naming its machine](docs/all-machines.png) | ![Needs you: every pending question above the list, an approval answered in place](docs/needs-you-light.png) |

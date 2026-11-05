@@ -328,6 +328,7 @@ test('an app updated to the new name keeps notifications on and its browser subs
   // Before the update, under the old name.
   await app('iPhone · Agent Bridge').enable();
   // After it: the same browser, storage and subscription, with the name the app now gives.
+  assert.notEqual(deviceName(IPHONE), 'iPhone · Agent Bridge', 'the device name changed with the rename');
   const updated = app(deviceName(IPHONE));
   assert.equal(updated.enabled, true, 'still on, without asking again');
   const host = client();
