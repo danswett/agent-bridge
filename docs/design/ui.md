@@ -686,7 +686,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **Mid-conversation,** 64 up in one direction brings the whole header back over the
     conversation (`collapse`), and 32 down sends it away. The count restarts when the
     direction changes, so reading back and forth changes nothing. A tap on the bar's title
-    brings it back, and the top always shows it in full.
+    brings it back, and the top always shows it in full. The reply area does the mirror image
+    (§6.5, #935), so the two never both take full room mid-conversation.
   - **Only the person's own scrolling counts:** a finger, a wheel, a trackpad, the keys or the
     scroll bar. A scroll the app makes (to a question, a restored position) and a response
     growing below leave the header as it was, except on a screen shorter than twice the
@@ -1128,6 +1129,19 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - macOS: a capsule field.
   - iOS: a capsule field over the keyboard.
   - Android: a filled field on `surfaceContainer`.
+- **Phone: compact while reading (#935).** Below 760 the reply area floats over the
+  conversation's foot, and mirrors the header (§6.2). A session opens with it in full.
+  - **Near the end,** it rides down with the scroll, and past its room it is compact: a
+    pinned 48 bar (plus the safe area) holding a one-line copy of the box, the draft's first
+    line or the placeholder. The copy is drawn, not read, and is not a tab stop; a tap on it
+    brings the box back in full and focuses it.
+  - **Away from the end,** 32 up sends it away and 64 down brings it back, with its own
+    count. The end always shows it in full. A draft is never hidden: the bar shows its first
+    line.
+  - **Focus anywhere in the reply area** brings it back at once and holds it. A scroll the
+    app makes keeps it as it was, unless it lands at the end, where it shows in full. On a
+    screen shorter than twice the header it folds with the header.
+  - **Reduced motion:** a cross-fade, as the header's. From 760 it never collapses.
 
 ### 6.6 Machines
 
@@ -1588,7 +1602,10 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   The folded parts stay in the tree and the tab order, focus reaching them brings the header
   back, and collapsing is never announced. The bar's one-line copy is drawn only: the title is
   read from the h2 and the status from the meta line. Nothing focused in the conversation
-  lands under the header, and the header never expands over the focused control. In high contrast the bar is `Canvas` with a `CanvasText` hairline.
+  lands under the header, and the header never expands over the focused control. In high contrast the bar is `Canvas` with a
+  `CanvasText` hairline. The reply area's compact bar (§6.5, #935) is the same: its copy of the
+  draft is drawn only, focus anywhere in the reply area brings the box back in full, and
+  focus never lands on a hidden control.
 - **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
   menu key opens a row's menu, and Ctrl/⌘+K focuses search. The shortcut is named where
   search is (the Windows search box's tooltip, on hover or when Tab reaches it) and nowhere
