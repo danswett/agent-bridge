@@ -365,8 +365,15 @@ internal sealed class AgentSignInService : IAsyncDisposable
             flow.Participants.Clear();
             flow.Bindings.Clear();
         }
-        if (outcome != SignInOutcome.SignedIn) { await StateAsync(flow.Context, flow.Id, RecoveryState.Failed); }
-        foreach (var (channel, grant) in recipients) { await SendAsync(channel, grant, AgentSignIn.Done, done, CancellationToken.None); }
+        if (outcome != SignInOutcome.SignedIn)
+        {
+            using var budget = new CancellationTokenSource(CheckLimit, time);
+            var update = StateAsync(flow.Context, flow.Id, RecoveryState.Failed, ct: budget.Token);
+            _ = update.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+            try { await update.WaitAsync(CheckLimit, time, budget.Token); }
+            catch (Exception) { }
+        }
+        await Task.WhenAll(recipients.Select(p => SendAsync(p.Key, p.Value, AgentSignIn.Done, done, CancellationToken.None)));
     }
 
     void Release(Flow flow)
@@ -384,14 +391,15 @@ internal sealed class AgentSignInService : IAsyncDisposable
         try
         {
             Flow[] flows;
+            List<Task> endings = [];
             lock (gate) { flows = active.Values.ToArray(); Trim(); }
             foreach (var flow in flows)
             {
                 if (flow.Stop.IsCancellationRequested || flow.Code is { } code && code.ExpiresAt <= time.GetUtcNow())
                 {
-                    await EndAsync(flow, SignInOutcome.Expired); continue;
+                    endings.Add(EndAsync(flow, SignInOutcome.Expired)); continue;
                 }
-                if (!Enabled || disposed || readOnly()) { await EndAsync(flow, SignInOutcome.Cancelled); continue; }
+                if (!Enabled || disposed || readOnly()) { endings.Add(EndAsync(flow, SignInOutcome.Cancelled)); continue; }
                 bool revoked;
                 bool alone;
                 lock (gate)
@@ -404,14 +412,15 @@ internal sealed class AgentSignInService : IAsyncDisposable
                 }
                 if (revoked || alone && flow.AloneSince is { } since && time.GetUtcNow() - since >= ReattachGrace)
                 {
-                    await EndAsync(flow, SignInOutcome.Cancelled); continue;
+                    endings.Add(EndAsync(flow, SignInOutcome.Cancelled)); continue;
                 }
                 if (flow.Silent && flow.Completed.Task.IsCompleted && flow.Context.Failures.All(f => source.Get(f.Id) is { Attention: null }))
                 {
-                    await EndAsync(flow, SignInOutcome.SignedIn, flow.Resume); continue;
+                    endings.Add(EndAsync(flow, SignInOutcome.SignedIn, flow.Resume)); continue;
                 }
-                if (!Compatible(flow.Context)) { await EndAsync(flow, SignInOutcome.Failed); }
+                if (!Compatible(flow.Context)) { endings.Add(EndAsync(flow, SignInOutcome.Failed)); }
             }
+            await Task.WhenAll(endings);
         }
         finally { Volatile.Write(ref sweeping, 0); }
     }

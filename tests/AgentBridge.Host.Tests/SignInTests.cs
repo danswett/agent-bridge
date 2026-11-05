@@ -337,6 +337,46 @@ public sealed class SignInTests
         Assert.True(factory.Process.Aborted);
     }
 
+    [Fact]
+    public async Task Eventual_successful_disposal_releases_quarantine_without_extending_the_callers_wait()
+    {
+        var time = new FakeTimeProvider();
+        var factory = new Factory();
+        factory.Process.HoldDisposal = true;
+        var runner = new PrivateSignInRunner(factory, time) { Cleanup = TimeSpan.Zero };
+        var target = new SignInTarget("store", AgentKind.Copilot, null);
+        var running = runner.RunAsync(target, (_, _) => Task.FromResult(true), CancellationToken.None, () => true);
+        await factory.Started.Task.WaitAsync(Patience);
+        factory.Process.OutputPipe.Put(Frame(time));
+        factory.Process.Complete();
+        Assert.Equal(SignInOutcome.Failed, await running.WaitAsync(Patience));
+        Assert.Equal(SignInOutcome.Refused, await runner.RunAsync(target, (_, _) => Task.FromResult(true), CancellationToken.None, () => true));
+        factory.Process.ReleaseDisposal.TrySetResult();
+        Assert.NotEqual(SignInOutcome.Refused, await runner.RunAsync(target, (_, _) => Task.FromResult(true), CancellationToken.None, () => true));
+        Assert.Equal(2, factory.Starts);
+    }
+
+    [Fact]
+    public async Task Cancellation_does_not_wait_forever_for_a_terminal_source_overlay()
+    {
+        await using var h = await Harness.CreateAsync();
+        var phone = h.Phone();
+        var start = h.Start(phone);
+        var flow = Json(start.Result).GetProperty("flow").GetString();
+        await start.Then(phone);
+        await h.Factory.Started.Task.WaitAsync(Patience);
+        h.Factory.Process.OutputPipe.Put(Frame(h.Time));
+        await phone.Code.Task.WaitAsync(Patience);
+        h.States.HangTerminal = true;
+        var cancelling = h.Service.CancelAsync(phone, Json(new { flow }));
+        await h.States.TerminalWaiting.Task.WaitAsync(Patience);
+        Assert.Equal(0, h.Service.CodesHeld);
+        await h.Factory.Process.Disposing.Task.WaitAsync(Patience);
+        h.Time.Advance(h.Service.CheckLimit + TimeSpan.FromSeconds(1));
+        Assert.Equal("cancelled", Json(await cancelling.WaitAsync(Patience)).GetProperty("outcome").GetString());
+        Assert.Equal("cancelled", (await phone.Done.Task.WaitAsync(Patience)).GetProperty("outcome").GetString());
+    }
+
     [Theory]
     [InlineData("cancel")]
     [InlineData("expire")]
@@ -514,6 +554,9 @@ public sealed class SignInTests
     sealed class StateSource(ISessionSource inner) : ISessionSource
     {
         public Action<RecoveryState>? After;
+        public bool HangTerminal;
+        public TaskCompletionSource TerminalWaiting { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly TaskCompletionSource stalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public long Revision => inner.Revision;
         public event EventHandler<SessionChange>? Changed { add => inner.Changed += value; remove => inner.Changed -= value; }
         public IReadOnlyList<Session> Snapshot() => inner.Snapshot();
@@ -526,6 +569,7 @@ public sealed class SignInTests
         public async Task SetSignInRecoveryAsync(string id, DateTimeOffset errorAt, string generation, RecoveryState state,
             bool begin = false, CancellationToken cancellationToken = default)
         {
+            if (HangTerminal && state == RecoveryState.Failed) { TerminalWaiting.TrySetResult(); await stalled.Task; }
             await inner.SetSignInRecoveryAsync(id, errorAt, generation, state, begin, cancellationToken);
             After?.Invoke(state);
         }
@@ -612,6 +656,8 @@ public sealed class SignInTests
         public Task<int> ExitCode => exit.Task;
         public bool Aborted;
         public bool Disposed;
+        public bool HoldDisposal;
+        public TaskCompletionSource ReleaseDisposal { get; } = new();
         public TaskCompletionSource Disposing { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public void Complete(int exit = 0, bool done = true)
         {
@@ -619,7 +665,11 @@ public sealed class SignInTests
             OutputPipe.End(); ErrorPipe.End(); this.exit.TrySetResult(exit);
         }
         public void Abort() { Aborted = true; OutputPipe.End(); ErrorPipe.End(); exit.TrySetResult(1); }
-        public ValueTask DisposeAsync() { Disposed = true; Disposing.TrySetResult(); return ValueTask.CompletedTask; }
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true; Disposing.TrySetResult();
+            return HoldDisposal ? new ValueTask(ReleaseDisposal.Task) : ValueTask.CompletedTask;
+        }
     }
     sealed class Pipe : Stream
     {

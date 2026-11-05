@@ -1221,6 +1221,9 @@ The framework's request/event contract (not yet offered to clients) is:
   contained helper. Slots/receipts, participants, output, waits and cleanup are bounded.
   Launch authorization is checked after source-state waits and again by the factory
   at the actual launch, including after any queue.
+  Terminal overlay updates are best-effort and bounded: a stalled source cannot hold
+  cancellation or cleanup hostage. A timed-out process cleanup stays quarantined until
+  disposal actually succeeds.
 * Current pinned **person**, session-read **and** write authority are all required.
   A self-claimed `app`/`pwa` kind is insufficient even when the transitional trust
   enforcement switch is off. Service/host roles, revoked/regranted generations,
@@ -1248,6 +1251,8 @@ its own real main-model reply is required to clear its attention.
 Dead-session resume/reload is an interface dependency on **#780 Host B**; the supplied
 stub starts/types nothing and claims no resumed session ids. No signed-in push is
 emitted by this framework.
+Advertising also waits for perf-A's follow-up to suppress ordinary "finished" pushes
+on auth failure (review 4476391166); that notification fix is not part of this slice.
 
 ### Attention
 

@@ -91,9 +91,8 @@ internal sealed class PrivateSignInRunner(IPrivateSignInProcessFactory factory, 
                 try
                 {
                     var disposing = process.DisposeAsync().AsTask();
-                    Observe(disposing);
+                    TrackDisposal(disposing, target.Store);
                     await disposing.WaitAsync(Cleanup, time);
-                    lock (gate) { stores.Remove(target.Store); }
                 }
                 catch (Exception) { outcome = SignInOutcome.Failed; }
             }
@@ -106,9 +105,8 @@ internal sealed class PrivateSignInRunner(IPrivateSignInProcessFactory factory, 
                     {
                         t.Result.Abort();
                         var disposing = t.Result.DisposeAsync().AsTask();
-                        Observe(disposing);
+                        TrackDisposal(disposing, target.Store);
                         await disposing.WaitAsync(Cleanup, time);
-                        lock (gate) { stores.Remove(target.Store); }
                     }
                     catch (Exception) { }
                 }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default).Unwrap();
@@ -120,6 +118,15 @@ internal sealed class PrivateSignInRunner(IPrivateSignInProcessFactory factory, 
 
     static void Observe(Task task) => _ = task.ContinueWith(t => _ = t.Exception, CancellationToken.None,
         TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+    void TrackDisposal(Task disposing, string store)
+    {
+        Observe(disposing);
+        _ = disposing.ContinueWith(t =>
+        {
+            if (t.IsCompletedSuccessfully) { lock (gate) { stores.Remove(store); } }
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
 
     static void FailOnError(Task task, TaskCompletionSource failure) => _ = task.ContinueWith(t =>
     {
