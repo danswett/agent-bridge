@@ -252,7 +252,15 @@ internal sealed class SessionTracker
     {
         if (effective != SessionStatus.Working || lastEvent is not { } last) { return null; }
         var busy = background || _state.Tools.Current() is not null;
-        if (now - last < (busy ? _options.NotRespondingBusyAfter : _options.NotRespondingAfter)) { return null; }
+        var after = busy ? _options.NotRespondingBusyAfter : _options.NotRespondingAfter;
+        if (now - last < after) { return null; }
+        // A Claude delegate writes only its own transcript beside the session's, so the session's
+        // goes quiet while its delegate works: that counts as the session's own event.
+        if (Discovered.Agent == AgentKind.Claude && DelegatesWrote() is { } wrote && wrote > last)
+        {
+            last = wrote;
+            if (now - last < after) { return null; }
+        }
         var agent = Discovered.Agent;
         return new Attention
         {
@@ -265,6 +273,26 @@ internal sealed class SessionTracker
     }
 
     static DateTimeOffset? Later(DateTimeOffset? a, DateTimeOffset? b) => a is null ? b : b is null ? a : a > b ? a : b;
+
+    // When any of the session's Claude delegates last wrote its transcript (ClaudeSubagents' folder),
+    // read only once the session already looks stalled, and bounded as that reader is.
+    DateTimeOffset? DelegatesWrote()
+    {
+        if (Discovered.TranscriptPath is not { } transcript) { return null; }
+        var dir = Path.Combine(Path.GetDirectoryName(transcript) ?? "", Path.GetFileNameWithoutExtension(transcript), "subagents");
+        try
+        {
+            if (!Directory.Exists(dir)) { return null; }
+            DateTimeOffset? latest = null;
+            foreach (var file in Directory.EnumerateFiles(dir, "agent-*.jsonl").Take(ClaudeSubagents.MaxRecords))
+            {
+                var at = new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero);
+                if (latest is null || at > latest) { latest = at; }
+            }
+            return latest;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
 
     // Which prompt the session's userMessage is, for the driver (#489): its record where the parser
     // knows it, beside its words, so the same words sent again are another prompt.

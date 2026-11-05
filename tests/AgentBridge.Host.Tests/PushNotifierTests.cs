@@ -394,6 +394,56 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal(2, SignInsSent());
     }
 
+    // A notice still waiting for the relay when the host restarted never reached anyone: the next
+    // host makes it again rather than counting the hour from it.
+    [Fact]
+    public async Task A_sign_in_notice_lost_with_a_restart_before_it_went_is_made_again_at_once()
+    {
+        var signedOut = S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut };
+        Start(null, signedOut);
+        Subscribe(Phone);
+        sender.Connected = false;
+        await After(TimeSpan.Zero);
+        Assert.Equal(1, notifier.Pending);
+
+        await notifier.DisposeAsync();
+        sender.Connected = true;
+        Start();
+        await After(TimeSpan.Zero);
+        Assert.Equal(1, SignInsSent());
+    }
+
+    [Fact]
+    public async Task A_sign_in_notice_is_not_sent_to_the_next_device_once_the_sessions_are_signed_in_again()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        sender.Respond = _ =>
+        {
+            source.Upsert(S("s1", SessionStatus.Idle, response: "Answered.", turns: 2));
+            return new PushResult(201, null);
+        };
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        await After(TimeSpan.Zero);
+
+        Assert.Equal(1, SignInsSent());
+    }
+
+    // Its repeat due with no device left to tell made nothing, and woke the loop at once, forever.
+    [Fact]
+    public async Task A_sign_in_repeat_with_no_device_to_tell_does_not_spin_the_notifier()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        await After(TimeSpan.Zero);
+        notifier.Handle(Peer(Phone), Ops.PushUnsubscribe, default);
+
+        time.Advance(TimeSpan.FromMinutes(61));
+        Assert.Equal(Timeout.InfiniteTimeSpan, await notifier.PumpAsync());
+    }
+
     // D (#800 P0): Daily's own session at 09:52:24 PT on 2026-11-05, captured read-only from its
     // events.jsonl and redacted (tests/fixtures/copilot/signin-401.jsonl). The CLI wrote turn_end,
     // then session.error 9 ms later, and read between the two the session was idle with the previous

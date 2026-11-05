@@ -298,6 +298,8 @@ public sealed class PushNotifier : IAsyncDisposable
                         store.Put(new PushSubscriber(peer.Device, name, request.Endpoint, request.Keys.P256dh, request.Keys.Auth, request.App, time.GetUtcNow(), grant));
                     }
                     log($"push subscription from {name} ({peer.Device[..Math.Min(8, peer.Device.Length)]}, {new Uri(request.Endpoint).Host}); {store.Count} in all");
+                    // A sign-in notice held back for want of any device to tell goes to this one now.
+                    Signal();
                     return new PushSubscribeResult(true, store.Count);
                 }
             case Ops.PushUnsubscribe:
@@ -514,6 +516,7 @@ public sealed class PushNotifier : IAsyncDisposable
                 // still true.
                 // Nor while the session's turn ended in failure (#845), however it came back to
                 // the outbox: a retry, or a reconnect, after the attention began.
+                if (ready.Kind == NoticeKind.SignIn && !NeedSignIn().ContainsKey(ready.Session)) { continue; }
                 if (ready.Kind == NoticeKind.Finished && Failed(sessions.GetValueOrDefault(ready.Session)?.Last))
                 {
                     Unreplaced(sessions[ready.Session], now);
@@ -581,6 +584,13 @@ public sealed class PushNotifier : IAsyncDisposable
             if (o.Kind == NoticeKind.Question && o.Question is { } q) { shownOn[key] = q; }
             else { shownOn.Remove(key); }
             if (o.Kind == NoticeKind.Finished) { finishedSent[key] = time.GetUtcNow(); }
+            // The hourly repeat counts from a notice that reached a device, and only that is kept
+            // across a restart: one lost with the outbox is made again by the next host.
+            if (o.Kind == NoticeKind.SignIn && signInSent.ContainsKey(o.Session))
+            {
+                signInSent[o.Session] = time.GetUtcNow();
+                store.SignIn(o.Session, signInSent[o.Session]);
+            }
             log($"notified {sub.Name}: {o.Kind.ToString().ToLowerInvariant()} for {o.Session[..Math.Min(8, o.Session.Length)]}");
             return;
         }
@@ -620,7 +630,9 @@ public sealed class PushNotifier : IAsyncDisposable
     {
         var times = new List<DateTimeOffset>();
         times.AddRange(sessions.Values.Where(t => t.Due is not null).Select(t => t.Due!.At));
-        times.AddRange(signInSent.Values.Select(sent => sent + options.SignInRepeat));
+        // Not one already past (no device to tell; SignIns made nothing), which woke the loop at
+        // once, again and again.
+        times.AddRange(signInSent.Values.Select(sent => sent + options.SignInRepeat).Where(due => due > now));
         if (sender is { Connected: true } s && s != broken)
         {
             // A notice held back by the rate limit is ready only once the window has room:
@@ -706,7 +718,6 @@ public sealed class PushNotifier : IAsyncDisposable
             // With no device to tell, nothing has been said: the first to subscribe hears it.
             if (!store.All.Any(MayNotify)) { continue; }
             signInSent[key] = now;
-            store.SignIn(key, now);
             EnqueueSignIn(key, affected, now);
         }
     }

@@ -558,4 +558,32 @@ public class AttentionTests
         Assert.Equal((SessionStatus.Idle, (AttentionKind?)null), (idle.Status, idle.Attention?.Kind));
         Assert.Null((await Read(w, TimeSpan.FromHours(2))).Attention);
     }
+
+    // Claude's delegate writes only its own transcript beside the session's: the session's own goes
+    // quiet for as long as the delegate works, and that is no stall.
+    [Fact]
+    public async Task A_Claude_session_whose_delegate_is_still_writing_is_not_called_not_responding()
+    {
+        using var f = new Fixture();
+        await using var source = f.Source(stalledAfter: TimeSpan.FromMinutes(10));
+        const string claude = "c1a0de00-0000-4000-8000-000000000001";
+        var transcript = f.ClaudeTranscript(claude);
+        Fixture.Append(transcript, Claude.User("Review the PR", Now),
+            Claude.Assistant(Now, "tool_use", Claude.ToolUse("toolu_1", "Task", new System.Text.Json.Nodes.JsonObject { ["description"] = "review" })));
+        f.ClaudeSessionFile(700, claude);
+        f.Processes.Run(AgentKind.Claude, 700);
+        var delegates = Path.Combine(Path.GetDirectoryName(transcript)!, claude, "subagents");
+        Directory.CreateDirectory(delegates);
+        var own = Path.Combine(delegates, "agent-a1.jsonl");
+        File.WriteAllText(own, "{}\n");
+
+        f.Time.Advance(TimeSpan.FromMinutes(31));
+        File.SetLastWriteTimeUtc(own, f.Time.GetUtcNow().AddMinutes(-1).UtcDateTime);
+        await source.RefreshAsync();
+        Assert.Equal((SessionStatus.Working, (AttentionKind?)null), (source.Get(claude)!.Status, source.Get(claude)!.Attention?.Kind));
+
+        f.Time.Advance(TimeSpan.FromMinutes(30));
+        await source.RefreshAsync();
+        Assert.Equal(AttentionKind.NotResponding, source.Get(claude)!.Attention?.Kind);
+    }
 }
