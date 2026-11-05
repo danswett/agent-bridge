@@ -104,6 +104,8 @@ function readField(raw) {
     // Any JSON value. Views format it as text and never interpret it as markup.
     default: f.default === undefined ? null : f.default,
     required: f.required === true,
+    // The schema's constraints (#766), as sent: checked by the host, not yet by this app.
+    constraints: obj(f.constraints),
   };
 }
 

@@ -572,6 +572,7 @@ Free text, in `text` or `other`, is at most 4 KiB of UTF-8; the whole request is
 Free text of nothing but what shows as nothing (white space, control and format characters,
 default-ignorables such as U+3164, marks with no base; see `session.reply`) is empty, and
 `refused` as such.
+A field's `constraints` (below) are checked too: a value outside them is `refused`, with why.
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
 Result: `{ "outcome": "<outcome>", "reason": "<text>" }`, with `reason` present for
@@ -1311,6 +1312,34 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `allowOther` | bool? | `choice` and `multi` also accept free text |
 | `default` | any? | |
 | `required` | bool? | |
+| `constraints` | FieldConstraints? | What the agent's schema allows of the value (#766). Absent when it says nothing a host checks |
+
+### FieldConstraints
+
+A Copilot `ask_user` field's JSON Schema constraints, for the input it draws: bounds for a
+`number`, length, pattern and format for `text`, how many may be ticked for a `multi`. Copilot
+CLI checks none of them on that form and records whatever is typed, so a host checks the answer
+against them (`Answers.Check`, and again on what it would type) and `refused`s one outside
+them before any key. A client may check them first; one that cannot read them sends the answer
+and lets the host refuse it. Not strict: a reader that cannot read them reads the field without.
+
+| Field | Type | Notes |
+|---|---|---|
+| `minimum`, `maximum` | number? | Inclusive bounds |
+| `exclusiveMinimum`, `exclusiveMaximum` | number? | Exclusive bounds |
+| `multipleOf` | number? | Greater than 0 |
+| `integer` | bool? | The value is a whole number (the schema's `"type": "integer"`) |
+| `minLength`, `maxLength` | int? | In UTF-16 code units, as JavaScript counts them |
+| `pattern` | string? | An ECMAScript pattern, as `new RegExp(pattern)` reads it: no flags, unanchored. At most 1,024 characters |
+| `format` | string? | `email`, `uri`, `date` or `date-time`, checked as Copilot CLI does (`^[^\s@]+@[^\s@]+\.[^\s@]+$`; `^https?://.+`; `YYYY-MM-DD`; `YYYY-MM-DDTHH:MM` with optional seconds, milliseconds and offset), dates as real dates. Other formats are not carried |
+| `minItems`, `maxItems` | int? | How many options a `multi` takes |
+
+Numbers are compared exactly as written, never as doubles; a host carries only bounds a
+JavaScript client holds exactly. Text is checked unless it is blank (no answer), a host's on
+the text it would type, line breaks flattened. A field whose constraints a host cannot check
+exactly (a bound JavaScript would hold as another number, a length that is not a whole number,
+a pattern it cannot read as JavaScript does), or whose pre-filled default breaks them, makes
+its question `answerAtMachine`.
 
 ### Option
 

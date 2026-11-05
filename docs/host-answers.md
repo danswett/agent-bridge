@@ -74,6 +74,18 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     only a string that is plainly a JSON number is read so. Seen in a real session for a number field; a text field is
     assumed to open the same way. Claude's and Codex's prompts take no typed field values, so
     have no such field.
+  * A field's schema constraints (#766): Copilot CLI 1.0.105 draws `ask_user`'s form with
+    `enforceSchemaConstraints` off, so it checks none of them and records whatever is typed.
+    The host checks the answer before any key, on what it would type (text with its line breaks
+    flattened, a number as the plain decimal typed), and refuses one outside them: a number's
+    `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf` and `integer`
+    type, compared exactly; text's `minLength` and `maxLength` in UTF-16 units, `pattern` as
+    JavaScript reads it (with a 250 ms limit) and `format` `email`, `uri`, `date` and
+    `date-time` with the CLI's own checks; a checkbox list's `minItems` and `maxItems`. A
+    field whose constraints cannot be checked exactly (a bound JavaScript holds as another
+    number, a pattern .NET would read differently, which includes lookbehinds, named groups and
+    letter escapes such as `\a`), or whose pre-filled default breaks them, is answered at the
+    machine. A pattern that runs past its limit is refused the same way.
   * An option list whose `default` is present but is not one of its options, `null` included,
     opens on its Other box (`Dxn` in 1.0.105), where the walk from the top row ends a row off;
     it is refused, and shown to be answered at the machine. So are a checkbox list with no

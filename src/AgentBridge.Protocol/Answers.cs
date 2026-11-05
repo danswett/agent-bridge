@@ -38,7 +38,7 @@ public static class Answers
                 if (field.Required == true) { return $"\"{Label(field)}\" needs an answer"; }
                 continue;
             }
-            if (ValueProblem(field, value) is { } problem) { return $"\"{Label(field)}\": {problem}"; }
+            if ((ValueProblem(field, value) ?? field.Constraints?.Problem(field.Type, value)) is { } problem) { return $"\"{Label(field)}\": {problem}"; }
         }
         return given.Count == 0 ? "the answer is empty" : null;
     }

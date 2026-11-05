@@ -73,6 +73,16 @@ public static class ProtocolVectors
     static readonly Field Notes = new() { Name = "notes", Type = FieldType.Text };
     static readonly Field Count = new() { Name = "count", Type = FieldType.Number, Default = JsonSerializer.SerializeToElement(3) };
 
+    // A field's schema constraints (#766), each a number JavaScript holds exactly.
+    static JsonElement N(double n) => JsonSerializer.SerializeToElement(n);
+    static readonly Field Bounded = new() { Name = "runs", Title = "Runs", Type = FieldType.Number, Required = true, Constraints = new() { Minimum = N(2), Maximum = N(10), MultipleOf = N(2), Integer = true } };
+    static readonly Field Patterned = new() { Name = "ticket", Type = FieldType.Text, Constraints = new() { MinLength = 5, MaxLength = 12, Pattern = "^[A-Z]+-[0-9]+$" } };
+    static readonly Field Mail = new() { Name = "mail", Type = FieldType.Text, Constraints = new() { Format = "email" } };
+    static readonly Field Day = new() { Name = "day", Type = FieldType.Text, Constraints = new() { Format = "date" } };
+    static readonly Field Above = new() { Name = "above", Type = FieldType.Number, Constraints = new() { ExclusiveMinimum = N(0), ExclusiveMaximum = N(1) } };
+    static readonly Field Pair = new() { Name = "pair", Type = FieldType.Multi, Options = [new("host"), new("relay"), new("pwa")], Constraints = new() { MinItems = 2, MaxItems = 2 } };
+    static readonly Question Limited = new() { Id = "call_q4", Kind = QuestionKind.Form, Message = "Run it", Fields = [Bounded, Patterned, Mail, Day, Above, Pair], AskedAt = T0 };
+
     static readonly Question Form = new() { Id = "call_q1", Kind = QuestionKind.Form, Message = "Which spike next, and **why**?", Fields = [Spike, Parts, Confirm, Notes, Count], AskedAt = T0 };
     static readonly Question Plain = new() { Id = "call_q2", Kind = QuestionKind.Form, Message = "Which branch should I use?", AskedAt = T0 };
     static readonly Question Approval = new()
@@ -178,7 +188,16 @@ public static class ProtocolVectors
             .Valid("choice", Spike)
             .Valid("text", Notes)
             .Valid("number", Count)
+            .Valid("a-number-with-constraints", Bounded)
+            .Valid("text-with-constraints", Patterned)
+            .Valid("a-list-with-item-counts", Pair)
             .Reads("an-unknown-type-reads-as-text", """{"name":"when","type":"date"}""");
+        f.Record<FieldConstraints>(Host)
+            .Valid("number-bounds", Bounded.Constraints!)
+            .Valid("exclusive-bounds", Above.Constraints!)
+            .Valid("text-length-and-pattern", Patterned.Constraints!)
+            .Valid("a-format", Mail.Constraints!)
+            .Valid("item-counts", Pair.Constraints!);
         f.Record<Question>(Host)
             .Valid("form", Form)
             .Valid("plain", Plain)
@@ -267,6 +286,7 @@ public static class ProtocolVectors
 
         const string form = "a-form", plain = "a-plain-question", approval = "an-approval", many = "five-text-fields";
         f.Context(form, new { question = Form }).Context(plain, new { question = Plain }).Context(approval, new { question = Approval }).Context(many, new { question = ManyTexts })
+            .Context("a-form-with-constraints", new { question = Limited })
             .Context("a-truncated-question", new { question = Plain with { Truncated = true } })
             .Context("an-approval-answered-at-the-machine", new { question = Approval with { AnswerAtMachine = true } });
         // Each answers its context's question by that question's id, as a host requires before it
@@ -278,6 +298,9 @@ public static class ProtocolVectors
         };
         var good = new Dictionary<string, object?> { ["spike"] = "s6", ["parts"] = new[] { "host", "pwa" }, ["confirm"] = true, ["notes"] = "Run it on Linux too", ["count"] = 3 };
         Dictionary<string, object?> With(string name, object? value) => new(good) { [name] = value };
+        const string limited = "a-form-with-constraints";
+        var Within = new Dictionary<string, object?> { ["runs"] = 4, ["ticket"] = "ABC-12", ["mail"] = "someone@example.com", ["day"] = "2028-02-29", ["above"] = 0.5, ["pair"] = new[] { "host", "pwa" } };
+        Dictionary<string, object?> Inside(string name, object? value) => new(Within) { [name] = value };
         f.Record<AnswerRequest>(Client, VectorChecks.Answers)
             .Valid("every-field", Answer(form, good), form)
             .Valid("only-the-required-field", Answer(form, new() { ["spike"] = "s7" }), form)
@@ -318,7 +341,21 @@ public static class ProtocolVectors
             .Refused("a-number-as-text", Answer(form, With("count", "3")), form)
             .Refused("text-as-a-number", Answer(form, With("notes", 3)), form)
             .Refused("a-text-field-over-4-KiB", Answer(form, With("notes", Repeat('a', Limits.AnswerText + 1))), form)
-            .Refused("no-fields-for-a-form-without-required-ones", Answer(approval, new()), approval);
+            .Refused("no-fields-for-a-form-without-required-ones", Answer(approval, new()), approval)
+            // #766: a field's schema constraints, checked exactly.
+            .Valid("inside-every-constraint", Answer(limited, Within), limited)
+            .Refused("a-number-below-its-minimum", Answer(limited, Inside("runs", 0)), limited)
+            .Refused("a-number-above-its-maximum", Answer(limited, Inside("runs", 12)), limited)
+            .Refused("a-number-that-is-not-whole", Answer(limited, Inside("runs", 4.5)), limited)
+            .Refused("a-number-off-its-step", Answer(limited, Inside("runs", 7)), limited)
+            .Refused("a-number-at-its-exclusive-bound", Answer(limited, Inside("above", 0)), limited)
+            .Refused("text-shorter-than-its-minimum", Answer(limited, Inside("ticket", "AB-1")), limited)
+            .Refused("text-longer-than-its-maximum-in-utf16-units", Answer(limited, Inside("ticket", "ABCDEFGHI-1\U0001F600")), limited)
+            .Refused("text-off-its-pattern", Answer(limited, Inside("ticket", "ABC-12x")), limited)
+            .Refused("text-that-is-not-an-email-address", Answer(limited, Inside("mail", "someone@example")), limited)
+            .Refused("text-that-is-not-a-date", Answer(limited, Inside("day", "2026-02-30")), limited)
+            .Refused("too-few-ticked", Answer(limited, Inside("pair", new[] { "host" })), limited)
+            .Refused("too-many-ticked", Answer(limited, Inside("pair", new[] { "host", "relay", "pwa" })), limited);
         f.Record<AnswerResult>(Host)
             .Valid("delivered", new AnswerResult(AnswerOutcome.Delivered))
             .Valid("refused", new AnswerResult(AnswerOutcome.Refused, "\"Spike\" needs an answer"))

@@ -127,6 +127,8 @@ public static class CopilotPlanner
             case CopilotFieldKind.Text:
                 {
                     var words = InjectableText.Collapse(value.GetString() ?? "");
+                    // Checked as typed, line breaks flattened, which is what Copilot records (#766).
+                    if (!string.IsNullOrWhiteSpace(words) && field.Constraints?.TextProblem(words) is { } outside) { return (null, null, outside); }
                     return ([words], string.IsNullOrWhiteSpace(words) ? new Expected.Omitted() : new Expected.Words(words), null);
                 }
             case CopilotFieldKind.Number:
@@ -140,6 +142,7 @@ public static class CopilotPlanner
                     }
                     // Expected as the text typed, which is what the CLI records, so the verifier
                     // compares the same canonical number the keys produced.
+                    if (field.Constraints?.NumberProblem(typed) is { } outside) { return (null, null, outside); }
                     using var emitted = JsonDocument.Parse(typed);
                     return ([typed], new Expected.Number(emitted.RootElement.Clone()), null);
                 }
@@ -187,6 +190,7 @@ public static class CopilotPlanner
             wanted.Add(at);
         }
         if (wanted.Count == 0 && !field.AllowsEmpty) { return ([], null, "choose at least one option"); }
+        if (field.Constraints?.CountProblem(wanted.Count) is { } outside) { return ([], null, outside); }
         var top = string.Concat(Enumerable.Repeat(KeyPlan.Up, field.Options.Count - 1));
         var keys = new List<string>();
         var cursor = 0;

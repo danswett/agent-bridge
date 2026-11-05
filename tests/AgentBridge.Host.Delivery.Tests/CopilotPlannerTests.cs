@@ -159,14 +159,160 @@ public class CopilotPlannerTests
         Assert.Contains("pre-filled default", Refusal(PickAndDays, Answer(new { pick = "a" })));
     }
 
+    // #766: Copilot CLI 1.0.105 checks none of a form field's constraints on ask_user, and records
+    // whatever is typed, so the host checks them, on what it would type, before any key.
+    static string Schema(string name, string property) =>
+        $$"""{ "message": "m", "requestedSchema": { "properties": { "{{name}}": {{property}} } } }""";
+
+    // Refused by the shared check a client also runs, and again by the host's own plan.
+    static string Outside(string arguments, AnswerRequest answer)
+    {
+        var (form, question) = Ask(arguments);
+        var problem = Answers.Check(question, answer);
+        Assert.NotNull(problem);
+        var (plan, planned) = CopilotPlanner.Plan(form, answer);
+        Assert.Null(plan);
+        Assert.EndsWith(planned!, problem);
+        return problem!;
+    }
+
+    const string Count = """{ "type": "integer", "minimum": 2, "maximum": 10, "multipleOf": 2 }""";
+
+    [Theory]
+    [InlineData("""{ "n": 1 }""", "\"n\": must be at least 2")]
+    [InlineData("""{ "n": 12 }""", "\"n\": must be at most 10")]
+    [InlineData("""{ "n": 4.5 }""", "\"n\": must be a whole number")]
+    [InlineData("""{ "n": 5 }""", "\"n\": must be a multiple of 2")]
+    public void A_number_outside_its_bounds_not_whole_or_off_its_step_is_refused_before_any_key(string answer, string why)
+    {
+        Assert.Equal(why, Outside(Schema("n", Count), Answer(Raw(answer))));
+    }
+
+    [Fact]
+    public void A_number_inside_its_constraints_is_typed_as_before()
+    {
+        Assert.Equal([("10", true)], Keys(Plan(Schema("n", Count), Answer(Raw("""{ "n": 10 }""")))));
+        Assert.Equal([("0.3", true)], Keys(Plan(Schema("x", """{ "type": "number", "exclusiveMinimum": 0, "multipleOf": 0.1 }"""), Answer(Raw("""{ "x": 0.3 }""")))));
+    }
+
+    [Fact]
+    public void Number_constraints_are_compared_exactly_never_as_doubles()
+    {
+        // As doubles 0.3 % 0.1 is not 0, and 0.30000000000000004 > 0.3 is easy to miss.
+        Assert.Equal("\"x\": must be at most 0.3", Outside(Schema("x", """{ "type": "number", "maximum": 0.3 }"""), Answer(Raw("""{ "x": 0.30000000000000004 }"""))));
+        Assert.Equal("\"x\": must be more than 0", Outside(Schema("x", """{ "type": "number", "exclusiveMinimum": 0 }"""), Answer(Raw("""{ "x": 0 }"""))));
+        Assert.Equal("\"x\": must be less than 1e2", Outside(Schema("x", """{ "type": "number", "exclusiveMaximum": 1e2 }"""), Answer(Raw("""{ "x": 100.0 }"""))));
+    }
+
+    [Theory]
+    [InlineData("""{ "type": "string", "minLength": 3 }""", "ab", "\"t\": must be at least 3 characters")]
+    [InlineData("""{ "type": "string", "maxLength": 3 }""", "abcd", "\"t\": must be at most 3 characters")]
+    [InlineData("""{ "type": "string", "pattern": "^[A-Z]{3}-[0-9]+$" }""", "ABC-x", "\"t\": does not match the form the question asks for")]
+    [InlineData("""{ "type": "string", "format": "email" }""", "someone@example", "\"t\": must be an email address")]
+    [InlineData("""{ "type": "string", "format": "uri" }""", "ftp://example.com", "\"t\": must be a URL starting http:// or https://")]
+    [InlineData("""{ "type": "string", "format": "date" }""", "2026-02-30", "\"t\": must be a date, as YYYY-MM-DD")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04 19:30", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
+    public void Text_outside_its_length_pattern_or_format_is_refused_before_any_key(string property, string text, string why)
+    {
+        Assert.Equal(why, Outside(Schema("t", property), Answer(new { t = text })));
+    }
+
+    [Theory]
+    [InlineData("""{ "type": "string", "minLength": 3, "maxLength": 3 }""", "abc")]
+    [InlineData("""{ "type": "string", "pattern": "^[A-Z]{3}-[0-9]+$" }""", "ABC-42")]
+    [InlineData("""{ "type": "string", "format": "email" }""", "someone@example.com")]
+    [InlineData("""{ "type": "string", "format": "uri" }""", "https://example.com/a")]
+    [InlineData("""{ "type": "string", "format": "date" }""", "2028-02-29")]
+    [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:30:05.123-08:00")]
+    // The CLI knows four formats and ignores the rest; so does the host.
+    [InlineData("""{ "type": "string", "format": "hostname" }""", "not a host name")]
+    public void Text_inside_its_constraints_is_typed_as_before(string property, string text)
+    {
+        Assert.Equal([(text, true)], Keys(Plan(Schema("t", property), Answer(new { t = text }))));
+    }
+
+    [Fact]
+    public void Lengths_count_UTF16_code_units_as_JavaScript_does()
+    {
+        Assert.Equal("\"t\": must be at most 1 characters", Outside(Schema("t", """{ "type": "string", "maxLength": 1 }"""), Answer(new { t = "\U0001F600" })));
+    }
+
+    [Fact]
+    public void A_pattern_is_read_as_JavaScript_reads_it_not_as_dotnet_does()
+    {
+        // JavaScript's \s takes a no-break space, where .NET's ECMAScript mode does not.
+        Outside(Schema("t", """{ "type": "string", "pattern": "^\\S+$" }"""), Answer(new { t = "a\u00A0b" }));
+        // And its $ is the end, never the place before a final line break.
+        var (_, question) = Ask(Schema("t", """{ "type": "string", "pattern": "^abc$" }"""));
+        Assert.NotNull(Answers.Check(question, Answer(new { t = "abc\n" })));
+    }
+
+    [Fact]
+    public void Text_is_checked_as_it_would_be_typed_with_its_line_breaks_flattened()
+    {
+        // The line break passes a pattern that refuses spaces; the space it is typed as does not.
+        var arguments = Schema("t", """{ "type": "string", "pattern": "^[^ ]+$" }""");
+        var (form, question) = Ask(arguments);
+        Assert.Null(Answers.Check(question, Answer(new { t = "a\nb" })));
+        Assert.Equal("\"t\": does not match the form the question asks for", CopilotPlanner.Plan(form, Answer(new { t = "a\nb" })).Problem);
+    }
+
+    [Fact]
+    public void A_checkbox_list_ticked_outside_its_item_counts_is_refused_before_any_key()
+    {
+        var arguments = Schema("l", """{ "type": "array", "minItems": 2, "maxItems": 2, "items": { "enum": ["a", "b", "c"] } }""");
+        Assert.Equal("\"l\": choose at least 2", Outside(arguments, Answer(new { l = new[] { "a" } })));
+        Assert.Equal("\"l\": choose at most 2", Outside(arguments, Answer(new { l = new[] { "a", "b", "c" } })));
+        Assert.Equal(2, Keys(Plan(arguments, Answer(new { l = new[] { "a", "c" } }))).Count);
+    }
+
+    [Theory]
+    // A bound JavaScript would hold as another number, or none at all.
+    [InlineData("""{ "type": "integer", "maximum": 9007199254740993 }""")]
+    [InlineData("""{ "type": "number", "minimum": "1" }""")]
+    [InlineData("""{ "type": "number", "multipleOf": 0 }""")]
+    [InlineData("""{ "type": "string", "maxLength": 1.5 }""")]
+    [InlineData("""{ "type": "string", "minLength": -1 }""")]
+    [InlineData("""{ "type": "array", "maxItems": "2", "items": { "enum": ["a"] } }""")]
+    // Patterns .NET would read otherwise: a lookbehind, an escape that is a letter in JavaScript,
+    // class subtraction, JavaScript's empty class, and one that does not compile at all.
+    [InlineData("""{ "type": "string", "pattern": "(?<=a)b" }""")]
+    [InlineData("""{ "type": "string", "pattern": "^\\a$" }""")]
+    [InlineData("""{ "type": "string", "pattern": "[a-z-[aeiou]]" }""")]
+    [InlineData("""{ "type": "string", "pattern": "[]" }""")]
+    [InlineData("""{ "type": "string", "pattern": "(" }""")]
+    [InlineData("""{ "type": "string", "format": 5 }""")]
+    // A default outside the field's own constraints, which is the only answer it can be given.
+    [InlineData("""{ "type": "integer", "minimum": 5, "default": 3 }""")]
+    [InlineData("""{ "type": "string", "maxLength": 2, "default": "none" }""")]
+    public void A_field_whose_constraints_cannot_be_checked_exactly_or_whose_default_breaks_them_is_answered_at_the_machine(string property)
+    {
+        using var doc = JsonDocument.Parse(Schema("f", property));
+        Assert.True(QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0).AnswerAtMachine);
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+        Assert.Null(form);
+        Assert.EndsWith("; answer it at the machine", problem);
+    }
+
+    [Fact]
+    public void A_question_carries_its_fields_constraints_so_a_client_can_check_them_first()
+    {
+        var (_, question) = Ask(Schema("n", Count));
+        var limits = Assert.Single(question.Fields).Constraints!;
+        Assert.Equal("""{"minimum":2,"maximum":10,"multipleOf":2,"integer":true}""", JsonSerializer.Serialize(limits, ProtocolJson.Options));
+        Assert.Null(Ask(Schema("t", """{ "type": "string", "format": "hostname" }""")).Question.Fields[0].Constraints);
+    }
     // Fields as JSON text, so a number keeps the spelling it was given.
     static JsonElement Raw(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
     [Fact]
     public void A_number_that_only_rounds_to_the_default_is_not_the_default()
     {
-        Assert.Contains("pre-filled default", Refusal(Days, Answer(Raw("""{ "days": 3.0000000000000000000000000000001 }"""))));
-        Assert.Contains("pre-filled default", Refusal(Days, Answer(Raw("""{ "days": 3e-29 }"""))));
+        // A number field, not Days's integer one, which the shared check refuses first for not being whole.
+        const string Amount = """{ "message": "m", "requestedSchema": { "properties": { "days": { "type": "number", "default": 3 } } } }""";
+        Assert.Contains("pre-filled default", Refusal(Amount, Answer(Raw("""{ "days": 3.0000000000000000000000000000001 }"""))));
+        Assert.Contains("pre-filled default", Refusal(Amount, Answer(Raw("""{ "days": 3e-29 }"""))));
+        Assert.Equal("\"days\": must be a whole number", Answers.Check(Ask(Days).Question, Answer(Raw("""{ "days": 3e-29 }"""))));
     }
 
     [Theory]
@@ -386,7 +532,11 @@ public class CopilotPlannerTests
         const string AtLeastOne = """{ "message": "m", "requestedSchema": { "properties": { "many": { "type": "array", "minItems": 1, "items": { "enum": ["a", "b"] } } } } }""";
 
         Assert.Equal([(U, true)], Keys(Plan(AnyOrNone, Answer(new { many = Array.Empty<string>() }))));
-        Assert.Contains("at least one", Refusal(AtLeastOne, Answer(new { many = Array.Empty<string>() })));
+        // minItems is now a constraint a client checks too (#766); the plan still refuses on its own.
+        var (form, question) = Ask(AtLeastOne);
+        var none = Answer(new { many = Array.Empty<string>() });
+        Assert.Equal("\"many\": choose at least 1", Answers.Check(question, none));
+        Assert.Contains("at least one", CopilotPlanner.Plan(form, none).Problem);
     }
 
     [Fact]

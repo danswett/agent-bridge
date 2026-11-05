@@ -168,7 +168,8 @@ internal static class QuestionMapper
             catch (JsonException) { return true; }
         }
         if (Json.Obj(schema, "properties") is not { } properties) { return true; }
-        return properties.EnumerateObject().All(p => p.Value.ValueKind != JsonValueKind.Object || CopilotFieldSchema.Read(p.Value).Problem is null);
+        return properties.EnumerateObject().All(p => p.Value.ValueKind != JsonValueKind.Object
+            || (CopilotFieldSchema.Read(p.Value).Problem is null && CopilotFieldConstraints.Read(p.Value).Problem is null));
     }
 
     // Each field as the input Copilot CLI draws for it (CopilotFieldSchema), which is not
@@ -197,6 +198,7 @@ internal static class QuestionMapper
             Options = options,
             Default = Json.Get(p, "default") is { } d ? Json.Detach(d) : null,
             Required = required ? true : null,
+            Constraints = CopilotFieldConstraints.Read(p).Constraints,
         };
     }
 

@@ -36,6 +36,14 @@ public static class KnownDifferences
         "LaunchRequest/a-transfer-without-a-command", "LaunchRequest/a-transfer-with-a-malformed-command",
     ];
 
+    // #766: the PWA carries a field's constraints but does not check them yet; the host does.
+    static readonly string[] Constraints =
+    [
+        "a-number-below-its-minimum", "a-number-above-its-maximum", "a-number-that-is-not-whole", "a-number-off-its-step",
+        "a-number-at-its-exclusive-bound", "text-shorter-than-its-minimum", "text-longer-than-its-maximum-in-utf16-units", "text-off-its-pattern",
+        "text-that-is-not-an-email-address", "text-that-is-not-a-date", "too-few-ticked", "too-many-ticked",
+    ];
+
     public static readonly IReadOnlyList<KnownDifference> All =
     [
         .. StrictFields.Select(v => new KnownDifference(v, 446, "pwa", "read",
@@ -50,5 +58,8 @@ public static class KnownDifferences
         .. UncheckedTransfer.Select(v => new KnownDifference(v, 447, "pwa", "check",
             "LaunchProtocol.Check refuses it with TransferProtocol.Check's reason",
             "checkLaunch takes it")),
+        .. Constraints.Select(v => new KnownDifference($"AnswerRequest/{v}", 766, "pwa", "check",
+            "Answers.Check refuses it: outside the field's constraints",
+            "checkAnswer takes it: it does not check constraints yet")),
     ];
 }

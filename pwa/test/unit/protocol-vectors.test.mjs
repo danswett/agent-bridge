@@ -143,6 +143,7 @@ const READS = {
   ToolCall: { read: readTool },
   Option: { read: (j) => readQuestion({ fields: [{ name: 'f', type: 'choice', options: [j] }] }).fields[0].options[0] ?? null },
   Field: { read: (j) => readQuestion({ fields: [j] }).fields[0] ?? null },
+  FieldConstraints: { read: (j) => readQuestion({ fields: [{ name: 'f', type: 'number', constraints: j }] }).fields[0].constraints },
   Question: { read: readQuestion },
   Background: { read: readBackground },
   ActivitySource: { read: readSource },
