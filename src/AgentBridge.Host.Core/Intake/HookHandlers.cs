@@ -22,7 +22,7 @@ namespace AgentBridge.Host.Core.Intake;
 // agent-ha-bridge wrote the Codex approval marker only after reaching Home Assistant, because
 // only its card could answer one. Here a client of this host answers it, so it is written for
 // every approval Codex asks for.
-internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProcessInspector processes, TimeProvider time)
+internal sealed partial class HookHandlers(string runtimeRoot, string claudeHome, IProcessInspector processes, TimeProvider time)
 {
     public string ClaudeRoot { get; } = Path.Combine(runtimeRoot, SpoolContract.ClaudeFolder);
     public string CodexRoot { get; } = Path.Combine(runtimeRoot, SpoolContract.CodexFolder);
@@ -565,8 +565,21 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
             // A repeated or unknown key is something else in what runs.
             if (!CommandKeys.Contains(p.Name) || !names.Add(p.Name)) { return null; }
         }
+        // A description is the agent's words, except where Codex writes its own: a network approval
+        // comes as Bash with `description: "network-access <target>"`
+        // (PermissionRequestPayload::bash(cmd, Some(format!("network-access {target}")))), and the
+        // person approves access to that target, which a card showing the command alone hid (#338).
+        if (input.TryGetProperty("description", out var d) && (d.ValueKind != JsonValueKind.String || NetworkAccess(d.GetString()!))) { return null; }
         return input.TryGetProperty("command", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
     }
+
+    // "network-access ..." however Codex or an older or newer build may write it: any case, any
+    // leading space, a hyphen, an underscore or a space between the words, then anything or nothing.
+    internal static bool NetworkAccess(string description) =>
+        NetworkAccessPrefix().IsMatch(description);
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^\s*network[-_\s]?access(?:\s|:|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex NetworkAccessPrefix();
 
     static string Cut(string text, int max) => text.Length > max ? text[..(max - 3)] + "..." : text;
 

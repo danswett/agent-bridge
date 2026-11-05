@@ -355,7 +355,9 @@ The files and their shapes are agent-ha-bridge's:
   `CommandCut` true past that (#209). `Command` is recorded only for the `Bash`, `shell` or
   `apply_patch` tool whose `tool_input` holds `command` and nothing else but `description`: the hook
   fires for MCP tools too, whose other arguments (a `host`) decide what runs, so such an approval
-  records no `Command` and is answered at the machine (#338). `Question` stays the 300-character activity line
+  records no `Command` and is answered at the machine (#338). So is a network approval, which Codex
+  sends as `Bash` with its own `description` `network-access <target>` (any case or spacing): what
+  is approved is the target, which the command does not show. `Question` stays the 300-character activity line
   agent-ha-bridge's reader expects; a client is shown `Command`, fenced. A marker without
   `Command` (agent-ha-bridge's hook, or this host before #209) is shown as its preview and
   marked `truncated`, so it is answered at the machine.
