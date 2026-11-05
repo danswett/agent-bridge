@@ -85,6 +85,16 @@ async function signIn(page) {
 const card = (page, id) => view(page, id);
 const subscribes = () => host.log.filter((op) => op === 'sessions.subscribe').length;
 
+// Neither a ring on what has focus nor one around the session's header (A12, #373).
+async function expectNoRing(v) {
+  const outline = await v.page().evaluate(() => {
+    const s = getComputedStyle(document.activeElement);
+    return s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) >= 1;
+  });
+  expect(outline, 'a ring on what has focus').toBe(false);
+  expect(await v.locator('.session-header').evaluate((e) => getComputedStyle(e).boxShadow), 'a ring around the header').toBe('none');
+}
+
 test('a signed-in phone sees a machine\'s live sessions over an end-to-end channel', async ({ page, context }) => {
   const violations = [];
   await page.exposeFunction('cspViolation', (v) => violations.push(v));
@@ -368,6 +378,9 @@ test.describe('notifications', () => {
     await expect(card(page, 'linked-1').locator('.question-message .md-copy')).toHaveCount(1);
     await expect(card(page, 'linked-1').locator('.question-slot button:not(.md-copy)').first()).toBeFocused();
     expect(new URL(page.url()).search).toBe('');
+    // Focus is on its answers for a screen reader, with no ring drawn on them, or around the
+    // session's header (A12, #373): nothing a key moved.
+    await expectNoRing(card(page, 'linked-1'));
 
     // At two panes, where Tools is a tab: one left on Tools still opens on its question.
     await page.setViewportSize({ width: 900, height: 800 });
@@ -383,6 +396,8 @@ test.describe('notifications', () => {
     await expect(card(page, 'linked-2')).toHaveClass(/linked/);
     await expect(card(page, 'linked-2').locator('.question-slot button:not(.md-copy)').first()).toBeFocused();
     await expect(page.locator('#search')).toHaveValue('');
+    // Though keys were pressed (the search), what the tap brought draws no ring.
+    await expectNoRing(card(page, 'linked-2'));
   });
 
   // A notification's session, opened while its machine's list is not yet whole (#269).

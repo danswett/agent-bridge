@@ -435,6 +435,8 @@ export class SessionsPage {
     card.setTab('conversation');
     this.#choose(card);
     for (const el of [card.element, card.view]) {
+      // Marked for a moment, and drawn as nothing: a ring around its header or its row looked
+      // like focus the person never moved (A12, #373).
       el.classList.add('linked');
       setTimeout(() => el.classList.remove('linked'), 4000);
     }
@@ -445,6 +447,7 @@ export class SessionsPage {
     if (this.$('list-pane')?.getClientRects().length) { this.#laneGuard?.arm(); }
     card.element.scrollIntoView({ block: 'nearest', behavior });
     card.els.titleText.tabIndex = -1;
+    // Focus lands for a screen reader; js/ui/focus.js draws a ring only if a key brought it (A12).
     card.els.titleText.focus({ preventScroll: true });
     // A question it was opened for is in sight, however far its conversation was scrolled.
     card.revealQuestion(behavior);
