@@ -1,4 +1,4 @@
-# Agent Bridge: from Home Assistant add-on to a standalone product
+# Slipgates: from Home Assistant add-on to a standalone product
 
 *Plan and design. Drafted 2026-10-27 (PT) against `danswett/agent-ha-bridge` at
 `5e59309` (1.33.30+).*
@@ -8,6 +8,14 @@
 > next live in [status.md](status.md). The "Progress (2026-10-28)" part of §10 is a
 > historical snapshot; status.md supersedes it. Decisions made after 2026-10-29 are
 > recorded in status.md's decision log until they are folded into the sections here.
+>
+> **The name.** The product was renamed from Agent Bridge to Slipgates on 2026-11-03
+> ([brand.md](design/brand.md)). This page uses the new name for the product and its parts.
+> Code identifiers, commands, paths, the repository slug and other legacy names keep their
+> names until Phase 3, #541 ([brand.md §3.3](design/brand.md#33-never-renamed-by-the-brand)).
+> The protocol's name, Bridge Protocol v1, is also a legacy name kept until Phase 3 (§4). The
+> "Agent Bridge" OAuth app and "Agent Bridge (dev)" GitHub App keep the names GitHub shows,
+> and change here when the owner renames the Apps.
 
 ## 0. Summary
 
@@ -24,9 +32,9 @@ home lab.
 | Desktop UI | **Native on each platform, equal standing:** **WinUI 3** on Windows (Windows App SDK 2.x, .NET 10, unpackaged) and **SwiftUI** on macOS (decided 2026-10-27). Both are thin shells over the same host and protocol, and carry no product logic of their own. Linux runs the host only (§3.3) |
 | Cross-platform rule | **Nothing depends on Windows.** One shared host binary (.NET), Go hook, relay, protocol and all product logic on Windows, macOS and Linux. Only the UI shell and the OS adapters (console injection vs tmux, TPM vs Secure Enclave, toasts vs UserNotifications, scheduled task vs LaunchAgent) differ per platform, behind one interface each |
 | Install/update | **Velopack** (Windows and macOS) from GitHub Releases of a **new** `danswett/agent-bridge` repository (never `agent-ha-bridge`'s release feed, see G2). The app installs and manages the bridge on both. macOS builds are Developer ID signed and notarized (§5.7) |
-| Daemon | **Rewrite in C#** (.NET 10) as **Bridge Host**, one per machine (Windows and macOS), headless |
+| Daemon | **Rewrite in C#** (.NET 10) as **the Slipgates host**, one per machine (Windows and macOS), headless |
 | Hooks | Keep the Go `agent-bridge-hook` and its spool contract unchanged. Only its fallback target changes |
-| Machine-to-machine and phone connectivity | **Agent Bridge Relay**: an **untrusted**, end-to-end-encrypted (E2E) rendezvous and relay, **Azure-native and built for massive scale and low latency** (§5.8: account-homed routing across AKS nodes, anycast global load balancer, regions added as stamps, direct WebRTC/LAN paths that upgrade in place). It is also self-hostable as one container, and there is a relay-free LAN-only mode |
+| Machine-to-machine and phone connectivity | **The Slipgates relay**: an **untrusted**, end-to-end-encrypted (E2E) rendezvous and relay, **Azure-native and built for massive scale and low latency** (§5.8: account-homed routing across AKS nodes, anycast global load balancer, regions added as stamps, direct WebRTC/LAN paths that upgrade in place). It is also self-hostable as one container, and there is a relay-free LAN-only mode |
 | Identity | **Sign in with GitHub** (an OAuth app owned by `danswett`) scopes the account. **Per-device keys**, approved on an existing device with a matching code, carry the actual trust |
 | Phone | **PWA** first, served from GitHub Pages (not the relay; see §8), with Web Push. Native iOS/Android later on the same protocol and push gateway |
 | Home Assistant | Optional **connector** plug-in: status entities and actionable notifications. The dashboard and its publication machinery are retired |
@@ -126,8 +134,8 @@ Two side effects are worth stating plainly:
  │        │ hooks (Go, unchanged)          │        │        │ hooks                │
  │        ▼ spool (files)                  │        │        ▼                      │
  │  ┌─────────────────────┐  named pipe    │        │  ┌───────────────┐            │
- │  │  Bridge Host (C#)   │◄──────────────┐│        │  │ Bridge Host   │            │
- │  │  daemon rewrite     │               ││        │  │ (C#, headless)│            │
+ │  │  Slipgates host     │◄──────────────┐│        │  │ Slipgates host│            │
+ │  │  (C#) daemon rewrite│               ││        │  │ (C#, headless)│            │
  │  │  + connectors (HA)  │   ┌──────────┐││        │  └──────┬────────┘            │
  │  └──────┬──────────────┘   │ WinUI 3  │││        └─────────┼─────────────────────┘
  │         │ secure channel   │   app    ├┘│                  │
@@ -141,7 +149,7 @@ Two side effects are worth stating plainly:
            │  WSS :443 (outbound only, E2E ciphertext)        │
            ▼                       ▼                          ▼
      ┌───────────────────────────────────────────────────────────────┐
-     │  Agent Bridge Relay (untrusted)                               │
+     │  Slipgates relay (untrusted)                                  │
      │  GitHub sign-in · device directory (signed roster) · frame    │
      │  relay · push gateway (Web Push now; APNs/FCM later). Serves  │
      │  no app code: the PWA comes from GitHub Pages (§8)            │
@@ -157,8 +165,8 @@ Two side effects are worth stating plainly:
 | Component | Runs where | Responsibility |
 |---|---|---|
 | **agent-bridge-hook** (Go) | Inside each agent's hook call | Unchanged: stdin → spool file → immediate reply, about 21 ms. Fallback when the host is down becomes `agent-bridge-host hook --fallback` (NativeAOT, fast start) instead of the PowerShell script |
-| **Bridge Host** (C#, .NET 10) | One per machine, per user, at logon. Windows: `WinExe`, no console, scheduled task. macOS: background-only signed `.app`, LaunchAgent. Linux: systemd user service | Everything the daemon does today: spool intake, discovery, transcript tailing, activity, decisions, replies and injection, launch/stop/resume, usage, worktree isolation and reclaim, transfers, self-maintenance. Also the protocol server (pipe or Unix socket, LAN, relay) and the connectors. **All product logic lives here**, so every client behaves the same |
-| **Agent Bridge app**: WinUI 3 (Windows) and SwiftUI (macOS) | Per user, one per desktop OS | UI, tray or menu-bar icon, notifications with typed answers, installer/manager for the host and agent hooks, pairing UX. A thin client of Bridge Protocol v1 over the local socket: it renders protocol state and sends commands, and holds no product rules, so the two apps cannot drift. Both are held to one feature list (§7.1) and one set of protocol contract tests. **Optional at run time**: closing it never stops the bridge |
+| **Slipgates host** (C#, .NET 10) | One per machine, per user, at logon. Windows: `WinExe`, no console, scheduled task. macOS: background-only signed `.app`, LaunchAgent. Linux: systemd user service | Everything the daemon does today: spool intake, discovery, transcript tailing, activity, decisions, replies and injection, launch/stop/resume, usage, worktree isolation and reclaim, transfers, self-maintenance. Also the protocol server (pipe or Unix socket, LAN, relay) and the connectors. **All product logic lives here**, so every client behaves the same |
+| **Slipgates app**: WinUI 3 (Windows) and SwiftUI (macOS) | Per user, one per desktop OS | UI, tray or menu-bar icon, notifications with typed answers, installer/manager for the host and agent hooks, pairing UX. A thin client of Bridge Protocol v1 over the local socket: it renders protocol state and sends commands, and holds no product rules, so the two apps cannot drift. Both are held to one feature list (§7.1) and one set of protocol contract tests. **Optional at run time**: closing it never stops the bridge |
 | **Relay** (ASP.NET Core) | Cloud, run by the project; self-host container available | Account sign-in, signed device directory, opaque frame forwarding, push gateway. Serves no app code. Holds no keys capable of reading content |
 | **PWA** | Phone/browser, served from GitHub Pages, never from the relay (§8) | Session list/cards, answer, reply, launch, Web Push |
 | **MCP server** (Node, existing) | Launched by MCP clients | Re-targeted from HA REST to the **local host pipe** with a scoped agent token. Tool names stay, with an alias for `ask_via_home_assistant` |
@@ -193,6 +201,8 @@ A scheduled task at logon (Windows), a LaunchAgent (macOS) or a systemd user ser
 ---
 
 ## 4. Bridge Protocol v1
+
+This is Slipgates' protocol. Bridge Protocol v1 is its legacy name, kept until Phase 3 (#541).
 
 A single protocol is used by app↔host, phone↔host and host↔host traffic, on every
 transport. It replaces MQTT discovery, retained topics, `/api/states` polling,
@@ -476,7 +486,8 @@ commands between device identities, which fixes the documented gap that "any hol
 can request anything any machine offers".
 
 **Spike S4 result (2026-10-27, `danswett/agent-bridge#4`): GO, live.** The relay
-proxies GitHub's device flow through the "Agent Bridge (dev)" **GitHub App** and keeps
+proxies GitHub's device flow through the "Agent Bridge (dev)" **GitHub App** (its display
+name becomes "Slipgates (dev)" in the App's settings, #539; its client id stays) and keeps
 no GitHub credential; it issues its own signed account token. A device joins by
 proving possession of its static key with an HMAC keyed by ECDH against a relay
 ephemeral, which works for ECDH-only WebCrypto and TPM keys. **Device id = SHA-256 of
@@ -806,7 +817,7 @@ anywhere in it.
 - Push failure rate.
 - Direct-upgrade success rate.
 
-Alerts reach the operator as notifications in the Agent Bridge apps (dogfooding the push
+Alerts reach the operator as notifications in the Slipgates apps (dogfooding the push
 path), with email as the fallback.
 
 **Where to watch it: built into the native apps.** The WinUI 3 and SwiftUI apps get an
@@ -839,7 +850,7 @@ the label-allowlist and log-hygiene tests.
 
 ---
 
-## 6. Bridge Host: the daemon rewrite
+## 6. The Slipgates host: the daemon rewrite
 
 ### 6.1 Module map
 
@@ -951,7 +962,7 @@ goes through one `StartWindowless` helper, which ports the
 
 ---
 
-## 7. Agent Bridge apps (WinUI 3 on Windows, SwiftUI on macOS)
+## 7. Slipgates apps (WinUI 3 on Windows, SwiftUI on macOS)
 
 Both apps have every page and feature below; neither is the "main" one. Platform
 idiom differs (Windows: tray icon, toasts, Fluent; macOS: menu-bar item, UserNotifications,

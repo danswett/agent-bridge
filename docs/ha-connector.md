@@ -692,8 +692,8 @@ be established; a check that found nothing newer; completed) and the busy notice
 What is checked and installed is **this host's own product** (design G2): the app's package,
 which carries the host (`IHostUpdates`, Velopack on Windows, [app-windows.md](app-windows.md)),
 with the app's feed (GitHub releases of `danswett/agent-bridge`, or the app's `feed.txt`) and
-its "Include pre-releases" setting. `latest_version` on a migrated machine is therefore an
-agent-bridge version, never agent-ha-bridge's. A copy its updater did not install (a build
+its "Include pre-releases" setting. `latest_version` on a migrated machine is therefore a
+Slipgates version, never agent-ha-bridge's. A copy its updater did not install (a build
 folder, or a platform it does not package yet) serves no buttons and reports its own version as
 current, as stage 1 did; so does a host with `homeAssistant.updates.checkForUpdates` off, which
 looks nothing up, and a read-only host (`delivery.readOnly`), which acts on nothing from another
@@ -1205,7 +1205,7 @@ for retained state, and `config/entity_registry/list` for ids:
 1. Daemon → host: the machine row stays (online, session count, version, `(dev)`); each card
    keeps rendering status, activity, the reply text, the trail, compactions and background
    counts; Detailed activity toggles reasoning; usage rows stay; no `_2` ids; the update row
-   shows agent-bridge's version and its Install and Check buttons work; a question is answered
+   shows the Slipgates version and its Install and Check buttons work; a question is answered
    from the card, on a phone-sized browser too.
 2. A session ending: it leaves the list, the writer drops its card, and only then do its
    entities go; all 29 topics are empty.

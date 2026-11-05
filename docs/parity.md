@@ -1,6 +1,6 @@
 # Parity with agent-ha-bridge
 
-What agent-ha-bridge does that a person can see or rely on, and whether agent-bridge does it
+What agent-ha-bridge does that a person can see or rely on, and whether Slipgates does it
 too, with the evidence. This is the audit the migration plan starts from (design doc §10,
 "Path to migration", stage 0). A machine leaves agent-ha-bridge's PowerShell daemon only
 when the rows that matter to it are `Verified`, or `Intentionally different` for a stated
