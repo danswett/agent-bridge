@@ -14435,7 +14435,9 @@
           }
         },
         "conflicted": [],
-        "heads": [],
+        "heads": [
+          "n7"
+        ],
         "quarantined": [],
         "evidence": [],
         "serving": [
