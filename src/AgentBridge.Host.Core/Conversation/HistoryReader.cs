@@ -474,7 +474,16 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 into.Record(Attachments.Base64Url(TurnIds.Raw(line.Span)));
                 if (!Decoding(() => dialect.Apply(doc.RootElement, at ?? DateTimeOffset.UnixEpoch, into, context))) { turn.Truncated = true; }
                 return true;
-            }, aligned: from == s.End);
+            }, aligned: from == s.End || AfterNewline(from));
+        }
+
+        // Whether a record starts at pos: a window cut exactly at one has no fragment to drop, and
+        // dropping its first line as one lost a long turn's final reply (review of #686).
+        bool AfterNewline(long pos)
+        {
+            Span<byte> before = stackalloc byte[1];
+            ReadAt(before, pos - 1);
+            return before[0] == (byte)'\n';
         }
 
         // Calls onLine for each whole line in [from, to) until it says stop; a line longer than

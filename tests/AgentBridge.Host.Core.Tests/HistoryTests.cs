@@ -378,6 +378,29 @@ public class HistoryTests
         Assert.Equal(Enumerable.Range(0, 6).Select(i => "prompt " + i), seen);
     }
 
+    // Found in review of #686: a long turn's window starting exactly at a record was read as
+    // starting inside one, so that record, here the turn's final reply, was dropped as a fragment.
+    // One byte later it is a fragment; one byte earlier the window holds the newline before it.
+    [Theory]
+    [InlineData(-1, false)]
+    [InlineData(0, true)]
+    [InlineData(1, true)]
+    public async Task A_long_turns_window_starting_at_a_record_keeps_that_record(int offset, bool kept)
+    {
+        var last = Copilot.Assistant("at the end", 4);
+        var window = Encoding.UTF8.GetByteCount(last) + 1 + offset;
+        await using var s = new Copilot_(options: o => new SessionSourceOptions
+        {
+            CopilotHome = o.CopilotHome, ClaudeHome = o.ClaudeHome, CodexHome = o.CodexHome, UseFileSystemWatcher = false,
+            HistoryKeyFile = o.HistoryKeyFile, HistoryBudgets = new HistoryBudgets { TurnBytes = window },
+        });
+        await s.After(Copilot.User("long one", 1), Copilot.Assistant("early on", 2), Copilot.ToolResult("c0", new string('z', 1000), 3), last);
+
+        var turn = (await s.Page()).Turns!.Single();
+
+        Assert.True(turn.Truncated);
+        Assert.Equal(kept ? ["at the end"] : [], turn.Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => p.Text));
+    }
     [Fact]
     public async Task A_turn_longer_than_the_host_reads_keeps_its_prompt_and_its_end()
     {
