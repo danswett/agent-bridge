@@ -157,6 +157,16 @@ other field (matcher, timeout, type) stays.
 | Copilot | `~\.copilot\hooks\decision-notifier.json` | `exec <bridgeHome>\bin\agent-bridge-hook.exe`, `args [copilot, <name>, <script>]`, or `powershell & '<script>'` | `exec <hook>`, `args [copilot, <name>]` (`agent_stop`, `ask_user`, `permission`) |
 | Claude | `~\.claude\settings.json` | `"<go hook>" claude <name> "<script>"`, or `"<ha-bridge>\run-hook.cmd" "<script>"` | `"<hook>" claude <name>` (`ask`, `notification`, `stop`, `register`) |
 | Codex | `<bridgeHome>\codex-bridge\plugins\agent-ha-bridge\hooks.json` | `<go hook> codex hook <script>`, or `pwsh -NoProfile -ExecutionPolicy Bypass -File <script>` | `<hook> codex hook` |
+| Codex (what it runs) | `~\.codex\plugins\cache\agent-ha-bridge\agent-ha-bridge\<version>\hooks.json`, every version present | the same entries, as Codex copied them | the same, per entry |
+
+Codex runs its cached copy of the plugin, not the source, and copies it again only for a new
+version (#123), so each cached version's `hooks.json` is re-pointed with the source, snapshotted
+and put back byte for byte by a rollback in the same way. Only that marketplace and plugin
+(agent-ha-bridge's installer registers both as `agent-ha-bridge`) are read, only entries naming
+this installation's hook are changed, and a version with none is not written. A folder or
+`hooks.json` there that is a symbolic link or junction refuses the migration in preflight,
+since Codex makes plain folders and a link could lead the rewrite out of the cache. With no
+cache, as before Codex first loads the plugin, there is nothing to re-point.
 
 Files are written whole, flushed to the disk and renamed into place (snapshots, `migration.json`,
 `intake.json` and `hook.json` too), so a power cut leaves either the old file or the new one,
@@ -224,6 +234,9 @@ publishes the dashboard (G7).
 * **`~\.agent-ha-bridge`**: nothing in it is written but the Codex plugin's `hooks.json`,
   which is where Codex reads agent-ha-bridge's hook command from. Its `config.json`,
   `installation.json`, scripts, secrets and runtime records are as they were.
+* **Codex's plugin cache** (`~\.codex\plugins\cache`): nothing but agent-ha-bridge's cached
+  `hooks.json` copies above. Other marketplaces and plugins, the plugin's other cached files and
+  the person's own entries are not touched.
 * **Instruction blocks** (`~\.copilot\instructions\agent-ha-bridge.instructions.md`, the
   marked blocks in `~\.claude\CLAUDE.md` and `~\.codex\AGENTS.md`): left in place. They name
   agent-ha-bridge's agent token, which still authenticates against Home Assistant.

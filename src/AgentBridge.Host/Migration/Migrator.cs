@@ -187,7 +187,8 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         }
 
         var hookPath = options.HookPath(install.Id);
-        var plans = new[] { Registrations.Copilot(install, hookPath), Registrations.Claude(install, hookPath), Registrations.Codex(install, hookPath) };
+        var plans = new[] { Registrations.Copilot(install, hookPath), Registrations.Claude(install, hookPath), Registrations.Codex(install, hookPath) }
+            .Concat(Registrations.CodexCache(install, hookPath)).ToArray();
         if (plans.FirstOrDefault(p => p.Refusal is not null) is { } blocked) { Say("Refused: " + blocked.Refusal + "."); return new(false, lines); }
         if (StillRunningPowerShell(install, plans) is { } running) { Say("Refused: " + running); return new(false, lines); }
         // Rewriting a hard-linked file either leaves its other names behind (a rename) or risks

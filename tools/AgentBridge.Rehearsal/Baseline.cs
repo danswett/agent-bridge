@@ -57,6 +57,9 @@ internal static class BaselineCapture
             !IsLog(rel) &&
             !IsCodexHooks(rel));
         Tree(files, homes, Hooks, homes.BridgeHome, IsCodexHooks);
+        // What Codex actually runs: its cached copy of the plugin, one per version, which a
+        // migration re-points with the source (#123).
+        Tree(files, homes, Hooks, Path.Combine(homes.CodexHome, "plugins", "cache", "agent-ha-bridge", "agent-ha-bridge"), IsCachedCodexHooks);
         Tree(files, homes, Hooks, Path.Combine(homes.CopilotHome, "hooks"), _ => true);
         One(files, homes, Hooks, Path.Combine(homes.CopilotHome, "instructions", "agent-ha-bridge.instructions.md"));
         One(files, homes, Agents, Path.Combine(homes.ClaudeHome, "settings.json"));
@@ -82,6 +85,12 @@ internal static class BaselineCapture
             && parts[0].Equals("codex-bridge", StringComparison.OrdinalIgnoreCase)
             && parts[1].Equals("plugins", StringComparison.OrdinalIgnoreCase)
             && parts[3].Equals("hooks.json", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static bool IsCachedCodexHooks(string rel)
+    {
+        var parts = rel.Split('/');
+        return parts.Length == 2 && parts[1].Equals("hooks.json", StringComparison.OrdinalIgnoreCase);
     }
 
     static bool IsLog(string rel)

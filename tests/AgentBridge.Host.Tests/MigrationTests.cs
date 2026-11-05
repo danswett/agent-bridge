@@ -349,6 +349,91 @@ public sealed class MigrationTests : MigrationFixture
         Assert.Equal(before, _f.Listing());
     }
 
+    // Codex runs its cached copy of the plugin, not the source, and refreshes it only for a new
+    // version (#123): each version's copy is re-pointed with the source, entry by exact entry,
+    // and put back byte for byte.
+    [Fact]
+    public async Task Codexs_cached_copies_of_the_plugin_are_re_pointed_with_its_source_and_restored_byte_for_byte()
+    {
+        // An older version Codex still keeps, from before the native hook, with a person's own
+        // entry beside agent-ha-bridge's.
+        var older = _f.CodexCacheHooks("0.9.0");
+        Directory.CreateDirectory(Path.GetDirectoryName(older)!);
+        File.WriteAllText(older, new JsonObject
+        {
+            ["hooks"] = new JsonObject
+            {
+                ["Stop"] = new JsonArray(new JsonObject
+                {
+                    ["hooks"] = new JsonArray(
+                        new JsonObject { ["type"] = "command", ["command"] = "C:\\mine\\stop.cmd", ["timeout"] = 5 },
+                        new JsonObject { ["type"] = "command", ["command"] = $"pwsh -NoProfile -ExecutionPolicy Bypass -File {_f.CodexScript}", ["timeout"] = 20 }),
+                }),
+            },
+        }.ToJsonString());
+        var cached = File.ReadAllBytes(_f.CodexCacheHooks());
+        var olderBytes = File.ReadAllBytes(older);
+        var before = _f.Listing();
+        var hook = _f.InstalledHook;
+
+        var dry = await _f.Migrator().MigrateAsync(dryRun: true);
+        Assert.Contains($"codex-cache-{FakeAgentHaBridge.CodexVersion}: re-point 6 hook(s) in {_f.CodexCacheHooks()}", dry.ToString());
+        Assert.Contains($"codex-cache-0.9.0: re-point 1 hook(s) in {older}", dry.ToString());
+        await Migrated();
+
+        var codex = FakeAgentHaBridge.Read(_f.CodexCacheHooks())["hooks"]!.AsObject();
+        Assert.Equal(6, codex.Count);
+        Assert.All(codex, e => Assert.Equal($"{hook} codex hook", (string?)e.Value![0]!["hooks"]![0]!["command"]));
+        var stop = FakeAgentHaBridge.Read(older)["hooks"]!["Stop"]![0]!["hooks"]!;
+        Assert.Equal("C:\\mine\\stop.cmd", (string?)stop[0]!["command"]);
+        Assert.Equal($"{hook} codex hook", (string?)stop[1]!["command"]);
+        Assert.Contains($"{_f.CodexCacheHooks()}: as migrated", _f.Migrator().Status());
+
+        await RolledBack();
+        Assert.Equal(cached, File.ReadAllBytes(_f.CodexCacheHooks()));
+        Assert.Equal(olderBytes, File.ReadAllBytes(older));
+        Assert.Equal(before, _f.Listing());
+    }
+
+    [Fact]
+    public async Task Another_plugins_or_marketplaces_cache_is_left_as_it_is_even_naming_agent_ha_bridges_hook()
+    {
+        var command = $"{_f.GoHook} codex hook {_f.CodexScript}";
+        string Other(params string[] parts) => Path.Combine([_f.CodexHome, "plugins", "cache", .. parts, "1.0.0", "hooks.json"]);
+        var others = new[] { Other("another-marketplace", "agent-ha-bridge"), Other("agent-ha-bridge", "another-plugin") };
+        foreach (var path in others)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, new JsonObject { ["hooks"] = new JsonObject { ["Stop"] = new JsonArray(new JsonObject { ["hooks"] = new JsonArray(new JsonObject { ["type"] = "command", ["command"] = command }) }) } }.ToJsonString());
+        }
+        var bytes = others.Select(File.ReadAllBytes).ToList();
+
+        await Migrated();
+
+        Assert.Equal(bytes, others.Select(File.ReadAllBytes));
+        Assert.DoesNotContain(others[0], _f.Migrator().Status());
+    }
+
+    [Fact]
+    public async Task A_link_in_Codexs_plugin_cache_refuses_the_migration_before_anything_is_touched()
+    {
+        // Codex makes its cache of plain folders; a link there could lead a rewrite out of it.
+        var elsewhere = Path.Combine(_f.Home, "elsewhere", "2.0.0");
+        Directory.CreateDirectory(elsewhere);
+        File.Copy(_f.CodexHooks, Path.Combine(elsewhere, "hooks.json"));
+        try { Directory.CreateSymbolicLink(Path.Combine(_f.CodexCache, "2.0.0"), elsewhere); }
+        // Windows lets only an administrator, or developer mode, make one.
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException) { return; }
+        var listing = _f.Listing();
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("in Codex's plugin cache is a symbolic link or junction", report.ToString());
+        Assert.Equal(listing, _f.Listing());
+        Assert.Empty(_f.Runtime_.Calls);
+    }
+
     [Fact]
     public async Task A_hook_file_edited_while_migrated_gets_only_its_own_entries_back()
     {

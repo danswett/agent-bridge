@@ -16,7 +16,8 @@ namespace AgentBridge.Host.Migration;
 //
 // Only read. Nothing in it is ever written by a migration except the Codex plugin's
 // hooks.json, which is where Codex reads agent-ha-bridge's hook command from, and which is
-// restored byte for byte on rollback.
+// restored byte for byte on rollback. (Codex runs its own copy of that file, in its plugin cache
+// under codexHome, CodexPluginCache; migration re-points and restores those copies the same way.)
 public sealed record AgentHaBridgeInstall(
     string Id,
     string BridgeHome,
@@ -41,6 +42,12 @@ public sealed record AgentHaBridgeInstall(
     public string CodexPluginRoot => Path.Combine(BridgeHome, "codex-bridge", "plugins", "agent-ha-bridge");
     public string CodexHooksFile => Path.Combine(CodexPluginRoot, "hooks.json");
     public string CodexHookScript => Path.Combine(CodexPluginRoot, "hooks", "codex-bridge-hook.ps1");
+
+    // Where Codex keeps the copy of that plugin it actually runs, one folder per version
+    // (<codexHome>\plugins\cache\<marketplace>\<plugin>\<version>\hooks.json). install-codex.ps1
+    // names both the marketplace and the plugin agent-ha-bridge. Codex refreshes a copy only when
+    // the version changes, so a rewrite of the source alone never reaches a running Codex (#123).
+    public string CodexPluginCache => Path.Combine(CodexHome, "plugins", "cache", "agent-ha-bridge", "agent-ha-bridge");
 
     // Its owned instruction files and blocks: left in place by a migration, and checked on
     // rollback (Set-BridgeManagedInstructionBlock, Install-BridgeAgentInstructions).

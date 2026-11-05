@@ -81,6 +81,23 @@ public class BaselineTests
     }
 
     [Fact]
+    public void Codexs_cached_copy_of_the_plugins_hooks_counts_as_a_hook_and_the_rest_of_its_cache_is_not_watched()
+    {
+        using var s = Install();
+        s.File(".codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", "{\"hooks\":1}");
+        s.File(".codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/.codex-plugin/plugin.json", "{}");
+        var before = BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow);
+        s.File(".codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", "{\"hooks\":2}");
+        s.File(".codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/.codex-plugin/plugin.json", "{\"v\":2}");
+        s.File(".codex/plugins/cache/another/plugin/1.0.0/hooks.json", "{}");
+
+        var d = Assert.Single(Again(s, before));
+
+        Assert.Equal(BaselineCapture.Hooks, d.Category);
+        Assert.Equal("~/.codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/1.0.0/hooks.json", d.Path);
+    }
+
+    [Fact]
     public void A_baseline_that_filed_codexs_hooks_as_install_is_judged_by_the_current_rule()
     {
         using var s = Install();
