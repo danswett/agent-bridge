@@ -673,14 +673,21 @@ public sealed partial class DemoHost : IAsyncDisposable
     // arriving (#489), which nothing in the demo sends on its own.
     public Task Upsert(Session next) => Change(next);
 
+    // The pauses a change and a removal take, as a host's would; a test holds them to order a
+    // removal against a turn finishing.
+    internal Func<TimeSpan, Task> Pause { get; set; } = d => Task.Delay(d);
+
     // finishes: a turn started here ends a moment later, as an agent's would; not a session that has
-    // stopped answering (#800).
-    async Task Change(Session next, bool finishes = true)
+    // stopped answering (#800). onlyIfPresent: the finishing update, which must not bring back a
+    // session removed while it waited to be written (#625, Copilot 4485774643): the gallery's, removed
+    // in its own 400 ms pause, came back and was sent again as an upsert.
+    async Task Change(Session next, bool finishes = true, bool onlyIfPresent = false)
     {
-        await Task.Delay(400);
+        await Pause(TimeSpan.FromMilliseconds(400));
         IProtocolChannel[] to;
         lock (gate)
         {
+            if (onlyIfPresent && !sessions.ContainsKey(next.Id)) { return; }
             sessions[next.Id] = next;
             revision++;
             to = [.. subscribers.Where(s => s.IsOpen)];
@@ -689,19 +696,19 @@ public sealed partial class DemoHost : IAsyncDisposable
         // The agent takes the answer or reply and finishes its turn a little later.
         if (finishes && next.Status == SessionStatus.Working)
         {
-            await Task.Delay(3000);
+            await Pause(TimeSpan.FromMilliseconds(3000));
             // Removed meanwhile (the self-test's gallery cleans up after itself): it stays gone.
             lock (gate) { if (!sessions.ContainsKey(next.Id)) { return; } }
             var done = DateTimeOffset.UtcNow;
             // The main agent wrote last: the top-level text is its own again. A few short blocks, so a
             // conversation's pictures show the space between them (#765).
-            await Change(next with { Status = SessionStatus.Idle, StatusSince = done, UpdatedAt = done, Activity = next.Activity with { Response = "Done: that's taken care of.\n\nThe branch is pushed.\n\n- the suite passes\n- nothing else is open", TurnCount = (next.Activity.TurnCount ?? 0) + 1, Reasoning = null, Source = null, Own = null } });
+            await Change(next with { Status = SessionStatus.Idle, StatusSince = done, UpdatedAt = done, Activity = next.Activity with { Response = "Done: that's taken care of.\n\nThe branch is pushed.\n\n- the suite passes\n- nothing else is open", TurnCount = (next.Activity.TurnCount ?? 0) + 1, Reasoning = null, Source = null, Own = null } }, onlyIfPresent: true);
         }
     }
 
     async Task RemoveAsync(string id)
     {
-        await Task.Delay(400);
+        await Pause(TimeSpan.FromMilliseconds(400));
         IProtocolChannel[] to;
         lock (gate)
         {

@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using AgentBridge.App.Core;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -65,6 +66,42 @@ public sealed class DemoTests
         await Wait.UntilAsync(() => main.Sessions.Count == DemoHost.Examples().Count + DemoHost.HeavySessions, "the heavy sessions");
         var heavy = await connection.ReadAsync<Session>(Ops.SessionGet, new { id = DemoHost.HeavyId }, TimeSpan.FromSeconds(5));
         Assert.Equal(Limits.History, heavy.Activity.History?.Count);
+    }
+
+    [Fact]
+    public async Task A_session_removed_while_its_finished_turn_waits_to_be_written_stays_removed()
+    {
+        await using var demo = DemoHost.Start();
+        // Each pause is held until the test lets it end, so the removal lands in the finishing
+        // update's own pause, after the check made before it.
+        var pauses = Channel.CreateUnbounded<(TimeSpan Length, TaskCompletionSource Over)>();
+        demo.Pause = length =>
+        {
+            var over = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            pauses.Writer.TryWrite((length, over));
+            return over.Task;
+        };
+        async Task<TaskCompletionSource> Next(int ms)
+        {
+            var (length, over) = await pauses.Reader.ReadAsync().AsTask().WaitAsync(FakeHost.Patience);
+            Assert.Equal(TimeSpan.FromMilliseconds(ms), length);
+            return over;
+        }
+        var before = demo.Count;
+        var now = DateTimeOffset.UtcNow;
+
+        var put = demo.PutAsync(new Session { Id = "gallery-gone", Agent = AgentKind.Copilot, Status = SessionStatus.Working, StatusSince = now, UpdatedAt = now, Activity = new Activity { Response = "Working on it." } });
+        (await Next(400)).SetResult();
+        (await Next(3000)).SetResult();
+        var finishing = await Next(400);
+        Assert.Equal(before + 1, demo.Count);
+        var remove = demo.RemoveSessionAsync("gallery-gone");
+        (await Next(400)).SetResult();
+        await remove.WaitAsync(FakeHost.Patience);
+        finishing.SetResult();
+        await put.WaitAsync(FakeHost.Patience);
+
+        Assert.Equal(before, demo.Count);
     }
 }
 
