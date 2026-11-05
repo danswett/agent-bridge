@@ -78,6 +78,29 @@ public static partial class CopilotFormScreen
 
     static bool Permission(string row) => PermissionRow().IsMatch(row);
 
+    // Why two of the form's fields could not be told apart on screen, or null. The field being
+    // answered is known by its heading and, among several, by the tab hints, which say only
+    // whether it is first, last or between; the tab bar marks it by colour alone, which the
+    // screen read does not carry. So two fields with the same heading, both between the first
+    // and the last, look the same: a screen that changed without the form moving on (an Enter
+    // the CLI did not act on, while something else repainted) would pass for the next one, and
+    // its keys go into the field before (#510 review, Copilot 5780128109).
+    public static string? Ambiguous(CopilotForm form)
+    {
+        var count = form.Fields.Count;
+        string Place(int i) => i == 0 ? "first" : i == count - 1 ? "last" : "between";
+        var seen = new HashSet<(string, string)>();
+        for (var i = 0; i < count; i++)
+        {
+            if (form.Fields[i].Label is not { } label) { continue; }
+            if (!seen.Add((Collapse(label), Place(i))))
+            {
+                return $"two of this question's fields are headed \"{label}\", and the host cannot tell on screen which of them the form is at; answer it at the machine";
+            }
+        }
+        return null;
+    }
+
     // The form's key hints, below `from`: accept, decline and cancel always, and with more than
     // one field, next and prev as the field's place says. Read from the hints row alone, never
     // from the question or what is typed into the field, either of which may say "tab next".

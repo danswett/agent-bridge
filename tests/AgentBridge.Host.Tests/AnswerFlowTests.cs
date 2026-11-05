@@ -998,6 +998,59 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_form_with_two_fields_of_the_same_heading_between_its_first_and_last_is_refused_for_the_machine()
+    {
+        // The two "Note" fields read the same on screen: same heading, and both show "tab next"
+        // and "shift+tab prev". A repaint while the CLI still showed the first would pass for
+        // the second, and the second's words go into the first.
+        var answer = new { first = "b", one = "for the first note", two = "for the second note", last = "c" };
+        string[] names = ["first", "one", "two", "last"];
+        await AskFieldsAsync(new
+        {
+            first = new { type = "string", @enum = new[] { "a", "b", "c" } },
+            one = new { type = "string", title = "Note" },
+            two = new { type = "string", title = "Note" },
+            last = new { type = "string", @enum = new[] { "a", "b", "c" } },
+        }, 4, answer);
+        injector.Screen = () => FieldsScreen(names, labels: ["first", "Note", "Note", "last"]);
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Equal("two of this question's fields are headed \"Note\", and the host cannot tell on screen which of them the form is at; answer it at the machine", reason);
+        Assert.Empty(injector.Attempts);
+    }
+
+    [Theory]
+    // Fields of the same heading the tab hints do tell apart (the first and the last, or the
+    // first and one between), and a title whose spaces are not the ones the screen shows (a
+    // no-break space, a run of spaces, spaces at its ends): all answered as usual.
+    [InlineData("first-and-last")]
+    [InlineData("first-and-between")]
+    [InlineData("spaces")]
+    public async Task Headings_the_screen_tells_apart_or_reads_with_other_spaces_are_answered(string form)
+    {
+        var three = form == "first-and-between";
+        object answer = three ? new { one = "b", two = "c", last = "a" } : new { one = "b", two = "c" };
+        string[] names = three ? ["one", "two", "last"] : ["one", "two"];
+        string[] labels = form switch { "spaces" => ["Pick one", "two"], "first-and-between" => ["Pick", "Pick", "last"], _ => ["Pick", "Pick"] };
+        var title = form == "spaces" ? "\u00A0Pick  one " : "Pick";
+        var list = new { type = "string", title, @enum = new[] { "a", "b", "c" } };
+        var other = new { type = "string", title = form == "spaces" ? "two" : "Pick", @enum = new[] { "a", "b", "c" } };
+        await AskFieldsAsync(three
+            ? new { one = list, two = other, last = new { type = "string", title = "last", @enum = new[] { "a", "b", "c" } } }
+            : new { one = list, two = other }, names.Length, answer);
+        injector.Screen = () => FieldsScreen(names, labels: labels);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(names.Length, Enters());
+    }
+
+    [Fact]
     public async Task A_question_with_no_form_schema_is_refused_for_the_machine_with_nothing_typed()
     {
         // How the CLI draws an ask_user with no requestedSchema cannot be told from its code, so

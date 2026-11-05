@@ -90,7 +90,14 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     row of a permission prompt, bare or between a box's sides, above the form's heading or
     below its hints (an option, or words typed, reading "1. Yes" are the form's own). An `ask_user` with no form
     schema is refused, `answer it at the machine`: how 1.0.105 draws one cannot be told from
-    its code (its elicitations require a schema), so there is no form to hold the keys to. A screen that has settled
+    its code (its elicitations require a schema), so there is no form to hold the keys to.
+    So is a form with two fields of the same heading the tab hints cannot tell apart (both
+    between the first and the last): the tab bar marks the field being answered by colour
+    alone, which the screen read does not carry, so a repaint while the CLI still showed the
+    first could pass for the second. Headings are compared with every run of whitespace, a
+    no-break space included, as one space and the ends trimmed; a heading or question the
+    console wraps mid-word, or a title with a line break, is refused rather than typed into
+    (#848). A screen that has settled
     or moved on is not enough: a permission prompt that opens before its transcript entry is
     written reads just as steady, and keys held to its own rows would go into it, the Enter
     approving what it highlights (#510 review). Anything else stops the answer there, as
