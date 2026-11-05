@@ -22,11 +22,13 @@ public sealed class RestoreTests : IDisposable
 
     RestoreFile Written() => RestoreFiles.Read(Record).File!;
 
-    RestoreRecorder Recorder(bool restoreOnStart = true, bool freshLogon = false, Func<AgentKind, bool>? endsSettled = null)
+    RestoreRecorder Recorder(bool restoreOnStart = true, bool freshLogon = false, Func<AgentKind, bool>? endsSettled = null, TimeProvider? clock = null,
+        Func<string?>? readOnly = null, List<string>? logs = null)
     {
         var r = new RestoreRecorder(source, new RestoreOptions
         {
-            Path = Record, Instance = "run2", Ends = ends, RestoreOnStart = restoreOnStart, Boot = boot, Logon = new Logon(freshLogon), Time = Time, EndsSettled = endsSettled,
+            Path = Record, Instance = "run2", Ends = ends, RestoreOnStart = restoreOnStart, Boot = boot, Logon = new Logon(freshLogon), Time = clock ?? Time, EndsSettled = endsSettled,
+            ReadOnly = readOnly ?? (() => null), Log = logs is null ? null : s => logs.Add(s),
         });
         r.NoticeReady += told.Add;
         return r;
@@ -552,6 +554,104 @@ public sealed class RestoreTests : IDisposable
         Assert.Null(r.Notice);
         Assert.Empty(r.Folders()!);
         Assert.Empty(told);
+    }
+
+    // Quality, #813: a clock set back leaves an offer dated ahead of it. Read as dated now, it is kept
+    // (and its worktree with it) and let go a week on, and no timer is ever asked for past what the
+    // system's timers take, which stopped the host at every start.
+    [Fact]
+    public async Task An_offer_dated_sixty_days_ahead_by_a_clock_set_back_is_kept_and_does_not_stop_the_host()
+    {
+        var now = Time.GetUtcNow();
+        RestoreFiles.Write(Record, new RestoreFile
+        {
+            Boot = Fixture.T0, Instance = "run1", Written = now.AddDays(60),
+            Owed = [new RestoreOwed(E("a"), RestoreCause.Reboot, now.AddDays(60), now.AddDays(60), Decided: true)],
+        });
+        var clock = new SystemLimits(Time);
+        await using var r = Recorder(clock: clock);
+
+        r.Start();
+
+        Assert.Equal(["/work/repo"], r.Folders()!);
+        Assert.Equal(now, Assert.Single(Written().Owed).At);
+        clock.Advance(RestoreRecorder.OwedFor - TimeSpan.FromMinutes(1));
+        Assert.Single(r.Folders()!);
+        clock.Advance(TimeSpan.FromMinutes(2));
+        Assert.Empty(r.Folders()!);
+    }
+
+    [Fact]
+    public async Task A_clock_set_back_while_the_host_runs_neither_stops_it_nor_lets_an_offer_go()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var clock = new SystemLimits(Time);
+        var logs = new List<string>();
+        await using var r = Recorder(clock: clock, logs: logs);
+        r.Start();
+        Assert.Single(told);
+
+        clock.SetBack(TimeSpan.FromDays(60));
+        clock.Advance(RestoreRecorder.OwedFor);
+
+        Assert.Single(r.Folders()!);
+        Assert.DoesNotContain(logs, l => l.StartsWith("restore: could not", StringComparison.Ordinal));
+    }
+
+    // Whatever stops the start is said, and every worktree is kept for the run: what is owed is not
+    // known, and the host goes on serving rather than stop at every start.
+    [Fact]
+    public async Task A_start_that_fails_is_said_and_keeps_every_worktree()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var logs = new List<string>();
+        await using var r = Recorder(readOnly: () => throw new InvalidOperationException("broken"), logs: logs);
+
+        r.Start();
+
+        Assert.Null(r.Folders());
+        Assert.Contains(logs, l => l.StartsWith("restore: could not start (InvalidOperationException: broken)", StringComparison.Ordinal));
+    }
+
+    // The system's limits on a timer, which FakeTimeProvider does not keep: a due time or a period
+    // past Timer.MaxSupportedTimeout (0xFFFFFFFE ms) throws, as the system's does. And a clock that
+    // can be set back, which FakeTimeProvider's cannot.
+    sealed class SystemLimits(FakeTimeProvider inner) : TimeProvider
+    {
+        const double MaxMilliseconds = 0xFFFFFFFE;
+        TimeSpan offset;
+
+        public void SetBack(TimeSpan by) => offset -= by;
+        public void Advance(TimeSpan by) => inner.Advance(by);
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow() + offset;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            Check(dueTime);
+            Check(period);
+            return new Limited(inner.CreateTimer(callback, state, dueTime, period));
+        }
+
+        static void Check(TimeSpan t)
+        {
+            if (t != Timeout.InfiniteTimeSpan && (t < TimeSpan.Zero || t.TotalMilliseconds > MaxMilliseconds))
+            {
+                throw new ArgumentOutOfRangeException(nameof(t), t, "past Timer.MaxSupportedTimeout");
+            }
+        }
+
+        sealed class Limited(ITimer timer) : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                Check(dueTime);
+                Check(period);
+                return timer.Change(dueTime, period);
+            }
+
+            public void Dispose() => timer.Dispose();
+            public ValueTask DisposeAsync() => timer.DisposeAsync();
+        }
     }
 
     sealed class Live : ISessionSource

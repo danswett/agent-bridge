@@ -89,6 +89,13 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     public static readonly TimeSpan OwedFor = TimeSpan.FromDays(7);
     // The push waits for every session to be judged, or this long after start, whichever is first.
     public static readonly TimeSpan NoticeAfter = TimeSpan.FromMinutes(10);
+    // A time in the record more than this ahead of the clock (one set back: a bad RTC, a VM restored
+    // from a snapshot, a year corrected) is read as now. Kept, never let go for it, and never left to
+    // put a deadline weeks out.
+    public static readonly TimeSpan AheadTolerance = TimeSpan.FromMinutes(2);
+    // No timer is set further out than this: a later deadline is looked at again when it fires. The
+    // system's timers refuse anything past about 49.7 days, and that refusal stopped the host.
+    public static readonly TimeSpan LongestWait = TimeSpan.FromDays(1);
     // What the record keeps of launches whose sessions have not been seen (bounded, never growing).
     const int LaunchesKept = 256;
 
@@ -115,6 +122,8 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     bool stopped;
     // The earlier record could not be read: what waits to be restored is unknown for this run.
     bool unreadable;
+    // Start failed: what is owed is unknown for this run, so every worktree is kept.
+    bool failed;
     bool told;
     RestoreNotice? notice;
     ITimer? writeTimer;
@@ -156,7 +165,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         {
             // A record set aside keeps every worktree until a person has looked at it and removed
             // it, on this start and every later one: unknown is never read as nothing owed (#780).
-            if (unreadable || !running || RestoreFiles.SetAsideExists(options.Path)) { return null; }
+            if (failed || unreadable || !running || RestoreFiles.SetAsideExists(options.Path)) { return null; }
             var folders = new List<string>();
             foreach (var w in owed)
             {
@@ -168,8 +177,23 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         }
     }
 
-    // After the source's first discovery pass (SessionSource.StartAsync).
+    // After the source's first discovery pass (SessionSource.StartAsync). Whatever stops it is said,
+    // and leaves this run keeping every worktree: what is owed is unknown then, and unknown is never
+    // read as nothing owed. The host goes on serving: a record that stopped it at start would stop it
+    // at every start.
     public void Start()
+    {
+        try { StartOnce(); }
+        catch (Exception e) when (e is not OutOfMemoryException) { Fail("start", e); }
+    }
+
+    void Fail(string what, Exception e)
+    {
+        lock (gate) { failed = true; }
+        log($"restore: could not {what} ({e.GetType().Name}: {e.Message}); what waits to be restored is unknown for this run, so no worktree is reclaimed until the host starts again");
+    }
+
+    void StartOnce()
     {
         var (previous, problem) = RestoreFiles.Read(options.Path);
         if (problem is not null)
@@ -299,10 +323,37 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         if (ready is not null) { Tell(ready); }
     }
 
+    // A timer's callback: anything it throws would stop the host, so it is said and fails closed.
+    void Guarded(Action act)
+    {
+        try { act(); }
+        catch (Exception e) when (e is not OutOfMemoryException) { Fail("look at what waits to be restored", e); }
+    }
+
+    // Times in the record ahead of the clock by more than AheadTolerance, read as now: the clock was
+    // set back. An offer dated 60 days ahead was never let go, and armed a timer past what the system
+    // takes, which stopped the host at every start (Quality, #813).
+    void AheadLocked(DateTimeOffset now)
+    {
+        for (var i = 0; i < owed.Count; i++)
+        {
+            if (owed[i].At - now > AheadTolerance) { owed[i] = owed[i] with { At = now }; }
+        }
+        foreach (var (id, e) in live.ToList())
+        {
+            if (e.Gone is { } gone && gone - now > AheadTolerance) { live[id] = e with { Gone = now }; }
+        }
+    }
+
+    // Never before now, never past LongestWait: what fires early only looks again.
+    static TimeSpan Wait(TimeSpan due) => due < TimeSpan.Zero ? TimeSpan.Zero : due > LongestWait ? LongestWait : due;
+
     // While anything is still being judged, every JudgeEvery; then once, when the first offer comes
-    // to OwedFor, so a host that runs for weeks lets it go (and its worktree) on time.
+    // to OwedFor (at most LongestWait ahead, then again), so a host that runs for weeks lets it go
+    // (and its worktree) on time.
     void ArmLocked(DateTimeOffset now)
     {
+        AheadLocked(now);
         var judging = owed.Any(w => !w.Decided);
         // Already looking every JudgeEvery, and still judging: left to run.
         if (!stopped && judging && judgeTimer is not null && judgingEvery) { return; }
@@ -312,12 +363,12 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         if (stopped || owed.Count == 0) { return; }
         if (judging)
         {
-            judgeTimer = time.CreateTimer(_ => Tick(), null, JudgeEvery, JudgeEvery);
+            judgeTimer = time.CreateTimer(_ => Guarded(Tick), null, JudgeEvery, JudgeEvery);
             judgingEvery = true;
             return;
         }
         var due = owed.Min(w => w.At) + OwedFor - now;
-        judgeTimer = time.CreateTimer(_ => Tick(), null, due > JudgeEvery ? due : JudgeEvery, Timeout.InfiniteTimeSpan);
+        judgeTimer = time.CreateTimer(_ => Guarded(Tick), null, Wait(due > JudgeEvery ? due : JudgeEvery), Timeout.InfiniteTimeSpan);
     }
 
     void Tell(RestoreNotice ready)
@@ -342,6 +393,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     // Judges what can be judged now, and the notice from it. Returns the notice to push, once.
     RestoreNotice? AdvanceLocked(DateTimeOffset now)
     {
+        AheadLocked(now);
         var held = source.Held?.Agents ?? [];
         for (var i = owed.Count - 1; i >= 0; i--)
         {
@@ -469,6 +521,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     void ScheduleWriteLocked(TimeSpan after)
     {
         if (stopped) { return; }
+        after = Wait(after);
         var due = time.GetUtcNow() + after;
         if (writeTimer is not null)
         {
@@ -478,7 +531,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             return;
         }
         writeDue = due;
-        writeTimer = time.CreateTimer(_ =>
+        writeTimer = time.CreateTimer(_ => Guarded(() =>
         {
             lock (gate)
             {
@@ -486,11 +539,12 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
                 writeTimer = null;
                 if (!stopped) { WriteLocked(time.GetUtcNow()); }
             }
-        }, null, after, Timeout.InfiniteTimeSpan);
+        }), null, after, Timeout.InfiniteTimeSpan);
     }
 
     void WriteLocked(DateTimeOffset now, DateTimeOffset? stoppedAt = null)
     {
+        AheadLocked(now);
         DateTimeOffset? nextGone = null;
         foreach (var (id, e) in live.ToList())
         {

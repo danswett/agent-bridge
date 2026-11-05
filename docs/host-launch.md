@@ -263,6 +263,13 @@ kept owed, and what earlier starts kept owed is let go.
 **Worktrees.** The reclaimer keeps the worktree of every session owed or still being judged, as it
 keeps a live session's; one owed without a folder or with one that cannot be resolved, or a record set aside, keeps every worktree.
 
+**A clock set back** (a bad RTC, a VM restored from a snapshot, a year corrected) leaves times in the
+record ahead of it. One more than 2 minutes ahead is read as now: an offer is kept, and let go a week
+from then. No timer is set more than a day ahead, and one that fires early only looks again, since the
+system's timers refuse anything past about 49.7 days and that refusal stopped the host at every start.
+Anything else that stops the record from starting, or from being looked at later, is logged and keeps
+every worktree for that run; the host goes on serving.
+
 ## The log
 
 ```
