@@ -336,7 +336,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      minutes. Each `pwa-ui` leg downloads Playwright's system packages before installing them,
      and if apt's first mirror hasn't finished in five minutes it fetches the rest from the
      runner's Canonical fallback, `https://archive.ubuntu.com` (main run 41927187905 lost a
-     WebKit shard to that mirror at 100 kB/s).
+     WebKit shard to that mirror at 100 kB/s). WebKit's legs, which download 114 MB of
+     packages, get 35 minutes and Chromium's 20, so a fallback download still leaves time for
+     the tests.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
