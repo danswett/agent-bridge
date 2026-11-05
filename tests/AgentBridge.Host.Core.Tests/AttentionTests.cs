@@ -42,6 +42,31 @@ public class AttentionTests
     static string Error(object data, int s, string? agentId = null) => Copilot.Event("session.error", data, s, agentId);
 
     [Fact]
+    public async Task Recovery_overlay_stays_pending_until_model_proof_and_rejects_stale_flow_or_error_callbacks()
+    {
+        await using var s = new Session_();
+        await s.After(Error(SignedOut, 2));
+        var source = s.Source;
+        var failure = source.Get(Id)!.Attention!.Since;
+        await source.SetSignInRecoveryAsync(Id, failure, "old-flow", RecoveryState.Checking, true);
+        await source.SetSignInRecoveryAsync(Id, failure, "new-flow", RecoveryState.Pending, true);
+        await source.SetSignInRecoveryAsync(Id, failure, "old-flow", RecoveryState.Failed);
+        Assert.Equal(RecoveryState.Pending, source.Get(Id)!.Attention!.Recovery);
+        await s.After(Copilot.User("try again", 3), Copilot.TurnStart(4), Copilot.TurnEnd(5),
+            Copilot.Assistant("", 6), Copilot.Assistant("⚠️ Turn error: login needed", 7));
+        Assert.Equal(RecoveryState.Pending, source.Get(Id)!.Attention!.Recovery);
+        await s.After(Error(SignedOut, 8));
+        await source.SetSignInRecoveryAsync(Id, failure, "new-flow", RecoveryState.Pending);
+        Assert.Null(source.Get(Id)!.Attention!.Recovery);
+        var latest = source.Get(Id)!.Attention!.Since;
+        await source.SetSignInRecoveryAsync(Id, latest, "latest", RecoveryState.Pending, true);
+        await s.After(Copilot.Assistant("real model content", 9));
+        Assert.Null(source.Get(Id)!.Attention);
+        await source.SetSignInRecoveryAsync(Id, latest, "latest", RecoveryState.Pending);
+        Assert.Null(source.Get(Id)!.Attention);
+    }
+
+    [Fact]
     public async Task A_turn_that_ended_on_copilots_authorization_error_leaves_the_session_idle_and_needing_sign_in()
     {
         await using var s = new Session_();
