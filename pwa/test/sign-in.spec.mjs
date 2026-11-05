@@ -624,6 +624,40 @@ test('a status line that refuses focus as the sheet closes, as WebKit\'s may, is
   await expect(banner(page).locator('.sign-in-line')).toBeFocused();
 });
 
+test('signed in before the host says pending, a status line that refuses focus is retried on the line drawn anew, not the one replaced (r4483327052)', async ({ page }) => {
+  await openDemo(page);
+  await signIn(page).click();
+  await expect(sheet(page).locator('.sign-in-code')).toBeVisible();
+  // The first focus on a status line does nothing, and the next frame waits until the host's
+  // pending has drawn the banner anew, so the retry comes after the line it was for has gone.
+  await page.evaluate(() => {
+    const focus = HTMLElement.prototype.focus;
+    let refused = false;
+    HTMLElement.prototype.focus = function (o) {
+      if (!refused && this.classList.contains('sign-in-line')) { refused = true; return; }
+      return focus.call(this, o);
+    };
+    const raf = window.requestAnimationFrame;
+    window.__frames = [];
+    window.requestAnimationFrame = (f) => { window.__frames.push(f); return 0; };
+    window.__flush = () => { window.requestAnimationFrame = raf; for (const f of window.__frames.splice(0)) { f(performance.now()); } };
+  });
+  await page.evaluate(() => {
+    const h = window.agentBridgeDemo.host;
+    const f = h.signInFlow;
+    h.signInFlow = null;
+    h.frame({ ev: 'signin.done', seq: h.seq + 1, data: { flow: f.id, outcome: 'signedIn', resumed: [], continue: [] } });
+  });
+  await expect(sheet(page)).toBeHidden();
+  const first = await banner(page).locator('.sign-in-line').elementHandle();
+  await setAttention(page, { recovery: 'pending' });
+  await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
+  expect(await first.evaluate((el) => el.isConnected)).toBe(false);
+  expect(await page.evaluate(() => window.__frames.length)).toBeGreaterThan(0);
+  await page.evaluate(() => window.__flush());
+  await expect(banner(page).locator('.sign-in-line')).toBeFocused();
+});
+
 test('signed out, nothing said about the account\'s machines stays in the live region (#878)', async ({ page }) => {
   await openDemo(page);
   await expect(page.locator('#sign-in-said .sign-in-said-line')).toHaveText(['Copilot on DEV-VM1 needs sign-in']);

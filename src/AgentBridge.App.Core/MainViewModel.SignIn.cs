@@ -23,8 +23,10 @@ public sealed partial class MainViewModel
 
     // A polite announcement for the app to make: "Copilot on DEV-VM1 needs sign-in". Never the code.
     public event Action<string>? Announce;
-    // The sheet closed, by its banner's key: focus goes back to that banner.
-    public event Action<string>? SignInSheetClosed;
+    // The sheet closed, by its banner's key: focus goes back to that banner. True when this close is
+    // a person here signing in: focus goes to its status line, never back to Sign in. Decided for
+    // each close, so a later attempt cancelled or failed goes back to its button.
+    public event Action<string, bool>? SignInSheetClosed;
     // A banner about to be drawn anew for its new state (needed to confirming, say), by its key, while
     // its old one is still shown: focus inside the old one moves to the new one.
     public event Action<string>? SignInRedrawing;
@@ -44,9 +46,6 @@ public sealed partial class MainViewModel
     // Where a person here signed in (signin.done signedIn), by banner: once the host clears its
     // sessions, that reads "Signed in · N sessions recovered" rather than "Recovered by itself".
     readonly HashSet<string> signedInHere = new(StringComparer.Ordinal);
-
-    // A person here signed in on that banner: where its sheet closed, focus goes to its status line.
-    public bool SignedInHere(string key) => signedInHere.Contains(key);
     // What the banners last said aloud, by key: each says so once a state (§9.1 A6).
     readonly Dictionary<string, string> signInSaid = new(StringComparer.Ordinal);
     // signin.code and signin.done that came before the start's result named their flow: held as read
@@ -455,7 +454,7 @@ public sealed partial class MainViewModel
         else if (done.Outcome == "cancelled") { signInFlows.Remove(key); }
         else { signInFlows[key] = new SignInBanners.Flow("done", Outcome: done.Outcome, Reason: done.Reason); }
         SyncSignIns();
-        CloseSignInSheet(key);
+        CloseSignInSheet(key, signedIn: done.Outcome == "signedIn");
     }
 
     void OpenSignInSheet(string key)
@@ -467,10 +466,10 @@ public sealed partial class MainViewModel
     }
 
     // key: close it only if it is that banner's sheet (a late result never closes another's).
-    void CloseSignInSheet(string key)
+    void CloseSignInSheet(string key, bool signedIn = false)
     {
         if (SignInSheet is not { } sheet || sheet.Key != key) { return; }
         SignInSheet = null;
-        SignInSheetClosed?.Invoke(sheet.Key);
+        SignInSheetClosed?.Invoke(sheet.Key, signedIn);
     }
 }

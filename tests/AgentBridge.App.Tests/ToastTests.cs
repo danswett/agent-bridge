@@ -351,6 +351,24 @@ public sealed class ToastTests
         Assert.Equal([ToastPlanner.Tag("s1", null)], sink.Withdrawn);
     }
 
+    // #878 (r4483045584): the next prompt's turn fails while a delegate's question keeps the session
+    // waiting, the main agent never seen working: the host counts that turn one short, so its count
+    // is the toasted turn's, but its prompt is the next one, and the earlier turn's toast stays.
+    [Fact]
+    public void A_later_prompts_turn_that_fails_while_a_delegate_asks_leaves_the_earlier_turns_finished_toast_up()
+    {
+        var p = Planner();
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s1", response: "Done.", turns: 2));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        var waiting = Make.Session("s1", status: SessionStatus.Waiting, question: Make.Choice() with { Agent = "agent-1" }, response: "Done.", turns: 2) with { WaitingOn = "agent-1" };
+        p.Upsert(AuthState.Attach(waiting, JsonSerializer.SerializeToElement(new { attention = new { kind = "error", errorClass = "auth" } })));
+        Assert.Empty(sink.Withdrawn);
+    }
+
     // #878: a delegate asking while the main agent stays idle is no new turn: the toasted turn's
     // failure, arriving after it, still withdraws that turn's finished toast.
     [Fact]

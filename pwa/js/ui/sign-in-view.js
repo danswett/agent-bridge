@@ -295,7 +295,7 @@ export class SignInBanners {
       this.#fill(view, b);
       const at = prev ? prev.nextSibling : this.container.firstChild;
       if (at !== view.el) { this.container.insertBefore(view.el, at); }
-      if (refocus) { this.#focusOn(view.els.line.hidden ? view.el : view.els.line); }
+      if (refocus) { const key = b.key; this.#focusOn(() => this.#lineOf(key)); }
       prev = view.el;
       this.#announce(b);
     }
@@ -313,8 +313,7 @@ export class SignInBanners {
     const back = this.#focusBack;
     this.#focusBack = null;
     if (back) {
-      const view = this.#views.get(back.key);
-      this.#focusOn(back.opener?.isConnected ? back.opener : view && !view.els.line.hidden ? view.els.line : view?.el);
+      this.#focusOn(() => (back.opener?.isConnected ? back.opener : this.#lineOf(back.key)));
     }
   }
 
@@ -322,7 +321,9 @@ export class SignInBanners {
   // same task the modal sheet closed in (the banner drawn anew for confirming), so a refused target is
   // tried once more on the next frame, as the app tries again after the next layout (FocusOnce), if
   // focus is still nowhere by then: the page, or the closed sheet (Chromium leaves it on Cancel a while).
-  #focusOn(target) {
+  // pick() is asked again for the retry: the banner may have been drawn anew in between (the host's
+  // pending after signin.done), so its line then is a new element.
+  #focusOn(pick) {
     const doc = this.container.ownerDocument;
     const take = (el) => {
       if (!el?.isConnected) { return false; }
@@ -334,14 +335,21 @@ export class SignInBanners {
       if (h && !h.hasAttribute('tabindex')) { h.setAttribute('tabindex', '-1'); }
       take(h);
     };
+    const target = pick();
     if (take(target)) { return; }
     if (!target?.isConnected) { heading(); return; }
     const later = globalThis.requestAnimationFrame ?? ((f) => setTimeout(f, 16));
     later(() => {
       const at = doc?.activeElement;
       if (at && at !== doc.body && at.isConnected && !at.closest?.('dialog:not([open])')) { return; }
-      if (!take(target)) { heading(); }
+      if (!take(pick())) { heading(); }
     });
+  }
+
+  // A banner's status line where it is shown, else the banner, by key: whichever is drawn now.
+  #lineOf(key) {
+    const view = this.#views.get(key);
+    return view && !view.els.line.hidden ? view.els.line : view?.el;
   }
 
   #resolve(b, kind, count) {

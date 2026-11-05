@@ -21,8 +21,9 @@ public sealed partial class SessionsPage
     SignInSheetViewModel? signInShown;
     // The model closed the sheet (signed in, failed, its banner gone): not a person's Cancel.
     bool signInClosing;
-    // The banner to put focus back on once the sheet has finished closing, by its key.
-    string? signInFocusAfter;
+    // The banner to put focus back on once the sheet has finished closing, by its key, and whether on
+    // its status line (this close was a person here signing in).
+    (string Key, bool Line)? signInFocusAfter;
 
     void WatchSignIns(MainViewModel vm)
     {
@@ -51,10 +52,10 @@ public sealed partial class SessionsPage
 
     // The dialog puts focus back where it was when it opened (the banner's Sign in, perhaps gone by
     // now) as it finishes hiding, so while it is still there, focus waits for it to have gone.
-    void OnSignInSheetClosed(string key)
+    void OnSignInSheetClosed(string key, bool signedIn)
     {
-        if (signInDialog is not null) { signInFocusAfter = key; return; }
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => FocusSignInBanner(key));
+        if (signInDialog is not null) { signInFocusAfter = (key, signedIn); return; }
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => FocusSignInBanner(key, signedIn));
     }
 
     void OnSignInSheet(object? sender, PropertyChangedEventArgs e)
@@ -194,10 +195,10 @@ public sealed partial class SessionsPage
             if (ReferenceEquals(signInDialog, dialog)) { signInDialog = null; }
             if (ReferenceEquals(signInShown, sheet)) { signInShown = null; }
             signInClosing = false;
-            if (signInDialog is null && signInFocusAfter is { } key)
+            if (signInDialog is null && signInFocusAfter is { } after)
             {
                 signInFocusAfter = null;
-                DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => FocusSignInBanner(key));
+                DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => FocusSignInBanner(after.Key, after.Line));
             }
         }
     }
@@ -205,36 +206,62 @@ public sealed partial class SessionsPage
     // Where focus goes once the sheet has gone (ui.md §6.13): the banner's button if it is still there
     // (Cancel, failure, expiry); on success its status line, "Signed in · waiting…"; and with the banner
     // gone, the session list's heading. The last two take focus programmatically only.
-    void FocusSignInBanner(string key)
+    // Not yet loaded, the target refuses focus: after the next layout pass the banner is looked up
+    // again by its key, as it may have been drawn anew in between (the host's pending after
+    // signin.done), so the retry is never on a container that has gone.
+    void FocusSignInBanner(string key, bool line = false, bool again = false)
     {
         var banner = viewModel?.SignIns.FirstOrDefault(b => b.Key == key);
         // The banner's new state (its button gone, its status line shown) laid out before it is looked for.
         SignInBannerList.UpdateLayout();
         var container = banner is null ? null : SignInBannerList.ContainerFromItem(banner) as DependencyObject;
         var status = container is null ? null : FindIn<ContentControl>(container, null, "SignInStatus");
-        // Signed in here: the status line, even while Sign in is still drawn, as the host's pending
-        // (which takes it away) may come after the sheet closed.
-        var target = container is null ? null : viewModel!.SignedInHere(key) && status is not null ? status : (Control?)FindIn<Button>(container, null, "SignInVerb") ?? status;
-        FocusOnce(target ?? SessionsHeading);
+        // Closed by a person here signing in: the status line, even while Sign in is still drawn, as the
+        // host's pending (which takes it away) may come after the sheet closed.
+        var target = container is null ? null : line && status is not null ? status : (Control?)FindIn<Button>(container, null, "SignInVerb") ?? status;
+        if (target is not null)
+        {
+            if (FocusNow(target)) { return; }
+            if (!again)
+            {
+                void Again(object? sender, object e)
+                {
+                    SignInBannerList.LayoutUpdated -= Again;
+                    FocusSignInBanner(key, line, again: true);
+                }
+                SignInBannerList.LayoutUpdated += Again;
+                SignInBannerList.InvalidateArrange();
+                return;
+            }
+        }
+        FocusOnce(SessionsHeading);
     }
 
-    // Focus, once, on a control that is no Tab stop: it is one until focus leaves it.
-    // Not yet loaded, it refuses focus: tried again once, after the next layout pass.
-    static void FocusOnce(Control target)
+    // Focus on a control that is no Tab stop: it is one until focus leaves it. False, and left as it
+    // was, if it refuses.
+    static bool FocusNow(Control target)
     {
         var made = !target.IsTabStop;
         if (made) { target.IsTabStop = true; }
-        void Done(object sender, RoutedEventArgs e) { target.LostFocus -= Done; target.IsTabStop = false; }
-        if (target.Focus(FocusState.Programmatic))
+        if (!target.Focus(FocusState.Programmatic))
         {
-            if (made) { target.LostFocus += Done; }
-            return;
+            if (made) { target.IsTabStop = false; }
+            return false;
         }
+        void Done(object sender, RoutedEventArgs e) { target.LostFocus -= Done; target.IsTabStop = false; }
+        if (made) { target.LostFocus += Done; }
+        return true;
+    }
+
+    // Focus, once, on a control: not yet loaded, it refuses focus, so it is tried again once, after
+    // the next layout pass.
+    static void FocusOnce(Control target)
+    {
+        if (FocusNow(target)) { return; }
         void Again(object? sender, object e)
         {
             target.LayoutUpdated -= Again;
-            if (target.Focus(FocusState.Programmatic)) { if (made) { target.LostFocus += Done; } }
-            else if (made) { target.IsTabStop = false; }
+            FocusNow(target);
         }
         target.LayoutUpdated += Again;
         target.InvalidateArrange();
