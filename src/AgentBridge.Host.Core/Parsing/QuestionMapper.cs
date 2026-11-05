@@ -148,13 +148,14 @@ internal static class QuestionMapper
             }
             catch (JsonException) { return ([], true); }
         }
-        if (Json.Obj(schema, "properties") is not { } properties) { return ([], true); }
+        var whole = CopilotFieldConstraints.FormUnchecked(schema) is null;
+        if (Json.Obj(schema, "properties") is not { } properties) { return ([], whole); }
         var required = Json.Arr(schema, "required") is { } r
             ? r.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToHashSet(StringComparer.Ordinal)
             : [];
         var patterns = new PatternBudget();
         var fields = new List<Field>();
-        var drivable = CopilotFieldConstraints.FormUnchecked(schema) is null;
+        var drivable = whole;
         foreach (var property in properties.EnumerateObject())
         {
             if (property.Value.ValueKind != JsonValueKind.Object) { continue; }

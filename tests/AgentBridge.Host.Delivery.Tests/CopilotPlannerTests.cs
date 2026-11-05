@@ -414,6 +414,30 @@ public class CopilotPlannerTests
     }
 
     [Theory]
+    // A field listed twice, one that is not an object, or a required one the form does not draw:
+    // the host would accept an answer the form forbids (Copilot review 5780983797 of #844).
+    [InlineData("""{ "properties": { "f": { "type": "string" } }, "required": ["g"] }""")]
+    [InlineData("""{ "properties": { "f": { "type": "string" } }, "required": "f" }""")]
+    [InlineData("""{ "properties": { "f": { "type": "string" }, "f": { "type": "number" } } }""")]
+    [InlineData("""{ "properties": { "f": true } }""")]
+    [InlineData("""{ "properties": [], "required": ["f"] }""")]
+    public void A_form_whose_fields_or_required_do_not_read_one_way_is_answered_at_the_machine(string schema)
+    {
+        using var doc = JsonDocument.Parse($$"""{ "message": "m", "requestedSchema": {{schema}} }""");
+        Assert.True(QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0).AnswerAtMachine);
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+        Assert.Null(form);
+        Assert.EndsWith("; answer it at the machine", problem);
+    }
+
+    [Fact]
+    public void A_form_requiring_a_field_it_draws_stays_answerable()
+    {
+        using var doc = JsonDocument.Parse("""{ "message": "m", "requestedSchema": { "type": "object", "properties": { "f": { "type": "string" } }, "required": ["f"], "additionalProperties": false } }""");
+        Assert.Null(QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0).AnswerAtMachine);
+        Assert.NotNull(CopilotForm.Read(doc.RootElement).Form);
+    }
+    [Theory]
     [InlineData("""{ "allOf": [{ "properties": { "f": { "maxLength": 2 } } }] }""")]
     [InlineData("""{ "if": { "required": ["f"] }, "then": { "required": ["g"] } }""")]
     [InlineData("""{ "dependentRequired": { "f": ["g"] } }""")]
@@ -475,26 +499,42 @@ public class CopilotPlannerTests
     }
     // Found while checking #844's cost per refresh: an option list's oneOf was matched against its
     // enum, and uniqueItems checked, each option against every other, on the thread that refreshes
-    // every session. 40,000 numbers each ran past this 5 s bound; matched by key, under one second.
-    [Fact]
-    public async Task Long_option_lists_are_checked_in_linear_time()
+    // every session. Timed as a ratio, n against 4n (the faster of two runs of each), not against a
+    // wall clock: CI runs under coverage on a shared runner, where 40,000 options read linearly
+    // still ran past a 5 s bound (#844 CI 41983282680). Linear is about 4; each against every other
+    // was about 16.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Long_option_lists_are_checked_in_linear_time(bool choice)
     {
-        const int N = 40_000;
-        var numbers = string.Join(", ", Enumerable.Range(0, N));
-        var consts = string.Join(", ", Enumerable.Range(0, N).Select(i => $$"""{ "const": {{i}} }"""));
-        foreach (var (property, machine) in new[]
+        string Property(int n)
         {
-            ($$"""{ "type": "string", "enum": [{{numbers}}], "oneOf": [{{consts}}] }""", true),
-            ($$"""{ "type": "array", "items": { "enum": [{{numbers}}] }, "uniqueItems": true }""", false),
-        })
-        {
-            using var doc = JsonDocument.Parse(Schema("f", property));
-            var root = doc.RootElement.Clone();
-            var question = await Task.Run(() => QuestionMapper.FromCopilotAskUser("call-1", root, Fixture.T0)).WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal(machine, question.AnswerAtMachine == true);
+            var numbers = string.Join(", ", Enumerable.Range(0, n));
+            return choice
+                ? $$"""{ "type": "string", "enum": [{{numbers}}], "oneOf": [{{string.Join(", ", Enumerable.Range(0, n).Select(i => $$"""{ "const": {{i}} }"""))}}] }"""
+                : $$"""{ "type": "array", "items": { "enum": [{{numbers}}] }, "uniqueItems": true }""";
         }
-    }
+        double Read(int n)
+        {
+            using var doc = JsonDocument.Parse(Schema("f", Property(n)));
+            var fastest = double.MaxValue;
+            for (var run = 0; run < 2; run++)
+            {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                var question = QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0);
+                fastest = Math.Min(fastest, clock.Elapsed.TotalMilliseconds);
+                // A string list of numbers breaks its own type; a checkbox list of distinct ones is answerable.
+                Assert.Equal(choice, question.AnswerAtMachine == true);
+            }
+            return Math.Max(fastest, 1);
+        }
 
+        Read(1_000);
+        var ratio = Read(32_000) / Read(8_000);
+
+        Assert.True(ratio < 10, $"reading 4x the options took {ratio:F1}x as long");
+    }
     [Fact]
     public void Many_quick_patterns_in_one_question_fit_its_budget()
     {

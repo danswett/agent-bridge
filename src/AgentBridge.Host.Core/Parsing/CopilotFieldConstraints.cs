@@ -174,7 +174,28 @@ public static class CopilotFieldConstraints
     {
         if (schema.ValueKind != JsonValueKind.Object) { return null; }
         if (Has(schema, "type", out var type) && !(type.ValueKind == JsonValueKind.String && type.GetString() == "object")) { return "type"; }
-        return Other(schema, ["properties", "required", "additionalProperties"]);
+        if (Other(schema, ["properties", "required", "additionalProperties"]) is { } keyword) { return keyword; }
+        // Every field drawn once, as an object, and `required` naming only those: a name listed
+        // twice, a field that is not an object, or a required one that is not drawn would leave an
+        // answer the host accepts that the form forbids (Copilot review of #844).
+        var drawn = new HashSet<string>(StringComparer.Ordinal);
+        if (Has(schema, "properties", out var properties))
+        {
+            if (properties.ValueKind != JsonValueKind.Object) { return "properties"; }
+            foreach (var p in properties.EnumerateObject())
+            {
+                if (p.Value.ValueKind != JsonValueKind.Object || !drawn.Add(p.Name)) { return "properties"; }
+            }
+        }
+        if (Has(schema, "required", out var required))
+        {
+            if (required.ValueKind != JsonValueKind.Array) { return "required"; }
+            foreach (var name in required.EnumerateArray())
+            {
+                if (name.ValueKind != JsonValueKind.String || !drawn.Contains(name.GetString()!)) { return "required"; }
+            }
+        }
+        return null;
     }
 
     // The options as CopilotFieldSchema takes them: the first list's `const`s, else the second.

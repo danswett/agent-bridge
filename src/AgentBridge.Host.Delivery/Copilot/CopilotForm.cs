@@ -58,13 +58,13 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
     static (CopilotForm?, string?) Schema(JsonElement schema)
     {
         if (schema.ValueKind != JsonValueKind.Object) { return (null, "the question's form could not be read"); }
-        if (!schema.TryGetProperty("properties", out var properties) || properties.ValueKind != JsonValueKind.Object)
-        {
-            return (new CopilotForm([]), null);
-        }
         if (CopilotFieldConstraints.FormUnchecked(schema) is { } keyword)
         {
             return (null, $"the question's form has a limit the host does not check (\"{keyword}\"); answer it at the machine");
+        }
+        if (!schema.TryGetProperty("properties", out var properties) || properties.ValueKind != JsonValueKind.Object)
+        {
+            return (new CopilotForm([]), null);
         }
         var fields = new List<CopilotField>();
         var patterns = new PatternBudget();
