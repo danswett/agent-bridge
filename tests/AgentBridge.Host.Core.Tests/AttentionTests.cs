@@ -19,11 +19,11 @@ public class AttentionTests
         public readonly string Events;
         public readonly AgentBridge.Host.Core.SessionSource Source;
 
-        public Session_(long tailBytes = 4 * 1024 * 1024)
+        public Session_(long tailBytes = 4 * 1024 * 1024, long maxSkim = 512L * 1024 * 1024)
         {
             Events = F.CopilotSession(Id, 100);
             F.Processes.Run(AgentKind.Copilot, 100);
-            Source = F.Source(tailBytes: tailBytes);
+            Source = F.Source(tailBytes: tailBytes, maxSkim: maxSkim);
         }
 
         public async Task<Session> After(params string[] lines)
@@ -211,9 +211,50 @@ public class AttentionTests
         await using var s = new Session_();
 
         var session = await s.After(Copilot.User("Go", 1), Copilot.TurnStart(2), Error(new { errorType = "session", message = "Turn error: too many requests", statusCode = 429 }, 3),
-            Copilot.Event("assistant.message", new { messageId = "m4", content = "\u26A0\uFE0F Turn error: too many requests" }, 4), Copilot.TurnEnd(5));
+            Copilot.Event("assistant.message", new { messageId = "m4", content = "\u26A0\uFE0F Turn error: too many requests" }, 4));
 
         Assert.Equal(AttentionKind.Error, session.Attention?.Kind);
+        Assert.Equal(SessionStatus.Idle, session.Status);
+    }
+
+    // Memory and a skill's context come within a turn and start none.
+    [Theory]
+    [InlineData("memory")]
+    [InlineData("skill-release")]
+    public async Task Context_the_cli_adds_after_another_error_leaves_it(string source)
+    {
+        await using var s = new Session_();
+
+        var session = await s.After(Copilot.User("Go", 1), Copilot.TurnStart(2), Error(new { errorType = "session", message = "Turn error: too many requests", statusCode = 429 }, 3),
+            Copilot.Event("user.message", new { content = "Context.", source }, 4));
+
+        Assert.Equal(AttentionKind.Error, session.Attention?.Kind);
+    }
+
+    [Fact]
+    public async Task A_failed_main_turn_leaves_a_live_delegates_permission_prompt_for_the_person()
+    {
+        await using var s = new Session_();
+
+        var session = await s.After(Copilot.User("Go", 1), Copilot.TurnStart(2), Copilot.ToolStart("c1", "powershell", new { }, 3, agentId: "agent-1"),
+            Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 4, agentId: "agent-1"), Error(SignedOut, 5));
+
+        Assert.Equal("agent-1", session.Question?.Agent);
+        Assert.Equal(AttentionKind.SignInNeeded, session.Attention?.Kind);
+    }
+
+    // Past MaxSkimBytes the host reads nothing until the tail: a failure seen before that stretch
+    // may have been answered in it, and a session that wrote so much since was reaching its model.
+    [Fact]
+    public async Task A_failure_read_before_a_stretch_the_host_never_read_is_not_taken_as_current()
+    {
+        await using var s = new Session_(tailBytes: 4096, maxSkim: 2048);
+        var lines = new List<string> { Copilot.User("Carry on", 1), Copilot.TurnStart(2), Error(SignedOut, 3) };
+        lines.AddRange(Enumerable.Range(0, 60).Select(i => Copilot.Assistant("Still bisecting " + new string('x', 200), 20 + i, agentId: "agent-1")));
+
+        var session = await s.After([.. lines]);
+
+        Assert.Null(session.Attention);
     }
 
     // Another error is about the turn it ended: the next one starting leaves it behind.

@@ -1207,13 +1207,15 @@ status rather than instead of it.
   "Needs sign-in", "Error · *message*" or "Not responding" over the status, ranks it with the
   sessions that need the person, and never shows it as plain idle or with a stale age.
 * **It goes**, and `session.patch` carries `"attention": null`:
-  * `error`: when the next turn starts.
+  * `error`: when the next turn starts: a prompt or a turn start, not context the CLI adds within
+    a turn (memory, a skill) or its own notice of the error.
   * `signInNeeded`: only when the model is seen answering, in a message of its own words or a
     tool it asked for, dated after the latest sign-in failure. A prompt, a turn starting or
     ending, a hook and anything the bridge typed are written whether the agent can reach its
     model or not, so none of them clears it: on VM1 (#800) a session ended a turn between two
     sign-in failures 51 ms apart. A sign-in through `sessions.signin`, when it comes, clears it
-    only on the same evidence.
+    only on the same evidence. A host that did not read part of a long transcript (past its skim
+    budget) does not keep a failure it read before that part: whatever followed was not seen.
 * A change to it moves `updatedAt`. It is a few hundred bytes and never trimmed by the
   [session budget](#session-budget).
 * **Older clients** ignore it and read the status, so a signed-out session reads as idle to them.
