@@ -817,6 +817,7 @@ jobs:
     #    design/tokens.json (design/README.md);
     #  - pwa-unit: the PWA's unit tests in Node, then again for coverage, beside the Playwright
     #    jobs rather than before them (#457);
+    #  - lab-install-smoke: the clean-VM install smoke's gate and verdict, offline and source only;
     #  - pwa-site-csp: the Pages build's CSP;
     #  - playwright-apt: the download of Playwright's system packages leaves a slow apt mirror only
     #    when it should (.github/actions/playwright-system-packages);
@@ -842,6 +843,11 @@ jobs:
       - name: Contrast, the SVG subset and the generated files
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'design-gen') || contains(fromJSON(env.SUITES), 'a11y-contrast')) }}
         run: node --test "tools/design-gen/test/*.test.mjs"
+      - name: The install smoke's gate refuses every install today, and its verdict passes only an installed product that launched
+        # Offline and source only: nothing installs, and nothing reaches Azure or GitHub.
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-install-smoke')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/lab/test-install-smoke.ps1
       - name: Connector read-contract mock
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'connector-conformance')) }}
         run: node --test tools/connector-conformance/mock-host.test.mjs

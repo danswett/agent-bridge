@@ -700,6 +700,22 @@ suites:
     command: agent-bridge-rehearsal soak run (tools/AgentBridge.Rehearsal), generalized from shadow-soak-vm.ps1
     status: partial
 
+  - id: lab-install-smoke
+    kind: unit
+    ring: 0
+    select: affected
+    # The clean-VM install smoke's gate and verdict (quality/lab/install-smoke-*.ps1), offline and
+    # source only: the gate refuses every install until its prerequisites are met in reviewed
+    # source, and the verdict passes a role only when the cut's verified installer installed and
+    # the installed product launched. Never evidence that the product installs: no install runs.
+    # Ring 0 on Linux, so a draft's fast ring runs it too.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/lab/install-smoke-*, quality/lab/test-install-smoke.ps1]
+    command: pwsh quality/lab/test-install-smoke.ps1
+    where: ci.yml light
+    status: exists
+
   - id: winui-ui
     kind: ui
     ring: 2
