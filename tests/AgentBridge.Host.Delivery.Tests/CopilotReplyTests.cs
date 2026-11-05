@@ -94,7 +94,9 @@ public sealed class CopilotReplyTests : IDisposable
         Assert.True(CopilotPrompts.Before(events).Asking);
         Fixture.Append(events, Copilot.Event("session.resume", new { }, 31));
         Assert.False(CopilotPrompts.Before(events).Asking);
-        Assert.Equal(((CopilotPermissionPrompt?)null, 0, 0), (CopilotPermissionTranscript.Before(events, "r1").Request, CopilotPermissionTranscript.Before(events, "r1").PendingPermissions, CopilotPermissionTranscript.Before(events, "r1").PendingAsks));
+        var after = CopilotPermissionTranscript.Before(events, "r1");
+        Assert.Null(after.Request);
+        Assert.Equal((0, 0), (after.PendingPermissions, after.PendingAsks));
 
         Fixture.Append(events, Ask("q2", 32));
         Assert.True(CopilotPrompts.Before(events).Asking);

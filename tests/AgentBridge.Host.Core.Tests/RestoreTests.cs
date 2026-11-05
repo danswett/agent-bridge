@@ -1202,6 +1202,45 @@ public sealed class RestoreTests : IDisposable
         Assert.NotNull(asked.Question);
     }
 
+    // Marked before it registers, and given a whole turn before the source first reads it: that
+    // prompt came after the restore, by its own time, so Continue has gone.
+    [Fact]
+    public async Task Continue_goes_for_a_turn_that_ran_whole_before_the_restored_session_was_first_read()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999995";
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var real = f.Source();
+        real.Mark(Id, new SessionRestored { At = Fixture.T0.AddSeconds(5), Cause = RestoreCause.Reboot, MidTurn = true, Continue = "carry on" });
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.User("carry on", 10), Copilot.TurnStart(11), Copilot.TurnEnd(12));
+
+        await real.RefreshAsync();
+
+        var after = real.Get(Id)!;
+        Assert.Equal(((bool?)null, (string?)null), (after.Restored!.MidTurn, after.Restored.Continue));
+    }
+
+    // The badge goes after a day; the restore does not: the interrupted turn is still not shown.
+    [Fact]
+    public async Task The_interrupted_turn_stays_hidden_after_the_restored_badge_goes()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999994";
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var real = f.Source();
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2));
+        await real.RefreshAsync();
+        real.Mark(Id, new SessionRestored { At = Fixture.T0.AddSeconds(5), Cause = RestoreCause.Reboot, MidTurn = true, Continue = "carry on" });
+        await Until(() => real.Get(Id)?.Restored is not null);
+
+        real.Mark(Id, null);
+        await Until(() => real.Get(Id)!.Restored is null);
+
+        Assert.Equal(SessionStatus.Idle, real.Get(Id)!.Status);
+        await real.RefreshAsync();
+        Assert.Equal(SessionStatus.Idle, real.Get(Id)!.Status);
+    }
+
     // Killed mid-turn with a question up, then resumed in a new CLI: the turn and the question died
     // with the old process, so the session is idle and asks nothing, mark or no mark.
     [Fact]
@@ -1295,7 +1334,8 @@ public sealed class RestoreTests : IDisposable
         Time.Advance(RestoreRecorder.JudgeEvery);
 
         Assert.Equal(["a"], r.Notice!.Offered.Select(o => o.Id));
-        Assert.Equal(1, r.Notice.Loops);
+        // a is a loop now, not restored too; b, ended normally, was restored.
+        Assert.Equal((1, 1), (r.Notice.Loops, r.Notice.Restored));
         Time.Advance(RestoreRecorder.GoneKept);
         Assert.Equal(["a"], Written().Owed.Select(w => w.Entry.Id));
         Assert.Equal(["/work/repo"], r.Folders()!);
@@ -1467,7 +1507,7 @@ public sealed class RestoreTests : IDisposable
     [Fact]
     public async Task A_restore_that_registers_and_dies_before_its_launch_returns_is_offered_as_a_loop()
     {
-        Previous(Fixture.T0, false, E("a"));
+        Previous(Fixture.T0, false, E("a", turn: RestoreTurn.Working));
         var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
         await using var r = Recorder(resumer: resumer);
         r.Start();
@@ -1480,7 +1520,9 @@ public sealed class RestoreTests : IDisposable
         Time.Advance(RestoreRecorder.JudgeEvery);
 
         Assert.Equal(["a"], r.Notice!.Offered.Select(o => o.Id));
-        Assert.Equal(1, r.Notice.Loops);
+        // Once: a loop, not also restored, and what it lost is said with the offer alone.
+        Assert.Equal((1, 0), (r.Notice.Loops, r.Notice.Restored));
+        Assert.Empty(r.RestoredLosses());
     }
 
     // Registered before the launcher could see its window ready: restored, not left waiting for a
@@ -1523,6 +1565,98 @@ public sealed class RestoreTests : IDisposable
         Assert.Same(first, marks.Of["a"]);
         Time.Advance(TimeSpan.FromHours(4));
         Assert.Null(marks.Of["a"]);
+    }
+
+    // ---- #837 review, third round ----
+
+    // A session that went a moment ago, restored on request: pruning its old entry 60 s after it went
+    // keeps the newer attempt's stamp, written in Stamps, so the session is adopted stamped.
+    [Fact]
+    public async Task Pruning_a_gone_session_keeps_the_stamp_of_a_restore_started_after_it_went()
+    {
+        var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using var first = Recorder(resumer: resumer);
+        first.Start();
+        source.Upsert(S("s"));
+        source.Remove("s");
+        Time.Advance(TimeSpan.FromSeconds(1));
+
+        var asked = first.RestoreAsync(new RestoreAsk { Session = "s", Cause = RestoreCause.Crash, By = "host-signin" });
+        await Until(() => resumer.Asked.Count == 1);
+        Time.Advance(RestoreRecorder.GoneKept);
+
+        Assert.Empty(Written().Sessions);
+        Assert.True(Written().Stamps.ContainsKey("s"));
+        resumer.Gate!.SetResult();
+        Assert.Equal(LaunchOutcome.Started, (await asked).Outcome);
+        Time.Advance(RestoreRecorder.Coalesce);
+        source.Sessions.Add(S("s"));
+        await using var second = Recorder();
+        second.Start();
+        Assert.NotNull(Assert.Single(Written().Sessions).Restored);
+    }
+
+    // A request cancelled while it waits its turn starts nothing, and takes back its stamp and mark.
+    [Fact]
+    public async Task A_restore_request_cancelled_while_it_waits_its_turn_starts_nothing_and_takes_back_its_stamp()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => resumer.Asked.Count == 1);
+
+        using var cancel = new CancellationTokenSource();
+        var queued = r.RestoreAsync(new RestoreAsk { Session = "x", Cause = RestoreCause.Crash, By = "host-signin" }, cancel.Token);
+        Assert.True(Written().Stamps.ContainsKey("x"));
+        cancel.Cancel();
+        var withdrawn = await queued.WaitAsync(TimeSpan.FromSeconds(5));
+        resumer.Gate!.SetResult();
+        await Until(() => Logged("restored, idle"));
+        Time.Advance(RestoreRecorder.Coalesce);
+
+        Assert.Equal(LaunchOutcome.Refused, withdrawn.Outcome);
+        Assert.Equal(["a"], resumer.Asked.Select(x => x.Id));
+        Assert.False(Written().Stamps.ContainsKey("x"));
+        Assert.Null(marks.Of["x"]);
+    }
+
+    // The expiry of a mark since replaced, already under way when it was replaced, takes nothing away.
+    [Fact]
+    public async Task An_expiry_already_under_way_for_a_replaced_mark_leaves_the_new_mark()
+    {
+        Previous(Fixture.T0, false, E("a", turn: RestoreTurn.Working));
+        var clock = new Captured(Time);
+        var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using var r = Recorder(resumer: resumer, clock: clock);
+        r.Start();
+        await Until(() => resumer.Asked.Count == 1);
+        // The restore's mark is the last timer armed for a day before its launch (its stamp comes last).
+        (TimerCallback Callback, object? State, TimeSpan Due) expiry;
+        lock (clock.Timers) { expiry = clock.Timers.Last(x => x.Due == RestoreProtocol.ShownFor); }
+        resumer.Gate!.SetResult();
+        await Until(() => told.Count == 1);
+        resumer.Gate = null;
+
+        Assert.Equal(LaunchOutcome.Started, (await r.RestoreAsync(new RestoreAsk { Session = "a", Cause = RestoreCause.Crash, MidTurn = true, By = "host-signin" })).Outcome);
+        var replaced = marks.Of["a"];
+        expiry.Callback(expiry.State);
+
+        Assert.NotNull(replaced);
+        Assert.Same(replaced, marks.Of["a"]);
+    }
+
+    // A TimeProvider that keeps each timer's callback, to run one as if it had been dispatched before
+    // its timer was disposed.
+    sealed class Captured(FakeTimeProvider inner) : TimeProvider
+    {
+        public readonly List<(TimerCallback Callback, object? State, TimeSpan Due)> Timers = [];
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            lock (Timers) { Timers.Add((callback, state, dueTime)); }
+            return inner.CreateTimer(callback, state, dueTime, period);
+        }
     }
 
     sealed class Resumer : ISessionResumer

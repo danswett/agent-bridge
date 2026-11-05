@@ -43,6 +43,8 @@ internal sealed class SessionState
     public DateTimeOffset? LastEventAt;
     // Prompts the user sent; turnCount is these less the one still in progress.
     public int Prompts;
+    // When the newest of them was sent, by its own record: a restore tells a prompt after it by this.
+    public DateTimeOffset? LastPromptAt;
     // The turn in progress is not a prompt's (Claude's turn for a delegate's notice), so no
     // prompt is still in progress.
     public bool UncountedTurn;
@@ -70,7 +72,7 @@ internal sealed class SessionState
         AgentTitle = null; UserMessage = null; UserMessageFrom = null; UserMessageLabel = null; UserMessageKey = null; Response = null; Reasoning = null; Model = null;
         ResponseBy = null; ReasoningBy = null; OwnResponse = null; OwnResponseCut = false; OwnReasoning = null; OwnAt = null;
         Cwd = null; Branch = null; Repository = null; StartedAt = null; UpdatedAt = null; LastActivityAt = null; LastEventAt = null;
-        Prompts = 0; Compactions = 0; Seen = false; UncountedTurn = false;
+        Prompts = 0; LastPromptAt = null; Compactions = 0; Seen = false; UncountedTurn = false;
         Status = SessionStatus.Idle; StatusSince = null; EffectiveSince = null;
         Tools.Clear();
         Background.Clear();
@@ -125,6 +127,12 @@ internal sealed class SessionState
         Reasoning = null;
         ReasoningBy = null;
         OwnReasoning = null;
+    }
+
+    public void Prompt(DateTimeOffset? at)
+    {
+        Prompts++;
+        if (at is { } t && !(LastPromptAt >= t)) { LastPromptAt = t; }
     }
 
     // The turn ended without finishing (the user interrupted, or the agent shut down):

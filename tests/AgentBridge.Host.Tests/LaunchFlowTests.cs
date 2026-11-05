@@ -395,6 +395,22 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Empty(starter.Specs);
     }
 
+    // The host stopping (or a caller withdrawing) before the agent is started: nothing is started,
+    // and the restore is refused, so its stamp is taken back.
+    [Fact]
+    public async Task A_restore_withdrawn_before_its_launch_starts_nothing()
+    {
+        const string Id = "7d7d7d7d-7d7d-4d7d-8d7d-7d7d7d7d7d7d";
+        Resumable(Id, app, "Stopping");
+        using var stopping = new CancellationTokenSource();
+        stopping.Cancel();
+
+        var o = await Launcher(Config()).ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal), stopping.Token);
+
+        Assert.Equal(LaunchOutcome.Refused, o.Outcome);
+        Assert.Empty(starter.Specs);
+    }
+
     // The resume list reads only the newest 200 sessions of each agent; a restore names its session,
     // and finds it whatever its age.
     [Fact]

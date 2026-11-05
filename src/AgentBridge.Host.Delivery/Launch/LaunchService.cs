@@ -553,7 +553,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             Context = l is null ? null : l.Context ?? "",
             Permissions = l?.Permissions == LaunchProtocol.AllowAll ? LaunchProtocol.AllowAll : LaunchProtocol.Ask,
         };
-        return requests.Once(key, () => RunAsync(request, key, ask.By, restoring: true), result =>
+        return requests.Once(key, () => RunAsync(request, key, ask.By, restoring: true, cancellationToken), result =>
             log($"launch {Short(key)} ({ask.By}): {result.Outcome.ToString().ToLowerInvariant()}{(result.Session is { } s ? $" session {Short(s)}" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
     }
 
@@ -580,7 +580,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     sealed record Plan(Launcher Launcher, string Executable, string Directory, string? Workspace, WorkspaceConfig? Isolated, ResumeEntry? Resume,
         string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null);
 
-    async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false)
+    // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
+    // agent is started, never after: a started session is followed whatever happens.
+    async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false, CancellationToken ct = default)
     {
         try
         {
@@ -594,7 +596,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             log($"launch {Short(key)} received ({(settings.Length > 0 ? settings : "machine defaults")}; prompt of {(request.Prompt ?? "").Length} chars{((request.Attachments?.Count ?? 0) > 0 ? $", {request.Attachments!.Count} attachment(s)" : "")})");
             if (BusyReason() is { } busy) { return new LaunchResult(LaunchOutcome.Busy, busy) { Trust = BusyQuestion() }; }
 
-            var resolved = await ResolveAsync(CancellationToken.None);
+            var resolved = await ResolveAsync(ct);
             // A resume not on the list while discovery is held may be of a session that is
             // running unseen; that cannot be told until a complete pass, so it waits.
             if (request.Resume is { } resumeId && source.Held is { } held
@@ -607,7 +609,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 // Found among every stored session, not only the newest resumeCount; Settle and
                 // StartAsync still check its folder and that it is not running.
                 if (!resolved.Resumable.Any(e => string.Equals(e.Id, restoreId, StringComparison.OrdinalIgnoreCase))
-                    && await FindAsync(resolved.Executables, restoreId, CancellationToken.None) is { } found)
+                    && await FindAsync(resolved.Executables, restoreId, ct) is { } found)
                 {
                     resolved = resolved with { Resumable = [.. resolved.Resumable, found] };
                 }
@@ -641,7 +643,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                         return Refused($"'{fetched.About.Title}' is a {theirs} session, so it resumes in {theirs}, not {plan.Launcher.Label}");
                     }
                 }
-                return await StartAsync(plan, claim, key, handed, fetched);
+                return await StartAsync(plan, claim, key, handed, fetched, ct);
             }
             finally
             {
@@ -650,11 +652,17 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 fetched?.Dispose();
             }
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return Refused(Withdrawn);
+        }
         catch (Exception e)
         {
             return Refused($"the host could not launch the session: {e.Message}");
         }
     }
+
+    const string Withdrawn = "the restore was withdrawn (the host is stopping, or its caller cancelled it) before anything started";
 
     // agent-ha-bridge's Resolve-DaemonRequestedLaunch: what the request names, against what this
     // machine offers, with its defaults filling what the request leaves out.
@@ -770,11 +778,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer), null);
     }
 
-    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched)
+    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default)
     {
         Pending follow;
         LaunchedWith launched;
-        await starting.WaitAsync();
+        await starting.WaitAsync(ct);
         string? reservation = null, reserved = null;
         try
         {
@@ -888,6 +896,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             var tuning = string.Join(" / ", new[] { plan.Model, plan.Effort, plan.Context, plan.AllowAll ? "allow all" : "" }.Where(x => x.Length > 0));
             log($"launch {Short(key)}: {(plan.Resume is null ? "new" : "resuming")} {plan.Launcher.Label} session in '{plan.Where}' ({directory}){(plan.Profile.Length > 0 ? $" profile '{plan.Profile}'" : "")}{(tuning.Length > 0 ? $" [{tuning}]" : "")}");
 
+            // Last chance to withdraw: nothing has started yet.
+            if (ct.IsCancellationRequested) { return Refused(Withdrawn); }
             Started started;
             try { started = starter.Start(spec); }
             catch (Exception e)

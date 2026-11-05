@@ -139,7 +139,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     }
                     NewTurn();
                     Prompted(text, from, label, Json.Str(e, "id"));
-                    S.Prompts++;
+                    S.Prompt(Json.Time(e, "timestamp"));
                     S.UncountedTurn = false;
                     S.OwnReasoning = null;
                 }

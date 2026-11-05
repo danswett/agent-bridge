@@ -264,13 +264,13 @@ this host launched it with, each kept only while `launch.options` still offers i
 machine's default), and one that launch left to the agent is left to it; a session started by hand, of which nothing is known, asks permission, whatever
 the machine's default is: it is never given Allow all it may not have had. A restore that is refused
 or fails stays offered (one that registered and then failed, as one that died again). Restored, a session carries `restored` ([v1-sessions.md](protocol/v1-sessions.md#sessions))
-for this run, at most 24 hours: when, why, whether it went mid-turn or with a question waiting, and
+for this run, at most 24 hours (the badge goes then; what the interrupted run left stays hidden while the session lives): when, why, whether it went mid-turn or with a question waiting, and
 for one that went mid-turn `continue`, the words of the reply a client offers as **Continue**
 ("You were interrupted by a reboot at 03:12; carry on where you left off", in the machine's time).
 Continue is an ordinary `session.reply` a person sends, with no more trust than any reply; no host
 sends it, and `midTurn` and `continue` go once a prompt arrives after the restore, whether its turn is still running when the host looks or has already ended. A question or approval the interrupted run left waiting is not shown as asked (`questionLost` says it went); one asked after the restore is. Nor is the turn it was in shown as running: the session reads idle until a prompt arrives after the restore. Replies still read the transcript first and refuse while it holds an unanswered ask, since typing into a question the agent may still show would answer it; for Copilot, an ask or a turn left open by a CLI that was killed ends with the new CLI's `session.resume` (a question it puts up again is written again, and asks again).
 
-**Crash loops.** Each restore is stamped in the record **before** its launch, (on its owed entry, or in `stamps` for one the record holds no entry of), so a session that registers and dies at once, with the host, is still known as restored. A restore that starts nothing (busy, refused) puts back what was there before; a restore that registers and dies before its launch returns is offered as a loop. A restored session that dies before it has been seen live 10 minutes (with the host
+**Crash loops.** Each restore is stamped in the record **before** its launch (on its owed entry, or in `stamps` for one the record holds no entry of), so a session that registers and dies at once, with the host, is still known as restored. A restore that starts nothing (busy, refused, or withdrawn because the host is stopping or its caller cancelled it before the agent started) puts back what was there before, its own stamp and mark only; a restore that registers and dies before its launch returns is offered as a loop. A restored session that dies before it has been seen live 10 minutes (with the host
 watching, judged as at a start, so one its agent ended normally does not count; or found dead at the next start) is not restored again: it is kept owed, offered, and counted in
 `loops`. Its stamp is cleared only once it has been seen live that long; one still waiting to register (at folder trust) keeps it. A host that keeps starting
 cannot restore one more than once. A host that stops while a restore waits its turn starts nothing more, and lets the one under way finish (a few seconds at most) before its last write.
@@ -279,7 +279,7 @@ cannot restore one more than once. A host that stops while a restore waits its t
 running; one still being judged is never let go) unless it is resumed or seen live again, and said in `hello`'s `machine.restore` ([v1-sessions.md](protocol/v1-sessions.md#hello)) for
 this run, at most 24 hours, and in one `restored` notification, sent when every session is judged and
 restored, or 10 minutes after start, and only if this start found any that died. The notification
-says how many were restored, names those offered, and names those, restored or not, that went mid-turn or with a question waiting; one an earlier start offered is offered still in
+says how many were restored (a session restored and then offered as a loop is counted once, as a loop), names those offered, and names those, restored or not, that went mid-turn or with a question waiting; one an earlier start offered is offered still in
 `hello`, not notified again, and is not restored by a later start: a person resumes it from Launch.
 One an earlier start was still judging is judged now, as of this start's cause. Beside agent-ha-bridge,
 or while the machine is read-only or launching is off, nothing is restored: the sessions are only

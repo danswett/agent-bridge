@@ -385,6 +385,7 @@ internal sealed class SessionTracker
     // How many prompts the transcript has had, so the driver can tell when more than one came in one
     // read, and so cannot know which of them a reply's arm was for.
     public int Prompts => _state.Prompts;
+    public DateTimeOffset? LastPromptAt => _state.LastPromptAt;
 
     // The sub-agents with a question pending.
     HashSet<string> Waiting() => [.. _state.Pending.Where(q => q.Agent is not null).Select(q => q.Agent!)];

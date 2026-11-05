@@ -846,12 +846,14 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         {
             if (mark is null)
             {
+                // The badge goes, the boundary stays: the session is still the restored one.
                 _restoreMarksBefore.Remove(id);
-                if (!_restoreMarks.Remove(id)) { return; }
+                if (!_restoreMarks.TryGetValue(id, out var showing) || !showing.Shown) { return; }
+                showing.Shown = false;
             }
             else
             {
-                if (_restoreMarks.TryGetValue(id, out var was) && was.Given == mark) { return; }
+                if (_restoreMarks.TryGetValue(id, out var was) && was.Given == mark && was.Shown) { return; }
                 if (was is not null) { _restoreMarksBefore[id] = was; } else { _restoreMarksBefore.Remove(id); }
                 _restoreMarks[id] = new RestoreMarkState(mark);
             }
@@ -901,6 +903,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         entry.Full = full;
         DateTimeOffset? endingSince;
         SessionRestored? restored;
+        DateTimeOffset? boundary = null;
         var prompted = false;
         lock (_gate)
         {
@@ -908,18 +911,20 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             // Continue is for a session that went mid-turn and has not been given a turn since:
             // once a prompt arrives after the restore (Continue pressed, any reply, or typed at the
             // machine), it goes, whether that turn is still running when this looks or has already
-            // ended or come to a question. Counted against the prompts the transcript held when the
-            // mark was first shown, so the interrupted turn it still shows does not count.
+            // ended or come to a question. A prompt is after the restore by its own time, so one
+            // whose whole turn ran before the first read after the launch still counts; and by the
+            // count the transcript held when the mark was first read, for one with no time.
             restored = null;
             if (_restoreMarks.TryGetValue(full.Id, out var state))
             {
                 state.Prompts ??= entry.Tracker.Prompts;
-                prompted = entry.Tracker.Prompts > state.Prompts;
+                prompted = entry.Tracker.Prompts > state.Prompts || entry.Tracker.LastPromptAt > state.Mark.At;
                 if (state.Mark.MidTurn == true && (prompted || (full.Status == SessionStatus.Working && full.StatusSince > state.Mark.At)))
                 {
                     state.Mark = state.Mark with { MidTurn = null, Continue = null };
                 }
-                restored = state.Mark;
+                boundary = state.Mark.At;
+                restored = state.Shown ? state.Mark : null;
             }
         }
         (DriverKind? Kind, string? Principal) driver = (null, null);
@@ -961,22 +966,23 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             }
         }
         if (endingSince is { } since) { shown = shown with { Status = SessionStatus.Ending, StatusSince = since }; }
-        if (restored is not null)
+        if (restored is not null) { shown = shown with { Restored = restored }; }
+        // Badge or not (it goes after a day; the restore stays):
+        if (boundary is { } restoredAt)
         {
-            shown = shown with { Restored = restored };
             // A question or approval the interrupted run left waiting went with it (questionLost says
             // so): the resumed agent is not asking it, so it is not shown as asked. One asked after
             // the restore is. Replies still read the transcript first, and refuse while it holds an
             // unanswered ask: typing into a question the agent may still show would answer it.
-            if (shown.Status == SessionStatus.Waiting && shown.StatusSince < restored.At && (shown.Question is null || shown.Question.AskedAt < restored.At))
+            if (shown.Status == SessionStatus.Waiting && shown.StatusSince < restoredAt && (shown.Question is null || shown.Question.AskedAt < restoredAt))
             {
-                shown = shown with { Question = null, WaitingOn = null, Status = SessionStatus.Idle, StatusSince = restored.At };
+                shown = shown with { Question = null, WaitingOn = null, Status = SessionStatus.Idle, StatusSince = restoredAt };
             }
             // Nor is the turn the interrupted run was in: resumed with no prompt, the agent is idle
             // until a prompt arrives after the restore, whatever its transcript last said.
-            else if (shown.Status == SessionStatus.Working && shown.StatusSince < restored.At && !prompted)
+            else if (shown.Status == SessionStatus.Working && shown.StatusSince < restoredAt && !prompted)
             {
-                shown = shown with { Status = SessionStatus.Idle, StatusSince = restored.At };
+                shown = shown with { Status = SessionStatus.Idle, StatusSince = restoredAt };
             }
         }
         if (_drivers is not null)
@@ -1184,5 +1190,7 @@ sealed class RestoreMarkState(SessionRestored mark)
     // As the recorder gave it; Mark loses midTurn and Continue once a turn starts.
     public SessionRestored Given { get; } = mark;
     public SessionRestored Mark { get; set; } = mark;
+    // The badge (Session.restored): false once the recorder has taken it away. The boundary stays.
+    public bool Shown { get; set; } = true;
     public int? Prompts { get; set; }
 }
