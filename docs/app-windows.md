@@ -455,8 +455,9 @@ into one folder with one version. An app update is a host update, so they never 
 
 ### Releases and updates: every merge to main is a pre-release
 
-CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` a GitHub
-pre-release, `v0.1.<n>`, of the whole package. Installed copies include pre-releases by
+CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` whose CI built the
+app a GitHub pre-release, `v0.1.<n>`, of the whole package. A change the app's jobs don't
+select (docs only, say) builds and publishes nothing. Installed copies include pre-releases by
 default and install them by themselves once their host is idle (Automatic updates, above);
 Settings, **Check for updates** and **Install**, does it at once, as does the Home Assistant
 connector's Install button on a machine the dashboard drives.
@@ -465,17 +466,19 @@ connector's Install button on a machine the dashboard drives.
   requests and pushes, so main's versions only rise, with gaps; a re-run keeps its number.
   Renaming or recreating `ci.yml` starts the count at 1 again, below every release, and no
   installed copy would ever take one: move the minor version up (`0.2.<n>`) in the same change.
-* **When:** after every check job in CI on that commit has passed: the `product` tests (Linux,
-  Windows x64 and Windows on Arm) and both `app` jobs (x64 and Arm64: build, pack, self-test,
-  install), and also the PWA, Home Assistant, spike and light jobs, none of which may have failed
-  or been cancelled. It runs for pushes to `danswett/agent-bridge`'s `main` only: never a pull
+* **When:** after every check job CI selected on that commit has passed, the `app` jobs among
+  them: the `product` tests (Linux, Windows x64 and Windows on Arm), both `app` jobs (x64 and
+  Arm64: build, pack, self-test, install), and whichever PWA, Home Assistant, spike and light
+  jobs ran, none of which may have failed or been cancelled. Main's CI plans from its last passed
+  commit, so an app change whose own run was replaced while waiting is built by the next run.
+  It runs for pushes to `danswett/agent-bridge`'s `main` only: never a pull
   request or a fork. It
   is the only job with `contents: write`, and runs one at a time (concurrency group
-  `publish-prerelease`). Before it, `publish-gate` lets through only the commit `main` is at
-  now: GitHub keeps one waiting job per concurrency group and cancels the older waiting one, so
-  a slow build of an older merge must not reach the group and evict a newer one. A run whose
-  commit main has moved past publishes nothing, and the newer commit's run publishes instead
-  (re-run it if it failed).
+  `publish-prerelease`), and publishes each version once and never one older than any already
+  out, so release order doesn't rest on the order main's CI runs go in (concurrency group
+  `ci-main`, which GitHub doesn't promise): a run publishes even after `main` has moved on, and
+  one that reaches `publish` after a newer release publishes nothing (re-run a failed run to
+  publish it, while no newer one has).
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag

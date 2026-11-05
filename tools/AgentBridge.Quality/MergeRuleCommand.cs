@@ -414,7 +414,10 @@ static class MergeRuleCommand
     /// (one REST call). A newer run still going doesn't count, so main stays red until the fix's
     /// run passes; but a finished run being re-run (attempt 2 on) does, as not green, since its
     /// attempt before was newer than any older run's, and is almost always red: no one re-runs a
-    /// green main. No finished run, or one that can't be read, fails closed.
+    /// green main. One exception: a run cancelled before any job started, with a newer run after
+    /// it, was a pending run that main's CI concurrency group replaced with the newer one; it
+    /// tested nothing, so it's passed over. No finished run, or one that can't be read, fails
+    /// closed, and so does a cancelled run whose jobs can't be read.
     /// </summary>
     static MainFact ReadMain(Session session, out string log)
     {
@@ -425,16 +428,26 @@ static class MergeRuleCommand
         {
             using var doc = session.Rest(path);
             var runs = doc.RootElement.GetProperty("workflow_runs").EnumerateArray()
-                .OrderByDescending(r => r.GetProperty("id").GetInt64());
-            foreach (var run in runs)
+                .OrderByDescending(r => r.GetProperty("id").GetInt64()).ToList();
+            var replaced = new List<string>();
+            for (var i = 0; i < runs.Count; i++)
             {
+                var run = runs[i];
                 var sha = MergeRule.Short(run.GetProperty("head_sha").GetString() ?? "");
                 var id = run.GetProperty("id").GetInt64();
                 var attempt = run.TryGetProperty("run_attempt", out var a) && a.ValueKind == JsonValueKind.Number ? a.GetInt32() : 1;
                 if (run.GetProperty("status").GetString() == "completed")
                 {
                     var conclusion = run.GetProperty("conclusion").GetString() ?? "without a result";
-                    log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {sha} ended {conclusion}.";
+                    // i > 0: only a run with a newer one after it can have been replaced; the newest
+                    // cancelled, or a re-run attempt cancelled, could hide a real result.
+                    if (conclusion == "cancelled" && i > 0 && attempt == 1 && NeverStarted(session, id))
+                    {
+                        replaced.Add($"{id} on {sha}");
+                        continue;
+                    }
+                    log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {sha} ended {conclusion}."
+                        + (replaced.Count > 0 ? $" Passed over run(s) {string.Join(", ", replaced)}: cancelled before starting, replaced by a newer run." : "");
                     return conclusion == "success"
                         ? new MainFact("success", $"{config.Base}'s CI {sha} passed")
                         : new MainFact("failure", $"{config.Base} is red (CI {sha}): waiting for {config.Base} to be fixed");
@@ -453,6 +466,22 @@ static class MergeRuleCommand
             log = $"Main: couldn't read {config.MainGreen.Workflow}'s runs on {config.Base}: {e.Message}";
             return new MainFact("error", MergeRule.Printable($"couldn't read {config.Base}'s CI: {e.Message}"));
         }
+    }
+
+    /// <summary>
+    /// Whether no job of the run's latest attempt ever ran: none got a runner or a step. A pending
+    /// run replaced in a concurrency group has no jobs at all, or only ones never picked up. A
+    /// list cut short, or a job without those facts, isn't proof, so the run counts.
+    /// </summary>
+    static bool NeverStarted(Session session, long run)
+    {
+        using var doc = session.Rest($"repos/{session.Slug}/actions/runs/{run}/jobs?per_page=100");
+        var jobs = doc.RootElement.GetProperty("jobs");
+        return doc.RootElement.GetProperty("total_count").GetInt32() == jobs.GetArrayLength()
+            && jobs.EnumerateArray().All(job =>
+                job.TryGetProperty("runner_id", out var runner)
+                && (runner.ValueKind == JsonValueKind.Null || (runner.ValueKind == JsonValueKind.Number && runner.GetInt64() == 0))
+                && job.TryGetProperty("steps", out var steps) && steps.ValueKind == JsonValueKind.Array && steps.GetArrayLength() == 0);
     }
 
     // REST names a bot "app[bot]" and GraphQL "app"; read both the GraphQL way.

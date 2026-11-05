@@ -19,7 +19,7 @@ public class CiPlanTests
                   JOBS: product ha-integration
           product:
             needs: plan
-            if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.product == 'true'
+            if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.product == 'true'
             strategy:
               matrix:
                 os: ${{ fromJSON(needs.plan.outputs.product-os) }}
@@ -29,25 +29,27 @@ public class CiPlanTests
               WHOLE_RING: ${{ needs.plan.outputs.whole-ring }}
             steps:
               - name: The NativeAOT transport
-                if: runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))
+                if: runner.os == 'Windows' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))
           ha-integration:
             needs: plan
-            if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'
+            if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'
           relay-image-sarif:
             needs: product
           quality-gate:
             needs: [plan, product, ha-integration]
             if: always()
+            outputs:
+              app: ${{ needs.app.result }}
           publish-gate:
             needs: [quality-gate]
             if: >-
               !cancelled() && github.event_name == 'push'
-              && needs.quality-gate.result == 'success'
+              && needs.quality-gate.result == 'success' && needs.quality-gate.outputs.app == 'success'
         """;
 
-    const string StepIf = "runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))";
-    const string StepProblem = "ci.yml job product step \"The NativeAOT transport\" must run on main and in the whole ring whatever the plan selected: " +
-        "its if: must be [runner.os == 'Windows|Linux|macOS' && ][!cancelled() && ](github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), '...') || ...)";
+    const string StepIf = "runner.os == 'Windows' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))";
+    const string StepProblem = "ci.yml job product step \"The NativeAOT transport\" must run in the whole ring whatever the plan selected: " +
+        "its if: must be [runner.os == 'Windows|Linux|macOS' && ][!cancelled() && ](env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), '...') || ...)";
 
     static IEnumerable<string> Check(string yaml) => CiPlan.Check(Fixture.Catalog(), yaml).Select(p => p.Message);
 
@@ -55,7 +57,7 @@ public class CiPlanTests
     public void The_wired_fixture_has_no_problems_so_each_test_below_shows_one_drift()
     {
         Assert.Empty(Check(Wired));
-        Assert.Empty(Check(Wired.Replace(StepIf, "${{ !cancelled() && ( github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'protocol') || contains(fromJSON(env.SUITES), 'transport') ) }}")));
+        Assert.Empty(Check(Wired.Replace(StepIf, "${{ !cancelled() && ( env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'protocol') || contains(fromJSON(env.SUITES), 'transport') ) }}")));
     }
 
     [Fact]
@@ -89,17 +91,19 @@ public class CiPlanTests
     [InlineData("runner.os == 'Windows' && contains(fromJSON(env.SUITES), 'transport')")]
     // Actions reads function and context names in any case; the check holds them to one spelling.
     [InlineData("runner.os == 'Windows' && contains(fromJson(env.SUITES), 'transport')")]
-    [InlineData("runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(ENV.suites), 'transport'))")]
-    // A bypass that's there but can't bypass: main would still skip it unless protocol is selected.
-    [InlineData("runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport')) && contains(fromJSON(env.SUITES), 'protocol')")]
+    [InlineData("runner.os == 'Windows' && (env.WHOLE_RING == 'true' || contains(fromJSON(ENV.suites), 'transport'))")]
+    // A bypass that's there but can't bypass: the whole ring would still skip it unless protocol is selected.
+    [InlineData("runner.os == 'Windows' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport')) && contains(fromJSON(env.SUITES), 'protocol')")]
     [InlineData("runner.os == 'Windows' && (github.event_name != 'pull_request' || contains(fromJSON(env.SUITES), 'transport'))")]
-    [InlineData("runner.os == 'Windows' && github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport')")]
+    [InlineData("runner.os == 'Windows' && env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport')")]
+    // The old main bypass: every push to main would run the step again, whatever its plan selected.
+    [InlineData("runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))")]
     // Guards that hold nowhere: two OSes, or one no runner has.
-    [InlineData("runner.os == 'Windows' && runner.os == 'Linux' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))")]
-    [InlineData("runner.os == 'Windwos' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))")]
+    [InlineData("runner.os == 'Windows' && runner.os == 'Linux' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))")]
+    [InlineData("runner.os == 'Windwos' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))")]
     // The plan's suites read straight from needs, not through env.SUITES.
     [InlineData("runner.os == 'Windows' && github.event_name == 'pull_request' && contains(fromJSON(needs.plan.outputs.suites), 'transport')")]
-    public void A_suite_gated_step_that_main_or_the_whole_ring_could_skip_is_reported(string condition)
+    public void A_suite_gated_step_the_whole_ring_could_skip_or_main_would_always_run_is_reported(string condition)
     {
         Assert.Equal([StepProblem], Check(Wired.Replace(StepIf, condition)));
     }
@@ -157,8 +161,10 @@ public class CiPlanTests
     [Theory]
     // Gated on another job's output: quality-gate couldn't tell whether it had to run.
     [InlineData("needs.plan.outputs.ha-integration == 'true'", "needs.plan.outputs.product == 'true'")]
-    // Skipped on main, or on a whole-ring pull request.
-    [InlineData("github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration", "needs.plan.outputs.ha-integration")]
+    // Skipped on a whole-ring run.
+    [InlineData("needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration", "needs.plan.outputs.ha-integration")]
+    // The old main bypass: every push to main would run the job again, whatever its plan selected.
+    [InlineData("if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration", "if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration")]
     [InlineData("|| needs.plan.outputs.ha-integration == 'true'", "|| needs.plan.outputs.ha-integration == 'true' && needs.plan.outputs.product == 'true'")]
     // A bare read, or the index syntax, without the comparison the gate shape has.
     [InlineData("|| needs.plan.outputs.ha-integration == 'true'", "|| needs.plan.outputs.ha-integration")]
@@ -167,7 +173,7 @@ public class CiPlanTests
     {
         var problems = Check(Wired.Replace(from, to));
 
-        Assert.Equal(["ci.yml job ha-integration is gated on the plan, but its if: isn't exactly: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'"], problems);
+        Assert.Equal(["ci.yml job ha-integration is gated on the plan, but its if: isn't exactly: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'"], problems);
     }
 
     [Fact]
@@ -179,7 +185,7 @@ public class CiPlanTests
             .Replace("ha-integration: ${{ steps.select.outputs.ha-integration }}", ""));
 
         Assert.Equal([
-            "ci.yml job ha-integration is gated on the plan, but its if: isn't exactly: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'",
+            "ci.yml job ha-integration is gated on the plan, but its if: isn't exactly: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'",
             "ci.yml job ha-integration is gated on the plan, but the plan's JOBS doesn't list it, so it would never run on a pull request",
             "ci.yml plan has no output ha-integration",
         ], problems);
@@ -207,6 +213,18 @@ public class CiPlanTests
         Assert.Equal([problem], Check(Wired.Replace(from, to)));
     }
 
+    // On main the app job runs only when selected; a run that skipped it must publish nothing.
+    [Theory]
+    [InlineData(" && needs.quality-gate.outputs.app == 'success'", "", "ci.yml publish-gate's if: doesn't require needs.quality-gate.outputs.app == 'success' (as one of its top-level && conditions), so a run that skipped the app would publish")]
+    [InlineData("needs.quality-gate.outputs.app == 'success'", "needs.quality-gate.outputs.app != 'failure'", "ci.yml publish-gate's if: doesn't require needs.quality-gate.outputs.app == 'success' (as one of its top-level && conditions), so a run that skipped the app would publish")]
+    [InlineData("needs.quality-gate.outputs.app == 'success'", "!(false && needs.quality-gate.outputs.app == 'success' && false)", "ci.yml publish-gate's if: doesn't require needs.quality-gate.outputs.app == 'success' (as one of its top-level && conditions), so a run that skipped the app would publish")]
+    [InlineData("app: ${{ needs.app.result }}", "app: success", "ci.yml quality-gate's output app isn't exactly ${{ needs.app.result }}, so publish-gate can't tell this run built the app")]
+    [InlineData("app: ${{ needs.app.result }}", "apps: ${{ needs.app.result }}", "ci.yml quality-gate's output app isn't exactly ${{ needs.app.result }}, so publish-gate can't tell this run built the app")]
+    public void A_publish_gate_that_would_publish_a_run_that_skipped_the_app_is_reported(string from, string to, string problem)
+    {
+        Assert.Equal([problem], Check(Wired.Replace(from, to)));
+    }
+
     [Fact]
     public void A_publish_gate_if_that_mixes_text_and_an_expression_is_reported_since_any_such_string_is_true()
     {
@@ -224,10 +242,10 @@ public class CiPlanTests
     }
 
     [Theory]
-    [InlineData("[publish-gate]", "needs.publish-gate.outputs.newest == 'true'", null)]
+    [InlineData("[publish-gate]", "github.ref == 'refs/heads/main'", null)]
     [InlineData("[plan]", "github.event_name == 'push'", "ci.yml delivery job publish must need exactly [publish-gate]")]
-    [InlineData("[publish-gate]", "always() && needs.publish-gate.outputs.newest == 'true'", IfProblem)]
-    [InlineData("[publish-gate]", "needs.publish-gate.outputs.newest == 'true' || github.event_name == 'push'", IfProblem)]
+    [InlineData("[publish-gate]", "always() && github.ref == 'refs/heads/main'", IfProblem)]
+    [InlineData("[publish-gate]", "github.ref == 'refs/heads/main' || github.event_name == 'push'", IfProblem)]
     public void Publish_runs_only_after_publish_gate_succeeded(string needs, string condition, string? problem)
     {
         var problems = Check(Wired + $"\n  publish:\n    needs: {needs}\n    if: {condition}\n");

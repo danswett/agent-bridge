@@ -84,7 +84,7 @@ Each ring runs everything in the rings below it, plus its own suites. The rule i
 |---|---|---|---|---|---|
 | **0 Inner loop** | On demand, and as a pre-push hook | < 60 s typical | The suites a change reaches (§4), unit and component only, on this machine's OS; secret scan of staged files; design check if `design/` changed | Developer machine or agent session | Nothing; it's advice |
 | **1 PR gate** | Every push to a PR that isn't a draft, and marking one ready for review | < 15 min wall | Selected suites on every OS they declare, plus the sentinels (`protocol`, CodeQL, dependency review). Shipped-binary checks (AOT, container, package) when reached. axe for PWA changes. Diff coverage | GitHub-hosted runners | Merge (one required check: `quality-gate`) |
-| **2 Main** | Every merge to `main`, before publish | < 30 min | **Everything** hosted, on every platform: upgrade by delta, WinUI and Apple UI tests, a11y scans, benchmarks recorded, SBOM and attestation, container scan, relay staging smoke | Hosted runners and staging | Publishing to the `dev` channel |
+| **2 Main** | A merge to `main` that changes what decides selection, or whose last passed commit can't be found, before publish; any other merge to `main` runs ring 1 for everything since that commit (§4.7) | < 30 min | **Everything** hosted, on every platform: upgrade by delta, WinUI and Apple UI tests, a11y scans, benchmarks recorded, SBOM and attestation, container scan, relay staging smoke | Hosted runners and staging | Publishing to the `dev` channel |
 | **3 Nightly / candidate** | Nightly on `main`'s head, and on demand for a candidate | < 3 h | Lab VMs: install the dev build on clean Windows x64 and Arm64, Linux and macOS. End to end with simulated agents, then real agents. Agent drift. Perf on quiet machines against baselines. Relay load and DAST on staging. Fuzzing | Lab (§6), staging | Promotion to `beta` |
 | **4 Release** | Before promotion to `stable`, or relay production | Hours to days | Migrate and roll back from the S0 snapshot. Shadow soak gate. Relay production smoke. iPhone PWA and screen-reader checklists. A release-readiness report | Lab, real devices, the owner | Promotion to `stable`; relay production approval |
 
@@ -266,14 +266,28 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    that pulled it in. The PR summary shows that table, so a reviewer can see what didn't
    run and why.
 7. **GitHub mechanics:** ci.yml's `plan` job checks the catalog, then runs the selector through
-   `quality/plan.ps1`: ring 1 on a pull request, ring 2 on `main`, and on a draft the fast ring
+   `quality/plan.ps1`: ring 1 on a pull request and on `main`, and on a draft the fast ring
    (`-FastRing`: ring 0, Linux only, §2).
 
+   **Main, at most one run at a time.** Pushes to `main` share the concurrency group `ci-main`,
+   which never cancels a run in progress: at most one runs and one waits, and a newer waiting run
+   (or a re-run of an old one) cancels the one waiting before it starts (the merge rule passes
+   over such a run, item 9). GitHub promises no order between them, and nothing relies on one.
+   So a main run's change is everything since the last commit main's CI
+   passed on: the plan reads `ci.yml`'s passed push runs on `main` (the newest 100, through the
+   `actions: read` token), takes the newest whose commit is an ancestor of this one, fetches
+   the whole history and diffs from there, so the changes of commits whose own run was replaced,
+   or went red, are tested with this one. A base older than needed only tests more; none found,
+   or the runs unreadable, runs the whole ring, never "no change". A docs-only push to `main`
+   runs what docs select (`light`'s link check, say), not the app or the product's builds.
+   Pull requests keep cancelling a superseded run, and a run by hand its own group.
+
    **What decides selection doesn't select for itself (#487).** Before the selector is built,
-   the plan job compares `HEAD^1..HEAD` with a fixed list in ci.yml: `.github/`, `quality/`,
+   the plan job compares the change (`HEAD^1..HEAD` on a pull request; on `main`, since its last
+   passed commit) with a fixed list in ci.yml: `.github/`, `quality/`,
    `tools/AgentBridge.Quality/`, `tests/AgentBridge.Quality.Tests/`, `build/`, and any
    `Directory.*.props` or `.targets`, `*.sln`/`*.slnx`, `global.json` or `nuget.config`. A ready
-   pull request that touches one runs the whole ring: its `whole-ring` output, written by a step
+   pull request or a push to `main` that touches one runs the whole ring: its `whole-ring` output, written by a step
    of its own that nothing from the change runs in, makes every gated job and every
    suite-gated step run, `product` test the whole solution on all three runners, and the plan
    select ring 2 (with ring 1's choice beside it). Otherwise a selector or catalog under change
@@ -298,7 +312,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    for reruns with `gh workflow run --ref`, fires only once the file has run or is on `main`), or
    listed in the catalog with `status: planned`. It also checks ci.yml's wiring to the plan, which
    only names hold together: every job whose `if:` reads the plan has exactly the one gate shape
-   (its own output, and it runs on `main` and in the whole ring whatever the plan says); the plan
+   (its own output, and it runs in the whole ring whatever the plan says); the plan
    step's `JOBS`, the jobs gated on the plan and the plan's outputs, bound to the steps that
    compute them, agree; every check job in ci.yml is in `quality-gate`'s needs (all but the
    delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, each pinned to the one
@@ -307,16 +321,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    condition, and `publish` needs `publish-gate` with no status function; the plan's suites and
    whole-ring reach steps only as `SUITES` and `WHOLE_RING`; and each step that reads the plan's
    suites names suites the catalog has, whose `where:` names that job explicitly, in the one
-   condition shape that runs on `main` and in the whole ring whatever the plan selected, with an
+   condition shape that runs in the whole ring whatever the plan selected, with an
    OS guard only for an OS its job runs on (`product`'s runners are pinned to all three there).
    The plan writes the "what runs and why" table to the run's summary, and outputs:
    - a true or false per job, from the selected suites' `where:`. So the catalog, not ci.yml,
-     says which suites a job runs, and moving a suite moves its trigger. On a pull request a
-     job runs only when it's true or the whole ring runs; on `main` every job runs whatever the
-     plan says;
+     says which suites a job runs, and moving a suite moves its trigger. On a pull request and
+     on `main` a job runs only when it's true or the whole ring runs;
    - the selected suites, which gate the steps inside `product` (the AOT injector and hook,
-     the build scripts, the relay container) and inside `light`, on a pull request only: on
-     `main`, and when the whole ring runs, every one of those steps runs;
+     the build scripts, the relay container) and inside `light`: when the whole ring runs,
+     every one of those steps runs;
    - `product`'s test projects, tested through a solution filter, still under
      `dotnet-coverage` with TRX and `--blame-hang`. When the whole ring runs, it's
      `AgentBridge.slnx` as before. The whole solution is always built, since projects no
@@ -365,7 +378,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      fetch and the Canonical count, belong to the forced proof alone: a fallback after a real
      five-minute timeout, on any run, is the one above, unchanged (#817 first proposed failing
      that one on an Azure fetch too, and dropped it). A run by hand runs every
-     job, as on `main`, but is never a release and writes no cache.
+     job (the whole ring), but is never a release and writes no cache.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
@@ -386,16 +399,25 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      reads, and would hold every pull request as if main were red.
 
    A final `quality-gate` job (`if: always()`) needs all of them. It fails if any failed or was
-   cancelled, and if any job the plan selected didn't succeed: on `main`, and when the whole ring
-   runs, that's every job; on a pull request, every job the plan gave true. A job the plan
+   cancelled, and if any job the plan selected didn't succeed: when the whole ring runs, that's
+   every job; otherwise, on `main` as on a pull request, every job the plan gave true (and a
+   plan that passed must have given each job, and `whole-ring`, exactly true or false). A job the plan
    skipped is fine. It's the required check (on `main` since 2026-11-03, with `merge-rule` beside
    it in main's ruleset, item 9), so skipped jobs never leave a pull request waiting.
    `publish-gate` needs `quality-gate` and its success, rather than a second copy of its list
-   (#512), so on `main` every ci.yml check job must have run and passed before a release
-   publishes, and a selection miss, or any red suite, is caught first. CodeQL, perf and the relay
+   (#512), so on `main` every ci.yml check job the plan selected must have run and passed before
+   a release publishes, and a selection miss, or any red suite, is caught first. It also needs
+   this run to have built the app (`quality-gate`'s `app` output, both pinned by the catalog
+   check): a main run whose change left
+   the app alone publishes nothing. Release order doesn't rest on the order main's runs go in,
+   which GitHub doesn't promise: `publish` runs one at a time, and inside it
+   `publish-prerelease.ps1` publishes each version (the run number) once and never one older
+   than any published. So a run publishes even after `main` has moved on (an app change followed
+   by a docs-only commit is released by the first's run), and one reaching `publish` after a
+   newer release publishes nothing. CodeQL, perf and the relay
    workflow run apart and don't hold a release.
-8. **Keeping the selector honest:** ring 2 runs everything on `main`, and each `main` run's
-   summary also says which jobs ring 1 chose for the same change. For every ring-2
+8. **Keeping the selector honest:** a whole-ring run (ring 2, every gated job) also says in its
+   summary which jobs ring 1 chose for the same change. For every ring-2
    failure, a nightly job asks whether ring 1's selection for that PR would have included
    the failing test. A **selection miss** is a bug in the catalog. It gets an issue, and the
    rate is a tracked metric (target: zero).
@@ -430,7 +452,12 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      landing pull requests on a broken main, which makes the breakage hard to untangle. Each run
      reads main once: `ci.yml`'s push runs on main, newest first, judged by the latest that
      finished, so a newer one still going doesn't free a red main until it passes; a finished run
-     being re-run counts as not green (its last finished attempt was almost always red). While it
+     being re-run counts as not green (its last finished attempt was almost always red). A run
+     cancelled while still pending, replaced in `ci-main` by a newer push before any job of it
+     started (a first attempt with a newer run listed, whose jobs, every one read, have no
+     runner and no steps), tested nothing, so it is passed over for the finished run before it,
+     red or green; any other cancelled run, or one whose jobs can't be read, still counts as not
+     green. While it
      isn't green, every pull request fails, its description starting `Main is red (CI <sha>)`;
      main unread, or with no finished run, fails closed. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from the merge coordinator, since labels take triage

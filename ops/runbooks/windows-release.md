@@ -7,7 +7,7 @@
 
 ## How releases reach machines today
 
-Every merge to `main` publishes a GitHub **pre-release** (`v0.1.<run>`), with x64 (`win`) and
+Every merge to `main` whose CI builds the app publishes a GitHub **pre-release** (`v0.1.<run>`), with x64 (`win`) and
 Arm64 (`win-arm64`) channels. Installed apps and hosts check every 30 minutes and install when
 the host is idle, or after 6 hours regardless (AutoUpdater.cs). They read releases
 **anonymously** from the GitHub API (`GithubSource` with no token: src/AgentBridge.App/Platform.cs,
