@@ -50,9 +50,15 @@ public static partial class CopilotFormScreen
     // across the whole screen, a field titled "Data" over hints starting "enter" read "ae" across
     // the two, and the words "ae" typed between them hid it, so their Enter was never pressed
     // (Copilot 4480874526). The heading and hints are never part of it; it is less than the
-    // whole screen, so it never shows words the screen does not.
+    // whole screen, so it never shows words the screen does not. An empty Other box's placeholder
+    // is read as the empty box it is: counted, it was the words "answer" already showing before
+    // they were typed, and once they replaced it they showed no more often, so their Enter was
+    // withheld (#510 review, Copilot 4482280064). Taken out of every read alike, it can only
+    // make a box showing it read as empty, never words show that are not there.
     public static List<string>? Input(IReadOnlyList<string> rows, CopilotForm form, int index) =>
-        Locate(rows, form, index, out var heading, out var hints) is null ? [.. rows.Skip(heading + 1).Take(hints - heading - 1)] : null;
+        Locate(rows, form, index, out var heading, out var hints) is null
+            ? [.. rows.Skip(heading + 1).Take(hints - heading - 1).Select(Unplaceheld)]
+            : null;
 
     static string? Locate(IReadOnlyList<string> rows, CopilotForm form, int index, out int fieldHeading, out int hintsStart)
     {
@@ -195,6 +201,23 @@ public static partial class CopilotFormScreen
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex Spaces();
+
+    // An empty Other box, as Copilot CLI 1.0.105 draws it (`Dxn`, and the other lists' `jl` with
+    // `placeholder:"Type your answer..."`): the caret, then the placeholder, whole or cut short
+    // with an ellipsis where the row is too narrow; the caret alone in its place. A text or number
+    // box (`Fxn`, `Lxn`) draws no placeholder.
+    const string OtherPlaceholder = "Type your answer...";
+
+    static string Unplaceheld(string row)
+    {
+        if (CaretRow().Match(row) is not { Success: true } m) { return row; }
+        var text = m.Groups[2].Value;
+        var shown = text == OtherPlaceholder || text.Length > 1 && text[^1] == '\u2026' && OtherPlaceholder.StartsWith(text[..^1], StringComparison.Ordinal);
+        return shown ? m.Groups[1].Value : row;
+    }
+
+    [GeneratedRegex(@"^(\s*\u276F\s*)(.*?)\s*$")]
+    private static partial Regex CaretRow();
 
     // "1. Yes", highlighted or not, bare or between a box's sides.
     [GeneratedRegex(@"^[\s\u2502\u2503|]*(?:\u276F\s*)?1\.\s+Yes\b")]

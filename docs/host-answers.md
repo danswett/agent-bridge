@@ -73,6 +73,9 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     field titled "Data" over hints starting "enter" read "ae" across the two, so the words
     "ae" typed between them never showed more often and their Enter was never pressed (#510
     review). Read in less of the screen, words only ever show less, never where they are not.
+    An empty Other box's placeholder ("Type your answer...", whole or cut short with an
+    ellipsis) is read as the empty box it is, so words it already reads ("answer") show once
+    they replace it; words that read exactly as the placeholder never show, and get no Enter.
   * Every answer, a single list or Yes/No included, goes field by field, each field its own
     writes, never batched with another's:
     its keys, held to the field they were planned for, then its Enter alone once the screen

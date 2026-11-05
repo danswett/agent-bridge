@@ -719,6 +719,46 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains(injector.Plans[2].Plan.Sends[0].Expect!, r => r.Text.Contains($"❯ {OtherWords}", StringComparison.Ordinal));
     }
 
+    [Theory]
+    // Words the empty box's placeholder ("Type your answer...") already reads: counted with it,
+    // they showed once before they were typed and once after, so their Enter was withheld
+    // (#510 review, Copilot 4482280064). Narrow: a row too narrow for the placeholder cuts it
+    // short with an ellipsis.
+    [InlineData("answer", false)]
+    [InlineData("your answer", false)]
+    [InlineData("Type", false)]
+    [InlineData("Type your answer", false)]
+    [InlineData("answer", true)]
+    public async Task Other_words_the_empty_boxs_placeholder_reads_get_their_Enter_once_they_show_in_its_place(string words, bool narrow)
+    {
+        injector.Screen = () => OtherScreen(injector.Plans.Count switch { 0 => null, 1 => narrow ? "Type your answer\u2026" : "", _ => words });
+        injector.OnInject = () => { if (injector.Plans.Count == 3) { Fixture.Append(events, Recorded("q1", new { pick = words })); } };
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, new { pick = new { other = words } }, Guid.NewGuid().ToString(), question: "q1");
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(3, injector.Plans.Count);
+        Assert.True(HasEnterOnly(injector.Plans[2].Plan));
+    }
+
+    [Fact]
+    public async Task Other_words_that_read_as_the_empty_boxs_placeholder_get_no_Enter()
+    {
+        // The box reads the same with the words as without them: nothing says they were taken
+        // in, so their Enter is withheld and the answer left for the machine.
+        const string Words = "Type your answer...";
+        injector.Screen = () => OtherScreen(injector.Plans.Count switch { 0 => null, 1 => "", _ => Words });
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, new { pick = new { other = Words } }, Guid.NewGuid().ToString(), question: "q1");
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        Assert.Contains("not submitted", result.GetProperty("reason").GetString());
+        Assert.Equal(2, injector.Plans.Count);
+        Assert.Equal(0, injector.Plans.Sum(p => p.Plan.Sends.Count(s => s.Enter)));
+    }
+
     [Fact]
     public async Task Other_words_are_not_typed_when_the_Other_box_never_opens()
     {
