@@ -33,11 +33,16 @@ public static class ConversationBlocks
 {
     public const int NameLongest = 500;
 
+    // What TextOf trims from a block's edges: plain spaces and line breaks, which HiddenText.Reveal
+    // leaves as they are, never a character it would show as an escape.
+    static readonly char[] AsciiEdges = [' ', '\n'];
+
     // A block's text as its item's name: hidden characters as their escapes (HiddenText.Reveal), as a
     // code block draws them, so a bidi override or a zero-width character in prose can't make the
     // name read other than as it runs (#707, B's call); then, when longer than NameLongest, cut at the
     // last whole grapheme that fits with "…" after it, so an emoji or a letter and its accents is
-    // never split.
+    // never split. Nothing is trimmed or cut before the reveal, so a hidden character at either edge
+    // is named too (#829).
     public static string NameOf(string text)
     {
         text = HiddenText.Reveal(text);
@@ -126,7 +131,9 @@ public static class ConversationBlocks
     {
         var text = new StringBuilder();
         Append(text, block);
-        return text.ToString().Trim();
+        // Only the plain spaces and line breaks at its edges: a no-break space, a line separator or any
+        // other hidden character there is part of what the block says, and NameOf reveals it (#829).
+        return text.ToString().Trim(AsciiEdges);
     }
 
     static void Append(StringBuilder text, MdBlock block)

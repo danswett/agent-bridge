@@ -148,6 +148,30 @@ public sealed class ConversationBlocksTests
         Assert.DoesNotContain('\u202E', overrides);
     }
 
+    [Theory]
+    [InlineData('\u2028')]
+    [InlineData('\u200B')]
+    [InlineData('\u202E')]
+    public void A_hidden_character_at_either_edge_of_a_paragraph_a_heading_or_a_link_label_is_kept_in_the_name_as_its_escape(char hidden)
+    {
+        var shown = Shown($"{hidden}para{hidden}\n\n# {hidden}Head{hidden}\n\n[{hidden}label{hidden}](https://a.b)");
+        var e = $"\\u{(int)hidden:X4}";
+
+        Assert.Equal([$"{e}para{e}", $"{e}Head{e}", $"{e}label{e}"], shown.Select(b => b.Name));
+    }
+
+    // Markdig (0.43) strips a no-break space (any Zs) from a paragraph's and a heading's edges as it
+    // parses them, so the view never draws it there and the name has nothing to reveal; in a link label
+    // it is kept and drawn. A Markdig that keeps it fails the first assertion: then the name reveals it.
+    [Fact]
+    public void A_no_break_space_at_a_blocks_edges_is_named_wherever_the_block_draws_it()
+    {
+        var shown = Shown("\u00A0para\u00A0\n\n# \u00A0Head\u00A0\n\n[\u00A0label\u00A0](https://a.b)");
+
+        Assert.Equal(["para", "Head", "\u00A0label\u00A0"], shown.Select(b => b.Text));
+        Assert.Equal(["para", "Head", "\\u00A0label\\u00A0"], shown.Select(b => b.Name));
+    }
+
     [Fact]
     public void Prose_a_heading_a_link_label_a_list_a_quote_and_a_table_are_named_with_hidden_characters_as_their_escapes()
     {
