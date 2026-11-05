@@ -490,13 +490,14 @@ static class Wait
     public static Task UntilAsync(Func<bool> done, string what, TimeSpan? patience = null, Func<string>? why = null) =>
         UntilAsync(done, what, patience, why, TimeProvider.System, () => Task.Delay(Look));
 
-    // Patience is counted in looks (patience / Look of them), not read off the wall clock. On a
-    // starved runner the process can go unscheduled for seconds: a 7.4 s gap between two looks
-    // took most of a 10 s deadline, and the connection the test waited for, held up by the same
-    // stall, came after it (#909). On Windows CI several tests have timed out within the same few
-    // milliseconds (#465). A gap like that says the test could not run, not that what it waited
-    // for never came, so it now costs one look. Each look takes at least Look, so no wait ends
-    // sooner than it did on the wall clock.
+    // Patience is counted in pauses between looks (patience / Look of them), not read off the wall
+    // clock. On a starved runner the process can go unscheduled for seconds: a 7.4 s gap between
+    // two looks took most of a 10 s deadline, and the connection the test waited for, held up by the
+    // same stall, came after it (#909). On Windows CI several tests have timed out within the same
+    // few milliseconds (#465). A gap like that says the test could not run, not that what it waited
+    // for never came, so it now costs one pause. The first look is free; each pause after it takes
+    // at least Look and is followed by a look, and only a look after the last pause that still fails
+    // gives up, so no wait gives up sooner than its patience.
     // clock and nextLook: a test of this helper stands in for the wall clock and the pause.
     internal static async Task UntilAsync(Func<bool> done, string what, TimeSpan? patience, Func<string>? why, TimeProvider clock, Func<Task> nextLook)
     {
@@ -505,24 +506,27 @@ static class Wait
         var began = clock.GetTimestamp();
         var last = began;
         var longest = TimeSpan.Zero;
-        var looks = 0;
-        while (!TestUi.Read(done))
+        var pauses = 0;
+        var checks = 0;
+        while (true)
         {
+            checks++;
+            if (TestUi.Read(done)) { return; }
             var now = clock.GetTimestamp();
             var gap = clock.GetElapsedTime(last, now);
             if (gap > longest) { longest = gap; }
             last = now;
-            looks++;
             var elapsed = clock.GetElapsedTime(began, now);
             var watchdog = elapsed > limit * Watchdog;
-            if (looks >= allowed || watchdog)
+            if (pauses >= allowed || watchdog)
             {
                 var bound = watchdog
-                    ? $"the watchdog's {(limit * Watchdog).TotalSeconds:F0} s of wall time ran out after {looks} of {allowed} looks"
-                    : $"{looks} looks in {elapsed.TotalSeconds:F1} s";
+                    ? $"the watchdog's {(limit * Watchdog).TotalSeconds:F0} s of wall time ran out after {pauses} of {allowed} pauses, {checks} checks"
+                    : $"{pauses} of {allowed} pauses, {checks} checks, {elapsed.TotalSeconds:F1} s";
                 throw TimedOut(what, longest, why is null ? null : TestUi.Read(why), bound);
             }
             await nextLook();
+            pauses++;
         }
     }
 
