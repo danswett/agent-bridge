@@ -1204,6 +1204,42 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.False(Rows().Single(r => r.Name == "Test PC").ViewOnly);
     }
 
+    // #788: the row says so from the host's hold itself, whatever the banner shows, as ui.md §6.6
+    // and the PWA's machine row do.
+    [Fact]
+    public async Task A_held_machines_row_says_discovery_held_with_the_hosts_reason_for_its_tooltip_until_the_hold_clears()
+    {
+        await BothMachinesAsync();
+        const string reason = "an unrecognised copilot process (pid 4120)";
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld(reason, [AgentKind.Copilot])));
+        await Wait.UntilAsync(() => Rows().Single(r => r.Name == "Build server").Held, "the held machine's row");
+
+        var row = Rows().Single(r => r.Name == "Build server");
+        Assert.Equal("1 session · Discovery held", row.Facts);
+        Assert.Equal($"Discovery held: {reason}", row.FactsWhy);
+        Assert.DoesNotContain("pid", row.Facts);
+        var here = Rows().Single(r => r.Name == "Test PC");
+        Assert.Equal(("1 session", null), (here.Facts, here.FactsWhy));
+
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged());
+        await Wait.UntilAsync(() => !Rows().Single(r => r.Name == "Build server").Held, "the hold to clear");
+        Assert.Equal(("1 session", null), (row.Facts, row.FactsWhy));
+    }
+
+    [Fact]
+    public async Task A_held_read_only_machines_row_says_discovery_held_in_view_onlys_place_and_both_reasons_in_its_tooltip()
+    {
+        const string why = "read-only: answer at the machine";
+        remoteHost.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "windows", "0.1.0", ReadOnly: why, Instance: "run-7"), [Capabilities.SessionsRead]));
+        remoteHost.Held = new DiscoveryHeld("the claude processes could not be listed", [AgentKind.Claude]);
+        await BothMachinesAsync();
+        await Wait.UntilAsync(() => Rows().Any(r => r.Name == "Build server" && r.ViewOnly && r.Held), "the held read-only machine's row");
+
+        var row = Rows().Single(r => r.Name == "Build server");
+        Assert.Equal("1 session · Discovery held", row.Facts);
+        Assert.Equal($"View only: {why} · Discovery held: the claude processes could not be listed", row.FactsWhy);
+    }
+
     [Fact]
     public async Task A_machine_chosen_from_a_menu_after_it_was_forgotten_changes_nothing_and_the_list_keeps_its_rows()
     {

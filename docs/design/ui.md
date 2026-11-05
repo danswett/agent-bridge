@@ -889,8 +889,10 @@ machine, online ones first, then the account's offline machines (#213):
   "Offline"). The icon and the state align with line 1, as a session row's glyph does (§5.1).
 - **Line 2:** at most two facts: how many sessions, and the version (with "(dev)" for a build
   from a working copy). A read-only machine says "View only", and a machine whose discovery is
-  held says "Discovery held", in the version's place. The host's reason is never on the row: it
-  is the line's tooltip and its accessible description. No device id on the row.
+  held says "Discovery held", in the version's place; one that is both says "Discovery held". It
+  says so while the hold stands, whether or not its banner was dismissed (#788). The host's reason
+  is never on the row: it is the line's tooltip and its accessible description, both reasons
+  where there are two. No device id on the row.
 - **Inside the row, under its two lines, in its text column:** the machine's updates (what its
   app found, how the last update ended, Check and Install) and, for an offline machine, Forget.
   Every action is the same small secondary button. Check for updates, for every machine at once,

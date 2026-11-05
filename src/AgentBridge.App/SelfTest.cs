@@ -344,6 +344,7 @@ static partial class SelfTest
             main.Selected = main.AllCards.First(c => c.Id == "demo-approval");
             await Task.Delay(700);
             await CheckMachinesPage(window, main, Check, outFile);
+            await CheckMachineHeld(window, main, remote, Check, outFile);
             await CheckNarrowest(window, Check, outFile);
             // The theme passes draw the Sessions page with a delegate in its strip and inspector.
             await ShowADelegate(window, main, Check);

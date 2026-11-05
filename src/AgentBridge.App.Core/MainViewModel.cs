@@ -243,6 +243,8 @@ public sealed partial class MainViewModel : Observable
         sessions.Synced += synced;
         sessions.SnapshotBegun += begun;
         sessions.HeldChanged += OnHeldChanged;
+        // Its Machines row says "Discovery held" while the hold stands (#788).
+        sessions.HeldChanged += SyncMachineRows;
         m.Host.Changed += changed;
         // After the machine's own handler (Machine, made before it is added) has unconfirmed its rows.
         m.Host.Gapped += begun;
@@ -253,6 +255,7 @@ public sealed partial class MainViewModel : Observable
             sessions.Synced -= synced;
             sessions.SnapshotBegun -= begun;
             sessions.HeldChanged -= OnHeldChanged;
+            sessions.HeldChanged -= SyncMachineRows;
             m.Host.Changed -= changed;
             m.Host.Gapped -= begun;
         };
