@@ -41,7 +41,8 @@ static partial class SelfTest
             var arrived = await Until(() => card.HasPrompt, TimeSpan.FromSeconds(10));
             var view = arrived ? await Choose(window, main, PromptSession, "Prompt") : null;
             var line = view is null ? null : ById<StackPanel>(view, "Prompt");
-            var scroll = view is null ? null : ById<ScrollViewer>(view, "Conversation");
+            // The conversation is a virtualised list since #829: its column is in the list's header.
+            var scroll = view is null ? null : ConversationScroller(view);
             var column = scroll is null ? null : Find<StackPanel>(scroll).FirstOrDefault(s => s.Name == "Conversation");
             if (view is null || line is null || column is null || !await Until(() => Shown(line), TimeSpan.FromSeconds(5))) { check(false, "draws a scheduled prompt's line in the conversation"); return; }
             await Task.Delay(300);
