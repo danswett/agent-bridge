@@ -62,14 +62,14 @@ jobs:
       product-os: ${{ steps.whole-ring.outputs.whole-ring == 'true' && '["ubuntu-latest","windows-latest","windows-11-arm"]' || steps.select.outputs.product-os }}
       test-filter: ${{ steps.select.outputs.test-filter }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # A pull request's checkout is its merge commit, whose first parent is the base it merges
           # into, so the change is HEAD^1..HEAD: what merging adds, even when the branch is behind.
           # On main, HEAD^1 is the previous commit. Either way two commits are enough.
           fetch-depth: 2
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
       # Before anything from the change runs. A selector, catalog or workflow under change must not
@@ -156,10 +156,10 @@ jobs:
       # Ring 0's filter on a draft's fast ring, and nothing anywhere else, whatever the plan said.
       TEST_FILTER: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && needs.plan.outputs.test-filter || '' }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
       - name: Choose what to test
@@ -240,7 +240,7 @@ jobs:
           pwsh -NoProfile -File build/test-report.ps1 -CoverageSummary TestResults/coverage-report/Summary.json -TestResults TestResults -Title ".NET tests: $env:MATRIX_OS" >> $env:GITHUB_STEP_SUMMARY
       - name: Keep the coverage report and test results
         if: success() || failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-${{ matrix.os }}
           path: |
@@ -250,7 +250,7 @@ jobs:
           retention-days: 14
       - name: Keep the hang dumps
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-hang-${{ matrix.os }}
           path: |
@@ -319,7 +319,7 @@ jobs:
         run: trivy image --scanners vuln --skip-db-update --severity HIGH,CRITICAL --format sarif --output "$RUNNER_TEMP/relay-image.sarif" agent-bridge-relay
       - name: Keep the relay image's SARIF
         if: runner.os == 'Linux' && !cancelled() && steps.relay-scan.outcome != 'skipped'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: relay-image-sarif
           path: ${{ runner.temp }}/relay-image.sarif
@@ -341,13 +341,13 @@ jobs:
       contents: read
       security-events: write # upload the SARIF
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - id: sarif
         # Absent when product failed before the image was built; nothing to send then.
         continue-on-error: true
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: relay-image-sarif
           path: ${{ runner.temp }}/sarif
@@ -370,10 +370,10 @@ jobs:
       HA_IMAGE: ghcr.io/home-assistant/home-assistant:2026.10.4
       MOSQUITTO_IMAGE: eclipse-mosquitto:2.0
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
       - name: Start a disposable Home Assistant and Mosquitto
@@ -407,10 +407,10 @@ jobs:
     if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes == 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
       - name: NuGet packages from main's cache
@@ -481,10 +481,10 @@ jobs:
             artifact: agent-bridge-windows-arm64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
       - run: dotnet tool install -g vpk --version 1.2.161
@@ -555,7 +555,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir ${{ matrix.out }}/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -DryRun
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}-${{ env.APP_VERSION }}
           path: ${{ matrix.out }}/releases
@@ -571,13 +571,13 @@ jobs:
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/sbom" | Out-Null
           trivy fs --format cyclonedx --output "$env:RUNNER_TEMP/sbom/agent-bridge-windows-${{ matrix.runtime }}-$env:APP_VERSION.cdx.json" "${{ matrix.out }}/publish"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sbom-${{ matrix.runtime }}-${{ env.APP_VERSION }}
           path: ${{ runner.temp }}/sbom
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: app-self-test-${{ matrix.runtime }}
@@ -635,18 +635,18 @@ jobs:
       # 'true' only when this run uploaded the release: attest then signs it.
       published: ${{ steps.publish.outputs.published }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
       - run: dotnet tool install -g vpk --version 1.2.161
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: agent-bridge-windows-${{ env.APP_VERSION }}
           path: out/app/releases
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: agent-bridge-windows-arm64-${{ env.APP_VERSION }}
           path: out/app-arm64/releases
@@ -695,7 +695,7 @@ jobs:
             done
           done
           ls -l "$RUNNER_TEMP"/release/*
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: sbom-*-${{ env.APP_VERSION }}
           path: ${{ runner.temp }}/sbom
@@ -730,13 +730,13 @@ jobs:
     # archive, on top of the checks.
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
       - name: S2 builds and checks its vectors
@@ -830,10 +830,10 @@ jobs:
       SUITES: ${{ needs.plan.outputs.suites }}
       WHOLE_RING: ${{ needs.plan.outputs.whole-ring }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
       - name: Every generated file matches design/
@@ -893,7 +893,7 @@ jobs:
               print "## PWA unit test coverage\n\n| Lines % | Branches % | Functions % |\n|---:|---:|---:|"
               print "| " pct(lh, lf) " | " pct(bh, bf) " | " pct(fh, ff) " |"
             }' "$out/lcov.info" >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() && steps.pwa-unit.outcome != 'skipped' }}
         with:
           name: pwa-coverage
@@ -990,10 +990,10 @@ jobs:
       PROJECT: ${{ matrix.project }}
       SHARD: ${{ matrix.shard }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
       - run: npm ci
@@ -1024,7 +1024,7 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ steps.browsers.outputs.cache-primary-key }}
       - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: pwa-test-results-${{ matrix.project }}-${{ strategy.job-index }}
@@ -1047,13 +1047,13 @@ jobs:
       run:
         working-directory: pwa
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
       - name: Build the dev stack
@@ -1085,7 +1085,7 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ steps.browsers.outputs.cache-primary-key }}
       - run: npx playwright test test/e2e
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: pwa-test-results-e2e
