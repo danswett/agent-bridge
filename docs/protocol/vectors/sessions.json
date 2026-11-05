@@ -7090,6 +7090,18 @@
           "context": "a-plain-question"
         },
         {
+          "name": "an-option-of-a-list-whose-other-cannot-be-sent",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q4",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "fields": {
+              "pick": "pg"
+            }
+          },
+          "context": "a-list-whose-other-cannot-be-sent"
+        },
+        {
           "name": "inside-every-constraint",
           "json": {
             "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",

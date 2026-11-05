@@ -32,6 +32,14 @@ test('other text is accepted only where the field allows it and must say somethi
   assert.match(checkAnswer(q, fields({ answer: 3 })), /expected a choice/);
 });
 
+// #908 before #766, as Answers.Check has it: Other the machine cannot send yet is refused in the
+// words the field already shows, whatever limits it also has.
+test('other the machine cannot send yet is refused in its own words before the field\'s limits', () => {
+  const q = form({ ...choice('answer'), otherUnavailable: 'otherNotSendable', constraints: { maxLength: 2, pattern: '^[a-z]+$' } });
+  assert.equal(checkAnswer(q, fields({ answer: { other: 'DuckDB, embedded' } })), "Your own answer can't be sent from here yet. Pick an option, or answer at the machine.");
+  assert.equal(checkAnswer(q, fields({ answer: 'b' })), null);
+});
+
 test('a multi choice takes a list with at most one other', () => {
   const q = form({ name: 'pick', type: 'multi', options: [{ value: 'a' }, { value: 'b' }], allowOther: true });
   assert.equal(checkAnswer(q, fields({ pick: ['a', 'b', { other: 'c' }] })), null);
