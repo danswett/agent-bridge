@@ -1001,7 +1001,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
                 var send = plan.Sends[i];
                 if ((send.Expect is { Count: > 0 } || send.Checks is { Count: > 0 })
                     && (Screen(processId) is not { } rows
-                        || (send.Expect ?? []).Any(e => e.Row >= rows.Count || rows[e.Row].TrimEnd() != e.Text.TrimEnd())
+                        || (send.Expect ?? []).Any(e => e.Row >= rows.Count || rows[e.Row].TrimEnd(' ') != e.Text.TrimEnd(' '))
                         || (send.Checks ?? []).Any(c => !c.Passes(rows))))
                 {
                     if (i > 0) { return new InjectionResult(InjectionStatus.Interrupted, AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChangedPartway); }
@@ -1240,6 +1240,59 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         }
         Assert.Equal("refused", outcome);
         Assert.Contains("input box changed just as the reply was to be typed", reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Theory]
+    // The same, a turn starting after the words went: Home then '!' puts the box in shell mode
+    // and takes the '!' away, so only the footer changes, and under 80 columns the turn's row
+    // says nothing of the mode. No Enter there; at 80 the row would show the label, and the
+    // Enter goes (#843 review, Copilot 4477100508).
+    [InlineData(70, false)]
+    [InlineData(80, true)]
+    public async Task A_turn_that_starts_before_the_Enter_in_a_narrow_window_gets_no_Enter(int width, bool entered)
+    {
+        const string Idle = " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help";
+        injector.Screen = _ => Working(width, Idle);
+        injector.Sent = i => { if (i == 0) { injector.Screen = _ => Working(width, " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue", "go on"); } };
+        injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text));
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        if (entered)
+        {
+            Assert.Equal("delivered", outcome);
+            return;
+        }
+        Assert.Equal("unconfirmed", outcome);
+        Assert.StartsWith("the reply was typed into Copilot's input box, but the box changed before its Enter", reason);
+        Assert.False(Assert.Single(injector.Plans).Plan.Sends[0].Enter);
+    }
+
+    [Theory]
+    // A box holding only Unicode spaces (no-break, figure, narrow no-break, ideographic) holds a
+    // draft. Trimmed with the box's padding it read as empty, and a working box needs no
+    // "/ commands" to be taken for empty, so the reply was added to the draft. Idle, the footer
+    // drops "/ commands" for any text at all (`gR`: text.length === 0), so it was refused there
+    // already, though not as a draft (#843 review, Copilot 4477100469).
+    [InlineData("\u00A0", true)]
+    [InlineData("\u2007", true)]
+    [InlineData("\u202F", true)]
+    [InlineData("\u3000", true)]
+    [InlineData("\u00A0", false)]
+    [InlineData("\u3000", false)]
+    public async Task A_box_holding_only_Unicode_spaces_is_a_draft_and_gets_none_of_the_reply(string space, bool working)
+    {
+        injector.Screen = _ => working
+            ? Working(80, " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue", space)
+            : [.. CopilotIdle.Take(3), $"\u2503 {space}", CopilotIdle[4], " Interactive \u00B7 Allow All \u00B7 @ files \u00B7 # issues"];
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("refused", outcome);
+        Assert.StartsWith("something is already typed in Copilot's input box at the machine", reason);
         Assert.Empty(injector.Plans);
     }
 

@@ -85,7 +85,7 @@ public static partial class CopilotInputBoxReader
         if (whole.Count == 1) { found = whole; }
         var (box, glyph, below, complete) = found[0];
         var working = below < rows.Count && Working(rows[below]);
-        var main = below < rows.Count && (working || IsFooter(rows[below])) && !rows.Skip(below + 1).Any(r => r.Trim().Length > 0);
+        var main = below < rows.Count && (working || IsFooter(rows[below])) && !rows.Skip(below + 1).Any(r => r.Trim(' ').Length > 0);
         var shell = glyph == ShellGlyph || box.Content == ShellPlaceholder || (main && Shell(rows[below]));
         var vim = !main ? CopilotVimMode.None : Has(rows[below], VimNormal) ? CopilotVimMode.Normal : Has(rows[below], VimInsert) ? CopilotVimMode.Insert : CopilotVimMode.None;
         var state = new CopilotInputBoxState(box.Rows, box.Content, box.Rows.Count - (complete ? 2 : 1), shell, main, complete, vim);
@@ -206,7 +206,12 @@ public static partial class CopilotInputBoxReader
     // Below this many columns a running turn's row drops its vim and mode labels (`V5.compact`).
     const int CompactWidth = 80;
 
-    // Every rail box: '╻' over '┃' rows to '╹'. Its text is what follows each '┃'.
+    // Every rail box: '╻' over '┃' rows to '╹'. Its text is what follows each '┃'. Only ASCII
+    // spaces are trimmed, here and in the plain box: they are the box's and the window's padding.
+    // A no-break, figure, narrow or ideographic space is something typed, and trimmed with the
+    // padding, a box holding only such spaces read as empty: a working box, which needs no
+    // "/ commands" to be taken for empty, then had the reply added to that draft (#843 review,
+    // Copilot 4477100469).
     // A box whose '┃' rows start at the window's first row is one cut off at the top (Complete
     // false): taller than the window, its top edge scrolled away.
     static List<(CopilotInputBox Box, string? Glyph, int Below, bool Complete)> Rails(IReadOnlyList<string> rows)
@@ -214,13 +219,13 @@ public static partial class CopilotInputBoxReader
         var found = new List<(CopilotInputBox, string?, int, bool)>();
         for (var i = 0; i < rows.Count; i++)
         {
-            var complete = rows[i].TrimStart().StartsWith(RailTop);
-            if (!complete && !(i == 0 && rows[0].TrimStart().StartsWith(Rail))) { continue; }
+            var complete = rows[i].TrimStart(' ').StartsWith(RailTop);
+            if (!complete && !(i == 0 && rows[0].TrimStart(' ').StartsWith(Rail))) { continue; }
             var first = complete ? i + 1 : i;
             var end = first;
-            while (end < rows.Count && rows[end].TrimStart().StartsWith(Rail)) { end++; }
-            if (end == first || end >= rows.Count || !rows[end].TrimStart().StartsWith(RailBottom)) { continue; }
-            var lines = Enumerable.Range(first, end - first).Select(r => rows[r].TrimStart()[1..].Trim()).ToList();
+            while (end < rows.Count && rows[end].TrimStart(' ').StartsWith(Rail)) { end++; }
+            if (end == first || end >= rows.Count || !rows[end].TrimStart(' ').StartsWith(RailBottom)) { continue; }
+            var lines = Enumerable.Range(first, end - first).Select(r => rows[r].TrimStart(' ')[1..].Trim(' ')).ToList();
             found.Add((new CopilotInputBox(Held(rows, i, end), Text(lines)), null, end + 1, complete));
             i = end;
         }
@@ -234,21 +239,21 @@ public static partial class CopilotInputBoxReader
         for (var i = 0; i + 2 < rows.Count; i++)
         {
             if (!IsRule(rows[i])) { continue; }
-            var first = rows[i + 1].TrimStart();
+            var first = rows[i + 1].TrimStart(' ');
             var glyph = first.StartsWith(Glyph, StringComparison.Ordinal) ? Glyph : first.StartsWith(ShellGlyph, StringComparison.Ordinal) ? ShellGlyph : null;
             if (glyph is null) { continue; }
             var end = i + 2;
             while (end < rows.Count && !IsRule(rows[end])) { end++; }
             if (end >= rows.Count) { continue; }
-            var lines = new List<string> { first[glyph.Length..].Trim() };
-            lines.AddRange(Enumerable.Range(i + 2, end - i - 2).Select(r => rows[r].Trim()));
+            var lines = new List<string> { first[glyph.Length..].Trim(' ') };
+            lines.AddRange(Enumerable.Range(i + 2, end - i - 2).Select(r => rows[r].Trim(' ')));
             found.Add((new CopilotInputBox(Held(rows, i, end), Text(lines)), glyph, end + 1, true));
             i = end;
         }
         return found;
     }
 
-    static bool IsRule(string row) => row.Trim() is { Length: > 2 } r && r.All(c => c == Rule);
+    static bool IsRule(string row) => row.Trim(' ') is { Length: > 2 } r && r.All(c => c == Rule);
 
     // The box's lines, without the blank ones the box pads itself with at either end.
     static string Text(List<string> lines)

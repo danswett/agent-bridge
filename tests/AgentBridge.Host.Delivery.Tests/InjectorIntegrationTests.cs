@@ -181,6 +181,26 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         "  3. No, and tell Copilot what to do differently (Esc to stop)",
     ];
 
+    // A Copilot input box holding only Unicode spaces, read off a real console by the real
+    // worker: only the window's ASCII padding is trimmed, so the spaces are still there for the
+    // reader to refuse as a draft (#843 review, Copilot 4477100469).
+    [WindowsTheory]
+    [InlineData("\u00A0")]
+    [InlineData("\u2007")]
+    [InlineData("\u202F")]
+    [InlineData("\u3000")]
+    public async Task Unicode_spaces_at_the_end_of_a_real_screens_row_are_read_and_its_padding_is_not(string space)
+    {
+        string[] draft = ["\u25CF Done.", "", "\u257B\u2584\u2584\u2584\u2584", $"\u2503 {space}", "\u2579\u2580\u2580\u2580\u2580", " Interactive \u00B7 @ files"];
+        var echo = StartEcho(show: draft);
+
+        var screen = await new WorkerInjector(Worker).ReadScreenAsync(echo.Pid);
+
+        Assert.Null(screen.Problem);
+        Assert.Equal(draft, screen.Rows!.Take(draft.Length));
+        Assert.StartsWith("something is already typed in Copilot's input box", AgentBridge.Host.Delivery.Copilot.CopilotInputBoxReader.Read(screen.Rows!).Problem);
+    }
+
     [WindowsFact]
     public async Task A_permission_prompt_is_read_off_a_real_screen_and_approved_by_its_digit_only_while_the_row_still_reads_so()
     {

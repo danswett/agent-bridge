@@ -49,7 +49,7 @@ public sealed record ScreenRowCheck(int Row, ScreenCheck Kind, IReadOnlyList<str
         ScreenCheck.WithoutParts => !ScreenParts.Of(rows[Row]).Any(Values.Contains),
         ScreenCheck.WithAny => Values.Any(v => rows[Row].Contains(v, StringComparison.Ordinal)),
         ScreenCheck.WithNone => !Values.Any(v => rows[Row].Contains(v, StringComparison.Ordinal)),
-        _ => !Values.Any(v => rows[Row].TrimStart().StartsWith(v, StringComparison.Ordinal)),
+        _ => !Values.Any(v => rows[Row].TrimStart(' ').StartsWith(v, StringComparison.Ordinal)),
     };
 }
 

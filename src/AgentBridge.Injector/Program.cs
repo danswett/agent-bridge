@@ -125,7 +125,7 @@ internal static unsafe partial class Program
                 if (rows is null) { return failure; }
                 foreach (var (row, expected) in send.Expect)
                 {
-                    if (row >= rows.Count || !string.Equals(rows[row], expected.TrimEnd(), StringComparison.Ordinal)) { return "fail screen 0"; }
+                    if (row >= rows.Count || !string.Equals(rows[row], expected.TrimEnd(' '), StringComparison.Ordinal)) { return "fail screen 0"; }
                 }
                 foreach (var (kind, row, values) in send.Checks)
                 {
@@ -202,7 +202,10 @@ internal static unsafe partial class Program
                         return (null, $"fail output {Marshal.GetLastPInvokeError()}");
                     }
                 }
-                rows.Add(new string(buffer, 0, (int)read).TrimEnd());
+                // Only the window's padding, which is ASCII spaces: a no-break or other Unicode
+                // space at a row's end is something drawn there, a draft of nothing else among
+                // them (#843 review, Copilot 4477100469).
+                rows.Add(new string(buffer, 0, (int)read).TrimEnd(' '));
             }
             return (rows, null);
         }
@@ -336,7 +339,7 @@ internal static unsafe partial class Program
         '~' => !Parts(rows[row]).Any(values.Contains),
         '+' => values.Any(v => rows[row].Contains(v, StringComparison.Ordinal)),
         '-' => !values.Any(v => rows[row].Contains(v, StringComparison.Ordinal)),
-        _ => !values.Any(v => rows[row].TrimStart().StartsWith(v, StringComparison.Ordinal)),
+        _ => !values.Any(v => rows[row].TrimStart(' ').StartsWith(v, StringComparison.Ordinal)),
     };
 
     // A row read as a footer is: its parts between '·' and runs of two or more spaces, trimmed.

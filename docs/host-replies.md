@@ -50,7 +50,12 @@ shell mode). Shell mode shows as that glyph, as the empty box's placeholder "Exe
 command", or as the footer's "Shell" label or "esc exit shell mode" hint. The reply is
 `refused`, with nothing typed:
 
-* when the box holds anything: the requesting client's reply result says how many
+* when the box holds anything, Unicode spaces included (no-break, figure, narrow no-break,
+  ideographic): only ASCII spaces, the box's and the window's padding, are trimmed, by the
+  worker reading the screen and by the reader. A draft of ASCII spaces alone, or of tabs (the
+  CLI draws a tab as four spaces), cannot be told from padding, and reads as empty; idle, the
+  footer then drops "/ commands", and the reply is refused all the same. The requesting
+  client's reply result says how many
   characters, and shows what, escaped (`ShownText.Reveal`) and cut to 500 characters. That
   text goes nowhere else: the host's log and Home Assistant (which keeps it in its history)
   get the fixed reason and the length only (`ReplyReasons.Shared`), since a draft can hold a
