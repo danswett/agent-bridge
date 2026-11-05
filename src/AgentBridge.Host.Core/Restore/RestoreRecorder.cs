@@ -84,7 +84,8 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     public static readonly TimeSpan GoneKept = TimeSpan.FromSeconds(60);
     // While anything is still being judged, it is looked at again this often.
     public static readonly TimeSpan JudgeEvery = TimeSpan.FromSeconds(5);
-    // A session offered and never resumed is let go after this, so its worktree can go too.
+    // A session offered and never resumed is let go this long after it was offered, so its worktree
+    // can go too. Never one still being judged: what it is cannot be told, so its worktree is kept.
     public static readonly TimeSpan OwedFor = TimeSpan.FromDays(7);
     // The push waits for every session to be judged, or this long after start, whichever is first.
     public static readonly TimeSpan NoticeAfter = TimeSpan.FromMinutes(10);
@@ -119,6 +120,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     ITimer? writeTimer;
     DateTimeOffset writeDue;
     ITimer? judgeTimer;
+    bool judgingEvery;
     string? writeProblem;
 
     // Raised once, with the notice to push, when what died is known (or NoticeAfter has passed).
@@ -218,7 +220,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
                 // sessions.restoreOnStart off none is kept.
                 foreach (var w in previous.Owed)
                 {
-                    if (!options.RestoreOnStart || now - w.At >= OwedFor || !seen.Add(w.Entry.Id)) { continue; }
+                    if (!options.RestoreOnStart || (w.Decided && now - w.At >= OwedFor) || !seen.Add(w.Entry.Id)) { continue; }
                     if (w.Decided) { owed.Add(w); continue; }
                     owed.Add(cause == RestoreCause.Reboot ? w with { Cause = cause } : w);
                     judgedNow.Add(w.Entry.Id);
@@ -300,12 +302,17 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     // to OwedFor, so a host that runs for weeks lets it go (and its worktree) on time.
     void ArmLocked(DateTimeOffset now)
     {
+        var judging = owed.Any(w => !w.Decided);
+        // Already looking every JudgeEvery, and still judging: left to run.
+        if (!stopped && judging && judgeTimer is not null && judgingEvery) { return; }
         judgeTimer?.Dispose();
         judgeTimer = null;
+        judgingEvery = false;
         if (stopped || owed.Count == 0) { return; }
-        if (owed.Any(w => !w.Decided))
+        if (judging)
         {
             judgeTimer = time.CreateTimer(_ => Tick(), null, JudgeEvery, JudgeEvery);
+            judgingEvery = true;
             return;
         }
         var due = owed.Min(w => w.At) + OwedFor - now;
@@ -339,7 +346,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         {
             var w = owed[i];
             if (live.TryGetValue(w.Entry.Id, out var e) && e.Gone is null) { owed.RemoveAt(i); continue; }
-            if (now - w.At >= OwedFor) { owed.RemoveAt(i); continue; }
+            if (w.Decided && now - w.At >= OwedFor) { owed.RemoveAt(i); continue; }
             if (w.Decided) { continue; }
             var verdict = RestoreJudge.Judge(w.Entry, w.Cause, running: false, held: held.Contains(w.Entry.Agent), () => options.Ends.Ended(w.Entry.Agent, w.Entry.Id),
                 endsSettled: options.EndsSettled?.Invoke(w.Entry.Agent) ?? true);
@@ -350,11 +357,12 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
                     owed.RemoveAt(i);
                     break;
                 case RestoreVerdict.Died when options.RestoreOnStart:
-                    owed[i] = w with { Decided = true };
+                    // Offered from now: a session held undecided for days still gets its full week.
+                    owed[i] = w with { Decided = true, At = now };
                     break;
                 case RestoreVerdict.Died:
                     owed.RemoveAt(i);
-                    said.Add(w with { Decided = true });
+                    said.Add(w with { Decided = true, At = now });
                     break;
             }
         }

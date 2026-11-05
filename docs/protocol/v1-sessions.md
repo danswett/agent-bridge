@@ -252,7 +252,7 @@ Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says c
 | `offered` | The sessions that died, newest first, at most 20: `id`, `agent`, `title`, `midTurn: true` if a turn was running when it went, `questionLost: true` if a question or approval was waiting in it, which went with it. Never the question's words, a prompt or a response |
 | `offeredMore` | How many more died than `offered` names. Absent when none |
 
-Absent when nothing went, or once the run is 24 hours old. Nothing is started from it: a session in `offered` is resumed by a person from Launch (`session.launch` with `resume`, [v1-launch.md](v1-launch.md)), with every rule a resume has. A client that does not know `restore` ignores it.
+Absent when nothing went, or once the run is 24 hours old. Nothing is started from it: a session in `offered` is resumed by a person from Launch (`session.launch` with `resume`, [v1-launch.md](v1-launch.md)), with every rule a resume has. A client that does not know `restore` ignores it. It names sessions, so a peer that may not read them (one pinned as a `host`, [trusted peers](../host-config.md#trusted-peers-disposable-host-foundation)) is not told it.
 
 **Changes (`hello.changed`).** What hello says changes without a new connection: agent-ha-bridge starting or stopping (G5) takes answering, replying, stopping and launching away or gives them back, with `readOnly`; `update` comes and goes. A client used to ask hello again every 10 s to see it, on every connection: about 36 hellos a minute at a host from the account's other machines' Windows apps (#640). Of a host that offers `hello.changed`, a client asks `{ "changes": true }` in its hello, and from then on, for as long as that channel is open, the host sends the event
 

@@ -153,7 +153,7 @@ public sealed class RestoreTests : IDisposable
         var died = n.Offered.Single(o => o.Id == "died");
         Assert.Equal(((bool?)true, (bool?)null), (died.MidTurn, died.QuestionLost));
         Assert.True(n.Offered.Single(o => o.Id == "asked").QuestionLost);
-        Assert.Same(n, r.Notice);
+        Assert.Equal(["asked", "died"], r.Notice!.Offered.Select(o => o.Id).Order(StringComparer.Ordinal));
         Assert.Equal(["/work/repo", "/work/repo"], r.Folders()!);
         Assert.Equal(["asked", "died"], Written().Owed.Select(w => w.Entry.Id).Order(StringComparer.Ordinal));
     }
@@ -383,6 +383,24 @@ public sealed class RestoreTests : IDisposable
         Assert.Empty(Written().Owed);
     }
 
+    [Fact]
+    public async Task A_session_still_being_judged_is_never_let_go_and_gets_its_full_week_once_offered()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        source.HeldNow = new DiscoveryHeld("the copilot processes could not be listed", [AgentKind.Copilot]);
+        await using var r = Recorder();
+        r.Start();
+
+        Time.Advance(RestoreRecorder.OwedFor + TimeSpan.FromDays(1));
+        Assert.Single(r.Folders()!);
+
+        source.HeldNow = null;
+        Time.Advance(RestoreRecorder.JudgeEvery);
+        Time.Advance(RestoreRecorder.OwedFor - TimeSpan.FromDays(1));
+        Assert.Single(r.Folders()!);
+        Time.Advance(TimeSpan.FromDays(1));
+        Assert.Empty(r.Folders()!);
+    }
     [Fact]
     public async Task A_record_set_aside_keeps_every_worktree_on_later_starts_until_it_is_removed()
     {

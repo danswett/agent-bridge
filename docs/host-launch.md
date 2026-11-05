@@ -249,8 +249,8 @@ The cause is `reboot` across boots or logons; on the same boot, `restart` if the
 `crash`. A session a person closed while the host was down, with nothing its agent records, reads as
 died: it is offered, never typed into.
 
-**What died** is kept in the record as owed, offered for 7 days (let go on time while the host keeps
-running) unless it is resumed or seen live again, and said in `hello`'s `machine.restore` ([v1-sessions.md](protocol/v1-sessions.md#hello)) for
+**What died** is kept in the record as owed, offered for 7 days (counted from when it is offered, and let go on time while the host keeps
+running; one still being judged is never let go) unless it is resumed or seen live again, and said in `hello`'s `machine.restore` ([v1-sessions.md](protocol/v1-sessions.md#hello)) for
 this run, at most 24 hours, and in one `restored` notification, sent when every session is judged or
 10 minutes after start, and only if this start found any that died. The notification names only
 those; one an earlier start offered is offered still in `hello`, not notified again. One an earlier
