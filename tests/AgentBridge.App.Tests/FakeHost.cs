@@ -466,6 +466,17 @@ sealed class HoldingDispatcher : IUiDispatcher
     });
 }
 
+static class Barriers
+{
+    // FakeHost.Barrier on any host: one that doesn't know it (DemoHost) refuses it, and the
+    // refusal comes back in the same order an answer would.
+    public static async Task HostHasAllAsync(this HostConnection connection)
+    {
+        try { await connection.CallAsync(FakeHost.Barrier); }
+        catch (HostErrorException) { }
+    }
+}
+
 static class Wait
 {
     // How often the condition is looked at.
