@@ -298,7 +298,8 @@ public sealed class AnswerService : ISessionAnswerer
         // read only from where that read stopped, for an answer or the session's end (Copilot
         // 4479319394; searched from the end before every write, it read up to the whole
         // transcript, twice a write, with the slot held). A transcript that cannot be read, or
-        // is shorter than what was read (replaced, or cut), stops it.
+        // is not the file the call was found in (shorter, another file, or other bytes where it
+        // was read: JsonlMark, Copilot 4484702591), stops it.
         CopilotCallWatch? asked = null;
         string? StillAsked()
         {
@@ -319,6 +320,9 @@ public sealed class AnswerService : ISessionAnswerer
             if (now.Answer is not null || now.SessionEnded) { return "the question was answered or closed while the answer was being typed"; }
             var prompts = waiting.Read();
             if (!prompts.Readable) { return "the session's transcript could no longer be read"; }
+            // Another file in its place, read again from its start: what it says is not what
+            // the answer was checked against (Copilot 4484702591).
+            if (prompts.Replaced) { return "the session's transcript was replaced while the answer was being typed"; }
             if (prompts.PendingPermissions > 0) { return "Copilot opened another prompt while the answer was being typed"; }
             // Any other ask, by its call id (a delegate's, opened since the first key): its form
             // can read the same as this one, and the session's listing keeps this one's id, so

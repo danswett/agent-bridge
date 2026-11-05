@@ -603,8 +603,48 @@ public sealed class CopilotPermissionTests : IDisposable
         Fixture.Append(events, Copilot.Permission("r3", "c3", Copilot.Prompts["read"], 3));
 
         var again = watch.Read();
-        Assert.Equal((null, 1), (again.Request, again.PendingPermissions));
+        Assert.Equal((null, 1, true), (again.Request, again.PendingPermissions, again.Replaced));
         Assert.Equal(new FileInfo(events).Length, watch.LastRead);
+        // Read from its start, it is the file read from now on.
+        Fixture.Append(events, Copilot.Permission("r4", "c4", Copilot.Prompts["read"], 4));
+        Assert.Equal((2, false), (watch.Read().PendingPermissions, watch.Read().Replaced));
+    }
+
+    // Another file of the same length in its place (Copilot 4484702591), byte for byte the same or
+    // rewritten with another call's request where the first was: nothing read of the first is
+    // kept, and the Read says it was replaced, which stops an answer being typed. Only an append
+    // is read as more of the same transcript.
+    [Theory]
+    [InlineData("moved into place")]
+    [InlineData("rewritten")]
+    public void A_transcript_replaced_by_one_of_the_same_length_is_read_again_from_its_start_and_said_to_be(string how)
+    {
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 1), Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 2));
+        var watch = new CopilotPermissionWatch(events, "r1");
+        var first = watch.Read();
+        Assert.Equal(("r1", "q1"), (first.Request?.RequestId, first.Asks!.Single()));
+
+        Fixture.Append(events, Copilot.ToolStart("c9", "powershell", new { command = "ls" }, 3));
+        var appended = watch.Read();
+        Assert.Equal((false, "r1"), (appended.Replaced, appended.Request?.RequestId));
+
+        var text = File.ReadAllText(events);
+        if (how == "moved into place")
+        {
+            File.WriteAllText(events + ".new", text);
+            File.Move(events + ".new", events, overwrite: true);
+        }
+        else
+        {
+            File.WriteAllText(events, text.Replace("\"r1\"", "\"r7\"").Replace("\"q1\"", "\"q7\""));
+        }
+
+        var replaced = watch.Read();
+        Assert.True(replaced.Replaced);
+        Assert.Equal(new FileInfo(events).Length, watch.LastRead);
+        Assert.Equal(how == "rewritten" ? ((string?)null, "q7") : ("r1", "q1"), (replaced.Request?.RequestId, replaced.Asks!.Single()));
+        Assert.False(watch.Read().Replaced);
     }
 
     [Fact]

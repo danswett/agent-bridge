@@ -11,7 +11,7 @@ namespace AgentBridge.Host.Delivery.Copilot;
 // them too. First: the request asked about is the earliest of those waiting (#690). Asks: the
 // tool call ids of the ask_user calls waiting.
 public sealed record CopilotPermissionState(bool Readable, CopilotPermissionPrompt? Request, int PendingPermissions, int PendingAsks, long ScannedTo,
-    IReadOnlySet<string>? Asks = null)
+    IReadOnlySet<string>? Asks = null, bool Replaced = false)
 {
     public IReadOnlyList<(string RequestId, CopilotPermissionPrompt? Prompt)> Others { get; init; } = [];
     public bool First { get; init; }
@@ -76,9 +76,11 @@ public static class CopilotPermissionTranscript
 // asks still waiting carried over. A form's answer is checked before every write, twice (by
 // the host, then by the injector once it holds the typing slot every session shares); read
 // from the start each time, those checks grew with the transcript and held up every other
-// session's typing behind them (#510 review, Copilot 4478363669). A transcript shorter than
-// what was read is not the one that was read (Copilot only appends to it), and is read again
-// from the start. describe: how the request asked about is described (CopilotPermission.Describe
+// session's typing behind them (#510 review, Copilot 4478363669). A transcript that is not the
+// file read so far (shorter, another file, or other bytes where it was read: JsonlMark, Copilot
+// 4484702591) is not the one that was read: everything read of it is dropped, it is read again
+// from its start, and that Read says it was Replaced, which an answer being typed stops on.
+// describe: how the request asked about is described (CopilotPermission.Describe
 // unless a test says otherwise); no other request is.
 public sealed class CopilotPermissionWatch(string path, string requestId, Func<JsonElement, CopilotPermissionPrompt?>? describe = null)
 {
@@ -95,6 +97,7 @@ public sealed class CopilotPermissionWatch(string path, string requestId, Func<J
     // task call before CLI 1.0.10x stamped it with the delegate's id, and a task (synchronous)
     // delegate is done when that call returns, where a background one's returns at once.
     readonly Dictionary<string, (string Agent, bool Background)> delegates = new(StringComparer.Ordinal);
+    readonly JsonlMark mark = new();
     long to;
 
     // The bytes the last Read took in.
@@ -103,20 +106,24 @@ public sealed class CopilotPermissionWatch(string path, string requestId, Func<J
     public CopilotPermissionState Read()
     {
         LastRead = 0;
-        if (to > 0 && Jsonl.Length(path) < to)
+        var end = Jsonl.Lines(path, to, skipFirst: false, Line, mark);
+        var replaced = mark.Replaced;
+        if (replaced)
         {
             permissions.Clear();
             asks.Clear();
             delegates.Clear();
             tools.Clear();
             to = 0;
+            mark.Reset();
+            end = Jsonl.Lines(path, to, skipFirst: false, Line, mark);
         }
-        if (Jsonl.Lines(path, to, skipFirst: false, Line) is not { } end) { return new CopilotPermissionState(false, null, 0, 0, 0); }
-        (LastRead, to) = (end - to, end);
+        if (end is not { } read) { return new CopilotPermissionState(false, null, 0, 0, 0, Replaced: replaced); }
+        (LastRead, to) = (read - to, read);
         // Completed edits can carry entire files: format and hash only what is still waiting.
         var pending = permissions.Select(p => (p.Id, Prompt: (describe ?? CopilotPermission.Describe)(p.Data))).ToList();
         var at = pending.FindIndex(p => p.Id == requestId);
-        return new CopilotPermissionState(true, at < 0 ? null : pending[at].Prompt, pending.Count, asks.Count, to, asks.Keys.ToHashSet(StringComparer.Ordinal))
+        return new CopilotPermissionState(true, at < 0 ? null : pending[at].Prompt, pending.Count, asks.Count, to, asks.Keys.ToHashSet(StringComparer.Ordinal), replaced)
         {
             Others = [.. pending.Where(p => p.Id != requestId)],
             First = at == 0,

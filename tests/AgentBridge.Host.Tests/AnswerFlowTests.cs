@@ -1627,6 +1627,44 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Single(injector.Plans);
     }
 
+    [Theory]
+    // A transcript of the same length put in its place between writes (Copilot 4484702591): byte
+    // for byte the same file moved there, or the file rewritten with another call's record of the
+    // same question, the form on screen the same and the listing still asking it. Read only for
+    // having grown, it was taken for the one the question was found in, and the rest of the keys
+    // went. No key goes after it.
+    [InlineData("moved into place")]
+    [InlineData("rewritten")]
+    public async Task A_transcript_replaced_by_one_of_the_same_length_between_writes_stops_the_answer(string how)
+    {
+        await AskFormAsync();
+        DrawsWords();
+        injector.OnInject = () =>
+        {
+            if (injector.Plans.Count == 1)
+            {
+                var bytes = File.ReadAllBytes(events);
+                if (how == "moved into place")
+                {
+                    File.WriteAllBytes(events + ".new", bytes);
+                    File.Move(events + ".new", events, overwrite: true);
+                    return;
+                }
+                // Another call's start of the same question: one digit of its own record's time.
+                var at = Array.FindLastIndex(bytes, b => b is >= (byte)'0' and <= (byte)'9');
+                bytes[at] = bytes[at] == (byte)'1' ? (byte)'2' : (byte)'1';
+                File.WriteAllBytes(events, bytes);
+            }
+        };
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        Assert.Contains("replaced or cut short", result.GetProperty("reason").GetString());
+        Assert.Single(injector.Plans);
+    }
+
     // ---- the form's own heading, never a row of it that reads the same (Copilot 4478963305) ----
 
     const string FormHeading = "Copilot needs information.";

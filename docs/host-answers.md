@@ -102,7 +102,10 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     parser's `FailTurn` does. The call and the prompts waiting are kept up to date from what the
     transcript has gained since the call was validated (`CopilotCallWatch`,
     `CopilotPermissionWatch`), not searched again with that slot held; a transcript that can
-    no longer be read, or is shorter than what was read, stops it. A check that fails stops
+    no longer be read, or is not the file read (shorter than what was read, another file in its
+    place by its volume and file index on Windows or device and inode on Linux, or other bytes
+    in its first 4 KiB or the 4 KiB before where the read stopped: `JsonlMark`), stops it, and
+    nothing read of it is carried over. A check that fails stops
     it as any other reason does: once keys have gone, the answer is typed and unconfirmed, and
     read back later. A refused write stops everything after it.
   * The rows a field's keys or Enter are held to must show the form at that field

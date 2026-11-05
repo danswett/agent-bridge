@@ -76,6 +76,43 @@ public sealed class CopilotTranscriptTests : IDisposable
         Assert.False(new CopilotCallWatch(events + ".missing", "q1", 0).Read().Readable);
     }
 
+    // An equal-length file in the transcript's place (Copilot 4484702591): another file moved
+    // there, byte for byte the same, or the same file rewritten with other bytes at its start or
+    // just before where it was read to, another call's record of the same question, say. Read no
+    // further, then or after anything is added to it; what is added to the file read is read.
+    [Theory]
+    [InlineData("moved into place")]
+    [InlineData("rewritten at its start")]
+    [InlineData("rewritten where it was read to")]
+    public void A_transcript_replaced_by_one_of_the_same_length_is_never_read_on_from_where_the_call_was_read(string how)
+    {
+        Fixture.Append(events, [.. Enumerable.Range(0, 200).Select(i => Copilot.ToolStart($"t{i}", "powershell", new { command = $"echo {i}" }, i))]);
+        Fixture.Append(events, Copilot.ToolStart("q1", "ask_user", new { message = "m", requestedSchema = Schema }, 201));
+        var watch = new CopilotCallWatch(events, "q1", CopilotTranscript.Find(events, "q1").ScannedTo);
+        Fixture.Append(events, Copilot.ToolStart("c1", "powershell", new { command = "ls" }, 202));
+        Assert.True(watch.Read().Readable);
+
+        var bytes = File.ReadAllBytes(events);
+        var length = bytes.Length;
+        static bool Digit(byte b) => b is >= (byte)'0' and <= (byte)'9';
+        if (how == "moved into place")
+        {
+            File.WriteAllBytes(events + ".new", bytes);
+            File.Move(events + ".new", events, overwrite: true);
+        }
+        else
+        {
+            var at = how == "rewritten at its start" ? Array.FindIndex(bytes, Digit) : Array.FindLastIndex(bytes, Digit);
+            bytes[at] = bytes[at] == (byte)'1' ? (byte)'2' : (byte)'1';
+            File.WriteAllBytes(events, bytes);
+        }
+        Assert.Equal(length, new FileInfo(events).Length);
+
+        Assert.False(watch.Read().Readable);
+        Fixture.Append(events, Recorded("q1", new { pick = "b" }, 203));
+        Assert.False(watch.Read().Readable);
+    }
+
     [Fact]
     public void The_sessions_own_abort_ends_its_question_and_a_subagents_does_not()
     {
