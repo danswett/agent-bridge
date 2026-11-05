@@ -98,16 +98,20 @@ internal static partial class AgentErrors
 
     // "Bearer <x>", "token=<x>", "api_key: <x>", and JSON's "password":"<x>": whatever follows is
     // the secret, a quoted one whole, spaces and escaped quotes included, to its closing quote or
-    // the end of the text. A second "Bearer" is never taken for the first one's secret, which
-    // would leave the real one after it showing.
-    [GeneratedRegex(@"\bbearer\s+(?!bearer\b)[^\s,;]+|\b(?:access[_-]?token|refresh[_-]?token|client[_-]?secret|token|password|passwd|secret|api[_-]?key)[""']?\s*[:=]\s*(?:""(?:[^""\\]|\\.)*""?|'(?:[^'\\]|\\.)*'?|[^\s,;]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Timeout)]
+    // the end of the text. A value is never itself a scheme or keyword (bearer, basic, token,
+    // digest, authorization): "Bearer Bearer x" and "token=Bearer x" took the second word for the
+    // secret and left the real one after it showing, so such words are passed over to it, but
+    // only a whole word: a secret that starts with one (token-12345, basic.x9) is still one. A key joined to its prefix by _ or - (db_password,
+    // GITHUB_TOKEN, aws_secret_access_key) is one too: a word boundary missed every such key, as
+    // _ is a word character. Only a letter or digit before it makes it part of another word.
+    [GeneratedRegex(@"(?<![A-Za-z0-9])bearer(?:\s+(?:bearer|basic|token|digest|authorization)\b)*\s+(?!(?:bearer|basic|token|digest|authorization)(?![^\s,;]))[^\s,;]+|(?<![A-Za-z0-9])(?:access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|api[_-]?key|credentials?|token|password|passwd|pwd|secret)(?:[_-][A-Za-z0-9]+)*[""']?\s*[:=]\s*(?:(?:bearer|basic|token|digest|authorization)\s+)*(?:""(?:[^""\\]|\\.)*""?|'(?:[^'\\]|\\.)*'?|(?!(?:bearer|basic|token|digest|authorization)(?![^\s,;]))[^\s,;]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Timeout)]
     private static partial Regex Keyed();
 
     // An Authorization header echoed back, whatever its scheme, and a Basic credential on its own:
     // base64 of a short user:password is too short to read as opaque, and can be letters only
     // ("dXNlcjpwYXNz"). A bare one is told from the word ("basic auth failed" stays) by what it
     // decodes to (BasicMark), never by which characters it happens to use.
-    [GeneratedRegex(@"\bauthorization[""']?\s*[:=]\s*[""']?(?:basic|bearer|token|digest)\s+[^\s,;""']+|\bbasic\s+(?<b64>(?!(?:basic|authorization)\b)[A-Za-z0-9+/]+={0,2})(?![A-Za-z0-9+/=])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Timeout)]
+    [GeneratedRegex(@"\bauthorization[""']?\s*[:=]\s*[""']?(?:basic|bearer|token|digest)(?:\s+(?:bearer|basic|token|digest|authorization)\b)*\s+(?!(?:bearer|basic|token|digest|authorization)(?![^\s,;""']))[^\s,;""']+|\bbasic\s+(?<b64>(?!(?:bearer|basic|token|digest|authorization)(?![A-Za-z0-9+/=]))[A-Za-z0-9+/]+={0,2})(?![A-Za-z0-9+/=])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Timeout)]
     private static partial Regex Basic();
 
     // A header is always a credential; a bare "basic <x>" when x is base64 of user:password, padded

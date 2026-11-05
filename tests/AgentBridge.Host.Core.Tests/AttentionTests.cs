@@ -385,6 +385,54 @@ public class AttentionTests
             AgentErrors.Shown(raw));
     }
 
+    // A key joined to its prefix by _ or -, in either case, with = or :, quoted or not.
+    [Theory]
+    [InlineData("Failed: db_password=hunter2x", "Failed: db_[token]")]
+    [InlineData("Failed: DB_PASSWORD: hunter2x", "Failed: DB_[token]")]
+    [InlineData("Failed: GITHUB_TOKEN=abc123", "Failed: GITHUB_[token]")]
+    [InlineData("Failed: github_token: \"two words\"", "Failed: github_[token]")]
+    [InlineData("Failed: x_api_key: example", "Failed: x_[token]")]
+    [InlineData("Failed: X-API-KEY='two words'", "Failed: X-[token]")]
+    [InlineData("Failed: aws_secret_access_key=example", "Failed: aws_[token]")]
+    [InlineData("Failed: AWS_SECRET_ACCESS_KEY: \"example\"", "Failed: AWS_[token]")]
+    [InlineData("Failed: pwd=example", "Failed: [token]")]
+    [InlineData("Failed: PWD: 'two words'", "Failed: [token]")]
+    [InlineData("Failed: credentials=example", "Failed: [token]")]
+    [InlineData("Failed: Credentials: \"two words\"", "Failed: [token]")]
+    [InlineData("Failed: private_key=example", "Failed: [token]")]
+    [InlineData("Failed: SSH_PRIVATE_KEY: example", "Failed: SSH_[token]")]
+    public void A_credential_key_joined_to_a_prefix_is_still_taken_out(string message, string shown)
+    {
+        Assert.Equal(shown, AgentErrors.Shown(message));
+    }
+
+    // A scheme or keyword repeated is never the secret; the real value after it is.
+    [Theory]
+    [InlineData("Sent Bearer Bearer abc123", "Sent [token]")]
+    [InlineData("Sent bEaReR BEARER abc123", "Sent [token]")]
+    [InlineData("Sent Authorization: Bearer Bearer abc123", "Sent Authorization: [token]")]
+    [InlineData("Sent token=Bearer abc123", "Sent [token]")]
+    [InlineData("Sent TOKEN: bearer Digest abc123", "Sent [token]")]
+    [InlineData("Sent Authorization: Basic Basic dXNlcjpwYXNz", "Sent [token]")]
+    [InlineData("Sent authorization=BASIC basic dXNlcjpwYXNz", "Sent [token]")]
+    [InlineData("Sent Bearer Bearer", "Sent Bearer Bearer")]
+    [InlineData("Failed: password=token-12345", "Failed: [token]")]
+    [InlineData("Sent Bearer basic.x9", "Sent [token]")]
+    [InlineData("Sent Authorization: Basic token-12345", "Sent [token]")]
+    public void A_repeated_scheme_word_is_never_taken_for_the_secret(string message, string shown)
+    {
+        Assert.Equal(shown, AgentErrors.Shown(message));
+    }
+
+    // Words that hold those letters, or name them without a value, stay as they are.
+    [Fact]
+    public void Words_that_merely_contain_a_credential_keyword_are_left_alone()
+    {
+        const string message = "Authorization error. Your credentials may be expired or invalid. The password field, tokens: 3, mytoken=visible, secretary=Ann, pwdx: 2, keyed: yes.";
+
+        Assert.Equal(message, AgentErrors.Shown(message));
+    }
+
     [Fact]
     public void A_quoted_credential_is_taken_out_whole()
     {
@@ -445,7 +493,7 @@ public class AttentionTests
     [InlineData("Sent Basic dXNlcjpwYXNz; basic auth failed", "Sent [token]; basic auth failed")]
     [InlineData("Sent Basic dXNlcjpwdzE now", "Sent [token] now")]
     [InlineData("basic\nBasic dXNlcjpwYXNz", "basic [token]")]
-    [InlineData("Bearer\nBearer syntheticbearercredential", "Bearer [token]")]
+    [InlineData("Bearer\nBearer syntheticbearercredential", "[token]")]
     public void A_bare_basic_credential_is_taken_out_by_what_it_decodes_to(string message, string shown)
     {
         Assert.Equal(shown, AgentErrors.Shown(message));
