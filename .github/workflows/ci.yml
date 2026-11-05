@@ -955,7 +955,11 @@ jobs:
             project: webkit
             shard: 3/3
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # WebKit's legs get 35 minutes, Chromium's 20. WebKit needs 181 system packages (114 MB),
+    # and on main run 41927187905 a slow apt mirror held webkit 3/3 in that download past 20
+    # minutes, twice, before a test ran. 35 leaves room for the five minutes the download step
+    # below gives that mirror, a full download from Canonical's archive and the shard's tests.
+    timeout-minutes: ${{ matrix.project == 'webkit' && 35 || 20 }}
     defaults:
       run:
         working-directory: pwa
@@ -982,6 +986,44 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-${{ matrix.project }}
+      # Playwright's system packages, downloaded before its install so a slow apt mirror can be
+      # left. On main run 41927187905, webkit 3/3 fetched its 181 packages (114 MB) from
+      # azure.archive.ubuntu.com at about 100 kB/s on two runners in turn and hit the 20-minute
+      # limit inside the install, before any test ran, while webkit 2/3 fetched the same 114 MB
+      # in 47 s. The runner's mirror list (/etc/apt/apt-mirrors.txt, from actions/runner-images)
+      # puts that mirror first and Canonical's HTTPS archive after it, but apt moves down the
+      # list only when a fetch fails, never when it is slow. So the download gets five minutes
+      # on the list as it stands; if it isn't done by then, the Azure mirror is taken off the
+      # list and apt fetches the rest from https://archive.ubuntu.com, keeping what it has. apt
+      # checks every package against the signed index either way, and the install below then
+      # finds them all downloaded. The packages and the install are as before; only where a slow
+      # download finishes from changes. If the mirror list isn't the Azure-then-Canonical one
+      # this expects, or Azure is still named after the edit, the step fails rather than go on
+      # waiting on the same mirror.
+      - name: Download Playwright's system packages
+        run: |
+          list=$(npx playwright install-deps --dry-run "$PROJECT" | sed -n 's/.*--no-install-recommends \([^"]*\)".*/\1/p')
+          read -ra pkgs <<< "$list"
+          if [ "${#pkgs[@]}" -eq 0 ]; then
+            echo "::error::playwright install-deps --dry-run named no packages to download"; exit 1
+          fi
+          sudo apt-get update
+          rc=0
+          sudo timeout 5m apt-get install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?
+          if [ "$rc" -eq 124 ]; then
+            mirrors=/etc/apt/apt-mirrors.txt
+            if ! grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors" || ! grep -q '^https://archive\.ubuntu\.com/ubuntu/' "$mirrors"; then
+              echo "::error::$mirrors doesn't list the Azure mirror and https://archive.ubuntu.com this step expects, so it can't leave the slow mirror"; exit 1
+            fi
+            echo "::warning title=pwa-ui::apt took over 5 minutes to download Playwright's system packages; fetching the rest from https://archive.ubuntu.com"
+            sudo sed -i '/^http:\/\/azure\.archive\.ubuntu\.com\//d' "$mirrors"
+            if grep -rqs '^[^#]*azure\.archive\.ubuntu\.com' "$mirrors" /etc/apt/sources.list /etc/apt/sources.list.d/; then
+              echo "::error::apt's sources still name azure.archive.ubuntu.com after removing it from $mirrors"; exit 1
+            fi
+            sudo apt-get install -y --download-only --no-install-recommends "${pkgs[@]}"
+          elif [ "$rc" -ne 0 ]; then
+            exit "$rc"
+          fi
       - run: npx playwright install --with-deps "$PROJECT"
       - name: Save Playwright's browsers to main's cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
