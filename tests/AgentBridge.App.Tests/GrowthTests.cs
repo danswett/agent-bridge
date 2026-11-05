@@ -142,6 +142,23 @@ public sealed class GrowthMeasureTests
         Assert.Equal(Growth.Step * Growth.Step, measured.Ratio, 3);
     }
 
+    // The default, as the app's self-test measures: one paused smaller run (1.6× beside 16×) is
+    // outvoted, so quadratic work still reads as quadratic (#875, Copilot).
+    [Fact]
+    public void A_paused_smaller_run_cannot_hide_quadratic_work_at_the_default_number_of_pairs()
+    {
+        var clock = new FakeTimeProvider(Start);
+        var run = 0;
+        var measured = Growth.Measure(n =>
+        {
+            // Run 1 is the untimed first run; run 2 is the first pair's smaller one.
+            clock.Advance(Unit * ((long)n * n / 50) * (++run == 2 ? 10 : 1));
+        }, Size, Growth.DefaultRuns, clock);
+
+        Assert.False(measured.Linear, measured.ToString());
+        Assert.Equal(Growth.Step * Growth.Step, measured.Ratio, 3);
+    }
+
     // A pause in one run of one pair is outvoted, whichever size it falls on.
     [Theory]
     [InlineData(0)]

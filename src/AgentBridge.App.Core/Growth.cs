@@ -20,9 +20,13 @@ public static class Growth
         public override string ToString() => $"{Small.TotalMilliseconds:0} ms, then {Large.TotalMilliseconds:0} ms at {Step}×, {Ratio:0.0}×";
     }
 
+    // Three by default, so the median is a true middle: of two, the lower ratio was taken, and one
+    // paused smaller run (1.6× beside 16×) hid quadratic work (#875, Copilot).
+    public const int DefaultRuns = 3;
+
     // runs pairs, each the smaller size and the larger timed one after the other; the result is the
     // pair whose ratio is the median (with an even count, the lower of the middle two).
-    public static Result Measure(Action<int> work, int size, int runs = 2) => Measure(work, size, runs, TimeProvider.System);
+    public static Result Measure(Action<int> work, int size, int runs = DefaultRuns) => Measure(work, size, runs, TimeProvider.System);
 
     // The two sizes are timed in turn, not each in a block of its own. Timed as blocks (every
     // smaller run, then every larger one, the quickest of each), a slow stretch of a shared runner
