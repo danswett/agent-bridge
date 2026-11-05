@@ -253,7 +253,20 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     {
         var before = S.Background.Version;
         Background(e, at);
-        return ApplyOwn(e, at) || S.Background.Version != before;
+        var changed = ApplyOwn(e, at) || S.Background.Version != before;
+        Prune();
+        return changed;
+    }
+
+    // A permission prompt's payload (everything Copilot was given for it, an edit's whole file
+    // and diff included) is kept only while its question is pending: an abort, a shutdown or a
+    // delegate's end drops the question without its completion, and the payload with it (#797).
+    // Delivery reads what is still waiting from the transcript itself, never from here.
+    void Prune()
+    {
+        if (S.Permissions.Count == 0) { return; }
+        foreach (var id in S.Permissions.Keys.Where(id => !S.Pending.Exists(q => q.Id == id)).ToList()) { S.Permissions.Remove(id); }
+        foreach (var (request, id) in _permissionQuestion.Where(p => !S.Permissions.ContainsKey(p.Value)).ToList()) { _permissionQuestion.Remove(request); }
     }
 
     void Background(JsonElement e, DateTimeOffset? at)

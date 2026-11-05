@@ -446,6 +446,34 @@ public class CopilotTests
         Assert.Equal([alike.Id, alike.Id], new[] { told.Id, alone.Id });
     }
 
+    // A pending prompt's payload (an edit's whole file and diff) is kept only while its question
+    // is: a delegate's abort drops its request and the payload with it, a pending one beside it
+    // keeps both, and the session's own abort drops everything (#797).
+    [Fact]
+    public void A_permission_prompts_payload_goes_with_its_question_and_one_still_pending_keeps_its_own()
+    {
+        var state = new SessionState();
+        var parser = new CopilotParser(state, TimeProvider.System);
+        void Feed(params string[] lines) { foreach (var line in lines) { parser.Parse(System.Text.Encoding.UTF8.GetBytes(line)); } }
+        var edit = Copilot.Prompts["write"].DeepClone().AsObject();
+        edit["newFileContents"] = new string('x', 1 << 20);
+
+        Feed(Copilot.User("go", 1), Copilot.SubagentStarted("t1", "helper", 2),
+            Copilot.ToolStart("c1", "edit", new { path = "src\\app.js" }, 3, agentId: "helper"), Copilot.Permission("r1", "c1", edit, 4, agentId: "helper"),
+            Copilot.ToolStart("c2", "powershell", new { command = "git push" }, 5), Copilot.Permission("r2", "c2", Copilot.Prompts["commands"], 6));
+        Assert.Equal(2, state.Permissions.Count);
+
+        Feed(Copilot.Event("abort", new { reason = "user_initiated" }, 7, agentId: "helper"));
+        var pending = Assert.Single(state.Pending);
+        Assert.StartsWith("r2#", pending.Id);
+        Assert.Equal([pending.Id], state.Permissions.Keys);
+        Assert.Null(pending.AnswerAtMachine);
+
+        Feed(Copilot.Event("abort", new { reason = "user_initiated" }, 8));
+        Assert.Empty(state.Pending);
+        Assert.Empty(state.Permissions);
+    }
+
     [Fact]
     public async Task A_request_to_run_outside_the_sandbox_and_a_kind_the_host_does_not_drive_are_answered_only_at_the_machine()
     {

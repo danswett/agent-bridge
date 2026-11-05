@@ -204,6 +204,7 @@ internal sealed class SessionState
     {
         Tools.FailRunning(at);
         Pending.Clear();
+        Permissions.Clear();
         Status = SessionStatus.Idle;
     }
 
