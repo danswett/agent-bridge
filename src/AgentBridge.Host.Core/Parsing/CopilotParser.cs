@@ -37,6 +37,8 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         Marker("\"session.model_change\""),
         Marker("\"session.shutdown\""),
         Marker("\"session.error\""),
+        // A turn starting clears a turn's error (NewTurn), on a cold read too.
+        Marker("\"assistant.turn_start\""),
         Marker("\"subagent.started\""),
         // What a delegate was given, by whom, and its model since: a cold read whose window
         // its start falls before still lists it with its task, nesting and current model.
@@ -107,6 +109,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             // read as fine again after the host restarted.
             case "session.error" when !IsSubagent(e):
                 if (AgentErrors.Copilot(data, Json.Time(e, "timestamp") ?? Time.GetUtcNow()) is { } failure) { Failed(failure); }
+                break;
+            case "assistant.turn_start" when !IsSubagent(e):
+                NewTurn();
                 break;
             case "user.message" when !IsSubagent(e):
                 NewTurn();

@@ -191,6 +191,19 @@ public class AttentionTests
         Assert.Equal(expected, session.Attention?.Kind);
     }
 
+    [Fact]
+    public async Task Another_error_before_the_parsed_tail_is_cleared_by_a_turn_starting_there_too()
+    {
+        await using var s = new Session_(tailBytes: 4096);
+        var lines = new List<string> { Copilot.User("Go", 1), Copilot.TurnStart(2), Error(new { errorType = "session", message = "Turn error: boom" }, 3),
+            Copilot.TurnStart(10), Copilot.Assistant("Done.", 11), Copilot.TurnEnd(12) };
+        lines.AddRange(Enumerable.Range(0, 40).Select(i => Copilot.Assistant("Still bisecting " + new string('x', 200), 20 + i, agentId: "agent-1")));
+
+        var session = await s.After([.. lines]);
+
+        Assert.Null(session.Attention);
+    }
+
     // The CLI follows a turn's error with a notice of its own, written as an assistant.message.
     [Fact]
     public async Task Another_error_stays_past_the_clis_turn_error_notice_until_the_next_turn()
@@ -283,6 +296,20 @@ public class AttentionTests
     {
         Assert.Equal("Request failed: {\"[token]} and [token] end",
             AgentErrors.Shown("Request failed: {\"password\":\"example-value-7\"} and password = \"a secret \\\"phrase\\\" here\" end"));
+    }
+
+    [Fact]
+    public void An_authorization_header_is_taken_out_whatever_its_scheme_and_the_word_basic_is_not()
+    {
+        Assert.Equal("Sent [token] and [token]; basic auth failed",
+            AgentErrors.Shown("Sent Authorization: Basic dXNlcjpwYXNz and Basic dTpwMQ==; basic auth failed"));
+    }
+
+    [Fact]
+    public void A_quoted_path_with_spaces_in_it_is_taken_out_whole()
+    {
+        Assert.Equal("Cannot read [path] or [path] now",
+            AgentErrors.Shown("Cannot read \"C:\\Users\\Example Person\\.copilot\\private.json\" or '/home/Example Person/.copilot/x.json' now"));
     }
 
     [Fact]

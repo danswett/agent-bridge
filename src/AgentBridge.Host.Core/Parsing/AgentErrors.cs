@@ -65,11 +65,13 @@ internal static partial class AgentErrors
     [
         (Link(), "[link]"),
         (Keyed(), "[token]"),
+        (Basic(), "[token]"),
         (Prefixed(), "[token]"),
         (Jwt(), "[token]"),
         (Email(), "[email]"),
         (Uuid(), "[id]"),
         (GitHubRequestId(), "[id]"),
+        (QuotedPath(), "[path]"),
         (WindowsPath(), "[path]"),
         (UnixPath(), "[path]"),
         (DeviceCode(), "[code]"),
@@ -88,6 +90,12 @@ internal static partial class AgentErrors
     [GeneratedRegex(@"\bbearer\s+[^\s,;]+|\b(?:access[_-]?token|refresh[_-]?token|client[_-]?secret|token|password|passwd|secret|api[_-]?key)[""']?\s*[:=]\s*(?:""(?:[^""\\]|\\.)*""?|'(?:[^'\\]|\\.)*'?|[^\s,;]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Timeout)]
     private static partial Regex Keyed();
 
+    // An Authorization header echoed back, whatever its scheme, and a Basic credential on its own:
+    // base64 of a short user:password is too short to read as opaque. A digit, +, / or = tells it
+    // from the word ("basic auth failed" stays), unless the header names it.
+    [GeneratedRegex(@"\bauthorization[""']?\s*[:=]\s*[""']?(?:basic|bearer|token|digest)\s+[^\s,;""']+|\bbasic\s+(?=[A-Za-z0-9+/]*[0-9+/=])[A-Za-z0-9+/]+={0,2}", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Timeout)]
+    private static partial Regex Basic();
+
     // GitHub's, OpenAI's and Anthropic's (sk-, sk-ant-) and Slack's token forms.
     [GeneratedRegex(@"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|sk-[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,})", RegexOptions.CultureInvariant, Timeout)]
     private static partial Regex Prefixed();
@@ -105,6 +113,10 @@ internal static partial class AgentErrors
     // time's two-digit groups are too short to be one.
     [GeneratedRegex(@"\b[0-9A-Fa-f]{3,}(?::[0-9A-Fa-f]{3,}){3,}\b", RegexOptions.CultureInvariant, Timeout)]
     private static partial Regex GitHubRequestId();
+
+    // A quoted path, whole: a folder name with a space in it is still the machine's.
+    [GeneratedRegex(@"""(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|/)[^""\r\n]*""|'(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|/)[^'\r\n]*'", RegexOptions.CultureInvariant, Timeout)]
+    private static partial Regex QuotedPath();
 
     [GeneratedRegex(@"\b[A-Za-z]:[\\/][^\s""'<>|]*|\\\\[^\s""'<>|]+", RegexOptions.CultureInvariant, Timeout)]
     private static partial Regex WindowsPath();
