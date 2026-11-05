@@ -96,4 +96,57 @@ public sealed class RosterKeepTests
         Assert.Equal(Index(removed, r, "+C1"), r.State.ActiveAdd(removed.Id("C1")));
         Assert.Equal(["C1", "C2", "G"], removed.Active(r));
     }
+
+    // As above, then C1 and C2 remove S keeping nothing (M). On a branch from R that leaves out
+    // M, S adds Y, and supplies W, a copy of C1's key from before P's add, with an adopting merge.
+    internal static World CopyCannotUnkeep()
+    {
+        var w = OutsideCopy(personRemovesS: false);
+        w.Remove("M", "C1", "+S", "R", cosigner: "C2");
+        w.Add("+Y", "S", "Y", "R");
+        w.Merge("join", "S", ["+Y", "adopt"], adopt: true);
+        return w;
+    }
+
+    [Fact]
+    public void A_copy_cannot_un_keep_a_signer_and_what_the_thief_adds_beside_the_recovery_is_void()
+    {
+        var w = CopyCannotUnkeep();
+        var v = w.Verifier();
+        Assert.True(v.State.IsVoid(Index(w, v, "+C1'")));
+        Assert.True(v.State.IsVoid(Index(w, v, "+Y")));
+        Assert.Equal(["C1", "C2", "G"], w.Active(v));
+    }
+
+    // D, outside S's subtree, is removed by M0; on an old head where E is absent it adds E's key
+    // and adopts that with its own merge. E is kept by the person's removal M of S.
+    internal static World RemovedDevicesCopy()
+    {
+        var w = new World();
+        w.Genesis();
+        w.Add("+D", "G", "D", "G");
+        w.Add("+S", "G", "S", "+D");
+        w.Confirm("cS", "G", "+S", "+S");
+        w.Add("+E", "S", "E", "cS");
+        w.Add("+C1", "G", "C1", "+E");
+        w.Add("+C2", "G", "C2", "+C1");
+        w.Confirm("cC1", "G", "+C1", "+C2");
+        w.Confirm("cC2", "G", "+C2", "cC1");
+        w.Remove("M", "C1", "+S", "cC2", keep: ["+E"], cosigner: "C2");
+        w.Add("+F", "C1", "F", "M");
+        w.Remove("M0", "G", "+D", "+F");
+        w.Add("+E'", "D", "E", "+D");
+        w.Merge("own", "D", ["+E'", "cS"], adopt: true);
+        return w;
+    }
+
+    [Fact]
+    public void A_removed_devices_copy_of_a_kept_devices_key_reaches_nothing()
+    {
+        var w = RemovedDevicesCopy();
+        var v = w.Verifier();
+        Assert.True(v.State.IsVoid(Index(w, v, "+E'")));
+        Assert.Equal(Index(w, v, "+E"), v.State.ActiveAdd(w.Id("E")));
+        Assert.Equal(["C1", "C2", "E", "F", "G"], w.Active(v));
+    }
 }
