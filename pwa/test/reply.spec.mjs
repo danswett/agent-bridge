@@ -239,6 +239,9 @@ test.describe('progress', () => {
     await send.click();
     await expect(live).toHaveText('Reply sent');
     await expect(send).toHaveAttribute('aria-busy', 'true');
+    // Disabled while it is on its way, but never dimmed: the ring keeps its contrast.
+    await expect(send).toBeDisabled();
+    expect(await send.evaluate((b) => getComputedStyle(b).opacity)).toBe('1');
     await expect(status).toHaveText('');
     await releaseBefore(page, 'typing');
     await expect(live).toHaveText('Reply passed to the agent');
@@ -247,6 +250,9 @@ test.describe('progress', () => {
     await expect(live).toHaveText('Reply delivered');
     await expect(send).toHaveClass(/\bchecked\b/);
     await expect(send.locator('.send-check use')).toHaveAttribute('href', 'design/sprite.svg#icon-check');
+    // Its box emptied, Send is disabled under its check, which is not dimmed either.
+    await expect(send).toBeDisabled();
+    expect(await send.evaluate((b) => getComputedStyle(b).opacity)).toBe('1');
     // Its name stays its own: the receipt says it was delivered.
     await expect(send).toHaveAccessibleName('Send');
     await expect(status).toHaveText('');

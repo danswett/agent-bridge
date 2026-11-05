@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AnswerService, sent } from '../../js/answer-service.js';
+import { AnswerService } from '../../js/answer-service.js';
 import { HostClient, HostError } from '../../js/host-client.js';
 import { finished, recentTimings, tapped } from '../../js/timing.js';
 import { readAnswerResult } from '../../js/protocol.js';
@@ -232,10 +232,10 @@ test('HostClient.answer sends session.answer and reads an unknown outcome as unc
 // ---- progress (sessions.progress, #600) ----
 
 // fakeClient's, with what the machine says of its progress played through the onProgress the
-// service passed.
+// service passed, and the request taken by its transport at once (onSent).
 function progressClient() {
   const c = fakeClient();
-  c.answer = (data, { onProgress } = {}) => new Promise((resolve, reject) => { c.calls.push({ data, resolve, reject, progress: onProgress }); });
+  c.answer = (data, { onProgress, onSent } = {}) => new Promise((resolve, reject) => { c.calls.push({ data, resolve, reject, progress: onProgress }); onSent?.(); });
   return c;
 }
 
@@ -323,9 +323,12 @@ test("a host's outcome or timing name with a line break cannot forge a line on t
   assert.match(lines[0], /^agent-bridge reply forge-1 other: result \d+ ms; host: typed 7 ms$/);
 });
 
-test('a call refused on a channel already closed is not marked sent', () => {
-  tapped('reply', 'closed-1');
-  sent({ closed: true }, { request: 'closed-1' }, Promise.resolve()).catch(() => {});
-  finished('closed-1', 'unconfirmed');
+test('an answer whose request its client never sent is not marked sent', async () => {
+  const { conn, submit } = setup({ marks: 'answer' });
+  // A client that takes the call but whose transport never sends it (no onSent).
+  conn.client = fakeClient();
+  submit();
+  conn.client.last().resolve({ outcome: 'unconfirmed', reason: null });
+  await flush();
   assert.deepEqual(recentTimings().at(-1).client.map(([mark]) => mark), ['result']);
 });

@@ -327,7 +327,8 @@ A host waits up to a minute for a working session to take a reply, so the reques
 ### Timing marks
 
 Each answer and reply keeps marks on this device (`js/timing.js`, #600), so where the time
-went can be read without a debugger: the tap, each send (a resend is `sent 2`), each progress
+went can be read without a debugger: the tap, each send once the channel has taken it (a resend
+is `sent 2`; one the channel refused is none), each progress
 stage and the outcome, as `performance` measures from the tap named
 `agent-bridge reply 1a2b3c4d typed` (the request's first 8 hex digits, as the host's log
 names it), with the machine's own `timings` from the result (ms since it received the request:

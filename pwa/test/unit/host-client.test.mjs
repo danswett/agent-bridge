@@ -54,6 +54,27 @@ test('a request on a dead transport fails at once instead of timing out', async 
   await assert.rejects(client.request('hello'), /not connected to the relay/);
 });
 
+test('a reply or answer is said to have gone once its transport has taken it, and never when the transport refuses it', async () => {
+  const t = fakeTransport();
+  let take;
+  t.send = (m) => { t.sent.push(m); return new Promise((r) => { take = r; }); };
+  const client = new HostClient(t, { timeoutMs: 60000 });
+  const went = [];
+
+  client.reply({ id: 's1', request: 'r1', text: 'go' }, { onSent: () => went.push('r1') }).catch(() => {});
+  assert.deepEqual(went, [], 'not as the call returns');
+  await flush();
+  assert.deepEqual(went, [], 'nor while the transport still has it');
+  take();
+  await flush();
+  assert.deepEqual(went, ['r1']);
+
+  t.send = () => Promise.reject(new Error('not connected to the relay'));
+  await assert.rejects(client.answer({ id: 's1', question: 'q1', request: 'r2', text: 'yes' }, { onSent: () => went.push('r2') }), /not connected/);
+  assert.deepEqual(went, ['r1']);
+  client.close();
+});
+
 test('closing the transport fails every pending request', async () => {
   const t = fakeTransport();
   const client = new HostClient(t, { timeoutMs: 60000 });

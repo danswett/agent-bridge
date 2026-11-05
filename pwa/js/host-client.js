@@ -106,8 +106,11 @@ export class HostClient {
   request(op, data = {}, options = {}) { return this.#request(op, data, options).done; }
 
   // The request's id too, known as soon as it is made. onProgress hears the request's interim
-  // progress frames, read (readProgress), in the order they come.
-  #request(op, data = {}, { timeoutMs = this.#timeoutMs, onProgress = null } = {}) {
+  // progress frames, read (readProgress), in the order they come. onSent runs once the transport
+  // has taken the request, and never for one it refused: the transport sends a microtask after the
+  // call, so a mark taken as the call returns counted a failed send, and the queue's time, as the
+  // host's.
+  #request(op, data = {}, { timeoutMs = this.#timeoutMs, onProgress = null, onSent = null } = {}) {
     if (this.closed) { return { id: null, done: Promise.reject(new HostError(op, 'the channel is closed')) }; }
     const id = ++this.#next;
     const done = new Promise((resolve, reject) => {
@@ -117,7 +120,9 @@ export class HostClient {
       this.#pending.set(id, { op, resolve, reject, timer, onProgress });
       // A send that fails (the relay went away under the channel) fails this request at
       // once, rather than leaving it to time out: S5's sleeping-iPhone lesson.
-      Promise.resolve().then(() => this.#transport.send({ id, op, data })).catch((e) => {
+      Promise.resolve().then(() => this.#transport.send({ id, op, data })).then(() => {
+        if (onSent) { try { onSent(); } catch (e) { console.error(e); } }
+      }, (e) => {
         const p = this.#pending.get(id);
         if (p) { this.#pending.delete(id); clearTimeout(p.timer); reject(new HostError(op, e.message)); }
       });
@@ -182,16 +187,16 @@ export class HostClient {
   // Answers a question: data is session.answer's { id, question, request, fields | text }.
   // Resolves to { outcome, reason, timings? }; rejects only when no outcome arrived (HostError).
   // onProgress({ stage, working }) hears how far the host has got, where it says
-  // (sessions.progress); a host that doesn't sends only the outcome.
-  async answer(data, { timeoutMs = this.#answerTimeoutMs, onProgress = null } = {}) {
-    return readAnswerResult(await this.request(Ops.sessionAnswer, this.#withProgress(data, onProgress, (d) => hostJsonBytes(d) <= Limits.request), { timeoutMs, onProgress }));
+  // (sessions.progress); a host that doesn't sends only the outcome. onSent: once it has gone.
+  async answer(data, { timeoutMs = this.#answerTimeoutMs, onProgress = null, onSent = null } = {}) {
+    return readAnswerResult(await this.request(Ops.sessionAnswer, this.#withProgress(data, onProgress, (d) => hostJsonBytes(d) <= Limits.request), { timeoutMs, onProgress, onSent }));
   }
 
   // Sends a session a prompt: data is session.reply's { id, request, text, attachments? }.
   // Resolves to { outcome, reason, timings? }; rejects only when no outcome arrived (HostError).
-  // onProgress as for answer().
-  async reply(data, { timeoutMs = this.#replyTimeoutMs, onProgress = null } = {}) {
-    return readAnswerResult(await this.request(Ops.sessionReply, this.#withProgress(data, onProgress, (d) => checkReply(d) === null), { timeoutMs, onProgress }));
+  // onProgress and onSent as for answer().
+  async reply(data, { timeoutMs = this.#replyTimeoutMs, onProgress = null, onSent = null } = {}) {
+    return readAnswerResult(await this.request(Ops.sessionReply, this.#withProgress(data, onProgress, (d) => checkReply(d) === null), { timeoutMs, onProgress, onSent }));
   }
 
   // Sends a file ahead of a reply (attachments.js does the chunking). Each resolves to

@@ -45,11 +45,10 @@ const NO_OUTCOME = 'no outcome came back from the machine in time';
 const MAX_BUSY_RESENDS = 5;
 const STAGE_ORDER = { received: 1, typed: 2, queued: 2 };
 
-// Marks 'sent' for a call just made, if it went: one on a channel already closed is refused
-// before anything is sent, and is no send.
-export function sent(client, entry, call) {
-  if (!client.closed) { marked(entry.request, 'sent'); }
-  return call;
+// Marks 'sent' for a request once the transport has taken it (HostClient's onSent): not as the call
+// returns, which counted a send the transport then refused, and the time it queued as the host's.
+export function sent(entry) {
+  return () => marked(entry.request, 'sent');
 }
 
 export class AnswerService {
@@ -70,7 +69,7 @@ export class AnswerService {
     giveUpMs = 9 * 60 * 1000,
     // How long one entry may go on being resent, when some ops take longer than others.
     giveUpFor = null,
-    send = (client, data, entry, progress, stage) => sent(client, entry, client.answer(data, { onProgress: stage })),
+    send = (client, data, entry, progress, stage) => client.answer(data, { onProgress: stage, onSent: sent(entry) }),
     payload = (e) => ({ id: e.sessionId, question: e.questionId, request: e.request, ...e.answer }),
     final = (e) => !['busy', 'refused'].includes(e.outcome),
     // Whether busy on a resend means the first copy is still being delivered. A launch's host

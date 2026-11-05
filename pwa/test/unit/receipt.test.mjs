@@ -67,8 +67,9 @@ test('an outcome is said at once, past the one-second limit and any stage not ye
   // A view drawn after the delivery (a card drawn afresh) shows no check, and says nothing again.
   const late = [];
   const after = new ReceiptClock({ describe: () => outcome('reply'), draw: () => {}, say: (s) => late.push(s), delivered: () => late.push('check') });
-  after.show({ request: `r${n}`, state: 'done', outcome: 'delivered' });
+  after.show({ request: `r${n}`, state: 'done', outcome: 'delivered', attempts: 1 });
   assert.deepEqual(late, []);
+  assert.deepEqual(said, ['Sending reply', 'Reply delivered']);
 });
 
 test('nothing heard for 3 s puts Still sending… on the line, words only', (t) => {
@@ -282,4 +283,25 @@ test('a wait that ends inside the one-second limit is never said: the request is
   show({ state: 'sending', reason: null });
   tick(ReceiptTiming.announceGapMs * 2);
   assert.deepEqual(said, ['Sending reply', 'Reply sent']);
+});
+
+// Try again resends the same request: one that fails the same way again is heard again (a screen
+// reader heard the retry go, and then nothing), once for each attempt, never twice for one.
+test('Try again that fails the same way is heard again, once for each attempt', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const said = [];
+  const failed = { key: 'failed', text: 'Not sent', more: null, tone: 'warn', line: true, speech: 'Reply not sent: no answer from the machine' };
+  const clock = new ReceiptClock({
+    describe: (e, { stalled }) => (e.state === 'failed' ? failed : describeInFlight('reply', e, { machineName: 'ULTRA', stalled })),
+    draw: () => {},
+    say: (s) => said.push(s),
+  });
+  const request = `r${++n}`;
+  const at = (state, attempts) => clock.show({ request, state, attempts, stage: null, reason: null, progress: null });
+  at('failed', 1);
+  at('failed', 1);
+  at('sending', 2);
+  at('failed', 2);
+  assert.equal(said.filter((s) => s === failed.speech).length, 2);
+  clock.destroy();
 });

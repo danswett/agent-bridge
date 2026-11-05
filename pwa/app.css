@@ -1242,6 +1242,10 @@ form.reply, form.answer { container: receipt / inline-size; }
   border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin 1s linear infinite;
 }
 .reply .button.send[aria-busy="true"]::after { inset: 0; margin: auto; }
+/* Send, disabled while its request is in flight and, its box emptied, while its check shows, keeps
+   full opacity, as the option pressed does: dimmed by .button:disabled, its ring and check lost the
+   contrast they are drawn for, in forced colours too (#616 review). */
+:is(.reply .button.send:is([aria-busy="true"], .checked), .answer[aria-busy="true"] .button.send, .answer .button.send.checked):is(:disabled, [aria-disabled="true"]) { opacity: 1; }
 /* Held for a machine that isn't connected, the ring stands still, in Send's ink at full opacity
    (#617): a paler ring fell under 3:1, and in forced colours GrayText on Highlight did too. */
 :is(.reply .button.send.still, .answer.still :is(.button, .choice), .needs-entry.still .button)::after { animation: none; }

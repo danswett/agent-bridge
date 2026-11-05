@@ -136,7 +136,7 @@ const histories = new Map();
 function historyFor(request, now) {
   let h = histories.get(request);
   if (!h) {
-    h = { start: now, stage: null, stageAt: now, sendingSince: null, delivering: false, said: new Set(), pending: null, saidAt: -Infinity, sayTimer: null, voices: new Set() };
+    h = { start: now, stage: null, stageAt: now, sendingSince: null, delivering: false, said: new Set(), pending: null, pendingKey: null, saidAt: -Infinity, sayTimer: null, voices: new Set() };
     histories.set(request, h);
     if (histories.size > KEEP) { histories.delete(histories.keys().next().value); }
   }
@@ -155,8 +155,10 @@ function stallDue(entry, h, T) {
 
 // at once: an outcome, said now whatever was said in the last second, in place of anything
 // still waiting. alert: a failure, said assertively on the page's alert line (ui.md §9.1 A6).
-function speak(h, text, now, gapMs, atOnce, alert = false) {
-  if (!text || h.said.has(text)) {
+// key: what makes it news, its words unless given: an outcome's is its attempt's, so Try again
+// failing the same way is heard again, while a view drawn afresh never says it twice.
+function speak(h, text, now, gapMs, atOnce, alert = false, key = text) {
+  if (!text || h.said.has(key)) {
     // The request is back in a state already said, or one with nothing to say: what was waiting
     // was about a state it has left (a disconnect's "waiting for" after the connection is back).
     clearTimeout(h.sayTimer);
@@ -165,6 +167,7 @@ function speak(h, text, now, gapMs, atOnce, alert = false) {
     return;
   }
   h.pending = text;
+  h.pendingKey = key;
   if (atOnce) {
     clearTimeout(h.sayTimer);
     h.sayTimer = null;
@@ -179,7 +182,8 @@ function sayNow(h, now, alert = false) {
   if (h.pending === null) { return; }
   const text = h.pending;
   h.pending = null;
-  h.said.add(text);
+  h.said.add(h.pendingKey ?? text);
+  h.pendingKey = null;
   h.saidAt = now();
   if (alert) {
     sayAlert(text);
@@ -277,7 +281,7 @@ export class ReceiptClock {
       // An outcome is never held: shown and said at once, past any stage not yet said.
       const d = this.describe(entry, { stalled: false });
       this.#put(d.line ? d : ROOM);
-      speak(h, d.speech, this.now, T.announceGapMs, true, d.tone === 'bad');
+      speak(h, d.speech, this.now, T.announceGapMs, true, d.tone === 'bad', `${entry.attempts ?? 0}\n${d.speech}`);
       if (entry.state === 'done' && entry.outcome === 'delivered' && this.#seen === entry.request) {
         this.#seen = null;
         this.delivered();

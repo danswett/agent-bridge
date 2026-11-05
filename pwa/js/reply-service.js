@@ -47,7 +47,7 @@ export class ReplyService extends AnswerService {
           this.#sending.delete(entry.key);
           if (files.length) { progress({ sent: total, total, phase: 'reply' }); }
           // Its files' time is the tap's to sent, not the machine's.
-          return await sent(client, entry, client.reply(data, { onProgress: stage }));
+          return await client.reply(data, { onProgress: stage, onSent: sent(entry) });
         } catch (e) {
           if (abort.signal.aborted) { throw Object.assign(new Error(CANCELLED), { fromHost: true, reason: CANCELLED }); }
           throw e;
