@@ -561,6 +561,28 @@ public sealed class UsageSharingTests : IAsyncLifetime
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task Pruning_an_offline_machine_after_online_hosts_exceeded_the_cap_confirms_its_removal(bool all)
+    {
+        await using var capped = await TestRelay.StartAsync(o => { o.Roster.MaxMachines = 1; o.Roster.Time = time; });
+        var account = capped.TokenFor(1, "octo");
+        var desk = await capped.ConnectAsync(account, "Desk", "host");
+        var old = await capped.ConnectAsync(account, "Old laptop", "host");
+        var cache = PeerUsage.Load(null, desk.Id, desk.Relay.AccountId, time);
+        Assert.Equal(1, cache.Take([Claude(12, Now)], new UsageReader(old.Id, "Old laptop")));
+        await old.DisposeAsync();
+        await Wait.UntilAsync(() => desk.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true, "the offline laptop before pruning", Patience);
+        await using var peers = new UsagePeers(cache, desk.Id, time: time);
+        peers.Attach(desk.Relay, desk.Hub);
+        peers.Start();
+
+        await capped.App.Services.GetRequiredService<MachineRoster>().FlushAsync(all: all);
+
+        await Wait.UntilAsync(() => cache.Entries.Count == 0, "confirmation of removal by writer pruning", Patience);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task A_forget_written_by_another_replica_is_confirmed_to_an_already_connected_host(bool writeConflict)
     {
         var storage = new MemoryRosterStore();

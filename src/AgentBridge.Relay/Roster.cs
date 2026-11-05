@@ -478,7 +478,9 @@ public sealed class MachineRoster
                 string? etag;
                 lock (a)
                 {
+                    var shown = Shown(a);
                     Prune(a);
+                    announce |= Shown(a) != shown;
                     doc = new RosterDocument { Machines = [.. a.Machines.Values.OrderByDescending(m => m.LastSeen)], Forgotten = new(a.Forgotten) };
                     etag = a.ETag;
                     a.Dirty = false;

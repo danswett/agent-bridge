@@ -107,6 +107,8 @@ can process both normally. An unsuccessful forget sends no confirmation.
 The same confirmation path is used when a roster reload learns a removal from another
 replica, both during a periodic reread and after a write conflict. Already-connected
 hosts therefore clear such cached readings without waiting for unrelated activity.
+Writer pruning also announces a changed offline list through that path, including
+when online hosts exceeded the cap and a departing host only becomes eligible later.
 
 | `error` | Why |
 |---|---|
