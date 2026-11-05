@@ -143,6 +143,17 @@ public sealed class HookIntake : IAsyncDisposable
     // answer while any is queued (one whose deletion failed after it was handled aside).
     volatile bool _queued;
 
+    // Whether the hook events spooled so far have been taken in, so a registration says what its
+    // session's hooks said. The restore record reads a Claude or Codex session's ending only then
+    // (#780): a SessionEnd written while the host was down sits in the spool until a pass applies
+    // it to the registration. The first pass runs at once and the first prune (which deletes ended
+    // registrations) PruneInterval later, so the ending is read in between. While agent-ha-bridge
+    // has the spool, its daemon applies them to the same registrations, and the spool is not even
+    // listed from here (G5): settled as far as this host can know.
+    public bool Drained => Paused is not null || (_passed && !_queued && !Waiting());
+
+    volatile bool _passed;
+
     // A test's way to see each listing of the spool (G5: none once agent-ha-bridge has it).
     internal Action? Listing { get; set; }
 
@@ -249,6 +260,7 @@ public sealed class HookIntake : IAsyncDisposable
         if (!ReconcileApprovals(beat)) { return 0; }
         EnsureWatcher();
         var handled = Consume();
+        _passed = true;
         // Each deletion asks first: the markers are the daemon's once it has started.
         if (_handlers.WithdrawalsPending && Paused is null) { _handlers.RetryWithdrawals(); }
         var now = _time.GetUtcNow();

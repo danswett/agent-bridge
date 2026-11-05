@@ -229,8 +229,9 @@ prompt, a response, a question's words or an attachment. With it, when the machi
 change that matters, at most every 250 ms, whole: to a temporary file, flushed to the disk, then
 renamed over the last, so a power cut leaves the record before or the record after. A session that
 goes stays in it for 60 s more, because a shutting-down machine ends its agents before its host. A
-record that cannot be read is set aside as `restore.json.unreadable`, offers nothing, and keeps
-every worktree while that run lasts.
+record that cannot be read (or one from a newer host) is set aside as `restore.json.unreadable`,
+offers nothing, and keeps every worktree, on that start and every later one, until a person
+removes that file: what was owed is unknown, and unknown is never read as nothing owed.
 
 **At start**, after discovery's first pass, each session the last run saw live is judged:
 
@@ -240,6 +241,7 @@ every worktree while that run lasts.
 | Its agent's discovery is held ([v1-sessions.md](protocol/v1-sessions.md#discovery-held)) | Waits, and is judged once it can be: never read as gone (§6.3, #43) |
 | The machine booted since (boot times more than 2 minutes apart), or on Windows the person's logon is new (a sign-out, or a shutdown with Fast Startup, which keeps the boot time): an empty, volatile key of the profile's, `HKCU\Software\AgentBridge\logon-<hash>`, which Windows drops with the logon and which holds no value (uninstall removes any left behind) | Died: a shutdown or a sign-out ends every session, so an ending written as it went down is the shutdown's |
 | Same boot, and the last run saw it go | Ended under the host's eyes |
+| Same boot, and its agent's endings are not yet all taken in (on a machine migrated from agent-ha-bridge, a Claude or Codex SessionEnd still in the hook intake's spool) | Waits until the intake has drained the spool, then is judged |
 | Same boot, and its agent recorded a normal end | Ended. Copilot: a `session.shutdown` of the main agent after the last `user.message` in its `events.jsonl`. Claude and Codex: its hook registration says `Ended` (their SessionEnd hook) |
 | Otherwise | Died with the host |
 
@@ -247,19 +249,20 @@ The cause is `reboot` across boots or logons; on the same boot, `restart` if the
 `crash`. A session a person closed while the host was down, with nothing its agent records, reads as
 died: it is offered, never typed into.
 
-**What died** is kept in the record as owed, offered for 7 days unless it is resumed or seen live
-again, and said in `hello`'s `machine.restore` ([v1-sessions.md](protocol/v1-sessions.md#hello)) for
+**What died** is kept in the record as owed, offered for 7 days (let go on time while the host keeps
+running) unless it is resumed or seen live again, and said in `hello`'s `machine.restore` ([v1-sessions.md](protocol/v1-sessions.md#hello)) for
 this run, at most 24 hours, and in one `restored` notification, sent when every session is judged or
-10 minutes after start, and only if this start found any that died: one an earlier start offered is
-offered still, not notified again. Nothing starts: a person resumes it from Launch, through the resume path
+10 minutes after start, and only if this start found any that died. The notification names only
+those; one an earlier start offered is offered still in `hello`, not notified again. One an earlier
+start was still judging is judged now, as of this start's cause. Nothing starts: a person resumes it from Launch, through the resume path
 above. Beside agent-ha-bridge, or while the machine is read-only or launching is off, the sessions
 are only offered (design G5), and stay owed until the machine takes launches. With
 `sessions.restoreOnStart` off ([host-config.md](host-config.md)), what went is said and nothing is
 kept owed, and what earlier starts kept owed is let go.
 
 **Worktrees.** The reclaimer keeps the worktree of every session owed or still being judged, as it
-keeps a live session's; one owed without a folder, or a record that could not be read, keeps every
-worktree.
+keeps a live session's; one owed without a folder, or a record set aside, keeps every worktree.
+
 ## The log
 
 ```

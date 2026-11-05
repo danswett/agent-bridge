@@ -32,16 +32,19 @@ public static class RestoreJudge
     //   * on another boot: died, whatever it wrote as it went (a shutdown ends every session, and
     //     an ending written then is the shutdown's; so is one the host saw go just before it);
     //   * on the same boot, gone while that run watched: it ended under the host's eyes;
+    //   * its agent's endings not yet settled (a hook's SessionEnd still in the intake's spool):
+    //     waiting, as for a hold, so an ending written while the host was down is not missed;
     //   * ended normally, as its agent records it: never restored;
     //   * otherwise it died with the host.
     // A session a person closed while the host was down, on the same boot, with nothing its agent
     // records, reads as died: it is offered, never typed into (#780, known edge).
-    public static RestoreVerdict Judge(RestoreEntry entry, RestoreCause cause, bool running, bool held, Func<bool?> endedNormally)
+    public static RestoreVerdict Judge(RestoreEntry entry, RestoreCause cause, bool running, bool held, Func<bool?> endedNormally, bool endsSettled = true)
     {
         if (running) { return RestoreVerdict.Running; }
         if (held) { return RestoreVerdict.Waiting; }
         if (cause == RestoreCause.Reboot) { return RestoreVerdict.Died; }
         if (entry.Gone is not null) { return RestoreVerdict.Ended; }
+        if (!endsSettled) { return RestoreVerdict.Waiting; }
         return endedNormally() == true ? RestoreVerdict.Ended : RestoreVerdict.Died;
     }
 }
@@ -53,6 +56,9 @@ public sealed record RestoreOptions
     // machine.instance: this run of the host.
     public required string Instance { get; init; }
     public required ISessionEnds Ends { get; init; }
+    // Whether every ending an agent's hooks wrote so far has been taken in (the hook intake's spool
+    // is drained), by agent; none says always. Until then that agent's sessions wait to be judged.
+    public Func<AgentKind, bool>? EndsSettled { get; init; }
     // sessions.restoreOnStart (docs/host-config.md): off, what died is only said, never kept.
     public bool RestoreOnStart { get; init; } = true;
     // Why the machine takes no launches from other devices now (design G5), or null.
@@ -111,6 +117,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     bool told;
     RestoreNotice? notice;
     ITimer? writeTimer;
+    DateTimeOffset writeDue;
     ITimer? judgeTimer;
     string? writeProblem;
 
@@ -145,7 +152,9 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     {
         lock (gate)
         {
-            if (unreadable || !running) { return null; }
+            // A record set aside keeps every worktree until a person has looked at it and removed
+            // it, on this start and every later one: unknown is never read as nothing owed (#780).
+            if (unreadable || !running || RestoreFiles.SetAsideExists(options.Path)) { return null; }
             var folders = new List<string>();
             foreach (var w in owed)
             {
@@ -163,8 +172,20 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         var (previous, problem) = RestoreFiles.Read(options.Path);
         if (problem is not null)
         {
-            log($"restore: the record of the sessions live when the host last ran could not be read ({problem}); it is set aside as {RestoreFiles.FileName}.unreadable, nothing is offered from it, and no worktree is reclaimed while this host runs");
+            log($"restore: the record of the sessions live when the host last ran could not be read ({problem}); it is set aside as {RestoreFiles.FileName}.unreadable, nothing is offered from it, and no worktree is reclaimed until that file is removed");
             RestoreFiles.SetAside(options.Path);
+        }
+        else if (RestoreFiles.SetAsideExists(options.Path))
+        {
+            log($"restore: {RestoreFiles.FileName}.unreadable is still there; no worktree is reclaimed until it is removed");
+        }
+        // What the sessions still live were launched with, so adopting them keeps it.
+        lock (gate)
+        {
+            foreach (var e in previous?.Sessions ?? [])
+            {
+                if (e.Launch is { } l && launched.Count < LaunchesKept) { launched.TryAdd(e.Id, l); }
+            }
         }
         // Heard from now, so nothing between the snapshot and this is missed; the snapshot is taken
         // outside the lock, as the source's own events are.
@@ -192,17 +213,21 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
                     owed.Add(new RestoreOwed(e, cause, previous.Written, now, Decided: false));
                     judgedNow.Add(e.Id);
                 }
-                // Sessions earlier runs left owed, still offered; said already, so not news. With
+                // Sessions earlier runs left owed. Those offered already are not news. Those still
+                // being judged are, and are judged as of now: a reboot since makes them died. With
                 // sessions.restoreOnStart off none is kept.
                 foreach (var w in previous.Owed)
                 {
-                    if (options.RestoreOnStart && now - w.At < OwedFor && seen.Add(w.Entry.Id)) { owed.Add(w); }
+                    if (!options.RestoreOnStart || now - w.At >= OwedFor || !seen.Add(w.Entry.Id)) { continue; }
+                    if (w.Decided) { owed.Add(w); continue; }
+                    owed.Add(cause == RestoreCause.Reboot ? w with { Cause = cause } : w);
+                    judgedNow.Add(w.Entry.Id);
                 }
                 log($"restore: the host last ran on {(cause == RestoreCause.Reboot ? "an earlier boot" : "this boot")} ({cause.ToString().ToLowerInvariant()}); {previous.Sessions.Count} session(s) were live then");
             }
             ready = AdvanceLocked(now);
             WriteLocked(now);
-            if (owed.Any(w => !w.Decided)) { judgeTimer = time.CreateTimer(_ => Tick(), null, JudgeEvery, JudgeEvery); }
+            ArmLocked(now);
         }
         if (ready is not null) { Tell(ready); }
     }
@@ -266,13 +291,25 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             var before = Signature();
             ready = AdvanceLocked(now);
             if (Signature() != before) { ScheduleWriteLocked(Coalesce); }
-            if (owed.All(w => w.Decided))
-            {
-                judgeTimer?.Dispose();
-                judgeTimer = null;
-            }
+            ArmLocked(now);
         }
         if (ready is not null) { Tell(ready); }
+    }
+
+    // While anything is still being judged, every JudgeEvery; then once, when the first offer comes
+    // to OwedFor, so a host that runs for weeks lets it go (and its worktree) on time.
+    void ArmLocked(DateTimeOffset now)
+    {
+        judgeTimer?.Dispose();
+        judgeTimer = null;
+        if (stopped || owed.Count == 0) { return; }
+        if (owed.Any(w => !w.Decided))
+        {
+            judgeTimer = time.CreateTimer(_ => Tick(), null, JudgeEvery, JudgeEvery);
+            return;
+        }
+        var due = owed.Min(w => w.At) + OwedFor - now;
+        judgeTimer = time.CreateTimer(_ => Tick(), null, due > JudgeEvery ? due : JudgeEvery, Timeout.InfiniteTimeSpan);
     }
 
     void Tell(RestoreNotice ready)
@@ -304,7 +341,8 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             if (live.TryGetValue(w.Entry.Id, out var e) && e.Gone is null) { owed.RemoveAt(i); continue; }
             if (now - w.At >= OwedFor) { owed.RemoveAt(i); continue; }
             if (w.Decided) { continue; }
-            var verdict = RestoreJudge.Judge(w.Entry, w.Cause, running: false, held: held.Contains(w.Entry.Agent), () => options.Ends.Ended(w.Entry.Agent, w.Entry.Id));
+            var verdict = RestoreJudge.Judge(w.Entry, w.Cause, running: false, held: held.Contains(w.Entry.Agent), () => options.Ends.Ended(w.Entry.Agent, w.Entry.Id),
+                endsSettled: options.EndsSettled?.Invoke(w.Entry.Agent) ?? true);
             switch (verdict)
             {
                 case RestoreVerdict.Ended:
@@ -321,10 +359,14 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             }
         }
         BuildNoticeLocked();
-        if (told || notice is not { } n || !owed.Concat(said).Any(w => w.Decided && judgedNow.Contains(w.Entry.Id))) { return null; }
-        if (n.Waiting > 0 && now - started < NoticeAfter) { return null; }
+        if (told || notice is null) { return null; }
+        var waiting = owed.Count(w => !w.Decided);
+        if (waiting > 0 && now - started < NoticeAfter) { return null; }
+        // The push says only what this start found: an offer an earlier one pushed is in hello alone.
+        var found = owed.Where(w => w.Decided).Concat(said).Where(w => judgedNow.Contains(w.Entry.Id)).OrderByDescending(w => w.Entry.Seen).ToList();
+        if (found.Count == 0) { return null; }
         told = true;
-        return n;
+        return NoticeOf(found, waiting, found);
     }
 
     void BuildNoticeLocked()
@@ -338,8 +380,14 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         }
         // Why and when, of what this run found if it found anything, else of what it carried over.
         var all = owed.Concat(said).ToList();
-        var latest = all.Where(w => judgedNow.Contains(w.Entry.Id)).MaxBy(w => w.At) ?? all.MaxBy(w => w.At)!;
-        notice = new RestoreNotice
+        var fresh = all.Where(w => judgedNow.Contains(w.Entry.Id)).ToList();
+        notice = NoticeOf(offered, waiting, fresh.Count > 0 ? fresh : all);
+    }
+
+    RestoreNotice NoticeOf(List<RestoreOwed> offered, int waiting, List<RestoreOwed> about)
+    {
+        var latest = about.MaxBy(w => w.At)!;
+        return new RestoreNotice
         {
             At = started,
             Cause = latest.Cause,
@@ -387,9 +435,20 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     // keeps, so it is not written for it.
     static bool Same(RestoreEntry a, RestoreEntry b) => a == (b with { Seen = a.Seen, Gone = a.Gone });
 
+    // A write already due sooner stands; one due later (a gone session's GoneKept) is brought
+    // forward, so a change is written within Coalesce whatever else is waiting.
     void ScheduleWriteLocked(TimeSpan after)
     {
-        if (stopped || writeTimer is not null) { return; }
+        if (stopped) { return; }
+        var due = time.GetUtcNow() + after;
+        if (writeTimer is not null)
+        {
+            if (writeDue <= due) { return; }
+            writeDue = due;
+            writeTimer.Change(after, Timeout.InfiniteTimeSpan);
+            return;
+        }
+        writeDue = due;
         writeTimer = time.CreateTimer(_ =>
         {
             lock (gate)

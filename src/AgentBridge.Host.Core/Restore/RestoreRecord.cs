@@ -66,10 +66,18 @@ public static class RestoreFiles
     {
         try
         {
-            var info = new FileInfo(path);
-            if (!info.Exists) { return (null, null); }
-            if (info.Length > MaxBytes) { return (null, $"it is larger than {MaxBytes / 1024 / 1024} MiB"); }
-            var file = JsonSerializer.Deserialize<RestoreFile>(File.ReadAllBytes(path), ProtocolJson.Options);
+            // Absent only when the OS says so: FileInfo.Exists is false for a file whose details
+            // cannot be read too, which would read a record nobody can see as no record at all.
+            byte[] bytes;
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                if (stream.Length > MaxBytes) { return (null, $"it is larger than {MaxBytes / 1024 / 1024} MiB"); }
+                bytes = new byte[stream.Length];
+                stream.ReadExactly(bytes);
+            }
+            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return (null, null); }
+            var file = JsonSerializer.Deserialize<RestoreFile>(bytes, ProtocolJson.Options);
             if (file is null) { return (null, "it is empty"); }
             if (file.V != RestoreFile.CurrentVersion) { return (null, $"it is version {file.V}, not {RestoreFile.CurrentVersion}"); }
             // JSON null reads into anything, whatever the record says it holds.
@@ -107,6 +115,19 @@ public static class RestoreFiles
             try { File.Delete(partial); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }
+    }
+
+    // Whether a record set aside is still there. Only "not found" is no: one that cannot be looked
+    // at may be there.
+    public static bool SetAsideExists(string path)
+    {
+        try
+        {
+            _ = File.GetAttributes(path + ".unreadable");
+            return true;
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return false; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return true; }
     }
 
     // Moved aside, not deleted, so a person can see what could not be read; one is kept.
@@ -227,8 +248,8 @@ public sealed class SessionEnds(string copilotHome, IReadOnlyList<string> claude
         return agent switch
         {
             AgentKind.Copilot => CopilotEnded(Path.Combine(copilotHome, "session-state", id, "events.jsonl")),
-            AgentKind.Claude => RegistrationEnded(claudeRoots, id),
-            AgentKind.Codex => RegistrationEnded(codexRoots, id),
+            AgentKind.Claude => RegistrationEnded(agent, claudeRoots, id),
+            AgentKind.Codex => RegistrationEnded(agent, codexRoots, id),
             _ => null,
         };
     }
@@ -266,20 +287,22 @@ public sealed class SessionEnds(string copilotHome, IReadOnlyList<string> claude
         return ended;
     }
 
-    static bool? RegistrationEnded(IReadOnlyList<string> roots, string id)
+    // As discovery reads them: each root's registration checked as a registration of its own
+    // session, and of those in several roots the one written last. One that cannot be read says
+    // nothing, rather than an older root's copy saying it ended.
+    static bool? RegistrationEnded(AgentKind agent, IReadOnlyList<string> roots, string id)
     {
+        Registration? newest = null;
         foreach (var root in roots)
         {
-            var path = Path.Combine(root, id + ".json");
-            try
+            var registration = RegistrationDiscovery.Parse(agent, Path.Combine(root, RegistrationDiscovery.SafeKey(id) + ".json"), out var why);
+            if (registration is null)
             {
-                if (!File.Exists(path)) { continue; }
-                using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
-                if (doc.RootElement.ValueKind != JsonValueKind.Object) { return null; }
-                return doc.RootElement.TryGetProperty("Ended", out var ended) && ended.ValueKind == JsonValueKind.True;
+                if (why is not null) { return null; }
+                continue;
             }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return null; }
+            if (newest is null || (registration.Updated ?? DateTimeOffset.MinValue) > (newest.Updated ?? DateTimeOffset.MinValue)) { newest = registration; }
         }
-        return null;
+        return newest?.Ended;
     }
 }

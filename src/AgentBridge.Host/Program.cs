@@ -389,6 +389,9 @@ async Task<int> ServeAsync(HostHandover handover)
         Instance = machine.Instance!,
         Ends = SessionEnds.For(options),
         Logon = new VolatileLogonMarker(identity.Folder),
+        // Claude's and Codex's endings come through the hook intake on a migrated machine: judged once
+        // it has taken in what the hooks spooled while the host was down.
+        EndsSettled = agent => agent == AgentKind.Copilot || intakeState is null || runningIntake is { Drained: true },
         RestoreOnStart = settings.RestoreOnStart,
         ReadOnly = () => ReadOnlyReason() ?? (settings.Launch.Enabled ? null : "launching is turned off (launch.enabled)") ?? g5.Recent(),
         Log = Log,

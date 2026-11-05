@@ -22,9 +22,12 @@ public sealed class RestoreTests : IDisposable
 
     RestoreFile Written() => RestoreFiles.Read(Record).File!;
 
-    RestoreRecorder Recorder(bool restoreOnStart = true, bool freshLogon = false)
+    RestoreRecorder Recorder(bool restoreOnStart = true, bool freshLogon = false, Func<AgentKind, bool>? endsSettled = null)
     {
-        var r = new RestoreRecorder(source, new RestoreOptions { Path = Record, Instance = "run2", Ends = ends, RestoreOnStart = restoreOnStart, Boot = boot, Logon = new Logon(freshLogon), Time = Time });
+        var r = new RestoreRecorder(source, new RestoreOptions
+        {
+            Path = Record, Instance = "run2", Ends = ends, RestoreOnStart = restoreOnStart, Boot = boot, Logon = new Logon(freshLogon), Time = Time, EndsSettled = endsSettled,
+        });
         r.NoticeReady += told.Add;
         return r;
     }
@@ -334,6 +337,138 @@ public sealed class RestoreTests : IDisposable
         Assert.False(ended.Ended(AgentKind.Claude, claude));
         File.WriteAllText(Path.Combine(f.ClaudeRegistrations, claude + ".json"), "{ \"SessionId\": \"" + claude + "\", \"Ended\": true }");
         Assert.True(ended.Ended(AgentKind.Claude, claude));
+    }
+
+    [Fact]
+    public async Task A_change_after_a_session_goes_is_written_within_the_coalescing_delay_not_with_the_gone_one()
+    {
+        source.Sessions.AddRange([S("a"), S("b")]);
+        await using var r = Recorder();
+        r.Start();
+        source.Remove("b");
+        Time.Advance(RestoreRecorder.Coalesce);
+
+        source.Upsert(S("c"));
+        Time.Advance(RestoreRecorder.Coalesce);
+
+        Assert.Contains(Written().Sessions, e => e.Id == "c");
+    }
+
+    [Fact]
+    public async Task A_session_still_running_across_a_host_restart_keeps_what_it_was_launched_with()
+    {
+        var launch = new RestoreLaunch("agency", "Bridge", true, "work", null, null, null, "ask");
+        Previous(Fixture.T0, true, E("a") with { Launch = launch });
+        source.Sessions.Add(S("a"));
+        await using var r = Recorder();
+
+        r.Start();
+
+        Assert.Equal(launch, Assert.Single(Written().Sessions).Launch);
+    }
+
+    [Fact]
+    public async Task An_offer_is_let_go_after_seven_days_while_the_host_keeps_running()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        await using var r = Recorder();
+        r.Start();
+        Assert.Single(r.Folders()!);
+
+        Time.Advance(RestoreRecorder.OwedFor);
+        Time.Advance(RestoreRecorder.Coalesce);
+
+        Assert.Empty(r.Folders()!);
+        Assert.Null(r.Notice);
+        Assert.Empty(Written().Owed);
+    }
+
+    [Fact]
+    public async Task A_record_set_aside_keeps_every_worktree_on_later_starts_until_it_is_removed()
+    {
+        File.WriteAllText(Record, "{ not json");
+        await using (var first = Recorder())
+        {
+            first.Start();
+        }
+
+        await using var second = Recorder();
+        second.Start();
+        Assert.Null(second.Folders());
+
+        File.Delete(Record + ".unreadable");
+        Assert.NotNull(second.Folders());
+    }
+
+    [Fact]
+    public async Task A_session_still_being_judged_when_the_host_stopped_is_judged_as_of_a_reboot_since_and_pushed()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        source.HeldNow = new DiscoveryHeld("the copilot processes could not be listed", [AgentKind.Copilot]);
+        await using (var first = Recorder())
+        {
+            first.Start();
+        }
+        Assert.Empty(told);
+        source.HeldNow = null;
+        ends.Of["a"] = true;
+
+        await using var second = Recorder(freshLogon: true);
+        second.Start();
+
+        var n = Assert.Single(told);
+        Assert.Equal((RestoreCause.Reboot, "a"), (n.Cause, Assert.Single(n.Offered).Id));
+    }
+
+    [Fact]
+    public async Task The_push_names_only_what_this_start_found_and_hello_names_every_offer()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        source.Sessions.Add(S("b"));
+        await using (var first = Recorder())
+        {
+            first.Start();
+        }
+        told.Clear();
+        source.Sessions.Clear();
+
+        await using var second = Recorder();
+        second.Start();
+
+        Assert.Equal("b", Assert.Single(Assert.Single(told).Offered).Id);
+        Assert.Equal(["a", "b"], second.Notice!.Offered.Select(o => o.Id).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_claude_session_waits_until_its_hooks_endings_are_taken_in_before_it_is_judged()
+    {
+        Previous(Fixture.T0, false, E("a", AgentKind.Claude));
+        var settled = false;
+        await using var r = Recorder(endsSettled: agent => agent != AgentKind.Claude || settled);
+        r.Start();
+        var judging = r.Notice!;
+        Assert.Equal((1, 0), (judging.Waiting, judging.Offered.Count));
+
+        ends.Of["a"] = true;
+        settled = true;
+        Time.Advance(RestoreRecorder.JudgeEvery);
+
+        Assert.Null(r.Notice);
+        Assert.Empty(told);
+    }
+
+    [Fact]
+    public void Of_a_registration_in_two_roots_the_one_written_last_says_whether_the_session_ended()
+    {
+        var older = Path.Combine(f.Root, "older");
+        var newer = Path.Combine(f.Root, "newer");
+        Directory.CreateDirectory(older);
+        Directory.CreateDirectory(newer);
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(Path.Combine(older, id + ".json"), "{ \"SessionId\": \"" + id + "\", \"Updated\": \"2026-10-28T04:00:00.000Z\", \"Ended\": true }");
+        File.WriteAllText(Path.Combine(newer, id + ".json"), "{ \"SessionId\": \"" + id + "\", \"Updated\": \"2026-10-28T05:00:00.000Z\", \"Ended\": false }");
+
+        Assert.False(new SessionEnds(f.CopilotHome, [older, newer], []).Ended(AgentKind.Claude, id));
     }
 
     sealed class Live : ISessionSource
