@@ -52,6 +52,9 @@ public sealed partial class SessionView
     // Where focus goes on a stop not wholly in view in a block brought to the leading edge (one taller
     // than the view): brought in, the block's start leaving the edge, until B rules on #829.
     static readonly TabLanding Landing = TabLanding.FocusVisible;
+    // TEST-ONLY (#881): where the self-test collects what moves the view while it measures a Tab.
+    // Null in every normal run, so nothing is built or logged for it.
+    internal static Action<string>? Diagnostics;
 
     void ShowResponse(bool reset)
     {
@@ -109,7 +112,7 @@ public sealed partial class SessionView
         // From where the last key is taking it, so a key pressed while that scroll still moves adds to it.
         var from = keyTarget ?? scroll.VerticalOffset;
         var to = ConversationKeyboard.Offset(key, from, scroll.ViewportHeight, scroll.ScrollableHeight);
-        if (Math.Abs(to - from) >= 0.5 && scroll.ChangeView(null, to, null, disableAnimation: !Motion.Scrolls)) { keyTarget = to; }
+        if (Math.Abs(to - from) >= 0.5 && scroll.ChangeView(null, to, null, disableAnimation: !Motion.Scrolls)) { keyTarget = to; Diagnostics?.Invoke($"OnReadingKey: ChangeView from {from:0.#} px to {to:0.#} px"); }
     }
 
     // What had focus when a key reached the conversation, from it up to the list: a text input, a
@@ -138,14 +141,21 @@ public sealed partial class SessionView
     // manager's own scroll to its stop held (InViewAtTab).
     void OnLeavingBlock(UIElement sender, LosingFocusEventArgs e)
     {
+        Diagnostics?.Invoke($"LosingFocus {e.Direction}: block {Where(PlaceOf(e.OldFocusedElement))} to block {Where(PlaceOf(e.NewFocusedElement))}, the view at {ConversationScroll?.VerticalOffset:0.#} px");
         if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } passed) { e.Cancel = true; FocusBlock(passed.Index, e.Direction == FocusNavigationDirection.Next, passed.Wrapped, e.OldFocusedElement); }
     }
 
     void OnReachingBlock(UIElement sender, GettingFocusEventArgs e)
     {
-        if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } passed) { e.Cancel = true; FocusBlock(passed.Index, e.Direction == FocusNavigationDirection.Next, passed.Wrapped, e.OldFocusedElement); }
-        else if (!e.Cancel && InViewAtTab(e.NewFocusedElement, e.Direction) is { } kept) { HoldFocusScroll(kept.Container, kept.Source).Leaving(); }
+        var passedBy = TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction);
+        var kept = passedBy is null && !e.Cancel ? InViewAtTab(e.NewFocusedElement, e.Direction) : null;
+        Diagnostics?.Invoke($"GettingFocus {e.Direction}: block {Where(PlaceOf(e.OldFocusedElement))} to block {Where(PlaceOf(e.NewFocusedElement))}, Tab passes block {(passedBy is { } p ? (p.Index + 1).ToString() : "none")}, landing held {kept is not null}, the view at {ConversationScroll?.VerticalOffset:0.#} px");
+        if (passedBy is { } passed) { e.Cancel = true; FocusBlock(passed.Index, e.Direction == FocusNavigationDirection.Next, passed.Wrapped, e.OldFocusedElement); }
+        else if (kept is { } k) { HoldFocusScroll(k.Container, k.Source).Leaving(); }
     }
+
+    // A place as a block's number for the log (#881): 1-based, "header" or "footer" outside the blocks, "none" outside the tree.
+    string Where(int? place) => place is not { } p ? "none" : p < 0 ? "header" : p >= blocks.Count ? "footer" : $"{p + 1}";
 
     // The block a Tab lands in that is wholly in view, so stays where it is (ui.md §6.4), and what
     // the focus manager's scroll to the stop will come from: it pads a control 20 px each side
@@ -286,6 +296,7 @@ public sealed partial class SessionView
         var direction = forward ? FocusNavigationDirection.Next : FocusNavigationDirection.Previous;
         var waited = 0;
         ConversationBlock? brought = null;
+        Diagnostics?.Invoke($"FocusBlock(block {index + 1}, forward {forward}, wrapped {wrapped}) from block {Where(PlaceOf(focusedThen))}, the view at {ConversationScroll?.VerticalOffset:0.#} px");
         DispatcherQueue.TryEnqueue(Bring);
 
         // The response may change while this waits, even to a new list of blocks, so the block is
@@ -304,8 +315,22 @@ public sealed partial class SessionView
                 return;
             }
             target = blocks[at];
-            if (!ReferenceEquals(brought, target)) { ConversationList.ScrollIntoView(target, ScrollIntoViewAlignment.Leading); brought = target; }
+            if (!ReferenceEquals(brought, target))
+            {
+                var offsetThen = ConversationScroll?.VerticalOffset;
+                var wholly = ConversationList.ContainerFromIndex(at) is FrameworkElement shown && ConversationScroll is { } s && ConversationKeyboard.WhollyInView(Top(shown, s), shown.ActualHeight, s.ViewportHeight);
+                ConversationList.ScrollIntoView(target, ScrollIntoViewAlignment.Leading);
+                brought = target;
+                if (Diagnostics is { } diag && ConversationScroll is { } scrolled)
+                {
+                    diag($"FocusBlock's ScrollIntoView(block {at + 1}, Leading): Resume's move is block {move.Block + 1}, the block {(wholly ? "wholly" : "not wholly")} in view and {(ConversationList.ContainerFromIndex(at) is null ? "not " : "")}realised, the view at {offsetThen:0.#} px before and {scrolled.VerticalOffset:0.#} px straight after");
+                    EventHandler<ScrollViewerViewChangedEventArgs>? next = null;
+                    next = (_, e) => { diag($"the next ViewChanged after that ScrollIntoView: {scrolled.VerticalOffset:0.#} px{(e.IsIntermediate ? " (intermediate)" : "")}"); scrolled.ViewChanged -= next; };
+                    scrolled.ViewChanged += next;
+                }
+            }
             ConversationList.UpdateLayout();
+            if (Diagnostics is { } afterLayout) { afterLayout($"FocusBlock after UpdateLayout for block {at + 1}: the view at {ConversationScroll?.VerticalOffset:0.#} px"); }
             if (ConversationList.ContainerFromIndex(at) is not { } container)
             {
                 // Not laid out yet: again at the next layout, a few times at most.
@@ -400,6 +425,7 @@ public sealed partial class SessionView
         if (anchor is not { } a || ConversationScroll is not { } scroll || ConversationList.ContainerFromIndex(a.Index) is not FrameworkElement c) { return; }
         var to = a.OffsetFor(scroll.VerticalOffset, Top(c, scroll), scroll.ScrollableHeight);
         if (Math.Abs(to - scroll.VerticalOffset) < 0.5) { return; }
+        Diagnostics?.Invoke($"KeepAnchor on block {a.Index + 1}: from {scroll.VerticalOffset:0.#} px to {to:0.#} px");
         Anchoring(scroll, to);
     }
 
@@ -410,11 +436,16 @@ public sealed partial class SessionView
     {
         if (panning || scrolling || keyTarget is not null || anchoring is not null || anchor is not { } a || ConversationScroll is not { } scroll || !ConversationList.IsLoaded
             || ConversationList.ContainerFromIndex(a.Index) is not FrameworkElement c) { return; }
-        if (a.Correction(anchorAt, scroll.VerticalOffset, Top(c, scroll), scroll.ScrollableHeight) is { } to) { Anchoring(scroll, to); }
+        if (a.Correction(anchorAt, scroll.VerticalOffset, Top(c, scroll), scroll.ScrollableHeight) is { } to)
+        {
+            Diagnostics?.Invoke($"OnConversationLaidOut's correction on block {a.Index + 1}: from {scroll.VerticalOffset:0.#} px to {to:0.#} px, the anchor taken at {anchorAt:0.#} px");
+            Anchoring(scroll, to);
+        }
     }
 
     void Anchoring(ScrollViewer scroll, double to)
     {
+        Diagnostics?.Invoke($"Anchoring: ChangeView from {scroll.VerticalOffset:0.#} px to {to:0.#} px");
         anchoring = to;
         anchorAt = to;
         scroll.ChangeView(null, to, null, disableAnimation: true);

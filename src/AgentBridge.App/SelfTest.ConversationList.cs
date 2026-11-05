@@ -473,6 +473,7 @@ static partial class SelfTest
             var heard = new KeyEventHandler((_, e) => seen |= e.Key == VirtualKey.Tab);
             using var requests = new BringIntoViewLog(list, scroll, Log);
             scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
+            requests.Mark("Tab pressed");
             try
             {
                 method = Press(window.Handle, VirtualKey.Tab, foreground: true, extended: false);
@@ -517,9 +518,38 @@ static partial class SelfTest
             (this.list, this.scroll, this.log) = (list, scroll, log);
             Listen("list", list);
             if (list.ItemsPanelRoot is { } panel) { Listen("panel", panel); }
+            else { log("the list's ItemsPanelRoot was null: no listener on the panel"); }
+            if (SessionView.Shallowest<ScrollContentPresenter>(scroll) is { } presenter) { Listen("scroll content presenter", presenter); }
+            else { log("no ScrollContentPresenter found under the scroller"); }
             Listen("scroller", scroll);
+            for (var i = 0; i < list.Items.Count; i++)
+            {
+                if (list.ContainerFromIndex(i) is ListViewItem item) { HookContainer(item); }
+            }
+            log($"listening on {containers.Count} realised containers");
+            list.ContainerContentChanging += OnContainer;
             scroll.ViewChanged += OnViewChanged;
+            scroll.ViewChanging += OnViewChanging;
+            SessionView.Diagnostics = line => log($"at {clock.ElapsedMilliseconds} ms, {line}");
         }
+
+        // A mark in the log, on the same clock.
+        public void Mark(string what) => log($"at {clock.ElapsedMilliseconds} ms, {what}");
+
+        readonly HashSet<UIElement> containers = [];
+
+        void HookContainer(ListViewItem item)
+        {
+            if (containers.Add(item)) { Listen("container", item); }
+        }
+
+        void OnContainer(ListViewBase sender, ContainerContentChangingEventArgs args)
+        {
+            if (!args.InRecycleQueue && args.ItemContainer is ListViewItem item) { HookContainer(item); }
+        }
+
+        void OnViewChanging(object? sender, ScrollViewerViewChangingEventArgs e) =>
+            log($"the view changing at {clock.ElapsedMilliseconds} ms from {scroll.VerticalOffset:0.#} px to {e.NextView.VerticalOffset:0.#} px, finally {e.FinalView.VerticalOffset:0.#} px, inertial {e.IsInertial}");
 
         void Listen(string where, UIElement target)
         {
@@ -547,7 +577,11 @@ static partial class SelfTest
         {
             foreach (var (target, handler) in heard) { target.BringIntoViewRequested -= handler; }
             heard.Clear();
+            containers.Clear();
+            SessionView.Diagnostics = null;
+            list.ContainerContentChanging -= OnContainer;
             scroll.ViewChanged -= OnViewChanged;
+            scroll.ViewChanging -= OnViewChanging;
         }
     }
 
