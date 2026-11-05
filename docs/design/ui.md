@@ -734,9 +734,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     the focused element out of view. Then the view scrolls only as far as it takes to bring the
     focused element wholly into view at the nearest edge, and the block's start stays as close to
     the leading edge as that allows. Focus is never scrolled out of sight (A4, WCAG 2.4.11).
-    Known gap (#881): if focus is on a stop scrolled out of view and Tab lands on a stop already in
-    view, the view may return toward the stop focus left. The landing stop stays wholly in view.
-    The intended behaviour is that the view stays put. No block's container is
+    No block's container is
     a stop, and in high contrast it has no fill: the block draws in the system's colours.
   - The self-test checks that a block stays in place through a live resize and the conversation is
     drawn alike before and after it (a renderer's noise aside), that Page Down and Down scroll the text with focus and

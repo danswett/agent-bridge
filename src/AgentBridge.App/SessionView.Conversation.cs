@@ -315,20 +315,22 @@ public sealed partial class SessionView
                 return;
             }
             target = blocks[at];
-            if (!ReferenceEquals(brought, target))
+            var offsetThen = ConversationScroll?.VerticalOffset;
+            var wholly = ConversationList.ContainerFromIndex(at) is FrameworkElement shown && shown.ActualHeight > 0 && ConversationScroll is { } s && ConversationKeyboard.WhollyInView(Top(shown, s), shown.ActualHeight, s.ViewportHeight);
+            // Not for a block already wholly in view: ScrollIntoView moved the view -315 px for one at the top edge when focus was on a stop out of view (#881, run 42060617165).
+            if (!ReferenceEquals(brought, target) && !wholly)
             {
-                var offsetThen = ConversationScroll?.VerticalOffset;
-                var wholly = ConversationList.ContainerFromIndex(at) is FrameworkElement shown && ConversationScroll is { } s && ConversationKeyboard.WhollyInView(Top(shown, s), shown.ActualHeight, s.ViewportHeight);
                 ConversationList.ScrollIntoView(target, ScrollIntoViewAlignment.Leading);
                 brought = target;
                 if (Diagnostics is { } diag && ConversationScroll is { } scrolled)
                 {
-                    diag($"FocusBlock's ScrollIntoView(block {at + 1}, Leading): Resume's move is block {move.Block + 1}, the block {(wholly ? "wholly" : "not wholly")} in view and {(ConversationList.ContainerFromIndex(at) is null ? "not " : "")}realised, the view at {offsetThen:0.#} px before and {scrolled.VerticalOffset:0.#} px straight after");
+                    diag($"FocusBlock's ScrollIntoView(block {at + 1}, Leading): Resume's move is block {move.Block + 1}, the block not wholly in view and {(ConversationList.ContainerFromIndex(at) is null ? "not " : "")}realised, the view at {offsetThen:0.#} px before and {scrolled.VerticalOffset:0.#} px straight after");
                     EventHandler<ScrollViewerViewChangedEventArgs>? next = null;
                     next = (_, e) => { diag($"the next ViewChanged after that ScrollIntoView: {scrolled.VerticalOffset:0.#} px{(e.IsIntermediate ? " (intermediate)" : "")}"); scrolled.ViewChanged -= next; };
                     scrolled.ViewChanged += next;
                 }
             }
+            else if (wholly) { Diagnostics?.Invoke($"FocusBlock's ScrollIntoView(block {at + 1}) skipped: the block is wholly in view, the view at {offsetThen:0.#} px"); }
             ConversationList.UpdateLayout();
             if (Diagnostics is { } afterLayout) { afterLayout($"FocusBlock after UpdateLayout for block {at + 1}: the view at {ConversationScroll?.VerticalOffset:0.#} px"); }
             if (ConversationList.ContainerFromIndex(at) is not { } container)
