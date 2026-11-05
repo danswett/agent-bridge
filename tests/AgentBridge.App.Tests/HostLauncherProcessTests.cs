@@ -36,13 +36,6 @@ public sealed class HostLauncherProcessTests : IDisposable
         return p;
     }
 
-    // Only a dead process's pid can be reused, so a live one's is still its own.
-    static bool Alive(int pid)
-    {
-        try { using var p = Process.GetProcessById(pid); return !p.HasExited; }
-        catch (ArgumentException) { return false; }
-    }
-
     [Fact]
     public async Task A_host_in_the_launchers_job_ends_with_the_launcher_and_an_agent_it_started_runs_on()
     {
@@ -61,22 +54,28 @@ public sealed class HostLauncherProcessTests : IDisposable
                 new Dictionary<string, string> { [HostLauncherContract.Variable] = "1" }, folder);
             // Written aside and moved into place, so it is never read half written or still held.
             await Wait.UntilAsync(() => File.Exists(agentPid), "the host to start its agent", TimeSpan.FromSeconds(60));
-            var agent = int.Parse(File.ReadAllText(agentPid).Trim(), System.Globalization.CultureInfo.InvariantCulture);
+            var agentId = int.Parse(File.ReadAllText(agentPid).Trim(), System.Globalization.CultureInfo.InvariantCulture);
+            // Held by its handle from now, before the job is closed: if the agent ends with the
+            // host (what this catches), its pid can be given to another process, which a look-up
+            // by pid would then judge alive, or kill (#478 review, Copilot 4486726235).
+            using var agent = Process.GetProcessById(agentId);
+            _ = agent.SafeHandle;
             try
             {
                 Assert.Equal("1", File.ReadAllText(told).Trim());
                 Assert.False(host.HasExited);
+                Assert.False(agent.HasExited);
 
                 // The launcher ends: its handle to the job closes, as it does when it is killed.
                 job.Dispose();
 
                 await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
-                Assert.True(Alive(agent), "the agent ended with the host");
+                Assert.False(agent.HasExited, "the agent ended with the host");
             }
             finally
             {
-                try { using var a = Process.GetProcessById(agent); a.Kill(); }
-                catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
+                try { if (!agent.HasExited) { agent.Kill(); } }
+                catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
             }
         }
         finally { job.Dispose(); }

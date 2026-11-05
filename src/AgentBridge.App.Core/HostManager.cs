@@ -285,8 +285,32 @@ public sealed class HostManager
         // restarts: the host it brings up next is waited for, as the task path waits for the task's
         // run, rather than a second launcher started beside it and the first one's pid lost (#106
         // review, #420).
-        if (CurrentLauncher() is not { } pid || !processes.IsRunning(pid)) { launcher = processes.Start(layout.LauncherExe, layout.ServeArguments); }
-        await WaitAsync(running: true, StartTimeout, ct);
+        var adopted = LauncherAlive();
+        if (!adopted) { launcher = processes.Start(layout.LauncherExe, layout.ServeArguments); }
+        await WaitForLauncherAsync(started: !adopted, ct);
+    }
+
+    bool LauncherAlive() => CurrentLauncher() is { } pid && processes.IsRunning(pid);
+
+    // Waits for the host a launcher brings up. One taken on may already have decided to end
+    // without starting another (it saw a Stop, or its host ended on purpose), and polling the pipe
+    // alone then only ran out the timeout: so once no launcher is left before a host answers, one
+    // is started and given the whole timeout of its own, as RunTaskAsync does for the task's run
+    // (#478 review, Copilot 4486726168). One this started that ends is a failed start, not retried.
+    async Task WaitForLauncherAsync(bool started, CancellationToken ct)
+    {
+        var deadline = Time.GetUtcNow() + StartTimeout;
+        while (!await IsRunningAsync(ct))
+        {
+            if (!started && !LauncherAlive())
+            {
+                launcher = processes.Start(layout.LauncherExe, layout.ServeArguments);
+                started = true;
+                deadline = Time.GetUtcNow() + StartTimeout;
+            }
+            else if (Time.GetUtcNow() > deadline) { throw new TimeoutException("the host did not start; see its log"); }
+            await Task.Delay(Poll, ct);
+        }
     }
 
     // The launcher this app started directly (no logon task), which the task cannot end, or one

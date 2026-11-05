@@ -803,6 +803,70 @@ public sealed class HostManagerTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task Starting_with_no_task_while_a_launcher_an_earlier_run_of_the_app_started_is_ending_without_a_host_starts_one_fresh_launcher()
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var up = false;
+        var looks = 0;
+        // The launcher an earlier run started had already decided to end (it saw a Stop): it is
+        // there when Start looks for one, ends at the look after, and no host comes up until a
+        // launcher this starts brings one. Each look at the pipe takes a second, so waiting on the
+        // ended one alone runs out the timeout.
+        var m = new HostManager(manager.Layout, tasks, processes, async ct =>
+        {
+            if (!up)
+            {
+                if (++looks > 1) { processes.Alive.Remove(77); }
+                clock.Advance(TimeSpan.FromSeconds(1));
+                throw new IOException("not listening");
+            }
+            return await LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct);
+        }, userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(10),
+            Elevated = () => false,
+            Time = clock,
+        };
+        var startedUtc = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
+        using var launcherFiles = new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { });
+        Assert.True(launcherFiles.HoldRecord(77, startedUtc));
+        processes.Alive.Add(77);
+        processes.Others.Add((77, startedUtc.Ticks));
+        processes.OnStart = () => { up = true; host.Start(); };
+
+        await m.StartAsync();
+
+        Assert.Single(processes.Started);
+        Assert.True(await m.IsRunningAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Starting_with_no_task_when_a_launcher_it_started_ends_without_a_host_fails_and_starts_no_other()
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var m = new HostManager(manager.Layout, tasks, processes, _ =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(1));
+            throw new IOException("not listening");
+        }, userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(10),
+            Elevated = () => false,
+            Time = clock,
+        };
+
+        await Assert.ThrowsAsync<TimeoutException>(() => m.StartAsync());
+
+        Assert.Single(processes.Started);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task Stopping_a_host_that_goes_kills_nothing()
     {
         host.On(HostOps.Stop, d => { _ = Task.Run(host.StopAsync); return new { stopping = true }; });

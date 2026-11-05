@@ -235,7 +235,10 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   blocks nothing): unlocked, a Stop's new marker written between a launcher's look and its
   delete was deleted, and the host started after Stop had said it was stopped (#478). A
   launcher that cannot have the lock within 2 s leaves the marker; an app that cannot writes
-  it anyway. A launcher looks for the marker again
+  it anyway, says so in its log, and waits for the lock once more to write it again if it has
+  gone meanwhile. An app opened after a launcher started waits for the host that launcher
+  brings up, but starts one fresh launcher if it ends first with no host answering (it saw a
+  Stop, or its host ended on purpose). A launcher looks for the marker again
   before every start of the host, once its record is held, so a Stop that came just after it
   cleared the last one is honoured even when the app could not find it yet. A host the launcher cannot vouch for
   (one it could not create in its job, which is then also not told it is watched, or one started
