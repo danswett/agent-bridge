@@ -328,6 +328,7 @@ function flip(container, mutate, { gapFade = false, hold = 0 } = {}) {
   if (panel) {
     const gap = was + capDrawn - panel.offsetHeight;
     if (gap > 0.5 && (!S.reduced || gapFade)) { closeCard(panel, gap, hold); }
+    if (gap < -0.5 && !S.reduced) { openCard(panel, -gap); }
   }
   if (S.reduced && !gapFade) { return; }
   let any = false;
@@ -379,8 +380,22 @@ function cancelClose(panel) {
   if (!c) { return; }
   closing.delete(panel);
   for (const a of c.anims) { a.onfinish = null; a.cancel(); }
-  c.fill.remove();
+  c.fill?.remove();
   c.cap.style.transform = '';
+}
+// Growing is the same in reverse. The card used to take its new height at once, so its bottom
+// edge and background jumped down ahead of the content and the panels below, which ease down.
+// Now the bottom edge eases down from where it was drawn, and the body is revealed with it
+// (clipped, as the reasoning disclosure's opening is), so the card grows with what it holds.
+function openCard(panel, grow) {
+  const cap = panel.querySelector(':scope > .face.cap');
+  const body = panel.querySelector(':scope > .face.body');
+  const c = { cap, fill: null, anims: [] };
+  closing.set(panel, c);
+  const opts = { duration: T.shift, easing: E.std };
+  c.anims.push(cap.animate([{ transform: `translateY(${-grow}px)` }, { transform: 'translateY(0)' }], opts),
+    body.animate([{ clipPath: `inset(0 0 ${grow}px 0)` }, { clipPath: 'inset(0 0 0 0)' }], opts));
+  c.anims[0].onfinish = () => { if (closing.get(panel) === c) { cancelClose(panel); } };
 }
 function closeCard(panel, gap, hold) {
   const cap = panel.querySelector(':scope > .face.cap');
@@ -503,7 +518,9 @@ const realTools = () => toolList.querySelectorAll(':scope > .tool:not(.ghost)');
 const atTop = () => toolList.scrollTop <= 2;
 // Keeps the newest 50. Only at the top: evicting from the bottom while the reader is scrolled away
 // would shrink the scroll range under them and move what they read.
-const trim = () => { while (realTools().length > 50) { realTools()[realTools().length - 1].remove(); } };
+// The model is trimmed with the rows, never ahead of them: a row kept while the reader is
+// scrolled away has to keep its call, or its age stops ticking.
+const trim = () => { while (realTools().length > 50) { realTools()[realTools().length - 1].remove(); } tools.splice(50); };
 function addTool() {
   pending.push(makeTool());
   if (!flushing) { flushing = true; requestAnimationFrame(flushTools); }
@@ -515,8 +532,8 @@ function flushTools() {
   const items = pending.splice(0).reverse();
   if (!items.length) { return; }
   tools.unshift(...items);
-  tools.splice(50);
   if (today()) {
+    tools.splice(50);
     // What both clients do today: the whole list rebuilt on each refresh.
     toolList.replaceChildren(...tools.map(toolRow));
     return;
