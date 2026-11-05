@@ -71,14 +71,14 @@ public sealed class Entry
 
     static int Sized(Assertion? a) => a is null ? 0 : a.AuthenticatorData.Length + a.ClientDataJson.Length + a.Signature.Length;
 
-    static byte[] Signature(JsonElement e, string what)
+    internal static byte[] Signature(JsonElement e, string what)
     {
         var der = Codec.FromBase64Url(StrictJson.String(e, what), what);
         P256.CheckRosterSignature(der, what);
         return der;
     }
 
-    static Assertion ParseAssertion(JsonElement e, string what)
+    internal static Assertion ParseAssertion(JsonElement e, string what)
     {
         var a = StrictJson.Object(e, what);
         StrictJson.Members(a, AssertionFields, AssertionFields, what);
@@ -113,7 +113,7 @@ public sealed class Entry
         return b.Append('}').ToString();
     }
 
-    static void Append(StringBuilder b, Assertion a) =>
+    internal static void Append(StringBuilder b, Assertion a) =>
         b.Append("{\"authenticatorData\":\"").Append(Codec.Base64Url(a.AuthenticatorData))
             .Append("\",\"clientDataJSON\":\"").Append(Codec.Base64Url(a.ClientDataJson))
             .Append("\",\"signature\":\"").Append(Codec.Base64Url(a.Signature)).Append("\"}");
