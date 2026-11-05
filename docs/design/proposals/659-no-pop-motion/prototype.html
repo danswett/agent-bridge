@@ -91,6 +91,11 @@ main { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)
    wider of the two while they cross-fade and nothing beside it moves. */
 .val { display: inline-grid; font-variant-numeric: tabular-nums; }
 .val > .v { grid-area: 1 / 1; white-space: nowrap; }
+/* The pill's count is centred in a cell held as wide as its widest value ("99+") by a hidden
+   copy, so a count gaining a digit (9 → 10), or the wider old value fading out, never moves
+   "new" or the centred pill. */
+#pill-n { justify-items: center; }
+#pill-n > .size { grid-area: 1 / 1; visibility: hidden; white-space: nowrap; }
 
 /* (b) Sessions */
 .row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; min-height: 52px; padding: 6px 12px; }
@@ -159,7 +164,7 @@ footer { max-width: 1400px; margin: 0 auto; padding: 0 16px 24px; color: var(--t
       </div>
     </header>
     <div class="tools-wrap">
-      <button type="button" class="pill" id="pill" hidden>↑ <span class="val" id="pill-n"><span class="v">0</span></span> new</button>
+      <button type="button" class="pill" id="pill" hidden>↑ <span class="val" id="pill-n"><span class="size" aria-hidden="true">99+</span><span class="v">0</span></span> new</button>
       <ol class="tools stack" id="tools" aria-label="Tools"></ol>
     </div>
   </section>
@@ -275,7 +280,10 @@ function drawn(container) {
   }
   return m;
 }
-function flip(container, mutate) {
+// gapFade: under reduced motion, a leaving item's gap closes with a cross-fade instead of at
+// once: the children that moved fade in where they now are, with no travel (Arriving and
+// leaving's reduced-motion column). Without it they jumped into the gap as the copy faded.
+function flip(container, mutate, { gapFade = false } = {}) {
   const before = drawn(container);
   const moving = new Set();
   for (const k of before.keys()) {
@@ -285,12 +293,18 @@ function flip(container, mutate) {
     shifts.delete(k);
   }
   mutate();
-  if (today() || S.reduced) { return; }
+  if (today() || (S.reduced && !gapFade)) { return; }
   let any = false;
   for (const k of container.children) {
     if (!before.has(k) || !k.getClientRects().length) { continue; }
     const dy = before.get(k) - k.getBoundingClientRect().top;
     if (Math.abs(dy) < 0.5) { continue; }
+    if (S.reduced) {
+      const f = k.animate([{ opacity: 0 }, { opacity: 1 }], { duration: T.cross, easing: 'linear' });
+      f.id = 'gap';
+      shifts.set(k, f);
+      continue;
+    }
     const a = k.animate([{ transform: `translateY(${dy}px)` }, { transform: 'translateY(0)' }],
       { duration: T.shift, easing: moving.has(k) ? E.dec : E.std });
     a.id = 'shift';
@@ -329,7 +343,7 @@ function depart(container, els, { dy = 0, dur = T.itemOut } = {}) {
       g.style.top = `${parseFloat(g.style.top) + g.drawn.top - now.top}px`;
       g.style.left = `${parseFloat(g.style.left) + g.drawn.left - now.left}px`;
     }
-  });
+  }, { gapFade: true });
   for (const g of ghosts) {
     const to = dy && !S.reduced ? { opacity: 0, transform: `translateY(${dy}px)` } : { opacity: 0 };
     const a = g.animate([{ opacity: Number(g.dataset.from), transform: 'translateY(0)' }, to],
@@ -433,16 +447,17 @@ function flushTools() {
   arrive(toolList, els, () => { place(); trim(); });
 }
 const pill = $('pill');
+const pillText = (n) => (n > 99 ? '99+' : String(n));
 function showPill(n) {
   const was = fresh;
   fresh = n;
   pill.getAnimations().forEach((a) => a.cancel());
   if (pill.hidden) {
-    pill.querySelector('.v').textContent = String(n);
+    pill.querySelector('.v').textContent = pillText(n);
     pill.hidden = false;
     fadeIn(pill);
   } else if (n !== was) {
-    setValue($('pill-n'), String(n));
+    setValue($('pill-n'), pillText(n));
   }
 }
 function hidePill() {
@@ -455,6 +470,13 @@ function hidePill() {
 }
 pill.addEventListener('click', () => { returning = true; toolList.scrollTo({ top: 0, behavior: S.reduced || today() ? 'auto' : 'smooth' }); hidePill(); });
 toolList.addEventListener('scroll', () => { if (atTop()) { returning = false; hidePill(); trim(); } }, { passive: true });
+// The reader taking the scroll back cancels the return, and so does a return that ends short of
+// the top: left set, every later call would arrive as at the top and move what is read.
+const stopReturning = () => { returning = false; };
+for (const type of ['wheel', 'touchstart', 'pointerdown']) { toolList.addEventListener(type, stopReturning, { passive: true }); }
+const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
+toolList.addEventListener('keydown', (e) => { if (SCROLL_KEYS.has(e.key)) { stopReturning(); } });
+toolList.addEventListener('scrollend', () => { if (!atTop()) { stopReturning(); } });
 
 // While the pill's smooth scroll to the top runs, new calls arrive as at the top: anchoring
 // would move the scroll under it and stop it short.
@@ -649,6 +671,8 @@ window.proto = {
   burst: (n = 5) => { for (let i = 0; i < n; i += 1) { addTool(); } },
   get shiftCount() { return shiftCount; },
   get fresh() { return fresh; },
+  get returning() { return returning; },
+  showPill,
 };
 </script>
 </body>

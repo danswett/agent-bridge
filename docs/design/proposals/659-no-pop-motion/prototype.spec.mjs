@@ -162,6 +162,62 @@ test('under reduced motion nothing travels: arrivals and values cross-fade over 
   expect(await ty(page, '#ev-first')).toBe(0);
 });
 
+test('under reduced motion a session row leaving closes its gap with a cross-fade: the row below fades in where it lands, never travelling', async ({ page }) => {
+  await page.evaluate(() => window.proto.setReduced(true));
+  const below = await page.locator('#rows > .row').nth(2).getAttribute('data-row');
+  await clickAndFreeze(page, '#row-end', 40);
+  const o = await opacity(page, `#rows > [data-row="${below}"]`);
+  expect(o).toBeGreaterThan(0);
+  expect(o).toBeLessThan(1);
+  expect(await ty(page, `#rows > [data-row="${below}"]`)).toBe(0);
+});
+
+test('the pill keeps its width as its count goes 9, 10, 9 and 99+, during each fade and after it', async ({ page }) => {
+  await page.evaluate(() => { document.getElementById('tools').scrollTop = 200; window.proto.showPill(9); });
+  await page.evaluate(() => { for (const a of document.getAnimations()) { a.finish(); } });
+  const width = () => page.evaluate(() => document.getElementById('pill').getBoundingClientRect().width);
+  const w = await width();
+  for (const n of [10, 9, 100, 9]) {
+    // Clearing the cell's last change lets the value cross-fade instead of changing at once.
+    await page.evaluate((k) => {
+      delete document.getElementById('pill-n').dataset.at;
+      window.proto.showPill(k);
+      for (const a of document.getAnimations()) { a.pause(); a.currentTime = 40; }
+    }, n);
+    expect(await page.locator('#pill-n .v.old').count()).toBe(1);
+    expect(Math.abs(await width() - w)).toBeLessThan(0.5);
+    await page.evaluate(() => { for (const a of document.getAnimations()) { a.finish(); } });
+    await expect(page.locator('#pill-n .v.old')).toHaveCount(0);
+    expect(Math.abs(await width() - w)).toBeLessThan(0.5);
+    if (n === 100) { await expect(page.locator('#pill-n > .v')).toHaveText('99+'); }
+  }
+});
+
+test('a return to the top that the reader interrupts ends there: later calls keep what is read in place again', async ({ page }) => {
+  await page.evaluate(() => { document.getElementById('tools').scrollTop = 200; window.proto.addTool(); });
+  await expect(page.locator('#pill')).toBeVisible();
+  await page.evaluate(() => { for (const a of document.getAnimations()) { a.finish(); } });
+  // The pill starts the smooth return, and the reader's wheel takes the scroll back at once.
+  await page.evaluate(() => {
+    const list = document.getElementById('tools');
+    document.getElementById('pill').click();
+    list.dispatchEvent(new WheelEvent('wheel', { deltaY: 40, bubbles: true, cancelable: true }));
+    list.scrollTop = 200;
+  });
+  expect(await page.evaluate(() => window.proto.returning)).toBe(false);
+  const read = await page.evaluate(() => {
+    const list = document.getElementById('tools');
+    const top = list.getBoundingClientRect().top;
+    const el = [...list.querySelectorAll(':scope > .tool')].find((li) => li.getBoundingClientRect().top >= top);
+    return { id: el.dataset.id, top: el.getBoundingClientRect().top };
+  });
+  await clickAndFreeze(page, '#tool-one', 40);
+  const now = await page.evaluate((id) => document.querySelector(`#tools > [data-id="${id}"]`).getBoundingClientRect().top, read.id);
+  expect(Math.abs(now - read.top)).toBeLessThan(1);
+  await page.evaluate(() => { for (const a of document.getAnimations()) { a.finish(); } });
+  await expect(page.locator('#pill')).toHaveAccessibleName(/^↑\s*1\s*new$/);
+});
+
 test('a session row leaving fades where it was as the row below eases up into its place', async ({ page }) => {
   const below = await page.locator('#rows > .row').nth(2).getAttribute('data-row');
   await clickAndFreeze(page, '#row-end', 40);
