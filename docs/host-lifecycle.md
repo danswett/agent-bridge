@@ -54,7 +54,14 @@ Purpose is a label, not authorization. The closed `QuietBlockedReason` set is:
 The separate, closed `DepartureBlocker` set for commit/conditions is exactly:
 `DeliveryInFlight`, `Typing`, `AnnounceUnacked`, `JournalUncertain`,
 `AppRunning`, `OtherHostRunning`, `ChannelChanged`, `TransferInFlight`,
-`ConditionFault`. `IDepartureCondition` exposes `Kind` and synchronous
+`ConditionFault`, `LeaseExpired`. `LeaseExpired` (#885) is the coordinator's own
+outcome: the provisional lease's 30-second lifetime ran out before commit, whether
+or not the gate's expiry notification has run yet. Callers report it as
+"changed" and may start again; it was previously `ConditionFault`, which callers
+could not tell from a condition that really faulted. A lease released before its
+lifetime (abort, dispose, refused announcement) and a lease already committed still
+abort as `ConditionFault`. Registration refuses a condition whose `Kind` is
+`LeaseExpired`. `IDepartureCondition` exposes `Kind` and synchronous
 `bool IsBlocking()`: lock-free and non-blocking, with no I/O or side effects, reading only its owner's in-memory
 snapshot refreshed outside the fence. Kinds are validated/captured at registration.
 No owner or transport getter runs while the delivery gate lock is held.
