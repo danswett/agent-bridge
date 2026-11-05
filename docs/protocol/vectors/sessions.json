@@ -8059,6 +8059,22 @@
           }
         },
         {
+          "name": "typed-but-not-recorded",
+          "json": {
+            "outcome": "unconfirmed",
+            "reason": "the answer was typed into the prompt, but the session did not record an answer within 15 seconds, so it may not have been submitted; check at the machine",
+            "stage": "typed"
+          }
+        },
+        {
+          "name": "recorded-differently",
+          "json": {
+            "outcome": "unconfirmed",
+            "reason": "the session recorded a different answer for \"spike\"; check at the machine",
+            "stage": "recorded"
+          }
+        },
+        {
           "name": "an-unknown-outcome-reads-as-unconfirmed",
           "json": {
             "outcome": "queued",
@@ -8067,6 +8083,19 @@
           "reads": {
             "outcome": "unconfirmed",
             "reason": "later"
+          }
+        },
+        {
+          "name": "an-unknown-stage-reads-as-typed",
+          "json": {
+            "outcome": "unconfirmed",
+            "reason": "later",
+            "stage": "acknowledged"
+          },
+          "reads": {
+            "outcome": "unconfirmed",
+            "reason": "later",
+            "stage": "typed"
           }
         },
         {

@@ -724,7 +724,7 @@ public sealed record AnswerRequest
     public SignedCommand? Confirm { get; init; }
 }
 
-public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null)
+public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null, AnswerStage? Stage = null)
 {
     // Only for a request that asked for progress.
     public DeliveryTimings? Timings { get; init; }
@@ -752,6 +752,16 @@ public sealed record DeliveryProgress(string Stage, bool? Working = null)
     // working, so the agent takes it at its next step (queued).
     public const string Typed = "typed";
 }
+
+// How far an unconfirmed answer is known to have got (#467), named as DeliveryTimings names the
+// stages, so a client can say which: typed, every key went and nothing has been recorded for the
+// question since, which may mean it was never submitted (an Enter the CLI took as part of the
+// words); recorded, the session recorded an answer to that very question that is not, or not
+// yet, the one typed. Confirmed is delivered, never a stage. Unlike the progress frames and
+// timings, it is on every unconfirmed answer's result, whether or not the client asked for
+// progress. A stage a client does not know reads as typed, the one that claims least.
+[UnknownAs(Typed)]
+public enum AnswerStage { Typed, Recorded }
 
 // session.reply: a prompt for the session, typed into its own input as if at the machine.
 // Request is the client's UUID for this reply, as for an answer. Attachments name files the

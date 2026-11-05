@@ -125,7 +125,10 @@ public class CopilotPlannerTests
             """, Answer(new { colour = "blue", go = true, notes = "note\nhere", count = 42 }));
 
         Assert.Equal([(U + U + D + D, true), (U, true), ("note here", true), ("42", true)], Keys(plan));
-        Assert.All(plan.Keys.Sends, s => Assert.Equal((CopilotPlanner.FieldEnterDelayMs, CopilotPlanner.AfterFieldMs), (s.EnterDelayMs, s.PauseAfterMs)));
+        // Words wait the reply's pause before their Enter, an option list its own (#467).
+        Assert.Equal([CopilotPlanner.FieldEnterDelayMs, CopilotPlanner.FieldEnterDelayMs, CopilotPlanner.ReplyEnterDelayMs, CopilotPlanner.ReplyEnterDelayMs],
+            plan.Keys.Sends.Select(s => s.EnterDelayMs));
+        Assert.All(plan.Keys.Sends, s => Assert.Equal(CopilotPlanner.AfterFieldMs, s.PauseAfterMs));
         Assert.Equal(["colour", "go", "notes", "count"], plan.Fields.Select(f => f.Name));
     }
 
@@ -956,6 +959,14 @@ public class CopilotPlannerTests
 
         Assert.False(form.Matches(reordered));
         Assert.False(form.Matches(question with { Fields = [] }));
+    }
+
+    [Fact]
+    public void Typed_words_are_found_on_screen_by_their_end_however_the_CLI_wraps_and_borders_them()
+    {
+        var tail = WordsOnScreen.Tail("Very close. The middle bar does not connect all the way");
+        Assert.Equal(0, WordsOnScreen.Count(["\u2502 Feedback (optional)  \u2502", "\u2502                      \u2502"], tail));
+        Assert.Equal(1, WordsOnScreen.Count(["\u2502 Very close. The middle bar does \u2502", "\u2502 not connect all the  \u2502", "\u2502 way                  \u2502"], tail));
     }
 }
 

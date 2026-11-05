@@ -226,7 +226,99 @@ test('HostClient.answer sends session.answer and reads an unknown outcome as unc
   await flush();
   assert.deepEqual(sent[0], { id: 1, op: 'session.answer', data: { id: 's1', question: 'q1', request: 'r1', text: 'hi' } });
   t.onmessage({ re: 1, ok: true, result: { outcome: 'typed-later', reason: 'newer host' } });
-  assert.deepEqual(await p, { outcome: 'unconfirmed', reason: 'newer host' });
+  assert.deepEqual(await p, { outcome: 'unconfirmed', reason: 'newer host', stage: null });
+});
+
+test('an answer typed but unconfirmed keeps its selections and is asked about again on reconnect, with the same request (#467)', async () => {
+  const { conn, service, seen, submit } = setup();
+  submit();
+  conn.client.last().resolve({ outcome: 'unconfirmed', reason: 'not recorded', stage: 'typed' });
+  await flush();
+  assert.equal(service.get('h1', 's1', 'q1').outcome, 'unconfirmed');
+  // Still final for the person: giving it again sends nothing.
+  submit({ fields: { answer: 'b' } });
+  assert.equal(conn.client.calls.length, 1);
+
+  // Reconnected: the host is asked what that request came to, and nothing new is sent.
+  conn.client = fakeClient();
+  service.ready('h1');
+  assert.equal(conn.client.calls.length, 1);
+  assert.deepEqual(conn.client.last().data, { id: 's1', question: 'q1', request: 'r1', fields: { answer: 'a' } });
+  assert.equal(service.get('h1', 's1', 'q1').state, 'done');
+  conn.client.last().resolve({ outcome: 'delivered', reason: null, stage: null });
+  await flush();
+  assert.equal(service.get('h1', 's1', 'q1').outcome, 'delivered');
+  assert.deepEqual(seen, ['sending', 'done:unconfirmed', 'done:delivered']);
+  // Delivered is final: nothing more on the next reconnect.
+  conn.client = fakeClient();
+  service.ready('h1');
+  assert.equal(conn.client.calls.length, 0);
+});
+
+test('of two asks about an unconfirmed answer, only the later one can change it, whichever is answered last', async () => {
+  const { conn, service, submit } = setup();
+  submit();
+  conn.client.last().resolve({ outcome: 'unconfirmed', reason: 'not recorded', stage: 'typed' });
+  await flush();
+
+  // Reconnected twice before the first ask was answered.
+  const older = fakeClient();
+  conn.client = older;
+  service.ready('h1');
+  const newer = fakeClient();
+  conn.client = newer;
+  service.ready('h1');
+  newer.last().resolve({ outcome: 'unconfirmed', reason: 'recorded another answer', stage: 'recorded' });
+  await flush();
+  older.last().resolve({ outcome: 'unconfirmed', reason: 'not recorded', stage: 'typed' });
+  await flush();
+
+  const entry = service.get('h1', 's1', 'q1');
+  assert.deepEqual([entry.outcome, entry.detail.stage, entry.reason], ['unconfirmed', 'recorded', 'recorded another answer']);
+});
+
+test('an ask about an unconfirmed answer that brings a new reason at the same stage shows the new reason', async () => {
+  const { conn, service, seen, submit } = setup();
+  submit();
+  conn.client.last().resolve({ outcome: 'unconfirmed', reason: 'the session recorded a different answer', stage: 'recorded' });
+  await flush();
+
+  // Asked again: the same stage, and what the host now knows (a late completion's error).
+  conn.client = fakeClient();
+  service.ready('h1');
+  conn.client.last().resolve({ outcome: 'unconfirmed', reason: 'the call failed after it was recorded', stage: 'recorded' });
+  await flush();
+  const entry = service.get('h1', 's1', 'q1');
+  assert.deepEqual([entry.outcome, entry.detail.stage, entry.reason], ['unconfirmed', 'recorded', 'the call failed after it was recorded']);
+
+  // The same again changes nothing.
+  conn.client = fakeClient();
+  service.ready('h1');
+  conn.client.last().resolve({ outcome: 'unconfirmed', reason: 'the call failed after it was recorded', stage: 'recorded' });
+  await flush();
+  assert.deepEqual(seen, ['sending', 'done:unconfirmed', 'done:unconfirmed']);
+});
+
+test('an unconfirmed answer the host never typed, or one too old for the host to remember, is not asked about again', async () => {
+  let t = 0;
+  const { conn, service, submit } = setup({ now: () => t, giveUpMs: 1000 });
+  submit();
+  // No stage: this app gave up on it, or an older host; the host may not hold the request.
+  conn.client.last().resolve({ outcome: 'unconfirmed', reason: 'no outcome', stage: null });
+  await flush();
+  conn.client = fakeClient();
+  service.ready('h1');
+  assert.equal(conn.client.calls.length, 0);
+
+  const other = setup({ now: () => t, giveUpMs: 1000 });
+  other.submit();
+  other.conn.client.last().resolve({ outcome: 'unconfirmed', reason: 'not recorded', stage: 'typed' });
+  await flush();
+  t = 5000;
+  other.conn.client = fakeClient();
+  other.service.ready('h1');
+  assert.equal(other.conn.client.calls.length, 0);
+  assert.equal(service.get('h1', 's1', 'q1').outcome, 'unconfirmed');
 });
 
 // ---- progress (sessions.progress, #600) ----

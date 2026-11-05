@@ -159,6 +159,11 @@ const OUTCOME_TEXT = {
   refused: () => 'The machine refused this answer.',
 };
 
+const UNCONFIRMED_STAGE_TEXT = {
+  typed: () => 'Typed into the prompt, but not confirmed as submitted. Check the conversation.',
+  recorded: () => 'The session recorded something for this question, but not confirmed as this answer. Check the conversation.',
+};
+
 // What an answer's progress or outcome says, for the form, the Needs you lane and the card once
 // the question has gone: the receipt's words (receipt.js; ui.md §6.4 and §6.5, decided on #617).
 // On its way it is only heard (Sending, Sent, Passed to the agent, never Up next and never
@@ -186,6 +191,8 @@ export function describeAnswer(entry, machineName, { question = null, stalled = 
       }
       let text = OUTCOME_TEXT[outcome]();
       if (outcome === 'refused' && entry.reason) { text = `The machine refused this answer: ${entry.reason}.`; }
+      // How far the host knows it got (#467): typed into the prompt, or recorded differently.
+      if (outcome === 'unconfirmed' && UNCONFIRMED_STAGE_TEXT[entry.detail?.stage]) { text = UNCONFIRMED_STAGE_TEXT[entry.detail.stage](); }
       if (outcome === 'unconfirmed' && entry.reason) { text += ` (${entry.reason})`; }
       return { key: outcome, text, more: null, tone: outcome === 'refused' ? 'bad' : 'warn', line: true, speech: `Answer: ${text}` };
     }

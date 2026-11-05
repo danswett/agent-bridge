@@ -88,7 +88,9 @@ internal sealed class DeliveryTimeline
 
     public void InjectStart() { lock (gate) { injectStart ??= Now(); } }
 
-    public void InjectEnd() { lock (gate) { injectEnd = Now(); } }
+    // The end of the last write that typed anything. A later write that typed nothing (refused
+    // before its first key) does not move it; one alone still marks when it was tried.
+    public void InjectEnd(bool sent = true) { lock (gate) { if (sent || injectEnd is null) { injectEnd = Now(); } } }
 
     public void Typed(bool wasWorking)
     {

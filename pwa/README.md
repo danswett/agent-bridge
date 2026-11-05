@@ -296,6 +296,8 @@ as unconfirmed rather than sent again. Outcomes:
 |---|---|---|
 | `delivered` | The check on the control that sent it for about a second, then You answered · *value* | The host's upsert takes the question away; the card keeps the line |
 | `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check the conversation. | Final; nothing offers to send it again |
+| `unconfirmed`, stage `typed` | Typed into the prompt, but not confirmed as submitted. Check the conversation. | The same, but on a reconnect the same request is sent once more, which the host answers from the session's record without typing: delivered if it was submitted since (#467) |
+| `unconfirmed`, stage `recorded` | The session recorded something for this question, but not confirmed as this answer. Check the conversation. The reason says what it recorded, or the error. | As `inserted` |
 | `stale` | Already answered or gone | Final |
 | `busy` | Another answer is being delivered. Try again in a moment. | Send comes back after 2 s, as a new request |
 | `refused` | The machine refused this answer: *reason* | The form can be changed and sent, as a new request |

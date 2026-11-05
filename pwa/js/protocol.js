@@ -297,17 +297,23 @@ export function readHello(raw) {
   };
 }
 
-// session.answer's and session.reply's result: { outcome, reason }, and timings where the host
-// sent them (sessions.progress): each stage it reached, in ms since it received the request
+// session.answer's and session.reply's result: { outcome, reason, stage }, and timings where the
+// host sent them (sessions.progress): each stage it reached, in ms since it received the request
 // ({ typed, recorded, confirmed }). Only for this device's own timing marks, so a stage that
 // isn't a whole number of ms is left out, as is one the protocol doesn't name: its name would
 // be the host's own text in the console line (timing.js). Anything unreadable is unconfirmed,
-// since the host may have typed it.
+// since the host may have typed it. stage, on an unconfirmed answer, is how far it is known to
+// have got (#467), named as the progress timings name the stages: 'typed' (every key went,
+// nothing recorded) or 'recorded' (the session recorded another answer); one this app does not
+// know reads as 'typed'.
 export const TimingStages = Object.freeze(['typed', 'recorded', 'confirmed']);
+export const AnswerStages = Object.freeze(['typed', 'recorded']);
 export function readAnswerResult(raw) {
   const r = obj(raw) ?? {};
+  const outcome = readOutcome(r.outcome);
+  const stage = outcome === 'unconfirmed' && r.stage != null ? tolerant(AnswerStages, 'typed')(r.stage) : null;
   const timings = Object.entries(obj(r.timings) ?? {}).filter(([what, ms]) => TimingStages.includes(what) && Number.isFinite(ms) && ms >= 0);
-  return { outcome: readOutcome(r.outcome), reason: str(r.reason), ...(timings.length ? { timings: Object.fromEntries(timings) } : {}) };
+  return { outcome, reason: str(r.reason), stage, ...(timings.length ? { timings: Object.fromEntries(timings) } : {}) };
 }
 
 // An interim frame's progress for a session.reply or session.answer that asked for it

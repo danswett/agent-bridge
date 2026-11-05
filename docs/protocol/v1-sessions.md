@@ -628,9 +628,9 @@ and JavaScript's `trim()` is applied (so `"   "`, `"\u0085"` and `"\u001b "` ali
 nothing records no answer, and blank text might be recorded trimmed to nothing.
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
-Result: `{ "outcome": "<outcome>", "reason": "<text>" }`, with `reason` present for
-anything but `delivered`, and `timings` for a request that asked for progress
-([Progress](#progress)):
+Result: `{ "outcome": "<outcome>", "reason": "<text>", "stage": "<stage>" }`, with `reason`
+present for anything but `delivered`, `stage` only on `unconfirmed` (below), and `timings`
+for a request that asked for progress ([Progress](#progress)):
 
 | `outcome` | Meaning | Typed? |
 |---|---|---|
@@ -642,6 +642,22 @@ anything but `delivered`, and `timings` for a request that asked for progress
 
 A client treats an outcome it doesn't know as `unconfirmed`, never as `delivered`. The
 session's next `session.upsert` shows the question gone whatever the outcome.
+
+An `unconfirmed` answer also carries `stage`, how far it is known to have got
+([#467](https://github.com/danswett/agent-bridge/issues/467)):
+
+| `stage` | Meaning |
+|---|---|
+| `typed` | The keys were typed into the prompt and the session has recorded nothing for that question since. It may not have been submitted: Copilot's form once took an answer's last Enter as a new line in its text field |
+| `recorded` | The session recorded an answer to that very question, but not the one typed (or the call ended in an error) |
+
+Accepted by the session is `delivered`, never a stage. A stage a client does not know reads as
+`typed`; an older host sends none. A repeat of a request whose outcome was `unconfirmed`
+reads the session's record of that same question again, typing nothing: an answer recorded
+since (submitted at the machine, or recorded late) comes back `delivered`, and from then on
+stays so, and one recorded differently comes back `recorded`. It never answers a newer
+question. A client may therefore send the same request again after a reconnect, within the
+10 minutes the host remembers it, to learn what came of a `typed` answer.
 
 Typing into a live session is a single writer's job, and the host serializes it: one
 answer or reply per session at a time (`busy` otherwise), checked against the transcript

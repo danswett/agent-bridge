@@ -42,7 +42,7 @@ live prompts. Every send is one attach-write-detach: a burst of characters, then
 pause, Enter as a keystroke of its own (a burst is a paste, and Enter inside it would not
 submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
 
-* **Free text:** the words, 300 ms, Enter.
+* **Free text:** the words, then Enter as a write of its own once they show on screen (as for a form's text field, below).
 * **A form,** field by field in schema order, each committed with its own Enter (120 ms
   after its keys, 240 ms before the next field):
   * choice and boolean: Up × (N−1) to reach the top row wherever the caret was left (Up
@@ -53,7 +53,39 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     answer. An empty answer only where `minItems` allows it. That Up stops at the first
     row of a checkbox list, as it does in a single-choice list, is assumed rather than
     seen live: check it on the test VM.
-  * text and number: the words (a number as plain decimal, below). An optional text field left
+  * text and number: the words (a number as plain decimal, below), then, only once the session's
+    screen shows them, Enter as a write of its own (#467). Typed 120 ms before their Enter,
+    as option lists are, the words and the Enter reached a busy CLI as one paste, and Copilot
+    1.0.105's form took the Enter as a new line in the text field: the answer sat typed but
+    never submitted. Showing on screen proves the CLI has taken the words in as input of
+    their own. How often the words' end already shows is counted on the field they go to:
+    once the screen has changed from how it stood before the keys that open that field, and
+    reads the same twice running (two reads in a row, not two reads with another between).
+    Counted before, a label of the new field reading like the words could pass for them, and
+    the same words given to the field before could hide them.
+  * In an answer with words, every field is its own writes, never batched with another's:
+    its keys, held to the field they were planned for, then its Enter alone once the screen
+    has settled from them (so the change awaited is the form moving on, not an option list's
+    highlight repainting). The next field's keys wait for the form to move off the screen the
+    Enter was pressed on. Each write is held to those rows (`KeySend.Expect`): the injector
+    types nothing of it unless they still read exactly so, in the same attach, just before
+    its first key, since a permission prompt can open over the form at any moment and Enter
+    picks whatever it highlights (sec-510). The last checks before typing (step 5:
+    agent-ha-bridge, the call still unanswered, no other prompt waiting, the process) are made
+    again before each write, and once more when the injector holds the typing slot
+    (`KeyPlan.Proceed`). A refused write stops everything after it.
+  * It fails closed: an answer with words is not typed at all into a screen the host cannot
+    read, nor words made only of spaces and line-drawing characters, which leave nothing to
+    look for (`refused`, nothing typed); and a field or words that do not show, or a screen
+    that does not settle, within 3 s, a screen that changed under a write, or a question no
+    longer asked, leave it there, with nothing more pressed (`unconfirmed`, stage `typed`,
+    for the person to finish at the machine). An Enter sent into a screen nobody has read is
+    how #467 happened. What remains: keys reach the CLI in the order they were written, so a
+    count taken too early can only send the words' Enter early, behind the words, which is
+    reported `typed`, not `delivered`; rows are compared whole, so an animated form would be
+    refused rather than typed into; and an answer without words (option lists only) is typed
+    as one write, rechecked when the injector holds the slot but not held to the screen.
+  * An optional text field left
     out is skipped with Enter; an option list cannot be left out, since Enter commits
     whatever its caret is on.
   * text and number with a schema `default` (#662): Copilot opens the field with the default
@@ -126,7 +158,7 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     not know, an option with no `const`) is never typed into, and the question is shown to be
     answered at the machine.
 * **Other** (a lone option list): Up × (N−1), Down × N as one burst with no Enter, 400 ms
-  for Other to hand over the input, then the words, 300 ms, Enter (agent-ha-bridge #240:
+  for Other to hand over the input, then the words, and Enter once they show on screen (agent-ha-bridge #240:
   Down on the last option opens Other at once, and an empty Enter returns to the last
   option).
 
@@ -385,6 +417,20 @@ In order, for every answer:
    `unconfirmed` reason states only the fact (a refusal may say "answer at the machine"), and
    an exception's text goes to the host's log only, as for replies
    ([host-replies.md](host-replies.md), "What a reason says").
+   Every `unconfirmed` answer says its `stage`: `typed` when nothing was recorded for the
+   call (the keys reached the prompt, but it may not have been submitted), `recorded` when
+   something else was (#467).
+9. A repeat of a request settled `unconfirmed` (a client's resend after a reconnect) reads
+   the same call's record again from the same point, and types nothing. An answer recorded
+   since, the one typed (submitted at the machine, or recorded late), makes the request
+   `delivered` from then on; another makes it `recorded`. Only that call is read, so a newer
+   question is never answered, and nothing is ever typed twice. That holds however the
+   answer came to be `unconfirmed`, an interrupted injection included. A Copilot record whose
+   completion has not followed it gets a second from when a read first found it, as it does
+   while first watched, for a completion saying the call failed; after that the record alone
+   decides. That second is waited out within the read, so the one resend a client makes per
+   reconnect settles it.
+   Copilot and Claude; Codex records nothing to read.
 
 Progress and timings work as for replies ([host-replies.md](host-replies.md#progress-and-timings)):
 `received` before step 1, `typed` (never `working`: a question holds the session) once step

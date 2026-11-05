@@ -417,7 +417,10 @@ public static class ProtocolVectors
             .Valid("delivered", new AnswerResult(AnswerOutcome.Delivered))
             .Valid("refused", new AnswerResult(AnswerOutcome.Refused, "\"Spike\" needs an answer"))
             .Valid("stale", new AnswerResult(AnswerOutcome.Stale, "the question is no longer pending"))
-            .Reads("an-unknown-outcome-reads-as-unconfirmed", """{"outcome":"queued","reason":"later"}""");
+            .Valid("typed-but-not-recorded", new AnswerResult(AnswerOutcome.Unconfirmed, "the answer was typed into the prompt, but the session did not record an answer within 15 seconds, so it may not have been submitted; check at the machine", AnswerStage.Typed))
+            .Valid("recorded-differently", new AnswerResult(AnswerOutcome.Unconfirmed, "the session recorded a different answer for \"spike\"; check at the machine", AnswerStage.Recorded))
+            .Reads("an-unknown-outcome-reads-as-unconfirmed", """{"outcome":"queued","reason":"later"}""")
+            .Reads("an-unknown-stage-reads-as-typed", """{"outcome":"unconfirmed","reason":"later","stage":"acknowledged"}""");
 
         ReplyRequest Reply(string? text, params string[] attachments) => new()
         {
