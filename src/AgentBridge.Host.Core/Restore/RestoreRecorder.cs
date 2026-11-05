@@ -232,6 +232,20 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     readonly HashSet<string> diedDuring = new(StringComparer.Ordinal);
     // Being resumed now, by the queue or on request: never a second attempt at the same session.
     readonly HashSet<string> inFlight = new(StringComparer.Ordinal);
+    // Restores on request that the record holds no owed entry of, with the folder each runs in (null
+    // when not known): kept from any reclaim (Folders) until it registers, starts nothing, or its
+    // stamp lapses. Before, its worktree could be reclaimed before the launch reserved it.
+    readonly Dictionary<string, string?> requested = new(StringComparer.Ordinal);
+    // Restores on request still under way: shutdown waits for them as for the queue's (DisposeAsync).
+    readonly HashSet<Task> requests = [];
+    // Answered Unconfirmed (started, its window not yet seen ready), by the stamp of the attempt that
+    // was: seen ready later (LaunchService.SeenReadyLate), counted and shown restored then, if that
+    // attempt is still the session's. Seen ready while the attempt's answer was still on its way:
+    // readyLate, read as that answer arrives.
+    readonly Dictionary<string, Unconfirmed> unconfirmed = new(StringComparer.Ordinal);
+    readonly HashSet<string> readyLate = new(StringComparer.Ordinal);
+
+    sealed record Unconfirmed(DateTimeOffset Stamp, RestoreSession? Loss, bool Queue);
 
     // Cancelled as the host stops: a restore still waiting its turn starts nothing.
     readonly CancellationTokenSource stopping = new();
@@ -320,6 +334,12 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             {
                 // A session that may be restored, in a folder nobody knows: any worktree may be its.
                 if (w.Entry.Cwd is not { Length: > 0 } cwd) { return null; }
+                folders.Add(cwd);
+            }
+            foreach (var (id, folder) in requested)
+            {
+                if (owed.Any(w => w.Entry.Id == id)) { continue; }
+                if (folder is not { Length: > 0 } cwd) { return null; }
                 folders.Add(cwd);
             }
             return folders;
@@ -489,6 +509,8 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
 
                 if (resumed) { BuildNoticeLocked(); }
                 goneBeforeStart.Remove(s.Id);
+                // Registered: its own session from now, kept from a reclaim as any live one is.
+                requested.Remove(s.Id);
                 if (From(s, now) is not { } e) { return; }
                 // Stamped by a restore, and live now: its ten minutes start.
                 if (restoredAt.ContainsKey(e.Id)) { liveSince.TryAdd(e.Id, now); }
@@ -501,6 +523,8 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             {
                 live[change.Id] = gone with { Gone = now };
                 liveSince.Remove(change.Id);
+                // Gone before its window was seen ready: never shown restored.
+                unconfirmed.Remove(change.Id);
                 // Restored, and gone before it had lived LoopWithin: judged as a death at start is
                 // (its agent may record a normal end), and if it died, offered as a loop, never
                 // restored again. Kept owed meanwhile, so its worktree is too, and a restart within
@@ -643,9 +667,11 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         {
             resuming = false;
             inFlight.Remove(entry.Id);
+            // Seen ready already, while this answer was on its way.
+            var late = readyLate.Remove(entry.Id);
             if (stopped) { return; }
             var now = time.GetUtcNow();
-            switch (result.Outcome)
+            switch (result.Outcome is LaunchOutcome.Unconfirmed && late ? LaunchOutcome.Started : result.Outcome)
             {
                 case LaunchOutcome.Started:
                     // Seen ready: restored, and only now shown so, with Continue.
@@ -664,7 +690,9 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                     // or a window not recognised): never counted restored nor shown with Continue,
                     // since a reply's Enter there would answer the question (replies are held:
                     // LaunchService.HeldForReply). Offered while it has not registered; stamped,
-                    // and not tried again.
+                    // and not tried again. Seen ready later, while still followed: counted and shown
+                    // then (SeenReadyLate).
+                    if (!diedDuring.Remove(entry.Id)) { unconfirmed[entry.Id] = new Unconfirmed(restoredAt.GetValueOrDefault(entry.Id), Loss(entry), Queue: true); }
                     log($"restore: session {Short(entry.Id)} started, not seen ready ({result.Reason}); not counted restored");
                     break;
                 case LaunchOutcome.Busy:
@@ -795,6 +823,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         AgentKind agent;
         RestoreLaunch? launch;
         Undo undo;
+        TaskCompletionSource done;
         lock (gate)
         {
             if (stopped || stopping.IsCancellationRequested) { return Stopping; }
@@ -817,27 +846,70 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             }
             inFlight.Add(ask.Session);
             diedDuring.Remove(ask.Session);
+            if (!owed.Any(w => w.Entry.Id == ask.Session)) { requested[ask.Session] = known?.Cwd; }
+            done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            requests.Add(done.Task);
         }
-        var result = await ResumeOneAsync(new ResumeAsk(ask.Session, agent, launch, ask.By), cancellationToken);
+        try
+        {
+            var result = await ResumeOneAsync(new ResumeAsk(ask.Session, agent, launch, ask.By), cancellationToken);
+            lock (gate)
+            {
+                inFlight.Remove(ask.Session);
+                var late = readyLate.Remove(ask.Session);
+                if (!stopped)
+                {
+                    // Seen ready: restored, and shown so. Unless it has already registered and died: then
+                    // it is judged, as a loop. Not seen ready (unconfirmed): stamped, shown once seen ready
+                    // later (SeenReadyLate).
+                    var died = diedDuring.Remove(ask.Session);
+                    var outcome = result.Outcome is LaunchOutcome.Unconfirmed && late ? LaunchOutcome.Started : result.Outcome;
+                    if (outcome is LaunchOutcome.Started && !died)
+                    {
+                        restoredThisRun.Add(ask.Session);
+                        RevealLocked(ask.Session);
+                    }
+                    else if (outcome is LaunchOutcome.Unconfirmed && !died)
+                    {
+                        unconfirmed[ask.Session] = new Unconfirmed(restoredAt.GetValueOrDefault(ask.Session), null, Queue: false);
+                    }
+                    else if (outcome is LaunchOutcome.Busy or LaunchOutcome.Refused)
+                    {
+                        UndoLocked(undo);
+                        // Started nothing: no folder of its to keep.
+                        requested.Remove(ask.Session);
+                    }
+                    ScheduleWriteLocked(Coalesce);
+                }
+            }
+            log($"restore: session {Short(ask.Session)} asked by {ask.By}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}");
+            return result;
+        }
+        finally
+        {
+            lock (gate) { requests.Remove(done.Task); }
+            done.TrySetResult();
+        }
+    }
+
+    // A launch answered Unconfirmed whose window was seen ready later (LaunchService.SeenReadyLate):
+    // counted and shown restored now, with Continue, as if it had been seen ready in time. Only for the
+    // attempt that was unconfirmed, still the session's, and while it lives.
+    public void SeenReadyLate(string id)
+    {
         lock (gate)
         {
-            inFlight.Remove(ask.Session);
-            if (!stopped)
-            {
-                // Seen ready: restored, and shown so. Unless it has already registered and died: then
-                // it is judged, as a loop. Not seen ready (unconfirmed): stamped, never shown.
-                var died = diedDuring.Remove(ask.Session);
-                if (result.Outcome is LaunchOutcome.Started && !died)
-                {
-                    restoredThisRun.Add(ask.Session);
-                    RevealLocked(ask.Session);
-                }
-                else if (result.Outcome is LaunchOutcome.Busy or LaunchOutcome.Refused) { UndoLocked(undo); }
-                ScheduleWriteLocked(Coalesce);
-            }
+            if (stopped) { return; }
+            if (inFlight.Contains(id)) { readyLate.Add(id); return; }
+            if (!unconfirmed.Remove(id, out var u)) { return; }
+            if (!restoredAt.TryGetValue(id, out var stamp) || stamp != u.Stamp || (live.TryGetValue(id, out var e) && e.Gone is not null)) { return; }
+            if (u.Queue) { restoredBy[id] = u.Loss; }
+            restoredThisRun.Add(id);
+            RevealLocked(id);
+            BuildNoticeLocked();
+            ScheduleWriteLocked(Coalesce);
+            log($"restore: session {Short(id)} seen ready after all; restored, idle");
         }
-        log($"restore: session {Short(ask.Session)} asked by {ask.By}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}");
-        return result;
     }
     // The restored mark, for this host run and at most ShownFor; Continue's words only for one that
     // went mid-turn. Held (the boundary, no badge) from before the launch, and shown once the launch
@@ -1142,11 +1214,15 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                 continue;
             }
             // Carried by no entry (a restore on request of a session the record had let go): kept,
-            // in Stamps, until it registers, for a day at most if it never does.
-            if (!live.ContainsKey(id) && !owed.Any(w => w.Entry.Id == id) && !inFlight.Contains(id) && now - restoredAt[id] >= RestoreProtocol.ShownFor)
+            // in Stamps, until it registers, for a day at most if it never does; a write is due then,
+            // so an otherwise idle host lets it go too.
+            if (!live.ContainsKey(id) && !owed.Any(w => w.Entry.Id == id) && !inFlight.Contains(id))
             {
+                if (now - restoredAt[id] < RestoreProtocol.ShownFor) { Next(restoredAt[id] + RestoreProtocol.ShownFor); continue; }
                 restoredAt.Remove(id);
                 liveSince.Remove(id);
+                requested.Remove(id);
+                unconfirmed.Remove(id);
             }
         }
         var file = new RestoreFile
@@ -1191,12 +1267,13 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     {
         stopping.Cancel();
         // Read after the cancel: the queue starts nothing once it is cancelled (PumpLocked), so the
-        // restore under way now is the last one.
+        // restore under way now is the last one; so are those asked for (RestoreAsync), which are
+        // refused from now. Before, a requested restore's session registered after the last write.
         Task under;
         lock (gate)
         {
             if (stopped) { return; }
-            under = active;
+            under = Task.WhenAll([active, .. requests]);
         }
         await Task.WhenAny(under, Task.Delay(StopWait)).ConfigureAwait(false);
         source.Changed -= OnChanged;

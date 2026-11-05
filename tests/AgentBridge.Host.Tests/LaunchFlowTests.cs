@@ -442,13 +442,80 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var launcher = Launcher(Config(), follow: TimeSpan.FromSeconds(1));
 
         Assert.Equal(LaunchOutcome.Unconfirmed, (await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
-        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("stopped watching", StringComparison.Ordinal))));
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
         Assert.NotNull(launcher.HeldForReply(Id));
 
         Fixture.Append(Path.Combine(f.CopilotHome, "session-state", Id, "events.jsonl"),
             Copilot.User("trusted it, then this", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
         await source.RefreshAsync();
         Assert.Null(launcher.HeldForReply(Id));
+    }
+
+    // #855 L1: a new CLI's session.resume ends the killed turn, which counts a turn, with nobody having
+    // typed: replies stay held. Only a prompt of the person's after the launch lets them through.
+    [Fact]
+    public async Task A_resume_that_ends_a_killed_turn_does_not_lift_the_hold_but_a_prompt_typed_at_the_machine_does()
+    {
+        const string Id = "7e7e7e7e-7e7e-4e7e-8e7e-7e7e7e7e7e80";
+        Resumable(Id, app, "Killed mid-turn");
+        var events = Path.Combine(f.CopilotHome, "session-state", Id, "events.jsonl");
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2));
+        screens.Rows = ["Confirm folder trust", app, "Do you trust the files in this folder?", "❯ 1. Yes", "  2. Yes, and remember this folder for future sessions", "  3. No (Esc)"];
+        var launcher = Launcher(Config(), follow: TimeSpan.FromSeconds(1));
+
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
+        Fixture.Append(events, Copilot.Event("session.resume", new { }, 30));
+        await source.RefreshAsync();
+        Assert.NotNull(launcher.HeldForReply(Id));
+
+        // A prompt and the turn it starts, not yet ended: the turn count is the same as before.
+        Fixture.Append(events, Copilot.User("trusted it, then this", 40), Copilot.TurnStart(41));
+        await source.RefreshAsync();
+        Assert.Null(launcher.HeldForReply(Id));
+    }
+
+    // A launcher that hands its session on and exits (#780): with following ended unready, replies stay
+    // held while the process it handed the session to runs, and go through once that has gone.
+    [Fact]
+    public async Task A_reply_stays_held_after_following_ends_unready_while_the_process_a_launcher_handed_on_to_runs()
+    {
+        starter.ExitsAtOnce = true;
+        starter.HandsOn = true;
+        // Only the session's own window can be read; the launcher's went with it.
+        screens.Unreadable = pid => starter.Pids.Contains(pid);
+        screens.Rows = ["Confirm folder trust", "Do you trust the files in this folder?", "❯ 1. Yes"];
+        var launcher = Launcher(Config(), follow: TimeSpan.FromSeconds(1));
+
+        var o = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "fixture");
+        Assert.Equal(LaunchOutcome.Unconfirmed, o.Outcome);
+        var id = o.Session!;
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
+        Assert.NotNull(launcher.HeldForReply(id));
+
+        starter.Exit(starter.Pids[0] + 3000);
+        Assert.Null(launcher.HeldForReply(id));
+        Assert.Empty(screens.Typed);
+    }
+
+    // A launch answered Unconfirmed (its window at folder trust) whose window is then seen ready while it
+    // is still followed says so, once, for the restore record to count and show it restored then (#780).
+    [Fact]
+    public async Task A_launch_answered_unconfirmed_whose_window_is_seen_ready_later_says_so_once()
+    {
+        const string Id = "7e7e7e7e-7e7e-4e7e-8e7e-7e7e7e7e7e82";
+        Resumable(Id, app, "Ready after trust");
+        screens.Rows = ["Confirm folder trust", app, "Do you trust the files in this folder?", "❯ 1. Yes", "  2. Yes, and remember this folder for future sessions", "  3. No (Esc)"];
+        var launcher = Launcher(Config());
+        var ready = new List<string>();
+        launcher.SeenReadyLate += id => { lock (ready) { ready.Add(id); } };
+
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
+        Assert.Empty(ready);
+        screens.Rows = CopilotReady;
+        await WaitAsync(() => Task.FromResult(launcher.HeldForReply(Id) is null));
+
+        lock (ready) { Assert.Equal([Id], ready); }
     }
 
     // The resume list reads only the newest 200 sessions of each agent; a restore names its session,

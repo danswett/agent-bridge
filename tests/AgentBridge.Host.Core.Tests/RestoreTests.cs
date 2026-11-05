@@ -1430,6 +1430,96 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal(["a"], resumer.Asked.Select(x => x.Id));
     }
 
+    // A restore on request already launching when the host stops is let finish, as the queue's is: the
+    // session it starts registers before the last record is written, and is in it.
+    [Fact]
+    public async Task The_host_stopping_waits_for_a_restore_on_request_already_launching_and_writes_down_its_session()
+    {
+        var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        var asked = r.RestoreAsync(new RestoreAsk { Session = "s", Cause = RestoreCause.Crash, By = "host-signin" });
+        await Until(() => resumer.Asked.Count == 1);
+
+        var stopping = r.DisposeAsync().AsTask();
+        await Task.Delay(200);
+        Assert.False(stopping.IsCompleted);
+        source.Upsert(S("s"));
+        resumer.Gate!.SetResult();
+        await stopping.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(LaunchOutcome.Started, (await asked).Outcome);
+        var written = Written();
+        Assert.NotNull(written.Stopped);
+        Assert.Equal("s", Assert.Single(written.Sessions).Id);
+    }
+
+    // A restore on request of a session the record holds no owed entry of keeps its folder from any
+    // reclaim while it waits its turn and launches, and until it registers.
+    [Fact]
+    public async Task A_restore_on_request_keeps_its_folder_from_a_reclaim_until_its_session_registers()
+    {
+        source.Sessions.Add(S("s"));
+        var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        source.Remove("s");
+        Assert.Empty(r.Folders()!);
+
+        var asked = r.RestoreAsync(new RestoreAsk { Session = "s", Cause = RestoreCause.Crash, By = "host-signin" });
+        await Until(() => resumer.Asked.Count == 1);
+        Assert.Equal(["/work/repo"], r.Folders()!);
+        resumer.Gate!.SetResult();
+        await asked;
+        Assert.Equal(["/work/repo"], r.Folders()!);
+
+        source.Upsert(S("s"));
+        Assert.Empty(r.Folders()!);
+    }
+
+    // One the record knows nothing of keeps every worktree meanwhile (its folder is not known), and a
+    // stamp that never registers goes after a day on a host that writes nothing else.
+    [Fact]
+    public async Task A_restore_on_request_that_never_registers_keeps_every_worktree_and_lets_its_stamp_go_a_day_later()
+    {
+        var resumer = new Resumer();
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Unconfirmed, "Copilot in App is asking whether to trust the folder; left for a person at the machine") { Session = "s" });
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await r.RestoreAsync(new RestoreAsk { Session = "s", Cause = RestoreCause.Crash, By = "host-signin" })).Outcome);
+        Time.Advance(RestoreRecorder.Coalesce);
+        Assert.True(Written().Stamps.ContainsKey("s"));
+        Assert.Null(r.Folders());
+
+        Time.Advance(RestoreProtocol.ShownFor);
+
+        Assert.False(Written().Stamps.ContainsKey("s"));
+        Assert.Empty(r.Folders()!);
+    }
+
+    // Answered Unconfirmed (at folder trust), then seen ready while the launch still followed it: counted
+    // and shown restored then, with Continue; a later attempt's stamp is never confirmed by an earlier one.
+    [Fact]
+    public async Task A_restore_answered_unconfirmed_and_seen_ready_later_is_counted_and_shown_restored_then()
+    {
+        Previous(Fixture.T0, false, E("a", turn: RestoreTurn.Working));
+        var resumer = new Resumer();
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Unconfirmed, "Copilot in App is asking whether to trust the folder; left for a person at the machine") { Session = "a" });
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => Logged("not seen ready"));
+        source.Upsert(S("a"));
+        Assert.False(marks.Of.ContainsKey("a"));
+        Assert.Equal(0, r.Notice?.Restored ?? 0);
+
+        r.SeenReadyLate("a");
+
+        Assert.NotNull(marks.Of["a"]?.Continue);
+        Assert.Equal(1, r.Notice?.Restored);
+        Assert.Contains(r.RestoredLosses(), l => l.Id == "a");
+    }
+
     [Fact]
     public async Task What_restored_sessions_lost_is_kept_for_the_push()
     {

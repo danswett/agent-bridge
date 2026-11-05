@@ -441,6 +441,7 @@ async Task<int> ServeAsync(HostHandover handover)
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log) { Trust = trustedPeers };
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore);
     launcher.SessionStarted += restore.Launched;
+    launcher.SeenReadyLate += restore.SeenReadyLate;
     restore.Restore(launcher);
     restore.Start();
     transfers.Launcher = launcher;

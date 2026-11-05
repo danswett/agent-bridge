@@ -258,7 +258,11 @@ In order, for every reply:
    launched, resumed or restored whose window has not been seen ready is `refused`: it may
    still show a startup question, folder trust above all, that Enter would answer, and a resume's
    transcript already exists, so the check below never catches it (`LaunchService.HeldForReply`,
-   #780). The attachments are staged (below).
+   #780). Once following has ended unready, it stays so while that agent runs (the launcher, or the
+   process it handed the session to), until a prompt of the person's is in its transcript after the
+   launch (Copilot; a turn count would not do: it leaves out the turn that prompt starts, and a new
+   CLI's `session.resume` ending a killed turn counts one with nobody having typed) or, for an agent
+   that registers only once ready, it registers. The attachments are staged (below).
 5. The single typing turn is taken, then, immediately before typing: agent-ha-bridge again,
    the session again, and its transcript: no `ask_user` from any agent without its
    completion or `human_response.recorded`, and no `permission.requested` without its
