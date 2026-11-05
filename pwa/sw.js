@@ -127,6 +127,8 @@ self.addEventListener('fetch', (e) => {
 // notification, even one that cannot be read: iOS revokes notifications from an app whose
 // pushes show nothing.
 const KINDS = ['question', 'finished', 'resolved'];
+const CLASSES = ['needsYou', 'done', 'fyi'];
+const WITHDRAWN_TAG = 'agent-bridge-withdrawn';
 
 // Only ever within this app, whatever a payload says.
 function inApp(url) {
@@ -145,7 +147,16 @@ function notice(message) {
   const text = (v) => (typeof v === 'string' && v ? v : null);
   // A kind from a newer machine reads as a question: shown, and alerting.
   const kind = KINDS.includes(d.kind) ? d.kind : 'question';
+  // The host's notification class (#913); absent, unknown or wrong-typed reads as none, and
+  // the notice is as it was before classes.
+  const cls = CLASSES.includes(d.class) ? d.class : null;
   const tag = text(n.tag);
+  // Shown, then closed (withdrawn): an answered question and an FYI leave nothing behind, but a
+  // push that shows nothing costs the subscription on iOS and a generic notice elsewhere.
+  const withdraw = kind === 'resolved' || cls === 'fyi';
+  // Done is always silent, whatever the push says, and nothing to renotify: the host's word
+  // is the first safeguard, this the second. A silent notice that renotifies is a TypeError.
+  const silent = withdraw || cls === 'done' || n.silent === true;
   const options = {
     body: text(n.body) ?? 'A session needs you.',
     // A PNG: not every platform's notifications draw an SVG.
@@ -156,20 +167,26 @@ function notice(message) {
     data: { url: inApp(text(n.navigate)), kind, machine: text(d.machine), session: text(d.session), question: text(d.question) },
   };
   if (tag) {
-    // Every notice about a session replaces the one before it. A newer question or a
-    // finished turn alerts again; an answered question changes quietly.
+    // Every notice about a session replaces the one before it, never beside it. A newer question
+    // alerts again; a finished turn (without a class, as before) too; a silent one changes quietly.
     options.tag = tag;
-    options.renotify = kind !== 'resolved';
+    options.renotify = !silent;
   }
-  if (kind === 'resolved' || n.silent === true) { options.silent = true; }
-  return { title: text(n.title) ?? NAME, options };
+  if (silent) { options.silent = true; }
+  return { title: text(n.title) ?? NAME, options, withdraw };
 }
 
 self.addEventListener('push', (e) => {
   let message = null;
   try { message = e.data?.json() ?? null; } catch { /* unreadable: the generic notice */ }
-  const { title, options } = notice(message);
-  e.waitUntil(self.registration.showNotification(title, options));
+  const { title, options, withdraw } = notice(message);
+  e.waitUntil((async () => {
+    // Without a tag of its own, a withdrawn notice is closed by one made for the purpose.
+    if (withdraw && !options.tag) { options.tag = WITHDRAWN_TAG; }
+    await self.registration.showNotification(title, options);
+    if (!withdraw) { return; }
+    for (const shown of await self.registration.getNotifications({ tag: options.tag })) { shown.close(); }
+  })());
 });
 
 // A tap opens the app at the machine, session and question. An app already open is

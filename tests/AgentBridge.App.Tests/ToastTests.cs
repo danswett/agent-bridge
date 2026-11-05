@@ -580,6 +580,116 @@ public sealed class ToastTests
         Assert.All(sink.Shown, n => AssertSilent(n.Xml));
     }
 
+    // The host's notification class (#913) over the app's own rules.
+    static Session As(NotificationClass? c, Session s) => s with { Class = c };
+
+    void RaiseDue(ToastPlanner p)
+    {
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+    }
+
+    [Fact]
+    public void A_session_the_host_calls_fyi_raises_no_toast_for_a_question_or_a_finished_turn()
+    {
+        var p = Planner();
+        p.Upsert(As(NotificationClass.Fyi, Make.Session("asks", question: Make.Choice())));
+        p.Upsert(As(NotificationClass.Fyi, Make.Session("ends", status: SessionStatus.Working)));
+        p.Upsert(As(NotificationClass.Fyi, Make.Session("ends", response: "Done.", turns: 2)));
+        RaiseDue(p);
+
+        Assert.Empty(sink.Shown);
+    }
+
+    [Fact]
+    public void A_finished_turn_the_host_calls_done_goes_quietly_to_Notification_Center_even_when_Windows_would_pop_it_up()
+    {
+        var p = Planner(quiet: false);
+        p.Upsert(Make.Session("plain", status: SessionStatus.Working));
+        p.Upsert(Make.Session("plain", response: "Done.", turns: 2));
+        p.Upsert(As(NotificationClass.Done, Make.Session("done", status: SessionStatus.Working)));
+        p.Upsert(As(NotificationClass.Done, Make.Session("done", response: "Done.", turns: 2)));
+        RaiseDue(p);
+
+        Assert.Equal([("plain", false), ("done", true)], sink.Shown.Select(n => (n.Tag, n.Quiet)));
+    }
+
+    [Fact]
+    public void A_question_the_host_calls_needs_you_alerts_and_a_finished_turn_it_calls_needs_you_raises_no_done_toast()
+    {
+        var p = Planner(quiet: false);
+        p.Upsert(As(NotificationClass.NeedsYou, Make.Session("asks", question: Make.Choice())));
+        p.Upsert(As(NotificationClass.NeedsYou, Make.Session("stuck", status: SessionStatus.Working)));
+        p.Upsert(As(NotificationClass.NeedsYou, Make.Session("stuck", response: "Old answer.", turns: 2)));
+        RaiseDue(p);
+
+        Assert.Equal([("asks", false)], sink.Shown.Select(n => (n.Tag, n.Quiet)));
+    }
+
+    [Fact]
+    public void A_question_toast_is_withdrawn_when_the_host_says_the_session_no_longer_needs_you_though_the_question_stands()
+    {
+        var p = Planner();
+        p.Upsert(As(NotificationClass.NeedsYou, Make.Session(question: Make.Choice())));
+        RaiseDue(p);
+        Assert.Single(sink.Shown);
+
+        p.Upsert(As(NotificationClass.Fyi, Make.Session(question: Make.Choice())));
+
+        Assert.Equal(["s1"], sink.Withdrawn);
+        // Not put up again by the next update, nor when it is due.
+        p.Upsert(As(NotificationClass.Fyi, Make.Session(question: Make.Choice(), response: "changed")));
+        RaiseDue(p);
+        Assert.Single(sink.Shown);
+    }
+
+    [Fact]
+    public void A_question_asked_while_the_host_calls_the_session_fyi_is_raised_once_it_needs_you()
+    {
+        var p = Planner();
+        p.Upsert(As(NotificationClass.Fyi, Make.Session(question: Make.Choice())));
+        RaiseDue(p);
+        Assert.Empty(sink.Shown);
+
+        p.Upsert(As(NotificationClass.NeedsYou, Make.Session(question: Make.Choice())));
+        RaiseDue(p);
+
+        Assert.Equal("s1", Assert.Single(sink.Shown).Tag);
+    }
+
+    [Fact]
+    public void A_class_this_app_does_not_know_reads_as_none_and_the_toast_is_as_ever()
+    {
+        var node = JsonSerializer.SerializeToNode(Make.Session(question: Make.Choice()), ProtocolJson.Options)!.AsObject();
+        node["class"] = "urgent";
+        var s = JsonSerializer.Deserialize<Session>(node, ProtocolJson.Options)!;
+        node["class"] = 7;
+        var wrongType = JsonSerializer.Deserialize<Session>(node, ProtocolJson.Options)!;
+        Assert.Null(s.Class);
+        Assert.Null(wrongType.Class);
+
+        var p = Planner();
+        p.Upsert(s);
+        RaiseDue(p);
+
+        Assert.False(Assert.Single(sink.Shown).Quiet);
+    }
+
+    // A delegate is never a session of its own to the app: its question reaches it as its parent's,
+    // under the parent's tag, so the delegate has no toast of its own to stack beside it.
+    [Fact]
+    public void A_delegates_question_raises_one_toast_under_its_parent_session_and_a_later_one_replaces_it()
+    {
+        var p = Planner();
+        p.Upsert(Make.Session("parent", status: SessionStatus.Working));
+        p.Upsert(AskedByDelegate("parent", "Old."));
+        RaiseDue(p);
+        p.Upsert(AskedByDelegate("parent", "Old.") with { Question = Make.Choice("q2") with { Agent = "agent-1" } });
+        RaiseDue(p);
+
+        Assert.Equal(["parent", "parent"], sink.Shown.Select(n => n.Tag));
+    }
+
     [Fact]
     public void A_click_on_a_toast_reads_back_as_the_answer_the_card_would_send()
     {
