@@ -739,7 +739,7 @@ public sealed class PushNotifier : IAsyncDisposable
                     // one of these sessions as a question would, so not silent.
                     Title = $"{AgentName(agent)} on {machine.Name} needs sign-in",
                     Body = count == 1 ? "1 session affected" : $"{count} sessions affected",
-                    Navigate = PushNotice.SignInNavigate(sub.App, machine.Id, agent),
+                    Navigate = PushNotice.SignInNavigate(sub.App, machine.Id, agent, latest.Id),
                     Tag = PushNotice.Tag(machine.Id, key),
                     Data = new PushNoticeData { Kind = NoticeKind.SignIn, Machine = machine.Id, Session = latest.Id, Agent = agent, Sessions = count, At = now },
                 },

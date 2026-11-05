@@ -333,7 +333,7 @@ public sealed class PushNotifierTests : IDisposable
         var (_, n, ttl, urgency, topic) = sent.Single(r => r.Device == Phone);
         var key = PushNotice.SignInKey(AgentKind.Copilot, "octo");
         Assert.Equal(("Copilot on DEV needs sign-in", "2 sessions affected", $"{Machine}:{key}"), (n.GetProperty("title").GetString(), n.GetProperty("body").GetString(), n.GetProperty("tag").GetString()));
-        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}&signin=copilot", n.GetProperty("navigate").GetString());
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}&session=s2&signin=copilot", n.GetProperty("navigate").GetString());
         var data = n.GetProperty("data");
         Assert.Equal(("signIn", "copilot", 2, "s2"), (Kind(n), data.GetProperty("agent").GetString(), data.GetProperty("sessions").GetInt32(), data.GetProperty("session").GetString()));
         Assert.Equal((21600, "high", PushNotice.Topic(Machine, key)), (ttl, urgency, topic));

@@ -110,9 +110,11 @@ public static class PushNotice
     public static string SignInKey(AgentKind agent, string? account) =>
         $"signin:{agent.ToString().ToLowerInvariant()}:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(account ?? "")))[..8].ToLowerInvariant()}";
 
-    // Opens the machine at its sign-in banner, never a session.
-    public static string SignInNavigate(string app, string machine, AgentKind agent) =>
-        Link(app, $"host={Uri.EscapeDataString(machine)}&signin={agent.ToString().ToLowerInvariant()}");
+    // Opens the machine at the affected session that failed most recently, which a client that
+    // knows no sign-in link already routes to and shows as Needs sign-in; signin names the agent
+    // for one that can open its banner.
+    public static string SignInNavigate(string app, string machine, AgentKind agent, string session) =>
+        Link(app, $"host={Uri.EscapeDataString(machine)}&session={Uri.EscapeDataString(session)}&signin={agent.ToString().ToLowerInvariant()}");
 
     public static string Navigate(string app, string machine, string session, string? question) =>
         Link(app, $"host={Uri.EscapeDataString(machine)}&session={Uri.EscapeDataString(session)}" +

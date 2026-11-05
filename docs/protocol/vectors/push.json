@@ -395,7 +395,7 @@
           "json": {
             "title": "Copilot on DEV-VM1 needs sign-in",
             "body": "3 sessions affected",
-            "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&signin=copilot",
+            "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&signin=copilot",
             "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:signin:copilot:e3b0c442",
             "lang": "en",
             "data": {
