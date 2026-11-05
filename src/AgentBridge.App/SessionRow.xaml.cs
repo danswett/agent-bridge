@@ -134,12 +134,15 @@ public sealed partial class SessionRow : UserControl
         else { Motion.Leave(UnreadGone, "ActivityDot"); }
     }
 
-    // The row read aloud (§9), on the list item that has focus, not only on this control.
+    // The row read aloud (§9.1 A1), on the list item that has focus, not only on this control. Set
+    // only when its words change: the clock ticks every five seconds, and the age in the name moves
+    // once a minute at most.
     void NameRow()
     {
         if (Card is not { } c) { return; }
-        AutomationProperties.SetName(this, c.RowLabel);
-        if (Container is { } item) { AutomationProperties.SetName(item, c.RowLabel); }
+        var name = c.RowLabel;
+        if (AutomationProperties.GetName(this) != name) { AutomationProperties.SetName(this, name); }
+        if (Container is { } item && AutomationProperties.GetName(item) != name) { AutomationProperties.SetName(item, name); }
     }
 
     void ShowWords()

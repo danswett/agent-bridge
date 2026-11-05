@@ -372,6 +372,9 @@ public sealed partial class SessionCardViewModel : Observable
         Raise(nameof(SinceText));
         Raise(nameof(UpdatedText));
         Raise(nameof(AgeText));
+        // The row's name says its age (ui.md §9.1 A1). The row sets it only when its words change,
+        // once a minute at most, and it is no live region: Narrator reads it when the row is reached.
+        Raise(nameof(RowLabel));
         Raise(nameof(ResponseAgeText));
         // "last seen 2m ago" moves on with the clock too.
         if (Away) { RaiseStatus(); }
