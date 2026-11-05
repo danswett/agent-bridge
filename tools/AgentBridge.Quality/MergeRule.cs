@@ -103,7 +103,11 @@ sealed record ReviewFact(string Author, bool IsBot, string State, string? Commit
 sealed record RunFact(string Status, string? Conclusion);
 
 /// <summary>A check run or status on the head: success, pending or failure, and GitHub's word for it.</summary>
-sealed record CheckFact(string Name, string State, string? Detail);
+sealed record CheckFact(string Name, string State, string? Detail)
+{
+    /// <summary>The slug of the app whose check suite holds the check run; null for a commit status, which anyone with write access can post.</summary>
+    public string? App { get; init; }
+}
 
 sealed record PullRequestFacts(
     int Number,

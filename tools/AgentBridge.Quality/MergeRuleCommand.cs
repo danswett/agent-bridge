@@ -13,6 +13,13 @@ interface IGitHub
     /// <summary>A REST answer that isn't JSON, such as a job's log; only the weekly report reads one.</summary>
     string RestText(string path) => throw new NotSupportedException($"{path} can't be read as text here.");
     void PostStatus(string slug, string sha, string state, string context, string description, string? targetUrl);
+    /// <summary>A REST write with a JSON body: merge-takeover's ruleset PUT and its receipts on #170.</summary>
+    JsonDocument Send(string method, string path, string jsonBody) => throw new NotSupportedException($"{method} {path} isn't supported here.");
+    /// <summary>
+    /// Squash-merges a pull request past the ruleset with the admin bypass (merge-takeover only),
+    /// and only while its head is still <paramref name="headSha"/>.
+    /// </summary>
+    void MergePullRequest(string slug, int number, string headSha) => throw new NotSupportedException($"Merging #{number} isn't supported here.");
 }
 
 /// <summary>
@@ -64,20 +71,39 @@ sealed class GhCli : IGitHub
         Run(args, Environment.GetEnvironmentVariable("MERGE_RULE_POST_TOKEN") is { Length: > 0 } token ? token : null);
     }
 
-    static string Run(IEnumerable<string> args, string? token = null)
+    public JsonDocument Send(string method, string path, string jsonBody)
     {
-        var start = new ProcessStartInfo("gh") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        var answer = Run(["api", "-X", method, path, "--input", "-"], stdin: jsonBody);
+        return JsonDocument.Parse(answer.Trim().Length == 0 ? "{}" : answer);
+    }
+
+    public void MergePullRequest(string slug, int number, string headSha) =>
+        Run(["pr", "merge", number.ToString(CultureInfo.InvariantCulture), "--repo", slug, "--squash", "--admin", "--match-head-commit", headSha]);
+
+    static string Run(IEnumerable<string> args, string? token = null, string? stdin = null)
+    {
+        var start = new ProcessStartInfo("gh") { RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = stdin is not null, UseShellExecute = false };
         if (token is not null)
             start.Environment["GH_TOKEN"] = token;
         foreach (var arg in args)
             start.ArgumentList.Add(arg);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("Couldn't start gh.");
+        if (stdin is not null)
+        {
+            process.StandardInput.Write(stdin);
+            process.StandardInput.Close();
+        }
         var stderr = process.StandardError.ReadToEndAsync();
-        var stdout = process.StandardOutput.ReadToEnd();
-        process.WaitForExit();
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        // A hung gh (a stalled API call in an incident) mustn't hold merge-takeover's lock forever.
+        if (!process.WaitForExit(TimeSpan.FromSeconds(120)))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new InvalidOperationException($"gh {string.Join(' ', start.ArgumentList.Take(4))} timed out after 120 s and was stopped.");
+        }
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"gh {string.Join(' ', start.ArgumentList.Take(4))} failed ({process.ExitCode}): {stderr.Result.Trim()}");
-        return stdout;
+        return stdout.Result;
     }
 }
 
@@ -192,11 +218,15 @@ static class MergeRuleCommand
     /// <summary>
     /// Where the evaluator and its rules come from: the checkout's HEAD, the base branch's
     /// remote-tracking commit (null when it isn't fetched), whether the rules or the evaluator
-    /// differ from HEAD in the working tree, and whether --config named rules from elsewhere.
+    /// differ from HEAD in the working tree, whether --config named rules from elsewhere, and
+    /// whether HEAD is an older commit of the base branch (a checkout not yet moved forward).
     /// </summary>
-    internal sealed record CheckoutFacts(string Head, string? BaseCommit, bool Dirty, bool OtherRules = false);
+    internal sealed record CheckoutFacts(string Head, string? BaseCommit, bool Dirty, bool OtherRules = false, bool Behind = false);
 
-    static CheckoutFacts ReadCheckout(string baseBranch, string configPath)
+    internal static CheckoutFacts ReadCheckout(MergeRuleConfig config, string configPath, Func<string, CheckoutFacts>? checkout, IReadOnlyList<string>? alsoGuarded = null) =>
+        checkout is not null ? checkout(config.Base) : ReadCheckout(config.Base, configPath, alsoGuarded ?? []);
+
+    static CheckoutFacts ReadCheckout(string baseBranch, string configPath, IReadOnlyList<string> alsoGuarded)
     {
         var root = ChangedFiles.RepoRoot(Directory.GetCurrentDirectory());
         var otherRules = !string.Equals(Path.GetFullPath(configPath), Path.GetFullPath(Path.Combine(root, "quality", "merge-rule.yml")),
@@ -211,8 +241,21 @@ static class MergeRuleCommand
         {
             baseCommit = null;
         }
-        var dirty = ChangedFiles.Git(root, "status", "--porcelain", "--", "quality/merge-rule.yml", "tools/AgentBridge.Quality").Trim().Length > 0;
-        return new(head, baseCommit, dirty, otherRules);
+        var dirty = ChangedFiles.Git(root, ["status", "--porcelain", "--", "quality/merge-rule.yml", "tools/AgentBridge.Quality", .. alsoGuarded]).Trim().Length > 0;
+        var behind = false;
+        if (baseCommit is not null && !SameSha(head, baseCommit))
+        {
+            try
+            {
+                ChangedFiles.Git(root, "merge-base", "--is-ancestor", head, baseCommit);
+                behind = true;
+            }
+            catch (InvalidOperationException)
+            {
+                // Not an ancestor (exit 1): a pull request's commit or a local one, not an older main.
+            }
+        }
+        return new(head, baseCommit, dirty, otherRules, behind);
     }
 
     public static int Run(IReadOnlyList<string> args, TextWriter output, IGitHub github, Func<string, CheckoutFacts>? checkout = null)
@@ -225,20 +268,8 @@ static class MergeRuleCommand
             ?? Path.Combine(ChangedFiles.RepoRoot(Directory.GetCurrentDirectory()), "quality", "merge-rule.yml");
         var config = MergeRuleConfig.Load(configPath);
 
-        // Run from a pull request's worktree, the pull request's own evaluator and rules would
-        // judge it (#524's delta review): say whose they are, and refuse unless they're main's.
-        var origin = checkout is not null ? checkout(config.Base) : ReadCheckout(config.Base, configPath);
-        var where = $"{origin.Head}{(origin.Dirty ? " with local changes" : "")}{(origin.OtherRules ? $", rules from {configPath}" : "")}";
-        output.WriteLine($"Evaluator and rules from {where}; origin/{config.Base} is {origin.BaseCommit ?? "not fetched"}.");
-        if (origin.Dirty || origin.OtherRules || origin.BaseCommit is null || !SameSha(origin.Head, origin.BaseCommit))
-        {
-            if (!options.ContainsKey("allow-non-main"))
-            {
-                output.WriteLine($"Refusing: these aren't origin/{config.Base}'s evaluator and rules, so a pull request could be judging itself. Run it from a freshly fetched origin/{config.Base} checkout (git fetch origin, then git switch --detach origin/{config.Base} in a worktree kept for it), never a pull request's worktree, or pass --allow-non-main to judge with these anyway.");
-                return 2;
-            }
-            output.WriteLine($"::warning::merge-rule: judging with the evaluator and rules from {where}, not origin/{config.Base}'s.");
-        }
+        if (!MainsEvaluator(output, "merge-rule", config, configPath, options.ContainsKey("allow-non-main"), checkout))
+            return 2;
         var slug = options.GetValueOrDefault("slug") ?? Environment.GetEnvironmentVariable("GITHUB_REPOSITORY") ?? "danswett/agent-bridge";
         var post = options.ContainsKey("post");
         var session = new Session(github, config, slug);
@@ -284,9 +315,7 @@ static class MergeRuleCommand
         // With the open list cut short, a held pull request on any head may be among the unread,
         // so no pull request gets success from this run, in what's posted or what's shown.
         List<(PullRequestFacts Pr, MergeVerdict Verdict)> Judged(IEnumerable<(PullRequestFacts Pr, MergeVerdict? Verdict)> assessed, string sha) =>
-            assessed.Where(j => j.Verdict is not null && SameSha(j.Pr.HeadSha, sha))
-                .Select(j => (j.Pr, Verdict: listCut is not null && j.Verdict!.State == "success" ? MergeRule.ListCut(sha, listCut) : j.Verdict!))
-                .ToList();
+            MergeRuleCommand.Judged(assessed, sha, listCut);
 
         var rows = new List<string>();
         foreach (var head in prs.GroupBy(p => p.HeadSha.ToLowerInvariant()))
@@ -367,9 +396,86 @@ static class MergeRuleCommand
         return 1;
     }
 
+    /// <summary>
+    /// Whether this checkout's evaluator and rules are origin/main's, saying whose they are; false
+    /// means refuse. Run from a pull request's worktree, the pull request's own evaluator and rules
+    /// would judge it (#524's delta review). merge-takeover holds to the same, since it merges on
+    /// the verdict.
+    /// </summary>
+    internal static bool MainsEvaluator(TextWriter output, string command, MergeRuleConfig config, string configPath, bool allowNonMain, Func<string, CheckoutFacts>? checkout) =>
+        MainsEvaluator(output, command, config, configPath, allowNonMain, ReadCheckout(config, configPath, checkout));
+
+    internal static bool MainsEvaluator(TextWriter output, string command, MergeRuleConfig config, string configPath, bool allowNonMain, CheckoutFacts origin)
+    {
+        var where = $"{origin.Head}{(origin.Dirty ? " with local changes" : "")}{(origin.OtherRules ? $", rules from {configPath}" : "")}";
+        output.WriteLine($"Evaluator and rules from {where}; origin/{config.Base} is {origin.BaseCommit ?? "not fetched"}.");
+        if (origin.Dirty || origin.OtherRules || origin.BaseCommit is null || !SameSha(origin.Head, origin.BaseCommit))
+        {
+            if (!allowNonMain)
+            {
+                output.WriteLine($"Refusing: these aren't origin/{config.Base}'s evaluator and rules, so a pull request could be judging itself. Run it from a freshly fetched origin/{config.Base} checkout (git fetch origin, then git switch --detach origin/{config.Base} in a worktree kept for it), never a pull request's worktree, or pass --allow-non-main to judge with these anyway.");
+                return false;
+            }
+            output.WriteLine($"::warning::{command}: judging with the evaluator and rules from {where}, not origin/{config.Base}'s.");
+        }
+        return true;
+    }
+
+    static List<(PullRequestFacts Pr, MergeVerdict Verdict)> Judged(IEnumerable<(PullRequestFacts Pr, MergeVerdict? Verdict)> assessed, string sha, string? listCut) =>
+        assessed.Where(j => j.Verdict is not null && SameSha(j.Pr.HeadSha, sha))
+            .Select(j => (j.Pr, Verdict: listCut is not null && j.Verdict!.State == "success" ? MergeRule.ListCut(sha, listCut) : j.Verdict!))
+            .ToList();
+
+    /// <summary>
+    /// merge-takeover's way in: the verdict <c>merge-rule --pr N</c> gives, in process, with main's
+    /// CI and the open list read once for the tick. Like --pr, it's the worst verdict of every open
+    /// pull request on the same head, so a held one can't ride on another's success; the
+    /// <c>merge-rule</c> status itself counts neither way, as in ParseFacts.
+    /// </summary>
+    internal sealed class Judge
+    {
+        readonly Session session;
+        readonly List<PullRequestFacts> open;
+        readonly string? listCut;
+
+        Judge(Session session, List<PullRequestFacts> open, string? listCut, string mainLog)
+        {
+            this.session = session;
+            this.open = open;
+            this.listCut = listCut;
+            MainLog = mainLog;
+        }
+
+        public string MainLog { get; }
+
+        public string Cost => session.Cost;
+
+        public static Judge Start(IGitHub github, MergeRuleConfig config, string slug)
+        {
+            var session = new Session(github, config, slug);
+            session.Main = ReadMain(session, out var log);
+            var (open, cut) = FetchOpen(session);
+            return new(session, open, cut, log);
+        }
+
+        /// <summary>The pull request's facts as judged (its head's checks among them) and the verdict on that head; null when the rule doesn't apply.</summary>
+        public (PullRequestFacts Pr, MergeVerdict Verdict)? Of(int number)
+        {
+            var one = FetchOne(session, number, checks: false, history: true);
+            if (MergeRule.Evaluate(session.Config, session.Main, one) is null)
+                return null;
+            var prs = open.Where(p => SameSha(p.HeadSha, one.HeadSha)).ToList();
+            if (!prs.Any(p => p.Number == number))
+                prs.Add(one);
+            var judged = Judged(prs.Select(p => Assess(session, p)), one.HeadSha, listCut);
+            var self = judged.FirstOrDefault(j => j.Pr.Number == number);
+            return self.Pr is null ? null : (self.Pr, MergeRule.Combine(judged));
+        }
+    }
+
     // By kind, not exact type: JsonDocument.Parse throws JsonReaderException, a JsonException
     // that an exact match missed, so a garbled answer crashed the run instead of failing closed.
-    static bool IsReadFailure(Exception e) => e is InvalidOperationException or JsonException or KeyNotFoundException or FormatException;
+    internal static bool IsReadFailure(Exception e) => e is InvalidOperationException or JsonException or KeyNotFoundException or FormatException;
 
     /// <summary>
     /// The verdict on a pull request read from the open list: its light facts' failure (or error,
@@ -715,7 +821,7 @@ static class MergeRuleCommand
                 }
                 var key = slug + "/" + name;
                 if (!otherApps.TryGetValue(key, out var current) || id > current.Id)
-                    otherApps[key] = (id, Classify(name, cr));
+                    otherApps[key] = (id, Classify(name, cr) with { App = slug });
             }
         }
         var checks = new List<CheckFact>();
@@ -724,6 +830,7 @@ static class MergeRuleCommand
         foreach (var (_, suite) in latestRun.Values)
         {
             var workflow = suite.GetProperty("workflowRun").GetProperty("workflow").GetProperty("name").GetString() ?? "";
+            var app = suite.GetProperty("app") is { ValueKind: JsonValueKind.Object } owner ? owner.GetProperty("slug").GetString() : null;
             var status = suite.GetProperty("status").GetString();
             var conclusion = suite.GetProperty("conclusion").GetString();
             var runs = suite.GetProperty("checkRuns").GetProperty("nodes").EnumerateArray().ToList();
@@ -736,7 +843,7 @@ static class MergeRuleCommand
             if (runs.Count > 0)
                 checks.AddRange(runs
                     .GroupBy(cr => cr.GetProperty("name").GetString() ?? "")
-                    .Select(g => Classify(g.Key, g.MaxBy(cr => cr.GetProperty("databaseId").GetInt64()))));
+                    .Select(g => Classify(g.Key, g.MaxBy(cr => cr.GetProperty("databaseId").GetInt64())) with { App = app }));
             // The run's own result counts too, jobs or none: one cancelled between jobs, or failed
             // expanding a later matrix, ends red with every job it made green; one that ended
             // before any job (a workflow file that doesn't parse) is startup_failure. GitHub

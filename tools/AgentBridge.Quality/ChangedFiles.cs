@@ -62,10 +62,15 @@ static class ChangedFiles
             start.ArgumentList.Add(arg);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("git did not start.");
         var stderr = process.StandardError.ReadToEndAsync();
-        var stdout = process.StandardOutput.ReadToEnd();
-        process.WaitForExit();
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        // A hung git (a fetch stuck on the network) mustn't hold merge-takeover's lock forever.
+        if (!process.WaitForExit(TimeSpan.FromSeconds(120)))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new InvalidOperationException($"git {string.Join(' ', args)} timed out after 120 s and was stopped.");
+        }
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"git {string.Join(' ', args)} failed ({process.ExitCode}): {stderr.Result.Trim()}");
-        return stdout;
+        return stdout.Result;
     }
 }
