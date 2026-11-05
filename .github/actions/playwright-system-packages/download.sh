@@ -41,7 +41,7 @@ if [ "$rc" -eq 124 ]; then
   if ! grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors" || ! grep -q '^https://archive\.ubuntu\.com/ubuntu/' "$mirrors"; then
     echo "::error::$mirrors doesn't list the Azure mirror and https://archive.ubuntu.com this step expects, so it can't leave the slow mirror"; exit 1
   fi
-  echo "::warning title=${GITHUB_JOB:-Playwright's system packages}::apt took over $limit to download Playwright's system packages; fetching the rest from https://archive.ubuntu.com"
+  echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::apt took over $limit to download Playwright's system packages; fetching the rest from https://archive.ubuntu.com"
   sudo sed -i '/^http:\/\/azure\.archive\.ubuntu\.com\//d' "$mirrors"
   if grep -rqs '^[^#]*azure\.archive\.ubuntu\.com' "$mirrors" "$apt_etc/sources.list" "$apt_etc/sources.list.d/"; then
     echo "::error::apt's sources still name azure.archive.ubuntu.com after removing it from $mirrors"; exit 1
