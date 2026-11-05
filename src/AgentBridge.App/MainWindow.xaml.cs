@@ -267,14 +267,15 @@ public sealed partial class MainWindow : Window
 
     double Scale => GetDpiForWindow(Handle) is var dpi and > 0 ? dpi / 96.0 : 1;
 
-    // The smallest window ui.md allows, at the scale of the display the window is on now.
+    // The smallest window ui.md allows, at the scale of the display the window is on now. Asked at
+    // every step of a live resize (#765), it sets the presenter's minimums only when they change.
     void KeepSmallest()
     {
         if (AppWindow.Presenter is not OverlappedPresenter p) { return; }
         var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest);
         var (w, h) = area is null ? WindowPlacement.Smallest(Scale) : WindowPlacement.Smallest(new Display(new PixelRect(area.WorkArea.X, area.WorkArea.Y, area.WorkArea.Width, area.WorkArea.Height), Scale));
-        p.PreferredMinimumWidth = w;
-        p.PreferredMinimumHeight = h;
+        if (p.PreferredMinimumWidth != w) { p.PreferredMinimumWidth = w; }
+        if (p.PreferredMinimumHeight != h) { p.PreferredMinimumHeight = h; }
     }
 
     void Place()
