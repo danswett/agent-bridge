@@ -349,6 +349,7 @@ static partial class SelfTest
             // The theme passes draw the Sessions page with a delegate in its strip and inspector.
             await ShowADelegate(window, main, Check);
             await CheckPagesInEveryTheme(window, Check, outFile);
+            await CheckSignIn(window, main, remote, Check, outFile);
             // What was seen so far, written down first: a failure in high contrast that ends the
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
             await Write(outFile, result, checks, failures, "high contrast");

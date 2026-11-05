@@ -24,6 +24,7 @@ import { maxPlain } from '../blobs.js';
 import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { SessionOrder, SORTS, SORT_LABELS } from '../session-order.js';
 import { NeedsYouLane } from './needs-you-view.js';
+import { SignInBanners } from './sign-in-view.js';
 import { AppBadge } from '../needs-you.js';
 import { enter, scrollBehavior, watchLane } from './motion.js';
 import { QUESTION_ARRIVAL_GUARD_MS, watchMoves } from './session-card.js';
@@ -243,6 +244,12 @@ export class SessionsPage {
       open: (hostId, id) => this.showSession(id, hostId),
       badge,
     });
+    // An agent that needs sign-in (#800): a banner for each machine, agent and account, above the lane.
+    this.signIns = $('sign-in-banners') ? new SignInBanners($('sign-in-banners'), hosts, {
+      live: $('sign-in-said'),
+      open: (hostId, id) => this.showSession(id, hostId),
+      fallback: () => $('sessions-h'),
+    }) : null;
     // An entry is news, and its mark fades in, as a row is (views.js): once the list was drawn
     // before the change that brought it, and its machine has sent its whole list. Read as the
     // change comes, since the list draws before the lane does. A machine whose list is current
@@ -689,6 +696,8 @@ export class SessionsPage {
     this.#unwatchLane = null;
     this.#unwatchNews?.();
     this.#unwatchNews = null;
+    this.signIns?.stop();
+    this.signIns = null;
     this.answers.clear();
     this.replies.clear();
     this.stops.clear();

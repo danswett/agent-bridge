@@ -28,7 +28,7 @@ import { h } from './dom.js';
 import { designIcon, drivenBadge, glyph, setGlyph } from './glyph.js';
 import { ago, duration, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
-import { sessionStatus, statusLabel } from '../status.js';
+import { ATTENTION_RULES, sessionStatus, statusLabel } from '../status.js';
 import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.js';
 import { answerability } from '../answers.js';
 import { ReplyBox } from './reply-view.js';
@@ -669,9 +669,10 @@ export class SessionCard {
     // The row.
     e.rowTitle.textContent = title;
     setGlyph(e.rowGlyph, words.glyph, { size: 16, driven: words.driven, label: statusLabel(words, { title: s.title, machine: this.machineName }) });
-    if (this.#changed('row', [words.text, words.tone, words.driven, s.driverPrincipal, where, s.repository, this.labelled ? this.machineName : null])) {
-      // Rule 7 on a row: "Driven by an agent" in agent colour, in place of the status words.
-      const status = words.driven
+    if (this.#changed('row', [words.text, words.tone, words.driven, words.rule, s.driverPrincipal, where, s.repository, this.labelled ? this.machineName : null])) {
+      // Rule 7 on a row: "Driven by an agent" in agent colour, in place of the status words; not over
+      // rules 10-12 (#800), which say what is wrong. The glyph keeps the driven badge either way.
+      const status = words.driven && !ATTENTION_RULES.has(words.rule)
         ? h('span', { class: 'row-status driver', dataset: { tone: 'agent' }, title: s.driverPrincipal ?? null }, 'Driven by an agent')
         : h('span', { class: 'row-status', dataset: { tone: words.tone } }, words.facts[0]);
       setFacts(e.rowFacts, [status, this.labelled && this.machineName ? h('span', { class: 'machine-label' }, this.machineName) : whereView()]);
@@ -731,7 +732,7 @@ export class SessionCard {
     // prompt you didn't type is no bubble of yours and never rises.
     if (!first && echoed && !e.user.hidden) { enter(e.user, 'acknowledge', { dy: 1 }); }
 
-    if (this.#changed('facts', [s.agent, s.model, s.repository, s.branch, s.cwd, this.machineName, s.startedAt, s.activity.turnCount, s.activity.compactions, s.activity.background, s.processId])) {
+    if (this.#changed('facts', [s.agent, s.model, s.repository, s.branch, s.cwd, this.machineName, s.startedAt, s.activity.turnCount, s.activity.compactions, s.activity.background, s.processId, s.attention?.message])) {
       this.#renderFacts(s);
     }
     this.#bringQuestion(atEnd);
@@ -906,6 +907,10 @@ export class SessionCard {
     add('Turns', s.activity.turnCount !== null && s.activity.turnCount !== undefined ? `${s.activity.turnCount} turns` : null, 'turns');
     add('Compactions', s.activity.compactions ? plural(s.activity.compactions, 'compaction', 'compactions') : null, 'compactions');
     add('Process', s.processId !== null && s.processId !== undefined ? `pid ${s.processId}` : null, 'pid');
+    // What the agent said went wrong (#800): plain text, revealed and cut short by auth-state.js,
+    // never a link, and only here, never on its row.
+    // The host's sentence for what is wrong (6649775484), as it is: never the agent's own text.
+    add('Message', s.attention?.message ? h('span', { class: 'attention-message', dir: 'ltr' }, s.attention.message) : null, 'attention');
     e.facts.replaceChildren(...rows);
     this.refreshTimes();
   }

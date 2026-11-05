@@ -27,9 +27,10 @@ public sealed partial class MainViewModel
         // Only questions that can be answered now: another machine's kept while it is away, or not
         // yet confirmed by its snapshot, may be gone, and are not counted as waiting on you (#269).
         var want = byId
-            .Where(p => p.Value.Session.Question is not null && owner.TryGetValue(p.Value, out var m) && m.Current)
+            // Sign-in entries only where their banner can be (SignInLive): this machine is always current.
+            .Where(p => owner.TryGetValue(p.Value, out var m) && (p.Value.Session.Question is not null ? m.Current : AuthState.NeedsSignIn(AuthState.Of(p.Value.Session)) && SignInLive(m)))
             .Select(p => (Key: p.Key, Card: p.Value, Machine: owner[p.Value]))
-            .OrderBy(e => e.Card.Session.Question!.AskedAt)
+            .OrderBy(e => e.Card.Session.Question?.AskedAt ?? AuthState.Of(e.Card.Session)?.Since ?? e.Card.Session.StatusSince)
             .ThenBy(e => e.Machine.Name, StringComparer.Ordinal)
             .ThenBy(e => e.Machine.Key, StringComparer.Ordinal)
             .ThenBy(e => e.Card.Id, StringComparer.Ordinal)
@@ -39,8 +40,28 @@ public sealed partial class MainViewModel
         var entries = new List<NeedsYouEntry>();
         foreach (var (key, card, m) in want)
         {
-            var q = card.Session.Question!;
             current.TryGetValue(key, out var existing);
+            // An agent that needs sign-in (#800), with no question of its own: an entry with
+            // nothing to answer, kept while it still needs sign-in.
+            if (card.Session.Question is null)
+            {
+                if (existing is { Mode: not NeedsYouMode.SignIn })
+                {
+                    existing.Detach();
+                    NeedsYou.Remove(existing);
+                    existing = null;
+                }
+                var signIn = existing ?? NeedsYouEntry.ForSignIn(this, key, m.Key, card);
+                signIn.Refresh(several ? m.Name : null, now);
+                entries.Add(signIn);
+                continue;
+            }
+            var q = card.Session.Question!;
+            if (existing is { Mode: NeedsYouMode.SignIn })
+            {
+                NeedsYou.Remove(existing);
+                existing = null;
+            }
             // Mid-update, between one question and the next, the card has no question model for a
             // moment (SessionCardViewModel.Sync): the entry stays as it is until the new one is in,
             // so the next question arrives once, as itself, rather than as a rebuild of a stand-in.
@@ -91,6 +112,8 @@ public sealed partial class MainViewModel
             Raise(nameof(NeedsYouHeader));
             Raise(nameof(Waiting));
         }
+        // The banners name the same sessions, and go with the machine's rows (#800).
+        SyncSignIns();
     }
 
     // "3m" moves on with the clock.

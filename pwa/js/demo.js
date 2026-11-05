@@ -47,6 +47,7 @@ import { P256KeyPair } from './noise-p256.js';
 import { deviceIdOf } from './identity.js';
 import { fromUtf8 } from './bytes.js';
 import { blobIdOf, fromBase64url, openBlob, storedSize, toBase64url } from './blobs.js';
+import { SIGN_IN } from './auth-state.js';
 
 const BLOB_FILE_MAX = 100 * 1024 * 1024;
 
@@ -179,6 +180,20 @@ export class DemoHost {
   updateLog = [];
   #updateScript = [];
   updateStepMs = 400;
+  // Sign-in (#800): every signin.start and signin.cancel as received; the next starts' failures
+  // (their errors) and outcomes ({ outcome, reason } in place of started); the code the next flow
+  // shows, when a test wants another (a spoofed one, say); and the flow under way, with the
+  // channels in it, which alone are sent its code.
+  signInLog = [];
+  signInFailures = [];
+  signInOutcomes = [];
+  // How long the next starts' replies wait, in ms: a result that comes back after a Cancel.
+  signInDelays = [];
+  // How long the next cancels take to finish, in ms: "cancelled" is logged once each has.
+  signInCancelDelays = [];
+  nextCode = null;
+  signInFlow = null;
+  #flows = 0;
 
   // answering: false plays a host that can't answer (agent-ha-bridge still running, say);
   // replying: false, one that can't reply; attaching: false, one that takes no files; large:
@@ -189,12 +204,13 @@ export class DemoHost {
   // launching: false, one that can't launch sessions; transferring: false, one that takes no
   // sessions from other machines. readOnly: why it takes nothing from the phone, as hello says.
   // updating: true plays a host whose app installs updates asked for from the phone (#51).
-  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false } = {}) {
+  // signingIn: true, one that runs an agent's own device-code sign-in when a person asks (#800).
+  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false, signingIn = false } = {}) {
     this.machine = { id: machineId, name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true, ...(readOnly ? { readOnly } : {}) };
     this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
     this.stopWindowMs = stopWindowMs;
-    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : []), ...(launching && trusting ? [TRUST.capability] : []), ...(updating ? [UPDATE.capability] : [])];
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : []), ...(launching && trusting ? [TRUST.capability] : []), ...(updating ? [UPDATE.capability] : []), ...(signingIn && answering ? [SIGN_IN.capability] : [])];
     if (updating) {
       this.update = { current: '0.1.0', installer: true, available: '0.2.0', notes: 'Updates from your phone', checkedAt: now(), phase: 'idle', automatic: false };
     }
@@ -221,8 +237,10 @@ export class DemoHost {
     this.calls.push(op);
     const reply = (result) => t.deliver({ re: id, ok: true, result });
     switch (op) {
-      case 'hello':
-        return reply({ protocol: 1, machine: { ...this.machine, sessions: this.sessions.size }, capabilities: this.capabilities });
+      case 'hello': {
+        const signIn = this.#rollUp();
+        return reply({ protocol: 1, machine: { ...this.machine, sessions: this.sessions.size, ...(signIn.length ? { signIn } : {}) }, capabilities: this.capabilities });
+      }
       case USAGE.get:
         if (!this.capabilities.includes(USAGE.capability)) { break; }
         return reply(this.usage);
@@ -291,6 +309,10 @@ export class DemoHost {
       case UPDATE.install:
         if (!this.capabilities.includes(UPDATE.capability)) { break; }
         return reply(this.#updateAsk(op, data));
+      case SIGN_IN.start:
+      case SIGN_IN.cancel:
+        if (!this.capabilities.includes(SIGN_IN.capability)) { break; }
+        return this.#signIn(t, op, data, reply, (error) => t.deliver({ re: id, ok: false, error }));
       default:
         return t.deliver({ re: id, ok: false, error: `unknown op ${op}` });
     }
@@ -721,6 +743,112 @@ export class DemoHost {
     this.#broadcast('discovery.changed', held ? { discoveryHeld: held } : {});
   }
 
+  // hello.machine.signIn (#800): one entry per agent and account with sessions needing sign-in.
+  #rollUp() {
+    const groups = new Map();
+    for (const s of this.sessions.values()) {
+      const at = s.attention;
+      if (at?.kind !== 'signInNeeded') { continue; }
+      const k = `${s.agent}\n${at.account ?? ''}`;
+      if (!groups.has(k)) { groups.set(k, { agent: s.agent, provider: at.provider, ...(at.account ? { account: at.account } : {}), since: at.since, sessions: [], signIn: at.signIn, ...(at.recovery ? { recovery: at.recovery } : {}) }); }
+      groups.get(k).sessions.push(s.id);
+    }
+    return [...groups.values()];
+  }
+
+  // As a host runs the agent's own device-code sign-in: started with a flow id, then the code and
+  // URL the agent printed, sent only to the channels in the flow, never in a session or snapshot.
+  // A second start while one runs joins it (busy) and gets its code too.
+  #signIn(t, op, data, reply, fail) {
+    this.signInLog.push({ op, ...clone(data ?? {}) });
+    const failure = this.signInFailures.shift();
+    if (failure) { return fail(failure); }
+    if (op === SIGN_IN.cancel) {
+      if (this.signInFlow?.id === data?.flow) { this.signInFlow = null; }
+      const slow = this.signInCancelDelays.shift() ?? 0;
+      if (slow) { return setTimeout(() => { this.signInLog.push({ op: 'cancelled', flow: data?.flow }); reply({ outcome: 'cancelled' }); }, slow); }
+      return reply({ outcome: 'cancelled' });
+    }
+    const delay = this.signInDelays.shift() ?? 0;
+    if (delay) { const now = reply; reply = (v) => setTimeout(() => now(v), delay); }
+    const scripted = this.signInOutcomes.shift();
+    if (scripted) { return reply(scripted); }
+    if (![...this.sessions.values()].some((s) => s.attention?.kind === 'signInNeeded' && s.agent === data?.agent)) { return reply({ outcome: 'refused', reason: 'nothing on this machine needs that sign-in' }); }
+    const joining = !!this.signInFlow;
+    if (!this.signInFlow) {
+      const code = this.nextCode ?? { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 15 * 60000).toISOString() };
+      this.nextCode = null;
+      this.signInFlow = { id: `flow-${++this.#flows}`, agent: data.agent, code, channels: new Set() };
+    }
+    const flow = this.signInFlow;
+    flow.channels.add(t);
+    reply({ outcome: joining ? 'busy' : 'started', flow: flow.id });
+    setTimeout(() => { if (this.signInFlow === flow && this.transports.has(t)) { this.#event(t, SIGN_IN.code, { flow: flow.id, agent: flow.agent, ...clone(flow.code) }); } }, 50);
+    return undefined;
+  }
+
+  // The person entered the code at github.com (or didn't): signin.done to the flow's channels.
+  // signedIn doesn't clear the sessions: under #800's clear gate the host only marks them pending
+  // (signed in, waiting for the session to confirm) until the model answers (confirmSignIn).
+  finishSignIn(outcome, reason = null) {
+    const flow = this.signInFlow;
+    if (!flow) { return; }
+    this.signInFlow = null;
+    const resumed = outcome === 'signedIn' ? this.#markSignIn(flow.agent, 'pending') : [];
+    for (const t of flow.channels) { if (this.transports.has(t)) { this.#event(t, SIGN_IN.done, { flow: flow.id, outcome, ...(reason ? { reason } : {}), resumed, continue: [] }); } }
+  }
+
+  // Silent recovery: a stored credential still worked, and nobody signed in.
+  recoverSignIn(agent = 'copilot') { this.#clearSignIn(agent); }
+
+  // The model answered after the sign-in: the clear gate passes and the host clears the sessions.
+  confirmSignIn(agent = 'copilot') { this.#clearSignIn(agent); }
+
+  // The next turn failed sign-in again: back to needing it, with a new since.
+  failSignInAgain(agent = 'copilot') { this.#markSignIn(agent, 'failed', true); }
+
+  #markSignIn(agent, recovery, again = false) {
+    const at = now();
+    const ids = [];
+    for (const s of [...this.sessions.values()]) {
+      if (s.agent !== agent || s.attention?.kind !== 'signInNeeded') { continue; }
+      ids.push(s.id);
+      this.upsert({ ...s, attention: { ...s.attention, recovery, ...(again ? { since: at } : {}) }, updatedAt: at });
+    }
+    return ids;
+  }
+
+  // A sign-in another device started: a press here joins it (busy).
+  signInElsewhere(agent = 'copilot') {
+    const code = this.nextCode ?? { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 15 * 60000).toISOString() };
+    this.nextCode = null;
+    this.signInFlow = { id: `flow-${++this.#flows}`, agent, code, channels: new Set() };
+  }
+
+  // The sessions' sign-in fails again after it was cleared: a new episode, as a token revoked.
+  needSignInAgain() {
+    const at = now();
+    for (const [id, attention] of this.#signInCleared) {
+      const s = this.sessions.get(id);
+      if (s) { this.upsert({ ...s, attention: { ...attention, recovery: 'failed', since: at }, updatedAt: at }); }
+    }
+    this.#signInCleared.clear();
+  }
+
+  #signInCleared = new Map();
+
+  #clearSignIn(agent) {
+    const at = now();
+    const ids = [];
+    for (const s of [...this.sessions.values()]) {
+      if (s.agent !== agent || s.attention?.kind !== 'signInNeeded') { continue; }
+      ids.push(s.id);
+      this.#signInCleared.set(s.id, s.attention);
+      this.upsert({ ...s, attention: null, statusSince: at, updatedAt: at });
+    }
+    return ids;
+  }
+
   // The last seq sent on its channels: the one a client shows, in tests.
   get seq() { return Math.max(0, ...[...this.transports].map((t) => t.seq)); }
 
@@ -943,6 +1071,34 @@ export class DemoBlobStore {
     this.log.push({ op: 'delete' });
     return this.stored.delete(String(ticket).split('.')[0]);
   }
+}
+
+// ?signin=1 (#800): four Copilot sessions on this machine that stopped because its sign-in expired
+// (the VM1 fixture's words), rolled up into one sign-in needed; a session whose turn ended on the
+// quota; and one that has said nothing past the host's threshold while working. Each says so in
+// its attention, over a truthful status. The sessions are added to the host given.
+export function demoSignIn(host, base = Date.now()) {
+  const at = (ms) => new Date(base - ms).toISOString();
+  const titles = ['Coordinate the Shiproom', 'Fix the relay reconnect', 'Review the usage panel', 'Draft the release notes'];
+  const ids = titles.map((_, i) => `signin-${i + 1}`);
+  titles.forEach((title, i) => host.sessions.set(ids[i], {
+    id: ids[i], agent: 'copilot', title, repository: 'danswett/agent-bridge', model: 'gpt-6.1-sol',
+    status: 'idle', statusSince: at(300000 + i * 60000), startedAt: at(3600000), updatedAt: at(300000 + i * 60000),
+    activity: { response: 'Working on it.', turnCount: 3 + i },
+    attention: { kind: 'signInNeeded', since: at(300000 + i * 60000), agent: 'copilot', provider: 'github', account: 'demo-user', message: 'Copilot needs you to sign in again (401).', signIn: 'phone', recovery: 'failed' },
+  }));
+  // These two are driven by an agent: their rows still say what is wrong (rules 10-12 over rule 7).
+  host.sessions.set('error-quota', {
+    id: 'error-quota', agent: 'claude', title: 'Summarise the incident', driver: 'agent', driverPrincipal: 'homeassistant:demo', status: 'idle', statusSince: at(120000), updatedAt: at(120000),
+    activity: { response: 'Reading the logs.', turnCount: 2 },
+    attention: { kind: 'error', since: at(120000), agent: 'claude', errorClass: 'quota', message: 'Claude stopped with an error.' },
+  });
+  host.sessions.set('stalled', {
+    id: 'stalled', agent: 'codex', title: 'Re-run the flaky suite', driver: 'agent', driverPrincipal: 'homeassistant:demo', status: 'working', statusSince: at(900000), updatedAt: at(900000),
+    activity: { response: 'Running the suite again.', turnCount: 1 },
+    attention: { kind: 'notResponding', since: at(600000), agent: 'codex', lastEventAt: at(600000) },
+  });
+  return ids;
 }
 
 // The demo's other machines, after the first (?machines=): Laptop, with a session to reply to

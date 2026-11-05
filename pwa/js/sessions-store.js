@@ -77,6 +77,10 @@ export class SessionsStore {
     this.#emit({ type: 'held' });
   }
 
+  // A device flow's signin.code or signin.done (#800), passed on to whoever shows it and never kept:
+  // a code lives only as long as the flow on screen, and never in the list.
+  signIn(ev, data) { this.#emit({ type: 'signin', ev, data }); }
+
   clear() {
     this.#sessions.clear();
     this.revision = null;
