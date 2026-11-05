@@ -1452,15 +1452,23 @@ action lives on the machine, not on each row. The field names follow Connection'
 
 | Where in §2.2 | When | Glyph | Status text | Action |
 |---|---|---|---|---|
-| After rule 1 | `attention.kind: signInNeeded` | `needs` | "Needs sign-in · *Agent*" (and "· @*account*" when known) | **Sign in**, only with the `sessions.signin` capability; no button without it (A7) |
+| After rule 1 | `attention.kind: signInNeeded` | `needs` | "Needs sign-in · *Agent*" (and "· @*account*" when known) | **Sign in**, only with the `sessions.signin` capability and a `signIn` value the client knows; no button otherwise (A7) |
+| After the row above | `signInNeeded` with `recovery: pending` (signed in; the host hasn't seen the model answer yet) | `idle` | "Signed in · waiting for the session to confirm" | None; Continue (§6.12) where the session died mid-turn |
 | Refines rule 3 | `working` with `attention.kind: notResponding` | `failed` | "Not responding · since *time*" | None; there is nothing safe to press yet |
 | Before rule 4 | Main agent idle, and `attention.kind: error` | `failed` | "Not authorised", "Rate limited" or "Agent error", from `attention.errorClass` `auth`, `rate` or `other` (an unknown class reads as "Agent error"; a new class gets its words here first), plus "· N delegates still running" when background agents survive the turn | None on the row; the agent's own words go in Details |
 
 The error rule sits after the question rules and before rules 4 and 5, so background work
 that survives a failed turn never hides the error behind "Delegating".
 
-- `signInNeeded` counts in Needs you and sorts with the other `needs` rows. "Not responding"
-  and the error rows don't count in Needs you: nothing a person does on the row fixes them.
+- `signInNeeded` counts in Needs you and sorts with the other `needs` rows. "Not responding",
+  the error rows and "waiting for the session to confirm" don't count in Needs you: nothing a
+  person does on the row fixes them.
+- **Signing in isn't recovery.** A completed sign-in (`signin.done`) only moves the session to
+  "waiting for the session to confirm". It is recovered only when the host clears
+  `signInNeeded` under #800's clear gate: a main-agent reply with model words or a tool
+  request, dated after the latest sign-in failure, with no newer failure. If the next turn
+  fails sign-in again, the row goes straight back to "Needs sign-in". The client never clears
+  either state on its own.
 - None of them ever shows "Idle", "Working" or a stale "last active" time. An older client that
   reads an unknown status as idle is the bug this section fixes; the protocol decides whether
   that needs a capability.
@@ -1480,15 +1488,23 @@ that survives a failed turn never hides the error behind "Delegating".
 - "Sign in at the machine · *reason*" shows only when the host itself says the provider has no
   device sign-in (`signIn: machine`, with its reason). The issue that leaves a provider so
   carries `needs-rdp` (#696).
-- Not dismissible while it lasts: it goes by itself when `state` becomes `resumed`.
-- States:
+- **A `signIn` value the client doesn't know makes no claim:** the banner and the row say
+  "Needs sign-in" with no button and no instruction, never phone sign-in and never "at the
+  machine".
+- Not dismissible while it lasts: it goes by itself once every affected session is recovered.
+- States (each client's adapter maps them from the sessions' `attention` and `recovery`, and
+  the sign-in request it started):
 
-| `state` | Banner shows | Button |
+| State | Banner shows | Button |
 |---|---|---|
-| `needed` | Title; "*n* sessions affected" | Sign in |
-| `pending` | "Waiting for sign-in · code expires *time*" | Show code (reopens the sheet) |
-| `resumed` | "Signed in · *n* sessions resumed" for 60 s, then gone; or "Recovered by itself" when no person signed in | None |
-| `failed` | "Sign-in failed · *reason*" | Try again (a new request) |
+| Needed | Title; "*n* sessions affected" | Sign in |
+| Code shown | "Waiting for sign-in · code expires *time*" | Show code (reopens the sheet) |
+| Signed in, confirming (`recovery: pending`) | "Signed in · waiting for *n* sessions to confirm" | None |
+| Recovered (the host cleared `signInNeeded`) | "Signed in · *n* sessions recovered" for 60 s, then gone; or "Recovered by itself" when no person signed in | None |
+| Failed | "Sign-in failed · *reason*" | Try again (a new request) |
+
+A session that fails sign-in again while confirming returns the banner to Needed, with its
+count, and its row to "Needs sign-in". Sessions that confirm leave the count one by one.
 
 **The sign-in sheet** (`signin.code`, only on a person's device)
 
@@ -1508,8 +1524,9 @@ that survives a failed turn never hides the error behind "Delegating".
   and it doesn't send the person to the machine: that's only for the host's `signIn: machine`.
 - **Expired:** the code is hidden and the sheet says "Code expired" with Try again, even before
   the host updates.
-- **Success:** the sheet closes and the banner goes to `resumed`. Sessions that died mid-turn
-  show §6.12's **Continue**; nothing is typed for them.
+- **Success:** the sheet closes and the banner goes to "Signed in · waiting for *n* sessions to
+  confirm", not to recovered. Sessions that died mid-turn show §6.12's **Continue**; nothing is
+  typed for them, so a session confirms on its next turn.
 - The code and URL never appear in a notification, a toast, Home Assistant or a log, even after
   a press. They reach the clipboard only when the person presses Copy.
 
@@ -1528,7 +1545,7 @@ that survives a failed turn never hides the error behind "Delegating".
 - Sign in's accessible name: "Sign in to *Agent* on *machine*" (A1).
 - The sheet traps focus and starts on Cancel (A3, A4). When it closes, focus goes to the button
   that opened it if that button still exists (Cancel, failure, expiry). On success the button
-  is gone, so focus goes to the banner's "Signed in · *n* sessions resumed" line, which takes
+  is gone, so focus goes to the banner's "Signed in · waiting…" line, which takes
   focus programmatically only; if the banner has already gone, to the session list's heading.
   A sheet opened from a push uses the same rule. The code is read character by character ("Code: A B C D, 1 2 3 4").
 - Reduced motion: the ring is still; the banner and sheet appear without animation (A10).
@@ -1538,8 +1555,8 @@ that survives a failed turn never hides the error behind "Delegating".
 
 | Use | Text |
 |---|---|
-| Row | "Needs sign-in · *Agent*"; "Not responding · since *time*"; "Not authorised"; "Rate limited"; "Agent error" |
-| Banner | "*Agent* on *machine* needs sign-in"; "*n* sessions affected"; "Waiting for sign-in · code expires *time*"; "Signed in · *n* sessions resumed"; "Recovered by itself"; "Sign-in failed · *reason*"; "Sign in at the machine · *reason*" |
+| Row | "Needs sign-in · *Agent*"; "Signed in · waiting for the session to confirm"; "Not responding · since *time*"; "Not authorised"; "Rate limited"; "Agent error" |
+| Banner | "*Agent* on *machine* needs sign-in"; "*n* sessions affected"; "Waiting for sign-in · code expires *time*"; "Signed in · waiting for *n* sessions to confirm"; "Signed in · *n* sessions recovered"; "Recovered by itself"; "Sign-in failed · *reason*"; "Sign in at the machine · *reason*" |
 | Sheet | "Starting *Agent*'s sign-in on *machine*…"; "Open this page and enter the code."; "Expires *time*"; "Code expired"; "This sign-in code couldn't be shown." |
 | Buttons | "Sign in"; "Show code"; "Open"; "Copy"; "Cancel"; "Try again" |
 | Push | "*Agent* on *machine* needs sign-in" / "*n* sessions affected" |
