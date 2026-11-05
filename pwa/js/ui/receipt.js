@@ -36,6 +36,9 @@ export const ReceiptTiming = Object.freeze({
   announceGapMs: 1000,
   // Delivered: Send shows the check this long, then its own glyph again (sendCheckHold).
   sendCheckHoldMs: 1000,
+  // A request whose views all went on its way is followed to its outcome this long at most: past
+  // the answer service's 9-minute give-up, which ends it with one.
+  followMs: 10 * 60 * 1000,
 });
 
 const machine = (name) => name || 'the machine';
@@ -189,8 +192,42 @@ function sayNow(h, now, alert = false) {
     sayAlert(text);
     return;
   }
-  const voice = [...h.voices].find((v) => v.heard());
+  // A view of the request on screen first; a follower (followToOutcome) only when none is.
+  const voice = [...h.voices].find((v) => !v.fallback && v.heard()) ?? [...h.voices].find((v) => v.heard());
   if (voice) { voice.say(text); } else { sayOnPage(text); }
+}
+
+const inFlight = (entry) => entry?.state === 'sending' || entry?.state === 'waiting';
+
+// Requests whose views all went while they were on their way (a session that ended, a card taken
+// away), each followed to its outcome by one view-less clock that speaks on the page's line. It
+// says what its request's history has not: a view drawn again shares that history, so nothing is
+// said twice, and the rate limit is the request's. Before, the outcome of a request whose card went
+// was never heard. Let go at its outcome, at a request that is not its own, or after followMs.
+const followers = new Map();
+function followToOutcome(entry, { describe, follow, timing, now, page }) {
+  if (followers.has(entry.request)) { return; }
+  const clock = new ReceiptClock({ describe, draw: () => {}, say: page, now, timing, fallback: true });
+  let unfollow = null;
+  let over = false;
+  const end = () => {
+    if (over) { return; }
+    over = true;
+    clearTimeout(cap);
+    unfollow?.();
+    clock.destroy();
+    if (followers.get(entry.request) === end) { followers.delete(entry.request); }
+  };
+  const cap = setTimeout(end, timing.followMs ?? ReceiptTiming.followMs);
+  followers.set(entry.request, end);
+  unfollow = follow((next) => {
+    if (over) { return; }
+    if (!next || next.request !== entry.request) { end(); return; }
+    clock.show(next);
+    if (!inFlight(next)) { end(); }
+  });
+  if (over) { unfollow?.(); return; }
+  clock.show(entry);
 }
 
 // The page's own line, for an announcement no view of its request is on screen to say: a receipt
@@ -237,6 +274,9 @@ const ROOM = Object.freeze({ key: 'room', text: '', more: null, tone: 'room', li
 // whether say is heard now: a view not drawn (a session's card while another is open) leaves the
 // request's announcement to one that is, such as Needs you, or to the page's line. delivered():
 // the request this view saw on its way has been delivered: Send's check (holdCheck).
+// follow(fn): subscribes fn to the view's requests as they change, returning how to stop; given, a
+// request still on its way when the view goes is followed to its outcome (followToOutcome). page:
+// where such a follower speaks (the page's line).
 export class ReceiptClock {
   #entry = null;
   #timer = null;
@@ -246,8 +286,8 @@ export class ReceiptClock {
   // The request this clock saw in flight, so a view drawn after its delivery never shows the check.
   #seen = null;
 
-  constructor({ describe, draw, say = () => {}, heard = () => true, delivered = () => {}, now = () => Date.now(), timing = ReceiptTiming }) {
-    Object.assign(this, { describe, draw, say, heard, delivered, now, timing });
+  constructor({ describe, draw, say = () => {}, heard = () => true, delivered = () => {}, now = () => Date.now(), timing = ReceiptTiming, follow = null, page = sayOnPage, fallback = false }) {
+    Object.assign(this, { describe, draw, say, heard, delivered, now, timing, follow, page, fallback });
   }
 
   show(entry) {
@@ -259,6 +299,10 @@ export class ReceiptClock {
     clearTimeout(this.#timer);
     this.#timer = null;
     this.#voice(null);
+    const entry = this.#entry;
+    if (this.follow && inFlight(entry)) {
+      followToOutcome(entry, { describe: this.describe, follow: this.follow, timing: this.timing, now: this.now, page: this.page });
+    }
   }
 
   #voice(h) {

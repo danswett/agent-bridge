@@ -7,9 +7,17 @@ import { glyph } from './glyph.js';
 import { needsYou, AppBadge } from '../needs-you.js';
 import { tapState, prepareAnswer } from '../answers.js';
 import { BUSY_PAUSE_MS, answerControls, answerState, describeAnswer } from './question-view.js';
-import { ReceiptClock, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
+import { ReceiptClock, ReceiptTiming, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
 import { duration, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
+
+// An entry whose question the machine cleared while its answer was still on its way (typed, before
+// the machine confirmed it) stays, apart from the count, until its outcome has shown: a delivered
+// one for its check, any other for long enough to read, and never past the answer's give-up (the
+// answer service's 9 minutes). Dropped with its question, the ring went and the outcome never came.
+const LINGER_READ_MS = 5000;
+const LINGER_MAX_MS = 9 * 60 * 1000;
+const inFlight = (entry) => entry?.state === 'sending' || entry?.state === 'waiting';
 
 export class NeedsYouLane {
   #entries = new Map();
@@ -29,7 +37,8 @@ export class NeedsYouLane {
     this.render();
   }
 
-  get count() { return this.#entries.size; }
+  // Questions waiting, not entries kept only to show an answer's outcome.
+  get count() { let n = 0; for (const v of this.#entries.values()) { if (!v.lingering) { n++; } } return n; }
 
   schedule() {
     if (this.#scheduled) { return; }
@@ -49,6 +58,7 @@ export class NeedsYouLane {
     });
     const live = new Set();
     const want = [];
+    const before = [...this.list.children];
     for (const e of lane) {
       live.add(e.key);
       let view = this.#entries.get(e.key);
@@ -58,11 +68,19 @@ export class NeedsYouLane {
         view = this.#build(e);
         this.#entries.set(e.key, view);
       }
+      if (view.lingering) { this.#unlinger(view); this.#show(view, view.service.get(e.hostId, e.sessionId, e.questionId)); }
       this.#fill(view, e);
       want.push(view.el);
     }
+    const lingering = [];
     for (const [key, view] of this.#entries) {
-      if (!live.has(key)) { this.#drop(view); this.#entries.delete(key); }
+      if (live.has(key)) { continue; }
+      if (this.#lingers(view)) { lingering.push(view); } else { this.#drop(view); this.#entries.delete(key); }
+    }
+    // Where it was, so nothing around it moves for its question going.
+    for (const view of lingering.sort((a, b) => before.indexOf(a.el) - before.indexOf(b.el))) {
+      const at = before.indexOf(view.el);
+      want.splice(at < 0 ? want.length : Math.min(at, want.length), 0, view.el);
     }
     let prev = null;
     for (const el of want) {
@@ -72,7 +90,7 @@ export class NeedsYouLane {
     }
     while (prev ? prev.nextSibling : this.list.firstChild) { (prev ? prev.nextSibling : this.list.firstChild).remove(); }
     this.head.textContent = `Needs you \u00b7 ${lane.length}`;
-    this.container.hidden = lane.length === 0;
+    this.container.hidden = lane.length === 0 && lingering.length === 0;
     this.badge.set(lane.length);
     this.onRender?.(lane.length);
   }
@@ -125,6 +143,7 @@ export class NeedsYouLane {
           say: (text) => { els.live.textContent = text; },
           heard: () => drawn(els.live),
           delivered: () => holdCheck([els.approve, els.deny].find((b) => b.getAttribute('aria-pressed') === 'true')),
+          follow: (fn) => ctx.service.watch(e.hostId, e.sessionId, e.questionId, fn),
         });
         view.unwatch = ctx.service.watch(e.hostId, e.sessionId, e.questionId, (entry) => this.#show(view, entry));
         this.#show(view, ctx.service.get(e.hostId, e.sessionId, e.questionId));
@@ -186,22 +205,58 @@ export class NeedsYouLane {
     service.submit({ hostId: e.hostId, sessionId: e.sessionId, questionId: e.questionId, answer });
   }
 
+  // Whether an entry whose question has gone stays for its answer's outcome (LINGER_READ_MS).
+  #lingers(view) {
+    if (view.lingerOver) { return false; }
+    if (view.lingering) { return true; }
+    const x = view.entry;
+    if (!view.service || !inFlight(view.service.get(x.hostId, x.sessionId, x.questionId))) { return false; }
+    view.lingering = true;
+    view.el.dataset.lingering = 'true';
+    view.lingerCap = setTimeout(() => this.#endLinger(view), LINGER_MAX_MS);
+    return true;
+  }
+
+  #unlinger(view) {
+    view.lingering = false;
+    view.lingerOver = false;
+    delete view.el.dataset.lingering;
+    clearTimeout(view.lingerCap);
+    clearTimeout(view.lingerEnd);
+  }
+
+  #endLinger(view) {
+    clearTimeout(view.lingerCap);
+    clearTimeout(view.lingerEnd);
+    view.lingerOver = true;
+    this.schedule();
+  }
+
   #show(view, entry) {
     const { els } = view;
     clearTimeout(view.pause);
+    if (view.lingering && !inFlight(entry)) {
+      // Its outcome is in: shown for its check, or long enough to read, then the entry goes.
+      clearTimeout(view.lingerEnd);
+      const delivered = entry?.state === 'done' && entry.outcome === 'delivered';
+      view.lingerEnd = setTimeout(() => this.#endLinger(view), !entry ? 0 : delivered ? ReceiptTiming.sendCheckHoldMs : LINGER_READ_MS);
+    }
     const { again, pause } = answerControls(entry);
     view.el.dataset.answer = answerState(entry);
     // Held on this device for a machine that isn't connected: the ring on its button stands still.
     view.el.classList.toggle('still', entry?.state === 'waiting' && entry.reason === 'not connected');
     view.receipt.show(entry);
-    els.approve.disabled = els.deny.disabled = !again || pause;
-    els.resend.hidden = entry?.state !== 'failed';
-    if (pause) { view.pause = setTimeout(() => { els.approve.disabled = els.deny.disabled = false; }, BUSY_PAUSE_MS); }
+    // Its question gone, nothing in it can be pressed or tried again.
+    els.approve.disabled = els.deny.disabled = !again || pause || view.lingering;
+    els.resend.hidden = entry?.state !== 'failed' || view.lingering;
+    if (pause && !view.lingering) { view.pause = setTimeout(() => { els.approve.disabled = els.deny.disabled = !!view.lingering; }, BUSY_PAUSE_MS); }
     const sent = !again ? entry.answer?.fields?.[view.entry.question.fields[0].name] : undefined;
     for (const b of [els.approve, els.deny]) { b.setAttribute('aria-pressed', typeof sent === 'string' && b.dataset.value === sent ? 'true' : 'false'); }
   }
 
   #drop(view) {
+    clearTimeout(view.lingerCap);
+    clearTimeout(view.lingerEnd);
     view.unwatch?.();
     view.receipt?.destroy();
     clearTimeout(view.pause);

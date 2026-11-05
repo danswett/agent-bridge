@@ -1234,8 +1234,10 @@ form.reply, form.answer { container: receipt / inline-size; }
   transition: opacity var(--ab-motion-acknowledge-duration) var(--ab-motion-acknowledge-ease); }
 .reply .button.send > .send-check { inset: 0; margin: auto; width: 20px; height: 20px; }
 .checked > .send-check { opacity: 1; }
+/* With Other… open, Send answer still shows when an option is tapped instead: the ring is on the
+   option alone, the control that sent, never on both (#616 review). */
 .reply .button.send[aria-busy="true"]::after,
-.answer[aria-busy="true"] .button.send:not([hidden])::after,
+.answer[aria-busy="true"]:not(:has(.choice[aria-pressed="true"])) .button.send:not([hidden])::after,
 .answer[aria-busy="true"] .choice[aria-pressed="true"]::after,
 .needs-entry:is([data-answer="sending"], [data-answer="waiting"]) .button[aria-pressed="true"]::after {
   content: ""; position: absolute; inset-block: 0; inset-inline-end: 10px; margin-block: auto; width: 12px; height: 12px;
@@ -1249,6 +1251,9 @@ form.reply, form.answer { container: receipt / inline-size; }
 /* Held for a machine that isn't connected, the ring stands still, in Send's ink at full opacity
    (#617): a paler ring fell under 3:1, and in forced colours GrayText on Highlight did too. */
 :is(.reply .button.send.still, .answer.still :is(.button, .choice), .needs-entry.still .button)::after { animation: none; }
+/* Send answer's ring is drawn by a more specific rule than the one above, so it stands still on one
+   of its own specificity: it kept turning. */
+.answer.still[aria-busy="true"]:not(:has(.choice[aria-pressed="true"])) .button.send:not([hidden])::after { animation: none; }
 /* The line's room keeps the Needs you entry from growing or shrinking as words come and go, whatever
    the state: two lines in a phone's lane, where a wait or a busy outcome wraps. Its words stay in the
    text colour (.needs-status): the role colours are checked against the card, not the Needs you fill. */
@@ -1260,7 +1265,7 @@ form.reply, form.answer { container: receipt / inline-size; }
      Send's own colours (currentColor, as its arrow does), a still ring too: it stands still. */
   :is(.answer-status, .answer-receipt, .needs-status):is(.progress, .done, .warn, .bad), :is(.answer-status, .answer-receipt, .needs-status) .receipt-more { color: CanvasText; }
   .reply .button.send[aria-busy="true"]::after,
-  .answer[aria-busy="true"] .button.send:not([hidden])::after,
+  .answer[aria-busy="true"]:not(:has(.choice[aria-pressed="true"])) .button.send:not([hidden])::after,
   .answer[aria-busy="true"] .choice[aria-pressed="true"]::after,
   .needs-entry:is([data-answer="sending"], [data-answer="waiting"]) .button[aria-pressed="true"]::after { forced-color-adjust: none; border-color: currentColor; border-right-color: transparent; }
 }
@@ -1268,7 +1273,7 @@ form.reply, form.answer { container: receipt / inline-size; }
 .question-changed .button { margin-top: 8px; }
 @media (prefers-reduced-motion: reduce) {
   .reply .button.send[aria-busy="true"]::after,
-  .answer[aria-busy="true"] .button.send:not([hidden])::after,
+  .answer[aria-busy="true"]:not(:has(.choice[aria-pressed="true"])) .button.send:not([hidden])::after,
   .answer[aria-busy="true"] .choice[aria-pressed="true"]::after,
   .needs-entry:is([data-answer="sending"], [data-answer="waiting"]) .button[aria-pressed="true"]::after { animation: none; }
 }

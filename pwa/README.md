@@ -269,7 +269,12 @@ by request, so the form, Needs you and the card's receipt after the question has
 timing and say each change once between them, in a view of the request that is on screen, or
 else on the page's own live line (a session's card while another is open, a receipt gone with
 its question, a reply box moved on to the next reply), never lost and never on a line showing
-another request. From Send the line keeps the room the longest outcome needs (two lines in a
+another request. A request still on its way when every view of it goes (its session ended, its
+card taken away) is followed to its outcome on the page's line, at its own pace and for 10 minutes
+at most (past the 9-minute give-up). A Needs you entry whose question the machine clears before
+confirming its answer stays, ring on and nothing to press, apart from the count, until the
+outcome has shown: a check for its second, any other outcome for 5 s, and never past 9 minutes.
+With Other… open, an option tapped instead has the ring and Send answer none. From Send the line keeps the room the longest outcome needs (two lines in a
 box under 640 px wide, one above), empty unless it has something to say, until the box is typed
 in again, so nothing moves the box; a Needs you entry keeps its line's room (two lines on a
 phone) in every state. If the response is

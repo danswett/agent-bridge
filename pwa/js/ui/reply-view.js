@@ -120,6 +120,7 @@ export class ReplyBox {
       say: (text) => { this.els.live.textContent = text; },
       heard: () => drawn(this.els.live),
       delivered: () => holdCheck(this.els.send),
+      follow: (fn) => replying.service.watch(replying.hostId, replying.sessionId, fn),
     });
     const { service, hostId, sessionId } = replying;
     this.#unwatch = service.watch(hostId, sessionId, (e) => this.#show(e));

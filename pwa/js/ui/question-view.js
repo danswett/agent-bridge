@@ -237,6 +237,7 @@ export class QuestionPanel {
       heard: () => drawn(this.els.live),
       // The button that sent it: the option tapped, or Send.
       delivered: () => holdCheck(this.element.querySelector('.choice[aria-pressed="true"]') ?? this.els.send),
+      follow: (fn) => answering.service.watch(answering.hostId, answering.sessionId, q.id, fn),
     });
     const { service, hostId, sessionId } = answering;
     this.#unwatch = service.watch(hostId, sessionId, q.id, (e) => this.#show(e));

@@ -305,3 +305,44 @@ test('Try again that fails the same way is heard again, once for each attempt', 
   assert.equal(said.filter((s) => s === failed.speech).length, 2);
   clock.destroy();
 });
+
+// A request whose views all went on its way (its session ended, its card taken away) is followed to
+// its outcome on the page's line: heard, at the request's own pace, and never again by a view drawn
+// afresh for it.
+test('a request whose view goes while it is on its way is still heard to its outcome, once', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const describe = (entry, { stalled }) => (entry.state === 'done' ? outcome('reply') : describeInFlight('reply', entry, { machineName: 'ULTRA', stalled }));
+  const said = [];
+  const page = [];
+  let listener = null;
+  const clock = new ReceiptClock({ describe, draw: () => {}, say: (s) => said.push(s), page: (s) => page.push(s), follow: (fn) => { listener = fn; return () => { listener = null; }; } });
+  const entry = { request: `r${++n}`, state: 'sending', stage: null, attempts: 1, reason: null, progress: null };
+  clock.show(entry);
+  t.mock.timers.tick(ReceiptTiming.quietMs);
+  assert.deepEqual(said, ['Sending reply']);
+
+  clock.destroy();
+  assert.ok(listener, 'followed once its view went');
+  listener({ ...entry, stage: 'received' });
+  t.mock.timers.tick(ReceiptTiming.announceGapMs);
+  listener({ ...entry, stage: 'received', state: 'done', outcome: 'delivered' });
+  assert.deepEqual(page, ['Reply sent', 'Reply delivered']);
+  assert.equal(listener, null, 'and let go at its outcome');
+
+  const again = [];
+  new ReceiptClock({ describe, draw: () => {}, say: (s) => again.push(s) }).show({ ...entry, state: 'done', outcome: 'delivered' });
+  assert.deepEqual(again, []);
+  assert.deepEqual(said, ['Sending reply']);
+});
+
+test('a request followed after its view went is let go at its give-up however it stands', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const describe = (entry, { stalled }) => describeInFlight('answer', entry, { machineName: 'ULTRA', stalled });
+  let listener = null;
+  const clock = new ReceiptClock({ describe, draw: () => {}, page: () => {}, follow: (fn) => { listener = fn; return () => { listener = null; }; } });
+  clock.show({ request: `r${++n}`, state: 'waiting', reason: 'not connected', stage: null, attempts: 0, progress: null });
+  clock.destroy();
+  assert.ok(listener);
+  t.mock.timers.tick(ReceiptTiming.followMs);
+  assert.equal(listener, null);
+});

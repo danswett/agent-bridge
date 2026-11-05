@@ -1432,6 +1432,7 @@ export class SessionCard {
       },
       say: (text) => { live.textContent = text; },
       heard: () => drawn(live),
+      follow: (fn) => service.watch(hostId, sessionId, questionId, fn),
     });
     const receipt = { element, final: false, unwatch: null, fresh: true, clock };
     const show = (entry) => {

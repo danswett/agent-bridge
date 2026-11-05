@@ -152,6 +152,24 @@ test.describe('on a phone', () => {
     expect(sent).toEqual([{ id: LAND, question: 'r1#0123456789abcdef', request: expect.stringMatching(UUID), fields: { decision: 'approve' }, progress: true }]);
   });
 
+  test('an entry whose question the machine clears before confirming its answer stays, ring on, until the outcome and its check have shown', async ({ page }) => {
+    await openDemo(page);
+    const e = await ask(page, LAND, permission());
+    await page.evaluate(() => window.agentBridgeDemo.host.holdBefore('result'));
+    const approve = e.getByRole('button', { name: /^Approve once/ });
+    await approve.tap();
+    // Typed: the machine's upsert takes the question away before its result comes back.
+    await expect.poll(() => page.evaluate((id) => window.agentBridgeDemo.host.get(id).question, LAND)).toBeNull();
+    await expect(e).toHaveAttribute('data-lingering', 'true');
+    await expect(e).toHaveAttribute('data-answer', 'sending');
+    expect(await approve.evaluate((b) => getComputedStyle(b, '::after').content)).not.toBe('none');
+    await expect(e.getByRole('button', { name: /^Deny/ })).toBeDisabled();
+
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseBefore('result'));
+    await expect(approve).toHaveClass(/\bchecked\b/);
+    await expect(entryFor(page, LAND)).toHaveCount(0);
+  });
+
   test('the lane\'s line keeps its room whatever it says: an entry is as tall on its way as with a busy outcome\'s words', async ({ page }) => {
     await openDemo(page);
     await script(page, 'busy');

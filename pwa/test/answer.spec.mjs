@@ -132,6 +132,20 @@ test.describe('on a phone', () => {
     expect(timing).toMatchObject({ kind: 'answer', outcome: 'delivered', host: { typed: expect.any(Number) } });
     expect(timing.client.map(([mark]) => mark)).toEqual(['sent', 'received', 'typed', 'result']);
   });
+  test('with Other… open, an option tapped instead has the ring and Send answer has none', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, choice({ allowOther: true }));
+    await q.locator('.other-toggle').tap();
+    await expect(q.locator('button.send')).toBeVisible();
+    await hold(page);
+    await q.locator('.choice[data-value="sqlite"]').tap();
+    await expect(q.locator('.answer')).toHaveAttribute('aria-busy', 'true');
+
+    expect(await q.locator('.choice[data-value="sqlite"]').evaluate((b) => getComputedStyle(b, '::after').content)).not.toBe('none');
+    expect(await q.locator('button.send').evaluate((b) => getComputedStyle(b, '::after').content)).toBe('none');
+    await release(page);
+  });
+
   test('Other… opens a box for an answer of your own, which must say something', async ({ page }) => {
     await openDemo(page);
     const q = await ask(page, choice({ allowOther: true }));
