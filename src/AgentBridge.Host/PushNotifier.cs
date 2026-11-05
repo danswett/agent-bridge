@@ -368,6 +368,16 @@ public sealed class PushNotifier : IAsyncDisposable
         // its turn was running then.
         var baseline = t.MainKey;
         var wasRunning = t.MainRunning;
+        // A turn that ended on an error or a failed sign-in did not finish (#845): it is idle,
+        // truthfully, with the last turn's answer still beside it, and a finished notice quoted
+        // that answer as if the new prompt had got it. None goes while the attention lasts: one
+        // due or queued for the session is withdrawn here, before a delegate's question still
+        // pending can return early, and every one is checked again as it is made and sent.
+        if (Failed(s))
+        {
+            if (t.Due is { Kind: NoticeKind.Finished }) { t.Due = null; }
+            outbox.RemoveAll(o => o.Session == s.Id && o.Kind == NoticeKind.Finished);
+        }
         if (s.WaitingOn is null)
         {
             t.MainKey = MainKey(s);
@@ -401,16 +411,7 @@ public sealed class PushNotifier : IAsyncDisposable
         var turnRan = prev is { Status: SessionStatus.Waiting, WaitingOn: not null }
             ? wasRunning || (baseline is { } before && MainKey(s) != before)
             : prev is { Status: SessionStatus.Working or SessionStatus.Waiting };
-        // A turn that ended on an error or a failed sign-in did not finish (#845): it is idle,
-        // truthfully, with the last turn's answer still beside it, and a finished notice quoted
-        // that answer as if the new prompt had got it. None goes while the attention lasts, and
-        // one already due or queued for the session is withdrawn.
-        if (s.Attention is { Kind: AttentionKind.Error or AttentionKind.SignInNeeded })
-        {
-            if (t.Due is { Kind: NoticeKind.Finished }) { t.Due = null; }
-            outbox.RemoveAll(o => o.Session == s.Id && o.Kind == NoticeKind.Finished);
-        }
-        else if (s.Status == SessionStatus.Idle && turnRan
+        if (!Failed(s) && s.Status == SessionStatus.Idle && turnRan
             && !string.IsNullOrWhiteSpace(OwnResponse(s)) && FinishedKey(s) != t.FinishedKey)
         {
             t.Due = new Due(NoticeKind.Finished, now + options.FinishedDelay, null);
@@ -421,6 +422,8 @@ public sealed class PushNotifier : IAsyncDisposable
         // after replaces it with its own notice.
         if (t.Shown is { } shown && t.Due is null) { t.Due = new Due(NoticeKind.Resolved, now + options.QuestionDelay, shown); }
     }
+
+    static bool Failed(Session? s) => s?.Attention is { Kind: AttentionKind.Error or AttentionKind.SignInNeeded };
 
     static string FinishedKey(Session s) =>
         $"{s.Activity.TurnCount}:{MainKey(s)}";
@@ -478,7 +481,10 @@ public sealed class PushNotifier : IAsyncDisposable
                 // A finished notice that waited (the relay down, the rate limit, a retry, or
                 // collapsed) is not sent to a device now on screen; a collapsed one only while
                 // still true.
+                // Nor while the session's turn ended in failure (#845), however it came back to
+                // the outbox: a retry, or a reconnect, after the attention began.
                 if (ready.Kind == NoticeKind.Finished && (Sees(ready.Device, ready.Session)
+                    || Failed(sessions.GetValueOrDefault(ready.Session)?.Last)
                     || ready.Collapsed && sessions.GetValueOrDefault(ready.Session) is not { Removed: false, Last: { Status: SessionStatus.Idle, Question: null } })) { continue; }
                 if (!MayNotify(found) || ready.Grant != found.Grant) { continue; }
                 (next, sub, via) = (ready, found, s);
@@ -596,7 +602,7 @@ public sealed class PushNotifier : IAsyncDisposable
                     t.Shown = due.Question;
                     Enqueue(s!, NoticeKind.Question, due.Question, store.All);
                     break;
-                case NoticeKind.Finished when !t.Removed && s is { Status: SessionStatus.Idle, Question: null }:
+                case NoticeKind.Finished when !t.Removed && s is { Status: SessionStatus.Idle, Question: null } && !Failed(s):
                     t.FinishedKey = FinishedKey(s);
                     t.Shown = null;
                     var unseen = new List<PushSubscriber>();

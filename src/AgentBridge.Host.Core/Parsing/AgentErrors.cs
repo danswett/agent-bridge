@@ -116,7 +116,9 @@ internal static partial class AgentErrors
         (Opaque(), _ => "[token]"),
     ];
 
-    const int Timeout = 200;
+    // A guard against a pattern running away, never a budget: a cold first match under a busy CI
+    // runner's coverage took longer than 200 ms and showed nothing (Shown's null).
+    const int Timeout = 2000;
 
     [GeneratedRegex(@"\b(?:https?|wss?|file)://\S+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Timeout)]
     private static partial Regex Link();

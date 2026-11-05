@@ -349,6 +349,53 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal(0, notifier.Pending);
     }
 
+    // A finished push in flight when the next prompt fails sign-in comes back as a retry: it is
+    // checked again as it goes, and not sent while the attention lasts.
+    [Fact]
+    public async Task A_finished_push_retried_after_the_next_prompt_failed_sign_in_is_not_sent()
+    {
+        Start();
+        Subscribe(Phone);
+        var first = true;
+        sender.Respond = _ =>
+        {
+            if (!first) { return new PushResult(201, null); }
+            first = false;
+            source.Upsert(S("s1", SessionStatus.Working, response: "The build is green.", turns: 1));
+            source.Upsert(S("s1", SessionStatus.Idle, response: "The build is green.", turns: 2) with { Attention = SignedOut });
+            return new PushResult(503, "unavailable");
+        };
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "The build is green."));
+
+        await After(TimeSpan.FromSeconds(3));
+        await After(TimeSpan.FromMinutes(1));
+
+        Assert.Empty(sender.Sent);
+        Assert.True(sender.Attempts == 1, $"tried {sender.Attempts} times");
+    }
+
+    // A delegate's question still pending returns before the cleanup once did: the finished
+    // notice waiting for the relay went out with the stale answer when it came back.
+    [Fact]
+    public async Task A_finished_push_waiting_for_the_relay_is_withdrawn_when_sign_in_fails_with_a_delegates_question_pending()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "The build is green."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, notifier.Pending);
+
+        source.Upsert(S("s1", SessionStatus.Waiting, response: "The build is green.", turns: 2, question: Q("dq") with { Agent = "agent-1" }) with { WaitingOn = "agent-1", Attention = SignedOut });
+        Assert.Equal(0, notifier.Pending);
+        sender.Connected = true;
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.DoesNotContain(Received(), r => Kind(r.Notification) == "finished");
+    }
+
     [Fact]
     public async Task A_collapsed_finished_turn_is_dropped_if_the_session_is_working_again_when_it_is_due()
     {
