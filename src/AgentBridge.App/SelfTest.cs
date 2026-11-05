@@ -62,6 +62,7 @@ static partial class SelfTest
             var remoteFacts = rows.FirstOrDefault(r => r.Card?.Id == "demo-remote-codex") is { } rc ? ById<TextBlock>(rc, "RowFacts") : null;
             Check(remoteFacts is not null && Text(remoteFacts).EndsWith(" · " + remote.MachineName, StringComparison.Ordinal), $"names the machine on another machine's row ({(remoteFacts is null ? "none" : Text(remoteFacts))})");
             await CheckRowAnatomy(rows, Check);
+            CheckRowNames(window, rows, Check);
 
             // A session chosen in the list is the session pane's, with its question's controls.
             var approval = await Choose(window, main, "demo-approval", "Option:approve");
@@ -445,6 +446,30 @@ static partial class SelfTest
             if (!onLine1 || !oneLine || !weight || never || text.Split(" · ").Length > 2 || text.StartsWith('·') || text.Length == 0) { crooked.Add(card.Id); }
         }
         check(rows.Count > 0 && crooked.Count == 0, $"draws every row as two lines: the glyph on line 1, then at most two facts on one line, never the model or the pid{(crooked.Count > 0 ? $": not {string.Join(", ", crooked)}" : "")} ({string.Join(" | ", facts)})");
+    }
+
+    // ui.md §9.1 A1 (#796): the name UI Automation gives each row's list item, which Narrator reads
+    // as the row is reached, starts with the words the row draws, in the order drawn: its title,
+    // line 2's facts, then its age, or "New activity" where the dot is drawn instead. Read from the
+    // drawn text, not the view model, so a name built from words the row no longer draws fails.
+    static void CheckRowNames(MainWindow window, List<SessionRow> rows, Action<bool, string> check)
+    {
+        var wrong = new List<string>();
+        var names = new List<string>();
+        foreach (var row in rows)
+        {
+            if (row.Card is not { } card || window.Sessions.Rows.ContainerFromItem(card) is not ListViewItem item) { wrong.Add($"{row.Card?.Id ?? "?"}: no item"); continue; }
+            var name = FrameworkElementAutomationPeer.CreatePeerForElement(item)?.GetName() ?? "";
+            names.Add(name);
+            var title = ById<TextBlock>(row, "RowTitle");
+            var line2 = ById<TextBlock>(row, "RowFacts");
+            var age = ById<TextBlock>(row, "Age");
+            var dot = ById<FrameworkElement>(row, "Unread");
+            var shown = dot is { Visibility: Visibility.Visible } ? "New activity" : age?.Text;
+            var drawn = string.Join(", ", new[] { title?.Text }.Concat(line2 is null ? Enumerable.Empty<string>() : Text(line2).Split(StatusLine.Separator).Select(DelegateLabel.Aloud)).Append(shown).Where(s => !string.IsNullOrEmpty(s)));
+            if (drawn.Length == 0 || !(name == drawn || name.StartsWith(drawn + ", ", StringComparison.Ordinal)) || name != card.RowLabel) { wrong.Add($"{card.Id}: \"{name}\" for \"{drawn}\""); }
+        }
+        check(rows.Count > 0 && wrong.Count == 0, $"names every row's list item for its title, its second line's facts and its age, as drawn{(wrong.Count > 0 ? $": not {string.Join("; ", wrong)}" : "")} ({string.Join(" | ", names)})");
     }
 
     // The status words in their tone's text colour on every row and in the session's header, and

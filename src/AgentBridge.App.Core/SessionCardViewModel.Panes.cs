@@ -29,11 +29,38 @@ public sealed partial class SessionCardViewModel
     // Only the status's first fact, as StatusRules made it, never its words cut at a separator
     // (#286): "Waiting on you · 2 delegates still running" is one fact on a row and both in the
     // header.
-    public string RowStatus => Driven && Glyph != StatusGlyph.Needs ? "Driven by an agent" : Line.FirstFact;
+    public string RowStatus => DriverDrawn ? DriverText : Line.FirstFact;
+    bool DriverDrawn => Driven && Glyph != StatusGlyph.Needs;
     public string RowPlace => Machine ?? Place;
     public string RowFacts => string.Join(StatusLine.Separator, new[] { RowStatus, RowPlace }.Where(s => !string.IsNullOrEmpty(s)));
-    // A row read aloud (§9): its glyph's name already says the status and machine.
-    public string RowLabel => Unread ? $"{GlyphLabel}, new activity" : GlyphLabel;
+
+    // A row read aloud (ui.md §9.1 A1, #796). It starts with the words the row draws, in the order
+    // drawn and from the properties the row binds, so the two can't drift: the title, line 2's
+    // status and place, then the age, or "New activity" where the dot takes the age's place. Then
+    // what else the glyph's name (§9.2) says that the row doesn't draw, so nothing it said before
+    // goes unsaid: the status's later facts, or all of it under "Driven by an agent"; the driver
+    // while a question's words take its place; and the machine while the row shows where instead.
+    // The glyph's name alone left out line 2's place and the age (#796). Each part as the PWA names
+    // its row (#791), so both clients read a row alike. A delegate's name in a status fact is read
+    // without its commas, as in the glyph's name, so it can't read as facts of its own (#303).
+    public string RowLabel
+    {
+        get
+        {
+            var line = Line;
+            var unsaid = DriverDrawn ? line.Spoken : string.Join(StatusLine.Separator, line.Facts.Skip(1).Select(DelegateLabel.Aloud));
+            return string.Join(", ", new[]
+            {
+                Title,
+                DelegateLabel.Aloud(RowStatus),
+                RowPlace,
+                Unread ? "New activity" : AgeText,
+                unsaid,
+                Driven && !DriverDrawn ? "driven by an agent" : null,
+                Machine is null ? ctx.MachineName() : null,
+            }.Where(s => !string.IsNullOrEmpty(s)));
+        }
+    }
 
     // The header's one meta line after the glyph (§6.2): status, machine, repository.
     public string HeaderPlace => string.Join(" · ", new[] { Machine, Place }.Where(s => !string.IsNullOrEmpty(s)));

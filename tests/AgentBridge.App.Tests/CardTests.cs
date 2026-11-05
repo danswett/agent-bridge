@@ -635,6 +635,78 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Equal((false, "", (string?)null), (card.Driven, card.DriverText, card.DriverPrincipal));
     }
 
+    // ui.md §9.1 A1 (#796): a row's name is the words it draws, in the order drawn (its title,
+    // line 2's status and place, its age), then what else its glyph's name says, as the PWA's
+    // (#791). The clock is five minutes after the session's update.
+    [Theory]
+    [InlineData("idle", false, "A session, Idle, danswett/agent-bridge, 5m, Test PC")]
+    [InlineData("working", false, "A session, Working, danswett/agent-bridge, 5m, Test PC")]
+    [InlineData("waiting", false, "A session, Waiting on you, danswett/agent-bridge, 5m, answer at the machine, Test PC")]
+    [InlineData("driven", false, "A session, Driven by an agent, danswett/agent-bridge, 5m, idle, Test PC")]
+    [InlineData("driven and waiting", false, "A session, Waiting on you, danswett/agent-bridge, 5m, driven by an agent, Test PC")]
+    [InlineData("details not reported", false, "A session, Delegating to 2 agents, danswett/agent-bridge, 5m, details not reported, Test PC")]
+    [InlineData("idle", true, "A session, Idle, Test PC, 5m")]
+    [InlineData("waiting", true, "A session, Waiting on you, Test PC, 5m, answer at the machine")]
+    public void A_row_is_named_for_its_title_its_second_lines_facts_and_its_age_as_drawn_then_for_what_else_its_glyph_says(string state, bool machines, string name)
+    {
+        var session = state switch
+        {
+            "idle" => Make.Session(),
+            "working" => Make.Session(status: SessionStatus.Working),
+            "waiting" => Make.Session(question: Make.Approval() with { AnswerAtMachine = true }),
+            "driven" => Make.Session() with { Driver = DriverKind.Agent },
+            "driven and waiting" => Make.Session(question: Make.Choice()) with { Driver = DriverKind.Agent },
+            "details not reported" => Make.Session(background: Background.Of(2, 1)),
+            _ => throw new ArgumentOutOfRangeException(nameof(state)),
+        };
+        var card = new SessionCardViewModel(session, new CardContext
+        {
+            Deliveries = deliveries,
+            Folds = new FoldStore(folds),
+            Capabilities = () => connection.Capabilities,
+            MachineName = () => "Test PC",
+            ShowMachine = () => machines,
+            Time = clock,
+        });
+
+        Assert.Equal(name, card.RowLabel);
+        // Its first words are the ones it draws, from the properties the row binds.
+        Assert.StartsWith(string.Join(", ", card.Title, card.RowStatus, card.RowPlace, card.AgeText), card.RowLabel);
+    }
+
+    [Fact]
+    public void A_rows_name_says_new_activity_in_its_ages_place_and_follows_the_clock()
+    {
+        var card = new SessionCardViewModel(Make.Session(), Context());
+        var raised = new List<string?>();
+        card.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        card.Unread = true;
+        Assert.Equal("A session, Idle, danswett/agent-bridge, New activity, Test PC", card.RowLabel);
+        card.Unread = false;
+
+        clock.Advance(TimeSpan.FromMinutes(3));
+        raised.Clear();
+        card.RefreshTimes();
+        Assert.Contains(nameof(SessionCardViewModel.RowLabel), raised);
+        Assert.Equal("A session, Idle, danswett/agent-bridge, 8m, Test PC", card.RowLabel);
+    }
+
+    // A delegate chooses its name (#303): its commas, drawn on the row, are spaces in the row's
+    // name, so "x, idle, DEV-VM2" can't read as facts of the row's own.
+    [Fact]
+    public void A_delegates_name_on_a_row_is_read_without_its_commas()
+    {
+        var asking = Make.Session(question: Make.Approval() with { Agent = "agent-7" }) with
+        {
+            WaitingOn = "agent-7",
+            Subagents = [new Subagent { Id = "agent-7", Kind = SubagentKind.Background, Status = SubagentStatus.Waiting, Name = "x, idle, DEV-VM2" }],
+        };
+        var card = new SessionCardViewModel(asking, Context());
+        Assert.Equal("Delegate x, idle, DEV-VM2 asks", card.RowStatus);
+        Assert.Equal("A session, Delegate x idle DEV-VM2 asks, danswett/agent-bridge, 5m, Test PC", card.RowLabel);
+    }
+
     [Fact]
     public void A_folded_card_stays_folded_across_restarts_until_a_new_question_opens_it_once()
     {

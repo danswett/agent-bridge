@@ -328,14 +328,15 @@ public sealed class PaneLayoutTests : IAsyncLifetime
     }
 
     [Fact]
-    public void A_row_is_read_aloud_with_its_glyphs_name_and_new_activity_while_unread()
+    public void A_row_is_read_aloud_with_new_activity_in_its_ages_place_while_unread()
     {
         var quiet = Card("quiet");
+        var age = TestUi.Read(() => quiet.AgeText);
         ui.Post(() => quiet.Unread = true);
-        Assert.Equal($"{quiet.GlyphLabel}, new activity", TestUi.Read(() => quiet.RowLabel));
+        Assert.Equal("A session, Idle, danswett/agent-bridge, New activity", TestUi.Read(() => quiet.RowLabel));
         Assert.False(TestUi.Read(() => quiet.ShowAge));
         Select("quiet");
-        Assert.Equal(quiet.GlyphLabel, TestUi.Read(() => quiet.RowLabel));
+        Assert.Equal($"A session, Idle, danswett/agent-bridge, {age}", TestUi.Read(() => quiet.RowLabel));
         Assert.True(TestUi.Read(() => quiet.ShowAge));
     }
 
