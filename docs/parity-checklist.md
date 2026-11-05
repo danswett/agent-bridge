@@ -593,6 +593,7 @@ These rows have no step. Each has its reason. A row moves into a step when its i
 | §1 "Spinner verbs" | Missing (#53). The step would only confirm absence |
 | §1 "Unknown statuses" | Only seen when two versions meet: the first update after the rehearsal, E9-02 |
 | §2 "Cancel request", §2 "Claude free text" | Missing (#56, #42) |
+| §4 "A Copilot reply is typed only into its empty input box" | Implemented (#825), untested live: a step would leave a draft, shell mode or vim's normal mode in a live CLI's box, a test-VM check that needs the owner's approval. Covered offline by `CopilotInputBoxTests`, `ReplyFlowTests` and `InjectorIntegrationTests`, on screens built from the captured one and CLI 1.0.105's rendering code |
 | §8 "usage.keychain" | Missing (#52) |
 | §8 "Only the publication writer" | N/A: tied to the HA writer role |
 | §9 "Offline machines" | Missing (#50, #51) |
