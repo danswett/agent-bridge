@@ -300,8 +300,6 @@ public sealed class AnswerService : ISessionAnswerer
         // transcript, twice a write, with the slot held). A transcript that cannot be read, or
         // is shorter than what was read (replaced, or cut), stops it.
         CopilotCallWatch? asked = null;
-        // The asks waiting when the first key went, this question among them.
-        var asksAtStart = 0;
         string? StillAsked()
         {
             // A check that fails once keys have gone stops the answer there, as any other reason
@@ -313,7 +311,8 @@ public sealed class AnswerService : ISessionAnswerer
         string? Asked()
         {
             if (probe.Active() is { } active) { return active; }
-            if (source.Get(session.Id)?.Question?.Id != question.Id) { return "the session is no longer asking that question"; }
+            if (source.Get(session.Id)?.Question is not { } listed || listed.Id != question.Id) { return "the session is no longer asking that question"; }
+            if (listed.AnswerAtMachine == true) { return AtMachine(session.Agent, listed); }
             if (asked is null) { return "the question was not found in the session's transcript"; }
             var now = asked.Read();
             if (!now.Readable) { return "the session's transcript could no longer be read, or was replaced or cut short"; }
@@ -321,10 +320,11 @@ public sealed class AnswerService : ISessionAnswerer
             var prompts = waiting.Read();
             if (!prompts.Readable) { return "the session's transcript could no longer be read"; }
             if (prompts.PendingPermissions > 0) { return "Copilot opened another prompt while the answer was being typed"; }
-            // An ask opened since the first key (a delegate's) can be drawn as a form reading the
-            // same as this one, and the session's listing keeps this one's id, so the screen
-            // checks would pass and the rest of the keys go to that call (Copilot 4479319296).
-            if (prompts.PendingAsks > asksAtStart) { return "Copilot asked another question while the answer was being typed"; }
+            // Any other ask, by its call id (a delegate's, opened since the first key): its form
+            // can read the same as this one, and the session's listing keeps this one's id, so
+            // the screen checks would pass and the rest of the keys go to that call. Counted, one
+            // ask closing as another opened passed (Copilot 4479319296, Trust's re-review).
+            if (prompts.Asks!.Any(id => id != question.Id)) { return "Copilot asked another question while the answer was being typed"; }
             return Target(session, AgentKind.Copilot)?.Reason;
         }
 
@@ -341,7 +341,10 @@ public sealed class AnswerService : ISessionAnswerer
             // Immediately before typing: agent-ha-bridge again, then the question itself, by
             // its tool call id in the transcript, never by how recent anything looks.
             if (probe.Active() is { } active) { return Refused(active); }
-            if (source.Get(session.Id)?.Question?.Id != question.Id) { return Stale("the session is no longer asking that question"); }
+            if (source.Get(session.Id)?.Question is not { } listed || listed.Id != question.Id) { return Stale("the session is no longer asking that question"); }
+            // Marked for the machine while this waited for the slot (a delegate's question opened
+            // beside it, say): as it would have been refused on arrival (Trust's #510 re-review).
+            if (listed.AnswerAtMachine == true) { return Refused(AtMachine(session.Agent, listed)); }
             var call = CopilotTranscript.Find(transcript, question.Id);
             if (call.Arguments is not { } arguments) { return Stale("the session's transcript no longer shows that question"); }
             if (call.Resumed && call.Answer is null) { return Stale("the session was resumed in a new Copilot CLI since it asked that question; answer at the machine"); }
@@ -353,8 +356,7 @@ public sealed class AnswerService : ISessionAnswerer
             // before typing, since the host's view may be a pass behind.
             var prompts = waiting.Read();
             if (!prompts.Readable) { return Refused("the session's transcript could not be read, so nothing is typed; answer at the machine"); }
-            asksAtStart = prompts.PendingAsks;
-            if (prompts.PendingPermissions > 0)
+            if (prompts.PendingPermissions > 0 || prompts.Asks!.Any(id => id != question.Id))
             {
                 return Refused("Copilot has more than one prompt waiting, and the screen shows only one of them; answer at the machine");
             }

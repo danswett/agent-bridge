@@ -378,7 +378,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     // answer once both have taken their Enter.
     async Task AskDaysAsync(object recorded)
     {
-        Fixture.Append(events, AskDays("q2", second++));
+        // q1 answered and done first: a session's own questions are asked one at a time.
+        Fixture.Append(events, Recorded("q1", new { pick = "a" }), Copilot.ToolDone("q1", second++), AskDays("q2", second++));
         await source.RefreshAsync();
         boxes.Add("days");
         injector.Screen = () => FieldsScreen(["pick", "days"], message: "How many?");
@@ -1225,15 +1226,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         {
             if (injector.Plans.Count == 1)
             {
-                Fixture.Append(events, Copilot.ToolStart("q9", "ask_user", new
-                {
-                    message = "Approve the mark?",
-                    requestedSchema = new
-                    {
-                        properties = new { pick = new { type = "string", @enum = new[] { "a", "b", "c" } }, feedback = new { type = "string", title = "Feedback (optional)" } },
-                        required = new[] { "pick" },
-                    },
-                }, second++, "helper"));
+                Fixture.Append(events, DelegateAsk("q9", second++));
             }
         };
         var ch = await OpenAsync();
@@ -1242,6 +1235,80 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
         Assert.Contains("asked another question", result.GetProperty("reason").GetString());
+        Assert.Single(injector.Plans);
+    }
+
+    // A delegate's ask reading exactly as q2's form does.
+    static string DelegateAsk(string id, int s) => Copilot.ToolStart(id, "ask_user", new
+    {
+        message = "Approve the mark?",
+        requestedSchema = new
+        {
+            properties = new { pick = new { type = "string", @enum = new[] { "a", "b", "c" } }, feedback = new { type = "string", title = "Feedback (optional)" } },
+            required = new[] { "pick" },
+        },
+    }, s, "helper");
+
+    [Fact]
+    public async Task A_delegates_question_already_waiting_at_the_first_key_is_refused_with_nothing_typed()
+    {
+        // Written after the session's listing was last read: only the transcript says so.
+        await AskFormAsync();
+        DrawsWords();
+        Fixture.Append(events, DelegateAsk("q8", second++));
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, FormAnswer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("more than one prompt waiting", reason);
+        Assert.Empty(injector.Attempts);
+    }
+
+    [Fact]
+    public async Task A_delegates_question_closing_as_another_opens_between_writes_is_not_taken_for_none_and_nothing_is_typed()
+    {
+        // Two asks waiting, then one closes and another opens: counted, nothing changed (Trust's
+        // #510 re-review). Asks are told apart by their call ids, and one other than this
+        // question's refuses it before the first key.
+        await AskFormAsync();
+        DrawsWords();
+        Fixture.Append(events, DelegateAsk("q8", second++));
+        injector.Holding = _ => Fixture.Append(events, Copilot.ToolDone("q8", second++, agentId: "helper"), DelegateAsk("q9", second++));
+        var ch = await OpenAsync();
+
+        var (outcome, _) = await AnswerAsync(ch, FormAnswer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_question_marked_for_the_machine_while_its_answer_waits_for_the_typing_slot_gets_nothing()
+    {
+        // A delegate's question opens beside it while another session's answer holds the slot:
+        // the listing marks it for the machine, keeping its id (Trust's #510 re-review).
+        const string Second = "77777777-7777-4777-8777-777777777777";
+        var other = f.CopilotSession(Second, 200, name: "Second session");
+        Fixture.Append(other, Copilot.User("go", 1), Ask("r1", 2));
+        f.Processes.Run(AgentKind.Copilot, 200);
+        await source.RefreshAsync();
+        var release = new TaskCompletionSource();
+        injector.Gate = release.Task;
+        injector.OnInject = () => Fixture.Append(events, Recorded("q1", new { pick = "b" }));
+        var ch = await OpenAsync();
+
+        var first = AnswerAsync(ch, new { pick = "b" });
+        await Wait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
+        var waiting = ch.RequestAsync(Ops.SessionAnswer, new { id = Second, question = "r1", request = Guid.NewGuid().ToString(), fields = new { pick = "a" } });
+        await Task.Delay(300);
+        Fixture.Append(other, Copilot.ToolStart("r9", "ask_user", new { message = "Which one?", requestedSchema = new { properties = new { pick = new { type = "string", @enum = new[] { "a", "b", "c" } } } } }, 3, "helper"));
+        await source.RefreshAsync();
+        Assert.True(source.Get(Second)?.Question is { Id: "r1", AnswerAtMachine: true });
+        release.SetResult();
+
+        Assert.Equal("delivered", (await first).Outcome);
+        Assert.Equal("refused", (await waiting).GetProperty("result").GetProperty("outcome").GetString());
         Assert.Single(injector.Plans);
     }
 
@@ -1864,8 +1931,9 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains("console closed", reason);
         Assert.DoesNotContain("at the machine", reason);
 
-        // A different question, so the first attempt's outcome is not what comes back.
-        Fixture.Append(events, Ask("q2", second++));
+        // A different question, so the first attempt's outcome is not what comes back; q1 closed
+        // first, as a session's own questions are asked one at a time.
+        Fixture.Append(events, Copilot.ToolDone("q1", second++), Ask("q2", second++));
         await source.RefreshAsync();
         injector.Result = new InjectionResult(InjectionStatus.NothingTyped, "the session runs as administrator");
         Assert.Equal(("refused", "the session runs as administrator"), await AnswerAsync(ch, new { pick = "b" }, question: "q2"));

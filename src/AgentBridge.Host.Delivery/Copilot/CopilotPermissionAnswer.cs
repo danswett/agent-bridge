@@ -8,8 +8,10 @@ namespace AgentBridge.Host.Delivery.Copilot;
 // how many permission requests and ask_user calls are waiting in all, and the line boundary the
 // answer is looked for after. Others: every other permission request waiting, in the order
 // asked, each described (null where it cannot be read), so the screen can be checked for
-// them too. First: the request asked about is the earliest of those waiting (#690).
-public sealed record CopilotPermissionState(bool Readable, CopilotPermissionPrompt? Request, int PendingPermissions, int PendingAsks, long ScannedTo)
+// them too. First: the request asked about is the earliest of those waiting (#690). Asks: the
+// tool call ids of the ask_user calls waiting.
+public sealed record CopilotPermissionState(bool Readable, CopilotPermissionPrompt? Request, int PendingPermissions, int PendingAsks, long ScannedTo,
+    IReadOnlySet<string>? Asks = null)
 {
     public IReadOnlyList<(string RequestId, CopilotPermissionPrompt? Prompt)> Others { get; init; } = [];
     public bool First { get; init; }
@@ -81,6 +83,11 @@ public sealed class CopilotPermissionWatch(string path, string requestId)
 {
     // In the order asked, each with the request as recorded: a Dictionary does not keep that order once one is removed.\n    readonly List<(string Id, JsonElement Data)> permissions = [];
     readonly Dictionary<string, string?> asks = new(StringComparer.Ordinal);
+    // Delegates by the task call that started them, and those that have ended, as the session's
+    // parser keeps them (CopilotParser, BackgroundWork): a delegate's failure is written by its
+    // task call before CLI 1.0.10x stamped it with the delegate's id.
+    readonly Dictionary<string, string> delegates = new(StringComparer.Ordinal);
+    readonly HashSet<string> ended = new(StringComparer.Ordinal);
     long to;
 
     // The bytes the last Read took in.
@@ -93,6 +100,8 @@ public sealed class CopilotPermissionWatch(string path, string requestId)
         {
             permissions.Clear();
             asks.Clear();
+            delegates.Clear();
+            ended.Clear();
             to = 0;
         }
         if (Jsonl.Lines(path, to, skipFirst: false, Line) is not { } end) { return new CopilotPermissionState(false, null, 0, 0, 0); }
@@ -100,11 +109,19 @@ public sealed class CopilotPermissionWatch(string path, string requestId)
         // Completed edits can carry entire files: format and hash only what is still waiting.
         var pending = permissions.Select(p => (p.Id, Prompt: CopilotPermission.Describe(p.Data))).ToList();
         var at = pending.FindIndex(p => p.Id == requestId);
-        return new CopilotPermissionState(true, at < 0 ? null : pending[at].Prompt, pending.Count, asks.Count, to)
+        return new CopilotPermissionState(true, at < 0 ? null : pending[at].Prompt, pending.Count, asks.Count, to, asks.Keys.ToHashSet(StringComparer.Ordinal))
         {
             Others = [.. pending.Where(p => p.Id != requestId)],
             First = at == 0,
         };
+    }
+
+    // A delegate that aborted, shut down or failed asks nothing any more, and nor does one that
+    // had ended before (CopilotParser): left waiting, its ask was counted against an answer to
+    // the session's own question, which must refuse while another ask waits (#510 review).
+    void Retire(string agent)
+    {
+        foreach (var id in asks.Where(a => a.Value is { } p && (p == agent || ended.Contains(p))).Select(a => a.Key).ToList()) { asks.Remove(id); }
     }
 
     void Line(ReadOnlySpan<byte> bytes, long start)
@@ -113,7 +130,8 @@ public sealed class CopilotPermissionWatch(string path, string requestId)
         var permission = bytes.IndexOf("\"type\":\"permission."u8) >= 0;
         var ending = bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.resume\""u8) >= 0;
         var answer = asks.Count > 0 && (bytes.IndexOf("\"type\":\"tool.execution_complete\""u8) >= 0 || bytes.IndexOf("\"type\":\"human_response.recorded\""u8) >= 0);
-        if (!ask && !permission && !ending && !answer) { return; }
+        var delegated = bytes.IndexOf("\"type\":\"subagent."u8) >= 0;
+        if (!ask && !permission && !ending && !answer && !delegated) { return; }
         if (CopilotPrompts.Parse(bytes) is not { } e) { return; }
         using (e.Doc)
         {
@@ -138,11 +156,23 @@ public sealed class CopilotPermissionWatch(string path, string requestId)
                     permissions.Clear();
                     break;
                 case "abort" or "session.shutdown":
-                    foreach (var id in asks.Where(a => a.Value == e.AgentId).Select(a => a.Key).ToList()) { asks.Remove(id); }
+                    Retire(e.AgentId!);
+                    break;
+                case "subagent.started" when e.AgentId is { } started && CopilotPrompts.Str(data, "toolCallId") is { } task:
+                    delegates[task] = started;
+                    break;
+                case "subagent.completed" when (e.AgentId ?? Delegate(data)) is { } done:
+                    ended.Add(done);
+                    break;
+                case "subagent.failed" when (e.AgentId ?? Delegate(data)) is { } failed:
+                    ended.Add(failed);
+                    Retire(failed);
                     break;
             }
         }
     }
+
+    string? Delegate(JsonElement data) => CopilotPrompts.Str(data, "toolCallId") is { } task && delegates.TryGetValue(task, out var agent) ? agent : null;
 }
 
 // Where on the session's screen the prompt's answers are, read from the rows themselves. The

@@ -75,9 +75,12 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     prompt can open over the form at any moment and Enter picks whatever it highlights
     (sec-510, Copilot 4478363609). The last checks before typing (step 5: agent-ha-bridge, the
     call still unanswered, no other prompt waiting, the process) are made again before each
-    write, and once more when the injector holds the typing slot (`KeyPlan.Proceed`), with
-    another ask opened since the first key (a delegate's, whose form can read the same) a
-    reason to stop too. The call and the prompts waiting are kept up to date from what the
+    write, and once more when the injector holds the typing slot (`KeyPlan.Proceed`). Asks are
+    told apart by their call ids: any ask other than this question waiting (a delegate's, whose
+    form can read the same) refuses it before the first key and stops it after, as does the
+    question being marked for the machine (`answerAtMachine`) once the slot is taken. A
+    delegate that aborted, shut down or failed asks nothing any more, as the session's own
+    parser has it. The call and the prompts waiting are kept up to date from what the
     transcript has gained since the call was validated (`CopilotCallWatch`,
     `CopilotPermissionWatch`), not searched again with that slot held; a transcript that can
     no longer be read, or is shorter than what was read, stops it. A check that fails stops

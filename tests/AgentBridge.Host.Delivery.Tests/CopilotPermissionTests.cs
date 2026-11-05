@@ -461,6 +461,29 @@ public sealed class CopilotPermissionTests : IDisposable
     }
 
     [Fact]
+    public void Asks_are_named_by_their_calls_and_a_failed_delegates_ask_waits_no_longer()
+    {
+        // As the session's parser retires them (CopilotParser): a delegate that failed asks
+        // nothing, its failure stamped with its id, or written by its task call before 1.0.10x.
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 1),
+            Copilot.Event("subagent.started", new { toolCallId = "task1", agentName = "helper" }, 2, agentId: "helper"),
+            Copilot.ToolStart("q8", "ask_user", new { message = "?" }, 3, agentId: "helper"),
+            Copilot.Event("subagent.started", new { toolCallId = "task2", agentName = "other" }, 4, agentId: "other"),
+            Copilot.ToolStart("q9", "ask_user", new { message = "?" }, 5, agentId: "other"));
+        var watch = new CopilotPermissionWatch(events, "");
+        Assert.Equal(["q1", "q8", "q9"], watch.Read().Asks!.Order());
+
+        Fixture.Append(events, Copilot.Event("subagent.failed", new { toolCallId = "task1", error = "x" }, 6));
+        Assert.Equal(["q1", "q9"], watch.Read().Asks!.Order());
+
+        Fixture.Append(events, Copilot.Event("subagent.failed", new { toolCallId = "task2", error = "x" }, 7, agentId: "other"));
+        var left = watch.Read();
+        Assert.Equal(["q1"], left.Asks!.Order());
+        Assert.Equal(1, left.PendingAsks);
+    }
+
+    [Fact]
     public void A_transcript_shorter_than_what_was_read_is_read_again_from_its_start()
     {
         var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
