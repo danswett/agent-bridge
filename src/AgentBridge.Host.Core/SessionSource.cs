@@ -31,6 +31,7 @@ public sealed class SessionSource : ISessionSource
     readonly Dictionary<string, CodexLockHolding> _codexLockHolders = new(StringComparer.OrdinalIgnoreCase);
     // Sessions the host is ending, and since when. Under _gate.
     readonly Dictionary<string, DateTimeOffset> _ending = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (DateTimeOffset ErrorAt, string Generation, RecoveryState State)> _recovery = new(StringComparer.Ordinal);
     // Who drives each session (Session.Driver), shared with the Home Assistant connector; null for
     // a source that does not say.
     readonly SessionDrivers? _drivers;
@@ -800,6 +801,26 @@ public sealed class SessionSource : ISessionSource
     // it is something a client shows.
     void OnDriverChanged(string id) => _ = RecommitDriverAsync(id);
 
+    public async Task SetSignInRecoveryAsync(string id, DateTimeOffset errorAt, string generation, RecoveryState state, bool begin = false, CancellationToken cancellationToken = default)
+    {
+        await _pass.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            Entry? entry;
+            lock (_gate)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!_entries.TryGetValue(id, out entry)
+                    || entry.Full.Attention is not { Kind: AttentionKind.SignInNeeded } attention || attention.Since != errorAt) { return; }
+                if (!begin && (!_recovery.TryGetValue(id, out var previous) || previous.Generation != generation || previous.ErrorAt != errorAt)) { return; }
+                _recovery[id] = (errorAt, generation, state);
+                entry.Touched = _time.GetUtcNow();
+            }
+            Commit(entry, entry.Full);
+        }
+        finally { _pass.Release(); }
+    }
+
     async Task RecommitDriverAsync(string id)
     {
         try
@@ -831,6 +852,17 @@ public sealed class SessionSource : ISessionSource
         DateTimeOffset? endingSince;
         lock (_gate) { endingSince = _ending.TryGetValue(full.Id, out var at) ? at : null; }
         var shown = entry.Touched is { } touched && touched > full.UpdatedAt ? full with { UpdatedAt = touched } : full;
+        lock (_gate)
+        {
+            if (_recovery.TryGetValue(full.Id, out var recovery))
+            {
+                if (shown.Attention is { Kind: AttentionKind.SignInNeeded } attention && attention.Since == recovery.ErrorAt)
+                {
+                    shown = shown with { Attention = attention with { Recovery = recovery.State } };
+                }
+                else { _recovery.Remove(full.Id); }
+            }
+        }
         if (endingSince is { } since) { shown = shown with { Status = SessionStatus.Ending, StatusSince = since }; }
         if (_drivers is not null)
         {
@@ -928,6 +960,7 @@ public sealed class SessionSource : ISessionSource
         {
             if (!_entries.Remove(id, out var entry)) { return; }
             _ending.Remove(id);
+            _recovery.Remove(id);
             _drivers?.Forget(id);
             entry.Timer?.Dispose();
             entry.Timer = null;

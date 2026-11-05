@@ -18,6 +18,25 @@ public class ChannelTests
 {
     const string Marker = "AGENT-BRIDGE-PLAINTEXT-MARKER";
 
+    [Fact]
+    public async Task A_private_event_refused_at_encryption_spends_no_nonce_or_event_sequence()
+    {
+        var (relay, host, app) = await PairAsync();
+        await using var lifetime = relay;
+        var accepted = new TaskCompletionSource<SecureChannel>(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.Hub.Accepted += ch => accepted.TrySetResult(ch);
+        var phone = await app.Hub.OpenAsync(host.Id);
+        var sender = await accepted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sender.SendPrivateEventAsync("private", new { marker = "synthetic" }, () => false));
+        Assert.True(sender.IsOpen && phone.IsOpen);
+        Assert.Equal(1, await sender.SendPrivateEventAsync("private", new { marker = "allowed" }, () => true));
+        // A regular request proves both sides still agree on their Noise nonce.
+        host.Hub.Handler = (_, _, _) => Task.FromResult<object?>(new { alive = true });
+        var reply = await phone.RequestAsync("fixture", new { });
+        Assert.True(reply.GetProperty("ok").GetBoolean());
+    }
+
     static async Task<(TestRelay Relay, Device Host, Device App)> PairAsync(Action<AgentBridge.Relay.RelayOptions>? configure = null)
     {
         var relay = await TestRelay.StartAsync(configure);

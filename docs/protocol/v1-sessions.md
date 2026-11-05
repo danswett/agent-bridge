@@ -1175,6 +1175,67 @@ running (`working`); the main agent idle with background agents or commands stil
 and it was already `waiting` for a sub-agent's permission prompt before hosts said whose it
 was.
 
+### Disabled phone sign-in framework (#800 slice 2)
+
+`sessions.signin` is **not advertised**. Neither production sign-in entrypoint nor
+credential-status adapter is registered. Direct `signin.start` and `signin.cancel`
+requests return `refused`. The internal, fake-tested framework is gated off by default;
+enabling a fake backend in a test does not enable deployed hosts.
+
+The eventual agent-owned entrypoint is subject to captured-output/privacy admission.
+Engineering approved unpatched `copilot login --device-code` conditionally: **the machine
+opens a browser and copies the code**. No production runner is included here, no live
+sign-in was attempted, and there is no replacement OAuth client or installed-CLI patch.
+An approved adapter must suppress CLI debug logging with a supported option, preserve
+the CLI's persistence/organization-policy checks, and keep both output streams private.
+Its future command/output parser still needs the routed, redacted capture.
+
+The framework's request/event contract (not yet offered to clients) is:
+
+* `signin.start {request: UUID, agent: "copilot", account?: string}` returns
+  `{outcome: "started" | "busy" | "refused", flow?: UUID, reason?: string}`.
+  The host resolves the effective credential-store identity from its own state,
+  serializes that store, binds UUID receipts to target and authenticated device generation,
+  and starts only after returning the response. A matching explicit request can reattach
+  the same person key/generation and replay its unexpired code; a reconnect alone cannot.
+* `signin.code {flow, agent, userCode, verificationUri, expiresAt}` is sent only to
+  explicit, still-authorized participants over their encrypted channels, never the
+  session feed, hello, push, HA, transcript, log or a prompt. The code is uppercase ASCII
+  `XXXX-XXXX` (letters/digits), and the URL must equal
+  `https://github.com/login/device` byte for byte. No browser link supplied by a peer
+  or near-match URL is accepted. A queued private event rechecks authorization at
+  encryption, before spending a nonce.
+* `signin.cancel {flow}` is accepted only from a participating person binding.
+  `signin.done {flow, outcome, resumed, continue}` has constant outcomes
+  `signedIn | expired | cancelled | failed | refused` and never carries private output.
+  Cancel, expiry, revocation/G5 and shutdown purge the retained code and abort the
+  contained helper. Slots/receipts, participants, output, waits and cleanup are bounded.
+* Current pinned **person**, session-read **and** write authority are all required.
+  A self-claimed `app`/`pwa` kind is insufficient even when the transitional trust
+  enforcement switch is off. Service/host roles, revoked/regranted generations,
+  read-only G5 machines and unapproved/default configurations get no capability.
+
+The private runner accepts **adapter frames, not guessed Copilot console fixtures**:
+one strict JSON line with exactly `kind: "code"`, `userCode`, `verificationUri`,
+`expiresAt`, then a `done` line with exactly `kind`, `outcome: "signedIn"`,
+`persisted: true`, `policyAllowed: true`, and successful process exit. Duplicate,
+unknown, malformed/invalid-UTF-8, trailing or oversized output fails closed. Native
+expiry metadata is required and capped by the host deadline. Stdout/stderr never enter
+the generic command runner or a logger; errors expose only constant outcomes. There
+is deliberately no concrete process factory until the entrypoint gate passes.
+
+`signin.done signedIn` sets **pending**, not recovered: `signInNeeded` remains until
+the existing parser sees real main-agent model output after the latest auth failure.
+Prompts, turn boundaries, CLI error notices and login/resume acknowledgements do not
+clear it. An old callback cannot overwrite a newer flow/failure. Host-owned silent
+recovery has the same checking → pending → model-proof contract and initiates no
+device flow or approval; its status provider is unavailable by default, with no
+credential-file reads or speculative auth probes. Without a supported token-free
+agent status/reload contract, only the parser's positive model evidence proves recovery.
+Dead-session resume/reload is an interface dependency on **#780 Host B**; the supplied
+stub starts/types nothing and claims no resumed session ids. No signed-in push is
+emitted by this framework.
+
 ### Attention
 
 **New (#800).** What is wrong with a session that its `status` cannot say, shown over the
