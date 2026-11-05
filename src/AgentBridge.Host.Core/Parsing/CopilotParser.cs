@@ -350,6 +350,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 break;
             case "user.message" when !sub:
                 {
+                    NewTurn();
                     var text = Text.NonBlank(Json.Str(data, "content"));
                     if (text is null)
                     {
@@ -369,10 +370,12 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 }
             case "assistant.turn_start" when !sub:
                 S.SetStatus(SessionStatus.Working);
+                NewTurn();
                 _turnAskedForTools = false;
                 break;
             case "assistant.message" when !sub:
                 {
+                    Answered(data, at);
                     S.Model = Text.NonBlank(Json.Str(data, "model")) ?? S.Model;
                     S.MainSaid(Text.NonBlank(Json.Str(data, "content")), Text.NonBlank(Json.Str(data, "reasoningText")), at);
                     // The turn's latest reply decides whether it goes on to run tools. Copilot answers an
@@ -424,6 +427,18 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "session.shutdown" when !sub:
                 S.Abandon(at);
                 break;
+            // An error that ends the turn (AgentErrors.Copilot): the turn is over, so the session
+            // is idle, with the error or the sign-in it needs beside it. A delegate's is its own.
+            case "session.error" when !sub:
+                {
+                    if (AgentErrors.Copilot(data, Now(at)) is not { } attention) { return false; }
+                    S.Abandon(at);
+                    // Another error while it needs sign-in (a slash command failing, say) is no
+                    // proof it can reach its model, and the next prompt would clear it.
+                    if (attention.Kind == AttentionKind.SignInNeeded || S.Attention is not { Kind: AttentionKind.SignInNeeded }) { S.Attention = attention; }
+                    _turnAskedForTools = false;
+                    break;
+                }
             case "tool.execution_start":
                 {
                     var id = Json.Str(data, "toolCallId");
@@ -476,6 +491,32 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         }
         return true;
     }
+
+    // A turn starting leaves the last one's error behind it, as the CLI's own session list clears
+    // its error on a prompt. Never a sign-in: VM1's Quality session (#800) signed out at 16:45:05,
+    // ended a turn at 16:50:55 and failed sign-in again 51 ms later, and Migration's turn_end at
+    // 16:47:25 proved nothing either. A prompt, a turn starting or ending, a hook and anything the
+    // bridge typed are all written whether the agent can reach its model or not.
+    void NewTurn()
+    {
+        if (S.Attention is { Kind: not AttentionKind.SignInNeeded }) { S.Attention = null; }
+    }
+
+    // Only the model answering proves a sign-in good again: text of its own or a tool it asked
+    // for, written after the latest sign-in failure (a later failure sets it again). Not an empty
+    // message, and not the CLI's own "Turn error" notice, which it writes as an assistant.message
+    // carrying no model's words (emitDetachedTurnError, cli-main.js 1.0.105).
+    void Answered(JsonElement data, DateTimeOffset? at)
+    {
+        if (S.Attention is not { } attention) { return; }
+        if (attention.Kind != AttentionKind.SignInNeeded) { S.Attention = null; return; }
+        var content = Text.NonBlank(Json.Str(data, "content"));
+        var asked = Json.Arr(data, "toolRequests") is { } requests && requests.GetArrayLength() > 0;
+        var notice = content is not null && content.StartsWith(TurnErrorNotice, StringComparison.Ordinal);
+        if ((asked || (content is not null && !notice)) && at is { } t && t > attention.Since) { S.Attention = null; }
+    }
+
+    const string TurnErrorNotice = "\u26A0\uFE0F Turn error:";
 
     // A permission request is asked of the person like a question, so it is one, of kind
     // approval, carrying in full what it would allow (CopilotPermission). A host with

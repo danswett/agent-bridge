@@ -2415,6 +2415,131 @@
         }
       ]
     },
+    "Attention": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "sign-in-needed",
+          "json": {
+            "kind": "signInNeeded",
+            "since": "2026-10-28T04:22:43.182Z",
+            "agent": "copilot",
+            "provider": "github",
+            "account": "mona",
+            "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+            "signIn": "phone",
+            "recovery": "checking"
+          }
+        },
+        {
+          "name": "an-error-with-a-retry",
+          "json": {
+            "kind": "error",
+            "since": "2026-10-28T04:22:43.182Z",
+            "agent": "claude",
+            "message": "Rate limit reached.",
+            "errorClass": "rate",
+            "retryAt": "2026-10-28T04:25:43.182Z"
+          }
+        },
+        {
+          "name": "not-responding",
+          "json": {
+            "kind": "notResponding",
+            "since": "2026-10-28T04:22:43.182Z",
+            "agent": "codex",
+            "lastEventAt": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "unknown-values-and-fields-from-a-newer-host",
+          "json": {
+            "kind": "paused",
+            "since": "2026-10-28T04:22:43.182Z",
+            "errorClass": "cosmic",
+            "signIn": "watch",
+            "recovery": "teleporting",
+            "somethingNew": {
+              "a": 1
+            }
+          },
+          "reads": {
+            "kind": "error",
+            "since": "2026-10-28T04:22:43.182Z",
+            "errorClass": "other",
+            "signIn": "machine",
+            "recovery": "failed"
+          }
+        },
+        {
+          "name": "missing-kind",
+          "json": {
+            "since": "2026-10-28T04:22:43.182Z",
+            "agent": "copilot",
+            "provider": "github",
+            "account": "mona",
+            "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+            "signIn": "phone",
+            "recovery": "checking"
+          },
+          "reads": {
+            "kind": "error",
+            "since": "2026-10-28T04:22:43.182Z",
+            "agent": "copilot",
+            "provider": "github",
+            "account": "mona",
+            "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+            "signIn": "phone",
+            "recovery": "checking"
+          }
+        },
+        {
+          "name": "missing-since",
+          "json": {
+            "kind": "signInNeeded",
+            "agent": "copilot",
+            "provider": "github",
+            "account": "mona",
+            "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+            "signIn": "phone",
+            "recovery": "checking"
+          },
+          "reads": {
+            "kind": "signInNeeded",
+            "since": "0001-01-01T00:00:00.000Z",
+            "agent": "copilot",
+            "provider": "github",
+            "account": "mona",
+            "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+            "signIn": "phone",
+            "recovery": "checking"
+          }
+        },
+        {
+          "name": "wrong-type-provider",
+          "json": {
+            "kind": "signInNeeded",
+            "since": "2026-10-28T04:22:43.182Z",
+            "agent": "copilot",
+            "provider": 42,
+            "account": "mona",
+            "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+            "signIn": "phone",
+            "recovery": "checking"
+          },
+          "reads": {
+            "kind": "signInNeeded",
+            "since": "2026-10-28T04:22:43.182Z",
+            "agent": "copilot",
+            "account": "mona",
+            "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+            "signIn": "phone",
+            "recovery": "checking"
+          }
+        }
+      ],
+      "refused": []
+    },
     "Session": {
       "direction": "host",
       "valid": [
@@ -2621,6 +2746,27 @@
             "statusSince": "2026-10-28T04:22:43.182Z",
             "updatedAt": "2026-10-28T04:22:43.182Z",
             "activity": {}
+          }
+        },
+        {
+          "name": "signed-out",
+          "json": {
+            "id": "b7e1c2d3-0000-4000-8000-000000000001",
+            "agent": "copilot",
+            "status": "idle",
+            "statusSince": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:22:43.182Z",
+            "activity": {},
+            "attention": {
+              "kind": "signInNeeded",
+              "since": "2026-10-28T04:22:43.182Z",
+              "agent": "copilot",
+              "provider": "github",
+              "account": "mona",
+              "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+              "signIn": "phone",
+              "recovery": "checking"
+            }
           }
         },
         {

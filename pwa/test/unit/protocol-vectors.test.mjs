@@ -149,7 +149,8 @@ const READS = {
   OwnActivity: { read: readOwn },
   Activity: { read: readActivity },
   Subagent: { read: readSubagent },
-  Session: { read: readSession },
+  // attention (#800) is read from the PWA's own slice of it on; until then the status beside it is shown.
+  Session: { read: readSession, unread: ['attention'] },
   DiscoveryHeld: { read: readDiscoveryHeld },
   // As listAll pages through it: the cursor it reads is the one it sends for the next page.
   SessionList: {
@@ -387,6 +388,7 @@ const NOT_REPLAYED = {
   // The PWA asks for progress from #600; until then a host sends neither to it.
   DeliveryProgress: 'progress frames come only to a client that sends progress: true, which the PWA does not yet',
   DeliveryTimings: 'timings come only to a client that sends progress: true, which the PWA does not yet',
+  Attention: 'read within Session once the PWA shows attention (#800); until then Session leaves it unread',
 };
 
 // ---- the replay ----

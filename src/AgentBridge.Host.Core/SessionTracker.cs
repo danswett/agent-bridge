@@ -224,6 +224,7 @@ internal sealed class SessionTracker
             WaitingOn = question?.Agent,
             Subagents = subagents,
             SubagentsMore = more,
+            Attention = _state.Attention,
             Activity = new Activity
             {
                 Response = response,

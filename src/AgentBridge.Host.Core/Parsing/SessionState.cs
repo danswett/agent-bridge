@@ -54,6 +54,9 @@ internal sealed class SessionState
     public readonly BackgroundWork Background = new();
     // Questions the agent is waiting on, oldest first; the newest is the one shown.
     public readonly List<Question> Pending = [];
+    // session.attention (#800): what went wrong that the status cannot say. An error lasts until
+    // the next turn, a sign-in until the model is seen answering (CopilotParser.Answered).
+    public Attention? Attention;
 
     public SessionStatus Effective => Pending.Count > 0 ? SessionStatus.Waiting : Status;
     public DateTimeOffset? EffectiveSince;
@@ -69,6 +72,7 @@ internal sealed class SessionState
         Tools.Clear();
         Background.Clear();
         Pending.Clear();
+        Attention = null;
     }
 
     // Called after every event, with its time, so StatusSince is when the change happened
