@@ -1511,7 +1511,10 @@ count, and its row to "Needs sign-in". Sessions that confirm leave the count one
 - Opened by **Sign in** on the banner, the row or the push, and only on a person's press. No
   client starts it on its own.
 - **Before the code arrives:** "Starting *Agent*'s sign-in on *machine*…" with the progress
-  ring, and Cancel.
+  ring, and Cancel. If the request fails before any code, the sheet closes and the banner
+  shows "Couldn't start sign-in. Try again." as an alert line under its own verb, never the
+  machine's words. If the machine can't be reached, the line is "*machine* can't be reached
+  now".
 - **With the code:**
   - Line 1: "Open this page and enter the code." The page is the allowlisted URL as plain text
     (for example `github.com/login/device`) with **Open**.
@@ -1556,7 +1559,7 @@ count, and its row to "Needs sign-in". Sessions that confirm leave the count one
 | Use | Text |
 |---|---|
 | Row | "Needs sign-in · *Agent*"; "Signed in · waiting for the session to confirm"; "Not responding · since *time*"; "Not authorised"; "Rate limited"; "Agent error" |
-| Banner | "*Agent* on *machine* needs sign-in"; "*n* sessions affected"; "Waiting for sign-in · code expires *time*"; "Signed in · waiting for *n* sessions to confirm"; "Signed in · *n* sessions recovered"; "Recovered by itself"; "Sign-in failed · *reason*"; "Sign in at the machine · *reason*" |
+| Banner | "*Agent* on *machine* needs sign-in"; "*n* sessions affected"; "Waiting for sign-in · code expires *time*"; "Signed in · waiting for *n* sessions to confirm"; "Signed in · *n* sessions recovered"; "Recovered by itself"; "Sign-in failed · *reason*"; "Sign in at the machine · *reason*"; "Couldn't start sign-in. Try again."; "*machine* can't be reached now" |
 | Sheet | "Starting *Agent*'s sign-in on *machine*…"; "Open this page and enter the code."; "Expires *time*"; "Code expired"; "This sign-in code couldn't be shown." |
 | Buttons | "Sign in"; "Show code"; "Open"; "Copy"; "Cancel"; "Try again" |
 | Push | "*Agent* on *machine* needs sign-in" / "*n* sessions affected" |
