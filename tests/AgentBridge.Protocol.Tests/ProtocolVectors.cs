@@ -59,6 +59,9 @@ public static class ProtocolVectors
 
     static readonly MachineInfo Machine = new(MachineId, "DEV-VM1", "windows", "0.1.200", Dev: true, Sessions: 3, ReadOnly: "agent-ha-bridge is running for this user", Instance: "9a8b7c6d5e4f30211203f4e5d6c7b8a9");
 
+    static readonly RestoreSession RestoredMidTurn = new() { Id = SessionId, Agent = AgentKind.Copilot, Title = "Fix the login page", MidTurn = true };
+    static readonly RestoreSession RestoredAsking = new() { Id = "7a21c3d4-5e6f-4a1b-9c2d-3e4f5a6b7c8d", Agent = AgentKind.Claude, QuestionLost = true };
+
     static readonly ToolCall Running = new() { Id = "call_7", Name = "powershell", Summary = "Run the protocol tests", Status = ToolStatus.Running, StartedAt = T1 };
     static readonly ToolCall Finished = new() { Id = "call_6", Name = "edit", Summary = "src/AgentBridge.Protocol/Sessions.cs", Status = ToolStatus.Done, StartedAt = T0, EndedAt = T0.AddSeconds(2) };
 
@@ -268,6 +271,16 @@ public static class ProtocolVectors
         f.Record<DiscoveryChanged>(Host)
             .Valid("held", new DiscoveryChanged(Held))
             .Valid("released", new DiscoveryChanged());
+        // What a reboot or a crash took (#780; v1-sessions.md, What went).
+        f.Record<RestoreSession>(Host)
+            .Valid("mid-turn", RestoredMidTurn)
+            .Valid("a-question-lost", RestoredAsking);
+        f.Record<RestoreNotice>(Host)
+            .Valid("after-a-reboot", new RestoreNotice { At = T1, Cause = RestoreCause.Reboot, Since = T0, Why = RestoreWhy.Pending, Offered = [RestoredMidTurn, RestoredAsking] })
+            .Valid("still-judging-on-a-read-only-machine", new RestoreNotice { At = T1, Cause = RestoreCause.Crash, Waiting = 2, Why = RestoreWhy.ReadOnly, Offered = [RestoredAsking], OfferedMore = 3 });
+        f.Record<SessionRestored>(Host)
+            .Valid("after-a-crash", new SessionRestored { At = T1, Cause = RestoreCause.Crash })
+            .Valid("mid-turn-with-a-question-lost", new SessionRestored { At = T1, Cause = RestoreCause.Reboot, MidTurn = true, QuestionLost = true });
         f.Record<ListRequest>(Client)
             .Valid("first-page", new ListRequest())
             .Valid("next-page", new ListRequest("c2Vzc2lvbnM6Mg"));

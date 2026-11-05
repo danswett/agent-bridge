@@ -391,6 +391,11 @@ const NOT_REPLAYED = {
   DeliveryProgress: 'progress frames come only to a client that sends progress: true, which the PWA does not yet',
   DeliveryTimings: 'timings come only to a client that sends progress: true, which the PWA does not yet',
   Attention: 'read within Session once the PWA shows attention (#800); until then Session leaves it unread',
+  // The PWA shows what a reboot took once Design's spec lands (#780, client slice); until then
+  // it ignores machine.restore and reads a restored push as a question (title and body only).
+  RestoreNotice: 'the PWA does not read machine.restore yet (#780)',
+  RestoreSession: 'the PWA does not read machine.restore yet (#780)',
+  SessionRestored: 'no host sends a session\'s restored yet, and the PWA does not read it (#780)',
 };
 
 // ---- the replay ----

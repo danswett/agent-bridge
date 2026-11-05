@@ -831,6 +831,71 @@ public sealed class PushNotifier : IAsyncDisposable
         }
     }
 
+    // What a reboot or a crash took (#780), once per host start: to every device that may be told,
+    // as soon as the host knows (RestoreRecorder.NoticeReady). It names no question and opens the
+    // app at the machine, so an older app, which shows a kind it does not know as a question, shows
+    // only these words and opens nothing that could be answered.
+    public void NotifyRestore(RestoreNotice notice)
+    {
+        lock (gate)
+        {
+            var now = time.GetUtcNow();
+            foreach (var sub in store.All)
+            {
+                if (!MayNotify(sub)) { continue; }
+                outbox.RemoveAll(o => o.Device == sub.Device && o.Session == RestoreKey);
+                outbox.Add(new Outgoing
+                {
+                    Device = sub.Device,
+                    Session = RestoreKey,
+                    Kind = NoticeKind.Restored,
+                    Plain = PushNotice.Serialize(RestoreMessage(notice, sub.App, now)),
+                    Ttl = (int)RestoreProtocol.ShownFor.TotalSeconds,
+                    Urgency = "normal",
+                    Topic = PushNotice.Topic(machine.Id, RestoreKey),
+                    Created = now,
+                    NotBefore = now,
+                    Grant = sub.Grant,
+                });
+            }
+        }
+        Signal();
+    }
+
+    // The outbox's key for the restore notice: no session id has this shape.
+    const string RestoreKey = "~restore";
+
+    internal PushMessage RestoreMessage(RestoreNotice n, string app, DateTimeOffset now)
+    {
+        var count = n.Offered.Count + (n.OfferedMore ?? 0);
+        var title = n.Cause == RestoreCause.Reboot ? $"{machine.Name} restarted" : $"{machine.Name} · the host stopped";
+        var lines = new List<string>
+        {
+            count == 1 ? "1 session went with it." : $"{count} sessions went with it.",
+        };
+        var midTurn = n.Offered.Where(o => o.MidTurn == true).Select(Named).ToList();
+        if (midTurn.Count > 0) { lines.Add($"Mid-turn: {string.Join(", ", midTurn)}."); }
+        var lost = n.Offered.Where(o => o.QuestionLost == true).Select(Named).ToList();
+        if (lost.Count > 0) { lines.Add($"A question went unanswered in {string.Join(", ", lost)}."); }
+        lines.Add(n.Why == RestoreWhy.ReadOnly ? "They can be resumed once the machine takes launches." : "Resume them from Launch.");
+        var url = app;
+        var hash = url.IndexOf('#');
+        if (hash >= 0) { url = url[..hash]; }
+        url += (url.Contains('?') ? "&" : "?") + $"host={Uri.EscapeDataString(machine.Id)}";
+        return PushNotice.Fit(new PushMessage
+        {
+            Notification = new PushNotification
+            {
+                Title = title,
+                Body = string.Join("\n", lines),
+                Navigate = url,
+                Tag = PushNotice.Tag(machine.Id, RestoreKey),
+                Data = new PushNoticeData { Kind = NoticeKind.Restored, Machine = machine.Id, Session = "", At = now },
+            },
+        });
+
+        static string Named(RestoreSession o) => PushNotice.Flatten(o.Title) is { Length: > 0 } t ? t : $"{AgentName(o.Agent)} session";
+    }
     internal PushMessage Notice(Session s, NoticeKind kind, string? question, string app, DateTimeOffset now, bool ended = false)
     {
         var title = PushNotice.Flatten(s.Title);

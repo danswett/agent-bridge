@@ -124,6 +124,37 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Single(sender.Sent);
     }
 
+    // #780: what a reboot took, to every device, as words only. An app from before restored reads
+    // it as a question; with no question and no session named, it opens the machine and nothing
+    // that could be answered.
+    [Fact]
+    public async Task What_a_reboot_took_reaches_every_device_naming_no_question_and_opening_only_the_machine()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+
+        notifier.NotifyRestore(new RestoreNotice
+        {
+            At = T,
+            Cause = RestoreCause.Reboot,
+            Why = RestoreWhy.Pending,
+            Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login", MidTurn = true }, new RestoreSession { Id = "s2", Agent = AgentKind.Claude, QuestionLost = true }],
+        });
+        await After(TimeSpan.Zero);
+
+        var received = Received();
+        Assert.Equal([Laptop, Phone], received.Select(r => r.Device).Order(StringComparer.Ordinal));
+        var (_, n, ttl, urgency, topic) = received.Single(r => r.Device == Phone);
+        Assert.Equal("restored", Kind(n));
+        Assert.Equal("DEV restarted", n.GetProperty("title").GetString());
+        Assert.Equal("2 sessions went with it.\nMid-turn: Fix the login.\nA question went unanswered in Claude session.\nResume them from Launch.", n.GetProperty("body").GetString());
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}", n.GetProperty("navigate").GetString());
+        Assert.Equal("", n.GetProperty("data").GetProperty("session").GetString());
+        Assert.False(n.GetProperty("data").TryGetProperty("question", out _));
+        Assert.Equal((86400, "normal", PushNotice.Topic(Machine, "~restore")), (ttl, urgency, topic));
+    }
+
     [Fact]
     public async Task A_question_answered_at_the_machine_before_its_delay_is_never_notified()
     {

@@ -164,6 +164,46 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.False(other.Events.TryRead(out _));
     }
 
+    // #780: what a reboot or a crash took is said in hello, and a client that asked hears when it
+    // changes, as a session whose agent's discovery was held is judged later.
+    [Fact]
+    public async Task Hello_says_what_a_reboot_took_and_a_client_that_asked_hears_when_that_changes()
+    {
+        var time = new FakeTimeProvider();
+        RestoreNotice? notice = null;
+        served = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), answers: Answerer(), replies: Replier())
+        {
+            Drivers = drivers,
+            Time = time,
+            Restore = () => notice,
+        };
+        host.Hub.Handler = served.HandleAsync;
+        var ch = await OpenAsync();
+
+        var asked = (await ch.RequestAsync(Ops.Hello, new { changes = true })).GetProperty("result");
+        Assert.Contains(RestoreProtocol.Capability, asked.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+        Assert.False(asked.GetProperty("machine").TryGetProperty("restore", out _));
+
+        notice = new RestoreNotice
+        {
+            At = new DateTimeOffset(2026, 11, 4, 16, 2, 11, TimeSpan.Zero),
+            Cause = RestoreCause.Reboot,
+            Waiting = 1,
+            Why = RestoreWhy.Pending,
+            Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login", MidTurn = true }],
+        };
+        time.Advance(served.HelloCheck);
+        Assert.Equal(Events.HelloChanged, (await ch.Events.ReadAsync().AsTask().WaitAsync(Patience)).Name);
+        var restore = (await ch.RequestAsync(Ops.Hello, new { changes = true })).GetProperty("result").GetProperty("machine").GetProperty("restore");
+        Assert.Equal(("reboot", 1, "s1", true), (restore.GetProperty("cause").GetString(), restore.GetProperty("waiting").GetInt32(),
+            restore.GetProperty("offered")[0].GetProperty("id").GetString(), restore.GetProperty("offered")[0].GetProperty("midTurn").GetBoolean()));
+
+        // The held session judged: said again.
+        notice = notice with { Waiting = 0, Offered = [.. notice.Offered, new RestoreSession { Id = "s2", Agent = AgentKind.Copilot }] };
+        time.Advance(served.HelloCheck);
+        Assert.Equal(Events.HelloChanged, (await ch.Events.ReadAsync().AsTask().WaitAsync(Patience)).Name);
+    }
+
     [Fact]
     public async Task Hello_offers_replying_only_while_agent_ha_bridge_is_not_running_and_only_where_a_replier_can_deliver()
     {

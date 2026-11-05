@@ -186,6 +186,11 @@ public sealed partial class LaunchService : ISessionLauncher
 
     public bool Available => Config.Enabled && options.PlatformSupported && probe.Recent() is null && starter.Unavailable() is null;
 
+    // A session a launch started, with what it was started with: the host's restore record keeps it,
+    // so a session restored after a reboot is resumed as it was launched (#780). Raised as the launch
+    // is decided; a handler that throws costs only itself.
+    public event Action<string, LaunchedWith>? SessionStarted;
+
     public bool AnswersTrust => Available;
 
     // launch.remoteFolderTrust as it is now: config.json's at start, and the app's setting at once
@@ -1051,6 +1056,12 @@ public sealed partial class LaunchService : ISessionLauncher
 
     void Decide(Pending p, LaunchResult result)
     {
+        // Before the outcome is told, so the record has it by the time anyone hears of the session.
+        if (result is { Outcome: LaunchOutcome.Started, Session: { } id, Launched: { } launched } && SessionStarted is { } started)
+        {
+            try { started(id, launched); }
+            catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the restore record could not note session {id[..Math.Min(8, id.Length)]}: {e.Message}"); }
+        }
         if (!p.Decided.TrySetResult(result) && result.Outcome == LaunchOutcome.Started) { p.RegisteredLate = true; }
     }
 

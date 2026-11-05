@@ -160,6 +160,7 @@ the primary checkout.
 |---|---|
 | Whether a session is using it cannot be established (below), which keeps every one | `N worktree(s) were retained: whether a session is using them cannot be established (…)` |
 | A live session, of any agent, works in it or below it (physically, links resolved) | `a live session is working in it` |
+| A session waiting to be restored after a reboot or a crash worked in it or below it, or the host's record of those cannot be read, which keeps every one ([below](#restoring-after-a-reboot-or-a-crash)) | `a live session is working in it`, or `the sessions waiting to be restored cannot be read` |
 | Its git common folder is not the repository's | `which repository it belongs to is uncertain` |
 | It is locked (`git worktree lock`): a launch still starting, or anyone's lock | `it is locked (…)` |
 | A tracked entry is a link, a submodule or a conflict; a path in it is a junction or symlink; a tracked file is missing | `it holds a link, a submodule, a conflict, or a tracked file that is missing or unreadable` |
@@ -212,6 +213,53 @@ agent-bridge names none of its own: its build output is `bin/` and `obj/` folder
 ignored folder keeps a worktree like any other ignored data, since removing it would mean a
 recursive delete. A worktree where agent-bridge was built stays until a person removes it.
 
+## Restoring after a reboot or a crash
+
+A machine that reboots, or a host that crashes, takes the sessions running there with it (#780).
+The host keeps a record of the sessions it sees live, and when it starts again it says what went.
+This slice starts nothing: restoring itself, the crash-loop guard and Continue come later, through
+this page's resume path and every rule it has.
+
+**The record.** `restore.json` in the profile's folder, beside `config.json`. For each live session
+only what `launch.options` already says of one: its id, agent, title, folder, model, whether a turn
+was running and whether a question was waiting, and for a session this host launched, what it was
+launched with (launcher, workspace, worktree, profile, model, effort, context, permissions). Never a
+prompt, a response, a question's words or an attachment. With it, when the machine booted, this run's
+`machine.instance`, when it was written and, after a clean stop, `stopped`. It is written on each
+change that matters, at most every 250 ms, whole: to a temporary file, flushed to the disk, then
+renamed over the last, so a power cut leaves the record before or the record after. A session that
+goes stays in it for 60 s more, because a shutting-down machine ends its agents before its host. A
+record that cannot be read is set aside as `restore.json.unreadable`, offers nothing, and keeps
+every worktree while that run lasts.
+
+**At start**, after discovery's first pass, each session the last run saw live is judged:
+
+| | |
+|---|---|
+| Running now | Adopted as it is. Nothing to restore |
+| Its agent's discovery is held ([v1-sessions.md](protocol/v1-sessions.md#discovery-held)) | Waits, and is judged once it can be: never read as gone (§6.3, #43) |
+| The machine booted since (boot times more than 2 minutes apart), or on Windows the person's logon is new (a sign-out, or a shutdown with Fast Startup, which keeps the boot time): an empty, volatile key of the profile's, `HKCU\Software\AgentBridge\logon-<hash>`, which Windows drops with the logon and which holds no value (uninstall removes any left behind) | Died: a shutdown or a sign-out ends every session, so an ending written as it went down is the shutdown's |
+| Same boot, and the last run saw it go | Ended under the host's eyes |
+| Same boot, and its agent recorded a normal end | Ended. Copilot: a `session.shutdown` of the main agent after the last `user.message` in its `events.jsonl`. Claude and Codex: its hook registration says `Ended` (their SessionEnd hook) |
+| Otherwise | Died with the host |
+
+The cause is `reboot` across boots or logons; on the same boot, `restart` if the last run wrote `stopped`, else
+`crash`. A session a person closed while the host was down, with nothing its agent records, reads as
+died: it is offered, never typed into.
+
+**What died** is kept in the record as owed, offered for 7 days unless it is resumed or seen live
+again, and said in `hello`'s `machine.restore` ([v1-sessions.md](protocol/v1-sessions.md#hello)) for
+this run, at most 24 hours, and in one `restored` notification, sent when every session is judged or
+10 minutes after start, and only if this start found any that died: one an earlier start offered is
+offered still, not notified again. Nothing starts: a person resumes it from Launch, through the resume path
+above. Beside agent-ha-bridge, or while the machine is read-only or launching is off, the sessions
+are only offered (design G5), and stay owed until the machine takes launches. With
+`sessions.restoreOnStart` off ([host-config.md](host-config.md)), what went is said and nothing is
+kept owed, and what earlier starts kept owed is let go.
+
+**Worktrees.** The reclaimer keeps the worktree of every session owed or still being judged, as it
+keeps a live session's; one owed without a folder, or a record that could not be read, keeps every
+worktree.
 ## The log
 
 ```

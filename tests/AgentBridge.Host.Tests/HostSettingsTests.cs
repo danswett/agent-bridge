@@ -71,6 +71,22 @@ public sealed class HostSettingsTests : IDisposable
         if (problem is null) { Assert.Null(said); } else { Assert.Contains(problem, said); }
     }
 
+    [Theory]
+    [InlineData(null, true, null)]
+    [InlineData("{ \"sessions\": {} }", true, null)]
+    [InlineData("{ \"sessions\": { \"restoreOnStart\": true } }", true, null)]
+    [InlineData("{ \"sessions\": { \"restoreOnStart\": false } }", false, null)]
+    [InlineData("{ \"sessions\": { \"restoreOnStart\": \"yes\" } }", false, "sessions.restoreOnStart is not true or false")]
+    [InlineData("{ \"sessions\": true }", false, "sessions is not an object")]
+    [InlineData("not json", false, "is not valid")]
+    public void Restoring_sessions_after_a_reboot_is_on_unless_set_false_and_a_value_that_is_not_true_or_false_turns_it_off(string? text, bool on, string? problem)
+    {
+        var (settings, said) = With(text);
+
+        Assert.Equal(on, settings.RestoreOnStart);
+        if (problem is null) { Assert.Null(said); } else { Assert.Contains(problem, said); }
+    }
+
     [Fact]
     public void A_config_from_a_newer_schema_is_not_guessed_at()
     {
@@ -172,6 +188,17 @@ public sealed class HostSettingsTests : IDisposable
         Assert.Equal(1, Run("config", "set", "delivery.readOnly", "yes"));
         Assert.Equal(0, Run("config", "set", "delivery.readOnly", "true"));
         Assert.True(HostSettings.Load(folder).Settings.ReadOnly);
+    }
+
+    [Fact]
+    public void Restoring_sessions_is_turned_off_at_the_machine_with_the_cli_and_only_with_true_or_false()
+    {
+        Assert.Equal(1, Run("config", "set", "sessions.restoreOnStart", "no"));
+        Assert.True(HostSettings.Load(folder).Settings.RestoreOnStart);
+        Assert.Equal(0, Run("config", "set", "sessions.restoreOnStart", "false"));
+        Assert.False(HostSettings.Load(folder).Settings.RestoreOnStart);
+        Assert.Equal(0, Run("config", "unset", "sessions.restoreOnStart"));
+        Assert.True(HostSettings.Load(folder).Settings.RestoreOnStart);
     }
 
     [Fact]

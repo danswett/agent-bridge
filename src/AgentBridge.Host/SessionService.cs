@@ -49,6 +49,10 @@ public sealed class SessionService
     // may have arrived takes the session back from an agent at once, as one typed at the machine.
     public SessionDrivers? Drivers { get; init; }
     public TimeProvider Time { get; init; } = TimeProvider.System;
+
+    // hello's machine.restore (#780): what went with the machine or the host when it last stopped, or
+    // null. Set, it offers sessions.restore.
+    public Func<RestoreNotice?>? Restore { get; init; }
     // What each answer or reply request may take back, fixed when the request is first seen: the
     // session it named and the driver's generation then. Keyed by the request as the deliveries
     // remember it (its UUID, however it is spelt), so a resend, which they answer from the first
@@ -367,7 +371,7 @@ public sealed class SessionService
     {
         using (G5?.Hold())
         {
-            return new(1, machine with { Sessions = source.Snapshot().Count, ReadOnly = ReadOnly?.Invoke() }, Offered(channel));
+            return new(1, machine with { Sessions = source.Snapshot().Count, ReadOnly = ReadOnly?.Invoke(), Restore = Restore?.Invoke() }, Offered(channel));
         }
     }
 
@@ -394,7 +398,11 @@ public sealed class SessionService
     }
 
     // Only what a client acts on; machine.sessions changes all the time and is not a change here.
-    static string Said(string? readOnly, IEnumerable<string> offered) => (readOnly ?? "") + "\n" + string.Join("\n", offered);
+    // machine.restore is: a session judged after its agent's discovery was held is offered later.
+    static string Said(string? readOnly, RestoreNotice? restore, IEnumerable<string> offered) =>
+        (readOnly ?? "") + "\n" + Said(restore) + "\n" + string.Join("\n", offered);
+
+    static string Said(RestoreNotice? n) => n is null ? "" : FormattableString.Invariant($"{n.At:O}|{n.Waiting}|{n.Restored}|{n.Loops}|{n.Offered.Count}|{n.OfferedMore}|{n.Why}");
 
     void WatchHello(IProtocolChannel channel, HelloResult hello, Func<HelloResult, HelloResult>? shape)
     {
@@ -405,7 +413,7 @@ public sealed class SessionService
         });
         lock (watch)
         {
-            watch.Said = Said(hello.Machine.ReadOnly, hello.Capabilities);
+            watch.Said = Said(hello.Machine.ReadOnly, hello.Machine.Restore, hello.Capabilities);
             watch.Shape = shape;
         }
         lock (helloGate) { helloTimer ??= Time.CreateTimer(_ => CheckHellos(), null, HelloCheck, HelloCheck); }
@@ -435,13 +443,14 @@ public sealed class SessionService
                 Func<HelloResult, HelloResult>? shape;
                 lock (watch) { shape = watch.Shape; }
                 var readOnly = ReadOnly?.Invoke();
+                var restore = Restore?.Invoke();
                 var offered = Offered(channel);
                 string said;
-                if (shape is null) { said = Said(readOnly, offered); }
+                if (shape is null) { said = Said(readOnly, restore, offered); }
                 else
                 {
-                    var shaped = shape(new HelloResult(1, machine with { ReadOnly = readOnly }, offered));
-                    said = Said(shaped.Machine.ReadOnly, shaped.Capabilities);
+                    var shaped = shape(new HelloResult(1, machine with { ReadOnly = readOnly, Restore = restore }, offered));
+                    said = Said(shaped.Machine.ReadOnly, shaped.Machine.Restore, shaped.Capabilities);
                 }
                 lock (watch)
                 {
@@ -494,6 +503,7 @@ public sealed class SessionService
         if (launcher?.Available == true) { offered.Add(LaunchProtocol.Capability); }
         if (TrustAnswers?.Available == true && channel is SecureChannel) { offered.Add(TrustProtocol.Capability); }
         if (Updates?.Offered(channel) == true) { offered.Add(UpdateProtocol.Capability); }
+        if (Restore is not null) { offered.Add(RestoreProtocol.Capability); }
         // Transfers are signed by a device through the relay, and go through its blob store.
         if (transfers is not null && channel is SecureChannel)
         {

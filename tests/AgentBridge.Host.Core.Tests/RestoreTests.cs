@@ -1,0 +1,385 @@
+using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Restore;
+using AgentBridge.Protocol;
+using Microsoft.Extensions.Time.Testing;
+using Xunit;
+
+// The host's record of live sessions and what it finds at start of those an earlier run saw (#780;
+// docs/host-launch.md, Restoring after a reboot or a crash). A fake source, clock and boot time, so
+// every judgement and every write is exact. Nothing is started by any of it.
+public sealed class RestoreTests : IDisposable
+{
+    readonly Fixture f = new();
+    readonly Live source = new();
+    readonly Ends ends = new();
+    readonly FixedBoot boot = new(Fixture.T0);
+    readonly List<RestoreNotice> told = [];
+
+    public void Dispose() => f.Dispose();
+
+    FakeTimeProvider Time => f.Time;
+    string Record => Path.Combine(f.Root, RestoreFiles.FileName);
+
+    RestoreFile Written() => RestoreFiles.Read(Record).File!;
+
+    RestoreRecorder Recorder(bool restoreOnStart = true, bool freshLogon = false)
+    {
+        var r = new RestoreRecorder(source, new RestoreOptions { Path = Record, Instance = "run2", Ends = ends, RestoreOnStart = restoreOnStart, Boot = boot, Logon = new Logon(freshLogon), Time = Time });
+        r.NoticeReady += told.Add;
+        return r;
+    }
+
+    // What an earlier run of the host wrote, booted then, stopped cleanly or not.
+    void Previous(DateTimeOffset booted, bool stopped, params RestoreEntry[] sessions) => RestoreFiles.Write(Record, new RestoreFile
+    {
+        Boot = booted,
+        Instance = "run1",
+        Written = Time.GetUtcNow().AddMinutes(-5),
+        Stopped = stopped ? Time.GetUtcNow().AddMinutes(-5) : null,
+        Sessions = sessions,
+    });
+
+    static RestoreEntry E(string id, AgentKind agent = AgentKind.Copilot, RestoreTurn turn = RestoreTurn.Idle, bool question = false, string? cwd = "/work/repo") =>
+        new() { Id = id, Agent = agent, Title = "T " + id, Cwd = cwd, Turn = turn, QuestionWaiting = question, Seen = Fixture.T0 };
+
+    static Session S(string id, SessionStatus status = SessionStatus.Idle, string? response = null) => new()
+    {
+        Id = id,
+        Agent = AgentKind.Copilot,
+        Title = "T " + id,
+        Cwd = "/work/repo",
+        Status = status,
+        StatusSince = Fixture.T0,
+        UpdatedAt = Fixture.T0,
+        Activity = new Activity { Response = response },
+    };
+
+    [Fact]
+    public void A_record_is_replaced_whole_and_a_write_cut_short_by_a_crash_leaves_the_one_before_readable()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        File.WriteAllText(Record + ".0123.tmp", "{ \"v\": 1, \"boot\": ");
+        Previous(Fixture.T0, false, E("b"));
+
+        var (file, problem) = RestoreFiles.Read(Record);
+
+        Assert.Null(problem);
+        Assert.Equal(["b"], file!.Sessions.Select(s => s.Id));
+        Assert.Equal([Record + ".0123.tmp"], Directory.GetFiles(f.Root, "*.tmp"));
+    }
+
+    [Fact]
+    public void The_cause_is_a_reboot_across_boots_a_restart_after_a_clean_stop_and_otherwise_a_crash()
+    {
+        var file = new RestoreFile { Boot = Fixture.T0, Instance = "run1", Written = Fixture.T0 };
+
+        Assert.Equal(RestoreCause.Reboot, RestoreJudge.CauseOf(file, Fixture.T0.AddHours(1)));
+        // A boot time read against a clock that moved a little is the same boot.
+        Assert.Equal(RestoreCause.Crash, RestoreJudge.CauseOf(file, Fixture.T0.AddSeconds(30)));
+        Assert.Equal(RestoreCause.Restart, RestoreJudge.CauseOf(file with { Stopped = Fixture.T0 }, Fixture.T0));
+        // A sign-out, or a shutdown with Fast Startup, keeps the boot time and ends every agent.
+        Assert.Equal(RestoreCause.Reboot, RestoreJudge.CauseOf(file with { Stopped = Fixture.T0 }, Fixture.T0, freshLogon: true));
+    }
+
+    [Fact]
+    public async Task On_a_fresh_logon_a_session_seen_going_or_written_as_ended_is_offered_as_after_a_reboot()
+    {
+        Previous(Fixture.T0, true, E("a") with { Gone = Fixture.T0 }, E("b"));
+        ends.Of["b"] = true;
+        await using var r = Recorder(freshLogon: true);
+
+        r.Start();
+
+        var n = Assert.Single(told);
+        Assert.Equal(RestoreCause.Reboot, n.Cause);
+        Assert.Equal(["a", "b"], n.Offered.Select(o => o.Id).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task Sessions_an_earlier_run_left_offered_stay_offered_but_are_not_pushed_again()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        await using (var first = Recorder())
+        {
+            first.Start();
+        }
+        Assert.Single(told);
+        told.Clear();
+        source.Sessions.Add(S("b"));
+
+        await using var second = Recorder();
+        second.Start();
+
+        Assert.Empty(told);
+        Assert.Equal(["a"], second.Notice!.Offered.Select(o => o.Id));
+        Assert.Single(second.Folders()!);
+    }
+
+    [Fact]
+    public async Task With_restore_on_start_turned_off_sessions_left_offered_by_an_earlier_run_are_let_go()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        await using (var first = Recorder())
+        {
+            first.Start();
+        }
+
+        await using var second = Recorder(restoreOnStart: false);
+        second.Start();
+
+        Assert.Null(second.Notice);
+        Assert.Empty(second.Folders()!);
+        Assert.Empty(Written().Owed);
+    }
+
+    [Fact]
+    public async Task Sessions_that_died_with_a_crashed_host_are_offered_and_ones_running_or_ended_are_not()
+    {
+        Previous(Fixture.T0, false, E("running"), E("ended"), E("seen-going") with { Gone = Fixture.T0 },
+            E("died", turn: RestoreTurn.Working), E("asked", AgentKind.Claude, RestoreTurn.Waiting, question: true));
+        source.Sessions.Add(S("running"));
+        ends.Of["ended"] = true;
+        ends.Of["died"] = false;
+        await using var r = Recorder();
+
+        r.Start();
+
+        var n = Assert.Single(told);
+        Assert.Equal((RestoreCause.Crash, (RestoreWhy?)RestoreWhy.Pending, 0), (n.Cause, n.Why, n.Waiting));
+        Assert.Equal(["asked", "died"], n.Offered.Select(o => o.Id).Order(StringComparer.Ordinal));
+        var died = n.Offered.Single(o => o.Id == "died");
+        Assert.Equal(((bool?)true, (bool?)null), (died.MidTurn, died.QuestionLost));
+        Assert.True(n.Offered.Single(o => o.Id == "asked").QuestionLost);
+        Assert.Same(n, r.Notice);
+        Assert.Equal(["/work/repo", "/work/repo"], r.Folders()!);
+        Assert.Equal(["asked", "died"], Written().Owed.Select(w => w.Entry.Id).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task After_a_reboot_every_session_that_was_live_is_offered_even_one_its_agent_wrote_as_ended()
+    {
+        Previous(Fixture.T0.AddDays(-1), false, E("a"));
+        ends.Of["a"] = true;
+        await using var r = Recorder();
+
+        r.Start();
+
+        var n = Assert.Single(told);
+        Assert.Equal(RestoreCause.Reboot, n.Cause);
+        Assert.Equal("a", Assert.Single(n.Offered).Id);
+    }
+
+    [Fact]
+    public async Task A_session_whose_agents_discovery_is_held_waits_and_is_never_read_as_gone()
+    {
+        Previous(Fixture.T0, false, E("a"), E("b", AgentKind.Claude));
+        ends.Of["a"] = false;
+        source.HeldNow = new DiscoveryHeld("the copilot processes could not be listed", [AgentKind.Copilot]);
+        await using var r = Recorder();
+
+        r.Start();
+
+        // b has died; a cannot be told yet, so the push waits for it and its worktree is kept.
+        Assert.Empty(told);
+        var waiting = r.Notice!;
+        Assert.Equal((1, 1), (waiting.Waiting, waiting.Offered.Count));
+        Assert.Equal(["/work/repo", "/work/repo"], r.Folders()!);
+
+        source.HeldNow = null;
+        Time.Advance(RestoreRecorder.JudgeEvery);
+
+        var n = Assert.Single(told);
+        Assert.Equal((0, 2), (n.Waiting, n.Offered.Count));
+    }
+
+    [Fact]
+    public async Task A_hold_that_outlasts_ten_minutes_sends_the_notice_with_what_is_known_once()
+    {
+        Previous(Fixture.T0, false, E("a"), E("b", AgentKind.Claude));
+        source.HeldNow = new DiscoveryHeld("the copilot processes could not be listed", [AgentKind.Copilot]);
+        await using var r = Recorder();
+        r.Start();
+
+        Time.Advance(RestoreRecorder.NoticeAfter);
+        Time.Advance(RestoreRecorder.NoticeAfter);
+
+        var n = Assert.Single(told);
+        Assert.Equal((1, "b"), (n.Waiting, Assert.Single(n.Offered).Id));
+    }
+
+    [Fact]
+    public async Task With_restore_on_start_off_what_died_is_said_and_nothing_is_kept_waiting()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        await using var r = Recorder(restoreOnStart: false);
+
+        r.Start();
+
+        var n = Assert.Single(told);
+        Assert.Equal(((RestoreWhy?)RestoreWhy.Off, "a"), (n.Why, Assert.Single(n.Offered).Id));
+        Assert.Empty(r.Folders()!);
+        Assert.Empty(Written().Owed);
+    }
+
+    [Fact]
+    public async Task A_session_resumed_from_launch_is_no_longer_offered_and_frees_its_worktree()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        await using var r = Recorder();
+        r.Start();
+        Assert.Single(r.Folders()!);
+
+        source.Upsert(S("a"));
+        Time.Advance(RestoreRecorder.Coalesce);
+
+        Assert.Null(r.Notice);
+        Assert.Empty(r.Folders()!);
+        Assert.Empty(Written().Owed);
+        Assert.Equal(["a"], Written().Sessions.Select(s => s.Id));
+    }
+
+    [Theory]
+    [InlineData("{ not json")]
+    [InlineData("""{ "v": 1, "boot": "not a time", "instance": "run1", "written": "2026-10-28T04:00:00.000Z" }""")]
+    [InlineData("""{ "v": 1, "boot": "2026-10-28T04:00:00.000Z", "instance": "run1", "written": "2026-10-28T04:00:00.000Z", "sessions": [null] }""")]
+    public async Task An_unreadable_record_is_set_aside_offers_nothing_and_keeps_every_worktree(string text)
+    {
+        File.WriteAllText(Record, text);
+        await using var r = Recorder();
+
+        r.Start();
+
+        Assert.Null(r.Folders());
+        Assert.Null(r.Notice);
+        Assert.Empty(told);
+        Assert.Equal(text, File.ReadAllText(Record + ".unreadable"));
+        Assert.Equal("run2", Written().Instance);
+    }
+
+    [Fact]
+    public async Task A_session_that_goes_stays_in_the_record_for_a_minute_and_a_clean_stop_says_so()
+    {
+        source.Sessions.AddRange([S("a", SessionStatus.Working), S("b")]);
+        var r = Recorder();
+        r.Start();
+        var first = Written();
+        Assert.Equal((Fixture.T0, "run2", (DateTimeOffset?)null), (first.Boot, first.Instance, first.Stopped));
+        Assert.Equal(RestoreTurn.Working, first.Sessions.Single(s => s.Id == "a").Turn);
+
+        source.Remove("b");
+        Time.Advance(RestoreRecorder.Coalesce);
+        Assert.NotNull(Written().Sessions.Single(s => s.Id == "b").Gone);
+        Time.Advance(RestoreRecorder.GoneKept);
+        Assert.Equal(["a"], Written().Sessions.Select(s => s.Id));
+
+        await r.DisposeAsync();
+
+        Assert.NotNull(Written().Stopped);
+        Assert.Equal(["a"], Written().Sessions.Select(s => s.Id));
+    }
+
+    [Fact]
+    public async Task A_change_of_activity_alone_is_not_written_and_a_change_of_turn_is()
+    {
+        source.Sessions.Add(S("a"));
+        await using var r = Recorder();
+        r.Start();
+        var written = Written().Written;
+
+        Time.Advance(TimeSpan.FromSeconds(1));
+        source.Upsert(S("a", response: "more of the answer"));
+        Time.Advance(RestoreRecorder.Coalesce);
+        Assert.Equal(written, Written().Written);
+
+        source.Upsert(S("a", SessionStatus.Working));
+        Time.Advance(RestoreRecorder.Coalesce);
+        Assert.Equal(RestoreTurn.Working, Assert.Single(Written().Sessions).Turn);
+    }
+
+    [Fact]
+    public async Task A_session_launched_through_the_host_keeps_what_it_was_launched_with()
+    {
+        await using var r = Recorder();
+        r.Start();
+
+        r.Launched("a", new LaunchedWith { Agent = "agency", Workspace = "Bridge", Worktree = true, Profile = "work", Model = "gpt-6.1-sol", Permissions = "ask" });
+        source.Upsert(S("a"));
+        Time.Advance(RestoreRecorder.Coalesce);
+
+        Assert.Equal(new RestoreLaunch("agency", "Bridge", true, "work", "gpt-6.1-sol", null, null, "ask"), Assert.Single(Written().Sessions).Launch);
+    }
+
+    [Fact]
+    public void A_copilot_session_ended_only_when_its_main_agent_shut_down_after_the_last_thing_typed_and_claude_only_when_its_registration_says_so()
+    {
+        var ended = SessionEnds.For(f.Options());
+        var copilot = Guid.NewGuid().ToString();
+        var events = f.CopilotSession(copilot, null);
+        var claude = Guid.NewGuid().ToString();
+
+        Assert.Null(ended.Ended(AgentKind.Copilot, copilot));
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.Event("session.shutdown", new { }, 2, agentId: "sub"));
+        Assert.False(ended.Ended(AgentKind.Copilot, copilot));
+        Fixture.Append(events, Copilot.Event("session.shutdown", new { }, 3));
+        Assert.True(ended.Ended(AgentKind.Copilot, copilot));
+        // A sub-agent's prompt after it is not the person typing.
+        Fixture.Append(events, Copilot.User("look", 4, agentId: "sub"));
+        Assert.True(ended.Ended(AgentKind.Copilot, copilot));
+        Fixture.Append(events, Copilot.User("and again", 5));
+        Assert.False(ended.Ended(AgentKind.Copilot, copilot));
+
+        Assert.Null(ended.Ended(AgentKind.Claude, claude));
+        Directory.CreateDirectory(f.ClaudeRegistrations);
+        File.WriteAllText(Path.Combine(f.ClaudeRegistrations, claude + ".json"), "{ \"SessionId\": \"" + claude + "\", \"Ended\": false }");
+        Assert.False(ended.Ended(AgentKind.Claude, claude));
+        File.WriteAllText(Path.Combine(f.ClaudeRegistrations, claude + ".json"), "{ \"SessionId\": \"" + claude + "\", \"Ended\": true }");
+        Assert.True(ended.Ended(AgentKind.Claude, claude));
+    }
+
+    sealed class Live : ISessionSource
+    {
+        public readonly List<Session> Sessions = [];
+        public DiscoveryHeld? HeldNow;
+
+        public DiscoveryHeld? Held => HeldNow;
+        public long Revision => 0;
+        public event EventHandler<SessionChange>? Changed;
+
+        public void Upsert(Session s)
+        {
+            Sessions.RemoveAll(x => x.Id == s.Id);
+            Sessions.Add(s);
+            Changed?.Invoke(this, new SessionChange(SessionChangeKind.Upserted, s.Id, s, 0));
+        }
+
+        public void Remove(string id)
+        {
+            Sessions.RemoveAll(x => x.Id == id);
+            Changed?.Invoke(this, new SessionChange(SessionChangeKind.Removed, id, null, 0));
+        }
+
+        public IReadOnlyList<Session> Snapshot() => [.. Sessions];
+        public SessionList List(string? cursor = null) => new([.. Sessions], 0);
+        public Session? Get(string id) => Sessions.FirstOrDefault(s => s.Id == id);
+        public SessionSubscription Subscribe() => throw new NotSupportedException();
+        public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    sealed class Ends : ISessionEnds
+    {
+        public readonly Dictionary<string, bool?> Of = new(StringComparer.Ordinal);
+        public bool? Ended(AgentKind agent, string id) => Of.GetValueOrDefault(id);
+    }
+
+    sealed class Logon(bool fresh) : ILogonMarker
+    {
+        public bool Fresh() => fresh;
+    }
+
+    sealed class FixedBoot(DateTimeOffset at) : IBootClock
+    {
+        public DateTimeOffset Boot() => at;
+    }
+}
