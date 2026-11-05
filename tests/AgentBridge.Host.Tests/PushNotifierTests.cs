@@ -306,6 +306,49 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal("DEV · finished\nfour", LastBody());
     }
 
+    static readonly Attention SignedOut = new() { Kind = AttentionKind.SignInNeeded, Since = T, Agent = AgentKind.Copilot, Provider = "github" };
+
+    // #845: the failed turn leaves the last answer beside a truthful idle; quoted as "finished",
+    // it read as the new prompt's answer.
+    [Fact]
+    public async Task A_new_prompt_that_fails_sign_in_after_an_earlier_answer_sends_no_finished_push()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "The build is green."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Single(sender.Sent);
+        await After(new PushOptions().FinishedCollapse);
+
+        source.Upsert(S("s1", SessionStatus.Working, response: "The build is green.", turns: 1));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "The build is green.", turns: 2) with { Attention = SignedOut });
+        await After(new PushOptions().FinishedCollapse);
+
+        Assert.Single(sender.Sent);
+    }
+
+    [Fact]
+    public async Task A_finished_turn_still_queued_when_the_next_prompt_fails_sign_in_is_withdrawn()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "one"));
+        await After(TimeSpan.FromSeconds(3));
+        source.Upsert(S("s1", SessionStatus.Working, response: "one"));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "two", turns: 2));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, notifier.Pending);
+
+        source.Upsert(S("s1", SessionStatus.Working, response: "two", turns: 2));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "two", turns: 3) with { Attention = SignedOut });
+        await After(new PushOptions().FinishedCollapse);
+
+        Assert.Single(sender.Sent);
+        Assert.Equal(0, notifier.Pending);
+    }
+
     [Fact]
     public async Task A_collapsed_finished_turn_is_dropped_if_the_session_is_working_again_when_it_is_due()
     {

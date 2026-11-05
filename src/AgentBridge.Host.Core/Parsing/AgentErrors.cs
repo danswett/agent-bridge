@@ -98,8 +98,9 @@ internal static partial class AgentErrors
 
     // "Bearer <x>", "token=<x>", "api_key: <x>", and JSON's "password":"<x>": whatever follows is
     // the secret, a quoted one whole, spaces and escaped quotes included, to its closing quote or
-    // the end of the text.
-    [GeneratedRegex(@"\bbearer\s+[^\s,;]+|\b(?:access[_-]?token|refresh[_-]?token|client[_-]?secret|token|password|passwd|secret|api[_-]?key)[""']?\s*[:=]\s*(?:""(?:[^""\\]|\\.)*""?|'(?:[^'\\]|\\.)*'?|[^\s,;]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Timeout)]
+    // the end of the text. A second "Bearer" is never taken for the first one's secret, which
+    // would leave the real one after it showing.
+    [GeneratedRegex(@"\bbearer\s+(?!bearer\b)[^\s,;]+|\b(?:access[_-]?token|refresh[_-]?token|client[_-]?secret|token|password|passwd|secret|api[_-]?key)[""']?\s*[:=]\s*(?:""(?:[^""\\]|\\.)*""?|'(?:[^'\\]|\\.)*'?|[^\s,;]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Timeout)]
     private static partial Regex Keyed();
 
     // An Authorization header echoed back, whatever its scheme, and a Basic credential on its own:

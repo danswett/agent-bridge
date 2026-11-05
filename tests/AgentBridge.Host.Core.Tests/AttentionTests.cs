@@ -445,6 +445,7 @@ public class AttentionTests
     [InlineData("Sent Basic dXNlcjpwYXNz; basic auth failed", "Sent [token]; basic auth failed")]
     [InlineData("Sent Basic dXNlcjpwdzE now", "Sent [token] now")]
     [InlineData("basic\nBasic dXNlcjpwYXNz", "basic [token]")]
+    [InlineData("Bearer\nBearer syntheticbearercredential", "Bearer [token]")]
     public void A_bare_basic_credential_is_taken_out_by_what_it_decodes_to(string message, string shown)
     {
         Assert.Equal(shown, AgentErrors.Shown(message));

@@ -401,7 +401,16 @@ public sealed class PushNotifier : IAsyncDisposable
         var turnRan = prev is { Status: SessionStatus.Waiting, WaitingOn: not null }
             ? wasRunning || (baseline is { } before && MainKey(s) != before)
             : prev is { Status: SessionStatus.Working or SessionStatus.Waiting };
-        if (s.Status == SessionStatus.Idle && turnRan
+        // A turn that ended on an error or a failed sign-in did not finish (#845): it is idle,
+        // truthfully, with the last turn's answer still beside it, and a finished notice quoted
+        // that answer as if the new prompt had got it. None goes while the attention lasts, and
+        // one already due or queued for the session is withdrawn.
+        if (s.Attention is { Kind: AttentionKind.Error or AttentionKind.SignInNeeded })
+        {
+            if (t.Due is { Kind: NoticeKind.Finished }) { t.Due = null; }
+            outbox.RemoveAll(o => o.Session == s.Id && o.Kind == NoticeKind.Finished);
+        }
+        else if (s.Status == SessionStatus.Idle && turnRan
             && !string.IsNullOrWhiteSpace(OwnResponse(s)) && FinishedKey(s) != t.FinishedKey)
         {
             t.Due = new Due(NoticeKind.Finished, now + options.FinishedDelay, null);
