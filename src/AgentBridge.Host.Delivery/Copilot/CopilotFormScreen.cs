@@ -10,7 +10,8 @@ namespace AgentBridge.Host.Delivery.Copilot;
 // must be this form, at that field, before they are bound.
 //
 // From Copilot CLI 1.0.105's cli-main.js (minified names; recheck them on a CLI update):
-//   * The form (`MIo`) is headed "Copilot needs information." for ask_user (its source is
+//   * The form (`MIo`) is a box drawn with its top and bottom rules alone (paddingX 1), its
+//     first row inside "Copilot needs information." for ask_user (its source is
 //     Copilot's own, `JD`); an MCP server's reads "<server> needs information.". Under the
 //     heading, the question's message.
 //   * Then the fields (`Uxn`): with more than one, a tab bar (`Da`) naming each in order
@@ -41,7 +42,7 @@ public static partial class CopilotFormScreen
     {
         const string Prompted = "a permission prompt showed on the session's screen in place of the question's form";
         const string NotForm = "the session's screen no longer showed the question's form";
-        var headed = Enumerable.Range(0, rows.Count).Where(r => Collapse(rows[r]) == Heading).ToList();
+        var headed = Enumerable.Range(0, rows.Count).Where(r => Heads(rows, r)).ToList();
         if (headed.Count != 1) { return rows.Any(Permission) ? Prompted : NotForm; }
         var at = headed[0] + 1;
         // The whole question, as drawn: its lines, each wrapped onto as many rows as it takes.
@@ -86,6 +87,24 @@ public static partial class CopilotFormScreen
     }
 
     static bool Permission(string row) => PermissionRow().IsMatch(row);
+
+    // A form's own heading: the first row inside its frame (`MIo`: a box drawn with its top and
+    // bottom borders alone, paddingX 1, the heading first in it), so right under a row of the
+    // top border's rule and one column in from it. Not any row that reads so: the question, a
+    // field's title and an option are drawn inside the frame, under the heading or a blank row,
+    // or as one of a list's rows at the list's own indent. Counted wherever they read so, they
+    // refused a valid answer, and an option that started highlighted ("❯" before it) read so
+    // only once the keys had moved off it, so the Enter was withheld from a part-typed field
+    // (#510 review, Copilot 4478963305). Two forms on screen still have two headings.
+    static bool Heads(IReadOnlyList<string> rows, int r)
+    {
+        if (r == 0 || Collapse(rows[r]) != Heading) { return false; }
+        var rule = rows[r - 1].TrimEnd(' ');
+        var line = rule.TrimStart(' ');
+        return line.Length > 0 && line.All(c => c == '\u2500') && Indent(rows[r]) == rule.Length - line.Length + 1;
+    }
+
+    static int Indent(string row) => row.Length - row.TrimStart(' ').Length;
 
     // The field's heading as drawn: a text or number box's title alone, any other's with a
     // colon (`Fxn`, `Lxn`; `Dxn`, `Oxn`, `Nxn`). Read as "<title>:" for every field, the text

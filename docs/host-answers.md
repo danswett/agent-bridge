@@ -81,8 +81,11 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     A refused write stops everything after it.
   * The rows a field's keys or Enter are held to must show the form at that field
     (`CopilotFormScreen`, from 1.0.105's `MIo`, `Uxn`, `Da` and `Ft`), each part below the
-    last: exactly one "Copilot needs information." row (an MCP server's elicitation is headed
-    with its own name, and may have a field of the same name), the whole question under it
+    last: exactly one form heading, a "Copilot needs information." row right under the
+    frame's top rule and one column in from it (an MCP server's elicitation is headed with its
+    own name, and may have a field of the same name; the question, a field's title or an
+    option reading the same are the form's own, and never counted, Copilot 4478963305), the
+    whole question under it
     (its lines, each wrapped onto as many rows as it takes), with more than one field the tab
     bar naming exactly this form's fields in order (titles as written, brackets included; the
     field being answered may be in the bar's own brackets), the field's own heading on a row

@@ -1212,6 +1212,71 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Empty(injector.Attempts);
     }
 
+    // ---- the form's own heading, never a row of it that reads the same (Copilot 4478963305) ----
+
+    const string FormHeading = "Copilot needs information.";
+
+    // A one-list form, its caret moved down once for each Down typed, gone once it takes an Enter.
+    List<string> ListScreen(string message, string label, string[] options)
+    {
+        lock (injector.Plans)
+        {
+            if (injector.Plans.Any(p => p.Plan.Sends.Any(s => s.Enter))) { return ["(sent)"]; }
+            var caret = injector.Plans.Sum(p => p.Plan.Sends.Sum(s => (s.Text.Length - s.Text.Replace(KeyPlan.Down, "").Length) / KeyPlan.Down.Length));
+            return Framed(message, [label], 0, options.Select((o, i) => i == caret ? $"  \u276F {o}" : $"    {o}"));
+        }
+    }
+
+    [Theory]
+    // Highlighted as the form opens, it reads like the heading only once the walk has moved off
+    // it: counted then, the Enter was withheld from a part-typed list.
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task An_option_reading_like_the_forms_heading_is_the_lists_own_and_the_answer_goes_whole(int at)
+    {
+        string[] options = ["a", "b", "c"];
+        options[at] = FormHeading;
+        await AskFieldsAsync(new { pick = new { type = "string", @enum = options } }, 1, new { pick = "c" });
+        injector.Screen = () => ListScreen("Tell me", "pick", options);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, new { pick = "c" }, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Empty(injector.Refused);
+        Assert.Equal(1, Enters());
+    }
+
+    [Theory]
+    [InlineData("question")]
+    [InlineData("title")]
+    public async Task A_question_or_a_field_title_reading_like_the_forms_heading_is_the_forms_own_and_the_answer_goes(string where)
+    {
+        object properties = where == "title" ? new { note = new { type = "string", title = FormHeading } } : new { note = new { type = "string" } };
+        var message = where == "question" ? FormHeading : "Tell me";
+        await AskFieldsAsync(properties, 1, new { note = Feedback }, message);
+        injector.Screen = () => FieldsScreen(["note"], message: message, labels: where == "title" ? [FormHeading] : null);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, new { note = Feedback }, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Empty(injector.Refused);
+    }
+
+    [Fact]
+    public async Task Two_forms_on_the_screen_at_once_are_still_refused_before_any_key()
+    {
+        injector.Screen = () => [.. WhichOne, .. WhichOne];
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("no longer showed the question's form", reason);
+        Assert.Empty(injector.Attempts);
+    }
+
     [Fact]
     public async Task A_permission_prompt_opening_between_two_lists_gets_none_of_the_second_lists_keys()
     {
