@@ -22,6 +22,7 @@
 // choice (../transfer.js); otherwise it says to answer at the machine, and how to allow it.
 import { h } from './dom.js';
 import { ASK, ALLOW_ALL, MAX_PROMPT, TRUST, checkLaunch } from '../launch.js';
+import { LaunchFollow, sameQuestion } from '../launch-follow.js';
 
 export const APPROVE_HINT = 'agent-bridge-host workspace add <folder>';
 const AGENT_DEFAULT = '';
@@ -131,9 +132,34 @@ export class LaunchPanel {
   // on screen. pick(hostId): another machine was picked. launched(hostId): Launch was pressed
   // for that machine. waiting(on): whether a folder-trust question waits on a machine that takes
   // no launches now, the only thing that brings the page to mind while it isn't open.
-  constructor(root, { service, jump = () => false, pick = () => {}, launched = () => {}, waiting = () => {} }) {
-    Object.assign(this, { root, service, jump, pick, launched, waiting });
+  // sessions(hostId): the ids of the sessions that machine lists now; session(hostId, id): one of
+  // them, or null. Each session registered or changed is handed in (sessionSeen).
+  constructor(root, { service, jump = () => false, pick = () => {}, launched = () => {}, waiting = () => {}, sessions = () => [], session = () => null }) {
+    Object.assign(this, { root, service, jump, pick, launched, waiting, sessions, session });
+    // The busy listed again once it can have ended, and a launch reported unconfirmed followed
+    // until its session registers (../launch-follow.js, #896).
+    this.#follow = new LaunchFollow({
+      showing: (hostId) => this.#open && this.#target?.hostId === hostId,
+      relist: () => this.refresh(),
+      loads: () => this.#loads,
+      started: (hostId, late) => this.#startedLate(hostId, late),
+    });
+    // Every machine's: one launched on and then left is still followed.
+    service.onAny?.((entry) => this.#follow.follow(entry?.hostId, entry, (id) => !!this.session(entry.hostId, id)));
     this.#build();
+  }
+
+  #follow;
+  // By machine, the launch shown as started since its unconfirmed outcome, by request.
+  #lateStarted = new Map();
+
+  // A session registered or changed on a machine shown.
+  sessionSeen(hostId, session) { this.#follow.session(hostId, session); }
+
+  // Everything tied to the signed-in account goes with it.
+  clear() {
+    this.#follow.clear();
+    this.#lateStarted.clear();
   }
 
   #build() {
@@ -190,6 +216,8 @@ export class LaunchPanel {
   setOpen(open) {
     this.#open = open;
     this.els.body.hidden = !open;
+    // Listed again only while it shows: opening it lists it anyway.
+    if (!open) { this.#follow.stop(); }
     // Every time it opens: a workspace approved or a session ended since.
     if (open && this.#target && !this.#loading) { this.refresh(); }
   }
@@ -244,6 +272,7 @@ export class LaunchPanel {
     }
     this.#unwatch?.();
     this.#unwatch = null;
+    this.#follow.stop();
     this.#selection++;
     this.#target = target;
     this.#options = null;
@@ -363,7 +392,13 @@ export class LaunchPanel {
       if (this.#loading !== loading) { return; }
       this.#error = e?.reason ?? e?.message ?? String(e);
     }).finally(() => {
-      if (this.#loading === loading) { this.#loading = null; this.#draw(); }
+      if (this.#loading !== loading) { return; }
+      this.#loading = null;
+      // What it is busy with, as shown (a list that could not be read keeps the last one), is
+      // listed again once it can have ended. Not for a machine shown only for its questions,
+      // which shows no busy.
+      this.#follow.listed(target.hostId, target.inspectOnly ? null : this.#options, this.sessions(target.hostId));
+      this.#draw();
     });
     this.#draw();
     return loading;
@@ -676,11 +711,21 @@ export class LaunchPanel {
     // message went with it, as with a launch that starts at once, and must not go again with the
     // next launch. Only that launch, however many busy ones (which send nothing) came after it,
     // and only its message unchanged: what is written since stays. Whichever machine is picked
-    // now: the form, and its message, are the same for every machine.
+    // now: the form, and its message, are the same for every machine. The same question, though
+    // the machine may have asked it again under a new id since (#901).
+    const outcome = answer.state === 'done' ? answer.result?.outcome : null;
+    const late = outcome ? this.#follow.answered(hostId, answer.question, outcome) : null;
     const launched = this.#asked.get(hostId);
-    if (answer.state === 'done' && answer.result.outcome === 'started' && launched?.question === id) {
+    if (outcome === 'started' && sameQuestion(launched?.question, answer.question)) {
       this.#asked.delete(hostId);
-      if (this.els.prompt.value === launched.prompt) { this.els.prompt.value = ''; this.#drawCount(); }
+      this.#clearPrompt(launched.prompt);
+      // That launch's own status says so too, rather than that it was not confirmed.
+      if (this.service.get(hostId)?.request === launched.request) { this.#markStarted(hostId, launched.request); }
+    }
+    // The launch followed since its unconfirmed outcome, whose question this was.
+    if (late && this.service.get(hostId)?.request === late.request) {
+      this.#clearPrompt(this.service.get(hostId).answer?.prompt);
+      this.#markStarted(hostId, late.request);
     }
     if (this.#target?.hostId !== hostId) { return; }
     this.#drawTrust();
@@ -700,14 +745,46 @@ export class LaunchPanel {
   // it says whether the question it named still waits.
   #track(hostId, entry) {
     if (entry?.state === 'done' && hostId && this.#results.get(hostId)?.request !== entry.request) { this.#results.set(hostId, { request: entry.request, loads: this.#loads, superseded: false }); }
-    // A launch that started an agent now asking about its folder, by machine: the question, and
-    // the first message that went with it. A later busy launch naming it does not replace it.
+    // A launch that started an agent now asking about its folder, by machine: the question, the
+    // first message that went with it, and its request. A later busy launch naming it does not
+    // replace it.
     if (entry?.state === 'done' && hostId && entry.outcome === 'unconfirmed' && entry.detail?.trust?.id) {
-      this.#asked.set(hostId, { question: entry.detail.trust.id, prompt: entry.answer?.prompt ?? '' });
+      this.#asked.set(hostId, { question: entry.detail.trust, prompt: entry.answer?.prompt ?? null, request: entry.request });
     }
   }
 
   #asked = new Map();
+
+  // A first message sent, unchanged since (a box of only spaces counts as empty, as nothing was
+  // sent then), goes from the box.
+  #clearPrompt(sent) {
+    const now = this.els.prompt.value.trim() ? this.els.prompt.value : null;
+    if (now !== (sent ?? null)) { return; }
+    this.els.prompt.value = '';
+    this.#drawCount();
+  }
+
+  #markStarted(hostId, request) {
+    this.#lateStarted.set(hostId, request);
+    if (this.#target?.hostId === hostId) { this.#show(this.service.get(hostId)); }
+  }
+
+  // A launch followed since its unconfirmed outcome whose session has registered, as a launch
+  // that started at once: its prompt went with it, and its card opens, but only while the view
+  // shows that machine. A start minutes later must not take the person away from whatever they
+  // are doing now: elsewhere its status and the prompt change quietly, in a view not shown.
+  #startedLate(hostId, late) {
+    const entry = this.service.get(hostId);
+    if (entry?.request !== late.request) { return; }
+    const by = this.#asked.get(hostId);
+    if (late.question && sameQuestion(by?.question, late.question)) { this.#asked.delete(hostId); }
+    this.#clearPrompt(entry.answer?.prompt);
+    this.#markStarted(hostId, late.request);
+    if (this.#open && this.#target?.hostId === hostId) {
+      this.#jumped = late.request;
+      this.#jumpTo(late.session, hostId);
+    }
+  }
 
   #settled(entry) {
     const hostId = entry?.hostId ?? this.#target?.hostId;
@@ -742,6 +819,10 @@ export class LaunchPanel {
 
   #show(entry) {
     const e = this.els;
+    // Unconfirmed when it came, and seen to have started since: said as a start.
+    if (entry?.state === 'done' && entry.outcome === 'unconfirmed' && this.#lateStarted.get(entry.hostId) === entry.request) {
+      entry = { ...entry, outcome: 'started', reason: null };
+    }
     const shown = entry ? describeLaunch(entry, { machineName: this.#target?.machineName }) : { text: '', tone: '' };
     this.root.dataset.launch = !entry ? 'none' : entry.state !== 'done' ? entry.state : entry.outcome;
     e.status.textContent = shown.text;

@@ -1,0 +1,264 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { LaunchFollow, sameQuestion, BUSY_FOR_MS, BUSY_SLACK_MS, BUSY_AT_LEAST_MS, LATE_FOLLOW_FOR_MS } from '../../js/launch-follow.js';
+
+const flush = () => new Promise((r) => setImmediate(r));
+const T0 = Date.parse('2026-05-01T12:00:00.000Z');
+const iso = (ms) => new Date(ms).toISOString();
+const question = (over = {}) => ({ id: 'q1', agent: 'claude', folder: 'C:\\repos\\bridge', askedAt: iso(T0), ...over });
+
+// A LaunchFollow on a clock and timers the test moves, for a Launch page showing h1.
+function setup({ showing = true } = {}) {
+  const t = { now: T0, timers: [], relists: 0, started: [], loads: 0, showing, pending: [] };
+  t.follow = new LaunchFollow({
+    showing: (hostId) => t.showing && hostId === 'h1',
+    relist: () => { t.relists++; t.loads++; return new Promise((resolve) => { t.pending.push(resolve); }); },
+    loads: () => t.loads,
+    started: (hostId, late) => t.started.push({ hostId, ...late }),
+    now: () => t.now,
+    setTimer: (fn, ms) => { const timer = { fn, ms, at: t.now + ms, cleared: false }; t.timers.push(timer); return timer; },
+    clearTimer: (timer) => { if (timer) { timer.cleared = true; } },
+  });
+  t.armed = () => t.timers.filter((x) => !x.cleared && !x.fired);
+  // Moves the clock on, firing what falls due.
+  t.advance = (ms) => {
+    t.now += ms;
+    for (const x of t.armed()) { if (x.at <= t.now) { x.fired = true; x.fn(); } }
+  };
+  return t;
+}
+
+const busy = (trust = []) => ({ busy: 'Claude in Bridge is asking whether to trust its folder. New launches wait until it\'s answered.', trust });
+const unconfirmed = (over = {}) => ({ state: 'done', outcome: 'unconfirmed', request: 'r1', detail: { session: 's9', trust: question() }, ...over });
+
+test('a busy question asked 30 seconds ago is listed again a second after its two minutes, not before', () => {
+  const t = setup();
+  t.now = T0 + 30000;
+  assert.equal(t.follow.listed('h1', busy([question()]), ['s1']), 91000);
+  t.advance(90999);
+  assert.equal(t.relists, 0);
+  t.advance(1);
+  assert.equal(t.relists, 1);
+});
+
+test('the newest listed question sets the wait when the machine lists more than one', () => {
+  const t = setup();
+  t.now = T0 + 60000;
+  assert.equal(t.follow.listed('h1', busy([question(), question({ id: 'q2', askedAt: iso(T0 + 50000) })]), []), 111000);
+});
+
+test('a Bypass Permissions busy, which lists no question, is listed again after two minutes and a second', () => {
+  const t = setup();
+  assert.equal(t.follow.listed('h1', busy([]), []), BUSY_FOR_MS + BUSY_SLACK_MS);
+  // A question whose time can't be read says no more than none does.
+  assert.equal(t.follow.listed('h1', busy([question({ askedAt: null })]), []), BUSY_FOR_MS + BUSY_SLACK_MS);
+});
+
+test('a question whose two minutes are already up is listed again after five seconds once, then after two minutes and a second', () => {
+  const t = setup();
+  t.now = T0 + 10 * 60000;
+  assert.equal(t.follow.listed('h1', busy([question()]), []), BUSY_AT_LEAST_MS);
+  assert.equal(t.follow.listed('h1', busy([question()]), []), BUSY_FOR_MS + BUSY_SLACK_MS);
+  // Not busy any more: the next overdue question is listed again soon once more.
+  assert.equal(t.follow.listed('h1', { busy: null, trust: [] }, []), null);
+  assert.equal(t.follow.listed('h1', busy([question()]), []), BUSY_AT_LEAST_MS);
+});
+
+test('the wait is never under five seconds nor over two minutes and a second, whatever the clocks say', () => {
+  const t = setup();
+  t.now = T0 + BUSY_FOR_MS - 1000;
+  assert.equal(t.follow.listed('h1', busy([question()]), []), BUSY_AT_LEAST_MS);
+  t.follow.stop();
+  t.now = T0 - 10 * 60000;
+  assert.equal(t.follow.listed('h1', busy([question()]), []), BUSY_FOR_MS + BUSY_SLACK_MS);
+});
+
+test('a machine that is not busy arms nothing, and a listing that is not busy any more cancels the wait', () => {
+  const t = setup();
+  assert.equal(t.follow.listed('h1', { busy: null, trust: [] }, []), null);
+  assert.equal(t.follow.listed('h1', null, []), null);
+  assert.equal(t.armed().length, 0);
+  t.follow.listed('h1', busy(), []);
+  t.follow.listed('h1', { busy: null, trust: [] }, []);
+  assert.equal(t.armed().length, 0);
+  t.advance(BUSY_FOR_MS * 2);
+  assert.equal(t.relists, 0);
+});
+
+test('the wait lists nothing once another listing came since, or the page no longer shows that machine', () => {
+  const t = setup();
+  t.follow.listed('h1', busy(), []);
+  t.loads++;
+  t.advance(BUSY_FOR_MS + BUSY_SLACK_MS);
+  assert.equal(t.relists, 0);
+  t.follow.listed('h1', busy(), []);
+  t.showing = false;
+  t.advance(BUSY_FOR_MS + BUSY_SLACK_MS);
+  assert.equal(t.relists, 0);
+});
+
+test('stopping cancels the wait and forgets the sessions the machine had', () => {
+  const t = setup();
+  t.follow.listed('h1', busy(), ['s1']);
+  t.follow.stop();
+  assert.equal(t.armed().length, 0);
+  t.follow.session('h1', { id: 's2', agent: 'claude', status: 'working' });
+  assert.equal(t.relists, 0);
+});
+
+test('a session new since the machine said it was busy lists it again, and one it already had does not', () => {
+  const t = setup();
+  t.follow.listed('h1', busy(), ['s1']);
+  t.follow.session('h1', { id: 's1', agent: 'claude', status: 'working' });
+  assert.equal(t.relists, 0);
+  t.follow.session('h2', { id: 's2', agent: 'claude', status: 'working' });
+  assert.equal(t.relists, 0);
+  t.follow.session('h1', { id: 's2', agent: 'claude', status: 'working' });
+  assert.equal(t.relists, 1);
+});
+
+test('a new session on a busy machine the page does not show lists nothing', () => {
+  const t = setup({ showing: false });
+  t.follow.listed('h1', busy(), ['s1']);
+  t.follow.session('h1', { id: 's2', agent: 'claude', status: 'working' });
+  assert.equal(t.relists, 0);
+});
+
+test('sessions registering during a listing make one more listing after it, not one each', async () => {
+  const t = setup();
+  t.follow.listed('h1', busy(), []);
+  t.follow.session('h1', { id: 's1', agent: 'claude', status: 'working' });
+  t.follow.session('h1', { id: 's2', agent: 'claude', status: 'working' });
+  t.follow.session('h1', { id: 's3', agent: 'claude', status: 'working' });
+  assert.equal(t.relists, 1);
+  t.pending.shift()();
+  await flush();
+  assert.equal(t.relists, 2);
+  t.pending.shift()();
+  await flush();
+  assert.equal(t.relists, 2);
+});
+
+test('an unconfirmed launch whose session registers with a Claude agent has started, and its machine is listed again', () => {
+  const t = setup();
+  assert.equal(t.follow.follow('h1', unconfirmed(), () => false), true);
+  t.follow.session('h1', { id: 's9', agent: 'claude', status: 'working' });
+  assert.deepEqual(t.started.map((s) => [s.hostId, s.request, s.session]), [['h1', 'r1', 's9']]);
+  assert.equal(t.relists, 1);
+  // Followed once: its session's next update says nothing more.
+  t.follow.session('h1', { id: 's9', agent: 'claude', status: 'idle' });
+  assert.equal(t.started.length, 1);
+});
+
+test('a late start on a machine the page does not show is reported without listing it again', () => {
+  const t = setup({ showing: false });
+  t.follow.follow('h1', unconfirmed(), () => false);
+  t.follow.session('h1', { id: 's9', agent: 'codex', status: 'working' });
+  assert.equal(t.started.length, 1);
+  assert.equal(t.relists, 0);
+});
+
+test('a Copilot or Agency session registering proves nothing, as it registers before it is ready', () => {
+  const t = setup();
+  t.follow.follow('h1', unconfirmed(), () => false);
+  t.follow.session('h1', { id: 's9', agent: 'copilot', status: 'working' });
+  assert.equal(t.started.length, 0);
+  // Let go, as the app does: only a Trust answered here for the question its launch met (which
+  // the panel keeps) can start it now.
+  t.follow.session('h1', { id: 's9', agent: 'claude', status: 'working' });
+  assert.equal(t.started.length, 0);
+});
+
+test('an unconfirmed launch is not followed when its session was already listed, it named none, or it is not unconfirmed', () => {
+  const t = setup();
+  assert.equal(t.follow.follow('h1', unconfirmed(), (id) => id === 's9'), false);
+  assert.equal(t.follow.follow('h1', unconfirmed({ request: 'r2', detail: { trust: question() } }), () => false), false);
+  assert.equal(t.follow.follow('h1', unconfirmed({ request: 'r3', outcome: 'busy' }), () => false), false);
+  assert.equal(t.follow.follow('h1', unconfirmed({ request: 'r4', state: 'sending' }), () => false), false);
+  t.follow.session('h1', { id: 's9', agent: 'claude', status: 'working' });
+  assert.equal(t.started.length, 0);
+});
+
+test('the same outcome seen again is not followed again', () => {
+  const t = setup();
+  t.follow.follow('h1', unconfirmed(), () => false);
+  t.follow.session('h1', { id: 's9', agent: 'copilot', status: 'working' });
+  assert.equal(t.follow.follow('h1', unconfirmed(), () => false), false);
+  t.follow.session('h1', { id: 's9', agent: 'claude', status: 'working' });
+  assert.equal(t.started.length, 0);
+});
+
+test('a session that registers already ending has not started', () => {
+  const t = setup();
+  t.follow.follow('h1', unconfirmed(), () => false);
+  t.follow.session('h1', { id: 's9', agent: 'claude', status: 'ending' });
+  assert.equal(t.started.length, 0);
+  t.follow.session('h1', { id: 's9', agent: 'claude', status: 'working' });
+  assert.equal(t.started.length, 1);
+});
+
+test('following stops silently after thirty minutes, as the machine stops following its launch then', () => {
+  const t = setup();
+  t.follow.follow('h1', unconfirmed(), () => false);
+  t.now += LATE_FOLLOW_FOR_MS + 1;
+  t.follow.session('h1', { id: 's9', agent: 'claude', status: 'working' });
+  assert.equal(t.started.length, 0);
+  t.follow.follow('h1', unconfirmed({ request: 'r2' }), () => false);
+  t.now += LATE_FOLLOW_FOR_MS + 1;
+  assert.equal(t.follow.answered('h1', question(), 'started'), null);
+});
+
+test('another machine\'s session with the same id does not start the launch', () => {
+  const t = setup();
+  t.follow.follow('h1', unconfirmed(), () => false);
+  t.follow.session('h2', { id: 's9', agent: 'claude', status: 'working' });
+  assert.equal(t.started.length, 0);
+});
+
+test('the same question is the same id, or the same folder, agent and time asked, never the folder alone', () => {
+  const q = question();
+  assert.equal(sameQuestion(q, question()), true);
+  assert.equal(sameQuestion(q, question({ id: 'q2' })), true);
+  assert.equal(sameQuestion(q, question({ folder: 'C:\\other', agent: 'codex', askedAt: null })), true);
+  assert.equal(sameQuestion(q, question({ id: 'q2', agent: 'codex' })), false);
+  assert.equal(sameQuestion(q, question({ id: 'q2', askedAt: iso(T0 + 1000) })), false);
+  assert.equal(sameQuestion(q, question({ id: 'q2', folder: 'C:\\other' })), false);
+  // With no time asked to tell them apart, a folder and agent are not enough.
+  assert.equal(sameQuestion(question({ askedAt: null }), question({ id: 'q2', askedAt: null })), false);
+  assert.equal(sameQuestion(q, null), false);
+  assert.equal(sameQuestion(null, q), false);
+});
+
+test('Trust answered here for the launch\'s question hands the launch back, by id or asked again under a new one', () => {
+  const t = setup();
+  t.follow.follow('h1', unconfirmed(), () => false);
+  assert.equal(t.follow.answered('h1', question({ id: 'other', folder: 'C:\\x' }), 'started'), null);
+  assert.equal(t.follow.answered('h2', question(), 'started'), null);
+  assert.equal(t.follow.answered('h1', question({ id: 'q7' }), 'started')?.session, 's9');
+  // Let go once answered.
+  t.follow.session('h1', { id: 's9', agent: 'claude', status: 'working' });
+  assert.equal(t.started.length, 0);
+});
+
+test('Quit answered here for the launch\'s question lets the launch go, and an unconfirmed answer keeps following it', () => {
+  const t = setup();
+  t.follow.follow('h1', unconfirmed(), () => false);
+  assert.equal(t.follow.answered('h1', question(), 'unconfirmed'), null);
+  t.follow.session('h1', { id: 's9', agent: 'claude', status: 'working' });
+  assert.equal(t.started.length, 1);
+  t.follow.follow('h1', unconfirmed({ request: 'r2', detail: { session: 's10', trust: question() } }), () => false);
+  assert.equal(t.follow.answered('h1', question(), 'declined'), null);
+  t.follow.session('h1', { id: 's10', agent: 'claude', status: 'working' });
+  assert.equal(t.started.length, 1);
+});
+
+test('clearing forgets every launch followed and cancels the wait', () => {
+  const t = setup();
+  t.follow.follow('h1', unconfirmed(), () => false);
+  t.follow.listed('h1', busy(), []);
+  t.follow.clear();
+  assert.equal(t.armed().length, 0);
+  t.follow.session('h1', { id: 's9', agent: 'claude', status: 'working' });
+  assert.equal(t.started.length, 0);
+  assert.equal(t.relists, 0);
+});

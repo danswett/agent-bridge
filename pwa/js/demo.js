@@ -497,7 +497,7 @@ export class DemoHost {
         unconfirmed: "the session started, but it is asking whether to trust its folder; answer that at the machine",
         failed: 'the agent could not be started (The system cannot find the file specified.)',
       };
-      return { outcome: scripted.outcome, reason: scripted.reason ?? reasons[scripted.outcome] ?? 'from a newer host', ...(scripted.trust ? { trust: this.askTrust(scripted.trust) } : {}) };
+      return { outcome: scripted.outcome, reason: scripted.reason ?? reasons[scripted.outcome] ?? 'from a newer host', ...(scripted.session ? { session: scripted.session } : {}), ...(scripted.trust ? { trust: this.askTrust(scripted.trust) } : {}) };
     }
     const problem = checkLaunch(data);
     if (problem) { return { outcome: 'refused', reason: problem }; }

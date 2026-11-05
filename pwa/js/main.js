@@ -433,7 +433,8 @@ async function startDemo() {
     // The same, for the next stops; none scripted, the host decides as a real one would.
     scriptStops: (...outcomes) => host.scriptStops(outcomes),
     // The same, for the next launches: 'started' (the default), 'unconfirmed', 'busy', 'refused',
-    // 'failed', an unknown one, or { outcome, reason, drop: true }.
+    // 'failed', an unknown one, or { outcome, reason, drop: true }; an unconfirmed one may name
+    // its session ({ session }), which a host gives when it started one it could not confirm.
     scriptLaunches: (...outcomes) => host.scriptLaunches(outcomes),
     // The next update presses' refusals, by reason; none scripted, a press is taken (#51).
     scriptUpdates: (...reasons) => host.scriptUpdates(reasons),

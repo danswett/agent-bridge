@@ -62,7 +62,7 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 | `js/launch.js` | Launching: the tolerant readers of `launch.options` and a launch's result (an unknown outcome is `unconfirmed`), and `checkLaunch`, which mirrors the C# `LaunchProtocol.Check` with its wording; folder-trust questions and their answers (`launch.trust`) |
 | `js/transfer.js` | Signed commands: bringing a session from another machine (the account's other machines' sessions, `sessions.transfer.serve`, and the command this device signs for the one a session is on, [v1-transfer.md](../docs/protocol/v1-transfer.md)), and answering a folder-trust question (`launch.trust:trust` or `:quit`, for the machine asking it), held to the host's by shared test vectors |
 | `js/launch-service.js` | Starting sessions: `answer-service.js` with `session.launch`, one launch on its way per machine, resent with the same request until it has an outcome |
-| `js/push.js` | Notifications: whether this device can have them, turning them on (permission, then a push subscription with the relay's VAPID key) and off, and registering with each machine opened (`push.subscribe`) |
+| `js/launch-follow.js` | A launch followed after its outcome, as the app's `LaunchViewModel` does (#891, #896): a busy machine listed again once its busy can have ended (its question's two minutes and a second, or 2 min 1 s with none named) or when a session registers on it, one listing at a time; and a launch the machine could not confirm said to have started when its session registers, by the host's rule (not a Copilot's, which registers before it is ready), or when its folder-trust question is trusted here || `js/push.js` | Notifications: whether this device can have them, turning them on (permission, then a push subscription with the relay's VAPID key) and off, and registering with each machine opened (`push.subscribe`) |
 | `js/usage.js` | Agent usage: the tolerant reader, merging every machine's reports into one row per allowance (a reading beats a failure, then the freshest wins), and the card's words: colours at 75% and 90%, pace, resets, ages |
 | `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`), usage and updates: each machine shown on its own channel (`usage.subscribe`, `update.subscribe`), every other online machine by a short channel (`hello`, `usage.get`, `update.get`) once a minute while the app is in front, every ten seconds while an update there is under way; `call` sends a press to a machine on whichever |
 | `js/update.js` | A machine's updates ([v1-update.md](../docs/protocol/v1-update.md), #51): the tolerant reader, the row's words (what the machine's app is doing, how the last update ended), and `UpdateControl`, Check and Install with a request of their own each, a refusal shown on the row, and Check all |
@@ -115,7 +115,10 @@ A machine that does not take launches now (read-only, agent-ha-bridge) still sho
 question, read-only. It is asked for one again when it reconnects, and on updates at most every
 30 seconds. With every machine shown it is offered only when no machine takes launches, and then
 its panel stays while it offers others. An answer that may have been typed is never offered again from here, and a
-resend the machine refuses (its command expired) reads as not confirmed.
+resend the machine refuses (its command expired) reads as not confirmed. A launch not confirmed whose
+session then registers (or whose question is trusted here) reads as started, its first message cleared
+if unchanged and its card opened only while Launch shows that machine; a busy machine is listed again
+once its busy can have ended, or when a session registers there (#896).
 `test/e2e/fixture-host.mjs` is a working example in about 150 lines.
 
 The client resubscribes when `seq` skips, repeats or goes backwards, and replaces its

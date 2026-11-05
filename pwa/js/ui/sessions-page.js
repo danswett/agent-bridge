@@ -202,6 +202,8 @@ export class SessionsPage {
       // take the picker from a machine picked since.
       launched: (hostId) => this.#rememberLaunch(hostId),
       waiting: (on) => this.shell?.setAttention('launch', on),
+      sessions: (hostId) => hosts.sessions.list().filter((e) => e.hostId === hostId).map((e) => e.session.id),
+      session: (hostId, id) => hosts.sessions.get(hostId, id),
     });
     this.order = new SessionOrder({ storage });
     const media = (q) => globalThis.matchMedia?.(q) ?? { matches: false, addEventListener() {} };
@@ -261,7 +263,13 @@ export class SessionsPage {
     let news = false;
     let listed = new Set();
     let returned = new Set();
-    const unwatchSessions = hosts.sessions.onChange(() => { news = this.view.drawn; returned = new Set(); });
+    const unwatchSessions = hosts.sessions.onChange((c) => {
+      news = this.view.drawn;
+      returned = new Set();
+      // A session registered may be the one a launch's machine was busy with, or the one a launch
+      // reported unconfirmed started (#896).
+      if (c?.type === 'upsert') { this.launchPanel.sessionSeen(c.hostId, hosts.sessions.get(c.hostId, c.id)); }
+    });
     const unwatchHosts = hosts.onChange(() => {
       const now = new Set((hosts.shownIds?.() ?? []).filter((id) => !hosts.staleOf?.(id)));
       returned = new Set([...returned, ...[...now].filter((id) => !listed.has(id))]);
@@ -708,6 +716,7 @@ export class SessionsPage {
     this.order.clearEnded();
     this.launchPanel.setMachines(null);
     this.launchPanel.setTarget(null);
+    this.launchPanel.clear();
   }
 
   // Your order, Most recent or Machine. Where the order can't be kept on this device, the list
