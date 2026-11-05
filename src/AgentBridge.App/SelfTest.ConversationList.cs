@@ -466,7 +466,7 @@ static partial class SelfTest
             }
             finally { before.BringIntoViewRequested -= held; }
             var (offset, topAfter) = (scroll.VerticalOffset, Top(block, scroll));
-            Log($"focus on the last stop of block {from + 1}: {(focused ? "taken" : "refused")}, the view at {offsetBefore:0.#} px then {offset:0.#} px, block {code + 1}'s top {topBefore:0.#} px then {topAfter:0.#} px");
+            Log($"focus on the last stop of block {from + 1}: {(focused ? "taken" : "refused")}, its FocusState {SessionView.StateOf(stop)?.ToString() ?? "none"}, the view at {offsetBefore:0.#} px then {offset:0.#} px, block {code + 1}'s top {topBefore:0.#} px then {topAfter:0.#} px");
             if (!focused || !ReferenceEquals(FocusManager.GetFocusedElement(list.XamlRoot), stop)) { return ($"setup: focus on the last stop of block {from + 1}", method); }
             if (Math.Abs(offset - offsetBefore) > 0.5 || Math.Abs(topAfter - topBefore) > 0.5) { return ($"setup: block {code + 1} left where it was on screen while block {from + 1} took focus: its top {topBefore:0.#} px, then {topAfter:0.#} px", method); }
 
@@ -475,7 +475,7 @@ static partial class SelfTest
             var heard = new KeyEventHandler((_, e) => seen |= e.Key == VirtualKey.Tab);
             using var requests = new BringIntoViewLog(list, scroll, Log);
             scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
-            requests.Mark("Tab pressed");
+            requests.Pressing("Tab pressed: every time from here is the time since the press");
             requests.WatchKeys("leaving container", before);
             try
             {
@@ -494,7 +494,7 @@ static partial class SelfTest
             var shown = list.ContainerFromIndex(code) as FrameworkElement;
             var now = shown is null ? double.NaN : Top(shown, scroll);
             var moved = scroll.VerticalOffset - offset;
-            Log($"Tab pressed by {method}: focus on {on?.GetType().Name ?? "nothing"} in block {(BlockOf(list, on) is { } b ? b + 1 : 0)}, block {code + 1}'s top {now:0.#} px, the view moved {moved:0.#} px, {requests.Count} requests reached the conversation");
+            Log($"Tab pressed by {method}: focus on {on?.GetType().Name ?? "nothing"} in block {(BlockOf(list, on) is { } b ? b + 1 : 0)}, its FocusState {SessionView.StateOf(on as DependencyObject)?.ToString() ?? "none"}, block {code + 1}'s top {now:0.#} px, the view moved {moved:0.#} px, {requests.Count} requests reached the conversation");
             if (!landed || !ReferenceEquals(on, copy)) { return ($"Tab from block {from + 1} onto the Copy button of block {code + 1}: on {on?.GetType().Name ?? "nothing"} in {(BlockOf(list, on) is { } to ? $"block {to + 1}" : "no block")}", method); }
             if (Math.Abs(moved) > 0.5 || Math.Abs(now - topAfter) > 0.5) { return ($"block {code + 1}, wholly in view near the top, left where it was by Tab from a stop out of view (block {from + 1}'s, {-stopBottom:0.#} px above the view): the view moved {moved:0.#} px, its top {topAfter:0.#} px then {now:0.#} px", method); }
             return (null, method);
@@ -527,6 +527,15 @@ static partial class SelfTest
             Listen("scroller", scroll);
             WatchKeys("list", list);
             WatchKeys("scroller", scroll);
+            if (list.XamlRoot?.Content is { } content)
+            {
+                WatchKeys("window's content", content);
+                WatchAccelerators("window's content", content);
+            }
+            else { log("the list's XamlRoot had no content: no key listener on the window's content"); }
+            WatchAccelerators("list", list);
+            WatchFocus();
+            WatchMessages();
             for (var i = 0; i < list.Items.Count; i++)
             {
                 if (list.ContainerFromIndex(i) is ListViewItem item) { HookContainer(item); }
@@ -540,6 +549,81 @@ static partial class SelfTest
 
         // A mark in the log, on the same clock.
         public void Mark(string what) => log($"at {clock.ElapsedMilliseconds} ms, {what}");
+
+        // The key about to be pressed: the clock starts again from here, so every time after it is
+        // the time since the press.
+        public void Pressing(string what)
+        {
+            clock.Restart();
+            Mark(what);
+        }
+
+        readonly List<(UIElement Target, TypedEventHandler<UIElement, ProcessKeyboardAcceleratorEventArgs> Handler)> accelerators = [];
+
+        // Every ProcessKeyboardAccelerators the element raises, on the log's clock: the framework's
+        // accelerator pass comes after the preview key events and before KeyDown.
+        void WatchAccelerators(string where, UIElement target)
+        {
+            var handler = new TypedEventHandler<UIElement, ProcessKeyboardAcceleratorEventArgs>((_, e) =>
+                log($"ProcessKeyboardAccelerators on the {where} at {clock.ElapsedMilliseconds} ms: {e.Key}, modifiers {e.Modifiers}, handled {e.Handled}, the view at {scroll.VerticalOffset:0.#} px"));
+            target.ProcessKeyboardAccelerators += handler;
+            accelerators.Add((target, handler));
+        }
+
+        TypedEventHandler<UIElement, GettingFocusEventArgs>? listGetting;
+        TypedEventHandler<UIElement, LosingFocusEventArgs>? listLosing;
+        EventHandler<GettingFocusEventArgs>? anyGetting;
+        EventHandler<LosingFocusEventArgs>? anyLosing;
+
+        string FocusMove(string what, string where, DependencyObject? from, DependencyObject? to, FocusState state, FocusInputDeviceKind input, FocusNavigationDirection direction, bool cancelled) =>
+            $"{what} {where} at {clock.ElapsedMilliseconds} ms: {from?.GetType().Name ?? "nothing"} in {(BlockOf(list, from) is { } a ? $"block {a + 1}" : "no block")} to {to?.GetType().Name ?? "nothing"} in {(BlockOf(list, to) is { } b ? $"block {b + 1}" : "no block")}, FocusState {state}, input {input}, direction {direction}, cancelled {cancelled}, the view at {scroll.VerticalOffset:0.#} px";
+
+        // Every move of focus out of or into the list (handled or not), and every move the focus
+        // manager makes anywhere: whether focus on the block Tab lands in is taken, refused, or undone.
+        void WatchFocus()
+        {
+            listGetting = (_, e) => log(FocusMove("GettingFocus", "on the list", e.OldFocusedElement, e.NewFocusedElement, e.FocusState, e.InputDevice, e.Direction, e.Cancel));
+            listLosing = (_, e) => log(FocusMove("LosingFocus", "on the list", e.OldFocusedElement, e.NewFocusedElement, e.FocusState, e.InputDevice, e.Direction, e.Cancel));
+            anyGetting = (_, e) => log(FocusMove("GettingFocus", "from the focus manager", e.OldFocusedElement, e.NewFocusedElement, e.FocusState, e.InputDevice, e.Direction, e.Cancel));
+            anyLosing = (_, e) => log(FocusMove("LosingFocus", "from the focus manager", e.OldFocusedElement, e.NewFocusedElement, e.FocusState, e.InputDevice, e.Direction, e.Cancel));
+            list.AddHandler(UIElement.GettingFocusEvent, listGetting, true);
+            list.AddHandler(UIElement.LosingFocusEvent, listLosing, true);
+            FocusManager.GettingFocus += anyGetting;
+            FocusManager.LosingFocus += anyLosing;
+        }
+
+        // The thread's key messages for Tab as it takes them from its queue (WH_GETMESSAGE), before
+        // XAML has them: whether the view moved before the key was even read. One log at a time.
+        static BringIntoViewLog? hooked;
+        nint hook;
+
+        unsafe void WatchMessages()
+        {
+            if (hooked is not null) { log("another log holds the message hook: no key messages logged"); return; }
+            hook = SetWindowsHookExW(WhGetMessage, &OnMessage, 0, GetCurrentThreadId());
+            if (hook == 0) { log($"no message hook: error {Marshal.GetLastPInvokeError()}"); return; }
+            hooked = this;
+        }
+
+        [UnmanagedCallersOnly]
+        static nint OnMessage(int code, nint removing, nint message)
+        {
+            try
+            {
+                if (code >= 0 && message != 0 && hooked is { } self)
+                {
+                    // MSG: the window, then the message (padded to a pointer's size), then its wParam.
+                    var id = (uint)Marshal.ReadInt32(message, IntPtr.Size);
+                    var key = Marshal.ReadIntPtr(message, 2 * IntPtr.Size);
+                    if (id is WmKeyDown or WmKeyUp && key == (nint)VirtualKey.Tab)
+                    {
+                        self.log($"the message {(id == WmKeyDown ? "WM_KEYDOWN" : "WM_KEYUP")} Tab {(removing != 0 ? "taken" : "peeked")} from the queue at {self.clock.ElapsedMilliseconds} ms, the view at {self.scroll.VerticalOffset:0.#} px");
+                    }
+                }
+            }
+            catch (Exception ex) { AppLog.Write($"self-test: the message hook failed: {ex.Message}"); }
+            return CallNextHookEx(0, code, removing, message);
+        }
 
         readonly HashSet<UIElement> containers = [];
 
@@ -603,6 +687,17 @@ static partial class SelfTest
             heard.Clear();
             foreach (var (target, routed, handler) in keys) { target.RemoveHandler(routed, handler); }
             keys.Clear();
+            foreach (var (target, handler) in accelerators) { target.ProcessKeyboardAccelerators -= handler; }
+            accelerators.Clear();
+            if (listGetting is not null) { list.RemoveHandler(UIElement.GettingFocusEvent, listGetting); }
+            if (listLosing is not null) { list.RemoveHandler(UIElement.LosingFocusEvent, listLosing); }
+            FocusManager.GettingFocus -= anyGetting;
+            FocusManager.LosingFocus -= anyLosing;
+            if (hooked == this)
+            {
+                UnhookWindowsHookEx(hook);
+                hooked = null;
+            }
             containers.Clear();
             SessionView.Diagnostics = null;
             list.ContainerContentChanging -= OnContainer;

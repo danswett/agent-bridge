@@ -41,11 +41,12 @@ public sealed partial class SessionView : UserControl
         {
             Attach();
             WatchReleases();
+            WatchTabs();
             FocusManager.GettingFocus -= OnFocusMoving;
             FocusManager.GettingFocus += OnFocusMoving;
         };
         SizeChanged += (_, e) => FitComposer(e.NewSize.Height);
-        Unloaded += (_, _) => { if (!IsLoaded) { Detach(); UnwatchReleases(); FocusManager.GettingFocus -= OnFocusMoving; } };
+        Unloaded += (_, _) => { if (!IsLoaded) { Detach(); UnwatchReleases(); UnwatchTabs(); FocusManager.GettingFocus -= OnFocusMoving; } };
         // The Words states' ThemeResources are read as a state is entered: entered again, they are
         // the new theme's.
         ActualThemeChanged += (_, _) => { words = null; ShowWords(); };

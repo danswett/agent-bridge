@@ -98,7 +98,26 @@ public sealed partial class SessionView
         // once what has focus has had them.
         scroll.PreviewKeyDown += (_, e) => OnReadingKey(e, early: true);
         scroll.KeyDown += (_, e) => OnReadingKey(e, early: false);
-        ConversationList.PreviewKeyDown += OnTabFromOffScreen;
+    }
+
+    // Tab from a stop out of view (OnTabFromOffScreen) is taken at the window's content, the first
+    // element a key's PreviewKeyDown tunnels through, before anything else in the window has it.
+    UIElement? tabsAt;
+    KeyEventHandler? onTabAtRoot;
+
+    void WatchTabs()
+    {
+        if (tabsAt is not null || XamlRoot?.Content is not UIElement root) { return; }
+        tabsAt = root;
+        onTabAtRoot ??= OnTabFromOffScreen;
+        root.AddHandler(PreviewKeyDownEvent, onTabAtRoot, false);
+    }
+
+    void UnwatchTabs()
+    {
+        if (tabsAt is null) { return; }
+        tabsAt.RemoveHandler(PreviewKeyDownEvent, onTabAtRoot);
+        tabsAt = null;
     }
 
     // The keys that scroll a page scroll the conversation, as its ScrollViewer did (ui.md §6.4),
@@ -142,7 +161,7 @@ public sealed partial class SessionView
     // manager's own scroll to its stop held (InViewAtTab).
     void OnLeavingBlock(UIElement sender, LosingFocusEventArgs e)
     {
-        Diagnostics?.Invoke($"LosingFocus {e.Direction}: block {Where(PlaceOf(e.OldFocusedElement))} to block {Where(PlaceOf(e.NewFocusedElement))}, the view at {ConversationScroll?.VerticalOffset:0.#} px");
+        Diagnostics?.Invoke($"LosingFocus {e.Direction}: {e.OldFocusedElement?.GetType().Name ?? "nothing"} in block {Where(PlaceOf(e.OldFocusedElement))} to {e.NewFocusedElement?.GetType().Name ?? "nothing"} in block {Where(PlaceOf(e.NewFocusedElement))}, FocusState {e.FocusState}, input {e.InputDevice}, cancelled {e.Cancel}, the view at {ConversationScroll?.VerticalOffset:0.#} px");
         if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } passed) { e.Cancel = true; FocusBlock(passed.Index, e.Direction == FocusNavigationDirection.Next, passed.Wrapped, e.OldFocusedElement); }
     }
 
@@ -150,7 +169,7 @@ public sealed partial class SessionView
     {
         var passedBy = TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction);
         var kept = passedBy is null && !e.Cancel ? InViewAtTab(e.NewFocusedElement, e.Direction) : null;
-        Diagnostics?.Invoke($"GettingFocus {e.Direction}: block {Where(PlaceOf(e.OldFocusedElement))} to block {Where(PlaceOf(e.NewFocusedElement))}, Tab passes block {(passedBy is { } p ? (p.Index + 1).ToString() : "none")}, landing held {kept is not null}, the view at {ConversationScroll?.VerticalOffset:0.#} px");
+        Diagnostics?.Invoke($"GettingFocus {e.Direction}: {e.OldFocusedElement?.GetType().Name ?? "nothing"} in block {Where(PlaceOf(e.OldFocusedElement))} to {e.NewFocusedElement?.GetType().Name ?? "nothing"} in block {Where(PlaceOf(e.NewFocusedElement))}, FocusState {e.FocusState}, input {e.InputDevice}, cancelled {e.Cancel}, Tab passes block {(passedBy is { } p ? (p.Index + 1).ToString() : "none")}, landing held {kept is not null}, the view at {ConversationScroll?.VerticalOffset:0.#} px");
         if (passedBy is { } passed) { e.Cancel = true; FocusBlock(passed.Index, e.Direction == FocusNavigationDirection.Next, passed.Wrapped, e.OldFocusedElement); }
         else if (kept is { } k) { HoldFocusScroll(k.Container, k.Source).Leaving(); }
     }
@@ -381,7 +400,9 @@ public sealed partial class SessionView
         var (release, leaving) = HoldFocusScroll(container, source);
         FocusManager.TryFocusAsync(stop, FocusState.Keyboard).Completed = (op, status) =>
         {
-            if (status != AsyncStatus.Completed || !op.GetResults().Succeeded) { DispatcherQueue.TryEnqueue(() => release()); }
+            var succeeded = status == AsyncStatus.Completed && op.GetResults().Succeeded;
+            Diagnostics?.Invoke($"FocusHolding's TryFocusAsync(Keyboard) on {stop.GetType().Name} in block {Where(PlaceOf(stop))}: {status}, succeeded {succeeded}");
+            if (!succeeded) { DispatcherQueue.TryEnqueue(() => release()); }
         };
         // Only once focus has moved: the move itself may raise LosingFocus here.
         leaving();
@@ -393,11 +414,21 @@ public sealed partial class SessionView
     // the search is made here from the same stop, the move it finds is made as the focus handlers
     // make it (a block passed is held, FocusBlock; one wholly in view is landed on with the focus
     // manager's scroll held, InViewAtTab), and the key is handled so the manager's own never runs.
-    // Focus order is the manager's own search; no result (the end of the window) is left to it.
-    // Only for a stop that is not wholly in view: one in view keeps the manager's Tab, whatever block it is in.
+    // Taken at the window's content (WatchTabs), not the list: preview key events tunnel from the
+    // root and come before accelerators and KeyDown, and on the list the view had already moved
+    // (CI run 42097403847). Focus is put on the stop at once, as the keyboard puts it there, so it
+    // has moved before the framework goes on with the key: the asynchronous move made from the list
+    // never took (the same run). Focus order is the manager's own search; no result (the end of the
+    // window) is left to it. Only for a stop in a block of this list that is not wholly in view: any
+    // other Tab, a stop in view whatever block it is in, keeps the manager's Tab.
     void OnTabFromOffScreen(object sender, KeyRoutedEventArgs e)
     {
-        if (e.Key != VirtualKey.Tab || e.Handled || lettingTabPass || ConversationScroll is not { } scroll || XamlRoot is not { } root || root.Content is not { } within
+        if (e.Key != VirtualKey.Tab) { return; }
+        if (Diagnostics is { } arrived && XamlRoot is { } at0 && FocusManager.GetFocusedElement(at0) is DependencyObject had)
+        {
+            arrived($"PreviewKeyDown Tab at the window's content: focus on {had.GetType().Name} in block {Where(PlaceOf(had))}, FocusState {StateOf(had)}, handled {e.Handled}, the view at {ConversationScroll?.VerticalOffset:0.#} px");
+        }
+        if (e.Handled || lettingTabPass || ConversationScroll is not { } scroll || XamlRoot is not { } root || root.Content is not { } within
             || ConversationList.Visibility != Visibility.Visible || !ConversationList.IsLoaded) { return; }
         static bool Pressed(VirtualKey k) => InputKeyboardSource.GetKeyStateForCurrentThread(k).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
         if (Pressed(VirtualKey.Control) || Pressed(VirtualKey.Menu) || Pressed(VirtualKey.LeftWindows) || Pressed(VirtualKey.RightWindows)) { return; }
@@ -408,13 +439,49 @@ public sealed partial class SessionView
         var direction = forward ? FocusNavigationDirection.Next : FocusNavigationDirection.Previous;
         if (FocusManager.FindNextElement(direction, new FindNextElementOptions { SearchRoot = within }) is not { } to || ReferenceEquals(to, focused)) { return; }
         e.Handled = true;
+        // The blocks laid out as Tab was pressed, as the session's own handler takes them, which this comes before.
+        OnTabKey(sender, e);
         var passed = TabPassed(focused, to, direction);
         var kept = passed is null ? InViewAtTab(to, direction) : null;
         Diagnostics?.Invoke($"Tab from a stop out of view in block {at + 1} ({drawn.Top:0.#} to {drawn.Bottom:0.#} px), found by us and handled: to block {Where(PlaceOf(to))}, Tab passes block {(passed is { } p ? (p.Index + 1).ToString() : "none")}, landing held {kept is not null}, the view at {scroll.VerticalOffset:0.#} px");
         if (passed is { } through) { FocusBlock(through.Index, forward, through.Wrapped, focused); }
-        else if (kept is { } k) { FocusHolding(k.Container, k.Source, to); }
-        else { _ = FocusManager.TryFocusAsync(to, FocusState.Keyboard); }
+        else if (kept is { } k) { FocusNowHolding(k.Container, k.Source, to); }
+        else if (FocusNow(to) is not { } moved) { _ = FocusManager.TryFocusAsync(to, FocusState.Keyboard); }
+        else { Diagnostics?.Invoke($"Focus(Keyboard) on {to.GetType().Name} in block {Where(PlaceOf(to))}: {moved}"); }
+        if (Diagnostics is { } after && FocusManager.GetFocusedElement(root) is DependencyObject now)
+        {
+            after($"after the Tab at the window's content: focus on {now.GetType().Name} in block {Where(PlaceOf(now))}, FocusState {StateOf(now)}, the view at {scroll.VerticalOffset:0.#} px");
+        }
     }
+
+    // Focus on a stop in a block wholly in view at once, as the keyboard puts it there, the focus
+    // manager's scroll to it held (HoldFocusScroll); a stop that is neither an element nor a link
+    // is focused as FocusHolding does.
+    void FocusNowHolding(UIElement container, UIElement source, DependencyObject stop)
+    {
+        if (stop is not (UIElement or Hyperlink)) { FocusHolding(container, source, stop); return; }
+        var (release, leaving) = HoldFocusScroll(container, source);
+        var moved = FocusNow(stop) == true;
+        Diagnostics?.Invoke($"Focus(Keyboard) on {stop.GetType().Name} in block {Where(PlaceOf(stop))}, its scroll held: {moved}, its FocusState then {StateOf(stop)}, the view at {ConversationScroll?.VerticalOffset:0.#} px");
+        if (moved) { leaving(); }
+        else { release(); }
+    }
+
+    // Focus on a stop at once with the keyboard's FocusState: whether it moved, or null for a stop
+    // that is neither an element nor a link.
+    static bool? FocusNow(DependencyObject stop) => stop switch
+    {
+        UIElement element => element.Focus(FocusState.Keyboard),
+        Hyperlink link => link.Focus(FocusState.Keyboard),
+        _ => null,
+    };
+
+    internal static FocusState? StateOf(DependencyObject? element) => element switch
+    {
+        UIElement u => u.FocusState,
+        Hyperlink h => h.FocusState,
+        _ => null,
+    };
 
     // Where a stop is drawn against the view, top and bottom; null for anything that isn't an element or a link.
     static (double Top, double Bottom)? Drawn(DependencyObject? stop, UIElement view)

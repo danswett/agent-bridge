@@ -200,4 +200,21 @@ static partial class SelfTest
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetKeyboardState([In] byte[] state);
+
+    // TEST-ONLY (#881): a thread-local WH_GETMESSAGE hook, so the Tab check logs when its key messages are read (BringIntoViewLog).
+    const int WhGetMessage = 3;
+    const uint WmKeyDown = 0x0100, WmKeyUp = 0x0101;
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    private static unsafe partial nint SetWindowsHookExW(int hook, delegate* unmanaged<int, nint, nint, nint> proc, nint module, uint thread);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool UnhookWindowsHookEx(nint hook);
+
+    [LibraryImport("user32.dll")]
+    private static partial nint CallNextHookEx(nint hook, int code, nint wParam, nint lParam);
+
+    [LibraryImport("kernel32.dll")]
+    private static partial uint GetCurrentThreadId();
 }
