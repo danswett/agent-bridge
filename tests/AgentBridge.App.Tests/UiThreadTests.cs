@@ -1,4 +1,6 @@
 using Xunit;
+using Xunit.Abstractions;
+using Xunit.Sdk;
 
 // The tests' UI thread itself (TestUi, UiTestFramework): what every other test here relies on to
 // see the view models as the app's one UI thread leaves them (#101).
@@ -57,5 +59,98 @@ public sealed class UiThreadTests
         Assert.NotSame(mine, other);
         Assert.True(mine.OnIt);
         Assert.False(other.OnIt);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task Collections_wait_for_the_configured_number_of_UI_threads(int threads)
+    {
+        var assembly = new TestAssembly(Reflector.Wrap(typeof(UiThreadTests).Assembly));
+        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sink = new CollectionStarts();
+        var cases = Enumerable.Range(0, 4).Select(n => new WaitingCase(
+            new TestCollection(assembly, null, $"collection {n}"), released.Task)).ToArray();
+        var options = new ExecutionOptions();
+        options.SetValue("xunit.execution.MaxParallelThreads", threads);
+        options.SetValue("xunit.execution.SynchronousMessageReporting", true);
+        using var runner = new CountingRunner(assembly, cases, sink, options, attempted);
+        var run = runner.RunAsync();
+        try
+        {
+            await attempted.Task.WaitAsync(FakeHost.Patience);
+            var limit = threads == 0 ? Environment.ProcessorCount : threads;
+            Assert.Equal(limit < 0 ? cases.Length : Math.Min(limit, cases.Length), sink.Count);
+        }
+        finally
+        {
+            released.TrySetResult();
+            var summary = await run.WaitAsync(FakeHost.Patience);
+            Assert.Equal(cases.Length, summary.Total);
+            Assert.Equal(0, summary.Failed);
+        }
+    }
+
+    sealed class ExecutionOptions : ITestFrameworkExecutionOptions
+    {
+        readonly Dictionary<string, object?> values = new();
+        public TValue GetValue<TValue>(string name) => values.TryGetValue(name, out var value) ? (TValue)value! : default!;
+        public void SetValue<TValue>(string name, TValue value) => values[name] = value;
+    }
+
+    sealed class CollectionStarts : LongLivedMarshalByRefObject, IMessageSink
+    {
+        int count;
+        public int Count => Volatile.Read(ref count);
+        public bool OnMessage(IMessageSinkMessage message)
+        {
+            if (message is ITestCollectionStarting)
+                Interlocked.Increment(ref count);
+            return true;
+        }
+    }
+
+    sealed class CountingRunner(ITestAssembly assembly, IXunitTestCase[] cases, IMessageSink sink,
+        ITestFrameworkExecutionOptions options, TaskCompletionSource attempted)
+        : UiTestFramework.AssemblyRunner(assembly, cases, sink, sink, options)
+    {
+        int count;
+        readonly int total = cases.Length;
+        protected override Task<RunSummary> RunTestCollectionAsync(IMessageBus messageBus, ITestCollection testCollection,
+            IEnumerable<IXunitTestCase> testCases, CancellationTokenSource cancellationTokenSource)
+        {
+            var run = base.RunTestCollectionAsync(messageBus, testCollection, testCases, cancellationTokenSource);
+            if (Interlocked.Increment(ref count) == total)
+                attempted.TrySetResult();
+            return run;
+        }
+    }
+
+    sealed class WaitingCase : XunitTestCase
+    {
+        readonly Task released = Task.CompletedTask;
+
+        [Obsolete("Only for xunit's de-serializer; these cases are constructed in-process.", true)]
+        public WaitingCase() { }
+
+        public WaitingCase(ITestCollection collection, Task released)
+            : base(new CollectionStarts(), TestMethodDisplay.ClassAndMethod, TestMethodDisplayOptions.None,
+                new TestMethod(new TestClass(collection, Reflector.Wrap(typeof(UiThreadTests))),
+                    Reflector.Wrap(typeof(UiThreadTests).GetMethod(nameof(A_test_runs_on_its_UI_thread_before_and_after_each_await))!)))
+        {
+            this.released = released;
+        }
+
+        public override async Task<RunSummary> RunAsync(IMessageSink diagnosticMessageSink, IMessageBus messageBus,
+            object[] constructorArguments, ExceptionAggregator aggregator, CancellationTokenSource cancellationTokenSource)
+        {
+            Assert.True(TestUi.ForTest.OnIt);
+            await released;
+            Assert.True(TestUi.ForTest.OnIt);
+            return new RunSummary { Total = 1 };
+        }
     }
 }

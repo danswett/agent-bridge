@@ -33,6 +33,9 @@ The base is strong. CI already tests what ships, not just the code:
   take 2 min 45 s on one machine, build included. The three slowest projects take most of
   that: Host.Delivery (1 min 46 s, with real console injection), HomeAssistant (1 min 9 s)
   and Host (1 min 6 s).
+  App tests keep a UI thread per test, but start only `maxParallelThreads` collections
+  at once (one per core by default). #660 verified that their custom runner bypassed
+  xunit's collection limit; the cause of the simultaneous CI stalls remains unproven.
 - **Binaries as they ship:** the NativeAOT injector types into a real console, and the NativeAOT
   hook is started fresh for each event. The relay container runs read-only, as it ships. The
   packaged WinUI app runs its `--self-test` (UIA, every theme resource), Setup.exe installs

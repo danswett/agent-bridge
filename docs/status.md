@@ -48,6 +48,15 @@ retirement, not the current G7 migration refusal. Copilot CLI session
 
 ## 2. Where things are (2026-11-02)
 
+### Playwright system packages (#831, 2026-11-04)
+
+[#831](https://github.com/danswett/agent-bridge/pull/831) extends the bounded, signed
+APT download and guarded Canonical fallback to every CI Playwright dependency install.
+PWA UI, end-to-end and both Linux spike installs have 35-minute job budgets; browser
+lists, shards and test assertions are unchanged. CI covers eight mocked download and
+failure paths. Real mirror-fallback proof remains separate in
+[#817](https://github.com/danswett/agent-bridge/pull/817).
+
 ### Host trusted-peer floor (#402)
 
 An opt-in, default-off host-only authorization foundation is under review. It adds
