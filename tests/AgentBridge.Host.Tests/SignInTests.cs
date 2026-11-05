@@ -153,6 +153,41 @@ public sealed class SignInTests
         Assert.Equal(SignInOutcome.Refused, await running.WaitAsync(Patience));
     }
 
+    [Theory]
+    [InlineData("account", false)]
+    [InlineData("signIn", false)]
+    [InlineData("recovery", false)]
+    [InlineData("account", true)]
+    [InlineData("signIn", true)]
+    [InlineData("recovery", true)]
+    public async Task Agent_output_cannot_supply_account_sign_in_or_recovery_metadata(string field, bool onDone)
+    {
+        await using var h = await Harness.CreateAsync();
+        var phone = h.Phone();
+        await h.Start(phone).Then(phone);
+        await h.Factory.Started.Task.WaitAsync(Patience);
+        if (onDone)
+        {
+            h.Factory.Process.OutputPipe.Put(Frame(h.Time));
+            await phone.Code.Task.WaitAsync(Patience);
+        }
+        var value = field switch { "signIn" => "phone", "recovery" => "pending", _ => "synthetic-agent-account-text" };
+        var frame = onDone ? Json(new { kind = "done", outcome = "signedIn", persisted = true, policyAllowed = true }) : Frame(h.Time);
+        var fields = frame.Deserialize<Dictionary<string, JsonElement>>()!;
+        fields[field] = Json(value);
+        h.Factory.Process.OutputPipe.Put(Json(fields));
+        h.Factory.Process.ErrorPipe.Put("synthetic agent prose: account=synthetic-agent-account-text; signIn=phone; recovery=pending");
+        h.Factory.Process.Complete(done: false);
+        Assert.Equal("refused", (await phone.Done.Task.WaitAsync(Patience)).GetProperty("outcome").GetString());
+        var attention = h.Source.Get(Id)!.Attention!;
+        Assert.Null(attention.Account);
+        Assert.Null(attention.SignIn);
+        Assert.Equal(RecoveryState.Failed, attention.Recovery);
+        Assert.DoesNotContain("synthetic-agent-account-text", Json(h.Source.Get(Id)!).GetRawText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(phone.Events, e => e.Value.GetRawText().Contains("synthetic-agent-account-text", StringComparison.Ordinal));
+        Assert.DoesNotContain(h.Logs, line => line.Contains("synthetic-agent-account-text", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Requester_only_delivery_dedup_join_and_same_key_reattach_are_explicit()
     {

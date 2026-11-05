@@ -1199,6 +1199,12 @@ the routed, redacted capture. Upstream follow-up:
 
 The framework's request/event contract (not yet offered to clients) is:
 
+`account`, `signIn` and `recovery` are structured host metadata, never copied or inferred
+from CLI prose, messages or displayed account strings. An account with no structured
+identity remains absent. A requester can select a known identity but cannot supply one
+to publish. The private adapter accepts no account/sign-in/recovery fields; unexpected
+fields fail closed. Recovery values come only from the host's typed lifecycle.
+
 * `signin.start {request: UUID, agent: "copilot", account?: string}` returns
   `{outcome: "started" | "busy" | "refused", flow?: UUID, reason?: string}`.
   The host resolves the effective credential-store identity from its own state,
