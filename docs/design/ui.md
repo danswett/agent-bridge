@@ -1452,8 +1452,8 @@ action lives on the machine, not on each row. The field names follow Connection'
 
 | Where in §2.2 | When | Glyph | Status text | Action |
 |---|---|---|---|---|
-| After rule 1 | `attention.kind: signInNeeded` | `needs` | "Needs sign-in · *Agent*" (and "· @*account*" when known) | **Sign in**, only with the `sessions.signin` capability and a `signIn` value the client knows; no button otherwise (A7) |
-| After the row above | `signInNeeded` with `recovery: pending` (signed in; the host hasn't seen the model answer yet) | `idle` | "Signed in · waiting for the session to confirm" | None; Continue (§6.12) where the session died mid-turn |
+| After rule 1 | `attention.kind: signInNeeded` with `recovery: pending` (signed in; the host hasn't seen the model answer yet) | `idle` | "Signed in · waiting for the session to confirm" | None; Continue (§6.12) where the session died mid-turn |
+| After the row above | `attention.kind: signInNeeded` with any other `recovery` (or none) | `needs` | "Needs sign-in · *Agent*" (and "· @*account*" when known) | **Sign in**, only with the `sessions.signin` capability and a `signIn` value the client knows; no button otherwise (A7) |
 | Refines rule 3 | `working` with `attention.kind: notResponding` | `failed` | "Not responding · since *time*" | None; there is nothing safe to press yet |
 | Before rule 4 | Main agent idle, and `attention.kind: error` | `failed` | "Not authorised", "Rate limited" or "Agent error", from `attention.errorClass` `auth`, `rate` or `other` (an unknown class reads as "Agent error"; a new class gets its words here first), plus "· N delegates still running" when background agents survive the turn | None on the row; the agent's own words go in Details |
 
