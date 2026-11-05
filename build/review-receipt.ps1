@@ -42,7 +42,9 @@
 #    head's contents from GitHub: each file the scope needs, read whole after the CI capture, and
 #    the diff read.
 #  - The verdict: the reviewer's last message has exactly one standalone line `VERDICT: CLEAN`,
-#    anywhere in it (report text may follow); no other VERDICT line.
+#    anywhere in it (report text may follow); no other line starting VERDICT: after only whitespace
+#    on that line, a no-break space or form feed included (in any case, inside a code fence or
+#    not, whatever follows it).
 #  - The pull request: open, its head still -Head when the checks, threads and reviews are read,
 #    and every review thread resolved.
 #  Before it posts the comment, and again before the status, it reads the head again; if the head
@@ -410,9 +412,12 @@ foreach ($e in $events) {
 $messages = @($run | Where-Object { $_.Type -eq 'assistant.message' -and ([string](Get-Field $_.Data 'content')).Trim() })
 if ($messages.Count -eq 0) { Stop-Receipt 'the reviewer said nothing' }
 $report = [string](Get-Field $messages[-1].Data 'content')
-$verdicts = [regex]::Matches($report, '(?m)^[ \t]*VERDICT:[ \t]*(\S+)[ \t]*\r?$')
+# Every line that starts (after any whitespace on that line: spaces, tabs, no-break spaces, form
+# feeds and the like) with VERDICT:, in any case and whatever follows, is a verdict line, so a
+# NOT CLEAN verdict can't hide behind a quoted or fenced CLEAN one.
+$verdicts = [regex]::Matches($report, '(?im)^[^\S\r\n]*VERDICT:(.*)$')
 if ($verdicts.Count -ne 1) { Stop-Receipt "the reviewer's last message has $($verdicts.Count) VERDICT lines; exactly one is needed" }
-if ($verdicts[0].Groups[1].Value -cne 'CLEAN') { Stop-Receipt "the reviewer's verdict is $($verdicts[0].Groups[1].Value), not CLEAN" }
+if ($verdicts[0].Value -cnotmatch '^[ \t]*VERDICT:[ \t]*CLEAN[ \t]*\r?$') { Stop-Receipt "the reviewer's verdict is '$($verdicts[0].Groups[1].Value.Trim())', not CLEAN" }
 
 # --- CI before the first read: the coordinator's own `gh pr checks` on the head, between two reads
 # of the head, run as a powershell tool call in this session; the last one it started before the

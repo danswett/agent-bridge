@@ -241,6 +241,23 @@ Check 'One standalone VERDICT: CLEAN line anywhere in the last message is the ve
     Assert-Refused (Get-Refusal) '*has 0 VERDICT lines; exactly one is needed*'
 }
 
+Check 'Every line starting VERDICT: counts, whatever follows: a NOT CLEAN verdict with a fenced CLEAN, after any whitespace, an empty or other-case marker, or more words is refused' {
+    Reset ($events.Replace('VERDICT: CLEAN","model"', '\u00a0VERDICT: NOT CLEAN (1 Medium)\n\n```\nVERDICT: CLEAN\n```","model"'))
+    Assert-Refused (Get-Refusal) '*has 2 VERDICT lines; exactly one is needed*'
+    Reset ($events.Replace('VERDICT: CLEAN","model"', '\fVERDICT: NOT CLEAN (1 Medium)\nVERDICT: CLEAN","model"'))
+    Assert-Refused (Get-Refusal) '*has 2 VERDICT lines; exactly one is needed*'
+    Reset ($events.Replace('VERDICT: CLEAN","model"', 'VERDICT: NOT CLEAN (1 Medium)\n\nOnce fixed, it would end:\n```\nVERDICT: CLEAN\n```","model"'))
+    Assert-Refused (Get-Refusal) '*has 2 VERDICT lines; exactly one is needed*'
+    Reset ($events.Replace('VERDICT: CLEAN","model"', 'VERDICT: NOT CLEAN (1 Medium)\n\n> VERDICT: CLEAN","model"'))
+    Assert-Refused (Get-Refusal) '*verdict is ''NOT CLEAN (1 Medium)'', not CLEAN*'
+    Reset ($events.Replace('VERDICT: CLEAN","model"', 'VERDICT:\nVERDICT: CLEAN","model"'))
+    Assert-Refused (Get-Refusal) '*has 2 VERDICT lines; exactly one is needed*'
+    Reset ($events.Replace('VERDICT: CLEAN","model"', 'verdict: not clean\nVERDICT: CLEAN","model"'))
+    Assert-Refused (Get-Refusal) '*has 2 VERDICT lines; exactly one is needed*'
+    Reset ($events.Replace('VERDICT: CLEAN","model"', 'VERDICT: CLEAN (no findings)","model"'))
+    Assert-Refused (Get-Refusal) '*verdict is ''CLEAN (no findings)'', not CLEAN*'
+}
+
 Check 'A reviewer whose completion confirms another model is refused' {
     Reset ($events.Replace('"agentName":"reviewer","model":"claude-opus-5.5","firstDispatchedModel"', '"agentName":"reviewer","model":"claude-haiku-4.5","firstDispatchedModel"'))
     Assert-Refused (Get-Refusal) '*completed on claude-haiku-4.5*'
