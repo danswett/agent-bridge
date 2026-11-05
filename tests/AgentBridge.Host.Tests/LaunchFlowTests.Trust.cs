@@ -267,10 +267,13 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
 
         var options = await RequestAsync(ch, LaunchProtocol.Options, new { });
         Assert.False(options.TryGetProperty("trust", out _));
-        Assert.Equal("Busy: Claude in App is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all), so nothing was launched. Try again in a couple of minutes.",
+        // What the machine lists says what it is waiting on; a launch turned away says it was (#122).
+        Assert.Equal("Claude in App is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all); another launch waits until then.",
             options.GetProperty("busy").GetString());
         var busy = await LaunchTrustAsync(ch, new { workspace = "API" });
         Assert.Equal("busy", busy.GetProperty("outcome").GetString());
+        Assert.Equal("Busy: Claude in App is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all), so nothing was launched. Try again in a couple of minutes.",
+            busy.GetProperty("reason").GetString());
         Assert.False(busy.TryGetProperty("trust", out _));
         Assert.Empty(screens.Typed);
     }
@@ -298,7 +301,7 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
         Assert.Equal(2, screens.Plans.Count);
         var options = await RequestAsync(ch, LaunchProtocol.Options, new { });
         Assert.False(options.TryGetProperty("trust", out _));
-        Assert.StartsWith("Busy: Claude in App is waiting for a person at the machine to confirm Bypass Permissions mode", options.GetProperty("busy").GetString());
+        Assert.StartsWith("Claude in App is waiting for a person at the machine to confirm Bypass Permissions mode", options.GetProperty("busy").GetString());
     }
 
     [Fact]

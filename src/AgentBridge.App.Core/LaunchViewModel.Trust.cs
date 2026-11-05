@@ -315,8 +315,16 @@ public sealed partial class LaunchViewModel
                 askedBy.Remove(answer.Machine);
                 if ((string.IsNullOrWhiteSpace(prompt) ? null : prompt) == by.Prompt) { Prompt = ""; }
             }
+            // That launch's own status says so too, rather than that it was not confirmed.
+            if (late is { } l && l.Machine.Key == answer.Machine && l.Trust == answer.Question.Id)
+            {
+                late = null;
+                if (lost is null && last?.Request == l.Request) { startedLate = l.Request; Show(); }
+            }
             if (TrustResult(d)?.Session is { } id) { main.Open(answer.Machine, id, untilItArrives: true); }
         }
+        // Not trusted: that launch's agent closed, and nothing it leaves behind is its start.
+        else if (TrustOutcome(d) == "declined" && late is { } l && l.Machine.Key == answer.Machine && l.Trust == answer.Question.Id) { late = null; }
         // Its busy and its questions have changed.
         if (machine?.Key == answer.Machine && shown) { _ = RefreshAsync(); }
     }
