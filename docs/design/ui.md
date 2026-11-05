@@ -96,6 +96,10 @@ they are overlays applied after rules 1–6 (or 8) have picked the glyph and the
 While the host ends a session (`status: ending`), none of rules 1–6 apply: the row shows the
 `ended` glyph and "Ending session…" in secondary text, and rule 7's overlay still applies.
 
+An agent that needs sign-in, a turn that ended on an agent error, and a working session that
+has gone silent each have a rule of their own (§6.13, #800). None of them ever reads as idle or
+working.
+
 While a session's machine is away (#269), none of the rules apply: what the row last said may no
 longer be so. It shows the `failed` glyph (a host unreachable, §2.1) and, in secondary text,
 "Offline · last seen 2m ago" once the machine has left the relay's presence, or "Reconnecting…"
@@ -1435,6 +1439,109 @@ arrives, as a `question`.
 - **Home Assistant:** read only. `sensor.agent_bridge_<machine>_restore` (state: the last restore
   time; attributes: the notice), a `restored` attribute on each session's status sensor, and one
   persistent notification per restore. No Continue in Home Assistant.
+
+### 6.13 Sign-in needed, agent errors and Not responding (#800)
+
+A session must never look healthy while its agent is dead. When an agent stops because its
+sign-in expired, because a turn ended on an error, or because it went silent mid-turn, the row
+says so in words. One sign-in fixes every session for that machine, agent and account, so the
+action lives on the machine, not on each row. The field names here are the clients' proposal on
+#800 and follow whatever the protocol publishes; one adapter file per client maps them.
+
+**Status rules** (they extend §2.2; first match wins, in this order)
+
+| Where in §2.2 | When | Glyph | Status text | Action |
+|---|---|---|---|---|
+| After rule 1 | `status: signInNeeded` | `needs` | "Needs sign-in · *Agent*" (and "· @*account*" when known) | **Sign in**, only with the `agents.signIn` capability; no button without it (A7) |
+| Refines rule 3 | `working` with `notResponding` | `failed` | "Not responding · since *time*" | None; there is nothing safe to press yet |
+| Refines rule 6 | Idle, and the last turn ended on `error` | `failed` | "Quota reached", "Rate limited", "Model unavailable", "Network error" or "Agent error", from `error.kind` (an unknown kind reads as "Agent error") | None on the row; the agent's own words go in Details |
+
+- `signInNeeded` counts in Needs you and sorts with the other `needs` rows. "Not responding"
+  and the error rows don't count in Needs you: nothing a person does on the row fixes them.
+- None of them ever shows "Idle", "Working" or a stale "last active" time. An older client that
+  reads an unknown status as idle is the bug this section fixes; the protocol decides whether
+  that needs a capability.
+- `error.message` and `recovery.reason` are agent text: shown only in Details, as plain text
+  through the hidden-text check, never as a link or Markdown.
+
+**Machine banner** (`signIns`, one per machine, agent and account)
+
+- The same banner as §6.12's restore notice: an informational banner at the top of the session
+  list, below the restore notice for the same machine. One per (machine, agent, account), never
+  one per session.
+- Title: "*Agent* on *machine* needs sign-in" plus "· @*account*" when known. Line 2: "*n*
+  sessions affected", with the affected sessions' titles from the client's own records (never
+  from text in the record).
+- One button, **Sign in**, only with the capability. Without it the line reads "Sign in at the
+  machine" with no button, and the issue that leaves it so carries `needs-rdp` (#696).
+- Not dismissible while it lasts: it goes by itself when `state` becomes `resumed`.
+- States:
+
+| `state` | Banner shows | Button |
+|---|---|---|
+| `needed` | Title; "*n* sessions affected" | Sign in |
+| `pending` | "Waiting for sign-in · code expires *time*" | Show code (reopens the sheet) |
+| `resumed` | "Signed in · *n* sessions resumed" for 60 s, then gone; or "Recovered by itself" when no person signed in | None |
+| `failed` | "Sign-in failed · *reason*" | Try again (a new request) |
+
+**The sign-in sheet** (`deviceFlow`, only on a person's device)
+
+- Opened by **Sign in** on the banner, the row or the push, and only on a person's press. No
+  client starts it on its own.
+- **Before the code arrives:** "Starting *Agent*'s sign-in on *machine*…" with the progress
+  ring, and Cancel.
+- **With the code:**
+  - Line 1: "Open this page and enter the code." The page is the allowlisted URL as plain text
+    (for example `github.com/login/device`) with **Open**.
+  - The code in the monospace face at the display size, with **Copy**.
+  - "Expires *time*" in Pacific.
+  - Buttons: **Cancel** is the default and the Escape action; Open and Copy are secondary.
+    Nothing is copied or opened without a press.
+- **A URL not on the allowlist, or a malformed code:** the sheet shows "This sign-in link
+  wasn't recognised, so it isn't shown. Sign in at the machine." No link and no raw text.
+- **Expired:** the code is hidden and the sheet says "Code expired" with Try again, even before
+  the host updates.
+- **Success:** the sheet closes and the banner goes to `resumed`. Sessions that died mid-turn
+  show §6.12's **Continue**; nothing is typed for them.
+- The code and URL never appear in a notification, a toast, Home Assistant, a log or the
+  clipboard without a press.
+
+**Push and toast**
+
+- One per (machine, agent, account), repeated at most hourly while it lasts. Title "*Agent* on
+  *machine* needs sign-in", body "*n* sessions affected". Never the code or URL.
+- **Sound:** silent until the owner decides otherwise. Decision #764 keeps sound for pending
+  questions and approvals. Whether a sign-in may sound is an open owner decision. The payload
+  sets `notification.silent: true`.
+- Errors and "Not responding" get no push of their own; the row says them.
+
+**Accessibility** (§9.1)
+
+- The banner is a polite live region, announced once per new (machine, agent, account) (A6).
+- Sign in's accessible name: "Sign in to *Agent* on *machine*" (A1).
+- The sheet traps focus, starts on Cancel, and returns focus to the button that opened it (A3,
+  A4). The code is read character by character ("Code: A B C D, 1 2 3 4").
+- Reduced motion: the ring is still; the banner and sheet appear without animation (A10).
+- Every state is told apart by its words as well as its glyph.
+
+**Copy**
+
+| Use | Text |
+|---|---|
+| Row | "Needs sign-in · *Agent*"; "Not responding · since *time*"; "Quota reached"; "Rate limited"; "Model unavailable"; "Network error"; "Agent error" |
+| Banner | "*Agent* on *machine* needs sign-in"; "*n* sessions affected"; "Waiting for sign-in · code expires *time*"; "Signed in · *n* sessions resumed"; "Recovered by itself"; "Sign-in failed · *reason*"; "Sign in at the machine" |
+| Sheet | "Starting *Agent*'s sign-in on *machine*…"; "Open this page and enter the code."; "Expires *time*"; "Code expired"; "This sign-in link wasn't recognised, so it isn't shown. Sign in at the machine." |
+| Buttons | "Sign in"; "Show code"; "Open"; "Copy"; "Cancel"; "Try again" |
+| Push | "*Agent* on *machine* needs sign-in" / "*n* sessions affected" |
+
+**Platforms**
+
+- **Windows app and PWA:** the same banner as §6.12 and a modal sheet (ContentDialog in the app,
+  a dialog in the PWA).
+- **Apple (#260, owner welshofer):** note only. The same fields; the native form is that
+  track's decision.
+- **Home Assistant:** read-only status "Needs sign-in" on the session and machine. Never the
+  code or URL, and no Sign in.
 
 ## 7. Platform shells
 
