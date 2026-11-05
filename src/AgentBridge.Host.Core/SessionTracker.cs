@@ -103,7 +103,7 @@ internal sealed class SessionTracker
         if (_state.Background.Version != _delegatesVersion || _state.Background.CallsVersion != _callsVersion)
         {
             var (names, calls) = _state.Background.MainAgents();
-            MainDelegates = new Conversation.HistorySeed(names, calls) { CallOwners = _state.Background.CallOwners(), SyncAgents = _state.Background.SyncAgents() };
+            MainDelegates = new Conversation.HistorySeed(names, calls) { CallOwners = _state.Background.CallOwners(), SyncAgents = _state.Background.SyncAgents(), Parents = _state.Background.Parents() };
             _delegatesVersion = _state.Background.Version;
             _callsVersion = _state.Background.CallsVersion;
         }

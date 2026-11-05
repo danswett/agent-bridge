@@ -179,7 +179,7 @@ another agent sent **is** a prompt, with its `from`.
 | `tool` | [ToolCall](v1-sessions.md#toolcall)? | `tool`: the main agent's call, exactly as in `activity.history`: its name, a one-line summary (at most 200 bytes) and status, **never its arguments or results**. A call the transcript never ended reads `running` while the turn is the latest, and `failed` once a later prompt has started (the turn was abandoned), as `activity.history` does after an interruption |
 | `delegate` | [DelegateEvent](#delegateevent)? | `delegate`: one of the main agent's own delegates starting or reporting back (#661) |
 | `question` | [Question](v1-sessions.md#question)? | `question`: a question or an approval asked in this turn, exactly as `session.question` carried it while it waited (its `message` at most 8 KiB, the same budget rules), with `answerAtMachine` as it was. Never offered for answering again: a client draws it read-only (H4). A part whose question can't be read (Malformed records rule 3) has no `question`, and a client skips it |
-| `outcome` | `"answered"` \| `"approved"` \| `"denied"` \| `"cancelled"` \| `"unknown"`? | **Strict (security).** `question` only. `answered`: a form question got an answer. `approved` and `denied`: an approval's decision, as the agent recorded it. `cancelled`: the turn ended or was interrupted with the question unanswered. `unknown`: the transcript does not say, or it still waits (the question is also `session.question` then). An unknown value reads as `unknown`, never as `approved` |
+| `outcome` | `"answered"` \| `"approved"` \| `"denied"` \| `"cancelled"` \| `"unknown"`? | **Strict (security).** `question` only. `answered`: a form question got an answer. `approved` and `denied`: an approval's decision, as the agent recorded it. `cancelled`: the turn ended or was interrupted with the question unanswered. `unknown`: in the **latest turn only**, the transcript does not say yet, or it still waits (the question is also `session.question` then); in an earlier turn every question still without an outcome is `cancelled`, since another prompt has started. An unknown value reads as `unknown`, never as `approved` |
 | `answer` | string? | `question` with `outcome` `answered`: what the agent recorded as the answer, as plain text, at most **2 KiB**, the start kept. A form's fields are written one per line, `name: value`. Absent when the agent's record has none |
 | `answeredAt` | time? | When the outcome was recorded |
 
@@ -259,7 +259,10 @@ its turn.
 
 The worst case for one request, every budget spent: it **parses** at most 72 MiB, the 32 MiB above
 plus the one line it always examines (at most 32 MiB) and the one turn it always builds (at most
-8 MiB); it holds at most one line (32 MiB) in memory at a time. It **reads** at most 256 MiB back from
+8 MiB). Its **memory** is bounded by the same ceilings, not by one line: the line being read (a
+buffer that can grow to about twice the 32 MiB line limit), each record's parsed document while it is
+read, and the turns it builds, whose transcript (at most 40 MiB) becomes text of up to about twice
+that before the page is cut to its caps. It **reads** at most 256 MiB back from
 the cursor or the end looking for prompts, plus one 1 MiB chunk; 64 MiB forward from the start
 twice (the start's time, and whether the oldest turn found is the first); 256 MiB forward from a
 `before` to find its line's end, and that line (at most 32 MiB) to check its id; and the turns it
@@ -332,8 +335,8 @@ turn was the latest, with the same `from`.
 | `response` | `assistant.message` `content`, main agent's | `assistant` `text` blocks | `agent_message`; `item_completed` `AgentMessage`; an assistant `message` response item; `task_complete`'s `last_agent_message`. Codex writes a reply in more than one of these: the same text is one part |
 | `reasoning` | `assistant.message` `reasoningText`, main agent's | `thinking` blocks | `agent_reasoning`; a `reasoning` response item's `summary`; `Reasoning` `summary_text` (only when the user asked for summaries); one part per summary, the same text once |
 | `tool` | `tool.execution_start` and `_complete`, main agent's | `tool_use`, ended by its `tool_result` | `exec_command_*`, `patch_apply_*`, `mcp_tool_call_*`, `CommandExecution`, function, custom, shell and web search calls |
-| `question` (form) | `ask_user`'s `tool.execution_start`, a delegate's too (with its `agent`, as live; the delegate's call is no `tool` part); `answered` at `human_response.recorded` (its content is the `answer`) or the call's end; `cancelled` when the delegate asking aborts, shuts down or fails, or its synchronous `task` call returns, as live | `AskUserQuestion`'s `tool_use`; `answered` at its `tool_result` (its text is the `answer`) | none: Codex asks nothing as a form |
-| `question` (approval) | `permission.requested`; `approved` or `denied` from `permission.completed`'s `result.kind`; `cancelled` as a form question's, for a delegate's; a main agent's left with no `permission.completed` stays `unknown` in the latest turn, as it stays pending live, and is `cancelled` once a later prompt starts | not in the transcript (agent-ha-bridge's hook only): none | `exec_approval_request`, `apply_patch_approval_request`, always `answerAtMachine`; `approved` when the call then starts, else `unknown` |
+| `question` (form) | `ask_user`'s `tool.execution_start`, a delegate's too (with its `agent`, as live; the delegate's call is no `tool` part); `answered` at `human_response.recorded` (its content is the `answer`) or the call's end; `cancelled` when the delegate asking aborts, shuts down or fails, or its synchronous `task` call returns, or any of these ends a synchronous delegate it was started by (as far up as a background one), as live | `AskUserQuestion`'s `tool_use`; `answered` at its `tool_result` (its text is the `answer`) | none: Codex asks nothing as a form |
+| `question` (approval) | `permission.requested`; `approved` or `denied` from `permission.completed`'s `result.kind`; `cancelled` as a form question's, for a delegate's; a main agent's left with no `permission.completed` stays `unknown` in the latest turn, as it stays pending live, and is `cancelled` once a later prompt starts | not in the transcript (agent-ha-bridge's hook only): none | `exec_approval_request`, `apply_patch_approval_request`, always `answerAtMachine`; `approved` when the call then starts, else `unknown` in the latest turn and `cancelled` in an earlier one |
 | `delegate` `started` | `subagent.started` with no parent, named as the session names it, else from its `task` call; not one whose `task` call a delegate made (a nested delegate's start may name its parent only by that call's stamp) | an `Agent` call's `tool_result` with `async_launched` | `CollabAgentToolCall` `spawn_agent` the session itself called |
 | `delegate` `reported` | `subagent.completed` (`done`), `subagent.failed` (`failed`), or an `agent_idle` notification (`done`) | a task notification Claude marked as one | a `subagent_notification` that says it completed (`done`), errored or was interrupted (`failed`), or the session's own multi-agent call (a wait) returning that state |
 | The start | the first record's time | the first record's time | `session_meta`'s time |
@@ -357,7 +360,11 @@ an answer (the user interrupted, the session shut down, another prompt started) 
 yet, or one that can't be found, is `unavailable` ("this session's transcript can't be found"); one
 that can't be opened or read part-way is `unavailable` ("this session's transcript can't be read");
 a line in a turn that isn't JSON is skipped and the turn marked `truncated`, and a turn-starting
-line that isn't is an `unreadable` turn with `partial` on its page. Live `activity.turn` is then
+line that isn't is an `unreadable` turn with `partial` on its page. A record that is JSON but whose
+text can't be decoded (a string or name holding half a surrogate pair, `"\uD800"`) is read the same
+way, as a line that isn't JSON: that record, never the request, and live alike; JSON nested in a
+record's text that can't be decoded is read as JSON that isn't is: a tool's arguments as text, a
+question's schema as no fields. Live `activity.turn` is then
 absent until the next prompt the host can read, so nothing after that line is drawn under the
 prompt before it.
 

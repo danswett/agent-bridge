@@ -8,7 +8,7 @@ namespace AgentBridge.Host.Core.Conversation;
 // What one read of a session's history knows beyond the turn it is building: the delegates it has
 // seen start and what each is called, the main agent's task calls, whose tool calls are whose. One
 // per request; turns are built oldest first, so a start is known before its report.
-internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed, IReadOnlyDictionary<string, string> calls, bool remoteApproval, IReadOnlyDictionary<string, string>? owners = null, IReadOnlySet<string>? sync = null)
+internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed, IReadOnlyDictionary<string, string> calls, bool remoteApproval, IReadOnlyDictionary<string, string>? owners = null, IReadOnlySet<string>? sync = null, IReadOnlyDictionary<string, string>? parents = null)
 {
     // The main agent's own delegates, by id, with their names: those this read saw start, and those
     // the session lists now (its subagents with no parent), whose starts may be on an older page.
@@ -26,6 +26,8 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     // saw start, and those the session knows (BackgroundWork.SyncAgents), so it does not depend on
     // the page.
     readonly HashSet<string> _sync = new(sync ?? new HashSet<string>(), StringComparer.Ordinal);
+    // The delegate each nested delegate was started by: this read's starts, and the session's.
+    readonly Dictionary<string, string> _parents = new(parents ?? new Dictionary<string, string>(), StringComparer.Ordinal);
     const int Keep = 4096;
 
     // A delegate's runs as the main agent hears of them within one turn, as BackgroundWork keeps
@@ -83,6 +85,36 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     }
 
     public bool IsSync(string agent) => _sync.Contains(agent);
+
+    public void StartedBy(string agent, string parent)
+    {
+        if (_parents.Count < Keep || _parents.ContainsKey(agent)) { _parents[agent] = parent; }
+    }
+
+    // A delegate's turn ended for good: what it asked, and what every synchronous delegate it was
+    // waiting on asked, as far down as a background one, is asked of no one, as live
+    // (BackgroundWork.EndTurnOf). Only the direct delegate's was withdrawn, so a nested one's
+    // approval stayed unknown in the latest turn while live dropped it (#789).
+    public void EndTurnOf(TurnBuilder turn, string root, DateTimeOffset at)
+    {
+        turn.Withdrawn(root, at);
+        foreach (var agent in _sync)
+        {
+            if (Below(agent, root)) { turn.Withdrawn(agent, at); }
+        }
+    }
+
+    bool Below(string agent, string root)
+    {
+        var a = agent;
+        for (var depth = 0; depth < 64; depth++)
+        {
+            if (!_sync.Contains(a) || !_parents.TryGetValue(a, out var parent)) { return false; }
+            if (parent == root) { return true; }
+            a = parent;
+        }
+        return false;
+    }
 
     public void Started(TurnBuilder turn, string agent, string? name, SubagentKind kind, DateTimeOffset at)
     {
@@ -235,7 +267,12 @@ internal sealed class CopilotHistory : HistoryDialect
                     // A synchronous delegate's task call returning ends it, failed or not
                     // (BackgroundWork.TaskCallDone): what it was still asking is asked of no one,
                     // as live, instead of left pending (found in review of #292).
-                    if (context.DelegateOfCall(id) is { } ended && context.IsSync(ended)) { turn.Withdrawn(ended, at); }
+                    // Failed, the synchronous delegates it was waiting on go with it.
+                    if (context.DelegateOfCall(id) is { } ended && context.IsSync(ended))
+                    {
+                        if (failed) { context.EndTurnOf(turn, ended, at); }
+                        else { turn.Withdrawn(ended, at); }
+                    }
                     if (id is not null && turn.Pending(id))
                     {
                         var result = Json.Obj(data, "result") is { } r ? Json.Str(r, "content") : null;
@@ -270,7 +307,9 @@ internal sealed class CopilotHistory : HistoryDialect
                 {
                     var call = Json.Str(data, "toolCallId");
                     context.KnowMode(agent, Json.Str(data, "executionMode") == "background");
-                    var parented = Json.Str(data, "parentId") is { Length: > 0 };
+                    var parentId = Json.Str(data, "parentId");
+                    var parented = parentId is { Length: > 0 };
+                    if ((parented ? parentId : context.AgentOfCall(call)) is { } parent) { context.StartedBy(agent, parent); }
                     if (call is not null)
                     {
                         var nested = parented || context.AgentOfCall(call) is not null;
@@ -291,7 +330,7 @@ internal sealed class CopilotHistory : HistoryDialect
                 if ((agent ?? context.DelegateOfCall(Json.Str(data, "toolCallId"))) is { } lost)
                 {
                     context.Ended(turn, lost, SubagentOutcome.Failed, at);
-                    turn.Withdrawn(lost, at);
+                    context.EndTurnOf(turn, lost, at);
                 }
                 break;
             case "system.notification" when Json.Obj(data, "kind") is { } kind && Json.Str(kind, "type") == "agent_idle" && Json.Str(kind, "agentId") is { Length: > 0 } idle:
@@ -302,7 +341,7 @@ internal sealed class CopilotHistory : HistoryDialect
                 break;
             // A delegate's own abort or shutdown: what it was asking is asked of no one, as live.
             case "abort" or "session.shutdown":
-                turn.Withdrawn(agent!, at);
+                context.EndTurnOf(turn, agent!, at);
                 break;
         }
     }

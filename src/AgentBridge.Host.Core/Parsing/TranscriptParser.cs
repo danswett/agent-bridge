@@ -110,10 +110,17 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
 
     protected DateTimeOffset Now(DateTimeOffset? at) => at ?? Time.GetUtcNow();
 
+    // A record whose text can't be decoded (Json.Decodable) is read as one that is not JSON, as
+    // history reads it: it left the session unlisted, and must not give a turn an id here that
+    // history can't (found in review of #292).
     static JsonDocument? TryParse(ReadOnlyMemory<byte> line)
     {
-        try { return JsonDocument.Parse(line, new JsonDocumentOptions { MaxDepth = 256 }); }
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(line, new JsonDocumentOptions { MaxDepth = 256 }); }
         catch (JsonException) { return null; }
+        if (Json.Decodable(doc.RootElement)) { return doc; }
+        doc.Dispose();
+        return null;
     }
 
     protected static byte[] Marker(string text) => System.Text.Encoding.UTF8.GetBytes(text);

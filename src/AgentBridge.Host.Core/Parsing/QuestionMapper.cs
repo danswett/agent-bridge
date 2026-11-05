@@ -151,7 +151,8 @@ internal static class QuestionMapper
                 using var doc = JsonDocument.Parse(text);
                 return ChoiceList(doc.RootElement);
             }
-            catch (JsonException) { return string.IsNullOrWhiteSpace(text) ? [] : [text]; }
+            // JSON whose text can't be decoded (Json.Decodable) is read as text, as JSON that isn't.
+            catch (Exception e) when (e is JsonException or InvalidOperationException) { return string.IsNullOrWhiteSpace(text) ? [] : [text]; }
         }
         if (v.ValueKind != JsonValueKind.Array) { return []; }
         return [.. v.EnumerateArray().Select(c => c.ValueKind == JsonValueKind.String ? c.GetString() ?? "" : c.GetRawText()).Where(c => !string.IsNullOrWhiteSpace(c))];
@@ -174,7 +175,7 @@ internal static class QuestionMapper
                 using var doc = JsonDocument.Parse(schema.GetString() ?? "");
                 return SchemaForm(doc.RootElement);
             }
-            catch (JsonException) { return ([], true); }
+            catch (Exception e) when (e is JsonException or InvalidOperationException) { return ([], true); }
         }
         var whole = CopilotFieldConstraints.FormUnchecked(schema) is null;
         if (Json.Obj(schema, "properties") is not { } properties) { return ([], whole); }

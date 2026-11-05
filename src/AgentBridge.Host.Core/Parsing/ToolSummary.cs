@@ -63,7 +63,8 @@ internal static class ToolSummary
                     using var doc = JsonDocument.Parse(raw);
                     return From(doc.RootElement);
                 }
-                catch (JsonException) { }
+                // Text that is JSON but can't be decoded (Json.Decodable) is summarised as text.
+                catch (Exception e) when (e is JsonException or InvalidOperationException) { }
             }
             return Cut(raw);
         }

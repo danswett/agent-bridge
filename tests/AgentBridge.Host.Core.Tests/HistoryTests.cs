@@ -636,6 +636,99 @@ public class HistoryTests
         Assert.Equal(JsonSerializer.Serialize(together, ProtocolJson.Options), JsonSerializer.Serialize(alone, ProtocolJson.Options));
     }
 
+    // #789: a failed task call ends every synchronous delegate below the one it started, as live
+    // (BackgroundWork.EndTurnOf), so a nested one's approval is withdrawn too.
+    [Fact]
+    public async Task A_failed_task_call_withdraws_the_approvals_of_the_synchronous_delegates_below_it_as_live()
+    {
+        await using var s = new Copilot_();
+        var session = await s.After(
+            Copilot.User("go", 1),
+            Copilot.ToolStart("t1", "task", new { description = "Lead", prompt = "lead" }, 2),
+            Copilot.SubagentStarted("t1", "agent-1", 2, mode: "sync"),
+            Copilot.ToolStart("t2", "task", new { description = "Helper", prompt = "help" }, 3, agentId: "agent-1"),
+            Copilot.SubagentStarted("t2", "agent-2", 3, mode: "sync"),
+            Copilot.ToolStart("c7", "powershell", new { command = "git push" }, 4, agentId: "agent-2"),
+            Copilot.Permission("req7", "c7", Copilot.Prompts["commands"], 5, agentId: "agent-2"),
+            Copilot.Event("tool.execution_complete", new { toolCallId = "t1", success = false, error = new { message = "failed" } }, 6));
+
+        Assert.Null(session.Question);
+        var asked = (await s.Page()).Turns!.Single().Parts.Single(p => p.Kind == HistoryPartKind.Question);
+        Assert.Equal(("agent-2", QuestionOutcome.Cancelled), (asked.Question!.Agent, asked.Outcome!.Value));
+    }
+
+    // Found in review of #292: a record that is JSON but holds half a surrogate pair ("\uD800")
+    // parses, and then throws when its text is read, which failed every request reaching it.
+    static string Undecodable(string line) => line.Replace("UNDECODABLE", "\\uD800", StringComparison.Ordinal);
+
+    [Fact]
+    public async Task A_claude_prompt_whose_text_cannot_be_decoded_is_an_unreadable_turn_and_the_turns_before_it_are_reached()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        Fixture.Append(transcript,
+            Claude.User("first", 1),
+            Claude.Assistant(2, "end_turn", Claude.Text("One.")),
+            Undecodable(Claude.User("bad UNDECODABLE", 3)),
+            Claude.Assistant(4, "end_turn", Claude.Text("Two.")),
+            Claude.User("third", 5));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        var newest = await source.HistoryAsync(Id, null, 2);
+        Assert.True(newest.Partial);
+        Assert.True(newest.Turns![0].Unreadable);
+        Assert.Equal("third", Prompt(newest.Turns[1]));
+        var earlier = await source.HistoryAsync(Id, newest.Before, 2);
+        Assert.Equal(["first"], earlier.Turns!.Select(Prompt));
+        Assert.NotNull(earlier.Start);
+    }
+
+    [Fact]
+    public async Task An_older_copilot_reply_or_reasoning_whose_text_cannot_be_decoded_cuts_its_turn_not_the_request()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+            Copilot.User("one", 1),
+            Undecodable(Copilot.Assistant("reply UNDECODABLE", 2)),
+            Undecodable(Copilot.Event("assistant.message", new Dictionary<string, object> { ["content"] = "kept", ["UNDECODABLE"] = "name" }, 3)),
+            Copilot.Assistant("fine", 4, reasoning: "thought"),
+            Copilot.User("two", 5),
+            Copilot.Assistant("second", 6));
+
+        var newest = await s.Page(limit: 1);
+        Assert.Equal(["two"], newest.Turns!.Select(Prompt));
+        Assert.Null(newest.Partial);
+        var earlier = await s.Page(newest.Before, limit: 1);
+        var one = earlier.Turns!.Single();
+        Assert.Equal("one", Prompt(one));
+        Assert.True(one.Truncated);
+        Assert.True(earlier.Partial);
+        Assert.Equal(["thought", "fine"], one.Parts.Select(p => p.Text));
+        Assert.NotNull(earlier.Start);
+    }
+
+    [Fact]
+    public async Task A_first_record_and_first_prompt_whose_text_cannot_be_decoded_still_find_the_start_of_the_session()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+            Undecodable(Copilot.Event("session.start", new { selectedModel = "UNDECODABLE" }, 0)),
+            Undecodable(Copilot.User("first UNDECODABLE", 1)),
+            Copilot.User("two", 2),
+            Copilot.User("three", 3));
+
+        var newest = await s.Page(limit: 2);
+        Assert.Equal(["two", "three"], newest.Turns!.Select(Prompt));
+        Assert.Null(newest.Start);
+        var earlier = await s.Page(newest.Before, limit: 2);
+        Assert.True(earlier.Turns!.Single().Unreadable);
+        Assert.True(earlier.Partial);
+        Assert.Equal(Fixture.T0.AddSeconds(2), earlier.Start!.At);
+    }
+
     // Found in review of #292: a delegate's start was named from its task call when that call
     // was on the page, and from the start's own description when not.
     [Fact]

@@ -17,6 +17,40 @@ internal static class Json
 
     public static string? Str(JsonElement e, string name) => Get(e, name) is { ValueKind: JsonValueKind.String } v ? v.GetString() : null;
 
+    // Whether every string and property name in a record can be read as text. One holding half a
+    // surrogate pair ("\uD800") is valid JSON that parses, but GetString and Name then throw
+    // InvalidOperationException (Received.Text says the same): a record like that is unreadable,
+    // as one that is not JSON is, and costs that record, never the session or a history request
+    // (found in review of #292).
+    public static bool Decodable(JsonElement e)
+    {
+        try
+        {
+            switch (e.ValueKind)
+            {
+                case JsonValueKind.String:
+                    _ = e.GetString();
+                    return true;
+                case JsonValueKind.Object:
+                    foreach (var p in e.EnumerateObject())
+                    {
+                        _ = p.Name;
+                        if (!Decodable(p.Value)) { return false; }
+                    }
+                    return true;
+                case JsonValueKind.Array:
+                    foreach (var item in e.EnumerateArray())
+                    {
+                        if (!Decodable(item)) { return false; }
+                    }
+                    return true;
+                default:
+                    return true;
+            }
+        }
+        catch (InvalidOperationException) { return false; }
+    }
+
     public static int? Int(JsonElement e, string name) => Get(e, name) switch
     {
         { ValueKind: JsonValueKind.Number } v when v.TryGetInt32(out var i) => i,

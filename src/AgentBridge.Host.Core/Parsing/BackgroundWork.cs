@@ -618,6 +618,9 @@ internal sealed class BackgroundWork
     // The delegates kept that run synchronously: their task call returning ends them.
     public HashSet<string> SyncAgents() => [.. _agents.Values.Where(a => !a.Background).Select(a => a.Id)];
 
+    // The delegate each kept nested delegate was started by.
+    public Dictionary<string, string> Parents() => _agents.Values.Where(a => a.Parent is not null).ToDictionary(a => a.Id, a => a.Parent!, StringComparer.Ordinal);
+
     // session.get { id, agent }: the entry with its own words and tools.
     public Subagent? Detail(string agentId, DateTimeOffset? processStartedAt, IReadOnlySet<string> waiting)
     {

@@ -32,6 +32,11 @@ internal sealed record HistorySeed(IReadOnlyDictionary<string, string?> Delegate
 
     // The delegates the session knows run synchronously (BackgroundWork.SyncAgents).
     public IReadOnlySet<string> SyncAgents { get; init; } = new HashSet<string>();
+
+    // The delegate each nested delegate the session keeps was started by (BackgroundWork.Parents),
+    // so a failed task call ends the same synchronous delegates below it whatever page their
+    // starts are on.
+    public IReadOnlyDictionary<string, string> Parents { get; init; } = new Dictionary<string, string>();
 }
 
 // One request's read of a session's transcript (docs/protocol/v1-history.md): backwards from the
@@ -59,7 +64,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return HistoryResult.NotAvailable(NotRead); }
         using (handle)
         {
-            try { return new Pass(this, handle, sessionId, dialect, new HistoryContext(seed.Delegates, seed.Calls, remoteApproval, seed.CallOwners, seed.SyncAgents), seed.AgentTurns).Page(before, limit); }
+            try { return new Pass(this, handle, sessionId, dialect, new HistoryContext(seed.Delegates, seed.Calls, remoteApproval, seed.CallOwners, seed.SyncAgents, seed.Parents), seed.AgentTurns).Page(before, limit); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return HistoryResult.NotAvailable(NotRead); }
         }
     }
@@ -161,8 +166,11 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 if (!Charge(line.Length)) { return false; }
                 using var doc = Parse(line);
                 if (doc is null) { return true; }
-                dialect.First(doc.RootElement, context);
-                at = Json.Time(doc.RootElement, "timestamp");
+                if (!Decoding(() =>
+                {
+                    dialect.First(doc.RootElement, context);
+                    at = Json.Time(doc.RootElement, "timestamp");
+                })) { return true; }
                 return at is null && ++looked < 64;
             });
             return (fingerprint, at);
@@ -192,7 +200,8 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 if (!dialect.MayStart(line.Span)) { return true; }
                 if (!Charge(line.Length)) { return false; }
                 using var doc = Parse(line);
-                if (doc is null || dialect.Start(doc.RootElement) is not null)
+                HistoryPrompt? start = null;
+                if (doc is null || !Decoding(() => start = dialect.Start(doc.RootElement)) || start is not null)
                 {
                     _firstPrompt = offset;
                     return false;
@@ -372,15 +381,18 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             var line = new byte[content];
             ReadAt(line, start);
             using var doc = Parse(line);
-            if (doc is null)
+            HistoryPrompt? prompt = null;
+            DateTimeOffset? at = null;
+            if (doc is null || !Decoding(() =>
+            {
+                prompt = dialect.Start(doc.RootElement);
+                at = prompt is null ? null : Json.Time(doc.RootElement, "timestamp");
+            }))
             {
                 starts.Add(new Start(start, end, TurnIds.Raw(line), null, null));
                 return true;
             }
-            if (dialect.Start(doc.RootElement) is { } prompt)
-            {
-                starts.Add(new Start(start, end, TurnIds.Raw(line), prompt, Json.Time(doc.RootElement, "timestamp")));
-            }
+            if (prompt is not null) { starts.Add(new Start(start, end, TurnIds.Raw(line), prompt, at)); }
             return true;
         }
 
@@ -460,7 +472,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 // A turn whose own start could not be read is placed by the first time after it.
                 if (s.At is null && at is { } first && turn.At == DateTimeOffset.UnixEpoch) { turn.At = first; }
                 into.Record(Attachments.Base64Url(TurnIds.Raw(line.Span)));
-                dialect.Apply(doc.RootElement, at ?? DateTimeOffset.UnixEpoch, into, context);
+                if (!Decoding(() => dialect.Apply(doc.RootElement, at ?? DateTimeOffset.UnixEpoch, into, context))) { turn.Truncated = true; }
                 return true;
             }, aligned: from == s.End);
         }
@@ -538,16 +550,33 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             }
         }
 
+        // A record whose text .NET cannot decode is unreadable, as one that is not JSON is: a string
+        // or property name holding half a surrogate pair ("\uD800") is valid JSON that parses, but
+        // GetString and Name throw InvalidOperationException, which failed the whole request and
+        // left every older turn unreachable (found in review of #292; Received.Text is the same).
         static JsonDocument? Parse(ReadOnlyMemory<byte> line)
         {
             try
             {
                 var doc = JsonDocument.Parse(line, new JsonDocumentOptions { MaxDepth = 256 });
-                if (doc.RootElement.ValueKind == JsonValueKind.Object) { return doc; }
+                if (doc.RootElement.ValueKind == JsonValueKind.Object && Json.Decodable(doc.RootElement)) { return doc; }
                 doc.Dispose();
                 return null;
             }
             catch (JsonException) { return null; }
+        }
+
+        // Text inside a record's text can be JSON too (a tool's arguments, a question's schema),
+        // and the same half surrogate pair there throws only when a dialect reads it: that record
+        // is unreadable in its turn, as one Parse refuses is, never the request's failure.
+        static bool Decoding(Action read)
+        {
+            try
+            {
+                read();
+                return true;
+            }
+            catch (InvalidOperationException) { return false; }
         }
     }
 }
