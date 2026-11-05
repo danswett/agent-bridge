@@ -9,7 +9,8 @@ namespace AgentBridge.Host.Core.Parsing;
 // unless that turn asked for tools, because Copilot ends a turn after every round of
 // tool calls and starts the next one to read their results (reporting idle there made
 // every tool round flash idle). A pending ask_user or permission request means waiting.
-// abort and session.shutdown end the turn wherever it was.
+// abort and session.shutdown end the turn wherever it was, and so does the session's own
+// session.resume: a new CLI, so whatever a killed one was doing or asking is over.
 //
 // Subagents write into the same file, stamped with a top-level agentId the session's own
 // events never carry. Their turns, prompts and model are not the session's, so they are
@@ -366,6 +367,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "session.resume":
                 S.Model = Json.Str(data, "selectedModel") ?? S.Model;
                 Context(Json.Obj(data, "context"));
+                // A new process: whatever the last one was doing or asking died with it (killed
+                // mid-turn, nothing says so). A question it puts up again is written again.
+                if (!sub) { S.Abandon(at); }
                 break;
             case "session.context_changed":
                 Context(data);

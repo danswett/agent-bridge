@@ -58,7 +58,7 @@ public sealed class CopilotInput(string path)
     {
         var ask = bytes.IndexOf("\"type\":\"tool.execution_start\""u8) >= 0 && bytes.IndexOf("\"ask_user\""u8) >= 0;
         var permission = bytes.IndexOf("\"type\":\"permission."u8) >= 0;
-        var ending = bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0;
+        var ending = bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.resume\""u8) >= 0;
         var answer = asks.Count > 0 && (bytes.IndexOf("\"type\":\"tool.execution_complete\""u8) >= 0 || bytes.IndexOf("\"type\":\"human_response.recorded\""u8) >= 0);
         if (!ask && !permission && !ending && !answer) { return; }
         if (CopilotPrompts.Parse(bytes) is not { } e) { return; }
@@ -79,8 +79,10 @@ public sealed class CopilotInput(string path)
                 case "permission.completed" when CopilotPrompts.Str(data, "requestId") is { } id:
                     permissions.Remove(id);
                     break;
-                case "abort" or "session.shutdown" when e.AgentId is null:
-                    // The session's own abort or shutdown ends everything it was asking.
+                case "abort" or "session.shutdown" or "session.resume" when e.AgentId is null:
+                    // The session's own abort or shutdown ends everything it was asking, and so does a
+                    // new CLI resuming it: what a killed one asked died with it, and one asked again is
+                    // written again.
                     asks.Clear();
                     permissions.Clear();
                     break;

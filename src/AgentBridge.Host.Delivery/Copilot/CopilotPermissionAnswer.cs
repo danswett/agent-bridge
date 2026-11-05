@@ -18,7 +18,7 @@ public sealed record CopilotPermissionResult(string? Kind, bool Feedback, bool S
 public static class CopilotPermissionTranscript
 {
     // The whole transcript, start to end: a request waits until its permission.completed, or
-    // until the session's own abort or shutdown. ask_user calls are counted as CopilotInput
+    // until the session's own abort, shutdown or resume in a new CLI. ask_user calls are counted as CopilotInput
     // counts them, since either kind of prompt holding the session's input changes what a key
     // typed now would answer.
     public static CopilotPermissionState Before(string path, string requestId)
@@ -36,7 +36,7 @@ public static class CopilotPermissionTranscript
         {
             var ask = bytes.IndexOf("\"type\":\"tool.execution_start\""u8) >= 0 && bytes.IndexOf("\"ask_user\""u8) >= 0;
             var permission = bytes.IndexOf("\"type\":\"permission."u8) >= 0;
-            var ending = bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0;
+            var ending = bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.resume\""u8) >= 0;
             var answer = asks.Count > 0 && (bytes.IndexOf("\"type\":\"tool.execution_complete\""u8) >= 0 || bytes.IndexOf("\"type\":\"human_response.recorded\""u8) >= 0);
             if (!ask && !permission && !ending && !answer) { return; }
             if (CopilotPrompts.Parse(bytes) is not { } e) { return; }
@@ -58,7 +58,7 @@ public static class CopilotPermissionTranscript
                     case "permission.completed" when CopilotPrompts.Str(data, "requestId") is { } id:
                         permissions.Remove(id);
                         break;
-                    case "abort" or "session.shutdown" when e.AgentId is null:
+                    case "abort" or "session.shutdown" or "session.resume" when e.AgentId is null:
                         asks.Clear();
                         permissions.Clear();
                         break;

@@ -36,6 +36,9 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     // Sessions restored after a reboot or a crash (#780, RestoreRecorder), with their mark. Set before
     // the session registers, too: shown from its first upsert. Under _gate.
     readonly Dictionary<string, RestoreMarkState> _restoreMarks = new(StringComparer.Ordinal);
+    // The mark each one replaced, kept as it was then, for a restore attempt that started nothing
+    // (IRestoreMarks.Revert). Under _gate.
+    readonly Dictionary<string, RestoreMarkState> _restoreMarksBefore = new(StringComparer.Ordinal);
     // Who drives each session (Session.Driver), shared with the Home Assistant connector; null for
     // a source that does not say.
     readonly SessionDrivers? _drivers;
@@ -841,8 +844,28 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     {
         lock (_gate)
         {
-            if (mark is null ? !_restoreMarks.Remove(id) : _restoreMarks.TryGetValue(id, out var was) && was.Mark == mark) { return; }
-            if (mark is not null) { _restoreMarks[id] = new RestoreMarkState(mark); }
+            if (mark is null)
+            {
+                _restoreMarksBefore.Remove(id);
+                if (!_restoreMarks.Remove(id)) { return; }
+            }
+            else
+            {
+                if (_restoreMarks.TryGetValue(id, out var was) && was.Given == mark) { return; }
+                if (was is not null) { _restoreMarksBefore[id] = was; } else { _restoreMarksBefore.Remove(id); }
+                _restoreMarks[id] = new RestoreMarkState(mark);
+            }
+            if (!_entries.ContainsKey(id)) { return; }
+        }
+        _ = Task.Run(() => RecommitDriverAsync(id));
+    }
+
+    public void Revert(string id, SessionRestored mark)
+    {
+        lock (_gate)
+        {
+            if (!_restoreMarks.TryGetValue(id, out var now) || now.Given != mark) { return; }
+            if (_restoreMarksBefore.Remove(id, out var before)) { _restoreMarks[id] = before; } else { _restoreMarks.Remove(id); }
             if (!_entries.ContainsKey(id)) { return; }
         }
         _ = Task.Run(() => RecommitDriverAsync(id));
@@ -878,6 +901,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         entry.Full = full;
         DateTimeOffset? endingSince;
         SessionRestored? restored;
+        var prompted = false;
         lock (_gate)
         {
             endingSince = _ending.TryGetValue(full.Id, out var at) ? at : null;
@@ -890,7 +914,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             if (_restoreMarks.TryGetValue(full.Id, out var state))
             {
                 state.Prompts ??= entry.Tracker.Prompts;
-                if (state.Mark.MidTurn == true && (entry.Tracker.Prompts > state.Prompts || (full.Status == SessionStatus.Working && full.StatusSince > state.Mark.At)))
+                prompted = entry.Tracker.Prompts > state.Prompts;
+                if (state.Mark.MidTurn == true && (prompted || (full.Status == SessionStatus.Working && full.StatusSince > state.Mark.At)))
                 {
                     state.Mark = state.Mark with { MidTurn = null, Continue = null };
                 }
@@ -946,6 +971,12 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             if (shown.Status == SessionStatus.Waiting && shown.StatusSince < restored.At && (shown.Question is null || shown.Question.AskedAt < restored.At))
             {
                 shown = shown with { Question = null, WaitingOn = null, Status = SessionStatus.Idle, StatusSince = restored.At };
+            }
+            // Nor is the turn the interrupted run was in: resumed with no prompt, the agent is idle
+            // until a prompt arrives after the restore, whatever its transcript last said.
+            else if (shown.Status == SessionStatus.Working && shown.StatusSince < restored.At && !prompted)
+            {
+                shown = shown with { Status = SessionStatus.Idle, StatusSince = restored.At };
             }
         }
         if (_drivers is not null)
@@ -1046,6 +1077,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             _ending.Remove(id);
             _recovery.Remove(id);
             _restoreMarks.Remove(id);
+            _restoreMarksBefore.Remove(id);
             _drivers?.Forget(id);
             entry.Timer?.Dispose();
             entry.Timer = null;
@@ -1149,6 +1181,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
 // shown: Continue goes once there is one more.
 sealed class RestoreMarkState(SessionRestored mark)
 {
+    // As the recorder gave it; Mark loses midTurn and Continue once a turn starts.
+    public SessionRestored Given { get; } = mark;
     public SessionRestored Mark { get; set; } = mark;
     public int? Prompts { get; set; }
 }

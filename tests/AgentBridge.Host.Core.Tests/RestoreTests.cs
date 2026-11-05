@@ -1141,8 +1141,9 @@ public sealed class RestoreTests : IDisposable
 
         real.Mark(Id, new SessionRestored { At = Fixture.T0.AddSeconds(5), Cause = RestoreCause.Reboot, MidTurn = true, Continue = "carry on" });
         await Until(() => real.Get(Id)?.Restored is not null);
-        // Working still, by a transcript that stops where the reboot cut it: Continue stays.
-        Assert.Equal(((bool?)true, "carry on"), (real.Get(Id)!.Restored!.MidTurn, real.Get(Id)!.Restored!.Continue));
+        // Working still, by a transcript that stops where the reboot cut it: Continue stays, and the
+        // session, resumed with no prompt, is shown idle, not in the turn that was cut.
+        Assert.Equal(((bool?)true, "carry on", SessionStatus.Idle), (real.Get(Id)!.Restored!.MidTurn, real.Get(Id)!.Restored!.Continue, real.Get(Id)!.Status));
 
         Fixture.Append(events, Copilot.TurnEnd(3), Copilot.User("carry on", 10), Copilot.TurnStart(11));
         await real.RefreshAsync();
@@ -1199,6 +1200,29 @@ public sealed class RestoreTests : IDisposable
         var asked = real.Get(Id)!;
         Assert.Equal(SessionStatus.Waiting, asked.Status);
         Assert.NotNull(asked.Question);
+    }
+
+    // Killed mid-turn with a question up, then resumed in a new CLI: the turn and the question died
+    // with the old process, so the session is idle and asks nothing, mark or no mark.
+    [Fact]
+    public async Task A_copilot_session_resumed_after_its_process_was_killed_mid_turn_is_idle_and_asks_nothing()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999996";
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var real = f.Source();
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 3));
+        await real.RefreshAsync();
+        Assert.Equal(SessionStatus.Waiting, real.Get(Id)!.Status);
+
+        f.Processes.Exit(AgentKind.Copilot, 100);
+        f.Processes.Run(AgentKind.Copilot, 200, startedAt: Fixture.T0.AddSeconds(30));
+        f.CopilotSession(Id, 200, lockWrite: Fixture.T0.AddSeconds(31));
+        Fixture.Append(events, Copilot.Event("session.resume", new { resumeTime = Copilot.At(31) }, 31));
+        await real.RefreshAsync();
+
+        var resumed = real.Get(Id)!;
+        Assert.Equal((200, SessionStatus.Idle, (Question?)null), (resumed.ProcessId, resumed.Status, resumed.Question));
     }
 
     // ---- #837 review: the restore lifecycle ----
@@ -1375,6 +1399,132 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal(["a"], r.Notice!.Offered.Select(o => o.Id));
     }
 
+    // ---- #837 review, second round ----
+
+    // A restore started and not yet registered when the host went is stamped on its owed entry; found
+    // running at the next start, it is adopted stamped.
+    [Fact]
+    public async Task A_session_found_running_whose_restore_had_not_registered_is_adopted_with_its_stamp()
+    {
+        var now = Time.GetUtcNow();
+        RestoreFiles.Write(Record, new RestoreFile
+        {
+            Boot = Fixture.T0, Instance = "run1", Written = now.AddMinutes(-1),
+            Owed = [new RestoreOwed(E("a"), RestoreCause.Reboot, now.AddMinutes(-5), now.AddMinutes(-2), Decided: true, Restored: now.AddMinutes(-1))],
+        });
+        source.Sessions.Add(S("a"));
+        await using var r = Recorder();
+
+        r.Start();
+
+        Assert.NotNull(Assert.Single(Written().Sessions).Restored);
+    }
+
+    // A second request for a session already being restored is refused before it touches anything,
+    // so the first keeps its stamp; one the record holds no entry of is written down in Stamps before
+    // its launch, and adopted stamped if the host goes before it registers.
+    [Fact]
+    public async Task A_restore_on_request_is_written_down_before_its_launch_and_a_second_request_for_it_is_refused()
+    {
+        var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using var first = Recorder(resumer: resumer);
+        first.Start();
+
+        var asked = first.RestoreAsync(new RestoreAsk { Session = "s", Cause = RestoreCause.Crash, By = "host-signin" });
+        await Until(() => resumer.Asked.Count == 1);
+        var again = await first.RestoreAsync(new RestoreAsk { Session = "s", Cause = RestoreCause.Crash, By = "host-signin" }).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal((LaunchOutcome.Refused, "that session is already running or being restored"), (again.Outcome, again.Reason));
+        Assert.True(Written().Stamps.ContainsKey("s"));
+
+        source.Sessions.Add(S("s"));
+        await using var second = Recorder();
+        second.Start();
+        Assert.NotNull(Assert.Single(Written().Sessions).Restored);
+
+        resumer.Gate!.SetResult();
+        Assert.Equal(LaunchOutcome.Started, (await asked).Outcome);
+        Assert.Single(resumer.Asked);
+    }
+
+    // A restore the launcher could not confirm stays offered until its session registers, and is
+    // counted restored then; one that never registers is not hidden.
+    [Fact]
+    public async Task An_unconfirmed_restore_is_offered_until_its_session_registers()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer();
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Unconfirmed, "Copilot in App is asking whether to trust the folder; left for a person at the machine") { Session = "a" });
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => told.Count == 1);
+
+        Assert.Equal((0, 1), (r.Notice!.Restored, r.Notice.Offered.Count));
+        source.Upsert(S("a"));
+        Assert.Equal((1, 0), (r.Notice!.Restored, r.Notice.Offered.Count));
+    }
+
+    // Registered and gone before the launch returned: offered as a loop, not hidden as restored.
+    [Fact]
+    public async Task A_restore_that_registers_and_dies_before_its_launch_returns_is_offered_as_a_loop()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => resumer.Asked.Count == 1);
+
+        source.Upsert(S("a"));
+        source.Remove("a");
+        resumer.Gate!.SetResult();
+        await Until(() => Logged("restored, idle"));
+        Time.Advance(RestoreRecorder.JudgeEvery);
+
+        Assert.Equal(["a"], r.Notice!.Offered.Select(o => o.Id));
+        Assert.Equal(1, r.Notice.Loops);
+    }
+
+    // Registered before the launcher could see its window ready: restored, not left waiting for a
+    // registration that has already come. Guards the split of unconfirmed restores, whose other half
+    // (one not registered yet stays offered) An_unconfirmed_restore_is_offered_until_its_session_registers holds.
+    [Fact]
+    public async Task A_restore_that_registered_before_its_launch_came_back_unconfirmed_is_counted_restored()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Unconfirmed, "Copilot in App started, but its window was not seen ready; check at the machine") { Session = "a" });
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => resumer.Asked.Count == 1);
+
+        source.Upsert(S("a"));
+        resumer.Gate!.SetResult();
+        await Until(() => told.Count == 1);
+
+        Assert.Equal((1, 0), (told[0].Restored, told[0].Offered.Count));
+    }
+
+    // A request that started nothing (busy) takes back only its own mark: the one an earlier restore
+    // showed comes back, and is taken away when it was due to go, not a day after the attempt.
+    [Fact]
+    public async Task A_restore_on_request_that_starts_nothing_puts_back_the_earlier_restores_mark_until_its_own_time()
+    {
+        Previous(Fixture.T0, false, E("a", turn: RestoreTurn.Working));
+        var resumer = new Resumer();
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => told.Count == 1);
+        var first = marks.Of["a"]!;
+        Time.Advance(TimeSpan.FromHours(20));
+
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Busy, "Busy: Copilot in App is waiting for a person to answer whether to trust that folder"));
+        var busy = await r.RestoreAsync(new RestoreAsk { Session = "a", Cause = RestoreCause.Crash, By = "host-signin" });
+
+        Assert.Equal(LaunchOutcome.Busy, busy.Outcome);
+        Assert.Same(first, marks.Of["a"]);
+        Time.Advance(TimeSpan.FromHours(4));
+        Assert.Null(marks.Of["a"]);
+    }
+
     sealed class Resumer : ISessionResumer
     {
         public readonly List<ResumeAsk> Asked = [];
@@ -1404,7 +1554,16 @@ public sealed class RestoreTests : IDisposable
     sealed class Marks : IRestoreMarks
     {
         public readonly System.Collections.Concurrent.ConcurrentDictionary<string, SessionRestored?> Of = new(StringComparer.Ordinal);
-        public void Mark(string id, SessionRestored? mark) => Of[id] = mark;
+        public readonly System.Collections.Concurrent.ConcurrentDictionary<string, SessionRestored?> Before = new(StringComparer.Ordinal);
+        public void Mark(string id, SessionRestored? mark)
+        {
+            Before[id] = Of.GetValueOrDefault(id);
+            Of[id] = mark;
+        }
+        public void Revert(string id, SessionRestored mark)
+        {
+            if (Of.GetValueOrDefault(id) == mark) { Of[id] = Before.TryRemove(id, out var was) ? was : null; }
+        }
     }
 
     sealed class Live : ISessionSource

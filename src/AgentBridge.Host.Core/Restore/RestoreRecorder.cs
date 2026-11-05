@@ -32,6 +32,11 @@ public interface ISessionResumer
 public interface IRestoreMarks
 {
     void Mark(string id, SessionRestored? mark);
+
+    // An attempt that started nothing takes back the mark it showed: the mark before it comes back as
+    // it was then (Continue gone if a turn had started since), or none. Nothing if another mark has
+    // been shown since.
+    void Revert(string id, SessionRestored mark);
 }
 
 // Resuming a session that is not running, idle, as a restore does, for a caller other than the
@@ -195,6 +200,9 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     readonly Dictionary<string, DateTimeOffset> liveSince = new(StringComparer.Ordinal);
     // The marks shown on sessions restored in this run, each taken away after ShownFor.
     readonly Dictionary<string, ITimer> marks = new(StringComparer.Ordinal);
+    // And the marks themselves, with when each goes, so an attempt that started nothing can put an
+    // earlier one back for what was left of its time.
+    readonly Dictionary<string, (SessionRestored Mark, DateTimeOffset Until)> shown = new(StringComparer.Ordinal);
     // One resume at a time, the start-up queue's and RestoreAsync's alike.
     readonly SemaphoreSlim one = new(1, 1);
     // Tried this run and refused or failed: offered, not tried again.
@@ -206,6 +214,11 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     // Restored by this run and died while it watched: judged as a crash (an ending its agent records
     // still counts), but no cause of the notice's.
     readonly HashSet<string> inRun = new(StringComparer.Ordinal);
+    // Being resumed now, by the queue or on request: never a second attempt at the same session.
+    readonly HashSet<string> inFlight = new(StringComparer.Ordinal);
+    // Restores the launcher could not confirm (a folder-trust question, a window not seen ready):
+    // counted restored once the session registers, offered until then.
+    readonly Dictionary<string, RestoreEntry> unconfirmed = new(StringComparer.Ordinal);
     // Cancelled as the host stops: a restore still waiting its turn starts nothing.
     readonly CancellationTokenSource stopping = new();
     Task active = Task.CompletedTask;
@@ -339,6 +352,16 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                 if (e.Launch is { } l) { launched.TryAdd(e.Id, l); }
                 if (e.Restored is { } r) { restoredAt.TryAdd(e.Id, r); }
             }
+            // A restore started and not yet registered is stamped on its owed entry; one with no
+            // entry, in Stamps. Either, found running now, is adopted stamped.
+            foreach (var w in previous?.Owed ?? [])
+            {
+                if (w.Restored is { } r) { restoredAt[w.Entry.Id] = r; }
+            }
+            foreach (var (id, r) in previous?.Stamps ?? new Dictionary<string, DateTimeOffset>())
+            {
+                restoredAt.TryAdd(id, r);
+            }
         }
         // Heard from now, so nothing between the snapshot and this is missed; the snapshot is taken
         // outside the lock, as the source's own events are.
@@ -449,6 +472,14 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             {
                 // Resumed since (from Launch): live again, so no longer owed.
                 var resumed = owed.RemoveAll(w => w.Entry.Id == s.Id) + said.RemoveAll(w => w.Entry.Id == s.Id) > 0;
+                // A restore that could not be confirmed has registered: restored after all.
+                if (unconfirmed.Remove(s.Id, out var waited) && !inRun.Contains(s.Id))
+                {
+                    restoredNow++;
+                    restoredThisRun.Add(s.Id);
+                    if (waited.Turn == RestoreTurn.Working || waited.QuestionWaiting) { restoredLosses.Add(Lost(waited)); }
+                    resumed = true;
+                }
                 if (resumed) { BuildNoticeLocked(); }
                 goneBeforeStart.Remove(s.Id);
                 if (From(s, now) is not { } e) { return; }
@@ -559,7 +590,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     // What this start found died and has not yet tried to restore: never one an earlier run offered
     // (a person resumes that from Launch), one already restored, or one that died again too soon.
     IEnumerable<RestoreOwed> Candidates() =>
-        owed.Where(w => Offered(w) && w.Loop != true && w.Restored is null && judgedNow.Contains(w.Entry.Id) && !tried.Contains(w.Entry.Id));
+        owed.Where(w => Offered(w) && w.Loop != true && w.Restored is null && judgedNow.Contains(w.Entry.Id) && !tried.Contains(w.Entry.Id) && !inFlight.Contains(w.Entry.Id));
 
     // Whether the queue may start one now: a resume path, restoreOnStart on, and a machine that takes
     // launches (G5, launch.enabled, a config that could be read). Read-only, they wait, offered.
@@ -576,24 +607,25 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         if (stopped || stopping.IsCancellationRequested || !running || resuming || now < retryAt || !CanRestoreLocked()) { return; }
         if (Candidates().OrderByDescending(w => w.Entry.Seen).FirstOrDefault() is not { } next) { return; }
         var entry = next.Entry;
-        StampLocked(entry.Id, now, next.Cause, next.Since ?? next.At, entry.Turn == RestoreTurn.Working, entry.QuestionWaiting);
+        var undo = StampLocked(entry.Id, now, next.Cause, next.Since ?? next.At, entry.Turn == RestoreTurn.Working, entry.QuestionWaiting);
         if (!WriteLocked(now))
         {
             // Not written, so not safe to start: tried again, as for a busy launcher.
-            UnstampLocked(entry.Id, null);
+            UndoLocked(undo);
             retryAt = now + BusyRetry;
             return;
         }
         resuming = true;
+        inFlight.Add(entry.Id);
         // Off this thread: the launcher takes locks of its own, and calls back into this one.
         active = Task.Run(async () =>
         {
-            try { await RestoreNextAsync(next); }
+            try { await RestoreNextAsync(next, undo); }
             catch (Exception e) when (e is not OutOfMemoryException) { Fail("restore a session", e); }
         });
     }
 
-    async Task RestoreNextAsync(RestoreOwed w)
+    async Task RestoreNextAsync(RestoreOwed w, Undo undo)
     {
         var entry = w.Entry;
         var result = await ResumeOneAsync(new ResumeAsk(entry.Id, entry.Agent, LaunchOf(entry), RestorePrincipal));
@@ -601,26 +633,37 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         lock (gate)
         {
             resuming = false;
+            inFlight.Remove(entry.Id);
             if (stopped) { return; }
             var now = time.GetUtcNow();
             switch (result.Outcome)
             {
-                case LaunchOutcome.Started or LaunchOutcome.Unconfirmed:
+                // Not confirmed ready, but registered already: restored.
+                case LaunchOutcome.Unconfirmed when Registered(entry.Id):
+                case LaunchOutcome.Started:
                     restoredNow++;
-                    restoredThisRun.Add(entry.Id);
+                    // Unless it has already registered and died: then it is offered as a loop.
+                    if (!inRun.Contains(entry.Id)) { restoredThisRun.Add(entry.Id); }
                     if (entry.Turn == RestoreTurn.Working || entry.QuestionWaiting) { restoredLosses.Add(Lost(entry)); }
-                    log($"restore: session {Short(entry.Id)} restored, idle{(result.Outcome == LaunchOutcome.Unconfirmed ? $" (not confirmed: {result.Reason})" : "")}");
+                    log($"restore: session {Short(entry.Id)} restored, idle");
+                    break;
+                case LaunchOutcome.Unconfirmed:
+                    // Started, but not seen to register (a folder-trust question for a person, a
+                    // window not seen ready): offered until it registers, then counted restored. One
+                    // that never does stays offered, stamped, and is not tried again.
+                    if (owed.Any(x => x.Entry.Id == entry.Id)) { unconfirmed[entry.Id] = entry; }
+                    log($"restore: session {Short(entry.Id)} started, not confirmed ({result.Reason}); offered until it registers");
                     break;
                 case LaunchOutcome.Busy:
                     // Waiting on a person at the machine (folder trust), or on discovery: nothing
                     // started, so no stamp, and tried again.
-                    UnstampLocked(entry.Id, null);
+                    UndoLocked(undo);
                     retryAt = now + BusyRetry;
                     log($"restore: session {Short(entry.Id)} waits ({result.Reason})");
                     break;
                 case LaunchOutcome.Refused:
                     // Nothing started.
-                    UnstampLocked(entry.Id, null);
+                    UndoLocked(undo);
                     tried.Add(entry.Id);
                     log($"restore: session {Short(entry.Id)} could not be restored ({result.Reason}); it stays offered to resume from Launch");
                     break;
@@ -661,26 +704,40 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         lock (gate) { return [.. restoredLosses.Take(RestoreProtocol.MaxOffered)]; }
     }
 
-    // Stamped and marked before the launch; Previous: the owed entry's stamp before, put back if
-    // nothing was started.
-    void StampLocked(string id, DateTimeOffset now, RestoreCause cause, DateTimeOffset went, bool midTurn, bool questionLost)
+    // What a stamp replaced, so an attempt that started nothing leaves things as they were, and never
+    // takes away an earlier restore's protection.
+    sealed record Undo(string Id, DateTimeOffset? At, DateTimeOffset? Since, DateTimeOffset? Owed, DateTimeOffset? Live, (SessionRestored Mark, DateTimeOffset Until)? Shown);
+
+    bool Registered(string id) => live.TryGetValue(id, out var e) && e.Gone is null;
+
+    // Stamped and marked before the launch.
+    Undo StampLocked(string id, DateTimeOffset now, RestoreCause cause, DateTimeOffset went, bool midTurn, bool questionLost)
     {
-        restoredAt[id] = now;
         var i = owed.FindIndex(x => x.Entry.Id == id);
+        var undo = new Undo(id, restoredAt.TryGetValue(id, out var at) ? at : null, liveSince.TryGetValue(id, out var since) ? since : null,
+            i >= 0 ? owed[i].Restored : null, live.TryGetValue(id, out var e) ? e.Restored : null, shown.TryGetValue(id, out var was) ? was : null);
+        restoredAt[id] = now;
         if (i >= 0) { owed[i] = owed[i] with { Restored = now }; }
-        if (live.TryGetValue(id, out var e)) { live[id] = e with { Restored = now }; }
+        if (e is not null) { live[id] = e with { Restored = now }; }
         MarkLocked(id, now, cause, went, midTurn, questionLost);
+        return undo;
     }
 
-    void UnstampLocked(string id, DateTimeOffset? previous)
+    void UndoLocked(Undo undo)
     {
-        restoredAt.Remove(id);
-        liveSince.Remove(id);
+        var id = undo.Id;
+        if (undo.At is { } at) { restoredAt[id] = at; } else { restoredAt.Remove(id); }
+        if (undo.Since is { } since) { liveSince[id] = since; } else { liveSince.Remove(id); }
         var i = owed.FindIndex(x => x.Entry.Id == id);
-        if (i >= 0) { owed[i] = owed[i] with { Restored = previous }; }
-        if (live.TryGetValue(id, out var e) && e.Restored is not null) { live[id] = e with { Restored = null }; }
+        if (i >= 0) { owed[i] = owed[i] with { Restored = undo.Owed }; }
+        if (live.TryGetValue(id, out var e)) { live[id] = e with { Restored = undo.Live }; }
         if (marks.Remove(id, out var timer)) { timer.Dispose(); }
-        options.Marks?.Mark(id, null);
+        if (shown.Remove(id, out var tried)) { options.Marks?.Revert(id, tried.Mark); }
+        if (undo.Shown is { } before)
+        {
+            shown[id] = before;
+            marks[id] = time.CreateTimer(_ => Guarded(() => Unmark(id)), null, Wait(before.Until - time.GetUtcNow()), Timeout.InfiniteTimeSpan);
+        }
     }
 
     // What a session's restore resumes it with: what this host launched it with, else nothing (the
@@ -707,46 +764,54 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     static readonly LaunchResult Stopping = new(LaunchOutcome.Refused, "the host is stopping");
 
     // #800: a session an agent's expired sign-in stopped, resumed once it is renewed, as a restore is:
-    // stamped before its launch too.
+    // stamped before its launch too, and never a second attempt at one already running or being
+    // restored.
     public async Task<LaunchResult> RestoreAsync(RestoreAsk ask, CancellationToken cancellationToken = default)
     {
         AgentKind agent;
         RestoreLaunch? launch;
-        DateTimeOffset? previous;
+        Undo undo;
         lock (gate)
         {
             if (stopped || stopping.IsCancellationRequested) { return Stopping; }
             if (options.ReadOnly() is { } why) { return new LaunchResult(LaunchOutcome.Refused, why); }
+            if (inFlight.Contains(ask.Session) || (live.TryGetValue(ask.Session, out var current) && current.Gone is null))
+            {
+                return new LaunchResult(LaunchOutcome.Refused, "that session is already running or being restored");
+            }
             var known = live.GetValueOrDefault(ask.Session) ?? owed.FirstOrDefault(w => w.Entry.Id == ask.Session)?.Entry;
             agent = known?.Agent ?? AgentKind.Unknown;
             launch = known is null ? launched.GetValueOrDefault(ask.Session) : LaunchOf(known);
             cancellationToken.ThrowIfCancellationRequested();
             var now = time.GetUtcNow();
-            previous = owed.FirstOrDefault(w => w.Entry.Id == ask.Session)?.Restored;
-            StampLocked(ask.Session, now, ask.Cause, ask.Since ?? now, ask.MidTurn, ask.QuestionLost);
+            undo = StampLocked(ask.Session, now, ask.Cause, ask.Since ?? now, ask.MidTurn, ask.QuestionLost);
+            // Written down first, in Stamps if the record holds no entry of it.
             if (running && !WriteLocked(now))
             {
-                UnstampLocked(ask.Session, previous);
+                UndoLocked(undo);
                 return new LaunchResult(LaunchOutcome.Busy, "the host could not write down the restore before starting it; try again");
             }
+            inFlight.Add(ask.Session);
         }
         var result = await ResumeOneAsync(new ResumeAsk(ask.Session, agent, launch, ask.By));
         lock (gate)
         {
+            inFlight.Remove(ask.Session);
             if (!stopped)
             {
-                if (result.Outcome is LaunchOutcome.Started or LaunchOutcome.Unconfirmed)
+                if (result.Outcome is LaunchOutcome.Started || (result.Outcome is LaunchOutcome.Unconfirmed && Registered(ask.Session)))
                 {
-                    restoredThisRun.Add(ask.Session);
+                    // Unless it has already registered and died: then it is judged, as a loop.
+                    if (!inRun.Contains(ask.Session)) { restoredThisRun.Add(ask.Session); }
                 }
-                else if (result.Outcome is LaunchOutcome.Busy or LaunchOutcome.Refused) { UnstampLocked(ask.Session, previous); }
+                else if (result.Outcome is LaunchOutcome.Unconfirmed && owed.FirstOrDefault(w => w.Entry.Id == ask.Session) is { } waiting) { unconfirmed[ask.Session] = waiting.Entry; }
+                else if (result.Outcome is LaunchOutcome.Busy or LaunchOutcome.Refused) { UndoLocked(undo); }
                 ScheduleWriteLocked(Coalesce);
             }
         }
         log($"restore: session {Short(ask.Session)} asked by {ask.By}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}");
         return result;
     }
-
     // The restored mark, shown on the session for this host run and at most ShownFor; Continue's words
     // only for one that went mid-turn.
     void MarkLocked(string id, DateTimeOffset now, RestoreCause cause, DateTimeOffset went, bool midTurn, bool questionLost)
@@ -759,6 +824,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             QuestionLost = questionLost ? true : null,
             Continue = midTurn ? ContinueText(cause, went, options.Zone ?? TimeZoneInfo.Local) : null,
         };
+        shown[id] = (mark, now + RestoreProtocol.ShownFor);
         options.Marks?.Mark(id, mark);
         if (marks.Remove(id, out var earlier)) { earlier.Dispose(); }
         marks[id] = time.CreateTimer(_ => Guarded(() => Unmark(id)), null, RestoreProtocol.ShownFor, Timeout.InfiniteTimeSpan);
@@ -770,6 +836,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         {
             if (stopped || !marks.Remove(id, out var timer)) { return; }
             timer.Dispose();
+            shown.Remove(id);
         }
         options.Marks?.Mark(id, null);
     }
@@ -1025,8 +1092,9 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                 if (e.Restored is not null) { live[id] = e with { Restored = null }; }
                 continue;
             }
-            // Nothing carries the stamp any more.
-            if (!live.ContainsKey(id) && !owed.Any(w => w.Entry.Id == id))
+            // Carried by no entry (a restore on request of a session the record had let go): kept,
+            // in Stamps, until it registers, for a day at most if it never does.
+            if (!live.ContainsKey(id) && !owed.Any(w => w.Entry.Id == id) && !inFlight.Contains(id) && now - restoredAt[id] >= RestoreProtocol.ShownFor)
             {
                 restoredAt.Remove(id);
                 liveSince.Remove(id);
@@ -1041,6 +1109,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             Stopped = stoppedAt,
             Sessions = [.. live.Values.OrderBy(e => e.Id, StringComparer.Ordinal)],
             Owed = [.. owed],
+            Stamps = restoredAt.Where(s => !live.ContainsKey(s.Key) && !owed.Any(w => w.Entry.Id == s.Key)).ToDictionary(s => s.Key, s => s.Value, StringComparer.Ordinal),
         };
         try
         {

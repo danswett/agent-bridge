@@ -65,6 +65,10 @@ public sealed record RestoreFile
     public DateTimeOffset? Stopped { get; init; }
     public IReadOnlyList<RestoreEntry> Sessions { get; init; } = [];
     public IReadOnlyList<RestoreOwed> Owed { get; init; } = [];
+    // Restores started for sessions the record holds no entry of (one resumed on request whose
+    // record had already let it go): when, by id, until each is seen live LoopWithin, so one that
+    // registers and dies with the host is still known as restored.
+    public IReadOnlyDictionary<string, DateTimeOffset> Stamps { get; init; } = new Dictionary<string, DateTimeOffset>();
 }
 
 public static class RestoreFiles
@@ -95,7 +99,7 @@ public static class RestoreFiles
             if (file is null) { return (null, "it is empty"); }
             if (file.V != RestoreFile.CurrentVersion) { return (null, $"it is version {file.V}, not {RestoreFile.CurrentVersion}"); }
             // JSON null reads into anything, whatever the record says it holds.
-            if (file.Sessions is null || file.Owed is null || file.Sessions.Any(e => e?.Id is not { Length: > 0 }) || file.Owed.Any(w => w?.Entry?.Id is not { Length: > 0 })
+            if (file.Sessions is null || file.Owed is null || file.Stamps is null || file.Sessions.Any(e => e?.Id is not { Length: > 0 }) || file.Owed.Any(w => w?.Entry?.Id is not { Length: > 0 })
                 || !OwedWhole(bytes))
             {
                 return (null, "it is malformed");

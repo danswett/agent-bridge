@@ -83,6 +83,24 @@ public sealed class CopilotReplyTests : IDisposable
     }
 
     [Fact]
+    public void A_question_left_open_by_a_killed_cli_asks_no_more_once_a_new_cli_resumes_the_session_but_one_it_asks_again_does()
+    {
+        Fixture.Append(events, Copilot.User("go", 1), Ask("q1", 2), Copilot.Event("permission.requested", new { requestId = "r1", permissionRequest = new { kind = "shell" } }, 3));
+        Assert.True(CopilotPrompts.Before(events).Asking);
+        Assert.Equal((1, 1), (CopilotPermissionTranscript.Before(events, "r1").PendingPermissions, CopilotPermissionTranscript.Before(events, "r1").PendingAsks));
+
+        // No shutdown: the CLI was killed. A subagent's resume (none is written) would end nothing.
+        Fixture.Append(events, Copilot.Event("session.resume", new { }, 30, agentId: "helper"));
+        Assert.True(CopilotPrompts.Before(events).Asking);
+        Fixture.Append(events, Copilot.Event("session.resume", new { }, 31));
+        Assert.False(CopilotPrompts.Before(events).Asking);
+        Assert.Equal(((CopilotPermissionPrompt?)null, 0, 0), (CopilotPermissionTranscript.Before(events, "r1").Request, CopilotPermissionTranscript.Before(events, "r1").PendingPermissions, CopilotPermissionTranscript.Before(events, "r1").PendingAsks));
+
+        Fixture.Append(events, Ask("q2", 32));
+        Assert.True(CopilotPrompts.Before(events).Asking);
+    }
+
+    [Fact]
     public void A_transcript_that_cannot_be_read_is_never_taken_to_say_nothing_is_asking()
     {
         var state = CopilotPrompts.Before(events + ".missing");
