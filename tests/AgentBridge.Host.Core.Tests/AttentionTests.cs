@@ -19,11 +19,11 @@ public class AttentionTests
         public readonly string Events;
         public readonly AgentBridge.Host.Core.SessionSource Source;
 
-        public Session_()
+        public Session_(long tailBytes = 4 * 1024 * 1024)
         {
             Events = F.CopilotSession(Id, 100);
             F.Processes.Run(AgentKind.Copilot, 100);
-            Source = F.Source();
+            Source = F.Source(tailBytes: tailBytes);
         }
 
         public async Task<Session> After(params string[] lines)
@@ -174,6 +174,35 @@ public class AttentionTests
         Assert.Equal(AttentionKind.SignInNeeded, session.Attention?.Kind);
     }
 
+    // A host restarting reads only the transcript's tail; a delegate writing on past it hid the
+    // failure, and so would hide a reply that cleared it.
+    [Theory]
+    [InlineData(false, AttentionKind.SignInNeeded)]
+    [InlineData(true, null)]
+    public async Task A_sign_in_failure_before_the_parsed_tail_is_still_read_with_whatever_cleared_it(bool answered, AttentionKind? expected)
+    {
+        await using var s = new Session_(tailBytes: 4096);
+        var lines = new List<string> { Copilot.User("Carry on", 1), Copilot.TurnStart(2), Error(SignedOut, 3) };
+        if (answered) { lines.Add(Copilot.Assistant("Done.", 10)); }
+        lines.AddRange(Enumerable.Range(0, 40).Select(i => Copilot.Assistant("Still bisecting " + new string('x', 200), 20 + i, agentId: "agent-1")));
+
+        var session = await s.After([.. lines]);
+
+        Assert.Equal(expected, session.Attention?.Kind);
+    }
+
+    // The CLI follows a turn's error with a notice of its own, written as an assistant.message.
+    [Fact]
+    public async Task Another_error_stays_past_the_clis_turn_error_notice_until_the_next_turn()
+    {
+        await using var s = new Session_();
+
+        var session = await s.After(Copilot.User("Go", 1), Copilot.TurnStart(2), Error(new { errorType = "session", message = "Turn error: too many requests", statusCode = 429 }, 3),
+            Copilot.Event("assistant.message", new { messageId = "m4", content = "\u26A0\uFE0F Turn error: too many requests" }, 4), Copilot.TurnEnd(5));
+
+        Assert.Equal(AttentionKind.Error, session.Attention?.Kind);
+    }
+
     // Another error is about the turn it ended: the next one starting leaves it behind.
     [Fact]
     public async Task A_new_prompt_after_another_error_clears_it()
@@ -247,6 +276,13 @@ public class AttentionTests
 
         Assert.Equal("Authorization error for [email] ([token]). Request ID [id], session [id]. Enter [code] at [link] or see [path] and [path] now. [token]",
             AgentErrors.Shown(raw));
+    }
+
+    [Fact]
+    public void A_quoted_credential_is_taken_out_whole()
+    {
+        Assert.Equal("Request failed: {\"[token]} and [token] end",
+            AgentErrors.Shown("Request failed: {\"password\":\"example-value-7\"} and password = \"a secret \\\"phrase\\\" here\" end"));
     }
 
     [Fact]

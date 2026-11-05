@@ -82,8 +82,10 @@ internal static partial class AgentErrors
     [GeneratedRegex(@"\b(?:https?|wss?|file)://\S+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Timeout)]
     private static partial Regex Link();
 
-    // "Bearer <x>", "token=<x>", "api_key: <x>": whatever follows is the secret.
-    [GeneratedRegex(@"\bbearer\s+[^\s,;]+|\b(?:access[_-]?token|refresh[_-]?token|token|password|secret|api[_-]?key)\s*[:=]\s*[^\s,;]+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Timeout)]
+    // "Bearer <x>", "token=<x>", "api_key: <x>", and JSON's "password":"<x>": whatever follows is
+    // the secret, a quoted one whole, spaces and escaped quotes included, to its closing quote or
+    // the end of the text.
+    [GeneratedRegex(@"\bbearer\s+[^\s,;]+|\b(?:access[_-]?token|refresh[_-]?token|client[_-]?secret|token|password|passwd|secret|api[_-]?key)[""']?\s*[:=]\s*(?:""(?:[^""\\]|\\.)*""?|'(?:[^'\\]|\\.)*'?|[^\s,;]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Timeout)]
     private static partial Regex Keyed();
 
     // GitHub's, OpenAI's and Anthropic's (sk-, sk-ant-) and Slack's token forms.

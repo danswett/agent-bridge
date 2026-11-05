@@ -36,6 +36,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         Marker("\"session.resume\""),
         Marker("\"session.model_change\""),
         Marker("\"session.shutdown\""),
+        Marker("\"session.error\""),
         Marker("\"subagent.started\""),
         // What a delegate was given, by whom, and its model since: a cold read whose window
         // its start falls before still lists it with its task, nesting and current model.
@@ -101,7 +102,14 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         var data = Json.Obj(e, "data") ?? default;
         switch (Json.Str(e, "type"))
         {
+            // A sign-in failure and what clears it are kept past the skim too (Failed, NewTurn,
+            // Answered): a signed-out session whose delegates wrote on past the parsed window
+            // read as fine again after the host restarted.
+            case "session.error" when !IsSubagent(e):
+                if (AgentErrors.Copilot(data, Json.Time(e, "timestamp") ?? Time.GetUtcNow()) is { } failure) { Failed(failure); }
+                break;
             case "user.message" when !IsSubagent(e):
+                NewTurn();
                 if (Text.NonBlank(Json.Str(data, "content")) is { } text)
                 {
                     var (from, label, injected) = Source(Json.Str(data, "source"));
@@ -124,6 +132,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             // to say, as they always were. Cut as taken: nothing else holds these strings.
             case "assistant.message" when !IsSubagent(e):
                 {
+                    Answered(data, Json.Time(e, "timestamp"));
                     var reasoning = Text.NonBlank(Json.Str(data, "reasoningText"));
                     var content = Text.NonBlank(Json.Str(data, "content"));
                     if (reasoning is not null) { S.OwnReasoning = Limits.KeepEnd(reasoning, Limits.Reasoning).Text; }
@@ -433,9 +442,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 {
                     if (AgentErrors.Copilot(data, Now(at)) is not { } attention) { return false; }
                     S.Abandon(at);
-                    // Another error while it needs sign-in (a slash command failing, say) is no
-                    // proof it can reach its model, and the next prompt would clear it.
-                    if (attention.Kind == AttentionKind.SignInNeeded || S.Attention is not { Kind: AttentionKind.SignInNeeded }) { S.Attention = attention; }
+                    Failed(attention);
                     _turnAskedForTools = false;
                     break;
                 }
@@ -508,12 +515,20 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     // carrying no model's words (emitDetachedTurnError, cli-main.js 1.0.105).
     void Answered(JsonElement data, DateTimeOffset? at)
     {
-        if (S.Attention is not { } attention) { return; }
-        if (attention.Kind != AttentionKind.SignInNeeded) { S.Attention = null; return; }
+        // Another error is the next turn's to clear (NewTurn): the CLI's turn-error notice
+        // follows one as an assistant.message, and it would never have been seen.
+        if (S.Attention is not { Kind: AttentionKind.SignInNeeded } attention) { return; }
         var content = Text.NonBlank(Json.Str(data, "content"));
         var asked = Json.Arr(data, "toolRequests") is { } requests && requests.GetArrayLength() > 0;
         var notice = content is not null && content.StartsWith(TurnErrorNotice, StringComparison.Ordinal);
         if ((asked || (content is not null && !notice)) && at is { } t && t > attention.Since) { S.Attention = null; }
+    }
+
+    // Another error while it needs sign-in (a slash command failing, say) is no proof it can
+    // reach its model, and the next prompt would clear it.
+    void Failed(Attention attention)
+    {
+        if (attention.Kind == AttentionKind.SignInNeeded || S.Attention is not { Kind: AttentionKind.SignInNeeded }) { S.Attention = attention; }
     }
 
     const string TurnErrorNotice = "\u26A0\uFE0F Turn error:";
