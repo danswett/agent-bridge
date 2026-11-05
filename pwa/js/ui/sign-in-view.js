@@ -313,7 +313,7 @@ export class SignInBanners {
     const back = this.#focusBack;
     this.#focusBack = null;
     if (back) {
-      this.#focusOn(() => (back.opener?.isConnected ? back.opener : this.#lineOf(back.key)));
+      this.#focusOn(() => (back.opener?.isConnected ? back.opener : this.#lineOf(back.key)), back.restored);
     }
   }
 
@@ -322,8 +322,9 @@ export class SignInBanners {
   // tried once more on the next frame, as the app tries again after the next layout (FocusOnce), if
   // focus is still nowhere by then: the page, or the closed sheet (Chromium leaves it on Cancel a while).
   // pick() is asked again for the retry: the banner may have been drawn anew in between (the host's
-  // pending after signin.done), so its line then is a new element.
-  #focusOn(pick) {
+  // pending after signin.done), so its line then is a new element. restored: where the closing
+  // dialog put focus back by itself (the opener), which is no person's move, so the retry goes on.
+  #focusOn(pick, restored = null) {
     const doc = this.container.ownerDocument;
     const take = (el) => {
       if (!el?.isConnected) { return false; }
@@ -341,7 +342,7 @@ export class SignInBanners {
     const later = globalThis.requestAnimationFrame ?? ((f) => setTimeout(f, 16));
     later(() => {
       const at = doc?.activeElement;
-      if (at && at !== doc.body && at.isConnected && !at.closest?.('dialog:not([open])')) { return; }
+      if (at && at !== doc.body && at !== restored && at.isConnected && !at.closest?.('dialog:not([open])')) { return; }
       if (!take(pick())) { heading(); }
     });
   }
@@ -466,8 +467,9 @@ export class SignInBanners {
         this.#signedHere.set(key, this.now());
         this.#closeSheet(key);
         // Focus to the banner's line, never back to Sign in: the host's pending may come after this,
-        // and with it Sign in goes, which would leave focus nowhere.
-        if (this.#focusBack?.key === key) { this.#focusBack.opener = null; }
+        // and with it Sign in goes, which would leave focus nowhere. The closing dialog itself puts
+        // focus back on Sign in, so a retry finding it there still moves it on (r4485757956).
+        if (this.#focusBack?.key === key) { this.#focusBack.restored = this.#focusBack.opener; this.#focusBack.opener = null; }
       } else if (done.outcome === 'cancelled') {
         this.#flows.delete(key);
         this.#closeSheet(key);

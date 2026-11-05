@@ -658,6 +658,57 @@ test('signed in before the host says pending, a status line that refuses focus i
   await expect(banner(page).locator('.sign-in-line')).toBeFocused();
 });
 
+// The first focus on a status line does nothing, and focus is left on Sign in, as the closing
+// dialog puts it back on its opener; the next frame is held until the test lets it run.
+async function refuseLineLeavingSignIn(page) {
+  await page.evaluate(() => {
+    const focus = HTMLElement.prototype.focus;
+    let refused = false;
+    HTMLElement.prototype.focus = function (o) {
+      if (!refused && this.classList.contains('sign-in-line')) {
+        refused = true;
+        focus.call(document.querySelector('#sign-in-banners .sign-in-start'));
+        return;
+      }
+      return focus.call(this, o);
+    };
+    const raf = window.requestAnimationFrame;
+    window.__frames = [];
+    window.requestAnimationFrame = (f) => { window.__frames.push(f); return 0; };
+    window.__flush = () => { window.requestAnimationFrame = raf; for (const f of window.__frames.splice(0)) { f(performance.now()); } };
+  });
+  await page.evaluate(() => {
+    const h = window.agentBridgeDemo.host;
+    const f = h.signInFlow;
+    h.signInFlow = null;
+    h.frame({ ev: 'signin.done', seq: h.seq + 1, data: { flow: f.id, outcome: 'signedIn', resumed: [], continue: [] } });
+  });
+  await expect(sheet(page)).toBeHidden();
+  await expect(signIn(page)).toBeFocused();
+  expect(await page.evaluate(() => window.__frames.length)).toBeGreaterThan(0);
+}
+
+test('signed in before the host says pending, a status line that refuses focus while the sheet puts it back on Sign in is still focused on the next frame (r4485757956)', async ({ page }) => {
+  await openDemo(page);
+  await signIn(page).click();
+  await expect(sheet(page).locator('.sign-in-code')).toBeVisible();
+  await refuseLineLeavingSignIn(page);
+  await page.evaluate(() => window.__flush());
+  await expect(banner(page).locator('.sign-in-line')).toBeFocused();
+  await expect(signIn(page)).toBeVisible();
+});
+
+test('signed in before the host says pending, focus a person moves elsewhere before the retry stays there (r4485757956)', async ({ page }) => {
+  await openDemo(page);
+  await signIn(page).click();
+  await expect(sheet(page).locator('.sign-in-code')).toBeVisible();
+  await refuseLineLeavingSignIn(page);
+  const elsewhere = row(page, 'signin-1');
+  await elsewhere.evaluate((el) => { if (!el.matches('button, a, [tabindex]')) { el.setAttribute('tabindex', '-1'); } el.focus(); });
+  await page.evaluate(() => window.__flush());
+  await expect(elsewhere).toBeFocused();
+});
+
 test('signed out, nothing said about the account\'s machines stays in the live region (#878)', async ({ page }) => {
   await openDemo(page);
   await expect(page.locator('#sign-in-said .sign-in-said-line')).toHaveText(['Copilot on DEV-VM1 needs sign-in']);
