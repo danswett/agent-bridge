@@ -1,0 +1,65 @@
+name: Epic dashboard
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  issues:
+    types: [closed, reopened]
+  release:
+    types: [published]
+  # Releases published by CI's GITHUB_TOKEN don't emit downstream workflow runs, and
+  # release events have tag refs. CI completion supplies a trusted main-ref refresh.
+  # No upstream code, caches or artifacts are consumed; checkout stays on main.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: epic-dashboard
+  cancel-in-progress: true
+
+jobs:
+  dashboard:
+    if: >-
+      github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
+      && (github.event_name != 'workflow_run'
+          || (github.event.workflow_run.event == 'push'
+              && github.event.workflow_run.head_branch == 'main'
+              && github.event.workflow_run.head_repository.full_name == 'danswett/agent-bridge'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: epic-dashboard
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Read user-owned Project 1
+        env:
+          GH_TOKEN: ${{ secrets.EPIC_DASHBOARD_PROJECT_READ }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Missing EPIC_DASHBOARD_PROJECT_READ in the main-only epic-dashboard environment; #755 was not touched. See tools/epic-dashboard/README.md."
+            exit 1
+          fi
+          python3 tools/epic-dashboard/dashboard.py project > dashboard-project.json
+      - name: Generate the dashboard and compare its body
+        id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/epic-dashboard/dashboard.py render --project-file dashboard-project.json > dashboard.md
+          gh issue view 755 --repo danswett/agent-bridge --json body --jq .body > dashboard-current.md
+          python3 tools/epic-dashboard/dashboard.py compare --current dashboard-current.md --generated dashboard.md >> "$GITHUB_OUTPUT"
+      - name: Rewrite only the body of issue 755
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue edit 755 --repo danswett/agent-bridge --body-file dashboard.md
