@@ -57,17 +57,25 @@ test('words on a tint are measured on it over each surface it sits on, and only 
   wider.color.contrast.tints.subtle.push('surface.text3');
   assert.ok(failures(contrastPairs(wider)).some((p) => p.theme === 'dark' && p.fg === 'surface.text3' && p.bg === 'subtle on card'));
 });
-test('the selected tint is measured over a phone\'s shell too, with every kind of words its rows draw on it, and Bridge is not words there (#366)', () => {
+test('the selected tint is measured over a phone\'s shell too, with every kind of words its rows draw on it, and Bridge is words there in dark only (#366)', () => {
   for (const fg of ['surface.text', 'surface.text2', 'needs.text', 'agent.text']) {
     for (const bg of ['shell', 'layer', 'card']) {
       assert.ok(['dark', 'light'].every((theme) => pairs.some((p) => p.theme === theme && p.fg === fg && p.bg === `selected on ${bg}` && p.kind === 'text')), `${fg} is measured on selected over the ${bg}`);
     }
   }
-  assert.ok(!pairs.some((p) => p.fg === 'bridge' && p.bg.startsWith('selected on ') && p.kind === 'text'), 'Bridge is not words on the selected tint');
+  // A selected machine's state and buttons stay Bridge in dark, so they are measured there.
+  for (const bg of ['shell', 'layer', 'card']) {
+    assert.ok(pairs.some((p) => p.theme === 'dark' && p.fg === 'bridge' && p.bg === `selected on ${bg}` && p.kind === 'text'), `dark bridge is measured on selected over the ${bg}`);
+  }
+  assert.ok(!pairs.some((p) => p.theme === 'light' && p.fg === 'bridge' && p.bg.startsWith('selected on ') && p.kind === 'text'), 'Bridge is not words on the light selected tint');
   // Light Bridge on it is 4.09:1 over the shell, which is why its words take surface.text there.
   const asBridge = structuredClone(tokens);
   asBridge.color.contrast.tints.selected.words.push('bridge');
   assert.ok(failures(contrastPairs(asBridge)).some((p) => p.theme === 'light' && p.fg === 'bridge' && p.bg === 'selected on shell' && p.ratio < 4.1));
+  // danger.text, drawn on it by a selected machine's refused update, is 4.18:1 over the light shell: not yet listed (#858).
+  const asDanger = structuredClone(tokens);
+  asDanger.color.contrast.tints.selected.words.push('danger.text');
+  assert.ok(failures(contrastPairs(asDanger)).some((p) => p.theme === 'light' && p.fg === 'danger.text' && p.bg === 'selected on shell' && p.ratio < 4.2));
 });
 test('hyperlinks, words on an accent fill and selected text reach 4.5:1 on the Bridge accent palette, in dark and light', () => {
   const accent = pairs.filter((p) => p.fg.startsWith('accent.'));
