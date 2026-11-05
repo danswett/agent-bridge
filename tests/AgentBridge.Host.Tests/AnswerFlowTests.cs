@@ -494,7 +494,9 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         hints.AddRange(["ctrl+d decline", "esc cancel"]);
         List<string> rows = ["────────────────────────", " Copilot needs information.", .. message.Split('\n').SelectMany(line => Wrapped(line, wrap)).Select(l => $" {l}"), ""];
         if (labels.Length > 1) { rows.AddRange([$" {string.Join("   ", labels.Select((l, i) => marked && i == at ? $"[{l}]" : l))}", ""]); }
-        return [.. rows, $" {labels[at]}{(colon ? ":" : "")}", .. body, "", $" {string.Join(" · ", hints)}", "────────────────────────"];
+        // A line break in a title or the question is drawn as rows of their own, as Ink does.
+        List<string> drawn = [.. rows, $" {labels[at]}{(colon ? ":" : "")}", .. body, "", $" {string.Join(" · ", hints)}", "────────────────────────"];
+        return [.. drawn.SelectMany(r => r.Split('\n', '\r'))];
     }
 
     // A line as a console `wrap` columns wide breaks it between words; whole when wrap is 0.
@@ -1292,18 +1294,23 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Theory]
-    // A later field whose title is white space alone: a text box draws it as a blank row, a
-    // list as a lone colon. It is refused before the first key, not found missing once the
-    // field before it has been answered (#510 review, Copilot 5780656913).
-    [InlineData("string")]
-    [InlineData("enum")]
-    public async Task A_later_field_titled_with_white_space_alone_is_refused_before_any_key(string kind)
+    // A later field whose title is white space alone (a text box draws it as a blank row, a list
+    // as a lone colon) or holds a line break (the heading split across rows, its colon on the
+    // next, while the tab bar's first row still reads as the labels). It is refused before the
+    // first key, not found missing once the field before it has been answered (#510 review,
+    // Copilot 5780656913; Trust on 412f1b2d).
+    [InlineData("string", "   ")]
+    [InlineData("enum", "   ")]
+    [InlineData("enum", "Pick\n")]
+    [InlineData("enum", "Pick\r")]
+    [InlineData("string", "Pick\n")]
+    public async Task A_later_field_titled_with_white_space_alone_or_a_line_break_is_refused_before_any_key(string kind, string title)
     {
         var answer = new { first = "b", note = kind == "enum" ? "c" : Feedback };
         string[] names = ["first", "note"];
-        object note = kind == "enum" ? new { type = "string", @enum = new[] { "a", "b", "c" }, title = "   " } : new { type = "string", title = "   " };
+        object note = kind == "enum" ? new { type = "string", @enum = new[] { "a", "b", "c" }, title } : new { type = "string", title };
         await AskFieldsAsync(new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, note }, 2, answer);
-        injector.Screen = () => FieldsScreen(names, labels: ["first", "   "]);
+        injector.Screen = () => FieldsScreen(names, labels: ["first", title]);
         var ch = await OpenAsync();
 
         var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");

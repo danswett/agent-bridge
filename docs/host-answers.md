@@ -99,13 +99,14 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     first could pass for the second. Headings are compared with every run of whitespace, a
     no-break space included, as one space and the ends trimmed, a list's colon taken with its
     title as the CLI draws them together, untrimmed ("Pick one " is "Pick one :"); a title of
-    white space alone, drawn as a blank row or a lone colon, is refused before the first key;
-    a heading or question the
-    console wraps mid-word, or a title with a line break, is refused rather than typed into
-    (#848). With more than one field, the tab bar read at the first field, before any key,
-    vouches for every later field's title: a bar too wide for the window shows only some
-    labels, between arrows, and is refused there; one that fits holds every label, so no
-    later heading can wrap; and a title the console draws other than as written is drawn so
+    white space alone, drawn as a blank row or a lone colon, or with a line break or another
+    control character, which splits its heading across rows while the tab bar's first row
+    still reads as the labels, is refused before the first key; a heading or question the
+    console wraps mid-word is refused rather than typed into (#848). With more than one
+    field, the tab bar read at the first field, before any key, vouches for every later
+    field's width and characters: a bar too wide for the window shows only some labels,
+    between arrows, and is refused there; one that fits holds every label, so no later
+    heading can wrap; and a character the console draws other than as written is drawn so
     in the bar too, and refused there.
     What cannot be known beforehand (a permission prompt opening over a later field, or a
     long field scrolling the form's heading off a short window) still stops the keys there:
