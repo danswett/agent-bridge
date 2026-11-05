@@ -1,0 +1,60 @@
+{
+  "capturedAtPT": "2026-11-05T13:51:41.2603891-08:00",
+  "outgoingSession": "dfff11e8-26ce-4bb0-b4e1-82647f346182",
+  "handoffState": "PARKED_REFERENCE_NOT_YET_SUCCESSOR_ACCEPTED",
+  "namedSuccessor": null,
+  "H3Release": false,
+  "actualMainRef": "2df9b84f94dc4ded74cd840a20821073f6f40739",
+  "batch911917": {
+    "state": "LANDED_ONE_EACH_FULLMESSAGE_VERIFIED_FINAL_OWN_WHOLE_SUCCESS",
+    "attempt": 1,
+    "ownRun": 42111803279,
+    "finalHead": "2acd3bf378aa5a27618085fa6497b51d5a9a7a0a"
+  },
+  "solo874": {
+    "mergedAtPT": "2026-11-05T13:38:36-08:00",
+    "ownConclusion": null,
+    "ownAttempt": 1,
+    "ownRun": 42114496678,
+    "ownStatus": "in_progress",
+    "noOldCarry": true,
+    "state": "LANDED_ONE_USED_FULLMESSAGE_VERIFIED",
+    "url": "https://github.com/danswett/agent-bridge/actions/runs/42114496678",
+    "head": "8d74328c1b303c0ced57f820f32421497f18ca44",
+    "ordinaryLandingFenced": true,
+    "receipt": "https://github.com/danswett/agent-bridge/pull/874#issuecomment-6670254141",
+    "merge": "2df9b84f94dc4ded74cd840a20821073f6f40739"
+  },
+  "triage": {
+    "state": "DELIVERED_54_OF_54",
+    "url": "https://github.com/danswett/agent-bridge/issues/689#issuecomment-6670090134",
+    "actualAtPT": "2026-11-05T13:32:07-08:00"
+  },
+  "publicationFreeze": {
+    "source": "https://github.com/danswett/agent-bridge/issues/929#issuecomment-6668478876",
+    "untilNonDraftAtMost": 40,
+    "active": true
+  },
+  "activeOwnDelegates": [],
+  "timer": {
+    "soleId": 5,
+    "standingMinutes": 15,
+    "oldEmbeddedPolicySupersededBy929": true,
+    "cadenceMinutes": 5,
+    "stopOnlyAfterNamedSuccessorACKAndH3Release": true
+  },
+  "cachedLight": {
+    "mustReproveOnFreshMain": true,
+    "localOnly": true,
+    "sha256": "606B7CFC1B6C2400AF04C0F11661B132E9462595DD6CAD61B1FB0A9AFF9141C1",
+    "lastEquivalenceProvedThrough": "2acd3bf378aa5a27618085fa6497b51d5a9a7a0a",
+    "baseline": "3d53d9b9dda1bc9fb7e3956205d861edb747c700",
+    "noLocalRebuildOrRestore": true
+  },
+  "corrections": [
+    "Historical generic911917 prep copied unrelated893712 allFeedbackRead metadata; actual full source/native/fullmessage receipts are independent proof. Do not treat the copied string as evidence.",
+    "Generic874 evidence.selected may say2; actual members array is1 and only874 native executed. No reenactment or backdating to correct metadata."
+  ],
+  "noRuntimeOrProductionGrant": true,
+  "scratchNotAuthority": true
+}

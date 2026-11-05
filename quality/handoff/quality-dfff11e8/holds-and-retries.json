@@ -1,0 +1,74 @@
+{
+  "capturedAtPT": "2026-11-05T13:51:41.2603891-08:00",
+  "original22Ids": [
+    763,
+    761,
+    748,
+    719,
+    718,
+    714,
+    713,
+    712,
+    705,
+    699,
+    692,
+    667,
+    666,
+    665,
+    617,
+    605,
+    532,
+    510,
+    504,
+    469,
+    428,
+    394
+  ],
+  "source": "https://github.com/danswett/agent-bridge/issues/689#issuecomment-6644075326",
+  "warning": "Original ownership ledger, not fresh head/reason metadata. Never sweep. Release ONLY an owned main-only hold after each other reason and actual slot/every gate; restore if another gate blocks.",
+  "separate": [
+    {
+      "state": "RETAINED: actual source/feedback needs fresh qualification",
+      "source": "https://github.com/danswett/agent-bridge/pull/769#issuecomment-6644620771",
+      "pr": 769
+    },
+    {
+      "state": "RETAINED: actual source/feedback needs fresh qualification",
+      "source": "https://github.com/danswett/agent-bridge/pull/784#issuecomment-6645233918",
+      "pr": 784
+    },
+    {
+      "pr": 616,
+      "state": "CONTRACT_HOLD_SIGNIN_OFF"
+    },
+    {
+      "issue": 231,
+      "state": "DIRECT_USER_IMPLEMENTATION_FREEZE"
+    }
+  ],
+  "retries": [
+    {
+      "state": "A2_USED_NO_THIRD",
+      "pr": 510,
+      "run": 42093785802
+    },
+    {
+      "currentHead": "0984c48656b7fc576d8d1779be94296ea1e33ce6",
+      "currentOwnCIQualification": "NOT_QUALIFIED_READ_FRESH_ACTUAL_HEAD_CHECKS",
+      "supersededHistoricalOwnA1": "SUCCESS_asOf1308_NOT_CURRENT_NO_CARRY",
+      "state": "Old56c_A1FAILURE_asOf1322_QualityZEROretry_oldReservationObsolete_NO_HEAD_TRANSFER",
+      "pr": 625,
+      "supersededHistoricalHead": "fb5c813ec37c38df713c911815323bd0a738ff7f",
+      "oldRun": 42097774445,
+      "oldHead": "56c39d668b4d7f73642de5680f39dab55c2c8e8c",
+      "supersededHistoricalOwnRun": 42108002967,
+      "noNewRetryGrant": true
+    }
+  ],
+  "olderUsedNativePrs": [
+    817,
+    793,
+    900
+  ],
+  "olderUsedNativeWarning": "Historical ONE tickets already USED: NEVER repeat. Public actual merged PRs/earlier primary receipts authoritative. This list is not an exhaustive historical merge audit."
+}

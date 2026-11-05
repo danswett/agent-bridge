@@ -1,0 +1,95 @@
+QUALITY REFERENCE SNAPSHOT - NOT ADMISSION, NOT AN EXECUTABLE RUNBOOK
+Repository: danswett/agent-bridge
+Outgoing session: dfff11e8-26ce-4bb0-b4e1-82647f346182
+Owner-approved handoff ACK: hub689 comment6669732632.
+Read actual current origin/main AGENTS.md, quality/merge-rule.yml, docs/status.md,
+hub689 and the final handoff comment before acting. Actual GitHub/new owner
+instructions override this frozen snapshot. No branch here is a main merge grant.
+
+DELIVERED AND IRREVERSIBLE
+911 ce548e5d ->4fc27c31 at13:20:22PT; 917 379c41cf ->2acd3bf3 at13:20:49PT.
+Both ONE native requests USED; complete descriptions/both trailers/FULL final
+messages verified. Final2acd OWN42111803279 A1 whole SUCCESS fenced that batch.
+874 8d74328c ->2df9b84f at13:38:36PT ALONE; ONE USED, same FULL verification.
+New2df OWN42114496678 A1 requires its OWN whole SUCCESS; no old2acdgreen carry.
+Original54/54 triage published13:32:07PT: hub689 comment6670090134.
+Its historical13:19 metadata/windows are NOT ALLfeedback or current readiness.
+
+UNWRITTEN/NEWER OWNER POLICY: DO NOT INHERIT OBSOLETE TIMER WORDING
+929 owner comment6668478876: publication freeze until <=40 open non-draft PRs;
+only its narrow P0/test-flake/929-tool-lint exceptions apply.
+Batches <=3, disjoint changed/renamed paths, all other gates, one FINAL resulting
+main own whole CI fence. Red/cancelled: pause ordinary, causal Platform/SRE fix;
+no automatic retry, no old latest-finished green substitution.
+Review depth: sensitive initial ENTIRE after green; other production initial
+diff+whole changed; CLEAN repush delta+newly touched whole; tests/docs repush
+delta only; unchanged-own-commit rebase carry needs range-diff proof.
+Do NOT revive blanket ENTIRE-on-every-repush or serial-per-member fence policy.
+Nonsensitive tests/docs do not acquire mandatory R5 from old blanket wording.
+Actually completed Copilot NeedsCloserLook/ChangesRecommended can qualify
+after substantive human assessment/reasoned dispositions and zero open threads;
+literal ApprovalRecommended is NOT required. Billing/error/timeout is not done.
+Technical return FULFILLED differs from actual-role/model/coverage qualification.
+GP/direct-coordinator Opus is NOT the typed code-review/security-review R5 role.
+User model rule: self/routine gpt-6.1-sol; independent/security claude-opus-5.5.
+At most3 concurrent delegates, not old timer's5. No nested agents.
+Reviews static only. NO owner-machine builds/tests/lints/restores/diagnostics
+beyond the permitted cached light evaluator; CI tests, disposable Azure live work.
+One native request persisted BEFORE invocation; unknown outcome means readback,
+NEVER retry. Entire then-current description+both trailers/FULL final message
+are verified, not a few markers. Do not copy/run historical USED native helpers.
+Failed-jobs-only retry ONCE after actual failed log, SHARED Engineering ledger;
+510 A2 USED/no third; old62556c ticket is obsolete/nontransferable to ANY new head.
+625fb5c/42108002967 green is SUPERSEDED historical; current0984 has its OWN gates.
+ONE timer5 at5m, standing hub689 each15m <8lines, actual API PT, disclose gaps.
+Keep that timer until named successor ACK and H3 release; no competing timers.
+No live legacy/HA/MQTT/hooks/daemon, production relay approval or runtime grants.
+
+QUEUE AND HOLDS
+open-queue.json includes EVERY current open PR, full head, state, named responder
+and next action. Historical54 fields remain explicitly historical; changed heads
+require supersession assessment. Unqualified metadata is never readiness.
+Original22 and separate769/784 remain item-by-item, never a sweep. Preserve616
+HOLD/sign-in OFF and231 direct-user implementation freeze. See holds-and-retries.json.
+Next priority is eligible P0/security then owner phone P1 within latest H3 order;
+893/712 earlier prep was superseded by911/917,712's OWN hold restored; no native.
+666 SAME5d84 retained47 NOTCLEAN; a57 repair returned EARLY but two new LOW
+threads block eligibility; same Creative writer, no duplicate FULL47.
+895 typed87e0 FULL20 CLEAN returnedEARLY13:35:17, comment6670151772; qualify
+actual role/model, supersession, ALLfeedback and every gate; NOT missing review.
+933 OLDcd405 NOTCLEAN6670152903 (2MED1LOW) is NOT a later-head verdict.
+Current head pinned in queue; new ownCI/genuine/ALLfeedback then SAME proper
+reviewer delta; retain DRAFT/HOLD. Old1350/1400 waits close on actual earlier push.
+926 typed e613 ENTIRE9 CLEAN6669948940 returnedEARLY13:25:19; qualify, don't repeat.
+394/859 technical returns fulfilled; role provenance still needs qualification.
+920 nonurgent sensitive AGENTS/status902d; NO Quality reviewer started.
+930 is outgoing-Quality AUTHORED draft703f642a; no selfreceipt. Successor/H3 must
+explicitly accept ownership and arrange independent typed review/normal gates.
+502 was only a >=48h stale-draft candidate, NOT closed; branch remains.
+
+DELEGATES AND LOCAL-ONLY MATERIAL
+No active own delegates at snapshot. 73fd917 typed CLEAN; cc020695 triage DONE;
+c124874 paused at ZERO source coverage/no verdict, H3sole38310430 typed ENTIRE23
+CLEAN6669885491 was consumed. H3duplicate917276ac819 CLEAN6669722919 also qualified.
+666 retained reviewer5d84ba0e-a7fe-418a-b4a4-2b5c970aee80 is idle/not resumed.
+IDs do not promise cross-session resumability; public primary results are durable.
+Historical sensitive GP merged receipts beyond repaired874/917 are NOT audited;
+report UNKNOWN, do not invent after-fact typed provenance or rerun fulfilled work.
+Owned admission tree: %USERPROFILE%\repos\wt\agent-bridge-quality-dfff11e8.
+Owned930 tree: %USERPROFILE%\repos\wt\agent-bridge-quality-929-dfff11e8.
+Owned parking tree: %USERPROFILE%\repos\wt\agent-bridge-quality-handoff-dfff11e8.
+Parking branch: parked/quality-dfff11e8-20261105-1355. Reference only, no main PR.
+Session scratch: %USERPROFILE%\.copilot\session-state\<outgoing-session>\files.
+No product changes remain local-only;930 is already remote. Scratch/history and
+cached binaries are not portable authority, not a request to clean any worktree.
+Cached light DLL SHA256606B7CFC1B6C2400AF04C0F11661B132E9462595DD6CAD61B1FB0A9AFF9141C1,
+baseline3d53d9b9dda1bc9fb7e3956205d861edb747c700, verified equivalent through2acd.
+Re-prove source/build input equivalence to FRESH origin/main and actual DLL hash
+before use; Set-Location OWN clean detached main is mandatory. Source/rule/tool
+changes (including eventual933) can invalidate cache. NO local rebuild/restore.
+Use actual printed exact-head SUCCESS, real App creator and creator-bearing raw
+statuses; combined status lacks creator. Never manufacture App status.
+Portable generated manifests intentionally omit credentials and full scratch.
+H3 cannot HA-launch successor without agent credential (hub6670294075).
+At1356 H3 posts exact brief/settings; OWNER launches VM1card or supplies valid
+agent credential. Quality takes NO HA/credential/settings action or fallback.

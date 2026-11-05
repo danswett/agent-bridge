@@ -1,0 +1,3297 @@
+{
+  "capturedAtPT": "2026-11-05T13:51:41.2603891-08:00",
+  "repository": "danswett/agent-bridge",
+  "referenceOnly": true,
+  "admissionOwnerAtSnapshot": "Quality dfff11e8 until named successor ACK and H3 release; named successor not yet known",
+  "counts": {
+    "nonDraft": 60,
+    "held": 55,
+    "open": 109
+  },
+  "limits": "Every current open PR; fresh metadata ONLY, NOT ALLfeedback/readiness. Historical54 fields remain historical and may be superseded. Current API and newer primary packets override.",
+  "rows": [
+    {
+      "pr": 933,
+      "head": "94f7db9f3ef3794ba98fec510b087ede0936e38e",
+      "title": "#929: Evidence-bound review receipts and warning-first test timing lint",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T21:47:14Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/933",
+      "namedResponder": "Engineering0d1762e4 / existing same author",
+      "nextAction": "Last typed NOTCLEAN6670152903 2MED1LOW binds OLD cd4053030a6d38f9b6137eeba1616f40ebcef841, not a later current head. Current head is pinned in this row; if changed, qualify new own CI/genuine/ALLfeedback then SAME proper reviewer delta under929. Retain DRAFT/HOLD, NO draft clearance. Old1350batch/1400push waits do not survive an actual earlier push; eventual tool/rule inputs may invalidate old evaluator cache.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": "cd4053030a6d38f9b6137eeba1616f40ebcef841",
+      "knownTypedReviewSuperseded": true
+    },
+    {
+      "pr": 931,
+      "head": "5c3c757d19e9754a78e6e61ee21d790fac72126d",
+      "title": "Tests: App.Tests off the wall clock: waits count looks, fake clocks, barriers (#929, fixes #909, #925)",
+      "state": "OPEN_NOT_QUALIFIED_FOR_ADMISSION",
+      "draft": false,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T21:49:14Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/931",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Quality successor qualifies scope/sensitivity, actual CI/genuine Copilot/ALLfeedback/threads/required receipt/App/light/main fence; no readiness inferred from metadata.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 930,
+      "head": "703f642ac8bba35016d9a2d89d4567818ee715fb",
+      "title": "Docs: record owner-approved risk-based review depth (#929)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T20:43:38Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/930",
+      "namedResponder": "H3 0d1762e4 / named accepted Quality successor; author dfff11e8",
+      "nextAction": "OUTGOING QUALITY AUTHORED draft703f642a; accept ownership explicitly. Non-author coordinator must arrange independent typed review/receipt and normal gates; outgoing Quality must not selfreceipt. No nondraft exception invented.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 928,
+      "head": "7296b2b9faf0add14493d359930784bc0043a939",
+      "title": "Host: Needs sign-in push and Not responding watchdog for turns that end on a 401 (#800 P0, part B)",
+      "state": "OPEN_NOT_QUALIFIED_FOR_ADMISSION",
+      "draft": false,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T21:43:10Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/928",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Quality successor qualifies scope/sensitivity, actual CI/genuine Copilot/ALLfeedback/threads/required receipt/App/light/main fence; no readiness inferred from metadata.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 926,
+      "head": "263d697e83a6aea8a4088ee13b847c1b0b48eae4",
+      "title": "HA: show Needs sign-in, Agent error and Not responding, with attention, never Idle (#800 P0)",
+      "state": "OPEN_NOT_QUALIFIED_FOR_ADMISSION",
+      "draft": false,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "UNSTABLE",
+      "updatedAtApi": "2026-11-05T21:25:19Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/926",
+      "namedResponder": "Quality successor qualification; Engineering0d1762e4 existing review lane",
+      "nextAction": "P0 typed code-reviewe613 Opus5.5 ENTIRE9 CLEAN6669948940 actual13:25:19 EARLY; technical return fulfilled. Qualify actual role/model, ALLfeedback/5resolvedthreads/evaluate-supersession and every normal/main gate; no repeat.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 923,
+      "head": "27d34884893ed4378e4205db079c37ee2efd5675",
+      "title": "App: auto-update never stalls silently on a lost host link (#800 P0, part A)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "area:platform",
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T21:47:54Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/923",
+      "namedResponder": "SRE026d5395 same author; Engineering0d1762e4 proper review lane; Quality incumbent dfff11e8 until released",
+      "nextAction": "H3GO6670248942 authorizes ONE27d34884 push, not admission. Actual current head pinned here; qualify own newhead CI/genuine/ALLfeedback then FIRST proper code-review Opus FULL within35m of green. Previous GP reviews are NOT a qualifying delta base. Retain HOLD/autoOFF/no install/no retry.",
+      "historicalOriginal54": {
+        "pr": 923,
+        "head": "5cfe1f393ea73e6d3a7e4bcfaffe556c0b857739",
+        "classification": "P0-two-new-MEDIUM-threads-local-repair-not-pushed",
+        "identifiedResponder": "SRE026d5395 samep0-autoupdate writer; Engineering0d1762e4 typed independent lane",
+        "gates": {
+          "ciRuns": [
+            42104439661
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5791767524,
+          "copilotBody": "ChangesRecommended: premature refusal clear/cached rate-limit failure",
+          "unresolvedThreads": 2,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Local27d34884 repair delivered EARLY, NOT pushed; existing authority decides GO, then new-head CI/genuine/typed independent review. Olde09 NOT CLEAN never carries; no retry.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/923#issuecomment-6669245863"
+      },
+      "oldTriageHeadSuperseded": true,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 921,
+      "head": "820d69bb558e712952f831ad6b5277b71191eb0f",
+      "title": "Copilot forms: defaults read in linear time; ones no answer can keep go to the machine (#852, #882)",
+      "state": "OPEN_NOT_QUALIFIED_FOR_ADMISSION",
+      "draft": false,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T20:08:09Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/921",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Quality successor qualifies scope/sensitivity, actual CI/genuine Copilot/ALLfeedback/threads/required receipt/App/light/main fence; no readiness inferred from metadata.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 920,
+      "head": "902d532d8347e9d95a8f9e19c87ec5970cbce4d3",
+      "title": "Docs: record the 11-04 and 11-05 product decisions and the no-RDP tenet",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": true,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T20:06:34Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/920",
+      "namedResponder": "Quality successor review/admission; Product existing author",
+      "nextAction": "Nonurgent sensitive AGENTS/status902d; author Product must not selfreceipt. No outgoing Quality reviewer started. Qualify actual feedback/gates, then independent typed role under #929 depth, no priority leap.",
+      "historicalOriginal54": {
+        "pr": 920,
+        "head": "902d532d8347e9d95a8f9e19c87ec5970cbce4d3",
+        "classification": "nonurgent-sensitive-source-queue-NOT-started",
+        "identifiedResponder": "Qualitydfff11e8 qualification; Product3dad9c05 actual author",
+        "gates": {
+          "ciRuns": [
+            42089555151
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5790426904,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "NONURGENT AGENTS/status needs genuine outside receipt; no Quality reviewer started in evidence. Product will not self-receipt. Preserve HOLD/existing arming; root schedules.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/920#issuecomment-6668048232"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 906,
+      "head": "07523abf3b69d701169b36f1c4e6b3c606a71169",
+      "title": "App: Tab from a stop scrolled out of view leaves the view put (#881)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T20:42:48Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/906",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 895,
+      "head": "fc29161a74345814379c1c8870b3670ac3f929db",
+      "title": "PWA and app: sign-in captures and Not responding age (#800, #878)",
+      "state": "OPEN_NOT_QUALIFIED_FOR_ADMISSION",
+      "draft": false,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "UNSTABLE",
+      "updatedAtApi": "2026-11-05T21:35:18Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/895",
+      "namedResponder": "Quality successor qualification; SRE026d5395/Connectioneb29d6d8 existing ownership per primary packet",
+      "nextAction": "Typed code-review87e0 Opus5.5 FULL20 CLEAN technical return6670151772 actual13:35:17 EARLY. Qualify actual role/model, ALLfeedback/evaluate-supersession and every normal/main gate; no duplicate review.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 893,
+      "head": "72b8d52b9fbb0405a43f9767ba00f9f094ebac6f",
+      "title": "App and PWA: a session opened for its question focuses the question's heading, never an answer (#484)",
+      "state": "OPEN_NOT_QUALIFIED_FOR_ADMISSION",
+      "draft": false,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "UNSTABLE",
+      "updatedAtApi": "2026-11-05T17:12:27Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/893",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Prior exact72b8 App/light/fullfeedback prep superseded by H3 911/917 order. No native. Revalidate every current gate AFTER new2df own whole green; eligible owner phone P1 order, not a native grant.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 886,
+      "head": "b2375153f60a1d4b02e632ac7c5f689a7185b87c",
+      "title": "Host: remote restart and hook repair from a person's device (#801 slice A)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "area:security",
+        "area:platform",
+        "area:protocol"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-05T21:38:39Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/886",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 870,
+      "head": "9fef89ab477aa73f1d81e6319a194366ef392ec1",
+      "title": "Draft: host-only convergence decision package (#819)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-05T21:42:58Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/870",
+      "namedResponder": "Dogfoodb522f896/same44ae writer; SRE026d5395 seam owner",
+      "nextAction": "Seam CLEAN returned EARLY, wait closed. Keep draft/HOLD: #874 actual landing and owner port ACKs remain; USED ticket unchanged, no outside/runtime/repush grant.",
+      "historicalOriginal54": {
+        "pr": 870,
+        "head": "9fef89ab477aa73f1d81e6319a194366ef392ec1",
+        "classification": "draft-owner-port-contract-HOLD",
+        "identifiedResponder": "Dogfoodb522f896/same44ae writer; SRE026d5395 seam owner",
+        "gates": {
+          "draft": true,
+          "ciRuns": [
+            42046217218
+          ],
+          "ciChecks": "passing_draft_subset",
+          "copilotBody": "MISSING_IN_WINDOW_draft",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Seam CLEAN returned EARLY, wait closed. Keep draft/HOLD: #874 actual landing and owner port ACKs remain; USED ticket unchanged, no outside/runtime/repush grant.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/870#issuecomment-6660814996"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 863,
+      "head": "096ac7a1fbb2f8f77a5eebc0fa96561a3db7418b",
+      "title": "test(lab): draft held release verification consuming nightly (#357)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T08:25:29Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/863",
+      "namedResponder": "Platform0544445f/same91705185 writer",
+      "nextAction": "Keep draft/HOLD. Actual source validation is EIGHT guards, not nine; internal FULL7/draft success are not release/runtime/publication permission.",
+      "historicalOriginal54": {
+        "pr": 863,
+        "head": "096ac7a1fbb2f8f77a5eebc0fa96561a3db7418b",
+        "classification": "draft-contract-HOLD-not-stale",
+        "identifiedResponder": "Platform0544445f/same91705185 writer",
+        "gates": {
+          "draft": true,
+          "ciRuns": [
+            41993266129
+          ],
+          "ciChecks": "passing_draft_subset",
+          "copilotBody": "MISSING_IN_WINDOW_draft",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Keep draft/HOLD. Actual source validation is EIGHT guards, not nine; internal FULL7/draft success are not release/runtime/publication permission.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/863#issuecomment-6653312254"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 859,
+      "head": "0d7ee52d9c80233084b88a5b9261ef1e2afb15da",
+      "title": "Explain why Other needs the machine in Copilot forms (#146, partial)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold",
+        "security"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T17:59:53Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/859",
+      "namedResponder": "Migrationd5ac689c writer; Engineering0d1762e4 provenance; Qualitydfff qualification; Trust/A50e partner",
+      "nextAction": "FULL14 technical return/B CONSISTENT FULFILLED. Inspect existing role provenance per6669747017, not blind restart; preserve #510 second-lander shared mechanism/string contracts and ordinary guards.",
+      "historicalOriginal54": {
+        "pr": 859,
+        "head": "0d7ee52d9c80233084b88a5b9261ef1e2afb15da",
+        "classification": "technical-return-fulfilled-provenance-and-contract-HOLD",
+        "identifiedResponder": "Migrationd5ac689c writer; Engineering0d1762e4 provenance; Qualitydfff qualification; Trust/A50e partner",
+        "gates": {
+          "ciRuns": [
+            41997855880
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5782169140,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "SUCCESS_role_not_yet_qualified"
+        },
+        "nextAction": "FULL14 technical return/B CONSISTENT FULFILLED. Inspect existing role provenance per6669747017, not blind restart; preserve #510 second-lander shared mechanism/string contracts and ordinary guards.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/issues/689#issuecomment-6669747017"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 854,
+      "head": "52e959b00e7e3aa5cae37bf0cb0077ee3d988240",
+      "title": "Draft: nightly clean-VM E2E orchestration (#357/#736)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T07:41:00Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/854",
+      "namedResponder": "Platform0544445f/same91705185 writer",
+      "nextAction": "Keep draft/HOLD; repaired draft success/internal FULL7 are not nightly VM runtime. Preserve #772 actual-landing/lab contracts; no VM spend/action.",
+      "historicalOriginal54": {
+        "pr": 854,
+        "head": "52e959b00e7e3aa5cae37bf0cb0077ee3d988240",
+        "classification": "draft-contract-HOLD-not-stale",
+        "identifiedResponder": "Platform0544445f/same91705185 writer",
+        "gates": {
+          "draft": true,
+          "ciRuns": [
+            41987325832
+          ],
+          "ciChecks": "passing_draft_subset",
+          "copilotBody": "MISSING_IN_WINDOW_draft",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Keep draft/HOLD; repaired draft success/internal FULL7 are not nightly VM runtime. Preserve #772 actual-landing/lab contracts; no VM spend/action.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/854#issuecomment-6652543035"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 853,
+      "head": "416cd0c0f77e778afcbefb8bb2c37ae51d3bd0b9",
+      "title": "Tests: explain App and Host wait timeouts (#660)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-05T09:03:51Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/853",
+      "namedResponder": "Platform0544445f/same67cf5f15 writer",
+      "nextAction": "Existing writer handles conflict; retain FULL11 CLEAN under #929 range-diff if own commits unchanged. New-head CI/Copilot required, no universal ENTIRE restart.",
+      "historicalOriginal54": {
+        "pr": 853,
+        "head": "416cd0c0f77e778afcbefb8bb2c37ae51d3bd0b9",
+        "classification": "conflict-existing-writer-rebase",
+        "identifiedResponder": "Platform0544445f/same67cf5f15 writer",
+        "gates": {
+          "ciRuns": [
+            41983909303
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5780995334,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "mergeable": "CONFLICTING",
+          "independentObserved": "SUCCESS"
+        },
+        "nextAction": "Existing writer handles conflict; retain FULL11 CLEAN under #929 range-diff if own commits unchanged. New-head CI/Copilot required, no universal ENTIRE restart.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/853#issuecomment-6654003674"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 849,
+      "head": "2988381520eba78d3af8b7d2a7bb37d6b4a53040",
+      "title": "Lab: draft shared clean-VM contract and fail-closed provisioning plan",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T05:28:09Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/849",
+      "namedResponder": "Platform0544445f/same91705185 writer",
+      "nextAction": "Keep draft/HOLD; internal FULL6/draft guard success are source evidence only, not VM delivery/runtime or full non-draft eligibility.",
+      "historicalOriginal54": {
+        "pr": 849,
+        "head": "2988381520eba78d3af8b7d2a7bb37d6b4a53040",
+        "classification": "draft-contract-HOLD-not-stale",
+        "identifiedResponder": "Platform0544445f/same91705185 writer",
+        "gates": {
+          "draft": true,
+          "ciRuns": [
+            41973345451
+          ],
+          "ciChecks": "passing_draft_subset",
+          "copilotBody": "MISSING_IN_WINDOW_draft",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Keep draft/HOLD; internal FULL6/draft guard success are source evidence only, not VM delivery/runtime or full non-draft eligibility.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/849#issuecomment-6650519812"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 847,
+      "head": "5dc7d6c9a9803e50ae9f897d0b2a50b62bd713f6",
+      "title": "Hooks: preserve original Claude settings on removal",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T09:30:52Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/847",
+      "namedResponder": "Dogfoodb522f896 writer; Quality successor qualification",
+      "nextAction": "Retain outside FULL3 CLEAN; reconcile genuine #807 dependency with fresh primary evidence and preserve runtime/install limits. No duplicate review or blanket release.",
+      "historicalOriginal54": {
+        "pr": 847,
+        "head": "5dc7d6c9a9803e50ae9f897d0b2a50b62bd713f6",
+        "classification": "dependency-and-source-qualification",
+        "identifiedResponder": "Dogfoodb522f896 writer; Qualitydfff11e8 qualification",
+        "gates": {
+          "ciRuns": [
+            41981144926
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5780788334,
+          "copilotBody": "NeedsCloserLook: #807 landing dependency/real hook behavior",
+          "unresolvedThreads": 0,
+          "independentObserved": "SUCCESS"
+        },
+        "nextAction": "Retain outside FULL3 CLEAN; reconcile genuine #807 dependency with fresh primary evidence and preserve runtime/install limits. No duplicate review or blanket release.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/847#issuecomment-6654146831"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 842,
+      "head": "bbbf0451e34c60042a410543d6598f38b0f280f6",
+      "title": "Add off-by-default isolated Windows app signing",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-05T05:50:25Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/842",
+      "namedResponder": "Dogfoodb522f896/same6978f91f writer; Platform0544445f causal-CI routing",
+      "nextAction": "Initial snapshot timeout precedes persistence logic, not proof signing broke it. Existing causal disposition/source qualification next; no retry/signing grant.",
+      "historicalOriginal54": {
+        "pr": 842,
+        "head": "bbbf0451e34c60042a410543d6598f38b0f280f6",
+        "classification": "CIred-causal-boundary-and-outside-source",
+        "identifiedResponder": "Dogfoodb522f896/same6978f91f writer; Platform0544445f causal-CI routing",
+        "gates": {
+          "ciRuns": [
+            41967391121
+          ],
+          "ciChecks": "ARM product127047824655 FAILURE; quality-gate derivative",
+          "copilotReview": 5779853117,
+          "copilotBody": "NeedsCloserLook: privileged signing boundary review/runtime",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Initial snapshot timeout precedes persistence logic, not proof signing broke it. Existing causal disposition/source qualification next; no retry/signing grant.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/842#issuecomment-6650831549"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 838,
+      "head": "e011af510b221ce029cdb73948bdf3da855ba7f7",
+      "title": "Diagnose another connected machine over the person E2E channel (#802)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "area:design",
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T16:11:34Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/838",
+      "namedResponder": "Dogfoodb522f896 writer; Platform0544445f causal-CI routing",
+      "nextAction": "Exacte011 evidence already delivered; existing writer supplies causal repair/disposition, not repeat capture or product acquittal. No retry authorized.",
+      "historicalOriginal54": {
+        "pr": 838,
+        "head": "e011af510b221ce029cdb73948bdf3da855ba7f7",
+        "classification": "CIred-native-ARM-and-two-threads",
+        "identifiedResponder": "Dogfoodb522f896 writer; Platform0544445f causal-CI routing",
+        "gates": {
+          "ciRuns": [
+            42040762586
+          ],
+          "ciChecks": "native ARM127291675142 FAILURE; quality-gate derivative",
+          "copilotReview": 5786191242,
+          "copilotBody": "NeedsCloserLook: native Escape/focus failures",
+          "unresolvedThreads": 2,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Exacte011 evidence already delivered; existing writer supplies causal repair/disposition, not repeat capture or product acquittal. No retry authorized.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/838#issuecomment-6661817519"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 837,
+      "head": "d221285bfd1b52c69e659cd69de7318b8063f591",
+      "title": "Host: restore what a reboot or a crash took, idle, through the resume path (#780, Host B)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-05T16:11:31Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/837",
+      "namedResponder": "Trust/A50e5b45a writer; Connectioneb29d6d8 existing review lane",
+      "nextAction": "Qualify exactd221 FULL50 Connection review/provenance and genuine lifecycle assessment; zero threads/green metadata do not settle contracts or admission.",
+      "historicalOriginal54": {
+        "pr": 837,
+        "head": "d221285bfd1b52c69e659cd69de7318b8063f591",
+        "classification": "outside-team-source-and-lifecycle-assessment",
+        "identifiedResponder": "Trust/A50e5b45a writer; Connectioneb29d6d8 existing review lane",
+        "gates": {
+          "ciRuns": [
+            42019252038
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5784257789,
+          "copilotBody": "NeedsCloserLook: restore loop/worktree/Stop-marker lifecycle",
+          "unresolvedThreads": 0,
+          "independentObserved": "SUCCESS"
+        },
+        "nextAction": "Qualify exactd221 FULL50 Connection review/provenance and genuine lifecycle assessment; zero threads/green metadata do not settle contracts or admission.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/837#issuecomment-6657156641"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 836,
+      "head": "c5f60dc6763b176f8b856cc33c99c6a85ba3a911",
+      "title": "Security: approvals with hidden or bidi characters can be approved remotely through a signed two-step confirm (#803)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-05T16:11:19Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/836",
+      "namedResponder": "Trust/A50e5b45a existing writer",
+      "nextAction": "Existing writer rebases; retain returned SAME3800 FULL67 SOURCE CLEAN subject to #929 unchanged-own-commit range-diff qualification and new-head gates; no universal restart.",
+      "historicalOriginal54": {
+        "pr": 836,
+        "head": "c5f60dc6763b176f8b856cc33c99c6a85ba3a911",
+        "classification": "conflict-existing-writer-rebase",
+        "identifiedResponder": "Trust/A50e5b45a existing writer",
+        "gates": {
+          "ciRuns": [
+            42007622326
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5783204796,
+          "copilotBody": "NeedsCloserLook: confirmation verification review evidence",
+          "unresolvedThreads": 0,
+          "mergeable": "CONFLICTING",
+          "independentObserved": "SUCCESS"
+        },
+        "nextAction": "Existing writer rebases; retain returned SAME3800 FULL67 SOURCE CLEAN subject to #929 unchanged-own-commit range-diff qualification and new-head gates; no universal restart.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/836#issuecomment-6656912836"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 835,
+      "head": "9becc4eea4f139ef42441b76d59e7f0c7e87fca6",
+      "title": "Roster library: signing keys in the TPM, DPAPI and WebCrypto (#55 R1d)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "CLEAN",
+      "updatedAtApi": "2026-11-05T03:14:58Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/835",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 833,
+      "head": "f43997d848115f76d6a0ddfd1bc694211dcdb23b",
+      "title": "Roster library: PWA state port, vetoes, person commands and head attestations (#55 R1c)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "CLEAN",
+      "updatedAtApi": "2026-11-05T03:14:55Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/833",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 827,
+      "head": "2b64122217ea894ff9fe185b1fff444048fa1548",
+      "title": "Roster library: acceptance rule, state and scenario vectors (#55 R1b)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "CLEAN",
+      "updatedAtApi": "2026-11-05T02:41:21Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/827",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 824,
+      "head": "109815977ea4ced05a2dd58cb66bc18763a4b44f",
+      "title": "Roster library: encoding, parser and primitive vectors (#55 R1a)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T01:30:14Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/824",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 821,
+      "head": "51c390171ac4af3ec663444cb619bb703f141ec3",
+      "title": "Design: remote host management from a person's device (#801)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "area:security",
+        "area:platform",
+        "area:protocol"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T09:06:39Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/821",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 815,
+      "head": "6cdff456916c050a886e6ba5b7ff533228cf2a3a",
+      "title": "Design: host liveness, watchdog and offline reasons (#805)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T12:04:10Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/815",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 814,
+      "head": "4c1ab83be06bd78424cb1cae67803c3e5e310c5f",
+      "title": "Spec: sign-in needed, agent errors and Not responding (#800)",
+      "state": "OPEN_NOT_QUALIFIED_FOR_ADMISSION",
+      "draft": false,
+      "labels": [
+        "area:design"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "UNSTABLE",
+      "updatedAtApi": "2026-11-05T10:35:25Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/814",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Quality successor qualifies scope/sensitivity, actual CI/genuine Copilot/ALLfeedback/threads/required receipt/App/light/main fence; no readiness inferred from metadata.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 813,
+      "head": "2043b6260f321e820fe1cf09b0f2f7daace3b7e1",
+      "title": "Host: record live sessions and say what a reboot or a crash took (#780, Host A)",
+      "state": "OPEN_NOT_QUALIFIED_FOR_ADMISSION",
+      "draft": false,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-05T11:27:01Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/813",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Quality successor qualifies scope/sensitivity, actual CI/genuine Copilot/ALLfeedback/threads/required receipt/App/light/main fence; no readiness inferred from metadata.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 794,
+      "head": "25a955e663c3d01310632674e324b7be80da367b",
+      "title": "Ops: hourly epic dashboard rewrites #755 (#756 part 1)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "area:ops"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T09:02:52Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/794",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 791,
+      "head": "96b1ec7879aafaf0acb6f56b90bdab3903c21e5f",
+      "title": "PWA: accessibility contract A1, A3, A8: row names, selected-row contrast, Sort before New",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T21:47:23Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/791",
+      "namedResponder": "B/Daily4d05d459 writer; Platform0544445f causal-CI routing",
+      "nextAction": "HEAD CHANGED since13:19 triage; qualify #929 delta/carry/supersession, fresh actual checks/genuine/ALLfeedback and sensitivity. No old green or receipt carry. Historical next action: Own CI blocks eligibility; existing writer/Platform supplies causal disposition. Retained cee reviewer IDLE/not STARTED atdfdd. Creative A8 caveat/#858 accepted.",
+      "historicalOriginal54": {
+        "pr": 791,
+        "head": "dfdd7ab9dd7a655ac381fbe2eded19f55c4956a0",
+        "classification": "CIred-retained-reviewer-not-started",
+        "identifiedResponder": "B/Daily4d05d459 writer; Platform0544445f causal-CI routing",
+        "gates": {
+          "ciRuns": [
+            41989920520
+          ],
+          "ciChecks": "Ubuntu product FAILURE",
+          "copilotReview": 5781481010,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Own CI blocks eligibility; existing writer/Platform supplies causal disposition. Retained cee reviewer IDLE/not STARTED atdfdd. Creative A8 caveat/#858 accepted.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/791#issuecomment-6653168945"
+      },
+      "oldTriageHeadSuperseded": true,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 790,
+      "head": "cb8242aa88bd92c6706184936155d843d68a1886",
+      "title": "Spec: restored sessions after a reboot or crash (#780)",
+      "state": "OPEN_NOT_QUALIFIED_FOR_ADMISSION",
+      "draft": false,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "UNSTABLE",
+      "updatedAtApi": "2026-11-05T02:01:39Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/790",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Quality successor qualifies scope/sensitivity, actual CI/genuine Copilot/ALLfeedback/threads/required receipt/App/light/main fence; no readiness inferred from metadata.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 787,
+      "head": "97f8ae3f0e61419d4dde9bb067ea67419fe03fb7",
+      "title": "Design: layout keylines in ui.md §5.1/§5.2 (#771)",
+      "state": "OPEN_NOT_QUALIFIED_FOR_ADMISSION",
+      "draft": false,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "UNSTABLE",
+      "updatedAtApi": "2026-11-05T09:09:00Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/787",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Quality successor qualifies scope/sensitivity, actual CI/genuine Copilot/ALLfeedback/threads/required receipt/App/light/main fence; no readiness inferred from metadata.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 784,
+      "head": "059c3179148b117f4ca4e95026dd230236395c96",
+      "title": "Design: Settings agents, one readiness state per agent, Details and reflow (#783)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "area:design",
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T10:18:30Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/784",
+      "namedResponder": "Creativec187cf6c writer; Quality successor qualification",
+      "nextAction": "Preserve separate784 hold; qualify059c A4 repair/feedback/normal gates. Nonsensitive docs-only does not itself impose mandatory sensitive R5.",
+      "historicalOriginal54": {
+        "pr": 784,
+        "head": "059c3179148b117f4ca4e95026dd230236395c96",
+        "classification": "separate-design-contract-HOLD",
+        "identifiedResponder": "Creativec187cf6c writer; Qualitydfff11e8 qualification",
+        "gates": {
+          "ciRuns": [
+            42009274059
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5783292783,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING_not_automatic_sensitive_R5"
+        },
+        "nextAction": "Preserve separate784 hold; qualify059c A4 repair/feedback/normal gates. Nonsensitive docs-only does not itself impose mandatory sensitive R5.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/784#issuecomment-6655423320"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 774,
+      "head": "54972132516fffbd09ec30c28d0f860e130ae9c0",
+      "title": "Spec: question cards answer with Send answer, one pattern on every client (#773)",
+      "state": "OPEN_NOT_QUALIFIED_FOR_ADMISSION",
+      "draft": false,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "UNSTABLE",
+      "updatedAtApi": "2026-11-05T09:46:49Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/774",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Quality successor qualifies scope/sensitivity, actual CI/genuine Copilot/ALLfeedback/threads/required receipt/App/light/main fence; no readiness inferred from metadata.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 772,
+      "head": "4de4a2355e59e731dc17f45b1248046390fdf9b3",
+      "title": "CI: cancel superseded Apple PR runs",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T09:02:23Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/772",
+      "namedResponder": "Platform0544445f/samec3115014 writer",
+      "nextAction": "Existing Platform causal repair/disposition next; static microtask candidate remains UNPROVEN, not validation or retry authorization.",
+      "historicalOriginal54": {
+        "pr": 772,
+        "head": "4de4a2355e59e731dc17f45b1248046390fdf9b3",
+        "classification": "CIred-causal-repair-no-retry",
+        "identifiedResponder": "Platform0544445f/samec3115014 writer",
+        "gates": {
+          "ciRuns": [
+            41929236213,
+            41934610573
+          ],
+          "ciChecks": "Windows product FAILURE; WebKit2 FAILURE",
+          "copilotReview": 5777512774,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "SUCCESS"
+        },
+        "nextAction": "Existing Platform causal repair/disposition next; static microtask candidate remains UNPROVEN, not validation or retry authorization.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/772#issuecomment-6653976621"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 770,
+      "head": "f94e62439a54c9e516ff0107053a2760abfb6268",
+      "title": "Spec: group and collapse sessions (#767)",
+      "state": "OPEN_NOT_QUALIFIED_FOR_ADMISSION",
+      "draft": false,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "UNSTABLE",
+      "updatedAtApi": "2026-11-04T23:02:18Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/770",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Quality successor qualifies scope/sensitivity, actual CI/genuine Copilot/ALLfeedback/threads/required receipt/App/light/main fence; no readiness inferred from metadata.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 769,
+      "head": "b210b1f8e83b94c8e674eda34c57465324a40a17",
+      "title": "Security: concurrent permission prompts are shown and answered one at a time (#690)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T10:23:07Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/769",
+      "namedResponder": "Trust/A50e5b45a writer; Quality successor qualification",
+      "nextAction": "Preserve separate769 hold. Retain SAME5a73 FULL24 CLEAN, qualify genuine human assessment/ALLfeedback/contracts before any root admission.",
+      "historicalOriginal54": {
+        "pr": 769,
+        "head": "b210b1f8e83b94c8e674eda34c57465324a40a17",
+        "classification": "separate-security-HOLD-human-assessment",
+        "identifiedResponder": "Trust/A50e5b45a writer; Qualitydfff11e8 qualification",
+        "gates": {
+          "ciRuns": [
+            42003020418
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5782739496,
+          "copilotBody": "NeedsCloserLook: nested-tool arguments/dialog matching",
+          "unresolvedThreads": 0,
+          "independentObserved": "SUCCESS"
+        },
+        "nextAction": "Preserve separate769 hold. Retain SAME5a73 FULL24 CLEAN, qualify genuine human assessment/ALLfeedback/contracts before any root admission.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/769#issuecomment-6655292827"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 763,
+      "head": "90a2e30a39562d152ce6174b16e2b3f5b66a3086",
+      "title": "PWA: Escape goes back from a session pushed over the list (#370)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T22:45:14Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/763",
+      "namedResponder": "B/Daily4d05d459 writer; Quality successor qualification",
+      "nextAction": "Consume conditional Creative design acceptance, qualify current sensitive sessions-page source and all ordinary gates; no metadata-only ready declaration.",
+      "historicalOriginal54": {
+        "pr": 763,
+        "head": "90a2e30a39562d152ce6174b16e2b3f5b66a3086",
+        "classification": "sensitive-source-qualification",
+        "identifiedResponder": "B/Daily4d05d459 writer; Qualitydfff11e8 qualification",
+        "gates": {
+          "ciRuns": [
+            41925585226
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5776832597,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Consume conditional Creative design acceptance, qualify current sensitive sessions-page source and all ordinary gates; no metadata-only ready declaration.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/763#issuecomment-6643849466"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 761,
+      "head": "b5eea0a59e2967d1c9c07e138f9962a77cabd8f7",
+      "title": "PWA: Send, End session and Launch keep keyboard focus while their request goes (#369)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T22:45:18Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/761",
+      "namedResponder": "B/Daily4d05d459 existing writer",
+      "nextAction": "Qualify sensitive source receipt and Creative conditional acceptance; reconcile screenreader contract without unauthorized runtime/reviewer work.",
+      "historicalOriginal54": {
+        "pr": 761,
+        "head": "b5eea0a59e2967d1c9c07e138f9962a77cabd8f7",
+        "classification": "sensitive-source-and-screenreader-contract",
+        "identifiedResponder": "B/Daily4d05d459 existing writer",
+        "gates": {
+          "ciRuns": [
+            41924540396
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5776763381,
+          "copilotBody": "NeedsCloserLook: NVDA/VoiceOver cannot be proved by browser tests",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Qualify sensitive source receipt and Creative conditional acceptance; reconcile screenreader contract without unauthorized runtime/reviewer work.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/761#issuecomment-6643752666"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 760,
+      "head": "6d9ed3a8ba679b73433f8661f5ff20084e6afc75",
+      "title": "Ops: bake approved relay deployments and roll back unhealthy images (#577)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T22:20:15Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/760",
+      "namedResponder": "Platform0544445f/same18c1253e writer",
+      "nextAction": "Keep draft/HOLD; existing writer supplies causal plan disposition. Internal FULL13 is not outside admission; no deploy approval/runtime/ready flip.",
+      "historicalOriginal54": {
+        "pr": 760,
+        "head": "6d9ed3a8ba679b73433f8661f5ff20084e6afc75",
+        "classification": "draft-CIred-and-production-approval-contract",
+        "identifiedResponder": "Platform0544445f/same18c1253e writer",
+        "gates": {
+          "draft": true,
+          "ciRuns": [
+            41924187834
+          ],
+          "ciChecks": "plan FAILURE; fast quality-gate FAILURE",
+          "copilotBody": "MISSING_IN_WINDOW_draft",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Keep draft/HOLD; existing writer supplies causal plan disposition. Internal FULL13 is not outside admission; no deploy approval/runtime/ready flip.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/760#issuecomment-6643601871"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 748,
+      "head": "bcf2fcd73e8d3948d151cacfd47331be7eff06bf",
+      "title": "App: draw a word too long for WinUI's text layout, and hold host text to the protocol's limits (#493)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T07:28:02Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/748",
+      "namedResponder": "Quality successor admission; B/Daily4d05d459 writer",
+      "nextAction": "Consume returned FULL10 CLEAN with nonblocking LOW; qualify fresh ALLfeedback/normal/main/serial gates and preserve holds, no duplicate review.",
+      "historicalOriginal54": {
+        "pr": 748,
+        "head": "bcf2fcd73e8d3948d151cacfd47331be7eff06bf",
+        "classification": "readycandidate-pending-Quality-full-admission",
+        "identifiedResponder": "Qualitydfff11e8 admission; B/Daily4d05d459 writer",
+        "gates": {
+          "ciRuns": [
+            41976212049
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5780445897,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "SUCCESS"
+        },
+        "nextAction": "Consume returned FULL10 CLEAN with nonblocking LOW; qualify fresh ALLfeedback/normal/main/serial gates and preserve holds, no duplicate review.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/748#issuecomment-6652329358"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 719,
+      "head": "8cdc8da52b710eb17cda32b56156fa48ece34426",
+      "title": "App: updates download in the background and wait for Restart to update (#516)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T18:43:00Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/719",
+      "namedResponder": "B/Daily4d05d459 writer; Quality successor qualification",
+      "nextAction": "Owner explicitly chose landing without premerge real-upgrade check, closing that specific wait. Qualify current26 source/feedback/ordinary gates; no install or broad runtime waiver.",
+      "historicalOriginal54": {
+        "pr": 719,
+        "head": "8cdc8da52b710eb17cda32b56156fa48ece34426",
+        "classification": "owner-risk-disposition-and-source-qualification",
+        "identifiedResponder": "B/Daily4d05d459 writer; Qualitydfff11e8 qualification",
+        "gates": {
+          "ciRuns": [
+            41990723262
+          ],
+          "ciChecks": "passing",
+          "copilotReviews": [
+            5781656420,
+            5781932250
+          ],
+          "copilotBody": "NeedsCloserLook: accepted install/focus and installed N-to-N+1 proof",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Owner explicitly chose landing without premerge real-upgrade check, closing that specific wait. Qualify current26 source/feedback/ordinary gates; no install or broad runtime waiver.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/719#issuecomment-6666231126"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 718,
+      "head": "57f39f5277ca04f167168f668c77294802cd876b",
+      "title": "CI: renders of the PWA demo for design review (pwa-renders artifact)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T02:52:06Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/718",
+      "namedResponder": "Quality successor admission; Connectioneb29d6d8 lane",
+      "nextAction": "Retain exact57f FULL6 sensitive receipt; fresh ALLfeedback/normal/main/serial qualification. Old main-red hold is not automatically released.",
+      "historicalOriginal54": {
+        "pr": 718,
+        "head": "57f39f5277ca04f167168f668c77294802cd876b",
+        "classification": "readycandidate-pending-Quality-full-admission",
+        "identifiedResponder": "Qualitydfff11e8 admission; Connectioneb29d6d8 lane",
+        "gates": {
+          "ciRuns": [
+            41919006489
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5776414133,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "SUCCESS"
+        },
+        "nextAction": "Retain exact57f FULL6 sensitive receipt; fresh ALLfeedback/normal/main/serial qualification. Old main-red hold is not automatically released.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/718#issuecomment-6644101378"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 716,
+      "head": "6e2a182693ff60840bd0ad7cee83e277ce6a2e17",
+      "title": "feat: add consented new-session verification to Windows Settings",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T22:09:59Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/716",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 715,
+      "head": "886befefbfb4b95e275d5b4db96aecffe0d9e5f8",
+      "title": "feat: correlate consented new-session verification with provider and hook evidence",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T22:45:04Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/715",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 714,
+      "head": "2fb0157617224b15ec46b323675dc9cc42fc13d7",
+      "title": "Tests: synchronize native layout before the question guard clock advances (#649)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T09:02:22Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/714",
+      "namedResponder": "Platform0544445f/same649 writer",
+      "nextAction": "Existing Platform writer supplies own-CI causal repair/disposition; historical9a motion candidate is not green/admission. No retry/duplicate diagnosis.",
+      "historicalOriginal54": {
+        "pr": 714,
+        "head": "2fb0157617224b15ec46b323675dc9cc42fc13d7",
+        "classification": "CIred-historical-causal-candidate-only",
+        "identifiedResponder": "Platform0544445f/same649 writer",
+        "gates": {
+          "ciRuns": [
+            41913753969
+          ],
+          "ciChecks": "WebKit3 FAILURE",
+          "copilotReview": 5775954940,
+          "copilotBody": "NeedsCloserLook: native ResizeObserver/fake-clock validation",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING_not_automatic_sensitive_R5"
+        },
+        "nextAction": "Existing Platform writer supplies own-CI causal repair/disposition; historical9a motion candidate is not green/admission. No retry/duplicate diagnosis.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/714#issuecomment-6644571826"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 712,
+      "head": "168287a04d1254d3d64d705f464db04c9493e43f",
+      "title": "Tests: isolate readiness cancellation and fixture Git deadlines (#664)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T21:06:56Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/712",
+      "namedResponder": "Quality successor admission; Platform0544445f writer",
+      "nextAction": "Prior1682 prep superseded; ONLY own main hold restored, no native. Test-only no mandatory sensitive R5. Fresh current ALLfeedback/normal/source qualification and main fence before item-specific hold release.",
+      "historicalOriginal54": {
+        "pr": 712,
+        "head": "168287a04d1254d3d64d705f464db04c9493e43f",
+        "classification": "main-only-hold-RESTORED-not-released",
+        "identifiedResponder": "Qualitydfff11e8 admission; Platform0544445f writer",
+        "gates": {
+          "ciRuns": [
+            41913559774
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5775870837,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "SUCCESS_not_automatically_required_test_only"
+        },
+        "nextAction": "Preserve restored main-only HOLD/own slot; retain FULL2 CLEAN, qualify fresh admission. Do not insert712 into911+917 batch.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/712#issuecomment-6650886118"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 709,
+      "head": "509f35b2dcf3d08db50566a7cb74c34c511379fb",
+      "title": "Updater: release discovery that respects GitHub's rate limits (#530)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T03:13:05Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/709",
+      "namedResponder": "B/Daily4d05d459/same d530 writer",
+      "nextAction": "Qualify current509f outside-Daily source and readable disposition history; native updater contract remains unless explicit owner disposition. No test grant here.",
+      "historicalOriginal54": {
+        "pr": 709,
+        "head": "509f35b2dcf3d08db50566a7cb74c34c511379fb",
+        "classification": "source-and-explicit-runtime-contract",
+        "identifiedResponder": "B/Daily4d05d459/same d530 writer",
+        "gates": {
+          "ciRuns": [
+            41921918280
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5776606007,
+          "copilotBody": "NeedsCloserLook: disposable-Windows cached/backoff and explicit-restart proof",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Qualify current509f outside-Daily source and readable disposition history; native updater contract remains unless explicit owner disposition. No test grant here.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/709#issuecomment-6643289508"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 705,
+      "head": "c8f1402832032484160b3d04cecd95dd47256b8b",
+      "title": "App: Settings agent rows: per-row names, one verb per state, per-row status (#678)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T21:38:42Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/705",
+      "namedResponder": "B/Daily4d05d459 writer; Quality successor qualification",
+      "nextAction": "Qualify range-diff and two SelfTest conflict resolutions against prior9853/c76 FULL14; apply bounded delta/carry then all new-head gates, not automatic R5 or full restart.",
+      "historicalOriginal54": {
+        "pr": 705,
+        "head": "c8f1402832032484160b3d04cecd95dd47256b8b",
+        "classification": "rebase-review-carry-qualification",
+        "identifiedResponder": "B/Daily4d05d459 writer; Qualitydfff11e8 qualification",
+        "gates": {
+          "ciRuns": [
+            42103374927
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5791646131,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING_not_automatic_sensitive_R5"
+        },
+        "nextAction": "Qualify range-diff and two SelfTest conflict resolutions against prior9853/c76 FULL14; apply bounded delta/carry then all new-head gates, not automatic R5 or full restart.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/705#issuecomment-6668455664"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 701,
+      "head": "d56d870e2d86c4a94356cb6f13a861e205c14a15",
+      "title": "Tests: every App test class running at once no longer stops the App tests for seconds (#660)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T20:00:38Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/701",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 699,
+      "head": "e0d7b2b540fca4ac003436df771d1b583f252728",
+      "title": "Settings: approve workspaces and edit launch defaults",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T23:01:02Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/699",
+      "namedResponder": "Dogfoodb522f896 writer; Quality successor qualification",
+      "nextAction": "Consume explicitly corrected outside-team provenance and remaining frontend/runtime contract; author disarmed auto-merge, HOLD stays. Green is not runtime/admission acceptance.",
+      "historicalOriginal54": {
+        "pr": 699,
+        "head": "e0d7b2b540fca4ac003436df771d1b583f252728",
+        "classification": "outside-team-provenance-and-runtime-contract",
+        "identifiedResponder": "Dogfoodb522f896 writer; Qualitydfff11e8 qualification",
+        "gates": {
+          "ciRuns": [
+            41923176464,
+            41925571147
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5776855405,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "SUCCESS"
+        },
+        "nextAction": "Consume explicitly corrected outside-team provenance and remaining frontend/runtime contract; author disarmed auto-merge, HOLD stays. Green is not runtime/admission acceptance.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/699#issuecomment-6644174602"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 692,
+      "head": "9d1732474a56054d054ba0f00445e40c41dd1db5",
+      "title": "Docs: retitle the design lead to creative director (#477)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "area:design",
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T22:45:59Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/692",
+      "namedResponder": "Creativec187cf6c writer; Platform0544445f causal-CI routing",
+      "nextAction": "Existing owner supplies named causal plan and eligible green, including skipped CodeQL; no rerun authorized. Sensitive docs/status source qualification remains.",
+      "historicalOriginal54": {
+        "pr": 692,
+        "head": "9d1732474a56054d054ba0f00445e40c41dd1db5",
+        "classification": "CIred-and-CodeQL-skipped",
+        "identifiedResponder": "Creativec187cf6c writer; Platform0544445f causal-CI routing",
+        "gates": {
+          "ciRuns": [
+            41897299838
+          ],
+          "ciChecks": "ARM native FAILURE; WebKit2/3 CANCELLED",
+          "codeqlAnalyzer": 126810460928,
+          "codeqlAnalyzerConclusion": "SKIPPED_not_green",
+          "copilotReview": 5774532534,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Existing owner supplies named causal plan and eligible green, including skipped CodeQL; no rerun authorized. Sensitive docs/status source qualification remains.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/692#issuecomment-6641694322"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 691,
+      "head": "5484c14feca28810ce57c1dcf4f9f02066b003ec",
+      "title": "Open confirmed supported CLI sign-in with preserved homes and refreshed PATH",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T22:12:10Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/691",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 686,
+      "head": "6a704d6deb93a685d332fea32a24f0e0b76a87a9",
+      "title": "Protocol and host: session history for the conversation pane (#292)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-05T17:50:03Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/686",
+      "namedResponder": "Trust/A50e5b45a existing writer",
+      "nextAction": "Existing writer rebases; returned ca61 ENTIRE55 technical CLEAN retained. #929 unchanged-commit range-diff carry possible; new-head CI/genuine/ALLfeedback required, no universal restart.",
+      "historicalOriginal54": {
+        "pr": 686,
+        "head": "6a704d6deb93a685d332fea32a24f0e0b76a87a9",
+        "classification": "conflict-existing-writer-rebase",
+        "identifiedResponder": "Trust/A50e5b45a existing writer",
+        "gates": {
+          "ciRuns": [
+            42068068169
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5788710150,
+          "copilotBody": "NeedsCloserLook: independent security review evidence",
+          "unresolvedThreads": 0,
+          "mergeable": "CONFLICTING",
+          "independentObserved": "SUCCESS"
+        },
+        "nextAction": "Existing writer rebases; returned ca61 ENTIRE55 technical CLEAN retained. #929 unchanged-commit range-diff carry possible; new-head CI/genuine/ALLfeedback required, no universal restart.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/686#issuecomment-6665138120"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 673,
+      "head": "5cc5db49b29fe7eb358aea2f0d826b03d4b5e75e",
+      "title": "Quality: take over merging automatically while GitHub Actions is down, and hand back when it recovers",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "area:ops"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T01:02:36Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/673",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 668,
+      "head": "b0e9952f76b0603bf39d905e25502972d188506a",
+      "title": "Ops: alert from Azure when GitHub Actions or Pages is down or our runs stall (#658)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "hold",
+        "area:ops"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T22:45:12Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/668",
+      "namedResponder": "SRE026d5395 writer; Engineering0d1762e4 review lane",
+      "nextAction": "Keep draft/HOLD; distinguish static source CLEAN from Azure telemetry runtime proof. No ready flip/production/test grant.",
+      "historicalOriginal54": {
+        "pr": 668,
+        "head": "b0e9952f76b0603bf39d905e25502972d188506a",
+        "classification": "draft-contract-HOLD-runtime-not-authorized",
+        "identifiedResponder": "SRE026d5395 writer; Engineering0d1762e4 review lane",
+        "gates": {
+          "draft": true,
+          "ciRuns": [
+            41924546800
+          ],
+          "ciChecks": "passing_draft_subset_not_full_readiness",
+          "copilotReview": 5776771512,
+          "copilotBody": "NeedsCloserLook: owner-controlled Azure E2E validation",
+          "unresolvedThreads": 0,
+          "independentObserved": "SUCCESS"
+        },
+        "nextAction": "Keep draft/HOLD; distinguish static source CLEAN from Azure telemetry runtime proof. No ready flip/production/test grant.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/668#issuecomment-6643746858"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 667,
+      "head": "f6accbd3befd878fbbcd0dce5b2dd24c288021f5",
+      "title": "Design: nothing pops in or out; items ease in and neighbours ease aside (#659), decided",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T10:47:30Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/667",
+      "namedResponder": "Creativec187cf6c/same design delegate",
+      "nextAction": "Readable disposition of body concerns despite zero threads, then current24 source/normal qualification; no duplicate review requested.",
+      "historicalOriginal54": {
+        "pr": 667,
+        "head": "f6accbd3befd878fbbcd0dce5b2dd24c288021f5",
+        "classification": "human-assessment-and-source-qualification",
+        "identifiedResponder": "Creativec187cf6c/same design delegate",
+        "gates": {
+          "ciRuns": [
+            42010857139
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5783501623,
+          "copilotBody": "NeedsCloserLook: panel background jumps and stale Tools ages",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Readable disposition of body concerns despite zero threads, then current24 source/normal qualification; no duplicate review requested.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/667#issuecomment-6656038788"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 666,
+      "head": "a57ebdf586159d1708b28dec1f09ac374bd8463a",
+      "title": "Design: delegate events and conversation history (#661, #292), decided",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T21:40:01Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/666",
+      "namedResponder": "Creativec187cf6c writer; Quality successor qualifies SAME5d84 route",
+      "nextAction": "Repair already delivered EARLY; c484 was NOT CLEAN. Same writer disposes two new issues; retain SAME typed5d84 docs-delta route after current gates, no Root CLEAN/duplicate47.",
+      "historicalOriginal54": {
+        "pr": 666,
+        "head": "a57ebdf586159d1708b28dec1f09ac374bd8463a",
+        "classification": "two-new-threads-and-retained-reviewer-docs-delta",
+        "identifiedResponder": "Creativec187cf6c writer; Qualitydfff11e8 qualifies SAME5d84 route",
+        "gates": {
+          "ciRuns": [
+            42107324210
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5792014298,
+          "copilotBody": "ChangesRecommended: incomplete live delegate counts; TWO open issues",
+          "unresolvedThreads": 2,
+          "independentObserved": "MISSING_not_automatically_required_for_nonsensitive_docs"
+        },
+        "nextAction": "Repair already delivered EARLY; c484 was NOT CLEAN. Same writer disposes two new issues; retain SAME typed5d84 docs-delta route after current gates, no Root CLEAN/duplicate47.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/666#issuecomment-6669123419"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 665,
+      "head": "c3303c56572509a96cf1a8addc4ce90584bfd93d",
+      "title": "Design: adopt the Apple session layout's improvements across clients (decided)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T08:59:23Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/665",
+      "namedResponder": "Quality successor admission; Creativec187cf6c writer",
+      "nextAction": "Qualify current docs delta/ALLfeedback and ordinary gates; do not repeat stale CodeQL-skipped/thread failures as current or invent mandatory sensitive R5.",
+      "historicalOriginal54": {
+        "pr": 665,
+        "head": "c3303c56572509a96cf1a8addc4ce90584bfd93d",
+        "classification": "readycandidate-pending-Quality-full-admission",
+        "identifiedResponder": "Quality dfff11e8 admission; Creativec187cf6c writer",
+        "gates": {
+          "ciRuns": [
+            41998072996
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5782207919,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING_not_automatically_required_for_nonsensitive_docs"
+        },
+        "nextAction": "Qualify current docs delta/ALLfeedback and ordinary gates; do not repeat stale CodeQL-skipped/thread failures as current or invent mandatory sensitive R5.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/665#issuecomment-6653836938"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 656,
+      "head": "6054e0b6aa8b2032a53cda19a99bf2dbf7ec73c6",
+      "title": "PWA: quiet when hidden, fleet looks every five minutes, glyphs turned on the compositor",
+      "state": "OPEN_NOT_QUALIFIED_FOR_ADMISSION",
+      "draft": false,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "UNSTABLE",
+      "updatedAtApi": "2026-11-05T10:51:39Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/656",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Quality successor qualifies scope/sensitivity, actual CI/genuine Copilot/ALLfeedback/threads/required receipt/App/light/main fence; no readiness inferred from metadata.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 637,
+      "head": "bb08d84c7285f493c64a467fcf9900bdd300f960",
+      "title": "App: reorder by lifting the card while the others make room (#594)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T20:25:45Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/637",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 634,
+      "head": "173c05ce9adc2e32331ab64dfcd617ac4e971c8e",
+      "title": "Host: the session poll builds, serialises and opens nothing for an unchanged session, without exceptions",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T01:23:15Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/634",
+      "namedResponder": "Quality successor admission; perf-Aeb29d6d8 writer",
+      "nextAction": "Retain FULL14 bcd2f401 report and refusal-record assessment; qualify current ALLfeedback/normal/main admission, not new runtime/reviewer work.",
+      "historicalOriginal54": {
+        "pr": 634,
+        "head": "173c05ce9adc2e32331ab64dfcd617ac4e971c8e",
+        "classification": "readycandidate-pending-Quality-full-admission",
+        "identifiedResponder": "Quality dfff11e8 admission; perf-Aeb29d6d8 writer",
+        "gates": {
+          "ciRuns": [
+            41924500844
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5776776933,
+          "copilotBody": "NeedsCloserLook: symbolic-link refusal-record caching",
+          "unresolvedThreads": 0,
+          "independentObserved": "SUCCESS"
+        },
+        "nextAction": "Retain FULL14 bcd2f401 report and refusal-record assessment; qualify current ALLfeedback/normal/main admission, not new runtime/reviewer work.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/634#issuecomment-6646998485"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 633,
+      "head": "7c6fe5d45dcceaf4574777cbc8d839ba4ba47f9d",
+      "title": "PWA: reorder sessions by touch, lifting the card while the others make room (#593)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T20:54:44Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/633",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 629,
+      "head": "bbee76424cc822eefb5a74a0394975ba7fd6f5af",
+      "title": "Design: compact phone session header that collapses on scroll, decided (#620)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T21:29:48Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/629",
+      "namedResponder": "Creativec187cf6c, same writer",
+      "nextAction": "HEAD CHANGED since13:19 triage; qualify #929 delta/carry/supersession, fresh actual checks/genuine/ALLfeedback and sensitivity. No old green or receipt carry. Historical next action: SAME writer ACKs r4485642192 valid/fixing; qualify eventual authorized docs delta/normal gates. No-phone-strip already delivered EARLY; old085e/13:30 wait closed.",
+      "historicalOriginal54": {
+        "pr": 629,
+        "head": "f05866003a300d497d9cb27802290edc9a3c964d",
+        "classification": "keyboard-thread-existing-writer-ACK",
+        "identifiedResponder": "Creativec187cf6c, same writer",
+        "gates": {
+          "ciRuns": [
+            42102519294
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5791576212,
+          "copilotBody": "ChangesRecommended: keyboard tab navigation unreachable",
+          "unresolvedThreads": 1,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "SAME writer ACKs r4485642192 valid/fixing; qualify eventual authorized docs delta/normal gates. No-phone-strip already delivered EARLY; old085e/13:30 wait closed.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/629#issuecomment-6669776145"
+      },
+      "oldTriageHeadSuperseded": true,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 625,
+      "head": "0984c48656b7fc576d8d1779be94296ea1e33ce6",
+      "title": "App: show reply and answer progress (Sent, Typed, Queued) and log timing marks (#600)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T21:48:02Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/625",
+      "namedResponder": "Connectioneb29d6d8 / same perf-A0fa05bb0 author; Engineering0d1762e4 proper review lane; Quality incumbent dfff11e8 until released",
+      "nextAction": "H3GO6670248942 authorizes ONE0984c486 fast-forward push, not admission. Actual current head pinned here; qualify its OWN CI/genuine/ALLfeedback and all4 genuine MED findings, then proper code-review Opus ENTIRE27 within45m of green. fb5c/42108002967 SUCCESS is SUPERSEDED historical evidence, no carry. Old56c retry reservation obsolete/nontransferable; no retry.",
+      "historicalOriginal54": {
+        "pr": 625,
+        "head": "fb5c813ec37c38df713c911815323bd0a738ff7f",
+        "classification": "four-new-threads-and-nonauthor-sensitive-review",
+        "identifiedResponder": "perf-Aeb29d6d8/same0fa05bb0 writer; Engineering0d1762e4 typed independent lane",
+        "gates": {
+          "ciRuns": [
+            42108002967
+          ],
+          "wholeCISupplement": "A1 COMPLETED SUCCESS, updated2026-11-05T13:08:25-08:00",
+          "copilotReview": 5792119442,
+          "copilotBody": "NeedsCloserLook: hidden-whitespace normalization; FOUR open issues",
+          "unresolvedThreads": 4,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Same writer disposes four new findings; author no-findings is NOT independent. Qualify typed ENTIRE27 after eligible feedback/normal gates. Old56c retry nontransferable; no retry.",
+        "due": "Engineering independent within45min of qualified green per6669066394; no invented absolute deadline",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/625#issuecomment-6669655446"
+      },
+      "oldTriageHeadSuperseded": true,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 617,
+      "head": "0d2994fc694167c83808e9866ef491519191a05b",
+      "title": "Design: reply and answer progress states (#600), decided and normative",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T22:46:15Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/617",
+      "namedResponder": "Creativec187cf6c writer; Quality successor qualification",
+      "nextAction": "Qualify current61 docs/status review history and exact-head normal/ALLfeedback gates; old main-red comments are not current admission.",
+      "historicalOriginal54": {
+        "pr": 617,
+        "head": "0d2994fc694167c83808e9866ef491519191a05b",
+        "classification": "sensitive-design-source-qualification",
+        "identifiedResponder": "Creativec187cf6c writer; Quality dfff11e8 qualification",
+        "gates": {
+          "ciRuns": [
+            41922039691
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5776578343,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Qualify current61 docs/status review history and exact-head normal/ALLfeedback gates; old main-red comments are not current admission.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/617#issuecomment-6643304621"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 616,
+      "head": "6288bb29f32fb0e979b5ef31926ff34ceadcb57b",
+      "title": "PWA: show reply and answer progress (Sent, Typed, Queued) and keep timing marks (#600)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T15:38:18Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/616",
+      "namedResponder": "Connectioneb29d6d8 writer; Quality successor qualification",
+      "nextAction": "Preserve explicit HOLD/sign-in OFF. Qualify current34 source chain and human assessment separately; green metadata releases nothing.",
+      "historicalOriginal54": {
+        "pr": 616,
+        "head": "6288bb29f32fb0e979b5ef31926ff34ceadcb57b",
+        "classification": "contract-HOLD-signin-OFF",
+        "identifiedResponder": "Connectioneb29d6d8 writer; Quality dfff11e8 qualification",
+        "gates": {
+          "ciRuns": [
+            42053583734
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5787472168,
+          "copilotBody": "NeedsCloserLook: premature feedback removal/account-signout announcement",
+          "unresolvedThreads": 0,
+          "independentObserved": "SUCCESS"
+        },
+        "nextAction": "Preserve explicit HOLD/sign-in OFF. Qualify current34 source chain and human assessment separately; green metadata releases nothing.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/616#issuecomment-6662172091"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 605,
+      "head": "ce6a61b54637c39a66bdbdd43ebae36c4c172418",
+      "title": "Design: reorder by lifting the card while the others make room (#592)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T10:11:31Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/605",
+      "namedResponder": "Creativec187cf6c/same design delegate",
+      "nextAction": "Qualify current44 and readable dispositions; historical outside401/zero-turn failure was NOT completed review. No duplicate delegate requested.",
+      "historicalOriginal54": {
+        "pr": 605,
+        "head": "ce6a61b54637c39a66bdbdd43ebae36c4c172418",
+        "classification": "outside-review-and-feedback-disposition",
+        "identifiedResponder": "Creativec187cf6c/same design delegate",
+        "gates": {
+          "ciRuns": [
+            42007774725
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5783200059,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Qualify current44 and readable dispositions; historical outside401/zero-turn failure was NOT completed review. No duplicate delegate requested.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/605#issuecomment-6655213200"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 589,
+      "head": "0b32876f83b3bb3a24dd0fb232989cbcc48b35b7",
+      "title": "Experiment: add opt-in shared-learning evidence and snapshot tooling",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T05:47:27Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/589",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 588,
+      "head": "cb636bf513b3a5872a690a11ebf81e3ff27af09e",
+      "title": "Polish Apple settings, composer, and reconnect feedback",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        null
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T19:42:09Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/588",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 532,
+      "head": "a9b6de7f9d7fa4327f00d33e681bdde9d912b271",
+      "title": "Design: first-run setup and Settings (#384), decided",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T07:43:08Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/532",
+      "namedResponder": "Creativec187cf6c writer; Quality successor qualification",
+      "nextAction": "Use repaired a9b6 rule; qualify sensitive current96 inventory and normal gates; #231 direct-user implementation freeze remains separate.",
+      "historicalOriginal54": {
+        "pr": 532,
+        "head": "a9b6de7f9d7fa4327f00d33e681bdde9d912b271",
+        "classification": "sensitive-design-source-qualification",
+        "identifiedResponder": "Creativec187cf6c writer; Quality dfff11e8 qualification",
+        "gates": {
+          "ciRuns": [
+            41988809342
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5781388055,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Use repaired a9b6 rule; qualify sensitive current96 inventory and normal gates; #231 direct-user implementation freeze remains separate.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/532#issuecomment-6652524352"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 510,
+      "head": "3caa2f603b8f4eb216eb01b62441d4783d584e4b",
+      "title": "Host: a form's words get their Enter only once the CLI has taken them in; unconfirmed answers say how far they got (#467)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-05T21:28:14Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/510",
+      "namedResponder": "Trust/A50e5b45a writer; Quality successor qualification",
+      "nextAction": "Trust delta returned EARLY, context only; qualify exact49 typed outside review/native/client contracts and #859 order. ONE retry used, no third.",
+      "historicalOriginal54": {
+        "pr": 510,
+        "head": "3caa2f603b8f4eb216eb01b62441d4783d584e4b",
+        "classification": "sensitive-source-and-client-contract-gates",
+        "identifiedResponder": "Trust/A50e5b45a writer; Quality dfff11e8 qualification",
+        "gates": {
+          "ciRuns": [
+            42093785802
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5790865620,
+          "copilotBody": "NeedsCloserLook: native attachment/security validation",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Trust delta returned EARLY, context only; qualify exact49 typed outside review/native/client contracts and #859 order. ONE retry used, no third.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/510#issuecomment-6667861364"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 504,
+      "head": "5a6416f0611bf30de52d47ffa58e0072ece5021f",
+      "title": "App: scheduled and agent-sent prompts drawn as agent-driven and collapsed (#489)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T16:43:44Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/504",
+      "namedResponder": "Quality successor admission; B/Daily4d05d459 writer",
+      "nextAction": "Consume returned SAMEf957 FULL14 CLEAN and qualify fresh full admission; no duplicate review or automatic sensitive R5 requirement.",
+      "historicalOriginal54": {
+        "pr": 504,
+        "head": "5a6416f0611bf30de52d47ffa58e0072ece5021f",
+        "classification": "readycandidate-pending-Quality-full-admission",
+        "identifiedResponder": "Quality dfff11e8 admission; B/Daily4d05d459 writer",
+        "gates": {
+          "ciRuns": [
+            42060868903
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5788038112,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "SUCCESS"
+        },
+        "nextAction": "Consume returned SAMEf957 FULL14 CLEAN and qualify fresh full admission; no duplicate review or automatic sensitive R5 requirement.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/504#issuecomment-6663663840"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 502,
+      "head": "d4396b4b2a182c562f380790e0a96a437e521d38",
+      "title": "Design: VP of Design role, handoff process and local design-context export (#477)",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "area:design"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-03T20:36:42Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/502",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author danswett",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 478,
+      "head": "b7daa44bff49b909dfe822ff8adb1a27cef1e59c",
+      "title": "Host Stop: the host ends with its launcher; an earlier launcher is found; no stale marker (#420)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T18:05:59Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/478",
+      "namedResponder": "Trust/A50e5b45a routes existing lifecycle writer",
+      "nextAction": "Existing writer repairs/disposes current HIGH; prior lifecycle CLEAN is retained technical evidence, not HIGH clearance.",
+      "historicalOriginal54": {
+        "pr": 478,
+        "head": "b7daa44bff49b909dfe822ff8adb1a27cef1e59c",
+        "classification": "HIGH-thread-existing-writer-repair",
+        "identifiedResponder": "Trust/A50e5b45a routes existing lifecycle writer",
+        "gates": {
+          "ciRuns": [
+            41864596072
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5771724967,
+          "copilotBody": "ChangesRecommended: HIGH Stop-marker deletion race",
+          "unresolvedThreads": 1,
+          "independentObserved": "SUCCESS_does_not_clear_later_HIGH"
+        },
+        "nextAction": "Existing writer repairs/disposes current HIGH; prior lifecycle CLEAN is retained technical evidence, not HIGH clearance.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/478#issuecomment-6619714465"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 469,
+      "head": "7c6540b99f3901e982389849b472cd9cee1cbcc8",
+      "title": "status: native Agent Bridge delivery is not gated on HA, the shadow soak or legacy retirement",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T22:46:39Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/469",
+      "namedResponder": "Engineering0d1762e4 for existing-writer identification; writer UNKNOWN",
+      "nextAction": "Existing writer fixes or reasonedly disposes THREE unresolved threads; outside success is not closure or admission.",
+      "historicalOriginal54": {
+        "pr": 469,
+        "head": "7c6540b99f3901e982389849b472cd9cee1cbcc8",
+        "classification": "three-threads-and-contract-disposition",
+        "identifiedResponder": "Engineering0d1762e4 for existing-writer identification; writer UNKNOWN",
+        "gates": {
+          "ciRuns": [
+            41864092940
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5771624963,
+          "copilotBody": "NeedsCloserLook: obsolete native publisher prerequisite",
+          "unresolvedThreads": 3,
+          "independentObserved": "SUCCESS_not_thread_clearance"
+        },
+        "nextAction": "Existing writer fixes or reasonedly disposes THREE unresolved threads; outside success is not closure or admission.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/469#issuecomment-6635996901"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 428,
+      "head": "de37365859ed2ec5fb2f3f763e8455600a22c19d",
+      "title": "CI: Bump the actions group across 1 directory with 9 updates",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "dependencies",
+        "github_actions",
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-05T18:26:05Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/428",
+      "namedResponder": "Platform0544445f existing writer; Engineering0d1762e4 review lane",
+      "nextAction": "Existing writer handles rebase; preserve HOLD/LAST and explicit coverage failure. Qualify resulting coverage/carry under #929 range-diff rule where proved.",
+      "historicalOriginal54": {
+        "pr": 428,
+        "head": "de37365859ed2ec5fb2f3f763e8455600a22c19d",
+        "classification": "conflict-and-independent-coverage-failure",
+        "identifiedResponder": "Platform0544445f existing writer; Engineering0d1762e4 review lane",
+        "gates": {
+          "ciRuns": [
+            42019411333
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5784252268,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "mergeable": "CONFLICTING",
+          "independentObserved": "FAILURE"
+        },
+        "nextAction": "Existing writer handles rebase; preserve HOLD/LAST and explicit coverage failure. Qualify resulting coverage/carry under #929 range-diff rule where proved.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/428#issuecomment-6665863941"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 406,
+      "head": "73e3cca070825f6ef9bb1fa3903244ec5d28b401",
+      "title": "Show the migration failure in rollback test assertions",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "track:cross-cutting",
+        "area:testing",
+        "area:migration",
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T19:47:21Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/406",
+      "namedResponder": "welshofer, actual author; Quality admission only",
+      "nextAction": "Completed genuine head Copilot remains required; green checks/outside CLEAN do not waive billing failure. No auth action/rerun requested or invented sensitive R5.",
+      "historicalOriginal54": {
+        "pr": 406,
+        "head": "73e3cca070825f6ef9bb1fa3903244ec5d28b401",
+        "classification": "genuine-current-head-review-billing-error",
+        "identifiedResponder": "welshofer, actual author; Quality admission only",
+        "gates": {
+          "ciRuns": [
+            41898712914
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5774609210,
+          "copilotBody": "BILLING_ERROR_NOT_COMPLETED",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING_not_automatically_required_for_nonsensitive_test_only"
+        },
+        "nextAction": "Completed genuine head Copilot remains required; green checks/outside CLEAN do not waive billing failure. No auth action/rerun requested or invented sensitive R5.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/406#issuecomment-6640445511"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 405,
+      "head": "6c31a136ca57b7b3540021e66427d5fd21e767c3",
+      "title": "Make the local Mac host setup portable",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "track:apple",
+        "platform:macos",
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "CLEAN",
+      "updatedAtApi": "2026-11-04T20:07:39Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/405",
+      "namedResponder": "welshofer, actual author",
+      "nextAction": "Keep #358 integration hold. Author supplies own final-head CI/checks and genuine Copilot after parent integration; no new execution or retry.",
+      "historicalOriginal54": {
+        "pr": 405,
+        "head": "6c31a136ca57b7b3540021e66427d5fd21e767c3",
+        "classification": "parent-stack-and-own-CI-missing",
+        "identifiedResponder": "welshofer, actual author",
+        "gates": {
+          "ciRuns": [],
+          "ciChecks": "rollup_absent",
+          "copilotBody": "MISSING_IN_WINDOW",
+          "unresolvedThreads": 0,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Keep #358 integration hold. Author supplies own final-head CI/checks and genuine Copilot after parent integration; no new execution or retry.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/405#issuecomment-6640879805"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 397,
+      "head": "340816e22f28ada7172224c8c84a2f9e4683d239",
+      "title": "Harden sign-in and improve the Agent Bridge clients and host",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "track:cross-cutting",
+        "area:security",
+        "area:platform",
+        "platform:macos",
+        "platform:ios",
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "UNSTABLE",
+      "updatedAtApi": "2026-11-04T20:07:18Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/397",
+      "namedResponder": "welshofer, actual author",
+      "nextAction": "Preserve #358 stack; author supplies causal repair/thread disposition and current genuine review/sensitive qualification, no unauthorized rebase or retry.",
+      "historicalOriginal54": {
+        "pr": 397,
+        "head": "340816e22f28ada7172224c8c84a2f9e4683d239",
+        "classification": "CIred-thread-and-parent-stack",
+        "identifiedResponder": "welshofer, actual author",
+        "gates": {
+          "ciRuns": [
+            41903464779,
+            41903536065
+          ],
+          "ciChecks": "Windows/native failures and cancellations",
+          "copilotBody": "MISSING_IN_WINDOW",
+          "unresolvedThreads": 1,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Preserve #358 stack; author supplies causal repair/thread disposition and current genuine review/sensitive qualification, no unauthorized rebase or retry.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/397#issuecomment-6640872070"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 394,
+      "head": "4fa14dd8da611c58639a60047df2db98224ac65e",
+      "title": "docs: distinguish current and target HA connector architecture",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T16:00:35Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/394",
+      "namedResponder": "Quality successor qualification; Engineering0d1762e4 provenance; Migration d5ac689c/same a6429edc writer",
+      "nextAction": "ENTIRE5 technical return FULFILLED. Inspect existing role provenance under GP correction/Migration6669747017, not blind FULL restart; qualify ALLfeedback/normal admission.",
+      "historicalOriginal54": {
+        "pr": 394,
+        "head": "4fa14dd8da611c58639a60047df2db98224ac65e",
+        "classification": "technical-return-fulfilled-role-provenance-pending",
+        "identifiedResponder": "Quality dfff11e8 qualification; Engineering0d1762e4 provenance; Migration d5ac689c/same a6429edc writer",
+        "gates": {
+          "ciRuns": [
+            42056995702
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5787660654,
+          "copilotBody": "ApprovalRecommended",
+          "unresolvedThreads": 0,
+          "independentObserved": "SUCCESS_role_not_yet_qualified"
+        },
+        "nextAction": "ENTIRE5 technical return FULFILLED. Inspect existing role provenance under GP correction/Migration6669747017, not blind FULL restart; qualify ALLfeedback/normal admission.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/issues/689#issuecomment-6669747017"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 391,
+      "head": "a3b3157ce7f93562b49713fbb66ed8cf82db3b3f",
+      "title": "Design: device approval and the signed roster (#55)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T16:15:35Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/391",
+      "namedResponder": "Engineering0d1762e4 for existing-writer identification; writer UNKNOWN",
+      "nextAction": "Identify existing writer for conflict rebase/thread disposition; #929 permits proven unchanged-own-commit range-diff carry, not universal ENTIRE restart. New-head CI/Copilot required.",
+      "historicalOriginal54": {
+        "pr": 391,
+        "head": "a3b3157ce7f93562b49713fbb66ed8cf82db3b3f",
+        "classification": "conflict-rebase-and-thread",
+        "identifiedResponder": "Engineering0d1762e4 for existing-writer identification; writer UNKNOWN",
+        "gates": {
+          "ciRuns": [
+            41863574969
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5771641409,
+          "copilotBody": "ChangesRecommended: signature malleation/low-S; one open issue",
+          "unresolvedThreads": 1,
+          "threadPages": "127 total, page2 required",
+          "mergeable": "CONFLICTING",
+          "independentObserved": "SUCCESS_not_admission"
+        },
+        "nextAction": "Identify existing writer for conflict rebase/thread disposition; #929 permits proven unchanged-own-commit range-diff carry, not universal ENTIRE restart. New-head CI/Copilot required.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/391#issuecomment-6635727412"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 385,
+      "head": "3a5dc8dfb913d545e82a334ec656f32b0d3e994b",
+      "title": "Keep the Apple mobile composer visible and adapt its session inspector",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "track:apple",
+        "platform:macos",
+        "platform:ios"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T19:42:09Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/385",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 382,
+      "head": "254873c446930740a0d760526d0e2587a8376c8c",
+      "title": "Keep the session composer visible and expire stale staged files",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "track:apple",
+        "platform:macos",
+        "platform:ios"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T19:42:09Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/382",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 381,
+      "head": "94567483f5dc08beb25d94fcee47334bd36a1d8b",
+      "title": "Keep Mac G5 inspection complete across protected login parents",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "track:apple",
+        "platform:macos"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T19:42:09Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/381",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 379,
+      "head": "e6bad21abf7573929a2f71ab15840afd69fb2b0e",
+      "title": "Explain Keychain signing failures without false unlock guidance",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "track:apple",
+        "platform:macos",
+        "platform:ios"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T19:42:09Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/379",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 358,
+      "head": "473c1db9846da0fbc865f7d8e0c08357937c0d0d",
+      "title": "Add managed macOS hosting and the adaptive Apple session workbench",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "track:apple",
+        "platform:macos",
+        "platform:ios",
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T19:54:29Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/358",
+      "namedResponder": "welshofer, actual author",
+      "nextAction": "Existing author supplies causal repair and thread disposition, then genuine exact-head review and sensitive qualification; no retry authorized.",
+      "historicalOriginal54": {
+        "pr": 358,
+        "head": "473c1db9846da0fbc865f7d8e0c08357937c0d0d",
+        "classification": "CIred-thread-and-genuine-review",
+        "identifiedResponder": "welshofer, actual author",
+        "gates": {
+          "ciRuns": [
+            41901432679,
+            41901439573
+          ],
+          "ciChecks": "Windows/native failure; cancellations; CodeQL failure",
+          "copilotReview": 5774844846,
+          "copilotBody": "BILLING_ERROR_NOT_COMPLETED",
+          "unresolvedThreads": 1,
+          "independentObserved": "MISSING"
+        },
+        "nextAction": "Existing author supplies causal repair and thread disposition, then genuine exact-head review and sensitive qualification; no retry authorized.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/358#issuecomment-6640597253"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 349,
+      "head": "fe2f668dc2c6183693953df8a02623f2b4e23fc3",
+      "title": "Test real managed Mac Copilot launch reply answer and stop",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "track:apple",
+        "platform:macos"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T19:42:09Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/349",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 348,
+      "head": "a9289ef3900fb9f76b14f30bc20c38777ec234f0",
+      "title": "Verify installed CLI capabilities for managed Mac launches",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "track:apple",
+        "platform:macos"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T19:42:09Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/348",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 347,
+      "head": "9c6689da19ef9c3de816a1f4ccb27cea1b02f676",
+      "title": "Recognize the current Copilot readiness footer",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "track:cross-cutting",
+        "area:session-lifecycle",
+        "platform:macos"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T04:10:18Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/347",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 344,
+      "head": "d2f98268075746ff6395872dc18758356757f4bc",
+      "title": "Keep tmux replies private while preserving raw question keys",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "track:apple",
+        "platform:macos"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T19:42:09Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/344",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 343,
+      "head": "d9d293840c9754d9a003760090d111a5437f437e",
+      "title": "Match exact macOS process start times across native and .NET APIs",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "track:apple",
+        "platform:macos"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T19:42:09Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/343",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 342,
+      "head": "3644f1b6b940ff3649d229e80c581b6b837c649b",
+      "title": "Bound retries for incomplete macOS delivery scans",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "priority:P1",
+        "area:security",
+        "area:platform",
+        "track:apple",
+        "platform:macos"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T04:10:10Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/342",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 341,
+      "head": "36e424fec9d249f6ba84d24645e248a81568e61a",
+      "title": "Match both exact process start-time representations during Mac discovery",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "priority:P2",
+        "area:session-lifecycle",
+        "area:security",
+        "area:platform",
+        "track:apple",
+        "platform:macos"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T04:10:03Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/341",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 340,
+      "head": "d43f1b1e5d5671d62da6bc9c654fa450dab009d7",
+      "title": "Reduce macOS host process-discovery CPU",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "priority:P2",
+        "area:session-lifecycle",
+        "area:platform",
+        "track:apple",
+        "platform:macos"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T09:25:49Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/340",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 339,
+      "head": "7e2942bf135735d608254ff85d0644cfda531eae",
+      "title": "Document native Apple interop acceptance through existing connection settings",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "priority:P2",
+        "area:testing",
+        "track:apple",
+        "platform:macos",
+        "platform:ios"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T09:25:41Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/339",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 336,
+      "head": "5314ae698e4c8539057ad1c8e106ba4624439f49",
+      "title": "Discover owned macOS Codex sessions through native lock-holder checks",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "priority:P2",
+        "area:session-lifecycle",
+        "area:security",
+        "area:platform",
+        "track:apple",
+        "platform:macos"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T09:25:32Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/336",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 335,
+      "head": "0e0a679e478bcf45e2cdd505b467455fab0f10df",
+      "title": "Fail closed when Mac legacy bridge inspection is incomplete",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "bug",
+        "priority:P1",
+        "area:security",
+        "area:platform",
+        "track:apple",
+        "platform:macos"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T09:25:23Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/335",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 329,
+      "head": "3769cc965b718dd0c4e7dfa291508312f3917447",
+      "title": "Add owned tmux session delivery adapters for macOS",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "priority:P2",
+        "area:platform",
+        "track:apple",
+        "platform:macos"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T09:25:14Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/329",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 328,
+      "head": "f28caaa7e8160efff7a26bfcec569cef0c717e0c",
+      "title": "Add isolated Apple and product .NET interoperability harness",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "track:apple",
+        "platform:macos",
+        "platform:ios"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T09:25:06Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/328",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 327,
+      "head": "4659697070f482d0c57aef69085a9429440e6571",
+      "title": "Add a Swift probe for production .NET interoperability",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "track:apple",
+        "platform:macos",
+        "platform:ios"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-04T09:24:59Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/327",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 284,
+      "head": "973b28610e03c0b89f6e7a75948d54986484d81a",
+      "title": "Add Apple delegate browsing and safe attribution parity",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "track:apple",
+        "platform:macos",
+        "platform:ios"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T04:08:09Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/284",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 279,
+      "head": "a35cd3fa37c82f89dc23da37d77e62802a8ba556",
+      "title": "Apple: guard native notification answers and replies",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "track:apple",
+        "platform:macos",
+        "platform:ios"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T04:07:45Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/279",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 277,
+      "head": "16aa57c27b8e0d00463c4e764fe85b2dcba91fdc",
+      "title": "Share Apple attachment uploads and preserve their lifecycle",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "track:apple",
+        "platform:macos",
+        "platform:ios"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T04:07:38Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/277",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 267,
+      "head": "95a5624c621250641e0e62351384edd1a752c478",
+      "title": "Add native Apple reading, usage, connection and machine views",
+      "state": "DRAFT_NOT_READY",
+      "draft": true,
+      "labels": [
+        "track:apple",
+        "platform:macos",
+        "platform:ios"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "CONFLICTING",
+      "mergeStateMetadata": "DIRTY",
+      "updatedAtApi": "2026-11-04T04:07:13Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/267",
+      "namedResponder": "Quality successor admission; existing implementation session UNKNOWN, actual GitHub author welshofer",
+      "nextAction": "Keep draft; existing author completes its bounded work and owner publication policy; no ready flip granted.",
+      "historicalOriginal54": null,
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    },
+    {
+      "pr": 238,
+      "head": "f3db99aad611dc8fc53fb0d8a96641f12b4edbc2",
+      "title": "Usage: live Claude and Codex readings from the agents themselves (#200)",
+      "state": "HELD_NOT_ADMITTED",
+      "draft": false,
+      "labels": [
+        "hold"
+      ],
+      "actualAutoArmed": false,
+      "mergeableMetadata": "MERGEABLE",
+      "mergeStateMetadata": "BLOCKED",
+      "updatedAtApi": "2026-11-05T13:31:12Z",
+      "url": "https://github.com/danswett/agent-bridge/pull/238",
+      "namedResponder": "Quality successor admission; perf-A eb29d6d8 writer",
+      "nextAction": "Qualify retained source chain and LOW disposition, then fresh ALLfeedback/normal/main/serial admission; retain holds.",
+      "historicalOriginal54": {
+        "pr": 238,
+        "head": "f3db99aad611dc8fc53fb0d8a96641f12b4edbc2",
+        "classification": "readycandidate-pending-Quality-full-admission",
+        "identifiedResponder": "Quality dfff11e8 admission; perf-A eb29d6d8 writer",
+        "gates": {
+          "ciRuns": [
+            42032507914
+          ],
+          "ciChecks": "passing",
+          "copilotReview": 5785448094,
+          "copilotBody": "NeedsCloserLook: macOS probe identification; explicit LOW disposition exists",
+          "unresolvedThreads": 0,
+          "independentObserved": "SUCCESS_not_admission"
+        },
+        "nextAction": "Qualify retained source chain and LOW disposition, then fresh ALLfeedback/normal/main/serial admission; retain holds.",
+        "evidenceUrl": "https://github.com/danswett/agent-bridge/pull/238#issuecomment-6659265781"
+      },
+      "oldTriageHeadSuperseded": false,
+      "knownTypedReviewHead": null,
+      "knownTypedReviewSuperseded": false
+    }
+  ]
+}
