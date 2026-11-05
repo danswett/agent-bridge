@@ -423,7 +423,7 @@ public sealed partial class LaunchViewModel : Observable
                 loading = false;
                 localTrust = trust;
                 // A reload that fails says so, rather than leaving choices that may be out of date.
-                if (got is not null) { options = got; Listed(m, load); ListedLate(m, load); } else { options = null; error = failed; }
+                if (got is not null) { options = got; Listed(m, load); } else { options = null; error = failed; }
                 Draw();
                 ArmBusy(m);
             }
@@ -752,7 +752,7 @@ public sealed partial class LaunchViewModel : Observable
         var outcome = OutcomeOf(d);
         // A launch that started an agent now asking about its folder: the question, and the prompt
         // that went with it. A later busy launch naming it does not replace it.
-        if (outcome == "unconfirmed" && Result(d)?.Trust is { } asking && d.Payload is LaunchRequest went) { askedBy[m.Key] = (asking.Id, went.Prompt); }
+        if (outcome == "unconfirmed" && Result(d)?.Trust is { } asking && d.Payload is LaunchRequest went) { askedBy[m.Key] = (asking.Id, went.Prompt, d.Request); }
         FollowLate(m, d);
         if (outcome == "started")
         {

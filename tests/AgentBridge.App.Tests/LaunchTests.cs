@@ -443,7 +443,7 @@ public sealed class LaunchTests : IAsyncLifetime
         Assert.Equal(Long, launch.Prompt);
 
         options = options with { Busy = null, Trust = null };
-        await host.SendAsync(Events.SessionUpsert, Make.Session("new-1", updated: Make.T0.AddMinutes(10)));
+        await host.SendAsync(Events.SessionUpsert, Make.Session("new-1", updated: Make.T0.AddMinutes(10)) with { Agent = AgentKind.Claude });
 
         await Wait.UntilAsync(() => launch.State == "started", "started");
         Assert.Equal("Session started.", launch.StatusText);
@@ -453,48 +453,40 @@ public sealed class LaunchTests : IAsyncLifetime
         Assert.Single(Sent());
     }
 
-    // A Copilot can register before its folder question is answered: its session appearing is
-    // not its start while the machine still lists the question.
+    // A Copilot registers before its window is ready: neither its session appearing nor its
+    // question leaving the listing (a window that could not be read, or no longer followed) says
+    // it got past the question.
     [Fact]
-    public async Task A_session_that_registers_while_its_folder_question_still_waits_is_not_taken_as_started()
+    public async Task A_copilot_that_registers_while_asking_about_its_folder_is_not_taken_as_started()
     {
-        var question = Asking(clock.GetUtcNow());
+        var question = Asking(clock.GetUtcNow()) with { Agent = "copilot", Kind = AgentKind.Copilot, Label = "Copilot" };
         outcome = _ => AskingResult(question);
         options = options with { Busy = Waiting, Trust = [question] };
         ui.Post(() => { launch.Prompt = Long; launch.Launch(); });
         await Wait.UntilAsync(() => launch.State == "unconfirmed" && launch.Busy != "", "not confirmed, with the machine busy");
+        options = options with { Busy = null, Trust = null };
         var asked = Volatile.Read(ref optionsAsked);
 
         await host.SendAsync(Events.SessionUpsert, Make.Session("new-1", updated: Make.T0.AddMinutes(10)));
-        await Wait.UntilAsync(() => Volatile.Read(ref optionsAsked) > asked && launch.CanReload, "the machine listed again");
+        await Wait.UntilAsync(() => Volatile.Read(ref optionsAsked) > asked && launch.CanReload && launch.Busy == "", "the machine listed again");
+
         Assert.Equal("unconfirmed", launch.State);
         Assert.Equal(Long, launch.Prompt);
-
-        // Answered: the machine no longer lists it, which the page reads once the busy can have ended.
-        options = options with { Busy = null, Trust = null };
-        clock.Advance(TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(2));
-
-        await Wait.UntilAsync(() => launch.State == "started", "started once the question is no longer listed");
-        Assert.Equal("", launch.Prompt);
     }
 
-    // The host lists a question whose words change under a new id: still the same folder's.
+    // A clock here ahead of the machine's: its two minutes are already up, so it is listed again
+    // soon rather than after two more.
     [Fact]
-    public async Task A_folder_question_read_again_under_a_new_id_still_waits()
+    public async Task What_the_machine_still_says_is_busy_after_its_two_minutes_here_is_listed_again_soon()
     {
-        var question = Asking(clock.GetUtcNow());
-        outcome = _ => AskingResult(question);
-        options = options with { Busy = Waiting, Trust = [question] };
-        ui.Post(() => { launch.Prompt = Long; launch.Launch(); });
-        await Wait.UntilAsync(() => launch.State == "unconfirmed" && launch.Busy != "", "not confirmed, with the machine busy");
-        options = options with { Trust = [question with { Id = "q-2" }] };
-        var asked = Volatile.Read(ref optionsAsked);
+        options = options with { Busy = Waiting, Trust = [Asking(clock.GetUtcNow() - TimeSpan.FromMinutes(3))] };
+        await launch.RefreshAsync();
+        Assert.NotEqual("", launch.Busy);
+        options = options with { Busy = null, Trust = null };
 
-        await host.SendAsync(Events.SessionUpsert, Make.Session("new-1", updated: Make.T0.AddMinutes(10)));
-        await Wait.UntilAsync(() => Volatile.Read(ref optionsAsked) > asked && launch.CanReload, "the machine listed again");
+        clock.Advance(TimeSpan.FromSeconds(6));
 
-        Assert.Equal("unconfirmed", launch.State);
-        Assert.Equal(Long, launch.Prompt);
+        await Wait.UntilAsync(() => launch.Busy == "", "the busy to go");
     }
 
     // A Copilot whose session had not appeared in time registers before its window is ready:

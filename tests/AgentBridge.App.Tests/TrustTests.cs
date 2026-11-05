@@ -190,6 +190,8 @@ public sealed class TrustTests : IAsyncLifetime
         ui.Post(page.TrustQuestions[0].Trust);
         await Wait.UntilAsync(() => page.TrustQuestions.Count == 0 || page.TrustQuestions[0].State == "started", "started");
         await Wait.UntilAsync(() => page.Prompt == "", "the prompt cleared");
+        // The launch's own status too, though Codex's session had no id to follow (#122).
+        Assert.Equal(("started", "Session started."), (page.State, page.StatusText));
 
         // A question asked at the machine, answered here: what is being written stays.
         remoteTrust = [Question() with { Id = "q-2" }];
