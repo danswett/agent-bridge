@@ -129,15 +129,18 @@ public class QuestionMappingTests
     }
 
     [Fact]
-    public void A_question_that_is_one_option_list_also_takes_words_through_Other_and_a_form_does_not()
+    // A schema list is its enum or oneOf, which allows nothing else, so no schema list takes words
+    // through Other, alone or in a form (review of #844); the older choices form still does.
+    public void Only_the_older_choices_form_takes_words_through_Other()
     {
         var lone = Assert.Single(Ask("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] } } } }""").Fields);
         var form = Ask("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] }, "go": { "type": "boolean" } } } }""");
         var list = Assert.Single(Ask("""{ "message": "m", "requestedSchema": { "properties": { "many": { "type": "array", "items": { "enum": ["a", "b"] } } } } }""").Fields);
 
-        Assert.True(lone.AllowOther);
+        Assert.Null(lone.AllowOther);
         Assert.Null(form.Fields[0].AllowOther);
         Assert.Null(list.AllowOther);
+        Assert.True(Assert.Single(Ask("""{ "question": "m", "choices": ["a", "b"] }""").Fields).AllowOther);
     }
 
     [Fact]

@@ -91,10 +91,10 @@ internal static class QuestionMapper
         else if (Json.Get(arguments, "requestedSchema") is { } schema)
         {
             (fields, var drivable) = SchemaForm(schema);
-            // Every Copilot option list ends in "Other (type your answer)", but words reach
-            // it only in a question that is that one list: the Down past its last option
-            // opens Other there, and in a tabbed form or a checkbox list it does not.
-            if (fields is [{ Type: FieldType.Choice } only]) { fields = [only with { AllowOther = true }]; }
+            // Every Copilot option list ends in "Other (type your answer)", but a schema list is
+            // its `enum` or `oneOf`, which allows nothing else: words typed there were recorded
+            // outside the schema (review of #844), so no requestedSchema list offers Other. Only
+            // the older `choices` form above, which took free text unless told not to, does.
             // A field the CLI draws as something other than its schema says, or that cannot be
             // told, is never typed into, so a client shows the question to be answered at the
             // machine rather than offer what the host would then refuse (#662).

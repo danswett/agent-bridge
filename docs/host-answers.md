@@ -11,7 +11,7 @@ how the host does it and what it refuses.
 |---|---|---|
 | Copilot CLI | `ask_user` with no form: free text | Yes: the words, then Enter |
 | Copilot CLI | `ask_user` form (`requestedSchema`): `choice` (`type: string` with `enum` or `oneOf`), `boolean`, `multi` (`type: array`, items `anyOf` or `enum`), `text`, `number`, any number of fields | Yes |
-| Copilot CLI | Other words for a question that is one option list | Yes (`allowOther` is set on exactly that shape) |
+| Copilot CLI | Other words for a question that is one option list | Refused: a schema list is its `enum` or `oneOf`, which allows nothing else, so no `requestedSchema` list sets `allowOther` (#844). The walk below is kept for the older `choices` format, which is not typed into |
 | Copilot CLI | Other in a form of several fields, or in a checkbox list | Refused: no walk reaches it |
 | Copilot CLI | The older `question` / `choices` format | Refused: agent-ha-bridge never drove it, and no current build writes it |
 | Copilot CLI | Permission prompts: a shell command, path access, a file edit or read, a URL, an MCP tool, a custom tool | Yes, beyond agent-ha-bridge (below): approve once or deny. Refused, `answerAtMachine`, when `permissions.remoteApproval` is off. A character not drawn where it runs and a right-to-left letter are shown escaped, and still approved (#220, #253 decision 3) |
@@ -96,7 +96,9 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     white space. All of one question's patterns share 250 ms, building and matching them alike, so an
     agent's many slow patterns cannot hold up the reading of every session: once it is spent,
     every pattern left counts as one that cannot be checked, and the question is answered at the
-    machine (or the answer refused so). Whether Copilot trims a text box's words before recording
+    machine (or the answer refused so). Text of only spaces, tabs or no-break spaces is checked
+    like any other (it is typed and recorded as typed), and an empty answer to a required text
+    field is refused, since nothing typed records no answer. Whether Copilot trims a text box's words before recording
     them is not settled: its form passes them on as typed (`Fxn`, and `Uxn`'s accept step), but
     the native layer after it was not traced, so lengths are counted untrimmed.
   * An option list whose `default` is present but is not one of its options, `null` included,

@@ -129,7 +129,10 @@ public static class CopilotPlanner
                 {
                     var words = InjectableText.Collapse(value.GetString() ?? "");
                     // Checked as typed, line breaks flattened, which is what Copilot records (#766).
-                    if (!string.IsNullOrWhiteSpace(words) && field.Constraints?.TextProblem(words, patterns) is { } outside) { return (null, null, outside); }
+                    // Whitespace too: Copilot 1.0.105 records "   " as typed (`Fxn`, then the accept
+                    // step in `Uxn`), so spaces were let through a minLength of 5 (review of #844).
+                    // Only nothing typed is nothing recorded.
+                    if (words.Length > 0 && field.Constraints?.TextProblem(words, patterns) is { } outside) { return (null, null, outside); }
                     return ([words], string.IsNullOrWhiteSpace(words) ? new Expected.Omitted() : new Expected.Words(words), null);
                 }
             case CopilotFieldKind.Number:

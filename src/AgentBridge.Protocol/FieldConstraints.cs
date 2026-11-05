@@ -44,7 +44,7 @@ public sealed partial record FieldConstraints
     public string? Problem(FieldType type, JsonElement value, PatternBudget? budget = null) => type switch
     {
         FieldType.Number when value.ValueKind == JsonValueKind.Number => NumberProblem(value.GetRawText()),
-        FieldType.Text when value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()) => TextProblem(value.GetString()!, budget),
+        FieldType.Text when value.ValueKind == JsonValueKind.String && value.GetString()!.Length > 0 => TextProblem(value.GetString()!, budget),
         FieldType.Multi when value.ValueKind == JsonValueKind.Array => CountProblem(Ticked(value)),
         _ => null,
     };

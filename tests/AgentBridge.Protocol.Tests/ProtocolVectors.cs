@@ -76,7 +76,7 @@ public static class ProtocolVectors
     // A field's schema constraints (#766), each a number JavaScript holds exactly.
     static JsonElement N(double n) => JsonSerializer.SerializeToElement(n);
     static readonly Field Bounded = new() { Name = "runs", Title = "Runs", Type = FieldType.Number, Required = true, Constraints = new() { Minimum = N(2), Maximum = N(10), MultipleOf = N(2), Integer = true } };
-    static readonly Field Patterned = new() { Name = "ticket", Type = FieldType.Text, Constraints = new() { MinLength = 5, MaxLength = 12, Pattern = "^[A-Z]+-[0-9]+$" } };
+    static readonly Field Patterned = new() { Name = "ticket", Type = FieldType.Text, Required = true, Constraints = new() { MinLength = 5, MaxLength = 12, Pattern = "^[A-Z]+-[0-9]+$" } };
     static readonly Field Mail = new() { Name = "mail", Type = FieldType.Text, Constraints = new() { Format = "email" } };
     static readonly Field Day = new() { Name = "day", Type = FieldType.Text, Constraints = new() { Format = "date" } };
     static readonly Field Above = new() { Name = "above", Type = FieldType.Number, Constraints = new() { ExclusiveMinimum = N(0), ExclusiveMaximum = N(1) } };
@@ -350,6 +350,8 @@ public static class ProtocolVectors
             .Refused("a-number-off-its-step", Answer(limited, Inside("runs", 7)), limited)
             .Refused("a-number-at-its-exclusive-bound", Answer(limited, Inside("above", 0)), limited)
             .Refused("text-shorter-than-its-minimum", Answer(limited, Inside("ticket", "AB-1")), limited)
+            .Refused("whitespace-shorter-than-its-minimum", Answer(limited, Inside("ticket", "   ")), limited)
+            .Refused("a-required-text-field-left-empty", Answer(limited, Inside("ticket", "")), limited)
             .Refused("text-longer-than-its-maximum-in-utf16-units", Answer(limited, Inside("ticket", "ABCDEFGHI-1\U0001F600")), limited)
             .Refused("text-off-its-pattern", Answer(limited, Inside("ticket", "ABC-12x")), limited)
             .Refused("text-that-is-not-an-email-address", Answer(limited, Inside("mail", "someone@example")), limited)

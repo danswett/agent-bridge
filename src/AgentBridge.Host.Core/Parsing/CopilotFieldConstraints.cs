@@ -243,7 +243,8 @@ public static class CopilotFieldConstraints
         }
         if (input != CopilotFieldSchema.Input.Text) { return null; }
         var words = def.ValueKind == JsonValueKind.String ? def.GetString()! : def.GetRawText();
-        return string.IsNullOrWhiteSpace(words) ? null : c.TextProblem(words, budget);
+        // Whitespace is words too: the CLI records a default of spaces as it is (review of #844).
+        return words.Length == 0 ? null : c.TextProblem(words, budget);
     }
 
     static bool Has(JsonElement p, string name, out JsonElement value) =>

@@ -220,6 +220,13 @@ public class CopilotPlannerTests
     [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34+0560", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
     [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34+2400", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
     [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34z+0530", "\"t\": must be a date and time, as YYYY-MM-DDTHH:MM")]
+    // Whitespace is what Copilot records as typed, so it is checked like any other words (review
+    // of #844): spaces under a minimum length, a tab or a no-break space off a pattern, spaces as
+    // an email address.
+    [InlineData("""{ "type": "string", "minLength": 3 }""", "  ", "\"t\": must be at least 3 characters")]
+    [InlineData("""{ "type": "string", "pattern": "^[a-z]+$" }""", "\t", "\"t\": does not match the form the question asks for")]
+    [InlineData("""{ "type": "string", "pattern": "^[a-z]+$" }""", "\u00A0", "\"t\": does not match the form the question asks for")]
+    [InlineData("""{ "type": "string", "format": "email" }""", "   ", "\"t\": must be an email address")]
     public void Text_outside_its_length_pattern_or_format_is_refused_before_any_key(string property, string text, string why)
     {
         Assert.Equal(why, Outside(Schema("t", property), Answer(new { t = text })));
@@ -241,6 +248,8 @@ public class CopilotPlannerTests
     [InlineData("""{ "type": "string", "format": "date-time" }""", "2026-11-04T19:58:34.5z")]
     // The CLI knows four formats and ignores the rest; so does the host.
     [InlineData("""{ "type": "string", "format": "hostname" }""", "not a host name")]
+    // Spaces in a field with no constraints are still typed, and read as the field left empty.
+    [InlineData("""{ "type": "string" }""", "   ")]
     public void Text_inside_its_constraints_is_typed_as_before(string property, string text)
     {
         Assert.Equal([(text, true)], Keys(Plan(Schema("t", property), Answer(new { t = text }))));
@@ -400,6 +409,8 @@ public class CopilotPlannerTests
     [InlineData("""{ "type": "array", "items": { "anyOf": [{ "const": "a", "type": "integer" }, { "const": "b" }] } }""")]
     [InlineData("""{ "type": "array", "items": { "anyOf": [{ "const": 1.5, "type": "integer" }] } }""")]
     [InlineData("""{ "type": "string", "oneOf": [{ "const": "a", "type": ["string", "null"] }] }""")]    // A default outside the field's own constraints, which is the only answer it can be given.
+    // Spaces included: Copilot records a default of spaces as it is (review of #844).
+    [InlineData("""{ "type": "string", "minLength": 5, "default": "   " }""")]
     [InlineData("""{ "type": "integer", "minimum": 5, "default": 3 }""")]
     [InlineData("""{ "type": "string", "maxLength": 2, "default": "none" }""")]
     public void A_field_whose_constraints_cannot_be_checked_exactly_or_whose_default_breaks_them_is_answered_at_the_machine(string property)
@@ -556,6 +567,28 @@ public class CopilotPlannerTests
 
         Assert.True(ratio < 10, $"reading 4x the options took {ratio:F1}x as long");
     }
+    // A schema's option list is its enum or oneOf, which allows nothing else, but every one was
+    // offered Other, and the words typed there were recorded outside the schema (review of #844).
+    [Fact]
+    public void A_schema_option_list_offers_no_other_answer_and_one_sent_is_refused()
+    {
+        var (_, question) = Ask(Pick);
+
+        Assert.NotEqual(true, question.Fields.Single().AllowOther);
+        Assert.EndsWith("this choice takes no other answer", Answers.Check(question, Answer(new { pick = new { other = "none of these" } })));
+    }
+
+    // An empty answer is typed as nothing, and Copilot then records no answer at all to a field
+    // the form requires (review of #844).
+    [Fact]
+    public void An_empty_answer_to_a_required_text_field_is_refused()
+    {
+        var (_, question) = Ask("""{ "message": "m", "requestedSchema": { "properties": { "t": { "type": "string" } }, "required": ["t"] } }""");
+
+        Assert.Equal("\"t\" needs an answer", Answers.Check(question, Answer(new { t = "" })));
+        Assert.Null(Answers.Check(question, Answer(new { t = " " })));
+    }
+
     [Fact]
     public void Many_quick_patterns_in_one_question_fit_its_budget()
     {
@@ -783,7 +816,13 @@ public class CopilotPlannerTests
     [Fact]
     public void Words_through_Other_walk_up_to_the_top_then_down_past_the_last_option_and_submit_separately()
     {
-        var plan = Plan(Pick, Answer(new { pick = new { other = "none of these 🙂" } }));
+        // The walk itself, planned directly: no question offers Other now, since a schema list is
+        // closed and Answers.Check refuses words for it first (review of #844). Kept so that
+        // offering it again, if Product decides so, is one line in QuestionMapper.
+        var (form, _) = Ask(Pick);
+        var (planned, problem) = CopilotPlanner.Plan(form, Answer(new { pick = new { other = "none of these 🙂" } }));
+        Assert.Null(problem);
+        var plan = planned!;
 
         // Four options: three Ups reach the top from any row, four Downs open Other.
         Assert.Equal([(U + U + U + D + D + D + D, false), ("none of these 🙂", true)], Keys(plan));

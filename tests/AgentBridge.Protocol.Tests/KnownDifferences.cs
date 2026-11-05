@@ -40,7 +40,7 @@ public static class KnownDifferences
     static readonly string[] Constraints =
     [
         "a-number-below-its-minimum", "a-number-above-its-maximum", "a-number-that-is-not-whole", "a-number-off-its-step",
-        "a-number-at-its-exclusive-bound", "text-shorter-than-its-minimum", "text-longer-than-its-maximum-in-utf16-units", "text-off-its-pattern",
+        "a-number-at-its-exclusive-bound", "text-shorter-than-its-minimum", "whitespace-shorter-than-its-minimum", "text-longer-than-its-maximum-in-utf16-units", "text-off-its-pattern",
         "text-that-is-not-an-email-address", "text-that-is-not-a-date", "too-few-ticked", "too-many-ticked",
     ];
 
