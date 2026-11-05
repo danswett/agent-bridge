@@ -1363,7 +1363,7 @@ form.reply, form.answer { container: receipt / inline-size; }
     position: absolute; top: 0; left: 0; right: 0; z-index: 1; display: flex; align-items: center; gap: var(--ab-space-1);
     min-height: 3rem; padding: 0 var(--ab-space-1); pointer-events: none; isolation: isolate;
   }
-  .session-bar > .icon-button { pointer-events: auto; }
+  .session-bar > .icon-button, .session-bar > .row-menu { pointer-events: auto; }
   .session-bar::before {
     content: ""; position: absolute; inset: 0; z-index: -1; background: var(--ab-shell); border-bottom: 1px solid var(--ab-stroke2);
     opacity: 0; transition: opacity var(--ab-motion-cross-fade) linear;

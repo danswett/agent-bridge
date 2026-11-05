@@ -542,11 +542,13 @@ export class SessionCard {
     e.tabT = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabT, 'aria-controls': this.ids.tools, onclick: () => this.setTab('tools') }, 'Tools');
     e.tabs = h('div', { class: 'view-tabs', role: 'tablist', 'aria-label': 'Session' }, e.tabC, e.tabD, e.tabT);
     e.tabs.addEventListener('keydown', (ev) => {
-      if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') { return; }
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) { return; }
       ev.preventDefault();
       const tabs = [['conversation', e.tabC], ['delegates', e.tabD], ['tools', e.tabT]].filter(([, el]) => !el.hidden);
       const i = Math.max(0, tabs.findIndex(([t]) => t === this.#tab));
-      const [next, el] = tabs[(i + (ev.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length];
+      // Left and Right wrap; Home and End go to the first and last (ui.md §6.2, #629).
+      const to = ev.key === 'Home' ? 0 : ev.key === 'End' ? tabs.length - 1 : (i + (ev.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+      const [next, el] = tabs[to];
       this.setTab(next);
       el.focus();
     });

@@ -868,7 +868,7 @@ test.describe('a pending approval as delegates come and go above it', () => {
   const CASES = [
     { title: 'the first delegate starting brings the strip and a "Started" line',
       before: () => [], after: (now) => [running('d-new', 'Write the fix', now)] },
-    { title: 'a delegate listed with no start time brings the strip alone',
+    { title: 'a delegate listed with no start time brings the strip alone', stripOnly: true,
       before: () => [], after: () => [running('d-new', 'Write the fix', null)] },
     { title: 'three delegates reporting back add three lines',
       before: (now, ago) => THREE.map(([id, name]) => running(id, name, ago)),
@@ -903,7 +903,13 @@ test.describe('a pending approval as delegates come and go above it', () => {
         await asking(page, k.after(iso(70_000), iso(-20 * 60_000)), iso(70_000));
         await page.clock.runFor(20);
         const now = await deny.boundingBox();
-        expect(Math.abs(now.y - was.y) + Math.abs(now.x - was.x), 'the update moved Deny').toBeGreaterThan(1);
+        const moved = Math.abs(now.y - was.y) + Math.abs(now.x - was.x);
+        if (k.stripOnly && size.width < 760) {
+          // A phone has no strip (owner, #629): nothing above the question changes, so Deny stays put.
+          expect(moved, 'Deny stayed where it was').toBeLessThanOrEqual(1);
+          return;
+        }
+        expect(moved, 'the update moved Deny').toBeGreaterThan(1);
         await page.mouse.click(was.x + was.width / 2, was.y + was.height / 2);
         await page.clock.runFor(50);
         expect(await page.evaluate(() => window.agentBridgeDemo.host.answerLog.length)).toBe(before);

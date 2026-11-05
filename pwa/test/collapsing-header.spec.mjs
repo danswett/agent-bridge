@@ -232,6 +232,28 @@ for (const scheme of ['light', 'dark']) {
       expect(seen).toEqual(['back', 'more', 'view-tab', 'conversation']);
     });
 
+    test('the tabs are one stop: Left and Right wrap, Home and End go to the first and last, and the conversation stays where it was', async ({ page }) => {
+      const v = await session(page);
+      await folded(v);
+      const names = await v.getByRole('tab').evaluateAll((tabs) => tabs.filter((t) => !t.hidden).map((t) => t.textContent));
+      expect(names.length).toBeGreaterThanOrEqual(2);
+      const [first, last] = [names[0], names.at(-1)];
+      await v.getByRole('tab', { name: first }).focus();
+      const scroll = (await read(v)).scroll;
+      await page.keyboard.press('End');
+      await expect(v.getByRole('tab', { name: last })).toBeFocused();
+      await expect(v.getByRole('tab', { name: last })).toHaveAttribute('aria-selected', 'true');
+      await page.keyboard.press('ArrowRight');
+      await expect(v.getByRole('tab', { name: first })).toBeFocused();
+      await page.keyboard.press('ArrowLeft');
+      await expect(v.getByRole('tab', { name: last })).toBeFocused();
+      await page.keyboard.press('Home');
+      await expect(v.getByRole('tab', { name: first })).toBeFocused();
+      await expect(v.getByRole('tab', { name: first })).toHaveAttribute('aria-selected', 'true');
+      await expect(v.locator('[role=tab][tabindex="0"]')).toHaveCount(1);
+      expect((await read(v)).scroll).toBe(scroll);
+    });
+
     test('focus coming into the header expands it and holds it there until focus leaves', async ({ page }) => {
       const v = await session(page);
       const { room } = await folded(v, 300);
