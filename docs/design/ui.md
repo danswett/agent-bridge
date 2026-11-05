@@ -700,12 +700,15 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **While the session waits on you,** the bar's glyph is `needs` on its disc.
   - **The title stays the one h2.** The bar's copy is drawn, not read; the status is read from
     the meta line. Nothing is announced. Focus moving into the header brings it back, and it
-    stays while focus is there. The conversation's scroll padding is what the header covers
+    stays while focus is there. Focus the app puts on the title as a session opens (#707)
+    doesn't hold it: the person's own scrolling folds it as usual. The conversation's scroll padding is what the header covers
     plus 8, so focus never lands under it. Tab order is Back, More, the tabs, then
     the conversation. The tabs are one tab stop, on the selected tab; Left and Right move
     and select, wrapping, and Home and End go to the first and last.
   - **Reduced motion:** coming back and going are a cross-fade with no travel; near the top
     the header still follows the scroll. The thresholds don't change.
+  - **Only the conversation collapses it.** On the Delegates, Tools and Details tabs the header
+    stays whole.
   - **From 760, and in the Windows app,** the header never collapses. A session never opens
     collapsed. Native clients use the platform's own: `NavigationStack`'s large title on
     Apple; `exitUntilCollapsedScrollBehavior` then `enterAlwaysScrollBehavior` on Android.
