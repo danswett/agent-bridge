@@ -970,11 +970,13 @@ static partial class SelfTest
     // middle of this method.
     static async Task CheckHighContrast(MainWindow window, MainViewModel main, DemoHost remote, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
     {
+        var failedRow = await ShowFailedAgentRow(window, main);
         var contrast = await HighContrastPass.BeginAsync();
         result["highContrast"] = contrast.How;
         AppLog.Write($"self-test: high contrast {contrast.How}");
         if (!contrast.On)
         {
+            if (main.Settings is { } settings) { await settings.CheckAgentsAsync(); }
             // Skipped only off CI, where a developer's own setting is never changed.
             if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true") { check(false, $"turns Windows' high contrast on for the pass ({contrast.How})"); }
             return;
@@ -984,6 +986,7 @@ static partial class SelfTest
             var on = await Until(() => new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast, TimeSpan.FromSeconds(15));
             await Task.Delay(1500);
             check(on, "sees Windows' high contrast turned on");
+            await CheckAgentRowRepainted(window, main, failedRow, check);
             var hcBroken = await DrawPages(window, "HighContrast", outFile, check);
             check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
             await PictureYoursInHighContrast(window, check, outFile);

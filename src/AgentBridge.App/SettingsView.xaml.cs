@@ -13,7 +13,28 @@ public sealed partial class SettingsView : UserControl
 {
     SettingsViewModel? viewModel;
 
-    public SettingsView() => InitializeComponent();
+    public SettingsView()
+    {
+        InitializeComponent();
+        // Turning high contrast on can leave ActualTheme as it was, so a status line drawn before
+        // would keep its Light or Dark brush (#705 review): the lines are repainted when the system's
+        // colours change, as the caption buttons are (MainWindow.OnColorValuesChanged). The event
+        // comes off the UI thread, and is held only while the page is in the tree.
+        Loaded += (_, _) => { uiSettings.ColorValuesChanged -= OnColorValuesChanged; uiSettings.ColorValuesChanged += OnColorValuesChanged; };
+        Unloaded += (_, _) => uiSettings.ColorValuesChanged -= OnColorValuesChanged;
+    }
+
+    // Kept: the colour change is raised only while the UISettings that took the handler lives.
+    readonly Windows.UI.ViewManagement.UISettings uiSettings = new();
+
+    void OnColorValuesChanged(Windows.UI.ViewManagement.UISettings sender, object args) =>
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            foreach (var status in Descendants(AgentList).OfType<TextBlock>().Where(t => AutomationProperties.GetAutomationId(t).StartsWith("AgentStatus_", StringComparison.Ordinal)))
+            {
+                PaintStatus(status, null);
+            }
+        });
 
     public SettingsViewModel ViewModel
     {

@@ -126,6 +126,29 @@ static partial class SelfTest
         return asks;
     }
 
+    // A failed repair drawn on Settings before high contrast comes on, with its Danger colour then
+    // (#705 review: turning high contrast on can leave ActualTheme as it was).
+    static async Task<(TextBlock? Status, Windows.UI.Color? Was)> ShowFailedAgentRow(MainWindow window, MainViewModel main)
+    {
+        window.ShowPage("settings");
+        if (main.Settings is not { } settings) { return (null, null); }
+        await settings.SetUpAgentAsync("claude");
+        await Task.Delay(400);
+        var status = window.SettingsPage.AgentStatusOf("claude");
+        return (status, status is null ? null : Colour(status));
+    }
+
+    // The same line, not drawn again, now in high contrast's Danger text; then a fresh check takes the
+    // result and the page-wide error, so the pages drawn next are as before.
+    static async Task CheckAgentRowRepainted(MainWindow window, MainViewModel main, (TextBlock? Status, Windows.UI.Color? Was) before, Action<bool, string> check)
+    {
+        var now = window.SettingsPage.AgentStatusOf("claude");
+        var danger = (Ui.ThemedBrush("AbDangerText", now?.ActualTheme ?? ElementTheme.Default) as SolidColorBrush)?.Color;
+        check(before.Status is not null && ReferenceEquals(now, before.Status) && Colour(before.Status) == danger && danger != before.Was,
+            $"repaints a failed setup's status already drawn in high contrast's Danger text ({before.Was} then {(before.Status is null ? null : Colour(before.Status))}, wanted {danger}{(ReferenceEquals(now, before.Status) ? "" : "; the row was drawn again")})");
+        if (main.Settings is { } settings) { await settings.CheckAgentsAsync(); }
+    }
+
     // The high-contrast picture of the same rows, results and all, taken in the high-contrast pass.
     static async Task PictureAgentRows(MainWindow window, MainViewModel main, string outFile, string theme)
     {
