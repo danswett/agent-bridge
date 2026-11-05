@@ -498,6 +498,36 @@ test.describe('notifications', () => {
     }, null, { polling: 'raf', timeout: 30000 });
     expect(await at.jsonValue()).toEqual({ arriving: true });
   });
+
+  test('a notification\'s question taller than the pane, opened scrolled midway through it, brings its focused heading into sight', async ({ page }) => {
+    // Scrolled to the nearest edge of the whole question, one taller than the pane did not move,
+    // and the heading that had focus stayed out of sight (#893 review, Copilot 4481392664).
+    const message = ['Which one?', ...Array.from({ length: 150 }, (_, i) => `Line ${i + 1} of what the question says.`)].join('\n');
+    await host.upsert(asking('tall-1', 'q-tall', message));
+    await signIn(page);
+    const v = await open(page, 'tall-1');
+    const head = v.locator('.question-slot .question-head');
+    await expect(head).toBeAttached();
+    // Midway through it: its heading above the pane, its text filling the pane.
+    const tall = await v.locator('.stream-scroll').evaluate((s) => {
+      const q = s.querySelector('.question');
+      s.scrollTop += q.getBoundingClientRect().top - s.getBoundingClientRect().top + 600;
+      return q.getBoundingClientRect().height > s.getBoundingClientRect().height;
+    });
+    expect(tall).toBe(true);
+    await expect(head).not.toBeInViewport();
+    await page.evaluate(() => document.activeElement?.blur());
+    await page.evaluate((url) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
+      `${appUrl}?host=${host.deviceId}&session=tall-1&question=q-tall`);
+    // Read on every frame: the moment its heading has focus, its question holds clicks back.
+    const at = await page.waitForFunction(() => {
+      const a = document.activeElement;
+      return a?.classList.contains('question-head') ? { arriving: a.closest('.question')?.hasAttribute('data-arriving') ?? false } : null;
+    }, null, { polling: 'raf', timeout: 30000 });
+    expect(await at.jsonValue()).toEqual({ arriving: true });
+    await expect(head).toBeFocused();
+    await expect(head).toBeInViewport();
+  });
 });
 
 test('every machine shows its sessions and version, and its agents\' usage, merged, whether or not it is the one being viewed', async ({ page }) => {

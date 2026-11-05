@@ -172,7 +172,7 @@ function focusLinked() {
   target.tabIndex = -1;
   target.focus({ preventScroll: true });
   // Brought into sight as Needs you brings a question, so its answers wait before a click counts.
-  card.revealQuestion('auto');
+  card.revealQuestion('auto', target);
 }
 
 // A tap on a notification while the app is open: the worker says where to go.

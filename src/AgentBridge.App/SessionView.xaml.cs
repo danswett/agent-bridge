@@ -291,9 +291,14 @@ public sealed partial class SessionView : UserControl
             c.WantsFocus = false;
             // One scroll for the question: focus inside it brings the whole card into view, heading
             // first, on the same terms as QuestionWanted's (smooth once the page has drawn, a jump
-            // at start or with animations off), and that queued scroll then stands down.
+            // at start or with animations off), and that queued scroll then stands down. A card
+            // taller than the conversation's viewport brings the focused heading instead: brought
+            // in with the least scroll, a card already filling the viewport from midway through
+            // it moves nowhere, and the heading with focus stays out of sight (#893 review, Copilot
+            // 4481392664, the PWA's revealQuestion).
             var inQuestion = Motion.Within(target, QuestionCard);
-            (inQuestion ? (UIElement)QuestionCard : target).StartBringIntoView(new BringIntoViewOptions { AnimationDesired = Ready && Motion.Scrolls });
+            var tall = ConversationScroll.ViewportHeight > 0 && QuestionCard.ActualHeight > ConversationScroll.ViewportHeight;
+            (inQuestion && !(tall && target == heading) ? (UIElement)QuestionCard : target).StartBringIntoView(new BringIntoViewOptions { AnimationDesired = Ready && Motion.Scrolls });
             if (inQuestion) { GuardAnswer(); }
             questionScrolled |= inQuestion;
             if (focusPending) { focusPending = false; LayoutUpdated -= OnFocusLayout; }
