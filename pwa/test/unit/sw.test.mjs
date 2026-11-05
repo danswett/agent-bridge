@@ -34,7 +34,11 @@ function worker({ clients = [] } = {}) {
         if (at >= 0) { open.splice(at, 1); }
         open.push(n);
       },
-      getNotifications: async ({ tag } = {}) => open.filter((o) => tag === undefined || o.tag === tag),
+      // A browser answers this asynchronously too: other pushes' work can land in between.
+      getNotifications: async ({ tag } = {}) => {
+        await new Promise((r) => setImmediate(r));
+        return open.filter((o) => tag === undefined || o.tag === tag);
+      },
     },
     clients: { matchAll: async () => clients, openWindow: async (u) => { opened.push(u); }, claim() {} },
     addEventListener: (type, fn) => { handlers[type] = fn; },
@@ -46,7 +50,13 @@ function worker({ clients = [] } = {}) {
     handlers[type]({ ...event, waitUntil: (p) => { done = p; } });
     await done;
   };
-  return { fire, shown, opened, open, events };
+  // Dispatched and left running, as a browser does with pushes that arrive close together.
+  const start = (type, event) => {
+    let done;
+    handlers[type]({ ...event, waitUntil: (p) => { done = p; } });
+    return done;
+  };
+  return { fire, start, shown, opened, open, events };
 }
 
 // Objects made inside the worker's realm have its prototypes; compare their contents.
@@ -148,6 +158,16 @@ test('a question answered on any device is withdrawn: its notification is closed
   await sw.fire('push', push(classed('question', 'needsYou', { tag: `${MACHINE}:s2` })));
   await sw.fire('push', push(notice('resolved', { body: 'DEV · no longer waiting' })));
   assert.deepEqual(sw.open.map((n) => n.tag), [`${MACHINE}:s2`]);
+});
+
+test('a withdrawal still under way never closes a newer question that arrived for the same session', async () => {
+  const sw = worker();
+  await Promise.all([
+    sw.start('push', push(notice('resolved', { body: 'DEV · no longer waiting' }))),
+    sw.start('push', push(classed('question', 'needsYou', { body: 'DEV · waiting on you\nWhich port?' }))),
+  ]);
+  assert.deepEqual(sw.open.map((n) => [n.tag, n.data.kind, n.body]), [[`${MACHINE}:s1`, 'question', 'DEV · waiting on you\nWhich port?']]);
+  assert.deepEqual(sw.events, ['show', 'close', 'show']);
 });
 
 test('an answered question with no tag to withdraw it by is shown and closed under one of its own', async () => {

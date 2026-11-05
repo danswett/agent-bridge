@@ -181,17 +181,29 @@ function notice(message) {
   return { title: text(n.title) ?? NAME, options, withdraw };
 }
 
+// Pushes about one tag run one after another, in the order they came: a withdrawal still between
+// showing and closing would otherwise close a newer question that replaced it under the same tag.
+const queues = new Map();
+function inTurn(tag, job) {
+  if (!tag) { return job(); }
+  const run = (queues.get(tag) ?? Promise.resolve()).then(job);
+  const tail = run.then(() => {}, () => {});
+  queues.set(tag, tail);
+  tail.then(() => { if (queues.get(tag) === tail) { queues.delete(tag); } });
+  return run;
+}
+
 self.addEventListener('push', (e) => {
   let message = null;
   try { message = e.data?.json() ?? null; } catch { /* unreadable: the generic notice */ }
   const { title, options, withdraw } = notice(message);
-  e.waitUntil((async () => {
-    // Without a tag of its own, a withdrawn notice is closed by one made for the purpose.
-    if (withdraw && !options.tag) { options.tag = WITHDRAWN_TAG; }
+  // Without a tag of its own, a withdrawn notice is closed by one made for the purpose.
+  if (withdraw && !options.tag) { options.tag = WITHDRAWN_TAG; }
+  e.waitUntil(inTurn(options.tag, async () => {
     await self.registration.showNotification(title, options);
     if (!withdraw) { return; }
     for (const shown of await self.registration.getNotifications({ tag: options.tag })) { shown.close(); }
-  })());
+  }));
 });
 
 // A tap opens the app at the machine, session and question. An app already open is
