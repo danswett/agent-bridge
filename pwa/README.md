@@ -271,7 +271,9 @@ else on the page's own live line (a session's card while another is open, a rece
 its question, a reply box moved on to the next reply), never lost and never on a line showing
 another request. A request still on its way when every view of it goes (its session ended, its
 card taken away) is followed to its outcome on the page's line, at its own pace and for 10 minutes
-at most (past the 9-minute give-up). A Needs you entry whose question the machine clears before
+at most (past the 9-minute give-up); a sign-out takes everything still to be said with it, so
+nothing is spoken on the sign-in screen. In the view that sent it, a delivered answer's line stays
+empty while its check holds, then reads You answered. A Needs you entry whose question the machine clears before
 confirming its answer stays, ring on and nothing to press, apart from the count, until the
 outcome has shown: a check for its second, any other outcome for 5 s, and never past 9 minutes.
 With Other… open, an option tapped instead has the ring and Send answer none. From Send the line keeps the room the longest outcome needs (two lines in a

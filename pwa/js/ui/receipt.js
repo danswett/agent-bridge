@@ -205,6 +205,8 @@ const inFlight = (entry) => entry?.state === 'sending' || entry?.state === 'wait
 // said twice, and the rate limit is the request's. Before, the outcome of a request whose card went
 // was never heard. Let go at its outcome, at a request that is not its own, or after followMs.
 const followers = new Map();
+// Bumped as the account goes (stopReceipts): a clock from before never speaks or follows again.
+let epoch = 0;
 function followToOutcome(entry, { describe, follow, timing, now, page }) {
   if (followers.has(entry.request)) { return; }
   const clock = new ReceiptClock({ describe, draw: () => {}, say: page, now, timing, fallback: true });
@@ -220,14 +222,32 @@ function followToOutcome(entry, { describe, follow, timing, now, page }) {
   };
   const cap = setTimeout(end, timing.followMs ?? ReceiptTiming.followMs);
   followers.set(entry.request, end);
+  let shown = false;
   unfollow = follow((next) => {
     if (over) { return; }
     if (!next || next.request !== entry.request) { end(); return; }
+    shown = true;
     clock.show(next);
     if (!inFlight(next)) { end(); }
   });
   if (over) { unfollow?.(); return; }
-  clock.show(entry);
+  if (!shown) { clock.show(entry); }
+}
+
+// Everything still to be said goes with the account, at a sign-out, forced by the relay or not
+// (SessionsPage.clear, as the delivery services are cleared): every follower, every announcement
+// waiting out the rate limit, and every clock made before, so nothing is spoken on the sign-in
+// screen. The services are cleared without telling their watchers, so a card removed after this
+// would otherwise have followed its request's last state, and gone on saying it was still sending.
+export function stopReceipts() {
+  epoch++;
+  for (const end of [...followers.values()]) { end(); }
+  for (const h of histories.values()) {
+    clearTimeout(h.sayTimer);
+    h.sayTimer = null;
+    h.pending = null;
+  }
+  histories.clear();
 }
 
 // The page's own line, for an announcement no view of its request is on screen to say: a receipt
@@ -273,7 +293,8 @@ const ROOM = Object.freeze({ key: 'room', text: '', more: null, tone: 'room', li
 // the room kept) or null (no line). say(text): the announcement, rate-limited here. heard():
 // whether say is heard now: a view not drawn (a session's card while another is open) leaves the
 // request's announcement to one that is, such as Needs you, or to the page's line. delivered():
-// the request this view saw on its way has been delivered: Send's check (holdCheck).
+// the request this view saw on its way has been delivered: Send's check (holdCheck); given, the view
+// is the one that sent it, and its line stays empty while the check holds.
 // follow(fn): subscribes fn to the view's requests as they change, returning how to stop; given, a
 // request still on its way when the view goes is followed to its outcome (followToOutcome). page:
 // where such a follower speaks (the page's line).
@@ -285,9 +306,12 @@ export class ReceiptClock {
   #h = null;
   // The request this clock saw in flight, so a view drawn after its delivery never shows the check.
   #seen = null;
+  // The delivery whose check this view shows, and until when: its words wait for it.
+  #check = null;
+  #epoch = epoch;
 
-  constructor({ describe, draw, say = () => {}, heard = () => true, delivered = () => {}, now = () => Date.now(), timing = ReceiptTiming, follow = null, page = sayOnPage, fallback = false }) {
-    Object.assign(this, { describe, draw, say, heard, delivered, now, timing, follow, page, fallback });
+  constructor({ describe, draw, say = () => {}, heard = () => true, delivered = null, now = () => Date.now(), timing = ReceiptTiming, follow = null, page = sayOnPage, fallback = false }) {
+    Object.assign(this, { describe, draw, say, heard, delivered: delivered ?? (() => {}), checks: !!delivered, now, timing, follow, page, fallback });
   }
 
   show(entry) {
@@ -300,7 +324,7 @@ export class ReceiptClock {
     this.#timer = null;
     this.#voice(null);
     const entry = this.#entry;
-    if (this.follow && inFlight(entry)) {
+    if (this.follow && inFlight(entry) && this.#epoch === epoch) {
       followToOutcome(entry, { describe: this.describe, follow: this.follow, timing: this.timing, now: this.now, page: this.page });
     }
   }
@@ -316,20 +340,27 @@ export class ReceiptClock {
     clearTimeout(this.#timer);
     this.#timer = null;
     const entry = this.#entry;
+    if (this.#epoch !== epoch) { this.#voice(null); return; }
     if (!entry) { this.#voice(null); this.#put(null); return; }
     const T = this.timing;
     const t = this.now();
     const h = historyFor(entry.request, t);
     this.#voice(h);
     if (entry.state !== 'sending' && entry.state !== 'waiting') {
-      // An outcome is never held: shown and said at once, past any stage not yet said.
+      // An outcome is never held: said at once, past any stage not yet said, and shown at once
+      // too, but in the view that sent a delivered one, whose check comes first and its words once
+      // the check has held (#617 at af139038, §6.5).
       const d = this.describe(entry, { stalled: false });
-      this.#put(d.line ? d : ROOM);
+      const delivered = entry.state === 'done' && entry.outcome === 'delivered';
+      if (delivered && this.checks && this.#seen === entry.request) { this.#check = { request: entry.request, until: t + T.sendCheckHoldMs }; }
+      const holding = delivered && this.#check?.request === entry.request && t < this.#check.until;
+      this.#put(holding || !d.line ? ROOM : d);
       speak(h, d.speech, this.now, T.announceGapMs, true, d.tone === 'bad', `${entry.attempts ?? 0}\n${d.speech}`);
-      if (entry.state === 'done' && entry.outcome === 'delivered' && this.#seen === entry.request) {
+      if (delivered && this.#seen === entry.request) {
         this.#seen = null;
         this.delivered();
       }
+      if (holding) { this.#timer = setTimeout(() => this.#tick(), this.#check.until - t); }
       return;
     }
     this.#seen = entry.request;

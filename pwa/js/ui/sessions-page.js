@@ -28,6 +28,7 @@ import { SignInBanners } from './sign-in-view.js';
 import { AppBadge } from '../needs-you.js';
 import { enter, scrollBehavior, watchLane } from './motion.js';
 import { QUESTION_ARRIVAL_GUARD_MS, watchMoves } from './session-card.js';
+import { stopReceipts } from './receipt.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -702,6 +703,7 @@ export class SessionsPage {
     this.replies.clear();
     this.stops.clear();
     this.launches.clear();
+    stopReceipts();
     this.order.clearEnded();
     this.launchPanel.setMachines(null);
     this.launchPanel.setTarget(null);

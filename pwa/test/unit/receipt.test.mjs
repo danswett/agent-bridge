@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ReceiptClock, ReceiptTiming, answeredValue, describeInFlight, receiptText } from '../../js/ui/receipt.js';
+import { ReceiptClock, ReceiptTiming, answeredValue, describeInFlight, receiptText, stopReceipts } from '../../js/ui/receipt.js';
 
 // The receipt's timing (ui.md §6.5, decided on #617: quiet unless something's wrong), on a mocked
 // clock: nothing in the quiet window, the normal path heard and not seen, a line only for an
@@ -345,4 +345,62 @@ test('a request followed after its view went is let go at its give-up however it
   assert.ok(listener);
   t.mock.timers.tick(ReceiptTiming.followMs);
   assert.equal(listener, null);
+});
+
+// #617 at af139038, §6.5: in the view that sent it, a delivered answer's check comes first and its
+// words after the check has held; the outcome is said at once all the same. A view drawn after the
+// question has gone (the card's receipt) shows the words at once.
+test('the view that sent an answer shows its check before You answered, and says the outcome at once', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const describe = (entry, { stalled }) => (entry.state === 'done'
+    ? { key: 'delivered', text: 'You answered', more: 'Yes', tone: 'done', line: true, speech: 'Answer delivered. You answered Yes' }
+    : describeInFlight('answer', entry, { machineName: 'ULTRA', stalled }));
+  const drawn = [];
+  const said = [];
+  let checks = 0;
+  const clock = new ReceiptClock({ describe, draw: (d) => drawn.push(receiptText(d)), say: (s) => said.push(s), delivered: () => { checks++; } });
+  const entry = { request: `r${++n}`, state: 'sending', stage: null, attempts: 1, reason: null, progress: null };
+  clock.show(entry);
+  clock.show({ ...entry, state: 'done', outcome: 'delivered' });
+
+  assert.equal(checks, 1);
+  assert.equal(drawn.at(-1), '');
+  assert.deepEqual(said, ['Answer delivered. You answered Yes']);
+  t.mock.timers.tick(ReceiptTiming.sendCheckHoldMs - 1);
+  assert.equal(drawn.at(-1), '');
+  t.mock.timers.tick(1);
+  assert.equal(drawn.at(-1), 'You answered · Yes');
+
+  const card = [];
+  new ReceiptClock({ describe, draw: (d) => card.push(receiptText(d)) }).show({ ...entry, state: 'done', outcome: 'delivered' });
+  assert.deepEqual(card, ['You answered · Yes']);
+  assert.deepEqual(said, ['Answer delivered. You answered Yes']);
+});
+
+// A sign-out, forced by the relay or not, takes everything still to be said with it: a follower and
+// the announcement it is waiting to make, and a card removed after it follows nothing. Nothing is
+// said on the sign-in screen.
+test('after a sign-out nothing more is announced: not a follower, not one waiting, not a card removed later', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const describe = (entry, { stalled }) => (entry.state === 'done' ? outcome('reply') : describeInFlight('reply', entry, { machineName: 'ULTRA', stalled }));
+  const page = [];
+  const listeners = [];
+  const follow = (fn) => { listeners.push(fn); return () => { listeners.splice(listeners.indexOf(fn), 1); }; };
+  const gone = new ReceiptClock({ describe, draw: () => {}, page: (s) => page.push(s), follow });
+  const kept = new ReceiptClock({ describe, draw: () => {}, page: (s) => page.push(s), follow });
+  const first = { request: `r${++n}`, state: 'sending', stage: null, attempts: 1, reason: null, progress: null };
+  const second = { ...first, request: `r${++n}` };
+  gone.show(first);
+  kept.show(second);
+  t.mock.timers.tick(ReceiptTiming.quietMs);
+  gone.destroy();
+  assert.equal(listeners.length, 1);
+  listeners[0]({ ...first, stage: 'received' });
+
+  stopReceipts();
+  assert.equal(listeners.length, 0, 'the follower is let go');
+  kept.destroy();
+  assert.equal(listeners.length, 0, 'a card removed after follows nothing');
+  t.mock.timers.tick(ReceiptTiming.followMs);
+  assert.deepEqual(page, []);
 });
