@@ -120,12 +120,16 @@ public sealed class ReplyViewModel : Observable
         Unsay();
     }
 
-    // Send's check for about a second once its reply is delivered, then rest (ui.md §6.5).
+    // Send's check for about a second once its reply is delivered, then rest (ui.md §6.5). The
+    // expiry belongs to the request that showed the check: disposing the timer doesn't take back a
+    // SetCheck(false) already posted, which then cleared the next reply's check early (#625,
+    // Copilot 4486937437).
     void ShowCheck()
     {
         checkTimer?.Dispose();
         SetCheck(true);
-        checkTimer = deliveries.Time.CreateTimer(_ => deliveries.Ui.Post(() => SetCheck(false)), null, ReceiptTiming.SendCheckHold, Timeout.InfiniteTimeSpan);
+        var shownFor = handled;
+        checkTimer = deliveries.Time.CreateTimer(_ => deliveries.Ui.Post(() => { if (handled == shownFor) { SetCheck(false); } }), null, ReceiptTiming.SendCheckHold, Timeout.InfiniteTimeSpan);
     }
 
     void SetCheck(bool on)

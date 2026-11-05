@@ -417,6 +417,33 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_check_expiry_posted_for_one_reply_and_run_after_the_next_is_delivered_leaves_the_next_replys_check()
+    {
+        var ui = new HoldingDispatcher();
+        var held = new Deliveries(connection, ui, clock) { RetryDelay = TimeSpan.FromMilliseconds(50) };
+        host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Delivered));
+        var r = new ReplyViewModel(Make.Session(), attach: false, held, connection, machineName: "Test PC");
+
+        r.Text = "first";
+        r.Send();
+        await Wait.UntilAsync(() => r.SendCheck, "the first reply's check");
+        // The first check's hold ends: its expiry is posted, and runs only after the next reply's check shows.
+        ui.Hold();
+        clock.Advance(ReceiptTiming.SendCheckHold);
+        await Wait.UntilAsync(() => ui.QueuedCount > 0, "the first check's expiry posted");
+        var late = ui.TakeHeld();
+        r.Text = "second";
+        r.Send();
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionReply).Count == 2 && r.SendCheck && !r.Pending, "the second reply's check");
+        foreach (var a in late) { ui.Post(a); }
+
+        Assert.True(TestUi.Read(() => r.SendCheck));
+        clock.Advance(ReceiptTiming.SendCheckHold);
+        await Wait.UntilAsync(() => r.SendRest, "Send at rest after the second reply's own hold");
+        r.Detach();
+    }
+
+    [Fact]
     public async Task A_reply_that_is_not_delivered_returns_Send_to_rest_at_once_with_no_check_and_says_why_on_the_line()
     {
         host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Stale, "the session ended"));
