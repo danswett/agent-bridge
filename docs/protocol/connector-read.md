@@ -60,6 +60,11 @@ payloads in the documented envelopes. The existing
 [record vectors](vectors/README.md) additionally cover malformed/unknown fields,
 sub-agents, discovery holds and must-refuse payloads.
 
+Its `hello` is recorded from a host with no pinned peers, so it lists every capability
+that host offers, `sessions.patch` and `sessions.history` among them. A connector's
+`service` peer is offered `sessions.read` alone and is never served `session.history`
+([v1-history.md](v1-history.md), Security); the profile uses neither.
+
 Run the dependency-free, stdio-only reference mock:
 
 ```powershell
