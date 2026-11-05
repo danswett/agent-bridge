@@ -77,27 +77,33 @@ public sealed partial class SettingsView : UserControl
             DefaultButton = ContentDialogButton.Close,
         };
         if (await dialog.ShowAsync() != ContentDialogResult.Primary) { return; }
+        announcements.Begin(id);
         var pending = v.SetUpAgentAsync(id, remove);
-        Announce(id);
+        Announce(id, StatusOf(v, id));
         await pending;
-        Announce(id);
+        Announce(id, StatusOf(v, id));
     }
+
+    static string StatusOf(SettingsViewModel v, string id) => v.Agents.FirstOrDefault(a => a.Id == id)?.Status ?? "";
+
+    readonly AgentAnnouncements announcements = new();
 
     // The row's status is a polite live region, but its rows are drawn afresh from each status, so
     // the TextBlock that says it is new and Narrator would not hear a change: the change is raised
-    // on it once it is drawn, for "Setting up…" and again for the result.
-    void Announce(string id) => DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+    // on it once it is drawn, for "Setting up…" and again for the result, unless the row has moved
+    // on from what it said when the raise was queued (AgentAnnouncements).
+    internal void Announce(string id, string expected) => DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
     {
         AgentList.UpdateLayout();
-        if (AgentStatusOf(id) is { Text.Length: > 0 } status
+        if (AgentStatusOf(id) is { } status && announcements.Take(id, expected, status.Text)
             && (FrameworkElementAutomationPeer.FromElement(status) ?? FrameworkElementAutomationPeer.CreatePeerForElement(status)) is { } peer)
         {
             peer.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
-            Announced.Add((id, status.Text));
+            Announced.Add((id, peer.GetName()));
         }
     });
 
-    // What was raised for Narrator, by agent, for the self-test to see.
+    // What was raised for Narrator, by agent, as Narrator names it, for the self-test to see.
     internal List<(string Id, string Text)> Announced { get; } = [];
 
     internal ItemsControl AgentRows => AgentList;

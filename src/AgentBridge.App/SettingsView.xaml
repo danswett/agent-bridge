@@ -115,6 +115,7 @@
                                         Loaded="OnAgentStatusLoaded"
                                         Visibility="{x:Bind local:Ui.Some(Status)}"
                                         AutomationProperties.LiveSetting="Polite"
+                                        AutomationProperties.Name="{x:Bind StatusName}"
                                         AutomationProperties.AutomationId="{x:Bind StatusId}" />
                                 </StackPanel>
                             </Border>

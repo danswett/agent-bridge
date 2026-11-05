@@ -61,8 +61,15 @@ static partial class SelfTest
         await Task.Delay(400);
         var heard = view.Announced.Select(a => $"{a.Id}: {a.Text}").ToList();
         result["agentRowAnnouncements"] = heard;
-        check(heard.SequenceEqual(["copilot: Setting up…", $"copilot: {settings.Agents.Single(a => a.Id == "copilot").Status}", "claude: Repairing…", $"claude: {settings.Agents.Single(a => a.Id == "claude").Status}"]),
-            $"confirms each setup by name and raises its row's progress and result for Narrator ({string.Join(" | ", asked)}; {string.Join(" | ", heard)})");
+        check(heard.SequenceEqual(["copilot: Copilot CLI: Setting up…", $"copilot: {settings.Agents.Single(a => a.Id == "copilot").StatusName}", "claude: Claude Code: Repairing…", $"claude: {settings.Agents.Single(a => a.Id == "claude").StatusName}"]),
+            $"confirms each setup by name and raises its row's progress and result for Narrator, named for its agent ({string.Join(" | ", asked)}; {string.Join(" | ", heard)})");
+        // A raise queued for a status the row has since moved on from, or one already said, is not
+        // heard: a setup that ends before its progress is drawn is heard once (#705 review).
+        view.Announced.Clear();
+        view.Announce("copilot", "Setting up…");
+        view.Announce("copilot", settings.Agents.Single(a => a.Id == "copilot").Status);
+        await Task.Delay(400);
+        check(view.Announced.Count == 0, $"skips a status raise that was superseded or already said ({string.Join(" | ", view.Announced.Select(a => $"{a.Id}: {a.Text}"))})");
         TextBlock? Status(string id) => view.AgentStatusOf(id);
         bool OnItsRow(string id) => Status(id) is { } status && Buttons(rows).FirstOrDefault(b => b.Id == $"RemoveAgent_{id}").Button is { } remove
             && VisualTreeHelper.GetParent(VisualTreeHelper.GetParent(remove)) == VisualTreeHelper.GetParent(status);
@@ -72,8 +79,10 @@ static partial class SelfTest
         check(done is { Visibility: Visibility.Visible, Text.Length: > 0 } && AutomationProperties.GetLiveSetting(done) == AutomationLiveSetting.Polite && OnItsRow("copilot")
             && failed is { Visibility: Visibility.Visible } && AutomationProperties.GetLiveSetting(failed) == AutomationLiveSetting.Polite && OnItsRow("claude")
             && Colour(failed) == (Ui.Brush("AbDangerText") as SolidColorBrush)?.Color && Colour(done) != Colour(failed)
-            && quiet is { Text: "Not tested yet" },
-            $"says each setup's result on its own row as a polite live region, a failure in Danger (Copilot CLI: \"{done?.Text}\"; Claude Code: \"{failed?.Text}\"; Codex: \"{quiet?.Text}\")");
+            && quiet is { Text: "Not tested yet" }
+            && Named(done) == $"Copilot CLI: {done?.Text}" && Named(failed) == $"Claude Code: {failed?.Text}" && Named(quiet) == "Codex: Not tested yet",
+            $"says each setup's result on its own row as a polite live region named for its agent, a failure in Danger (\"{Named(done)}\"; \"{Named(failed)}\"; \"{Named(quiet)}\")");
+        static string? Named(TextBlock? status) => status is null ? null : FrameworkElementAutomationPeer.CreatePeerForElement(status)?.GetName();
         // The rows' foot at the window's: the last row's "Not tested yet" in the pictures too.
         rows.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false, VerticalAlignmentRatio = 1 });
         var themed = new List<string>();

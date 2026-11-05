@@ -5,10 +5,12 @@ namespace AgentBridge.App.Core;
 // One agent under Settings › Agents on this machine. Each row's buttons are named for its agent and
 // have their own AutomationIds, and its setup's result sits on the row, so Narrator and UI tests can
 // tell which agent a button or a result is about (#678; #670's design review).
-public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = false, bool canInstall = false, AgentSetupNote? note = null)
+public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = false, bool canInstall = false, AgentSetupNote? note = null, HookSetup? setup = null)
 {
     public string Id => agent.Id;
     public string Label => agent.Label;
+    // Whether this profile's setup finished, from the host's `hookSetup` (Unknown from an older host).
+    public HookSetup Setup { get; } = setup ?? HookSetups.Of(agent);
     // Offered only while the CLI is missing: an installed agent has nothing to install, so no
     // button rather than a disabled one (ui.md §9.1 A7).
     public bool ShowInstall => agent.Id is "copilot" or "claude" or "codex" && agent.Installation.State == ReadinessState.Missing;
@@ -16,23 +18,36 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     public string InstallName => $"Install CLI for {Label}";
     public string InstallId => $"InstallAgent_{Id}";
     // One verb for the state the hooks are in, never "Set up / Repair" (ui.md §9.1 A7): "Set up" while
-    // they aren't set up (or this profile's intake is off), "Repair" only when they're broken, and none
-    // when nothing needs doing: working, held by another profile or a read-only host, or set up and
-    // not tested yet. An agent that isn't installed has nothing to set up.
+    // they aren't set up (or this profile's intake is off), "Repair" only when they're broken or the
+    // setup didn't finish, and none when nothing needs doing: working, held by another profile or a
+    // read-only host, or set up and not tested yet. An agent that isn't installed has nothing to set up.
     // A host can't yet say hooks work, so a healthy set-up agent reads Unknown, and an Unknown that
-    // offered Repair put Repair on every healthy row (#705 review). Unknown is set up only when the
-    // host found this profile's owned setup record, which its detail says (AgentReadinessService.Hooks;
-    // AgentReadinessTests holds those words); without one, intake is on but this agent was never set up.
-    public string? SetUpVerb => agent.Installation.State != ReadinessState.Working ? null : agent.Hooks.State switch
+    // offered Repair put Repair on every healthy row (#705 review). The host's `hookSetup` says which
+    // Unknown it is: completed (set up, not tested yet) or not set up. Its record is saved before any
+    // registration, so incomplete is a setup that failed part-way: Repair, whatever intake says.
+    public string? SetUpVerb => agent.Installation.State != ReadinessState.Working ? null : (agent.Hooks.State, Setup) switch
     {
-        ReadinessState.Missing or ReadinessState.NeedsAction => "Set up",
-        ReadinessState.Unknown when !OwnedRecord => "Set up",
-        ReadinessState.Failed => "Repair",
+        // Another profile's or a read-only host's hooks are not this app's to change.
+        (ReadinessState.Blocked, _) => null,
+        (_, HookSetup.Incomplete) or (ReadinessState.Failed, _) => "Repair",
+        (ReadinessState.Missing or ReadinessState.NeedsAction, _) => "Set up",
+        (ReadinessState.Unknown, HookSetup.Completed) => null,
+        (ReadinessState.Unknown, HookSetup.NotSetUp) => "Set up",
+        // An older host, without `hookSetup`: only its detail says whether it found this profile's
+        // owned record (AgentReadinessService.Hooks; AgentReadinessTests holds those words), and a
+        // setup that failed part-way reads the same as one that worked, so this row's own failure,
+        // which a fresh check keeps, still offers Repair.
+        (ReadinessState.Unknown, _) when !OwnedRecord => "Set up",
+        (ReadinessState.Unknown, _) when note is { Tone: Tone.Bad } => "Repair",
         _ => null,
     };
     bool OwnedRecord => agent.Hooks.Detail.Contains("owned setup record", StringComparison.OrdinalIgnoreCase);
-    // Set up, with nothing to do until a new session shows the hooks work.
-    public bool NotTested => agent.Installation.State == ReadinessState.Working && agent.Hooks.State == ReadinessState.Unknown && OwnedRecord;
+    // Set up, with nothing to do until a new session shows the hooks work. Never "Ready": a finished
+    // setup isn't evidence that hooks work (#783 D2).
+    public bool NotTested => agent.Installation.State == ReadinessState.Working && agent.Hooks.State == ReadinessState.Unknown
+        && Setup switch { HookSetup.Completed => true, HookSetup.Unknown => OwnedRecord, _ => false };
+    // An older host's row whose own failed setup a fresh check keeps (SettingsViewModel.CheckAgentsAsync).
+    internal bool KeepsFailure => Setup == HookSetup.Unknown && NotTested;
     public bool ShowSetUp => SetUpVerb is not null;
     public bool CanSetUp => canManage && ShowSetUp;
     public string SetUpName => $"{SetUpVerb ?? "Set up"} {Label}";
@@ -45,6 +60,9 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     public string RemoveQuestion => $"Remove {Label}'s connection?";
     // The last setup's progress or result on this row: a polite live region in the view.
     public string Status => note?.Text ?? (NotTested ? "Not tested yet" : "");
+    // Its accessible name says whose it is: a live region is read out on its own, away from the
+    // agent's heading (#705 review).
+    public string StatusName => Status.Length == 0 ? "" : $"{Label}: {Status}";
     public Tone StatusTone => note?.Tone ?? Tone.None;
     public string StatusId => $"AgentStatus_{Id}";
     public string Installation => agent.Installation.State == ReadinessState.Working

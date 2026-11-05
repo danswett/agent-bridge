@@ -505,6 +505,130 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal(Tone.None, row.StatusTone);
     }
 
+    // The host's `hookSetup` (#705 review r4474869190), on the wire beside the hooks state its host
+    // sends with it. Until this build's AgentReadiness carries the field, the adapter reads it as
+    // missing, and the fixture's value is handed to the row as the adapter will hand it then.
+    [Theory]
+    [InlineData("unknown", NoRecordIntakeOn, "notSetUp", "Set up", "")]
+    [InlineData("failed", "Hook setup did not finish. Repair it before relying on these hooks.", "incomplete", "Repair", "")]
+    [InlineData("needsAction", RecordIntakeOff, "incomplete", "Repair", "")]
+    [InlineData("unknown", RecordIntakeOn, "completed", null, "Not tested yet")]
+    [InlineData("unknown", RecordIntakeOn, "unknown", null, "Not tested yet")]
+    [InlineData("unknown", NoRecordIntakeOn, null, "Set up", "")]
+    [InlineData("blocked", "Another bridge profile owns this agent's hook setup. Do not overwrite its registrations.", "incomplete", null, "")]
+    public void An_agent_row_takes_its_verb_from_the_hosts_hook_setup_and_reads_a_missing_one_as_unknown(string hooks, string detail, string? hookSetup, string? verb, string status)
+    {
+        var json = $$"""
+            {"id":"codex","label":"Codex","home":"fixture-home","executable":"codex.exe","version":"0.48.0",
+             "installation":{"state":"working","detail":"Executable found."},
+             "versionCheck":{"state":"working","detail":"Version 0.48.0"},
+             "hooks":{"state":"{{hooks}}","detail":{{JsonSerializer.Serialize(detail)}}},
+             "authentication":{"state":"unknown","detail":"Sign-in has not been verified."},
+             "activation":{"state":"unknown","detail":"Trust has not been verified."}
+             {{(hookSetup is null ? "" : $",\"hookSetup\":\"{hookSetup}\"")}}}
+            """;
+        var agent = JsonSerializer.Deserialize<AgentReadiness>(json, ProtocolJson.Options)!;
+        var built = typeof(AgentReadiness).GetProperty("HookSetup") is not null;
+        var sent = HookSetups.Parse(hookSetup);
+        Assert.Equal(built ? sent : HookSetup.Unknown, HookSetups.Of(agent));
+
+        var row = new AgentReadinessRow(agent, canManage: true, setup: built ? null : sent);
+
+        Assert.Equal(sent, row.Setup);
+        Assert.Equal(verb, row.SetUpVerb);
+        Assert.Equal(status, row.Status);
+    }
+
+    [Fact]
+    public void A_setup_that_did_not_finish_stays_repair_after_a_fresh_check_without_its_failure()
+    {
+        var row = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.NeedsAction, hooksDetail: RecordIntakeOff), canManage: true, setup: HookSetup.Incomplete);
+
+        Assert.Equal("Repair", row.SetUpVerb);
+        Assert.False(row.KeepsFailure);
+    }
+
+    [Fact]
+    public void A_completed_setup_is_not_tested_yet_and_never_ready()
+    {
+        // Words the host may change: `hookSetup` decides, not the detail.
+        var row = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.Unknown, hooksDetail: "Setup completed; no hook observed yet."), canManage: true, setup: HookSetup.Completed);
+
+        Assert.Null(row.SetUpVerb);
+        Assert.True(row.NotTested);
+        Assert.Equal("Not tested yet", row.Status);
+        Assert.DoesNotContain("Ready", row.StatusName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void On_a_host_that_cannot_say_a_setup_did_not_finish_a_set_up_agent_whose_own_setup_failed_still_offers_repair()
+    {
+        var row = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn), canManage: true,
+            note: new("Hook setup incomplete: fixture partial work", Tone.Bad));
+
+        Assert.Equal("Repair", row.SetUpVerb);
+        Assert.True(row.CanSetUp);
+        Assert.Equal("Hook setup incomplete: fixture partial work", row.Status);
+    }
+
+    [Fact]
+    public async Task On_a_host_that_cannot_say_a_setup_did_not_finish_a_failure_that_leaves_only_its_owned_record_keeps_its_repair_through_a_fresh_check()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = new(DateTimeOffset.UtcNow, [Agent("copilot", "Copilot CLI", ReadinessState.NeedsAction, hooksDetail: NoRecordIntakeOff)]) });
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
+        // The host saved the record, then failed to register: it now reads as set up, not tested.
+        host.On(HostOps.AgentsSetup, _ =>
+        {
+            host.Status = host.Status with { Agents = new(DateTimeOffset.UtcNow, [Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn)]) };
+            return new AgentSetupResult(false, "Hook setup incomplete: fixture partial work", true);
+        });
+        host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
+
+        await settings.SetUpAgentAsync("copilot");
+        await settings.CheckAgentsAsync();
+
+        Assert.Equal("Hook setup incomplete: fixture partial work", settings.Agents.Single().Status);
+        Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
+        Assert.Equal("Repair", settings.Agents.Single().SetUpVerb);
+    }
+
+    [Fact]
+    public void A_rows_status_is_named_for_its_agent_so_it_is_read_out_whose_it_is()
+    {
+        var failed = new AgentReadinessRow(Agent("claude", "Claude Code", ReadinessState.Failed), note: new("It took too long, and some hooks may have changed.", Tone.Bad));
+        var untested = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.Unknown, hooksDetail: RecordIntakeOn));
+        var quiet = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.NeedsAction));
+
+        Assert.Equal("Claude Code: It took too long, and some hooks may have changed.", failed.StatusName);
+        Assert.Equal("Codex: Not tested yet", untested.StatusName);
+        Assert.Equal("", quiet.StatusName);
+    }
+
+    [Fact]
+    public void A_setup_that_ends_before_its_progress_is_drawn_is_announced_once_with_its_result()
+    {
+        var announcements = new AgentAnnouncements();
+        announcements.Begin("copilot");
+
+        Assert.False(announcements.Take("copilot", "Setting up…", "Registered."));
+        Assert.True(announcements.Take("copilot", "Registered.", "Registered."));
+        Assert.False(announcements.Take("copilot", "Registered.", "Registered."));
+    }
+
+    [Fact]
+    public void A_later_setup_with_the_same_result_is_announced_again()
+    {
+        var announcements = new AgentAnnouncements();
+        announcements.Begin("claude");
+        Assert.True(announcements.Take("claude", "Repairing…", "Repairing…"));
+        Assert.True(announcements.Take("claude", "Repair incomplete.", "Repair incomplete."));
+
+        announcements.Begin("claude");
+
+        Assert.True(announcements.Take("claude", "Repair incomplete.", "Repair incomplete."));
+        Assert.True(announcements.Take("copilot", "Registered.", "Registered."));
+    }
+
     [Fact]
     public void Only_broken_hooks_offer_repair_whatever_the_host_says_of_them()
     {
