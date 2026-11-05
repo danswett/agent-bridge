@@ -110,12 +110,14 @@ public static class ConversationKeyboard
     // own focus); otherwise as Held says, however the list was replaced since. Focus taken from a
     // block the reply has since replaced (leftFrom, null for anywhere outside the list) went with the
     // block, so that alone isn't a move: but only while focus is parked where the list leaves it on
-    // taking the focused element away (focusParked: nowhere, or in the list, nothing pressed since
-    // the Tab). Block is where to bring focus; null with Dropped false, Tab goes on from where focus is.
+    // taking the focused element away (focusParked: nowhere, or in the list). A pointer pressed in the
+    // session since the Tab (pressed) drops it too, focus moved or not: the person has acted. Keys
+    // aren't counted, so the Tab's own key can't drop it; a key that moves focus moves it from where
+    // the Tab left it. Block is where to bring focus; null with Dropped false, Tab goes on from where focus is.
     public readonly record struct HeldMove(bool Dropped, int? Block);
 
-    public static HeldMove Resume(string? heldIn, string? shownIn, object? focusedThen, ConversationBlock? leftFrom, object? focusedNow, bool focusParked, IReadOnlyList<ConversationBlock> blocks, ConversationBlock target, int? from, bool forward, Func<int, bool> realised, bool wrapped = false) =>
-        heldIn is null || heldIn != shownIn
+    public static HeldMove Resume(string? heldIn, string? shownIn, object? focusedThen, ConversationBlock? leftFrom, object? focusedNow, bool focusParked, bool pressed, IReadOnlyList<ConversationBlock> blocks, ConversationBlock target, int? from, bool forward, Func<int, bool> realised, bool wrapped = false) =>
+        heldIn is null || heldIn != shownIn || pressed
             || (focusedThen is not null && !ReferenceEquals(focusedThen, focusedNow) && (leftFrom is null || Where(blocks, leftFrom) >= 0 || !focusParked))
             ? new(true, null)
             : new(false, Held(blocks, target, from, forward, realised, wrapped));

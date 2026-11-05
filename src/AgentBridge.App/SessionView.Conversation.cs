@@ -42,8 +42,8 @@ public sealed partial class SessionView
     // The blocks the list had laid out when Tab was last pressed in the session, until that press
     // has been handled: the focus search realises the block it lands in on its way (Reached).
     HashSet<int>? laidOutAtTab;
-    // Pointer presses in the session, so a held Tab can tell focus the person moved from focus the
-    // list parked when it took a focused element away.
+    // Pointer presses in the session, so a held Tab gives way once the person has clicked since,
+    // focus moved by it or not (Resume). Keys aren't counted: the held Tab's own key would drop it.
     int presses;
     // How far a Tab that lands in a block by itself brings it in (ConversationKeyboard.Reached): any
     // block not wholly in view, laid out or not, as B and the creative director ruled on #829 (ui.md §6.4).
@@ -272,13 +272,13 @@ public sealed partial class SessionView
 
         // The response may change while this waits, even to a new list of blocks, so the block is
         // found again each time; one replaced as the reply streams in gives way to the block Tab now
-        // stops in (Held). Another session shown since, or focus moved other than with a replaced
-        // block (anywhere outside the list, or by a press), and it does nothing.
+        // stops in (Held). Another session shown since, a pointer pressed since, or focus moved other
+        // than with a replaced block (anywhere outside the list), and it does nothing.
         void Bring()
         {
             var focused = XamlRoot is { } r ? FocusManager.GetFocusedElement(r) : null;
-            var parked = presses == pressedThen && (focused is null || InList(focused as DependencyObject));
-            var move = ConversationKeyboard.Resume(heldIn, Card?.Id, focusedThen, leftFrom, focused, parked, blocks, target, PlaceOf(focused as DependencyObject), forward, i => ConversationList.ContainerFromIndex(i) is not null, wrapped);
+            var parked = focused is null || InList(focused as DependencyObject);
+            var move = ConversationKeyboard.Resume(heldIn, Card?.Id, focusedThen, leftFrom, focused, parked, presses != pressedThen, blocks, target, PlaceOf(focused as DependencyObject), forward, i => ConversationList.ContainerFromIndex(i) is not null, wrapped);
             if (move.Dropped) { return; }
             if (move.Block is not { } at)
             {
