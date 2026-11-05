@@ -491,6 +491,27 @@ public sealed class UsageSharingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_real_forget_on_a_quiet_account_confirms_and_removes_cached_usage_without_another_announcement()
+    {
+        var desk = await HostAsync("Desk", []);
+        var old = await relay.ConnectAsync(token, "Old laptop", "host");
+        await SeeAsync(desk.Device, old.Id);
+        Assert.Equal(1, desk.Store.Take([Claude(12, Now)], new UsageReader(old.Id, "Old laptop")));
+        await old.DisposeAsync();
+        var phone = await relay.ConnectAsync(token, "Phone", "pwa");
+        await Wait.UntilAsync(() => desk.Device.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true
+            && phone.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true, "the offline laptop before forgetting", Patience);
+        desk.Peers.Start();
+
+        Assert.Null(await phone.Relay.ForgetAsync(old.Id));
+
+        await Wait.UntilAsync(() => desk.Store.Entries.Count == 0, "the relay's forget confirmation to remove cached usage", Patience);
+        var confirmed = desk.Device.Relay.Snapshot;
+        Assert.DoesNotContain(confirmed.Known!, k => k.Id == old.Id);
+        Assert.DoesNotContain(confirmed.Previous!.Known!, k => k.Id == old.Id);
+    }
+
+    [Fact]
     public async Task A_reading_taken_by_a_machine_the_account_has_forgotten_is_neither_kept_nor_taken_from_another_host()
     {
         var desk = await HostAsync("Desk", [() => Copilot(40, Now)]);
@@ -505,8 +526,11 @@ public sealed class UsageSharingTests : IAsyncLifetime
         await Wait.UntilAsync(() => phone.Relay.Known?.Any(k => k.Id == oldId) == true, "the old laptop to be listed offline", Patience);
 
         Assert.Null(await phone.Relay.ForgetAsync(oldId));
-        await Wait.UntilAsync(() => desk.Device.Relay.Known is { } k && k.All(m => m.Id != oldId), "the desk to hear it was forgotten", Patience);
-        await AnnounceAsync(desk.Device);
+        await Wait.UntilAsync(() =>
+        {
+            var snap = desk.Device.Relay.Snapshot;
+            return snap.Known?.All(k => k.Id != oldId) == true && snap.Previous?.Known?.All(k => k.Id != oldId) == true;
+        }, "the desk to hear the forget confirmation", Patience);
         await SeeAsync(desk.Device, vm.Device.Id);
         Assert.Equal(1, await desk.Peers.PassAsync());
 

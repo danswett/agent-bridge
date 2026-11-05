@@ -80,6 +80,8 @@ forgetting. Repeated polls of one snapshot do not count twice, and an intervenin
 message breaks the omission even if a poll skipped it. This protects cached readings
 from an older relay's disconnect window. Missing `known` remains null and breaks that
 confirmation; a relay without a roster never causes cached usage to be forgotten.
+On an older relay that sends only one snapshot for a real forget, cached usage can
+conservatively linger until another presence change confirms it or the readings expire.
 
 ## `forget` and `forget-result`
 
@@ -89,8 +91,13 @@ confirmation; a relay without a roster never causes cached usage to be forgotten
 { "t": "forget-result", "id": 7, "machine": "3f9a…", "error": "online" }
 ```
 
-`id` is the device's own request number, echoed back. On success the relay sends `presence`
-to every device of the account, without the machine in `known`.
+`id` is the device's own request number, echoed back. On success the relay sends two
+consecutive `presence` broadcasts to the account: the update followed immediately by
+a confirmation, each capturing the current membership. With no intervening return,
+both omit the forgotten machine. This confirms host cache deletion on an otherwise
+quiet account without a timer, background task or unrelated membership change. The
+confirmation is an ordinary presence message, with no new wire field; older clients
+can process both normally. An unsuccessful forget sends no confirmation.
 
 | `error` | Why |
 |---|---|

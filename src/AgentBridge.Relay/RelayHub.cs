@@ -294,7 +294,13 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         }
         log.LogInformation("forget {Conn} {Kind}: {Outcome}", conn.Tag, conn.Kind, error ?? "ok");
         await conn.SendJsonAsync(new { t = "forget-result", id, machine = Wire.IsDeviceId(machine) ? machine!.ToLowerInvariant() : null, error });
-        if (error is null) { await BroadcastPresenceAsync(conn.Account.Id); }
+        if (error is null)
+        {
+            await BroadcastPresenceAsync(conn.Account.Id);
+            // Confirm a real forget without waiting for another membership change. Hosts
+            // require two wire snapshots before deleting cached readings (#206).
+            await BroadcastPresenceAsync(conn.Account.Id);
+        }
     }
 
     bool WithinRate(Connection c)
