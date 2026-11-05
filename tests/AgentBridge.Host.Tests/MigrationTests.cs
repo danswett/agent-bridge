@@ -492,6 +492,155 @@ public sealed class MigrationTests : MigrationFixture
         }
     }
 
+    // The link tests above use symbolic links, which Windows makes only for an administrator or in
+    // developer mode, so they return early on a Windows runner without either. A junction needs
+    // neither, and is what a person (or a tool) would make there: on Windows these make a real
+    // one (`mklink /J`) and fail if it cannot be made; elsewhere, where there are none, a
+    // symbolic link. Either way the refusal must come before anything under the home, the
+    // custom codexHome outside it, or the junction's target is written.
+    [Theory]
+    [InlineData("the Codex home")]
+    [InlineData("a cached version")]
+    [InlineData("a custom Codex home outside the home")]
+    [InlineData("a folder above a custom Codex home outside the home")]
+    [InlineData("a cached version in a custom Codex home outside the home")]
+    public async Task A_junction_on_the_way_to_Codexs_plugin_cache_refuses_the_migration_before_anything_is_touched(string where)
+    {
+        var outside = Directory.CreateTempSubdirectory("abmigrate-junction-").FullName;
+        string? link = null;
+        try
+        {
+            var codexHome = _f.CodexHome;
+            if (where.Contains("custom", StringComparison.Ordinal))
+            {
+                codexHome = where.StartsWith("a folder above", StringComparison.Ordinal)
+                    ? Path.Combine(outside, "codex-link", "profile")
+                    : where == "a custom Codex home outside the home" ? Path.Combine(outside, "codex-link") : Path.Combine(outside, "profile");
+                var installation = Path.Combine(_f.BridgeHome, "installation.json");
+                var json = FakeAgentHaBridge.Read(installation);
+                json["codexHome"] = codexHome;
+                File.WriteAllText(installation, json.ToJsonString(new() { WriteIndented = true }));
+            }
+            var version = Path.Combine(codexHome, Path.GetRelativePath(_f.CodexHome, Path.GetDirectoryName(_f.CodexCacheHooks())!));
+            string target;
+            switch (where)
+            {
+                case "the Codex home":
+                    (link, target) = (_f.CodexHome, Path.Combine(outside, "real-codex"));
+                    Directory.Move(_f.CodexHome, target);
+                    break;
+                case "a custom Codex home outside the home":
+                    (link, target) = (codexHome, Path.Combine(outside, "real-codex"));
+                    Directory.Move(_f.CodexHome, target);
+                    break;
+                case "a folder above a custom Codex home outside the home":
+                    (link, target) = (Path.Combine(outside, "codex-link"), Path.Combine(outside, "real"));
+                    Directory.CreateDirectory(target);
+                    Directory.Move(_f.CodexHome, Path.Combine(target, "profile"));
+                    break;
+                default:
+                    if (codexHome != _f.CodexHome) { Directory.Move(_f.CodexHome, codexHome); }
+                    (link, target) = (version, Path.Combine(outside, "moved-version"));
+                    Directory.Move(version, target);
+                    break;
+            }
+            Junction(link, target);
+            Assert.True(File.GetAttributes(link).HasFlag(FileAttributes.ReparsePoint));
+            Assert.True(File.Exists(Path.Combine(version, "hooks.json")), "the cached hooks are reached through the junction");
+            var home = Snapshot(_f.Home);
+            var external = Snapshot(outside);
+            Assert.Contains(external.Keys, k => k.EndsWith("hooks.json", StringComparison.Ordinal) && k.StartsWith(target + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+
+            foreach (var dryRun in new[] { true, false })
+            {
+                var report = await _f.Migrator().MigrateAsync(dryRun);
+
+                Assert.False(report.Ok);
+                Assert.Contains($"{link}, on the way to Codex's plugin cache, is a symbolic link or junction, which Codex does not make", report.ToString());
+            }
+            Assert.Equal(home, Snapshot(_f.Home));
+            Assert.Equal(external, Snapshot(outside));
+            Assert.Empty(_f.Runtime_.Calls);
+        }
+        finally
+        {
+            if (link is not null && new DirectoryInfo(link).LinkTarget is not null) { Directory.Delete(link); }
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    // A custom codexHome outside the home, plain all the way: its cached copy is re-pointed with
+    // the source, and a rollback puts every file under it back byte for byte.
+    [Fact]
+    public async Task A_custom_Codex_home_outside_the_home_has_its_cached_hooks_re_pointed_and_restored_byte_for_byte()
+    {
+        var outside = Directory.CreateTempSubdirectory("abmigrate-customhome-").FullName;
+        try
+        {
+            var codexHome = Path.Combine(outside, "profile");
+            Directory.Move(_f.CodexHome, codexHome);
+            var installation = Path.Combine(_f.BridgeHome, "installation.json");
+            var json = FakeAgentHaBridge.Read(installation);
+            json["codexHome"] = codexHome;
+            File.WriteAllText(installation, json.ToJsonString(new() { WriteIndented = true }));
+            var cached = Path.Combine(codexHome, Path.GetRelativePath(_f.CodexHome, _f.CodexCacheHooks()));
+            var home = _f.Listing();
+            var external = Directory.EnumerateFiles(outside, "*", SearchOption.AllDirectories).ToDictionary(f => f, File.ReadAllBytes);
+
+            await Migrated();
+
+            var hook = _f.InstalledHook;
+            foreach (var path in new[] { cached, _f.CodexHooks })
+            {
+                var entries = FakeAgentHaBridge.Read(path)["hooks"]!.AsObject();
+                Assert.Equal(6, entries.Count);
+                Assert.All(entries, e => Assert.Equal($"{hook} codex hook", (string?)e.Value![0]!["hooks"]![0]!["command"]));
+            }
+            Assert.Contains($"{cached}: as migrated", _f.Migrator().Status());
+
+            await RolledBack();
+
+            Assert.Equal(home, _f.Listing());
+            Assert.Equal(external.Keys.Order(), Directory.EnumerateFiles(outside, "*", SearchOption.AllDirectories).Order());
+            foreach (var (file, bytes) in external) { Assert.Equal(bytes, File.ReadAllBytes(file)); }
+        }
+        finally { Directory.Delete(outside, recursive: true); }
+    }
+
+    static void Junction(string link, string target)
+    {
+        if (!OperatingSystem.IsWindows()) { Directory.CreateSymbolicLink(link, target); return; }
+        using var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", ["/c", "mklink", "/J", link, target])
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+        })!;
+        mklink.WaitForExit();
+        Assert.True(mklink.ExitCode == 0, $"mklink /J {link} {target}: {mklink.StandardError.ReadToEnd()}");
+        Assert.Equal(target, new DirectoryInfo(link).LinkTarget);
+    }
+
+    // Every file below root, with its hash and last write time, and every link with its target,
+    // never followed: a junction's target is snapshotted where it is, under an owned root. The
+    // lock a migrate holds while it runs is left out, as in Listing.
+    static SortedDictionary<string, string> Snapshot(string root)
+    {
+        var snapshot = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var folders = new Stack<DirectoryInfo>([new DirectoryInfo(root)]);
+        while (folders.TryPop(out var folder))
+        {
+            foreach (var entry in folder.EnumerateFileSystemInfos())
+            {
+                if (entry.LinkTarget is { } target) { snapshot[entry.FullName] = "link " + target; }
+                else if (entry is DirectoryInfo d) { folders.Push(d); }
+                else if (entry.Name != "migration.lock")
+                {
+                    snapshot[entry.FullName] = $"{Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(entry.FullName)))} {entry.LastWriteTimeUtc.Ticks}";
+                }
+            }
+        }
+        return snapshot;
+    }
+
     [Theory]
     [InlineData("its version folder")]
     [InlineData("its hooks.json")]
