@@ -637,8 +637,9 @@ reaches the real host or its profile.
   of each page. Whole-window pictures capture the window's composed client, including Mica,
   rather than only the XAML tree: a translucent page layer without its backdrop otherwise
   becomes light in a PNG viewer (#785). Isolated-control pictures still use XAML rendering.
-  Before native capture, a new XAML frame must finish rendering and return to the UI
-  dispatcher; the self-test fails if that frame barrier cannot complete within 10 seconds.
+  Before native capture, two distinct XAML rendering ticks and another UI dispatcher turn
+  let a preceding update cycle finish even when the page is already idle; the self-test
+  fails if that frame barrier cannot complete within 10 seconds.
   The dark page pass reopens each output PNG and checks a page-background pixel is opaque
   and no lighter, in sRGB relative luminance, than the platform's dark layer token's straight
   colour (the upper bound for that layer over dark Mica). Encoded white and transparent

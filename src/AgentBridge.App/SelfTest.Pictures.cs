@@ -33,15 +33,24 @@ static partial class SelfTest
     static async Task CaptureFrame(FrameworkElement root)
     {
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var started = false;
+        var frames = 0;
+        TimeSpan? previous = null;
         var queued = false;
-        void Rendering(object? sender, object args) => started = true;
-        void Rendered(object? sender, RenderedEventArgs args)
+        void Rendering(object? sender, object args)
         {
-            if (!started || queued) { return; }
+            if (args is not RenderingEventArgs frame)
+            {
+                completed.TrySetException(new InvalidOperationException("The self-test capture received no XAML rendering timestamp."));
+                return;
+            }
+            if (previous == frame.RenderingTime) { return; }
+            previous = frame.RenderingTime;
+            frames++;
+            if (frames != 2) { return; }
             queued = true;
-            // Rendering precedes the frame; Rendered follows it. Leave that render
-            // callback before DwmFlush: it cannot publish pending XAML work itself.
+            // Rendering ticks even when no dirty content is submitted; Rendered need
+            // not fire then. The next distinct tick lets the preceding XAML update
+            // cycle finish. Leave this callback before DwmFlush waits for its commit.
             if (!root.DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => completed.TrySetResult()))
             {
                 completed.TrySetException(new InvalidOperationException("The UI dispatcher refused the self-test capture frame barrier."));
@@ -49,19 +58,17 @@ static partial class SelfTest
         }
         try
         {
-            CompositionTarget.Rendered += Rendered;
             // Subscribing requests frames even when XAML would otherwise be idle.
             CompositionTarget.Rendering += Rendering;
             await completed.Task.WaitAsync(TimeSpan.FromSeconds(10));
         }
         catch (TimeoutException e)
         {
-            throw new TimeoutException("No XAML frame completed for the self-test capture within 10 seconds.", e);
+            throw new TimeoutException($"The XAML capture frame barrier did not complete within 10 seconds (distinct rendering ticks: {frames}; UI turn queued: {queued}).", e);
         }
         finally
         {
             CompositionTarget.Rendering -= Rendering;
-            CompositionTarget.Rendered -= Rendered;
         }
     }
 
