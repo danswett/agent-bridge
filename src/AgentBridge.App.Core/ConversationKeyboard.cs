@@ -153,7 +153,36 @@ public static class ConversationKeyboard
     // (null outside the conversation's tree: entering from a popup, or leaving for one).
     public static (int From, int To) Ends(int? from, int? to, int count, bool forward) =>
         (from ?? (forward ? -1 : count), to ?? (forward ? count : -1));
+
+    // The block a Tab lands in by itself that is still brought in at the leading edge, as a held Tab
+    // is (#829): one the list had not laid out when Tab was pressed (laidOutAtKey), which the focus
+    // search realised on its way and would only scroll as far as it must; with
+    // TabReach.NotWhollyInView, also one laid out but not wholly in view. Null for a move within one
+    // block, or one that ends outside the blocks (to, from: places as Passed reads them, null outside
+    // the conversation's tree).
+    public static int? Reached(int? from, int? to, int count, TabReach reach, Func<int, bool> laidOutAtKey, Func<int, bool> whollyInView)
+    {
+        if (to is not (>= 0 and var t) || t >= count || from == t) { return null; }
+        if (!laidOutAtKey(t)) { return t; }
+        return reach == TabReach.NotWhollyInView && !whollyInView(t) ? t : null;
+    }
+
+    // Whether a block, its top `top` from the viewport's and `height` tall, is wholly in a viewport
+    // `viewport` tall: half a pixel either way is rounding.
+    public static bool WhollyInView(double top, double height, double viewport) => top >= -0.5 && top + height <= viewport + 0.5;
+
+    // Whether a focus move is the focus manager's to report, not a routed LosingFocus or
+    // GettingFocus's (#829): those are raised only on a control, never on a text element such as a
+    // link, so a move between two links, or between a link and anything outside the session, raises
+    // neither in the session. Ours when an end is in the session (here) and neither is a control
+    // in it, whose routed event has been handled already.
+    public static bool Unrouted(bool fromControlHere, bool toControlHere, bool fromHere, bool toHere) =>
+        !fromControlHere && !toControlHere && (fromHere || toHere);
 }
+
+// How far Tab brings in a block it lands in by itself (Reached): one not laid out when Tab was
+// pressed, or also one not wholly in view.
+public enum TabReach { NotLaidOut, NotWhollyInView }
 
 public enum ReadingKey { LineUp, LineDown, PageUp, PageDown, Top, End, Still }
 

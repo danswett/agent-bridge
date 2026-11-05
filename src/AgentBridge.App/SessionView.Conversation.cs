@@ -39,6 +39,12 @@ public sealed partial class SessionView
     double? keyTarget;
     // While Tab is sent on past a block that could not be realised, so it isn't held again for it.
     bool lettingTabPass;
+    // The blocks the list had laid out when Tab was last pressed in the session, until that press
+    // has been handled: the focus search realises the block it lands in on its way (Reached).
+    HashSet<int>? laidOutAtTab;
+    // How far a Tab that lands in a block by itself brings it in (ConversationKeyboard.Reached): the
+    // one place that says so, while B rules on the leading edge for a block already laid out (#829).
+    static readonly TabReach Reach = TabReach.NotWhollyInView;
 
     void ShowResponse(bool reset)
     {
@@ -119,7 +125,9 @@ public sealed partial class SessionView
     // and focus put on its first stop (its last, going back). The session's handlers see every move
     // out of (LosingFocus) or into (GettingFocus) anything in it, handled or not, so a Tab that passes
     // the whole list, nothing in it a stop until a block is realised, is held too; whichever comes
-    // first holds it.
+    // first holds it. A link is a text element, whose moves raise neither, so those come from the
+    // focus manager (OnFocusMoving). A block Tab lands in by itself is brought in at the leading
+    // edge too (Reached).
     void OnLeavingBlock(UIElement sender, LosingFocusEventArgs e)
     {
         if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } passed) { e.Cancel = true; FocusBlock(passed.Index, e.Direction == FocusNavigationDirection.Next, passed.Wrapped, e.OldFocusedElement); }
@@ -143,7 +151,49 @@ public sealed partial class SessionView
         var (f, t) = ConversationKeyboard.Ends(was, now, blocks.Count, forward);
         // Two ends at one place (both before the list, say) wrapped when the second comes first.
         var wrapped = ConversationKeyboard.Wrapped(f, t, forward, f == t ? Precedes(to, from) : null);
-        return ConversationKeyboard.Passed(blocks, f, t, forward, i => ConversationList.ContainerFromIndex(i) is not null, wrapped) is { } index ? (index, wrapped) : null;
+        if (ConversationKeyboard.Passed(blocks, f, t, forward, i => ConversationList.ContainerFromIndex(i) is not null, wrapped) is { } index) { return (index, wrapped); }
+        // Landed in a block by itself: still brought in at the leading edge when it wasn't laid out
+        // as Tab was pressed (or, by Reach, isn't wholly in view).
+        var laidOut = laidOutAtTab;
+        return ConversationKeyboard.Reached(was, now, blocks.Count, Reach,
+            i => laidOut?.Contains(i) ?? ConversationList.ContainerFromIndex(i) is not null,
+            i => ConversationList.ContainerFromIndex(i) is FrameworkElement c && ConversationScroll is { } s && ConversationKeyboard.WhollyInView(Top(c, s), c.ActualHeight, s.ViewportHeight)) is { } reached
+            ? (reached, wrapped) : null;
+    }
+
+    // Tab pressed anywhere in the session: what the list has laid out then, until the press has been
+    // handled, focus moved or not.
+    void OnTabKey(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key != VirtualKey.Tab || ConversationList.ItemsPanelRoot is not ItemsStackPanel panel || panel.FirstCacheIndex < 0) { return; }
+        var laidOut = new HashSet<int>();
+        for (var i = panel.FirstCacheIndex; i <= panel.LastCacheIndex; i++)
+        {
+            if (ConversationList.ContainerFromIndex(i) is not null) { laidOut.Add(i); }
+        }
+        laidOutAtTab = laidOut;
+        DispatcherQueue.TryEnqueue(() => { if (laidOutAtTab == laidOut) { laidOutAtTab = null; } });
+    }
+
+    // Every focus move in the app, as the focus manager reports it: a link is a text element, not a
+    // control, so a move between two links (or between a link and anything outside the session)
+    // raises no routed LosingFocus or GettingFocus here (#829); held as those are.
+    void OnFocusMoving(object? sender, GettingFocusEventArgs e)
+    {
+        if (e.Cancel || !DispatcherQueue.HasThreadAccess || !IsLoaded) { return; }
+        var (from, to) = (e.OldFocusedElement, e.NewFocusedElement);
+        var (fromHere, toHere) = (Within(from), Within(to));
+        if (ConversationKeyboard.Unrouted(fromHere && from is UIElement, toHere && to is UIElement, fromHere, toHere)) { OnReachingBlock(this, e); }
+    }
+
+    // Whether an element, a link in a text block included, is in this session's tree.
+    bool Within(DependencyObject? element)
+    {
+        for (var node = element is TextElement t ? t.ContentStart?.VisualParent : element; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (node == this) { return true; }
+        }
+        return false;
     }
 
     // Whether a comes before b in the visual tree; null for one element, or two in different trees.
@@ -288,8 +338,13 @@ public sealed partial class SessionView
     {
         anchoring = to;
         anchorAt = to;
+        AnchorCorrections++;
         scroll.ChangeView(null, to, null, disableAnimation: true);
     }
+
+    // How many times the view has been moved to keep its anchor block in place: read by the
+    // self-test, which tells such a move from one of the list's own.
+    internal int AnchorCorrections { get; private set; }
 
     static double Top(UIElement element, UIElement viewport) => element.TransformToVisual(viewport).TransformPoint(default).Y;
 

@@ -37,9 +37,15 @@ public sealed partial class SessionView : UserControl
     public SessionView()
     {
         InitializeComponent();
-        Loaded += (_, _) => { Attach(); WatchReleases(); };
+        Loaded += (_, _) =>
+        {
+            Attach();
+            WatchReleases();
+            FocusManager.GettingFocus -= OnFocusMoving;
+            FocusManager.GettingFocus += OnFocusMoving;
+        };
         SizeChanged += (_, e) => FitComposer(e.NewSize.Height);
-        Unloaded += (_, _) => { if (!IsLoaded) { Detach(); UnwatchReleases(); } };
+        Unloaded += (_, _) => { if (!IsLoaded) { Detach(); UnwatchReleases(); FocusManager.GettingFocus -= OnFocusMoving; } };
         // The Words states' ThemeResources are read as a state is entered: entered again, they are
         // the new theme's.
         ActualThemeChanged += (_, _) => { words = null; ShowWords(); };
@@ -56,6 +62,7 @@ public sealed partial class SessionView : UserControl
         };
         AddHandler(LosingFocusEvent, new Windows.Foundation.TypedEventHandler<UIElement, LosingFocusEventArgs>(OnLeavingBlock), true);
         AddHandler(GettingFocusEvent, new Windows.Foundation.TypedEventHandler<UIElement, GettingFocusEventArgs>(OnReachingBlock), true);
+        AddHandler(PreviewKeyDownEvent, new KeyEventHandler(OnTabKey), true);
         ConversationList.AddHandler(PointerPressedEvent, new PointerEventHandler((_, e) =>
         {
             if (Touch(e)) { follow.TouchDown(e.Pointer.PointerId); }

@@ -553,6 +553,56 @@ public sealed class ConversationKeyboardTests
         Assert.Null(ConversationKeyboard.Held(blocks, gone, from: -1, forward: false, i => true, wrapped: true));
     }
 
+    [Theory]
+    [InlineData(TabReach.NotLaidOut)]
+    [InlineData(TabReach.NotWhollyInView)]
+    public void A_Tab_that_lands_by_itself_in_a_block_not_laid_out_when_Tab_was_pressed_brings_that_block_in(TabReach reach)
+    {
+        Assert.Equal(4, ConversationKeyboard.Reached(3, 4, 10, reach, laidOutAtKey: i => i <= 3, whollyInView: _ => true));
+        Assert.Equal(4, ConversationKeyboard.Reached(5, 4, 10, reach, laidOutAtKey: i => i >= 5, whollyInView: _ => true));
+        Assert.Equal(0, ConversationKeyboard.Reached(-1, 0, 10, reach, laidOutAtKey: _ => false, whollyInView: _ => true));
+    }
+
+    [Theory]
+    [InlineData(TabReach.NotLaidOut)]
+    [InlineData(TabReach.NotWhollyInView)]
+    public void A_Tab_onto_a_block_laid_out_and_wholly_in_view_or_within_one_block_or_out_of_the_response_brings_nothing_in(TabReach reach)
+    {
+        Assert.Null(ConversationKeyboard.Reached(3, 4, 10, reach, laidOutAtKey: _ => true, whollyInView: _ => true));
+        Assert.Null(ConversationKeyboard.Reached(4, 4, 10, reach, laidOutAtKey: _ => false, whollyInView: _ => false));
+        Assert.Null(ConversationKeyboard.Reached(9, 10, 10, reach, laidOutAtKey: _ => false, whollyInView: _ => false));
+        Assert.Null(ConversationKeyboard.Reached(0, -1, 10, reach, laidOutAtKey: _ => false, whollyInView: _ => false));
+        Assert.Null(ConversationKeyboard.Reached(0, null, 10, reach, laidOutAtKey: _ => false, whollyInView: _ => false));
+    }
+
+    [Fact]
+    public void A_Tab_onto_a_block_laid_out_but_not_wholly_in_view_brings_it_in_only_when_the_reach_takes_in_such_blocks()
+    {
+        Assert.Null(ConversationKeyboard.Reached(3, 4, 10, TabReach.NotLaidOut, laidOutAtKey: _ => true, whollyInView: i => i != 4));
+        Assert.Equal(4, ConversationKeyboard.Reached(3, 4, 10, TabReach.NotWhollyInView, laidOutAtKey: _ => true, whollyInView: i => i != 4));
+    }
+
+    [Fact]
+    public void A_block_is_wholly_in_view_only_with_its_top_and_its_bottom_inside_the_viewport()
+    {
+        Assert.True(ConversationKeyboard.WhollyInView(544, 32, 576));
+        Assert.True(ConversationKeyboard.WhollyInView(0, 576, 576));
+        Assert.False(ConversationKeyboard.WhollyInView(560, 32, 576));
+        Assert.False(ConversationKeyboard.WhollyInView(-1, 32, 576));
+        Assert.False(ConversationKeyboard.WhollyInView(0, 700, 576));
+    }
+
+    [Fact]
+    public void A_focus_move_is_left_to_the_focus_manager_only_when_no_control_in_the_session_raised_it_and_an_end_is_in_the_session()
+    {
+        Assert.True(ConversationKeyboard.Unrouted(fromControlHere: false, toControlHere: false, fromHere: true, toHere: true));
+        Assert.True(ConversationKeyboard.Unrouted(fromControlHere: false, toControlHere: false, fromHere: false, toHere: true));
+        Assert.True(ConversationKeyboard.Unrouted(fromControlHere: false, toControlHere: false, fromHere: true, toHere: false));
+        Assert.False(ConversationKeyboard.Unrouted(fromControlHere: true, toControlHere: false, fromHere: true, toHere: true));
+        Assert.False(ConversationKeyboard.Unrouted(fromControlHere: false, toControlHere: true, fromHere: true, toHere: true));
+        Assert.False(ConversationKeyboard.Unrouted(fromControlHere: false, toControlHere: false, fromHere: false, toHere: false));
+    }
+
     [Fact]
     public void A_response_cut_by_2048_of_its_4096_blocks_changes_the_list_once_for_each_block_and_moves_no_other()
     {
