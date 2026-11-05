@@ -341,6 +341,26 @@ public class CopilotPlannerTests
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3), $"took {clock.Elapsed}");
     }
 
+    // Found in review of #844: the email check's classes overlap on dots, so a backtracking match of
+    // a default made of `a@`, a run of dots and a space was quadratic, and it ran while the question
+    // was read, outside the pattern budget. Measured at 5,000, 10,000 and 20,000 dots it took 29, 117
+    // and 452 ms; the generated matcher's vectorised scans only shrink the constant, so at n and 2n of
+    // a million it ran for minutes, far past a bound the linear match keeps with a wide margin. The
+    // default is still not an email.
+    [Fact]
+    public async Task An_email_default_of_a_long_run_of_dots_is_read_in_linear_time()
+    {
+        foreach (var n in new[] { 1_000_000, 2_000_000 })
+        {
+            using var doc = JsonDocument.Parse(Schema("e", $$"""{ "type": "string", "format": "email", "default": "a@{{new string('.', n)}} " }"""));
+            var root = doc.RootElement.Clone();
+            // Past the bound, WaitAsync throws: the old match was still running.
+            var question = await Task.Run(() => QuestionMapper.FromCopilotAskUser("call-1", root, Fixture.T0)).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(question.AnswerAtMachine);
+        }
+        Assert.Equal([("a@b.c", true)], Keys(Plan(Schema("t", """{ "type": "string", "format": "email" }"""), Answer(new { t = "a@b.c" }))));
+        Assert.Equal("\"t\": must be an email address", Outside(Schema("t", """{ "type": "string", "format": "email" }"""), Answer(new { t = "a@b." })));
+    }
     [Fact]
     public void Many_quick_patterns_in_one_question_fit_its_budget()
     {
