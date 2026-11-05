@@ -80,7 +80,7 @@ static partial class SelfTest
             Check(Message(form) is { Approval: false }, "draws a question that is not an approval as written");
             var withResponse = main.AllCards.FirstOrDefault(c => c.HasResponse);
             var responding = withResponse is null ? null : await Choose(window, main, withResponse.Id, "Response");
-            Check(responding is not null && await Until(() => ById<FrameworkElement>(responding, "Response") is MarkdownView { Children.Count: > 0 }, TimeSpan.FromSeconds(5)), "renders a response's Markdown");
+            Check(responding is not null && await Until(() => ById<MarkdownView>(responding, "ResponseBlock") is { Children.Count: > 0 }, TimeSpan.FromSeconds(5)), "renders a response's Markdown");
             // Status is a glyph and words (docs/design/ui.md §2.2), the glyph drawn from the generated
             // styles and named as its row reads (§9).
             var glyphs = rows.Select(r => (r.Card, Glyph: ById<StatusGlyphView>(r, "StatusGlyph"))).ToList();
@@ -962,6 +962,7 @@ static partial class SelfTest
             check(on, "sees Windows' high contrast turned on");
             var hcBroken = await DrawPages(window, "HighContrast", outFile);
             check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
+            await PictureYoursInHighContrast(window, check, outFile);
             var system = new[] { "SystemColorHighlightColor", "SystemColorHighlightTextColor", "SystemColorWindowTextColor", "SystemColorWindowColor", "SystemColorGrayTextColor", "SystemColorButtonFaceColor", "SystemColorButtonTextColor", "SystemColorHotlightColor" }
                 .Select(k => Application.Current.Resources.TryGetValue(k, out var c) && c is Windows.UI.Color colour ? colour.ToString() : null).OfType<string>().ToHashSet();
             var own = Design.DesignKeys.Brushes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var b) && b is SolidColorBrush s && system.Contains(s.Color.ToString()))).ToList();

@@ -3,6 +3,7 @@ using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 
 namespace AgentBridge.App;
@@ -42,30 +43,54 @@ static partial class SelfTest
         var view = await Choose(window, main, DemoHost.HeavyId, "Response");
         layout.CloseDelegate();
         var card = view?.Card;
+        var list = view is null ? null : ById<ListView>(view, "Conversation");
         // The strip with every delegate in it, the finished ones unfolded, not six and "14 finished".
         if (card is not null) { card.Delegates.FinishedOpen = true; }
         int Delegates() => card?.Delegates.Strip.Count(i => i.IsDelegate) ?? 0;
-        var response = view is null ? null : ById<FrameworkElement>(view, "Response") as MarkdownView;
-        var drawn = card is not null && await Until(() => card.History.Count >= Limits.History && response is { Children.Count: > 0 } && Delegates() >= DemoHost.HeavyDelegates && layout.ShowStrip && layout.ShowInspector, TimeSpan.FromSeconds(10));
+        var drawn = card is not null && list is not null && await Until(() => card.History.Count >= Limits.History && list.Items.Count > 0 && ById<MarkdownView>(view!, "ResponseBlock") is { Children.Count: > 0 } && Delegates() >= DemoHost.HeavyDelegates && layout.ShowStrip && layout.ShowInspector, TimeSpan.FromSeconds(10));
         var data = new Dictionary<string, int>
         {
             ["sessions"] = main.AllCards.Count(),
-            ["responseBlocks"] = response?.Children.Count ?? 0,
+            ["responseBlocks"] = list?.Items.Count ?? 0,
             ["delegateEvents"] = card?.Delegates.Events.Count ?? 0,
             ["toolRows"] = card?.History.Count ?? 0,
             ["delegates"] = Delegates(),
         };
         check(drawn && data["sessions"] > 15 && data["responseBlocks"] + data["delegateEvents"] > 200 && data["delegates"] == DemoHost.HeavyDelegates,
             $"draws a window as heavy as a real one for the resize pass, every delegate in its strip ({string.Join(", ", data.Select(d => $"{d.Value} {d.Key}"))})");
+        // A block in the middle of the response at the top of the conversation, part scrolled past.
+        var anchored = list is null ? null : await Anchor(list, outFile);
         await Task.Delay(700);
         var heavyLimit = SweepBudget - lightTook;
         var (heavy, heavyDone) = await Sweep(window, heavyLimit);
-        if (card is not null) { card.Delegates.FinishedOpen = false; }
 
         // Back where the drag began, the session still chosen and every pane drawn.
         var settled = await Until(() => layout.Mode == PaneMode.Three && main.Selected == card && layout.ShowInspector, TimeSpan.FromSeconds(5));
         check(settled, "keeps the session chosen, with its inspector, through a live resize across every width class");
         await Picture(window.RootElement, Path.ChangeExtension(outFile, ".resize.png"));
+        var moved = list is null || anchored is null ? "measured: the response not drawn" : await Anchored(list, anchored, outFile);
+        check(moved is null, $"keeps the block at the top of the conversation where it was through a live resize, drawn alike before and after{Not(moved)}");
+        var (unkeyed, pressedBy) = list is null ? ("measured: the response not drawn", "none") : await Keyed(window, list);
+        check(unkeyed is null, $"scrolls the conversation's text with Page Down and Down pressed on a link in it, focus left where it was and nothing selected ({pressedBy}){Not(unkeyed)}");
+        var untabbed = list is null ? "measured: the response not drawn" : await Tabbed(list);
+        check(untabbed is null, $"takes Tab from the last link or Copy button the conversation has drawn to the first in the next block with one, which it realises, inside the block and not onto it{Not(untabbed)}");
+        var (unplaced, placedPressedBy) = list is null ? ("measured: the response not drawn", "none") : await TabbedInView(window, list);
+        check(unplaced is null, $"takes Tab onto a Copy button in a block across the conversation's bottom edge with the block's start to the leading edge, and onto one in a block wholly in view without moving it ({placedPressedBy}){Not(unplaced)}");
+        var (unedged, edgePressedBy) = list is null ? ("measured: the response not drawn", "none") : await TabbedNearEdge(window, list);
+        check(unedged is null, $"takes Shift+Tab onto the Copy button of a block wholly in view, its top within 20 px of the conversation's, without moving it ({edgePressedBy}){Not(unedged)}");
+        var (untall, tallPressedBy) = list is null ? ("measured: the response not drawn", "none") : await TabbedTall(window, list);
+        check(untall is null, $"takes Tab onto the first link of a block taller than the conversation with the block's start to the leading edge, and Shift+Tab onto its last with that link wholly in view at the nearest edge ({tallPressedBy}){Not(untall)}");
+        var (unlinked, linkPressedBy) = list is null ? ("measured: the response not drawn", "none") : await TabbedLink(window, list);
+        check(unlinked is null, $"takes Tab, pressed on the last link of the last block the conversation has drawn, to the first link of the next block, which it realises at the leading edge, numbered in its set ({linkPressedBy}){Not(unlinked)}");
+        var chrome = list is null ? "measured: the response not drawn" : Contained(list);
+        check(chrome is null, $"draws no block's container as a tab stop, selected, filled or with a focus visual of its own{Not(chrome)}");
+        var unreachable = list is null ? "measured: the response not drawn" : await Reachable(list);
+        check(unreachable is null, $"finds the response's last block, off screen, by its name, which no other block has, and brings it into view for a screen reader{Not(unreachable)}");
+        // After Reachable, which needs the last block off screen to begin with: this walk realises every block.
+        var (unlisted, listRealised, listSeconds) = list is null ? ("measured: the response not drawn", 0, 0d) : await Listed(list);
+        check(unlisted is null, $"gives a screen reader every block of the response as a list item numbered 1 to {list?.Items.Count} of {list?.Items.Count}, walked as a screen reader walks it, ItemContainer's FindItemByProperty for each next item and VirtualizedItem's Realize for one not yet realised ({listRealised} realised so, in {listSeconds:0.0} s), none -1, and the header and footer outside the set{Not(unlisted)}");
+        if (card is not null) { card.Delegates.FinishedOpen = false; }
+        static string Not(string? wrong) => wrong is null ? "" : $": not {wrong}";
 
         var report = new Dictionary<string, object?>
         {
@@ -78,17 +103,38 @@ static partial class SelfTest
             ["lightFinished"] = lightDone,
             ["heavy"] = heavy.Report(),
             ["heavyFinished"] = heavyDone,
+            ["anchorKept"] = moved is null,
+            ["anchorProblem"] = moved,
+            ["readerProblem"] = unreachable,
+            ["listProblem"] = unlisted,
+            ["listRealisedByPeer"] = listRealised,
+            ["listWalkSeconds"] = Math.Round(listSeconds, 1),
+            ["keysProblem"] = unkeyed,
+            ["keysPressedBy"] = pressedBy,
+            ["containerProblem"] = chrome,
+            ["tabProblem"] = untabbed,
+            ["tabInViewProblem"] = unplaced,
+            ["tabInViewPressedBy"] = placedPressedBy,
+            ["tabNearEdgeProblem"] = unedged,
+            ["tabNearEdgePressedBy"] = edgePressedBy,
+            ["tallTabProblem"] = untall,
+            ["tallTabPressedBy"] = tallPressedBy,
+            ["linkTabProblem"] = unlinked,
+            ["linkTabPressedBy"] = linkPressedBy,
+            ["captures"] = new[] { Path.GetFileName(Path.ChangeExtension(outFile, ".resize.before.png")), Path.GetFileName(Path.ChangeExtension(outFile, ".resize.after.png")) },
         };
         result["resize"] = report;
         await File.WriteAllTextAsync(Path.ChangeExtension(outFile, ".resize.json"), JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
         string Said(FrameSummary s) => $"p50 {s.P50:0.#} ms, p95 {s.P95:0.#} ms, max {s.Max:0.#} ms, {s.OverLong} over {FrameTimes.Long} ms of {s.Frames}";
-        AppLog.Write($"self-test: resize, light: {Said(light.All)}; heavy: {Said(heavy.All)}");
+        // The p95 in each width class, the creative director's measure (#765), and in the moment of switching.
+        static string ByClass(FrameTimes t) => $"p95 three panes {t.In(PaneMode.Three).P95:0.#} ms, two panes {t.In(PaneMode.Two).P95:0.#} ms, one column {t.In(PaneMode.One).P95:0.#} ms, switching {t.Switching.P95:0.#} ms";
+        AppLog.Write($"self-test: resize, light: {Said(light.All)}; {ByClass(light)}; heavy: {Said(heavy.All)}; {ByClass(heavy)}");
         // The frame times are reported only, a sweep cut short by the hang guard included; the pass
         // fails only when a sweep never reached every width class, so nothing was measured there.
         var crossed = new[] { PaneMode.Three, PaneMode.Two, PaneMode.One }.All(m => light.In(m).Frames > 0 && heavy.In(m).Frames > 0);
         string Cut(string name, bool finished, TimeSpan limit) => finished ? "" : $"; the {name} sweep cut short at {limit.TotalSeconds:0.#} s";
         if (!lightDone || !heavyDone) { AppLog.Write($"self-test: resize, reported, not failed:{Cut("light", lightDone, SweepBudget / 2)}{Cut("heavy", heavyDone, heavyLimit)}"); }
-        check(crossed, $"measures the UI thread's frames through a live resize across the three width classes (heavy: {Said(heavy.All)}; light: {Said(light.All)}{Cut("light", lightDone, SweepBudget / 2)}{Cut("heavy", heavyDone, heavyLimit)})");
+        check(crossed, $"measures the UI thread's frames through a live resize across the three width classes (heavy: {Said(heavy.All)}; {ByClass(heavy)}; light: {Said(light.All)}; {ByClass(light)}{Cut("light", lightDone, SweepBudget / 2)}{Cut("heavy", heavyDone, heavyLimit)})");
     }
 
     // Narrowed a step a frame to the narrowest, then widened to where it began, or as far as it got

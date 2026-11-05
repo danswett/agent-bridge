@@ -628,8 +628,9 @@ public sealed partial class DemoHost : IAsyncDisposable
         {
             await Task.Delay(3000);
             var done = DateTimeOffset.UtcNow;
-            // The main agent wrote last: the top-level text is its own again.
-            await Change(next with { Status = SessionStatus.Idle, StatusSince = done, UpdatedAt = done, Activity = next.Activity with { Response = "Done: that's taken care of.", TurnCount = (next.Activity.TurnCount ?? 0) + 1, Reasoning = null, Source = null, Own = null } });
+            // The main agent wrote last: the top-level text is its own again. A few short blocks, so a
+            // conversation's pictures show the space between them (#765).
+            await Change(next with { Status = SessionStatus.Idle, StatusSince = done, UpdatedAt = done, Activity = next.Activity with { Response = "Done: that's taken care of.\n\nThe branch is pushed.\n\n- the suite passes\n- nothing else is open", TurnCount = (next.Activity.TurnCount ?? 0) + 1, Reasoning = null, Source = null, Own = null } });
         }
     }
 

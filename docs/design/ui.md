@@ -698,6 +698,58 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   centred in the pane once the pane is wider than the measure, as the PWA's is; it follows the
   pane's width as it changes, a divider being dragged included (§5.2). The scroll bar is at the
   pane's edge, not the column's.
+- **A list of blocks** (#765): the response's top-level blocks (a paragraph, a heading, a list,
+  a table, a code block, a quote, a rule) are the items of a virtualised list, so only those near
+  the viewport are laid out and a live resize re-wraps those alone. Everything else in the column
+  (the question, the receipt, your message and the response's label above; the reasoning, the
+  delegates' events and the current tool below) is the list's header and footer. It draws exactly
+  as one column did: the same reading measure, keylines and spacing, no selection, no item chrome,
+  and no focus visual on an item; focus goes to the links and buttons inside a block, as before.
+  - **The place is kept by the block, not the offset:** the block across the viewport's top edge
+    stays where it was through a change of width (a live resize, a divider dragged), and as blocks
+    are laid out for the first time and their estimated heights are corrected: a layout that moves
+    it while the view is still puts it back in the same pass, before it is drawn; a scroll or a pan
+    takes it again where it is. With the header at the top, nothing is held.
+  - **Accessibility (#707):** a screen reader gets the response as a list, each block a list item
+    numbered in the set ("12 of 214"), the header and footer outside it, so its scan and search
+    reach a block that is off screen and bring it into view. An item is named by its text, hidden
+    characters as their escapes as a code block draws them, cut at 500 characters at a whole
+    grapheme with "…"; the whole text is read from its content. Its
+    control type is said as the system says a list item.
+  - **The keyboard reads it as a page, not a list:** the arrow keys scroll a line, Page Up and Page
+    Down a viewport, Home and End (Ctrl too) to the top and the end, under reduced motion without
+    animation; none moves between blocks, nor does any of them with Ctrl or Shift, and Left and
+    Right do nothing to the page (a wide table still scrolls sideways with them, and selected text
+    keeps Shift and the arrows, and with caret browsing every arrow). A key with Alt is left to the
+    window, and one pressed in a text input or a control that uses it (a combo box, a slider, a
+    list of its own) to that control, Ctrl+Home and Ctrl+End included. Tab and Shift+Tab stop at
+    every link and Copy button in order, a block not
+    fully in view included, laid out or not: it is brought into view with its start at the leading
+    edge (at once, without animation, so under reduced motion as well), and focus goes to its first
+    stop (its last, going back), whether that is a link or a Copy button; a block fully in view
+    doesn't move; a block with none is passed. That holds when Tab or
+    Shift+Tab wraps round the window too: when nothing after the response is a stop, Shift+Tab from
+    the window's first control goes to the response's last block with a stop, laid out or not. A
+    block taller than the view lands with its start at the leading edge, unless that would leave
+    the focused element out of view. Then the view scrolls only as far as it takes to bring the
+    focused element wholly into view at the nearest edge, and the block's start stays as close to
+    the leading edge as that allows. Focus is never scrolled out of sight (A4, WCAG 2.4.11).
+    Known gap (#881): if focus is on a stop scrolled out of view and Tab lands on a stop already in
+    view, the view may return toward the stop focus left. The landing stop stays wholly in view.
+    The intended behaviour is that the view stays put. No block's container is
+    a stop, and in high contrast it has no fill: the block draws in the system's colours.
+  - The self-test checks that a block stays in place through a live resize and the conversation is
+    drawn alike before and after it (a renderer's noise aside), that Page Down and Down scroll the text with focus and
+    selection left alone, that Tab reaches a block not yet laid out, from a Copy button or from a link
+    to the link in the next block, brought in at the leading edge, that Tab onto a Copy button in a
+    block across the view's bottom edge brings the block's start to the leading edge and onto one in
+    a block wholly in view moves nothing, even with its top near the view's (Shift+Tab), that
+    Tab onto the first link of a block taller than the
+    view brings its start to the leading edge and Shift+Tab onto its last brings that link wholly
+    into view at the nearest edge, that no container is a stop or
+    draws chrome, that the last block is found by its name, which no other block has, and that every
+    block, found and realised as a screen reader does it (FindItemByProperty, then Realize), is a
+    list item numbered 1 to N in a set of N, none -1 ([app-windows.md](../app-windows.md)).
 - **Your messages:** a bubble at the right edge of the conversation's column (card fill,
   platform radius), at most 85% of the column's width, so a short message beside a short reply
   is still at the right (#255).
