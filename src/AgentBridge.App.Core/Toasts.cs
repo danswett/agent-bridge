@@ -46,6 +46,9 @@ public sealed class ToastPlanner
         // The main agent ran (working) after its finished toast went up: a failure now ends a later
         // turn, not the one that toast is for (#878).
         public bool RanSinceFinished;
+        // The turn the finished toast up is for, by count alone: a failure can replace the response
+        // in the same turn (the parser's "Turn error" notice), so its text is no way to know it.
+        public int? FinishedTurn;
         public (ToastKind Kind, DateTimeOffset At, string? Question)? Due;
         // While a delegate's question is pending (NoteWait).
         public bool WaitFromTurn;
@@ -117,8 +120,8 @@ public sealed class ToastPlanner
     static bool Stopped(Session s) => AuthState.Of(s)?.Kind is AuthState.Error or AuthState.SignInNeeded;
 
     // One due is dropped, and one up is withdrawn, when the attention comes after the turn ended.
-    // Only the toast for this same turn: one for an earlier turn that really finished (the session
-    // ran since, or its turn and answer were others) stays (#878).
+    // Only the toast for this same turn: one for an earlier turn that really finished (the main
+    // agent ran since, or the turn count moved on) stays (#878).
     void Unfinish(Tracked t, Session s)
     {
         // Working, not just any status but idle: a delegate's question makes the session waiting while
@@ -126,10 +129,8 @@ public sealed class ToastPlanner
         if (s.Status == SessionStatus.Working) { t.RanSinceFinished = true; }
         if (!Stopped(s)) { return; }
         if (t.Due is { Kind: ToastKind.Finished }) { t.Due = null; }
-        if (t.Shown is null && !t.RanSinceFinished && t.FinishedKey == FinishedKeyOf(s) && finished.Remove(s.Id)) { sink.Withdraw(TagOf(s.Id)); }
+        if (t.Shown is null && !t.RanSinceFinished && t.FinishedTurn == s.Activity.TurnCount && finished.Remove(s.Id)) { sink.Withdraw(TagOf(s.Id)); }
     }
-
-    static string FinishedKeyOf(Session s) => $"{s.Activity.TurnCount}|{MainResponse(s)}";
 
     public void Upsert(Session s)
     {
@@ -254,7 +255,7 @@ public sealed class ToastPlanner
             }
             else
             {
-                var key = FinishedKeyOf(s);
+                var key = $"{s.Activity.TurnCount}|{MainResponse(s)}";
                 // The main agent's words may have gone in the wait (a delegate wrote last, or the
                 // budget left them out): an empty toast says nothing.
                 if (s.Status != SessionStatus.Idle || t.FinishedKey == key || string.IsNullOrEmpty(MainResponse(s)) || Stopped(s)) { continue; }
@@ -262,6 +263,7 @@ public sealed class ToastPlanner
                 if (!Enabled() || !FinishedEnabled() || WindowActive()) { continue; }
                 finished.Add(id);
                 t.RanSinceFinished = false;
+                t.FinishedTurn = s.Activity.TurnCount;
                 sink.Show(new ToastNotice(TagOf(id), ToastXml.Finished(s, MachineName(), MachineKey), Quiet()));
             }
         }

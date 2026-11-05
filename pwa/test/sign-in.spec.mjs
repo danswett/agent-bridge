@@ -754,6 +754,17 @@ async function capture(locator, name, testInfo) {
   await testInfo.attach(name, { path, contentType: 'image/png' });
 }
 
+// The banner while its sheet shows the code: the modal sheet's backdrop covers it (opaque in forced
+// colours), so for the picture the sheet is made modeless and unseen, never cancelled (close() fires
+// no cancel), then modal again.
+async function captureUnderSheet(page, name, testInfo) {
+  await sheet(page).evaluate((d) => { d.close(); d.show(); d.style.visibility = 'hidden'; });
+  await capture(banner(page), name, testInfo);
+  await sheet(page).evaluate((d) => { d.style.visibility = ''; d.close(); d.showModal(); });
+  await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
+  expect(await page.evaluate(() => window.agentBridgeDemo.signInLog.filter((l) => l.op === 'signin.cancel'))).toEqual([]);
+}
+
 for (const look of [{ name: 'dark', media: { colorScheme: 'dark' } }, { name: 'forced-colors', media: { colorScheme: 'light', forcedColors: 'active' } }]) {
   test(`captures the banner and the sheet in ${look.name} (#800)`, async ({ page, browserName }, testInfo) => {
     test.skip(browserName !== 'chromium', 'captured in Chromium: WebKit draws a screenshot with a style the CSP refuses');
@@ -765,7 +776,7 @@ for (const look of [{ name: 'dark', media: { colorScheme: 'dark' } }, { name: 'f
     await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
     await expect(banner(page).locator('.sign-in-line')).toHaveText(/^Waiting for sign-in/);
     await capture(sheet(page), `signin-sheet.${look.name}.png`, testInfo);
-    await capture(banner(page), `signin-code-shown.${look.name}.png`, testInfo);
+    await captureUnderSheet(page, `signin-code-shown.${look.name}.png`, testInfo);
   });
 }
 
@@ -791,7 +802,7 @@ test('captures every state of the banner and the sheet: no claim, the code shown
   await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
   await expect(banner(page).locator('.sign-in-line')).toHaveText(/^Waiting for sign-in/);
   await capture(sheet(page), 'signin-sheet.png', testInfo);
-  await capture(banner(page), 'signin-code-shown.png', testInfo);
+  await captureUnderSheet(page, 'signin-code-shown.png', testInfo);
 
   await page.evaluate(() => window.agentBridgeDemo.finishSignIn('failed'));
   await expect(sheet(page)).toBeHidden();

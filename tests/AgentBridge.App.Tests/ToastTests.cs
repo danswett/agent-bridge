@@ -302,6 +302,22 @@ public sealed class ToastTests
         Assert.Single(sink.Shown);
     }
 
+    // #878: a failure that replaces the turn's response (the parser's "Turn error" notice) is still
+    // that turn's: its finished toast is withdrawn.
+    [Fact]
+    public void A_failure_that_replaces_the_turns_response_still_withdraws_that_turns_finished_toast()
+    {
+        var p = Planner();
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s1", response: "Done.", turns: 2));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        p.Upsert(AuthState.Attach(Make.Session("s1", response: "Turn error: the request failed.", turns: 2), JsonSerializer.SerializeToElement(new { attention = new { kind = "error", errorClass = "auth" } })));
+        Assert.Equal([ToastPlanner.Tag("s1", null)], sink.Withdrawn);
+    }
+
     // #878: a delegate asking while the main agent stays idle is no new turn: the toasted turn's
     // failure, arriving after it, still withdraws that turn's finished toast.
     [Fact]
