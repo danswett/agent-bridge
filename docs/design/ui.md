@@ -1124,6 +1124,13 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   (its ring on the option, the option kept pressed, "one attempt per prompt") belong to Send
   answer instead, as §6.4's "While an answer goes" says: the ring is on Send answer, and the
   chosen value stays selected and read-only. No client draws a ring on an option.
+- **Phone: one line at rest (#935, the owner, 2026-11-05).** Below 760 the box starts at one
+  line, 52 tall, with Attach before the text and Send after it, as the native composers do. It
+  grows a line at a time to six lines of text, then scrolls inside.
+- **While a question waits** (§5.3), one line above the box in `needs` text: "Answer its
+  question first. Go to the question". The link is a scroll the app makes to the question
+  (§6.2: it leaves the header as it was) and puts focus on its first choice. With the notice,
+  the reply area is 99 at rest on a phone.
 - **Platform styling:**
   - Windows and the PWA: a card with a 2 px Bridge bottom edge.
   - macOS: a capsule field.

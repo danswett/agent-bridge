@@ -23,7 +23,11 @@
 >   and 32 pt down to go.
 > - **D2:** the bar holds Back, the glyph, the title on one line, and More.
 > - **D3–D6:** everything at rest, and the bottom, stays as it is today. *(Superseded on
->   2026-11-05 for the header, above. The reply box and notice still stay as they are.)*
+>   2026-11-05 for the header, above, and for the bottom by #935: see the next note.)*
+>
+> **Decided (owner, 2026-11-05, #935).** D7 · 1: the reply area mirrors the header and compacts
+> while reading. D5 · 2 and D6 · 2: the box starts at one line and the notice is one line, 99 pt
+> at rest. These are in ui.md §6.2, §6.5 and §9.
 >
 > The text in [the ui.md section](#the-uimd-text) is now in [ui.md](../ui.md) §5.2, §5.3, §6.2,
 > §6.3 and §9, and the `collapse` motion is in `tokens.json`, both from #629. **ui.md is the
@@ -292,8 +296,8 @@ at-rest header is the owner's, and the first scroll takes it away.
 ## Secondary decisions: the at-rest header and the bottom
 
 *(For the header, D3 and D4 are superseded on 2026-11-05 by [At rest,
-revised](#at-rest-revised-2026-11-05). D5 and D6 still stand as decided: the reply box and the
-notice stay as they are.)*
+revised](#at-rest-revised-2026-11-05). For the bottom, the owner reversed D5 and D6 on
+2026-11-05 (#935): the box starts at one line and the notice is one line, both option 2.)*
 
 These are optional. **Each recommends keeping today's design**, because:
 
@@ -373,8 +377,9 @@ And in `tokens.json`'s `motion.catalogue`:
 
 > The strip scrolls away with the header on a phone (§6.2) and comes back with it.
 
-**§6.5 Reply box:** D5 and D6 keep its size at rest. D7 (#935) added "Phone: compact while
-reading", and a sentence in §6.2's mid-conversation bullet.
+**§6.5 Reply box:** for #935 (2026-11-05), D5 · 2 and D6 · 2 added "Phone: one line at rest" and
+"While a question waits", and D7 added "Phone: compact while reading", with a sentence in
+§6.2's mid-conversation bullet.
 
 **§9 Accessibility** (append):
 
@@ -385,8 +390,9 @@ reading", and a sentence in §6.2's mid-conversation bullet.
 
 ## Decisions
 
-Each decision lists its options with the recommended one first and in bold. **The owner chose
-the recommended option of every decision (2026-11-04).**
+Each decision lists its options with the chosen one in bold. **The owner chose the recommended
+option of every decision on 2026-11-04, then option 2 of D5 and D6, and D7 · 1, on 2026-11-05
+(#935).**
 
 **D1. Collapse behaviour** (the core).
 1. **Collapse on scroll down, tied to your finger near the top; bring it back with 64 pt up,
@@ -417,14 +423,14 @@ the recommended option of every decision (2026-11-04).**
 2. One row: tabs, then chips, scrolling sideways (saves 53).
 3. The chips move into the Delegates tab, which shows a count (saves 61). *(Chosen on 2026-11-05, with the `needs` glyph on the tab and a two-line title.)*
 
-**D5. The reply box's starting height** (secondary).
-1. **Keep two rows, with Attach and Send under the text.**
-2. One line, with Attach and Send beside it, growing to six lines (saves 76).
+**D5. The reply box's starting height** (secondary; *the owner chose 2 on 2026-11-05, #935*).
+1. Keep two rows, with Attach and Send under the text.
+2. **One line, with Attach and Send beside it, growing to six lines (saves 76).**
 
-**D6. The notice** (secondary).
-1. **Keep today's two-line notice.**
-2. One line, "Answer its question first. Go to the question", with a link to the question
-   (saves 21).
+**D6. The notice** (secondary; *the owner chose 2 on 2026-11-05, #935*).
+1. Keep today's two-line notice.
+2. **One line, "Answer its question first. Go to the question", with a link to the question
+   (saves 21).**
 
 **D7. The reply area while reading** (#935; *the owner chose 1, 2026-11-05*). The owner
 reported that the reply box "sits on too much space when it's not being typed in". Product
@@ -435,7 +441,7 @@ asked for one collapse rule and one motion for the header and the box (#696).
    conversation gains about 110 pt while reading, and nothing is ever a long scroll away.
 2. Collapse the same way, but come back only on a tap or at the end. This is calmer, but
    the box is out of reach while reading back.
-3. Keep it as today (D5 and D6). This changes nothing, but leaves the owner's report open.
+3. Keep it as today. This changes nothing, but leaves the owner's report open.
 
 ## Boards
 
@@ -492,9 +498,14 @@ tap on the bar focuses the box; focus on Send brings it back; a scroll to the qu
 it, or shows it in full when it lands at the end; Send is hit-testable at rest; no overflow
 and no errors. Captures were taken in dark, light and high contrast.
 
+With D5 · 2 and D6 · 2 it also checks: the box starts at 52; the notice is one line and not
+cut; the reply area is 99 at rest; the box grows a line at a time and stops at six lines, then
+scrolls; and Go to the question scrolls to it and focuses its first choice.
+
 ## What follows
 
-- **Done:** the owner decided D1–D6 on #620 (2026-11-04), and D7 for #935 (2026-11-05). In
+- **Done:** the owner decided D1–D6 on #620 (2026-11-04), and D7 with D5 · 2 and D6 · 2 for
+  #935 (2026-11-05). In
   #629, this page was labelled with the decision, and the text went into `ui.md` and `tokens.json` (the `collapse` entry,
   generated by design-gen).
 - **The PWA builds it in [#631](https://github.com/danswett/agent-bridge/issues/631).** Its
