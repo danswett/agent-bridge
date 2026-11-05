@@ -24,15 +24,11 @@ public static class CopilotFieldConstraints
         if (p.ValueKind != JsonValueKind.Object) { return (null, null); }
         var (input, _, unread) = CopilotFieldSchema.Read(p);
         if (unread is not null) { return (null, null); }
+        if (Unchecked(p, input) is { } keyword) { return (null, $"has a limit the host does not check (\"{keyword}\")"); }
         FieldConstraints c;
         string? problem = null;
         switch (input)
         {
-            // A number box, or a text box, limited to listed values (`enum`, `oneOf`, `const`): the
-            // host checks no list of numbers, so 5 went through an enum of [1, 2, 3] (review of #844).
-            case CopilotFieldSchema.Input.Number when Listed(p):
-            case CopilotFieldSchema.Input.Text when Has(p, "const", out _):
-                return (null, "is limited to listed values the host does not check");
             case CopilotFieldSchema.Input.Number:
                 c = new FieldConstraints
                 {
@@ -54,19 +50,9 @@ public static class CopilotFieldConstraints
                     Format = Format(p, ref problem),
                 };
                 break;
-            // Likewise a checkbox list whose items carry text or number limits: its options are not
-            // checked against them, so a minimum of 2 let 1 be ticked (review of #844).
-            case CopilotFieldSchema.Input.Multi when p.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Object && (TextLimited(items) || NumberLimited(items) || Has(items, "const", out _)):
-                return (null, "is a list of choices with limits the host does not check");
             case CopilotFieldSchema.Input.Multi:
                 c = new FieldConstraints { MinItems = Count(p, "minItems", ref problem), MaxItems = Count(p, "maxItems", ref problem) };
                 break;
-            // A string list (`enum` or `oneOf`) with text constraints: its options, and the words
-            // its Other takes, are not checked against them here, so it is answered at the machine
-            // rather than let "toolong" through a maxLength of 2 (review of #844).
-            // A string list's options can be numbers too, so number limits count as well.
-            case CopilotFieldSchema.Input.Choice when TextLimited(p) || NumberLimited(p) || Has(p, "const", out _):
-                return (null, "is a list of choices with limits the host does not check");
             default:
                 return (null, null);
         }
@@ -80,14 +66,118 @@ public static class CopilotFieldConstraints
         };
     }
 
-    static bool TextLimited(JsonElement o) =>
-        Has(o, "minLength", out _) || Has(o, "maxLength", out _) || Has(o, "pattern", out _)
-        || (Has(o, "format", out var f) && f.ValueKind == JsonValueKind.String && FieldConstraints.Formats.Contains(f.GetString()));
+    // What a field may carry and still be answered from another device is decided from an
+    // allow-list, never keyword by keyword: each list of keywords to refuse missed one, so a Yes/No
+    // with `const: true` took No, a number's `anyOf` of 1 and 2 took 5, and a text box's
+    // `allOf: [{ maxLength: 2 }]` was not measured (review of #844). Besides annotations, a field
+    // carries only the keywords the host checks for the input the CLI draws; a list of choices only
+    // the options it draws, each of its own `type`. Anything else, `anyOf`, `allOf`, `not`, `const`,
+    // `if`, `dependent*` or an unknown keyword alike, is answered at the machine. A list's text or
+    // number limits are among them: its options and Other words are not checked against them.
+    static readonly HashSet<string> Annotations = new(StringComparer.Ordinal)
+    {
+        "title", "description", "default", "examples", "$comment", "$schema", "$id", "$anchor",
+        "deprecated", "readOnly", "writeOnly", "enumNames",
+    };
 
-    static bool NumberLimited(JsonElement o) =>
-        Has(o, "minimum", out _) || Has(o, "maximum", out _) || Has(o, "exclusiveMinimum", out _) || Has(o, "exclusiveMaximum", out _) || Has(o, "multipleOf", out _);
+    static readonly string[] TextKeywords = ["minLength", "maxLength", "pattern", "format"];
+    static readonly string[] NumberKeywords = ["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf"];
 
-    static bool Listed(JsonElement o) => Has(o, "enum", out _) || Has(o, "oneOf", out _) || Has(o, "const", out _);
+    // The first keyword the host does not check, or null.
+    static string? Unchecked(JsonElement p, CopilotFieldSchema.Input input)
+    {
+        string[] own = input switch
+        {
+            CopilotFieldSchema.Input.Text => TextKeywords,
+            CopilotFieldSchema.Input.Number => NumberKeywords,
+            CopilotFieldSchema.Input.Choice => ["enum", "oneOf"],
+            CopilotFieldSchema.Input.Multi => ["items", "minItems", "maxItems", "uniqueItems"],
+            _ => [],
+        };
+        if (Other(p, own) is { } keyword) { return keyword; }
+        switch (input)
+        {
+            case CopilotFieldSchema.Input.Choice:
+                // A string list records its option as it is, so one that is not a string breaks
+                // its own `type`.
+                if (Entries(p, "oneOf") is { } entry) { return entry; }
+                if (!Within(p, "oneOf", "enum")) { return "enum"; }
+                return Options(p, "oneOf", "enum").All(o => o.ValueKind == JsonValueKind.String) ? null : "type";
+            case CopilotFieldSchema.Input.Multi when p.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Object:
+                if (Other(items, ["enum", "anyOf"]) is { } inner) { return $"items.{inner}"; }
+                if (Entries(items, "anyOf") is { } itemEntry) { return $"items.{itemEntry}"; }
+                if (!Within(items, "anyOf", "enum")) { return "items.enum"; }
+                if (Has(items, "type", out var type) && !Options(items, "anyOf", "enum").All(o => OfType(o, type))) { return "items.type"; }
+                // Two options of one value can both be ticked, which `uniqueItems` forbids.
+                if (Has(p, "uniqueItems", out var unique) && unique.ValueKind != JsonValueKind.False)
+                {
+                    var options = Options(items, "anyOf", "enum").ToList();
+                    if (unique.ValueKind != JsonValueKind.True || options.Where((o, i) => options.Take(i).Any(x => CopilotFieldSchema.SameScalar(o, x))).Any()) { return "uniqueItems"; }
+                }
+                return null;
+            default:
+                return null;
+        }
+    }
+
+    // A keyword set (not null, which the CLI reads as absent) that is neither `type`, an
+    // annotation nor one of these.
+    static string? Other(JsonElement o, string[] own)
+    {
+        foreach (var k in o.EnumerateObject())
+        {
+            if (k.Value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) { continue; }
+            if (k.Name == "type" || Annotations.Contains(k.Name) || own.Contains(k.Name)) { continue; }
+            return k.Name;
+        }
+        return null;
+    }
+
+    // An option entry (`{ const, title }`) carrying anything else.
+    static string? Entries(JsonElement o, string name)
+    {
+        if (!Has(o, name, out var list) || list.ValueKind != JsonValueKind.Array) { return null; }
+        foreach (var e in list.EnumerateArray())
+        {
+            if (e.ValueKind == JsonValueKind.Object && Other(e, ["const"]) is { } k) { return $"{name}.{k}"; }
+        }
+        return null;
+    }
+
+    // With both lists, the CLI draws the first and ignores the second, so each option drawn must be
+    // one the second allows.
+    static bool Within(JsonElement o, string consts, string values) =>
+        !(Has(o, consts, out _) && Has(o, values, out var v) && v.ValueKind == JsonValueKind.Array)
+        || Options(o, consts, values).All(c => v.EnumerateArray().Any(x => CopilotFieldSchema.SameScalar(c, x)));
+
+    // What the form itself carries besides its fields: anything but annotations, "required" and
+    // "additionalProperties" (answers name only its fields) limits them in a way the host does not
+    // check, such as an `allOf` or `if` across fields, so the question is answered at the machine.
+    public static string? FormUnchecked(JsonElement schema)
+    {
+        if (schema.ValueKind != JsonValueKind.Object) { return null; }
+        if (Has(schema, "type", out var type) && !(type.ValueKind == JsonValueKind.String && type.GetString() == "object")) { return "type"; }
+        return Other(schema, ["properties", "required", "additionalProperties"]);
+    }
+
+    // The options as CopilotFieldSchema takes them: the first list's `const`s, else the second.
+    static IEnumerable<JsonElement> Options(JsonElement o, string consts, string values)
+    {
+        if (Has(o, consts, out var list) && list.ValueKind == JsonValueKind.Array)
+        {
+            return list.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.Object && e.TryGetProperty("const", out _)).Select(e => e.GetProperty("const"));
+        }
+        return Has(o, values, out var v) && v.ValueKind == JsonValueKind.Array ? v.EnumerateArray() : [];
+    }
+
+    static bool OfType(JsonElement value, JsonElement type) => type.ValueKind == JsonValueKind.String && type.GetString() switch
+    {
+        "string" => value.ValueKind == JsonValueKind.String,
+        "number" => value.ValueKind == JsonValueKind.Number,
+        "integer" => value.ValueKind == JsonValueKind.Number && ExactDecimal.Parse(value.GetRawText()) is { IsInteger: true },
+        "boolean" => value.ValueKind is JsonValueKind.True or JsonValueKind.False,
+        _ => false,
+    };
 
     const string Uncheckable = "has limits the host cannot check exactly";
 

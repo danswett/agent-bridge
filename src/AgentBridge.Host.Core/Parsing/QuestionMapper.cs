@@ -154,7 +154,7 @@ internal static class QuestionMapper
             : [];
         var patterns = new PatternBudget();
         var fields = new List<Field>();
-        var drivable = true;
+        var drivable = CopilotFieldConstraints.FormUnchecked(schema) is null;
         foreach (var property in properties.EnumerateObject())
         {
             if (property.Value.ValueKind != JsonValueKind.Object) { continue; }

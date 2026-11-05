@@ -347,12 +347,83 @@ public class CopilotPlannerTests
     [InlineData("""{ "type": "array", "items": { "type": "number", "enum": [1, 1.5], "multipleOf": 1 } }""")]
     [InlineData("""{ "type": "array", "items": { "enum": [1, 2], "exclusiveMaximum": 2 } }""")]
     [InlineData("""{ "type": "string", "enum": [1, 2], "maximum": 1 }""")]
+    // Limits on allowed values outside the keywords the host checks, decided from an allow-list
+    // (review of #844): a Yes/No's const, enum or oneOf took No; a number's anyOf, allOf or not
+    // took 5; a text box's anyOf (drawn as a box, #700) took any words, and its allOf no length.
+    [InlineData("""{ "type": "boolean", "const": true }""")]
+    [InlineData("""{ "type": "boolean", "enum": [true] }""")]
+    [InlineData("""{ "type": "boolean", "oneOf": [{ "const": true }] }""")]
+    [InlineData("""{ "type": "integer", "anyOf": [{ "const": 1 }, { "const": 2 }] }""")]
+    [InlineData("""{ "type": "integer", "allOf": [{ "enum": [1, 2, 3] }] }""")]
+    [InlineData("""{ "type": "integer", "not": { "const": 0 } }""")]
+    [InlineData("""{ "type": "string", "anyOf": [{ "const": "x", "title": "X" }, { "const": "y" }] }""")]
+    [InlineData("""{ "type": "string", "anyOf": [{ "const": "x" }], "default": "x" }""")]
+    [InlineData("""{ "type": "string", "allOf": [{ "maxLength": 2 }] }""")]
+    [InlineData("""{ "type": "string", "not": { "const": "" } }""")]
+    [InlineData("""{ "type": "string", "if": { "minLength": 1 }, "then": { "maxLength": 2 } }""")]
+    [InlineData("""{ "type": "string", "x-unknown": 1 }""")]
+    [InlineData("""{ "type": "string", "enum": ["a", "b"], "oneOf": [{ "const": "a" }, { "const": "c" }] }""")]
+    [InlineData("""{ "type": "string", "oneOf": [{ "const": "a", "maxLength": 0 }, { "const": "b" }] }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"], "not": { "const": "a" } } }""")]
+    [InlineData("""{ "type": "array", "items": { "anyOf": [{ "const": "a" }, { "const": "b" }], "allOf": [{ "maxLength": 0 }] } }""")]
+    [InlineData("""{ "type": "array", "items": { "type": "integer", "enum": [1, 1.5] } }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"] }, "contains": { "const": "a" } }""")]
+    // And the edge cases of Copilot's closer look (5780739922): a reference, a type list, OpenAPI's
+    // nullable, a format on a number, a content encoding, a tuple, and a list whose two options of
+    // one value could both be ticked under uniqueItems.
+    [InlineData("""{ "$ref": "#/$defs/x" }""")]
+    [InlineData("""{ "type": "string", "$ref": "#/$defs/x" }""")]
+    [InlineData("""{ "type": ["string", "null"] }""")]
+    [InlineData("""{ "type": "string", "nullable": true }""")]
+    [InlineData("""{ "type": "number", "format": "date-time" }""")]
+    [InlineData("""{ "type": "string", "contentEncoding": "base64" }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"] }, "prefixItems": [{ "const": "a" }] }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "a"] }, "uniqueItems": true }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"] }, "minContains": 1 }""")]
     // A default outside the field's own constraints, which is the only answer it can be given.
     [InlineData("""{ "type": "integer", "minimum": 5, "default": 3 }""")]
     [InlineData("""{ "type": "string", "maxLength": 2, "default": "none" }""")]
     public void A_field_whose_constraints_cannot_be_checked_exactly_or_whose_default_breaks_them_is_answered_at_the_machine(string property)
     {
         using var doc = JsonDocument.Parse(Schema("f", property));
+        Assert.True(QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0).AnswerAtMachine);
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+        Assert.Null(form);
+        Assert.EndsWith("; answer it at the machine", problem);
+    }
+
+    [Theory]
+    // What the allow-list keeps answerable: annotations, the keywords the host checks, and lists
+    // whose options are all their type allows (review of #844).
+    [InlineData("""{ "type": "boolean", "default": true, "title": "T", "description": "d" }""")]
+    [InlineData("""{ "type": "boolean" }""")]
+    [InlineData("""{ "type": "string", "title": "t", "examples": ["x"], "$comment": "c", "maxLength": 9 }""")]
+    [InlineData("""{ "title": "untyped text" }""")]
+    [InlineData("""{ "type": "number", "title": "n", "minimum": 1, "multipleOf": 0.5 }""")]
+    [InlineData("""{ "type": "string", "enum": ["a", "b"], "enumNames": ["A", "B"], "default": "a" }""")]
+    [InlineData("""{ "type": "string", "enum": ["a", "b"], "oneOf": [{ "const": "b", "title": "B" }, { "const": "a" }] }""")]
+    [InlineData("""{ "type": "array", "items": { "type": "string", "enum": ["a", "b"] }, "minItems": 1, "uniqueItems": true }""")]
+    [InlineData("""{ "type": "array", "items": { "type": "integer", "anyOf": [{ "const": 1, "title": "One" }, { "const": 2 }] } }""")]
+    public void A_field_carrying_only_what_the_host_checks_stays_answerable(string property)
+    {
+        using var doc = JsonDocument.Parse(Schema("f", property));
+        Assert.Null(QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0).AnswerAtMachine);
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+        Assert.Null(problem);
+        Assert.NotNull(form);
+    }
+
+    [Theory]
+    [InlineData("""{ "allOf": [{ "properties": { "f": { "maxLength": 2 } } }] }""")]
+    [InlineData("""{ "if": { "required": ["f"] }, "then": { "required": ["g"] } }""")]
+    [InlineData("""{ "dependentRequired": { "f": ["g"] } }""")]
+    [InlineData("""{ "minProperties": 2 }""")]
+    [InlineData("""{ "propertyNames": { "maxLength": 1 } }""")]
+    [InlineData("""{ "$ref": "#/$defs/form" }""")]
+    public void A_form_limiting_its_fields_across_them_is_answered_at_the_machine(string extra)
+    {
+        var limits = extra.Trim()[1..^1];
+        using var doc = JsonDocument.Parse($$"""{ "message": "m", "requestedSchema": { "type": "object", "properties": { "f": { "type": "string" }, "g": { "type": "string" } }, {{limits}} } }""");
         Assert.True(QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0).AnswerAtMachine);
         var (form, problem) = CopilotForm.Read(doc.RootElement);
         Assert.Null(form);
@@ -509,17 +580,6 @@ public class CopilotPlannerTests
     }
 
     // ---- fields drawn as Copilot CLI draws them (cli-main.js `tle`), not as their keywords suggest ----
-
-    [Fact]
-    public void A_string_with_only_anyOf_is_a_text_box_typed_into_only_when_it_opens_empty()
-    {
-        const string Prefilled = """{ "message": "m", "requestedSchema": { "properties": { "mode": { "type": "string", "anyOf": [ { "const": "x", "title": "X" }, { "const": "y", "title": "Y" } ], "default": "x" } } } }""";
-        const string Empty = """{ "message": "m", "requestedSchema": { "properties": { "mode": { "type": "string", "anyOf": [ { "const": "x", "title": "X" }, { "const": "y", "title": "Y" } ] } } } }""";
-
-        Assert.Equal([("", true)], Keys(Plan(Prefilled, Answer(new { mode = "x" }))));
-        Assert.Contains("pre-filled default", Refusal(Prefilled, Answer(new { mode = "y" })));
-        Assert.Equal([("y", true)], Keys(Plan(Empty, Answer(new { mode = "y" }))));
-    }
 
     [Fact]
     public void A_string_with_enum_or_oneOf_is_still_a_list_walked_with_arrows_and_oneOf_is_read_first_as_the_CLI_reads_it()

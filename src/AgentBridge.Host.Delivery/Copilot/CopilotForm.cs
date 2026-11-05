@@ -62,6 +62,10 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
         {
             return (new CopilotForm([]), null);
         }
+        if (CopilotFieldConstraints.FormUnchecked(schema) is { } keyword)
+        {
+            return (null, $"the question's form has a limit the host does not check (\"{keyword}\"); answer it at the machine");
+        }
         var fields = new List<CopilotField>();
         var patterns = new PatternBudget();
         foreach (var property in properties.EnumerateObject())

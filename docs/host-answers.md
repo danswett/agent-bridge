@@ -86,9 +86,12 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     number, a pattern .NET would read differently, which includes lookbehinds, named groups,
     back-references, `\b` and `\B`, `^` or `$` followed by a quantifier (no JavaScript pattern at
     all), a quantified lookahead, a class escape beside a class's hyphen other than one first or last in the class and letter escapes such
-    as `\a`), whose pre-filled default breaks them, a number box or text box limited to listed values (`enum`, `oneOf`, `const`:
-    the CLI draws a number with an `enum` as a box taking any number), or a list of choices, or a checkbox list whose items, have
-    text or number limits or a `const` (its options and Other words are not checked against them), is answered at the machine. `\d`, `\w`
+    as `\a`), whose pre-filled default breaks them, or that carries any keyword beyond annotations and those
+    checked for the input the CLI draws (an allow-list: `enum`, `oneOf`, `anyOf`, `allOf`, `not`, `const`,
+    `if`, `dependent*` or an unknown keyword on a number, text or Yes/No field; on a list of choices,
+    or a checkbox list's items, anything but its options, each of their own `type`; on the form, anything
+    but its fields, `required` and `additionalProperties`), is answered at the machine. The CLI draws a
+    number with an `enum` as a box taking any number, and a string with only `anyOf` as a text box. `\d`, `\w`
     and `\s` are written out as JavaScript's sets, ASCII digits and word characters and Unicode
     white space. All of one question's patterns share 250 ms, building and matching them alike, so an
     agent's many slow patterns cannot hold up the reading of every session: once it is spent,
