@@ -87,12 +87,11 @@ attribution and roster ownership; this redirect does not design a competing path
 Initial connector reads do not imply any action grant, and agents must never
 answer approvals or folder trust.
 
-[#394](https://github.com/danswett/agent-bridge/pull/394) remains open/held at
-`d9382fd31dc9fad9d34919317bf7a3265de43c18` as of this audit. Its architecture
-redirect overlaps this routine documentation reconciliation; its enrollment
-proposal and protocol audit remain separate, unmerged evidence. Do not infer
-their approval from these compatibility/runbook corrections or close that PR
-automatically.
+[#394](https://github.com/danswett/agent-bridge/pull/394)'s original architecture and
+enrollment proposal at `d9382fd31dc9fad9d34919317bf7a3265de43c18` is preserved
+historical, **unadopted** evidence. That proposal is withdrawn from the corrected
+documentation-only #394; preserving its source does not adopt its enrollment
+design or protocol audit. Enrollment interface work remains Trust-owned under #388.
 
 #258 (Settings/health) and #175 (sub-agents/shadow) remain existing compatibility
 work with their existing owners. Closed #78 is historical token-propagation

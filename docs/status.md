@@ -49,9 +49,11 @@ The current host connector is compatibility, not that target implemented.
 #317 remains the parent goal, #319 the verified reversible production cutover,
 and #389 cleanup only after replacement. G7 still refuses writer migration.
 [Disposition and dependencies](ha-connector.md#retaining-ha-without-a-legacy-daemon-317)
-retain #322 and preserve held #331/#337/#345 and existing owners. #394's overlapping
-architecture/enrollment PR is still held; #522 is merged design and #534 a draft
-read profile with reference fixtures, not proof of installable HA delivery.
+retain #322 and preserve held #331/#337/#345 and existing owners. #394's original
+architecture/enrollment proposal at `d9382fd31dc9fad9d34919317bf7a3265de43c18`
+is preserved historical, unadopted evidence, withdrawn from its corrected
+documentation-only scope. #522 is merged design and #534 a draft read profile
+with reference fixtures, not proof of installable HA delivery.
 Copilot CLI session `d5ac689c-a9f6-4618-8e8f-9220793487f4` retains coordination.
 
 ## 2. Where things are (2026-11-02)
