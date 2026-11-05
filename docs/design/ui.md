@@ -933,15 +933,20 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     delegates · 4 reported back, 1 still working ›". It counts and shows no working glyph; "1
     still working" links to that delegate's strip item. It expands in place to its lines,
     indented under a rule (Disclosure, §5.3), and is remembered open or closed per session.
+    The line is two sibling targets, never one inside the other: the fold's button, then the
+    "1 still working" link after it in the tab order, which opens that delegate. The link has
+    its own focus ring, and each target meets §9.1 A11's size. With no delegate still working
+    there is no link, and the line is the button alone.
   - **Earlier (D4):** until history loads (below, #292), the events older than the oldest message
     shown fold into one line at the top of the conversation, "Earlier · 4 delegates started, 3
     reported back ›". It expands to their lines, in time order, which don't fold again.
   - **Time and access:** the age is relative; the tooltip and the accessible name give the
-    absolute time in Pacific ("Started 12:41 PM, reported back 12:55 PM PT"). A fold is one
-    accessible item, a button opened and closed with Enter or Space. Its accessible name is its
-    whole summary, in the order shown ("5 delegates · 4 reported back, 1 still working"), as
-    §9.1 A1 asks. Whether it is open is exposed apart from the name, by `aria-expanded`
-    (Windows: the ExpandCollapse pattern), and is never in the name.
+    absolute time in Pacific ("Started 12:41 PM, reported back 12:55 PM PT"). A fold is a
+    button opened and closed with Enter or Space, with the "1 still working" link beside it,
+    not in it (above). The button's accessible name is the whole summary, in the order shown
+    ("5 delegates · 4 reported back, 1 still working"), as §9.1 A1 asks. Whether it is open is
+    exposed apart from the name, by `aria-expanded` (Windows: the ExpandCollapse pattern), and
+    is never in the name.
 - **Questions** (#253): in the stream, as a card in Needs you colours. It is the one place a
   question's words are drawn, and the one place in the app it is answered. The header reads
   "Main agent asks" or "Delegate *name* asks". Then come the question and the platform's own
@@ -2103,6 +2108,10 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
     and Highlight and HighlightText when pressed). The `needs` glyph is Highlight with
     HighlightText ink, swapped on the pressed toggle's Highlight fill so its disc still shows.
     The Tools link is a system hyperlink.
+- **Delegate events (#661):** a fold of delegate events is a disclosure button named for its
+  whole summary, with `aria-expanded` (Windows: ExpandCollapse) for open or closed. Its "1 still
+  working" link is a sibling after it in the tab order, never nested in the button, and opens
+  that delegate. With none still working, there is only the button (§6.4).
 - **A question card (#773):** each field is named for its title. A required field says so
   where the role supports it: on a radio group (`radiogroup` with `aria-required`) and on a
   text or number field (`required`; `IsRequiredForForm` on Windows, on the radio list or the

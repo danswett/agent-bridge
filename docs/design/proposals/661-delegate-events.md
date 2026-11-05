@@ -42,7 +42,8 @@ strip already, so a line under the reply can read as live when it isn't.
   N delegates started, M reported back" at the top, never under the latest reply.
 - **Framing:** the strip, tab or chips are the present tense and the only live status; lines are
   a past-tense record in meta style; the inspector holds the detail. The tooltip or accessible
-  name gives the absolute Pacific time. A fold is one keyboard-expandable accessible item.
+  name gives the absolute Pacific time. A fold is one keyboard-expandable button; its "1 still
+  working" link is a separate target beside it, never inside it.
 
 | | Phone | Desktop |
 |---|---|---|
