@@ -246,7 +246,7 @@ Result: `{ "outcome", "reason", "session" }`:
 |---|---|
 | `started` | Trusted: the question has gone and the session registered (for Copilot, its window ready). `session` is its id. Other launches are no longer `busy` for it |
 | `declined` | Quit: the agent closed. Nothing was launched |
-| `unconfirmed` | A key was typed, but its effect was not seen within the host's wait (60 s): "Not confirmed: answer at the machine. …". Never retried |
+| `unconfirmed` | A key was typed, but its effect was not seen within the host's wait (60 s): "Not confirmed: answer at the machine. …". When Trust was followed by Claude's Bypass Permissions warning (Allow all), it says that warning is waiting in the agent's window, as soon as it is seen; that is never answered from a device. Never retried |
 | `refused` | Nothing was typed. `reason` says why |
 
 A client treats an outcome it does not know as `unconfirmed`.
