@@ -375,8 +375,15 @@ internal sealed class CopilotHistory : HistoryDialect
                 // error that ended the turn, none of its words (#840, #841, #846).
                 if (CopilotParser.MainText(data, _turnError) is { } content) { turn.Response(content, at); }
                 break;
+            // An error that ends the main agent's turn, as live reads it (AgentErrors.Copilot, then
+            // SessionState.FailTurn): what it was running fails and what it asked is cancelled
+            // (#857), and its notice names it (#846).
             case "session.error" when agent is null:
-                if (AgentErrors.Copilot(data, at) is { } failure) { _turnError = failure.Message; }
+                if (AgentErrors.Copilot(data, at) is { } failure)
+                {
+                    _turnError = failure.Message;
+                    turn.Failed(at);
+                }
                 break;
             case "assistant.turn_start" when agent is null:
                 _turnError = null;
@@ -487,6 +494,7 @@ internal sealed class CopilotHistory : HistoryDialect
             case "abort" or "session.shutdown" when agent is null:
                 turn.Abandoned(at);
                 break;
+
             // A delegate's own abort or shutdown: what it was asking is asked of no one, as live.
             case "abort" or "session.shutdown":
                 context.EndTurnOf(turn, agent!, at);

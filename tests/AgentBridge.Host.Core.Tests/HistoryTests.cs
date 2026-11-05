@@ -111,6 +111,116 @@ public class HistoryTests
         Assert.DoesNotContain("too many requests", shown);
     }
 
+    // #857: live ends the main agent's turn on a session.error it reads as the turn's end (#841,
+    // SessionState.FailTurn), but history never read the error, so the latest turn kept a tool
+    // running and a question waiting that live had already ended. A delegate's question is still
+    // the person's, as live.
+    [Fact]
+    public async Task An_error_that_ends_the_main_agents_turn_ends_its_tools_and_questions_in_history_as_live()
+    {
+        await using var s = new Copilot_();
+        var session = await s.After(
+            Copilot.User("go", 1),
+            Copilot.ToolStart("c0", "bash", new { command = "make" }, 2),
+            Copilot.ToolStart("q1", "ask_user", new { message = "Which branch?", requestedSchema = new { properties = new { branch = new { type = "string" } } } }, 3),
+            Copilot.Permission("req1", "c0", Copilot.Prompts["commands"], 4),
+            Copilot.ToolStart("q2", "ask_user", new { message = "Delegate asks", requestedSchema = new { properties = new { x = new { type = "string" } } } }, 5, agentId: "agent-d"),
+            Copilot.Event("session.error", new { errorType = "session", message = "Turn error: boom" }, 6));
+
+        var parts = (await s.Page(limit: 1)).Turns!.Single().Parts;
+
+        // The main agent's bash call and its ask_user call alike.
+        Assert.Equal([ToolStatus.Failed, ToolStatus.Failed], parts.Where(p => p.Kind == HistoryPartKind.Tool).Select(p => p.Tool!.Status));
+        var questions = parts.Where(p => p.Kind == HistoryPartKind.Question).ToList();
+        Assert.All(questions.Where(q => q.Question!.Agent is null), q => Assert.Equal(QuestionOutcome.Cancelled, q.Outcome));
+        Assert.Equal(2, questions.Count(q => q.Question!.Agent is null));
+        Assert.Equal(QuestionOutcome.Unknown, questions.Single(q => q.Question!.Agent == "agent-d").Outcome);
+        // As live: the main agent's tool failed and nothing of its own is pending.
+        Assert.Equal(ToolStatus.Failed, session.Activity.History!.Single(t => t.Id == "c0").Status);
+    }
+
+    // A model call's error is retried within the turn, and a hook's ends nothing (AgentErrors):
+    // live keeps the turn going, and so does history.
+    [Theory]
+    [InlineData("model_call")]
+    [InlineData("hook")]
+    public async Task An_error_the_turn_goes_on_after_leaves_its_tools_running(string errorType)
+    {
+        await using var s = new Copilot_();
+        await s.After(
+            Copilot.User("go", 1),
+            Copilot.ToolStart("c0", "bash", new { command = "make" }, 2),
+            Copilot.Event("session.error", new { errorType, message = "retrying" }, 3));
+
+        var parts = (await s.Page(limit: 1)).Turns!.Single().Parts;
+
+        Assert.Equal(ToolStatus.Running, parts.Single(p => p.Kind == HistoryPartKind.Tool).Tool!.Status);
+    }
+
+    // A delegate's error is its own (#857): live leaves the main agent's turn going, and so does
+    // history, and the delegate's question stays the person's.
+    [Fact]
+    public async Task A_delegates_error_leaves_the_main_agents_turn_going()
+    {
+        await using var s = new Copilot_();
+        var session = await s.After(
+            Copilot.User("go", 1),
+            Copilot.ToolStart("c0", "bash", new { command = "make" }, 2),
+            Copilot.ToolStart("q2", "ask_user", new { message = "Delegate asks", requestedSchema = new { properties = new { x = new { type = "string" } } } }, 3, agentId: "agent-d"),
+            Copilot.Event("session.error", new { errorType = "session", message = "Turn error: boom" }, 4, agentId: "agent-d"));
+
+        var parts = (await s.Page(limit: 1)).Turns!.Single().Parts;
+
+        Assert.Equal(ToolStatus.Running, parts.Single(p => p.Kind == HistoryPartKind.Tool).Tool!.Status);
+        Assert.Equal(QuestionOutcome.Unknown, parts.Single(p => p.Kind == HistoryPartKind.Question).Outcome);
+        Assert.Equal(ToolStatus.Running, session.Activity.History!.Single(t => t.Id == "c0").Status);
+    }
+
+    // A failed turn reads the same whichever page it is on, and alone or beside an older turn.
+    [Fact]
+    public async Task A_failed_turn_settles_the_same_on_every_page()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+            Copilot.User("first", 1), Copilot.Assistant("done", 2),
+            Copilot.User("go", 3), Copilot.TurnStart(4),
+            Copilot.ToolStart("c0", "bash", new { command = "make" }, 5),
+            Copilot.Event("session.error", new { errorType = "session", message = "Turn error: boom" }, 6));
+
+        var alone = (await s.Page(limit: 1)).Turns!.Single();
+        var beside = (await s.Page(limit: 2)).Turns![^1];
+
+        Assert.Equal(ToolStatus.Failed, alone.Parts.Single(p => p.Kind == HistoryPartKind.Tool).Tool!.Status);
+        Assert.Equal(JsonSerializer.Serialize(alone, ProtocolJson.Options), JsonSerializer.Serialize(beside, ProtocolJson.Options));
+    }
+
+    // A turn longer than TurnBytes read only past its error: what started after the error is not
+    // ended by it, here as live, which had ended the turn before the call started.
+    [Fact]
+    public async Task A_long_turns_window_past_its_error_ends_nothing_that_started_after_it()
+    {
+        await using var s = new Copilot_(options: o => new SessionSourceOptions
+        {
+            CopilotHome = o.CopilotHome, ClaudeHome = o.ClaudeHome, CodexHome = o.CodexHome, UseFileSystemWatcher = false,
+            HistoryKeyFile = o.HistoryKeyFile, HistoryBudgets = new HistoryBudgets { TurnBytes = 4096 },
+        });
+        var lines = new List<string>
+        {
+            Copilot.User("go", 1), Copilot.TurnStart(2),
+            Copilot.ToolStart("c0", "bash", new { command = "make" }, 3),
+            Copilot.Event("session.error", new { errorType = "session", message = "Turn error: boom" }, 4),
+        };
+        for (var i = 0; i < 20; i++) { lines.Add(Copilot.ToolResult("f" + i, new string('z', 1000), 5)); }
+        lines.Add(Copilot.ToolStart("c9", "bash", new { command = "make again" }, 6));
+        var session = await s.After([.. lines]);
+
+        var turn = (await s.Page(limit: 1)).Turns!.Single();
+
+        Assert.True(turn.Truncated);
+        Assert.Equal(ToolStatus.Running, turn.Parts.Single(p => p.Kind == HistoryPartKind.Tool && p.Tool!.Id == "c9").Tool!.Status);
+        Assert.Equal(ToolStatus.Running, session.Activity.History!.Single(t => t.Id == "c9").Status);
+    }
+
     [Fact]
     public async Task A_session_pages_back_oldest_first_to_the_start_of_the_session()
     {

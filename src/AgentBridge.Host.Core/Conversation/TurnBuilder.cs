@@ -167,6 +167,24 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
 
     public void Delegate(DelegateEvent e, DateTimeOffset at) => Add(Blank(HistoryPartKind.Delegate, at) with { Delegate = e });
 
+    // The main agent's turn failed (a session.error that ends it, SessionState.FailTurn, #857): its
+    // own tools and questions end with it; a delegate's question is still the person's, as live.
+    public void Failed(DateTimeOffset at)
+    {
+        foreach (var i in _running)
+        {
+            if (_parts[i].Tool is { Status: ToolStatus.Running } tool) { _parts[i] = _parts[i] with { Tool = tool with { Status = ToolStatus.Failed, EndedAt = at } }; }
+        }
+        _running.Clear();
+        _unanswered.RemoveAll(i =>
+        {
+            if (_parts[i] is not { Outcome: QuestionOutcome.Unknown } p) { return true; }
+            if (p.Question?.Agent is not null) { return false; }
+            _parts[i] = p with { Outcome = QuestionOutcome.Cancelled, AnsweredAt = at };
+            return true;
+        });
+    }
+
     // The turn was interrupted or the agent shut down: nothing is running and nothing is asked any more.
     public void Abandoned(DateTimeOffset? at)
     {
