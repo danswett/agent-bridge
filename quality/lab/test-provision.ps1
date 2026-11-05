@@ -129,7 +129,7 @@ Check '-Apply refuses before any Azure call and lists every unmet prerequisite' 
         $message = Test-Refused @{ Subscription = $subscription; Role = $role; RunId = 'abc123'; Apply = $true; Confirm = $false }
         Assert ($null -ne $message) "$role -Apply went ahead"
         Assert ($message -like '*refused before any Azure call*') "$role -Apply failed some other way: $message"
-        $expected = @('owner-authorization', 'bootstrap', 's0-snapshot', 'expiry-sweeper', 'cost-alerts') + @(if ($role -eq 'win-arm64') { 'arm64-feasibility' })
+        $expected = @('owner-authorization', 'bootstrap', 's0-snapshot', 'expiry-sweeper', 'run-registration', 'cost-alerts') + @(if ($role -eq 'win-arm64') { 'arm64-feasibility' })
         foreach ($id in $expected) { Assert ($message -like "*- $id (*") "$role -Apply doesn't list ${id}: $message" }
     }
     Assert ($global:LabAzCalls.Count -eq 0) "az ran: $($global:LabAzCalls -join '; ')"

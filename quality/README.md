@@ -716,7 +716,9 @@ where this section differs. Of the pieces below, only a draft of the provisionin
   `lab` environment secrets, never printed, as AGENTS.md requires.
 - **Cost guard:** cost and age alerts on the resource group (SRE). Every run deletes its
   resources in a `finally`, but that is best effort, so a durable sweeper deletes run-owned
-  resources past their expiry (at most 4 hours) before any run may start.
+  resources past their expiry (at most 4 hours) before any run may start, by exact name from
+  the inventory each run is registered in before its first create
+  ([lab/README.md §4](lab/README.md#4-machines-and-their-lifecycle)).
 - **iOS:** the simulator on macOS runners for XCUITest. Real-device runs are the owner's
   iPhone and a checklist (`pwa-iphone`). A device cloud only if the owner wants one (§9).
 

@@ -29,6 +29,7 @@ Where this file and those comments disagree, the comments win and this file is f
 | Scenarios and the simulated agent (`tests/AgentBridge.AgentSim`) | **Unbuilt** | Platform |
 | The `lab` environment, OIDC principal and reusable workflow | **Unbuilt**; nothing is scheduled or dispatchable | Platform, owner (bootstrap) |
 | The expiry sweeper (§4) | **Unbuilt**, and required before anything is created | Platform |
+| Run registration in the sweeper's inventory, before the first create (§4) | **Unbuilt**: `provision.ps1`'s `Register-LabRun` refuses | Platform (`provision.ps1`) |
 | The temporary nightly cut and schedule (§6) | **Unbuilt**; no cron is enabled | Platform, until SRE's #590 replaces it |
 | PPE, cut freeze, promotion and monitoring (#590, #451) | **Pending**, not part of this folder | SRE |
 | Lab cost and age alerts (`infra/modules/monitoring.bicep`) | **Unbuilt** | SRE |
@@ -75,20 +76,32 @@ size is assumed to run Windows until the feasibility receipt shows it in this su
 
 Every run:
 
-1. Creates its OS disk from the role's S0 snapshot (`snap-lab-<x64|a64>-s0`), a NIC on the lab
+1. Registers itself in the sweeper's trusted inventory **before its first create**:
+   `provision.ps1` writes the subscription, run id, role, the exact names below and their
+   expiry durably, reads the entry back, and creates nothing unless that receipt matches its
+   plan exactly. No parameter, environment variable or configuration default stands in for
+   the receipt.
+2. Creates its OS disk from the role's S0 snapshot (`snap-lab-<x64|a64>-s0`), a NIC on the lab
    subnet, and the VM, all named `<kind>-lab-<x64|a64>-<runId>` in `rg-agent-bridge-lab` and
    tagged with the run and an expiry **at most 4 hours** out. Only S0 snapshots persist
    between runs: a deallocated VM's disk still costs money.
-2. Has no public IP, no NSG of its own and no inbound from the Internet; the bootstrap's
+3. Has no public IP, no NSG of its own and no inbound from the Internet; the bootstrap's
    subnet NSG denies it. No admin user or password is passed: the disk is a specialized copy
    of S0, which itself holds no reusable credential.
-3. Deletes all three by exact name when it ends.
+4. Deletes all three by exact name when it ends.
 
-Cleanup in a `finally` is **best effort only**: a cancelled or killed job never reaches it. So
-before anything is created, a **durable sweeper** must exist, independent of the run, that
-deletes expired run-owned resources by exact name from a trusted inventory of runs (never by
-listing the group or matching a pattern or tag), and forgets their lab devices (§8). Tags
-label resources; they don't make them the lab's.
+Cleanup in a `finally` or `catch` is **best effort only**: a cancelled or killed job never
+reaches it, and nothing in the run guarantees removal after a hard cancel. So before anything
+is created, a **durable sweeper** must exist, independent of the run, that deletes expired
+run-owned resources by exact name from the trusted inventory (never by listing the group or
+matching a pattern or tag), treats a registered name that doesn't exist as already gone, and
+forgets their lab devices (§8). Tags label resources; they don't make them the lab's. The
+inventory is the sweeper's only source, so a resource created before its run was registered is
+one nothing would ever remove: that is why registration comes first.
+
+Neither the inventory, the registration nor the sweeper exists. `provision.ps1` has the
+registration's place and its receipt check, but `Register-LabRun` refuses unconditionally, so
+`-Apply` creates nothing even if every other prerequisite were marked met.
 
 Restoring S0 must be proven, not assumed: a run from S0 has no previous run's device
 identity, hooks, settings or processes. That proof is part of the S0 receipt (§10).
@@ -110,6 +123,8 @@ There is no `run.ps1` yet, and nothing here pretends to be one.
 - `-Relay` is required: `staging` until PPE exists, then `ppe`. Never production, and never a
   default.
 - `-RunId` defaults to a fresh id; `-Out` holds `result.json` (§7) and the artifacts.
+- `run.ps1` provisions through `provision.ps1`, which registers the run (§4) before any
+  create; `run.ps1` never creates a lab resource itself.
 
 ## 6. One cut, one nightly source
 
@@ -200,9 +215,10 @@ receipt.
 | Bootstrap (B2): `rg-agent-bridge-lab`, its network, the `lab` environment, an OIDC principal scoped to that group only, a subscription receipt | **Absent** | owner, Platform |
 | S0 snapshots per role, with the restore proof (§4) | **Absent** | Platform |
 | Durable expiry sweeper (§4) | **Absent** | Platform |
+| Run registration before the first create (§4): the trusted inventory, `provision.ps1` writing each run's exact names and expiry to it, and a verified read-back receipt | **Absent**; `Register-LabRun` refuses | Platform |
 | Cost and age alerts | **Absent** | SRE |
 | Lab token as a `lab` secret, and proof the credential, relay and device guards hold (B3) | **Absent**, unverified | owner, Platform |
-| PPE: population, keys, DNS, deploy (B4, #590) | **Pending**; staging until then | SRE, owner |
+| PPE (B4, #590): **population decided**, the lab and the owner's Beta machines | Enrollment, keys, DNS and deploy **pending**; staging until then | SRE, owner |
 | Relay churn (B5) | **Open**: makes runs `invalid` | SRE |
 
 ## 11. The provisioning draft
@@ -221,4 +237,6 @@ holds no subscription id or account of its own.
 `test-provision.ps1` checks that against a stand-in `az`: planning makes no call; every
 command stays in scope; expiry is at most 4 hours; `win-arm64` is native; a missing, default
 or placeholder subscription, an unknown role and a malformed run id are refused; and `-Apply`
-refuses before any Azure call, listing what's missing.
+refuses before any Azure call, listing what's missing, run registration included. The
+registration stub and its receipt check sit behind that refusal, so no offline check reaches
+them without editing the script; they are reviewed, not tested.

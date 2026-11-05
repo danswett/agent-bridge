@@ -16,7 +16,11 @@ and lists each one. Today none is met: the lab's resource group, `lab` environme
 principal and bootstrap receipt don't exist, no S0 snapshot exists, native Windows Arm64 is
 unproven, and no durable expiry sweeper exists. The sweeper matters because this script's own
 cleanup on failure is best effort only: a cancelled or killed run never reaches it, so nothing
-may be created until something independent deletes expired run-owned resources. A
+may be created until something independent deletes expired run-owned resources. The sweeper's
+only source is its trusted inventory of runs, and this script is what writes to it: before its
+first create, it durably registers the subscription, run id, role, the exact names it will
+create and their expiry, and checks the receipt it reads back (Register-LabRun below). That is
+unbuilt, so Register-LabRun refuses whatever $Prerequisites says. A
 prerequisite is marked met only by the reviewed change that delivers its receipt, never by a
 parameter, an environment variable or a configuration default.
 
@@ -101,7 +105,9 @@ $Prerequisites = @(
     [pscustomobject]@{ Id = 'arm64-feasibility'; Roles = @('win-arm64'); Met = $false; Owner = 'Platform, owner'
         Need = 'A feasibility receipt for native Windows Arm64 in this subscription and region: the image, Standard_D4ps_v5 (or the size chosen) unrestricted, Trusted Launch and licence billing (#357 B1). Until then win-arm64 is unproven; x64 emulation and Linux are no substitute.' }
     [pscustomobject]@{ Id = 'expiry-sweeper'; Roles = @('win-x64', 'win-arm64'); Met = $false; Owner = 'Platform'
-        Need = "A durable sweeper, independent of this script, that deletes expired run-owned resources in $ResourceGroup by exact name from a trusted inventory of runs, and forgets their lab devices. This script's own cleanup is best effort: a cancelled run never reaches it." }
+        Need = "A durable sweeper, independent of this script, that deletes expired run-owned resources in $ResourceGroup by exact name from its trusted inventory of runs (never from tags, a listing or a pattern), treats a registered name that doesn't exist as already gone, and forgets their lab devices. This script's own cleanup is best effort: a cancelled run never reaches it." }
+    [pscustomobject]@{ Id = 'run-registration'; Roles = @('win-x64', 'win-arm64'); Met = $false; Owner = 'Platform'
+        Need = 'This script registers each run in the sweeper''s trusted inventory before its first create: the subscription, run id, role, the exact resource names and their expiry, written durably and read back as a receipt that matches the plan. Unbuilt: no inventory exists, and Register-LabRun refuses until a reviewed change implements it.' }
     [pscustomobject]@{ Id = 'cost-alerts'; Roles = @('win-x64', 'win-arm64'); Met = $false; Owner = 'SRE'
         Need = 'Lab cost and resource-age alerts (infra/modules/monitoring.bicep) against the owner''s $75/month budget, with nightly runs of both roles (#357 B1).' }
 )
@@ -119,7 +125,8 @@ $names = [ordered]@{
     vm   = "vm-lab-$code-$RunId"
 }
 # Tags label a resource for people and the sweeper's report; they are not what makes it the
-# run's. The sweeper deletes from its trusted inventory of runs, by exact name.
+# run's. The sweeper deletes from its trusted inventory of runs, by exact name, and this script
+# registers the run there before it creates anything (Register-LabRun).
 $tags = @(
     'purpose=agent-bridge-lab'
     "lab-run=$RunId"
@@ -215,11 +222,29 @@ foreach ($argv in $shows) { if (Test-LabResource $argv) { throw "$($argv[[array]
 
 if (-not $PSCmdlet.ShouldProcess("$ResourceGroup ($($names.Values -join ', '))", "Create the lab run's resources, expiring $($plan.expiresAt)")) { return $plan }
 
+function Register-LabRun($Plan) {
+    # This script owns the registration, and it comes before the first create: a run cancelled
+    # or killed after any create is then still in the sweeper's inventory, by exact name. It
+    # must write the plan's subscription, runId, role, resources and expiresAt durably and
+    # return what it reads back from the inventory. No inventory exists, so it refuses. Marking
+    # a prerequisite met doesn't change that; only a reviewed change that implements it does.
+    throw "-Apply refused: registering run $($Plan.runId) in the sweeper's trusted inventory is unbuilt, and nothing is created unregistered"
+}
+
+# The receipt must be the plan, exactly; anything else creates nothing.
+$receipt = Register-LabRun $plan
+if ($null -eq $receipt) { throw "no inventory receipt for run $RunId; nothing created" }
+foreach ($field in 'subscription', 'runId', 'role', 'expiresAt') {
+    if (-not $receipt.PSObject.Properties[$field] -or "$($receipt.$field)" -cne "$($plan.$field)") { throw "the inventory receipt's $field doesn't match the plan; nothing created" }
+}
+if (-not $receipt.PSObject.Properties['resources'] -or (@($receipt.resources) -join ' ') -cne (@($plan.resources) -join ' ')) { throw "the inventory receipt's resources don't match the plan; nothing created" }
+
 try {
     foreach ($argv in $create) { Invoke-LabAz $argv }
     return $plan
 } catch {
-    # Best effort only, by exact name: the sweeper, not this, is what guarantees removal.
+    # Best effort only, by exact name: the sweeper, deleting what was registered above, is what
+    # guarantees removal. A hard cancel never reaches this.
     foreach ($argv in $cleanup) { try { Invoke-LabAz $argv } catch { Write-Warning "$_" } }
     throw
 }
