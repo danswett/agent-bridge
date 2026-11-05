@@ -497,7 +497,19 @@ changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
   and 76.4% of lines in the PWA. HostLauncher has no tests.
   - **Gates:** no global percentage, which mostly rewards trivial tests. Instead:
     1. **Diff coverage**: changed lines are at least 80% covered in ring 1. It's advisory for
-       the first month, then required.
+       the first month, then required. The advisory half is in place: after the coverage
+       report, each `product` job runs `agent-bridge-quality diff-coverage` on that report, so
+       no test runs twice. It takes the lines added since the merge base with `HEAD^1` (a pull
+       request's base, or `main`'s previous commit), following renames, and counts those the
+       report can execute (a class's own `<lines>`; a file in several classes, packages or
+       reports is unioned, and a line counts as covered if any of them ran it). Files outside
+       the checkout are ignored. The result, per OS, goes to the job summary and to
+       `diff-coverage.md` in the `coverage-<os>` artifact, naming the commit, the base, the run
+       and the artifact it was measured on. Below 80% it adds a warning; nothing fails on it.
+       It's **UNAVAILABLE** when there's no report, the report measures no file in the
+       checkout, or the tests didn't pass. It's **NOT APPLICABLE** when no added line is
+       executable. A draft's numbers come from its in-process tests only, as the summary
+       says. Making it required is Phase 4's, and not done.
     2. **A per-project floor, per OS,** that only ratchets up, kept in
        `quality/coverage-floors.json`.
 - **Timing:** every `product` run already records each test's duration (TRX), and the job

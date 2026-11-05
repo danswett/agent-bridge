@@ -26,7 +26,7 @@ static class Program
               issue list --json number,title,body,labels,author); only the hunt's own and
               --owner's count. Exits 1 when a test failed every run on some OS, or a run broke
               outside any test.
-        """ + "\n" + MergeRuleCommand.Usage + "\n" + ReportCommand.Usage;
+        """ + "\n" + MergeRuleCommand.Usage + "\n" + ReportCommand.Usage + "\n" + DiffCoverageCommand.Usage;
 
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -55,6 +55,9 @@ static class Program
             return MergeRuleCommand.Run(args[1..], output, GhCli.Instance);
         if (args[0] == "report")
             return ReportCommand.Run(args[1..], output, GhCli.Instance);
+        // Reads git and a coverage report, not the catalog.
+        if (args[0] == "diff-coverage")
+            return DiffCoverageCommand.Run(args[1..], output);
         var options = ParseOptions(args.Skip(1));
         // The flake hunt's reporter reads test results, not the catalog, so it runs anywhere.
         if (args[0] == "flakes")
