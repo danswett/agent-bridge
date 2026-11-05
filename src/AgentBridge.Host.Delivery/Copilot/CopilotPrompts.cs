@@ -31,7 +31,8 @@ public sealed class CopilotInput(string path)
     // killed CLI's. Whether the new one shows them again is not known, and a reply's Enter on a
     // menu still shown would accept it, so they keep a reply out until something settles them: their
     // own completion, an abort or shutdown, a question asked since (shown in their place), or a
-    // prompt the person typed at the machine (so nothing held the input). Answers are not held by
+    // prompt the person typed at the machine (no source, or "user" for one with an attachment; never a
+    // schedule's or an agent's), so nothing held the input. Answers are not held by
     // them: an answer to one of these is refused as stale (CopilotPermissionTranscript).
     readonly HashSet<string> stale = new(StringComparer.Ordinal);
     long scannedTo;
@@ -94,7 +95,7 @@ public sealed class CopilotInput(string path)
                     permissions.Remove(id);
                     stale.Remove(id);
                     break;
-                case "user.message" when e.AgentId is null && CopilotPrompts.Str(data, "source") is not { Length: > 0 }:
+                case "user.message" when e.AgentId is null && CopilotPrompts.Str(data, "source") is null or "" or "user":
                     stale.Clear();
                     break;
                 case "session.resume" when e.AgentId is null:
@@ -142,11 +143,12 @@ public static class CopilotPrompts
             using (e.Doc)
             {
                 // A subagent's messages are its own; one with a source (a scheduled prompt,
-                // memory, another agent) was not typed by anybody.
+                // memory, another agent) was not typed by anybody. "user" is the person's own, as
+                // Copilot marks a prompt with an attachment (CopilotParser.Source).
                 if (e.AgentId is not null) { return; }
                 if (e.Type == "session.shutdown") { ended = true; return; }
                 if (e.Type != "user.message" || e.Data.ValueKind != JsonValueKind.Object) { return; }
-                if (Str(e.Data, "source") is { Length: > 0 }) { return; }
+                if (Str(e.Data, "source") is { Length: > 0 } and not "user") { return; }
                 if (Str(e.Data, "content") is { } content) { prompts.Add(new CopilotPrompt(start, content, AttachedPaths(e.Data), Jsonl.Timestamp(e.Doc.RootElement))); }
             }
         }

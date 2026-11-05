@@ -226,6 +226,10 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     // Restored by this run and died while it watched: judged as a crash (an ending its agent records
     // still counts), but no cause of the notice's.
     readonly HashSet<string> inRun = new(StringComparer.Ordinal);
+    // Died while an attempt to restore it was under way (registered, then gone, before its result):
+    // that attempt does not count it restored. Per attempt, unlike inRun, so a later restore that
+    // succeeds is shown restored.
+    readonly HashSet<string> diedDuring = new(StringComparer.Ordinal);
     // Being resumed now, by the queue or on request: never a second attempt at the same session.
     readonly HashSet<string> inFlight = new(StringComparer.Ordinal);
 
@@ -505,6 +509,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                 {
                     owed.Add(new RestoreOwed(gone with { Gone = null }, RestoreCause.Crash, now, now, Decided: false));
                     inRun.Add(change.Id);
+                    if (inFlight.Contains(change.Id)) { diedDuring.Add(change.Id); }
                     restoredThisRun.Remove(change.Id);
                     BuildNoticeLocked();
                     ArmLocked(now);
@@ -620,6 +625,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         }
         resuming = true;
         inFlight.Add(entry.Id);
+        diedDuring.Remove(entry.Id);
         // Off this thread: the launcher takes locks of its own, and calls back into this one.
         active = Task.Run(async () =>
         {
@@ -646,7 +652,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                     restoredBy[entry.Id] = Loss(entry);
                     // Unless it has already registered and died: then it is judged, and if it died
                     // offered as a loop, not counted restored.
-                    if (!inRun.Contains(entry.Id))
+                    if (!diedDuring.Remove(entry.Id))
                     {
                         restoredThisRun.Add(entry.Id);
                         RevealLocked(entry.Id);
@@ -810,6 +816,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                 return new LaunchResult(LaunchOutcome.Busy, "the host could not write down the restore before starting it; try again");
             }
             inFlight.Add(ask.Session);
+            diedDuring.Remove(ask.Session);
         }
         var result = await ResumeOneAsync(new ResumeAsk(ask.Session, agent, launch, ask.By), cancellationToken);
         lock (gate)
@@ -819,7 +826,8 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             {
                 // Seen ready: restored, and shown so. Unless it has already registered and died: then
                 // it is judged, as a loop. Not seen ready (unconfirmed): stamped, never shown.
-                if (result.Outcome is LaunchOutcome.Started && !inRun.Contains(ask.Session))
+                var died = diedDuring.Remove(ask.Session);
+                if (result.Outcome is LaunchOutcome.Started && !died)
                 {
                     restoredThisRun.Add(ask.Session);
                     RevealLocked(ask.Session);

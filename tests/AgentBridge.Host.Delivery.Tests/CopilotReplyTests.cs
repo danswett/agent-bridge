@@ -111,6 +111,13 @@ public sealed class CopilotReplyTests : IDisposable
         Assert.True(CopilotPrompts.Before(events).Resumed);
         Fixture.Append(events, Copilot.User("typed here", 42));
         Assert.False(CopilotPrompts.Before(events).Asking);
+
+        // A scheduled prompt is nobody typing; one the person typed with an attachment ("user") is.
+        Fixture.Append(events, Ask("q4", 50), Copilot.Event("session.resume", new { }, 51),
+            Copilot.Event("user.message", new { content = "every hour", source = "schedule-1" }, 52));
+        Assert.True(CopilotPrompts.Before(events).Resumed);
+        Fixture.Append(events, Copilot.Event("user.message", new { content = "look at @notes.txt", source = "user" }, 53));
+        Assert.False(CopilotPrompts.Before(events).Asking);
     }
 
     [Fact]
@@ -154,6 +161,20 @@ public sealed class CopilotReplyTests : IDisposable
         Assert.Equal(offset, since.Prompts[1].Offset);
         Assert.NotEqual(since.Prompts[0].Offset, since.Prompts[1].Offset);
         Assert.False(since.SessionEnded);
+    }
+
+    // Copilot marks a prompt the person sent with an attachment source "user": still theirs, so a
+    // reply with a file is confirmed by it, with the file it carried.
+    [Fact]
+    public void A_prompt_marked_as_the_users_own_counts_with_its_attachment()
+    {
+        var from = CopilotPrompts.Before(events).ScannedTo;
+        Fixture.Append(events, Copilot.Event("user.message",
+            new { content = "look at @C:\\staged\\notes.txt", source = "user", attachments = new[] { new { path = "C:\\staged\\notes.txt" } } }, 2));
+
+        var prompt = Assert.Single(CopilotPrompts.Since(events, from).Prompts);
+
+        Assert.Equal(["C:\\staged\\notes.txt"], prompt.Attachments);
     }
 
     [Fact]

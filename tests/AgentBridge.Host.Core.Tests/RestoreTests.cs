@@ -1674,6 +1674,25 @@ public sealed class RestoreTests : IDisposable
         Assert.Same(replaced, marks.Of["a"]);
     }
 
+    // A session restored, then died while the host watched (a loop of this run): restored again on
+    // request, and seen ready, it is shown restored. Only a death during that attempt holds it back.
+    [Fact]
+    public async Task A_session_that_died_after_an_earlier_restore_is_shown_restored_when_a_later_restore_succeeds()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        await using var r = Recorder(resumer: new Resumer());
+        r.Start();
+        await Until(() => told.Count == 1);
+        source.Upsert(S("a"));
+        source.Remove("a");
+        Time.Advance(TimeSpan.FromMinutes(1));
+
+        var again = await r.RestoreAsync(new RestoreAsk { Session = "a", Cause = RestoreCause.Crash, By = "host-signin" });
+
+        Assert.Equal(LaunchOutcome.Started, again.Outcome);
+        Assert.Equal(Time.GetUtcNow(), marks.Of["a"]!.At);
+    }
+
     // A TimeProvider that keeps each timer's callback, to run one as if it had been dispatched before
     // its timer was disposed.
     sealed class Captured(FakeTimeProvider inner) : TimeProvider
