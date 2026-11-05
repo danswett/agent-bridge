@@ -604,6 +604,26 @@ test('signed in before the host says pending, focus goes to the banner\'s line a
   await expect(banner(page).locator('.sign-in-line')).toBeFocused();
 });
 
+test('a status line that refuses focus as the sheet closes, as WebKit\'s may, is focused on the next frame, not left for the heading (#878)', async ({ page }) => {
+  await openDemo(page);
+  await signIn(page).click();
+  await expect(sheet(page).locator('.sign-in-code')).toBeVisible();
+  // The first focus asked of a status line does nothing, as when WebKit refuses it on an element
+  // drawn in the task the modal sheet closed in (CI's pwa-ui webkit at 663c560e and d5342f0c).
+  await page.evaluate(() => {
+    const focus = HTMLElement.prototype.focus;
+    let refused = false;
+    HTMLElement.prototype.focus = function (o) {
+      if (!refused && this.classList.contains('sign-in-line')) { refused = true; return; }
+      return focus.call(this, o);
+    };
+  });
+  await page.evaluate(() => window.agentBridgeDemo.finishSignIn('signedIn'));
+  await expect(sheet(page)).toBeHidden();
+  await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
+  await expect(banner(page).locator('.sign-in-line')).toBeFocused();
+});
+
 test('signed out, nothing said about the account\'s machines stays in the live region (#878)', async ({ page }) => {
   await openDemo(page);
   await expect(page.locator('#sign-in-said .sign-in-said-line')).toHaveText(['Copilot on DEV-VM1 needs sign-in']);

@@ -295,7 +295,7 @@ export class SignInBanners {
       this.#fill(view, b);
       const at = prev ? prev.nextSibling : this.container.firstChild;
       if (at !== view.el) { this.container.insertBefore(view.el, at); }
-      if (refocus) { (view.els.line.hidden ? view.el : view.els.line).focus({ preventScroll: true }); }
+      if (refocus) { this.#focusOn(view.els.line.hidden ? view.el : view.els.line); }
       prev = view.el;
       this.#announce(b);
     }
@@ -314,16 +314,34 @@ export class SignInBanners {
     this.#focusBack = null;
     if (back) {
       const view = this.#views.get(back.key);
-      const target = back.opener?.isConnected ? back.opener : view && !view.els.line.hidden ? view.els.line : view?.el;
-      target?.focus({ preventScroll: true });
-      if (!target || this.container.ownerDocument?.activeElement !== target) {
-        const heading = this.fallback();
-        if (heading) {
-          if (!heading.hasAttribute('tabindex')) { heading.setAttribute('tabindex', '-1'); }
-          heading.focus({ preventScroll: true });
-        }
-      }
+      this.#focusOn(back.opener?.isConnected ? back.opener : view && !view.els.line.hidden ? view.els.line : view?.el);
     }
+  }
+
+  // Focus on target, else the Sessions heading. WebKit can refuse focus to an element drawn in the
+  // same task the modal sheet closed in (the banner drawn anew for confirming), so a refused target is
+  // tried once more on the next frame, as the app tries again after the next layout (FocusOnce), if
+  // focus is still nowhere by then: the page, or the closed sheet (Chromium leaves it on Cancel a while).
+  #focusOn(target) {
+    const doc = this.container.ownerDocument;
+    const take = (el) => {
+      if (!el?.isConnected) { return false; }
+      el.focus({ preventScroll: true });
+      return doc?.activeElement === el;
+    };
+    const heading = () => {
+      const h = this.fallback();
+      if (h && !h.hasAttribute('tabindex')) { h.setAttribute('tabindex', '-1'); }
+      take(h);
+    };
+    if (take(target)) { return; }
+    if (!target?.isConnected) { heading(); return; }
+    const later = globalThis.requestAnimationFrame ?? ((f) => setTimeout(f, 16));
+    later(() => {
+      const at = doc?.activeElement;
+      if (at && at !== doc.body && at.isConnected && !at.closest?.('dialog:not([open])')) { return; }
+      if (!take(target)) { heading(); }
+    });
   }
 
   #resolve(b, kind, count) {
