@@ -22,7 +22,8 @@
 # timed out, and how many packages came from https://archive.ubuntu.com. The WebKit legs are the
 # proof, so a webkit download with none fails; any other, whose packages the runner may already
 # have, only warns that it proves nothing. A forced download also fails if apt still
-# fetches a package from Azure after it was taken off the list. Unset or anything but true, every
+# fetches a package from Azure after it was taken off the list; a fallback after a real timeout
+# makes neither check (test.sh holds both modes). Unset or anything but true, every
 # line that runs is the same as without it.
 #
 # PLAYWRIGHT_APT_ETC and PLAYWRIGHT_APT_LIMIT exist for test.sh's stand-ins; the action sets neither.

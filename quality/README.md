@@ -361,7 +361,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      fails if apt still fetches a package from Azure, and counts the packages that came from
      `https://archive.ubuntu.com`. The WebKit legs are the proof: one that counts none fails;
      Chromium's, whose packages the runner may already have, only warns. Read each WebKit leg's
-     count and its `Get:` lines before calling the fallback proven. A run by hand runs every
+     count and its `Get:` lines before calling the fallback proven. Those two checks, the Azure
+     fetch and the Canonical count, belong to the forced proof alone: a fallback after a real
+     five-minute timeout, on any run, is the one above, unchanged (#817 first proposed failing
+     that one on an Azure fetch too, and dropped it). A run by hand runs every
      job, as on `main`, but is never a release and writes no cache.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
