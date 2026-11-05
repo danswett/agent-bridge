@@ -18,6 +18,13 @@ public sealed partial class DemoHost
     // ends that, so it is longer than twice the most the list was seen to realise from a view's top
     // in CI: some 1,750 DIP, or 55 such paragraphs (#829).
     public const int HeavyLinkedRun = 110;
+    // The heavy response's one block taller than any view, a quoted log just before the run of linked
+    // paragraphs, with a link on its first line and on its last: Tab onto either brings in a block the
+    // view can't hold (ui.md §6.4). Its index, after the blocks the resize pass's other checks use.
+    public const int HeavyTall = 192;
+    public const int HeavyTallLines = 44;
+    // The block in the middle of those, where the anchor and keys checks start: the block it always was.
+    public const int HeavyMiddle = 96;
 
     // Added to the sessions already listed, and sent to every window listening, at once.
     public async Task AddHeavyAsync()
@@ -119,6 +126,10 @@ public sealed partial class DemoHost
             else { blocks.Add(said[i % said.Length]); items++; }
         }
         // After the blocks the other checks use, so none of those moves; short, to keep within Limits.Response.
+        // A quote, not a paragraph, so the run of linked paragraphs after it starts where it did.
+        blocks.Add("> [The suite's log](https://github.com), case by case:\\\n"
+            + string.Concat(Enumerable.Range(1, HeavyTallLines).Select(n => $"> Case {n} ok\\\n"))
+            + "> [All passed](https://github.com).");
         for (var n = 1; n <= HeavyLinkedRun; n++) { blocks.Add($"[Run {n}](https://github.com)."); }
         // Said once, so a screen reader that finds the last block by its name finds that block.
         blocks.Add("That is the whole turn: every pane resized, every test run, nothing left open.");

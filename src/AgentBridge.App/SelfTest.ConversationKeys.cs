@@ -22,9 +22,10 @@ static partial class SelfTest
     {
         if (SessionView.Shallowest<ScrollViewer>(list) is not { } scroll || list.ItemsPanelRoot is not ItemsStackPanel { FirstVisibleIndex: >= 0 }) { return ("a scroller with blocks in view", "none"); }
         // Room above and below for a page each way, from a block in the middle of the response
-        // before its run of linked paragraphs (DemoHost.HeavyLinkedRun): the block it always was,
-        // where the view is put back once done, so the checks after this one start where they did.
-        var middle = (list.Items.Count - DemoHost.HeavyLinkedRun) / 2;
+        // before its tall block and run of linked paragraphs (DemoHost.HeavyMiddle): the block it
+        // always was, where the view is put back once done, so the checks after this one start where they did.
+        var middle = DemoHost.HeavyMiddle;
+        if (middle >= list.Items.Count) { return ($"setup: block {middle + 1} in the response", "none"); }
         list.ScrollIntoView(list.Items[middle], ScrollIntoViewAlignment.Leading);
         await Task.Delay(500);
         var start = scroll.VerticalOffset;
@@ -115,7 +116,10 @@ static partial class SelfTest
         return realised == 0 ? "a realised block" : null;
     }
 
-    static string Press(nint window, VirtualKey key, bool foreground, bool extended = true)
+    // A key pressed as the keyboard presses it, with Shift held about it when asked. Posted, the key
+    // carries no Shift of its own: the app reads modifiers from this thread's keyboard state, which
+    // only input read from the queue sets, so Shift is set down there until Unshift (after the key is seen).
+    static string Press(nint window, VirtualKey key, bool foreground, bool extended = true, bool shift = false)
     {
         var vk = (ushort)key;
         var scan = (ushort)MapVirtualKeyW(vk, 0);
@@ -123,19 +127,42 @@ static partial class SelfTest
         {
             // The navigation keys are extended keys: without the flag, Page Down is the keypad's 3. Tab is not.
             var flag = extended ? 0x1u : 0u;
-            var inputs = new[]
+            var shiftScan = (ushort)MapVirtualKeyW(ShiftKey, 0);
+            var keys = new[]
             {
                 new KeyInput { Type = 1, Vk = vk, Scan = scan, Flags = flag },
                 new KeyInput { Type = 1, Vk = vk, Scan = scan, Flags = flag | 0x2 },
             };
+            KeyInput[] inputs = shift
+                ? [new KeyInput { Type = 1, Vk = ShiftKey, Scan = shiftScan }, .. keys, new KeyInput { Type = 1, Vk = ShiftKey, Scan = shiftScan, Flags = 0x2 }]
+                : keys;
             if (SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<KeyInput>()) == inputs.Length) { return "SendInput"; }
         }
+        if (shift) { Shifted(true); }
         var to = GetFocus() is var focus && focus != 0 ? focus : window;
         var extendedBit = extended ? (nint)(1 << 24) : 0;
         var lParam = 1 | ((nint)scan << 16) | extendedBit;
         PostMessageW(to, 0x0100, (nint)vk, lParam);
         PostMessageW(to, 0x0101, (nint)vk, lParam | (1 << 30) | unchecked((nint)(1u << 31)));
         return "PostMessage";
+    }
+
+    const ushort ShiftKey = 0x10;
+    const ushort LeftShiftKey = 0xA0;
+
+    // Shift down, or up again, in this thread's keyboard state: for a key posted with Shift.
+    static void Shifted(bool down)
+    {
+        var state = new byte[256];
+        if (!GetKeyboardState(state)) { return; }
+        state[ShiftKey] = state[LeftShiftKey] = down ? (byte)0x80 : (byte)0;
+        SetKeyboardState(state);
+    }
+
+    // Shift back up after a key posted with it; nothing when it was sent, the keyboard's own up with it.
+    static void Unshift(string method)
+    {
+        if (method == "PostMessage") { Shifted(false); }
     }
 
     // INPUT with its KEYBDINPUT, as 64-bit Windows lays it out (the app is x64 and arm64 only).
@@ -165,4 +192,12 @@ static partial class SelfTest
 
     [LibraryImport("user32.dll")]
     private static partial uint MapVirtualKeyW(uint code, uint type);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetKeyboardState([Out] byte[] state);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetKeyboardState([In] byte[] state);
 }

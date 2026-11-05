@@ -725,11 +725,15 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     list of its own) to that control, Ctrl+Home and Ctrl+End included. Tab and Shift+Tab stop at
     every link and Copy button in order, a block not
     fully in view included, laid out or not: it is brought into view with its start at the leading
-    edge (a block taller than the view too; at once, without animation, so under reduced motion
-    as well), and focus goes to its first stop (its last, going back), whether that is a link or a
-    Copy button; a block fully in view doesn't move; a block with none is passed. That holds when Tab or
+    edge (at once, without animation, so under reduced motion as well), and focus goes to its first
+    stop (its last, going back), whether that is a link or a Copy button; a block fully in view
+    doesn't move; a block with none is passed. That holds when Tab or
     Shift+Tab wraps round the window too: when nothing after the response is a stop, Shift+Tab from
-    the window's first control goes to the response's last block with a stop, laid out or not. No
+    the window's first control goes to the response's last block with a stop, laid out or not. A
+    block taller than the view lands with its start at the leading edge, unless that would leave
+    the focused element out of view. Then the view scrolls only as far as it takes to bring the
+    focused element wholly into view at the nearest edge, and the block's start stays as close to
+    the leading edge as that allows. Focus is never scrolled out of sight (A4, WCAG 2.4.11). No
     block's container is
     a stop, and in high contrast it has no fill: the block draws in the system's colours.
   - The self-test checks that a block stays in place through a live resize and the conversation is
@@ -737,7 +741,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     selection left alone, that Tab reaches a block not yet laid out, from a Copy button or from a link
     to the link in the next block, brought in at the leading edge, that Tab onto a Copy button in a
     block across the view's bottom edge brings the block's start to the leading edge and onto one in
-    a block wholly in view moves nothing, that no container is a stop or
+    a block wholly in view moves nothing, that Tab onto the first link of a block taller than the
+    view brings its start to the leading edge and Shift+Tab onto its last brings that link wholly
+    into view at the nearest edge, that no container is a stop or
     draws chrome, that the last block is found by its name, which no other block has, and that every
     block, found and realised as a screen reader does it (FindItemByProperty, then Realize), is a
     list item numbered 1 to N in a set of N, none -1 ([app-windows.md](../app-windows.md)).

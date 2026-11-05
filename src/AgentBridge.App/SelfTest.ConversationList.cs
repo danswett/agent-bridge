@@ -32,10 +32,10 @@ static partial class SelfTest
     static async Task<Shot?> Anchor(ListView list, string outFile)
     {
         if (list.Items.Count < 3 || SessionView.Shallowest<ScrollViewer>(list) is not { } scroll) { return null; }
-        // In the middle of the response before its run of linked paragraphs (DemoHost.HeavyLinkedRun):
-        // the block it always was.
-        var index = (list.Items.Count - DemoHost.HeavyLinkedRun) / 2;
-        if (index < 1) { return null; }
+        // In the middle of the response before its tall block and run of linked paragraphs
+        // (DemoHost.HeavyMiddle): the block it always was.
+        var index = DemoHost.HeavyMiddle;
+        if (index >= list.Items.Count) { return null; }
         list.ScrollIntoView(list.Items[index], ScrollIntoViewAlignment.Leading);
         if (!await Until(() => list.ContainerFromIndex(index) is FrameworkElement { ActualHeight: > 0 }, TimeSpan.FromSeconds(5))) { return null; }
         await Task.Delay(300);
@@ -334,6 +334,112 @@ static partial class SelfTest
             if (!wholly && Math.Abs(now) > 1.5) { return ($"block {code + 1} across the view's bottom edge brought to the leading edge: its top {now:0.#} px from the view's", method); }
         }
         return (null, method);
+    }
+
+    // A block taller than the view (DemoHost.HeavyTall, a quoted log with a link on its first line
+    // and its last; ui.md §6.4, the creative director and B on #829): Tab onto its first link brings
+    // its start to the leading edge; Shift+Tab onto its last brings that link wholly into view at the
+    // nearest edge, the block's start as close to the leading edge as that allows, and no closer. Each
+    // from a stop focused with the view held, measured before and after, and the key pressed as the
+    // keyboard presses it. A link is brought in unpadded (BringIntoViewHandler), so it ends at the
+    // view's bottom edge; the 20 px a control is padded is allowed, and 1.5 px besides. Each step is
+    // logged; a view that can't be put so fails with "setup: ...", never skips. Null, and how the
+    // keys were pressed, when right.
+    static async Task<(string? Problem, string Method)> TabbedTall(MainWindow window, ListView list)
+    {
+        if (list.ItemsSource is not IList<ConversationBlock> blocks || SessionView.Shallowest<ScrollViewer>(list) is not { } scroll) { return ("setup: a list of blocks with a scroller", "none"); }
+        static void Log(string step) => AppLog.Write($"self-test: tall Tab, {step}");
+        static double Top(UIElement e, UIElement view) => e.TransformToVisual(view).TransformPoint(default).Y;
+        const int Tall = DemoHost.HeavyTall;
+        if (Tall + 1 >= blocks.Count || blocks[Tall].Block is not MdQuote || !blocks[Tall].Focusable || !blocks[Tall + 1].Focusable) { return ($"setup: a quote with stops at block {Tall + 1} and a block with one after it", "none"); }
+        var from = Enumerable.Range(0, Tall).LastOrDefault(j => blocks[j].Focusable, -1);
+        if (from < 0) { return ($"setup: a block with a stop before block {Tall + 1}", "none"); }
+        var method = "none";
+        foreach (var forward in new[] { true, false })
+        {
+            var key = forward ? "Tab" : "Shift+Tab";
+            // Forward, the tall block's start in the view's lower part, the block before it with a
+            // stop above; back, the block after it wholly in view near the top, the tall block across
+            // the view's top edge.
+            var by = forward ? from : Tall + 1;
+            list.ScrollIntoView(blocks[by], ScrollIntoViewAlignment.Leading);
+            await Still(scroll);
+            if (list.ContainerFromIndex(Tall) is not FrameworkElement placed || list.ContainerFromIndex(by) is not FrameworkElement leaving) { return ($"setup: blocks {by + 1} and {Tall + 1} realised", method); }
+            var view = scroll.ViewportHeight;
+            if (placed.ActualHeight <= view) { return ($"setup: block {Tall + 1} taller than the view: {placed.ActualHeight:0.#} px in a {view:0.#} px view", method); }
+            var at = forward
+                ? scroll.VerticalOffset + Top(placed, scroll) - Math.Min(view - 120, Top(placed, scroll) - Top(leaving, scroll))
+                : scroll.VerticalOffset + Top(leaving, scroll) - 120;
+            if (at < 0) { return ($"setup: block {Tall + 1} placed for {key}", method); }
+            scroll.ChangeView(null, at, null, disableAnimation: true);
+            await Still(scroll);
+            if (list.ContainerFromIndex(Tall) is not FrameworkElement block || list.ContainerFromIndex(by) is not FrameworkElement before) { return ($"setup: blocks {by + 1} and {Tall + 1} realised", method); }
+            var (top, beforeTop) = (Top(block, scroll), Top(before, scroll));
+            var placedRight = forward
+                ? top >= 24 && top <= scroll.ViewportHeight - 24
+                : top < 0 && ConversationKeyboard.WhollyInView(beforeTop, before.ActualHeight, scroll.ViewportHeight);
+            if (!placedRight) { return ($"setup: for {key}, block {Tall + 1}'s top {top:0.#} px and block {by + 1}'s {beforeTop:0.#} px ({before.ActualHeight:0.#} px tall) in a {scroll.ViewportHeight:0.#} px view", method); }
+            var stop = forward ? FocusManager.FindLastFocusableElement(before) : FocusManager.FindFirstFocusableElement(before);
+            if (stop is null) { return ($"setup: a stop in block {by + 1}", method); }
+            var held = new TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>((_, e) => e.Handled = true);
+            var offsetBefore = scroll.VerticalOffset;
+            bool focused;
+            before.BringIntoViewRequested += held;
+            try
+            {
+                focused = (await FocusManager.TryFocusAsync(stop, FocusState.Keyboard)).Succeeded;
+                await Still(scroll);
+            }
+            finally { before.BringIntoViewRequested -= held; }
+            var (offset, topAfter) = (scroll.VerticalOffset, Top(block, scroll));
+            Log($"for {key}, block {Tall + 1} ({block.ActualHeight:0.#} px in a {scroll.ViewportHeight:0.#} px view), its top {top:0.#} px before focus and {topAfter:0.#} px after, focus on the {(forward ? "last" : "first")} stop of block {by + 1}: {(focused ? "taken" : "refused")}, the view at {offsetBefore:0.#} px then {offset:0.#} px");
+            if (!focused || !ReferenceEquals(FocusManager.GetFocusedElement(list.XamlRoot), stop)) { return ($"setup: focus on a stop in block {by + 1}", method); }
+            if (Math.Abs(offset - offsetBefore) > 0.5 || Math.Abs(topAfter - top) > 0.5) { return ($"setup: block {Tall + 1} left where it was on screen while block {by + 1} took focus: its top {top:0.#} px, then {topAfter:0.#} px", method); }
+
+            // The key, pressed as the keyboard presses it.
+            var seen = false;
+            var heard = new KeyEventHandler((_, e) => seen |= e.Key == VirtualKey.Tab);
+            scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
+            try
+            {
+                method = Press(window.Handle, VirtualKey.Tab, foreground: true, extended: false, shift: !forward);
+                if (!await Until(() => seen, TimeSpan.FromSeconds(2)) && method == "SendInput")
+                {
+                    method = Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false, shift: !forward);
+                    await Until(() => seen, TimeSpan.FromSeconds(2));
+                }
+            }
+            finally
+            {
+                scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard);
+                if (!forward) { Unshift(method); }
+            }
+            if (!seen) { return ($"{key} reaching the conversation ({method})", method); }
+            var landed = await Until(() => BlockOf(list, FocusManager.GetFocusedElement(list.XamlRoot)) == Tall, TimeSpan.FromSeconds(3));
+            await Still(scroll);
+            var on = FocusManager.GetFocusedElement(list.XamlRoot);
+            var shown = list.ContainerFromIndex(Tall) as FrameworkElement;
+            var meant = shown is null ? null : forward ? FocusManager.FindFirstFocusableElement(shown) : FocusManager.FindLastFocusableElement(shown);
+            var now = shown is null ? double.NaN : Top(shown, scroll);
+            var (linkTop, linkBottom) = meant is Hyperlink l && Drawn(l, scroll) is { } r ? (r.Top, r.Bottom) : (double.NaN, double.NaN);
+            view = scroll.ViewportHeight;
+            Log($"{key} pressed by {method}: focus on {on?.GetType().Name ?? "nothing"} in block {(BlockOf(list, on) is { } b ? b + 1 : 0)}, block {Tall + 1}'s top {now:0.#} px, the link {linkTop:0.#} to {linkBottom:0.#} px in a {view:0.#} px view, the view moved {scroll.VerticalOffset - offset:0.#} px");
+            if (!landed || meant is not Hyperlink || !ReferenceEquals(on, meant)) { return ($"{key} from block {by + 1} onto the {(forward ? "first" : "last")} link of block {Tall + 1}: on {on?.GetType().Name ?? "nothing"} in {(BlockOf(list, on) is { } to ? $"block {to + 1}" : "no block")}", method); }
+            if (forward && Math.Abs(now) > 1.5) { return ($"block {Tall + 1}, taller than the view, brought to the leading edge by Tab onto its first link: its top {now:0.#} px from the view's", method); }
+            if (!forward && (double.IsNaN(linkTop) || linkTop < -1.5 || linkBottom > view + 1.5)) { return ($"the last link of block {Tall + 1}, taller than the view, wholly in view after Shift+Tab onto it: {linkTop:0.#} to {linkBottom:0.#} px in a {view:0.#} px view", method); }
+            if (!forward && (now >= 0 || linkBottom < view - 21.5)) { return ($"block {Tall + 1}'s start as close to the leading edge as its last link in view allows: its top {now:0.#} px, the link's bottom {linkBottom:0.#} px in a {view:0.#} px view", method); }
+        }
+        return (null, method);
+    }
+
+    // Where a link is drawn against a view, from its text's first character to its last.
+    static Rect? Drawn(Hyperlink link, UIElement view)
+    {
+        if (link.ContentStart?.VisualParent is not UIElement text || link.ContentEnd is not { } end) { return null; }
+        var (first, last) = (link.ContentStart.GetCharacterRect(LogicalDirection.Forward), end.GetCharacterRect(LogicalDirection.Backward));
+        var to = text.TransformToVisual(view);
+        var (a, b) = (to.TransformPoint(new Point(first.Left, Math.Min(first.Top, last.Top))), to.TransformPoint(new Point(last.Right, Math.Max(first.Bottom, last.Bottom))));
+        return new Rect(new Point(Math.Min(a.X, b.X), a.Y), new Point(Math.Max(a.X, b.X), b.Y));
     }
 
     // A link is a text element in its block's text, not a control (#829): in the window itself, Tab
