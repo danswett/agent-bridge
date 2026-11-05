@@ -310,14 +310,15 @@ public sealed class MarkdownTests
     {
         var inside = "x" + new string('\n', 50000) + "y";
         var trailing = "echo\n" + string.Concat(Enumerable.Repeat(" \n", 50000));
-        var clock = System.Diagnostics.Stopwatch.StartNew();
 
         var kept = new CodeCopy(new MdCode(inside, null), _ => true).Text;
         var trimmed = new CodeCopy(new MdCode(trailing, null), _ => true).Text;
 
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"took {clock.Elapsed}");
         Assert.Equal(inside, kept);
         Assert.Equal("echo", trimmed);
+        // Judged by growth, not a wall-clock second, which a loaded runner can run out by itself (#929).
+        Speed.IsLinear(n => "x" + new string('\n', n) + "y", 50000, t => _ = new CodeCopy(new MdCode(t, null), _ => true).Text);
+        Speed.IsLinear(n => "echo\n" + string.Concat(Enumerable.Repeat(" \n", n)), 50000, t => _ = new CodeCopy(new MdCode(t, null), _ => true).Text);
     }
 
     [Fact]

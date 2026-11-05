@@ -278,9 +278,9 @@ public sealed class FleetTests : IAsyncLifetime
         await BothMachinesAsync();
         ui.Post(() => main.SelectedMachine = main.Machines.Single(m => m.Key == "remote-id"));
 
-        // The relay connection itself went: nothing says the machine has.
+        // The relay connection itself went: nothing says the machine has. The fleet reads the link
+        // on its Changed, posted to this test's UI turn and run there, so it is done when Set returns.
         link.Set(FleetState.Connecting);
-        await Task.Delay(200);
         Assert.NotNull(Card("there"));
 
         link.Set(FleetState.Connected, ("host-id", "Test PC"));
@@ -495,7 +495,9 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.False(TestUi.Read(() => question.CanAnswer));
         ui.Post(() => question.Choose(question.Fields[0].Options.Single(o => o.Value == "sqlite")));
         Assert.Equal(0, TestUi.Read(() => main.Waiting));
-        await Task.Delay(200);
+        // An answer sent would have been written as it was chosen: once the other machine's host has
+        // everything sent before this, none was.
+        await Remote().Host.CallAsync(FakeHost.Barrier);
         Assert.Empty(remoteHost.Sent(Ops.SessionAnswer));
     }
 
@@ -1427,8 +1429,8 @@ public sealed class FleetTests : IAsyncLifetime
         link.Raise();
         await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
 
+        // The fleet reads the link on its Changed, run on this test's UI turn: done when Set returns.
         link.Set(FleetState.Connecting);
-        await Task.Delay(200);
         Assert.Single(Offline());
 
         // A drop between reading the state and reading the list is the same.
@@ -1436,7 +1438,6 @@ public sealed class FleetTests : IAsyncLifetime
         await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
         link.BeforeOfflineRead = () => link.Quietly(FleetState.Connecting, ("host-id", "Test PC"), ("remote-id", "Build server"));
         link.Raise();
-        await Task.Delay(200);
         Assert.Single(Offline());
 
         // An older relay keeps no roster: nothing listed, and nothing to forget.
