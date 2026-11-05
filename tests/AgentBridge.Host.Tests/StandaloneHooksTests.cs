@@ -472,6 +472,47 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.NotNull(IntakeState.Load(Profile).State);
     }
 
+    async Task<AgentReadiness> Readiness(string agent)
+    {
+        await using var service = new AgentReadinessService(Profile, Homes, LaunchConfig.Default,
+            new Locator { Locate = (_, _) => null }, codex, () => null);
+        return (await service.RefreshAsync(fresh: true)).Agents.Single(a => a.Id == agent);
+    }
+
+    [Fact]
+    public async Task Only_a_fully_completed_setup_is_reported_completed_and_a_failed_repair_reverts_it_to_incomplete()
+    {
+        // Intake is already enabled by another agent, as in the #705 review scenario.
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Assert.True((bool?)Read(Owner("claude"))["setupCompleted"]);
+        codex.FailPlugin = true;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
+
+        Assert.True(File.Exists(Owner("codex")));
+        Assert.Null(Read(Owner("codex"))["setupCompleted"]);
+        var interrupted = await Readiness("codex");
+        Assert.Equal(HookSetupState.Incomplete, interrupted.HookSetup);
+        Assert.Equal(ReadinessState.Failed, interrupted.Hooks.State);
+        Assert.DoesNotContain("owned setup record", interrupted.Hooks.Detail);
+        Assert.Equal(HookSetupState.Completed, (await Readiness("claude")).HookSetup);
+
+        codex.FailPlugin = false;
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
+        var repaired = await Readiness("codex");
+        Assert.Equal(HookSetupState.Completed, repaired.HookSetup);
+        // Completed setup is not evidence that hooks run in a new session.
+        Assert.Equal(ReadinessState.Unknown, repaired.Hooks.State);
+        Assert.Equal(ReadinessState.Unknown, repaired.Activation.State);
+
+        codex.FailPlugin = true;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
+
+        Assert.Null(Read(Owner("codex"))["setupCompleted"]);
+        Assert.Equal(HookSetupState.Incomplete, (await Readiness("codex")).HookSetup);
+        Assert.Equal(ReadinessState.Failed, (await Readiness("codex")).Hooks.State);
+    }
+
     [Fact]
     public async Task Settings_setup_refuses_read_only_and_host_shutdown_without_writes()
     {
@@ -971,8 +1012,11 @@ public sealed class StandaloneHooksTests : IDisposable
         var entries = Read(Registration("copilot"))["hooks"]!["agentStop"]!.AsArray();
         Assert.Single(entries);
         Assert.Equal("other-hook", (string?)entries[0]!["exec"]);
+        Assert.Null(Read(Owner("copilot"))["setupCompleted"]);
+        Assert.Equal(HookSetupState.Incomplete, (await Readiness("copilot")).HookSetup);
         await Setup.InstallAsync("copilot", false, TextWriter.Null);
         Assert.Equal(2, Read(Registration("copilot"))["hooks"]!["agentStop"]!.AsArray().Count);
+        Assert.Equal(HookSetupState.Completed, (await Readiness("copilot")).HookSetup);
     }
 
     [Fact]

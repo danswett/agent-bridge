@@ -237,8 +237,11 @@ public sealed class StandaloneHooks(
             var backup = Path.Combine(HookFolder, "backups", "claude-settings.json");
             if (!File.Exists(backup)) { DurableFile.Replace(backup, File.ReadAllBytes(path), null); }
         }
-        // Save ownership first: an interrupted install can be safely retried or removed.
-        DurableFile.Replace(owner, Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile }), ownerBefore);
+        // Save ownership first: an interrupted install can be safely retried or removed. The
+        // record is rewritten without setupCompleted, so an earlier completed setup cannot
+        // outlive a repair that fails below; readiness reports this record as incomplete.
+        var incomplete = Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile });
+        DurableFile.Replace(owner, incomplete, ownerBefore);
         RefreshFiles(profile, hookSource);
         instructions.Apply(InstructionBackup(agent));
         if (root is not null) { DurableFile.Replace(path, Bytes(root), before); }
@@ -258,6 +261,10 @@ public sealed class StandaloneHooks(
             savedState = savedState with { Homes = saved with { ClaudeConfigDirExplicit = explicitConfigDir } };
         }
         savedState.Save(profile);
+        // Only now, after registrations, the Codex plugin and intake are all written, does the
+        // record say setup completed. That is setup evidence, not proof that hooks run.
+        DurableFile.Replace(owner, Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile, ["setupCompleted"] = true }),
+            MigrationRecord.Hash(incomplete));
         output.WriteLine($"Registered. Restart the host from the {Product.App}, then start new agent sessions to load the hooks.");
         if (agent == "codex") { output.WriteLine("Start Codex at this machine and approve its hook trust prompt once; until then Codex silently skips its hooks."); }
     }
@@ -306,6 +313,8 @@ public sealed class StandaloneHooks(
         // A dedicated Copilot file with somebody else's additions must remain attributable,
         // otherwise reinstall would have to claim an unowned file or permanently refuse it.
         if (agent != "copilot" || !File.Exists(path)) { DurableFile.Remove(owner, MigrationRecord.Hash(owner)); }
+        // The retained record no longer describes a completed setup: its registrations are gone.
+        else { DurableFile.Replace(owner, Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile }), MigrationRecord.Hash(owner)); }
         // Keep the private runtime and binary: sessions already open retain their commands.
         output.WriteLine("Removed. Existing sessions keep their hooks until they end; other settings and Codex hook trust were left alone.");
     }

@@ -89,7 +89,14 @@ JSON formatting/comments can change. Codex gets a
 local plugin installed using its supported CLI, never a rewrite of hook trust settings.
 Each selected agent home gets `agent-bridge-owner.json`. Setup is repeatable; failures
 report incomplete setup and retain ownership so retry/removal is possible. Multiple agents
-are handled in order, not as one transaction.
+are handled in order, not as one transaction. Ownership is saved first without
+`setupCompleted`; only after the registrations (and Codex's plugin) and `intake.json` are all
+written does setup rewrite the record with `"setupCompleted": true`. Every setup or repair
+first rewrites the record without it, so a failed repair cannot leave an earlier completion
+behind, and a Copilot record kept for another tool's additions after removal loses it too.
+Readiness reports an owned record without `setupCompleted: true`, including records from
+before this field existed, as incomplete setup needing repair. Completion is setup evidence,
+not evidence that hooks run in a new session.
 
 Setup also installs product guidance in Copilot's `instructions\agent-bridge.instructions.md`,
 Claude's `CLAUDE.md` and Codex's `AGENTS.md`. The block is delimited by
