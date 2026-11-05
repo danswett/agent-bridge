@@ -725,7 +725,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     list of its own) to that control, Ctrl+Home and Ctrl+End included. Tab and Shift+Tab stop at
     every link and Copy button in order, a block not
     yet laid out included: it is brought into view at the leading edge and laid out, and focus goes
-    to its first stop (its last, going back); a block with none is passed. No block's container is
+    to its first stop (its last, going back); a block with none is passed. That holds when Tab or
+    Shift+Tab wraps round the window too: when nothing after the response is a stop, Shift+Tab from
+    the window's first control goes to the response's last block with a stop, laid out or not. No
+    block's container is
     a stop, and in high contrast it has no fill: the block draws in the system's colours.
   - The self-test checks that a block stays in place through a live resize and the conversation is
     drawn the same before and after it, that Page Down and Down scroll the text with focus and

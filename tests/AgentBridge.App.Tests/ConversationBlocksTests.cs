@@ -454,9 +454,50 @@ public sealed class ConversationKeyboardTests
     [Fact]
     public void Tab_that_wraps_round_the_window_goes_on_to_the_end_of_the_response_first()
     {
-        Assert.Equal((2, 5), ConversationKeyboard.Ends(2, -1, 5, forward: true));
-        Assert.Equal((2, -1), ConversationKeyboard.Ends(2, 5, 5, forward: false));
+        var blocks = Blocks("[a](https://a.b)\n\n[b](https://a.b)\n\n[c](https://a.b)\n\n[d](https://a.b)\n\n[e](https://a.b)");
+
+        Assert.Equal((2, -1), ConversationKeyboard.Ends(2, -1, 5, forward: true));
         Assert.Equal((-1, 3), ConversationKeyboard.Ends(null, 3, 5, forward: true));
-        Assert.Equal((2, 4), ConversationKeyboard.Ends(2, 4, 5, forward: true));
+        Assert.Equal((2, -1), ConversationKeyboard.Ends(2, null, 5, forward: false));
+        Assert.Equal(3, ConversationKeyboard.Passed(blocks, from: 2, to: -1, forward: true, i => false));
+        Assert.True(ConversationKeyboard.Wrapped(2, -1, forward: true, toBeforeFrom: null));
+        Assert.False(ConversationKeyboard.Wrapped(2, 4, forward: true, toBeforeFrom: null));
+        Assert.False(ConversationKeyboard.Wrapped(3, 3, forward: true, toBeforeFrom: null));
+        Assert.True(ConversationKeyboard.Wrapped(-1, -1, forward: true, toBeforeFrom: true));
+        Assert.False(ConversationKeyboard.Wrapped(-1, -1, forward: true, toBeforeFrom: false));
+        Assert.True(ConversationKeyboard.Wrapped(5, 5, forward: false, toBeforeFrom: false));
+    }
+
+    [Fact]
+    public void Shift_Tab_that_wraps_from_the_windows_first_control_onto_the_last_block_drawn_brings_in_a_block_after_it_that_was_not_drawn()
+    {
+        var blocks = Blocks("[a](https://a.b)\n\n[b](https://a.b)\n\n[c](https://a.b)\n\nPlain.\n\n[e](https://a.b)\n\nPlain.");
+        var (from, to) = ConversationKeyboard.Ends(-1, 2, blocks.Count, forward: false);
+
+        Assert.Equal(4, ConversationKeyboard.Passed(blocks, from, to, forward: false, i => i <= 2));
+    }
+
+    [Fact]
+    public void Tab_that_wraps_from_the_windows_last_control_onto_a_block_or_round_to_the_same_place_brings_in_a_block_before_it_that_was_not_drawn()
+    {
+        var blocks = Blocks("Plain.\n\n[b](https://a.b)\n\n[c](https://a.b)\n\n[d](https://a.b)");
+        var (from, to) = ConversationKeyboard.Ends(blocks.Count, 3, blocks.Count, forward: true);
+
+        Assert.Equal(1, ConversationKeyboard.Passed(blocks, from, to, forward: true, i => i >= 3));
+        // From the last control before the list round to the first, with nothing after it a stop.
+        var wrapped = ConversationKeyboard.Wrapped(-1, -1, forward: true, toBeforeFrom: true);
+        Assert.Equal(1, ConversationKeyboard.Passed(blocks, -1, -1, forward: true, i => false, wrapped));
+    }
+
+    [Fact]
+    public void Tab_held_for_a_replaced_block_after_wrapping_round_the_window_goes_on_from_the_other_end_of_the_response()
+    {
+        var blocks = Blocks("[a](https://a.b)\n\n[b](https://a.b)\n\n[c](https://a.b)\n\nPlain.");
+        var gone = Blocks("[x](https://a.b)")[0];
+
+        Assert.Equal(2, ConversationKeyboard.Held(blocks, gone, from: -1, forward: false, i => i <= 1, wrapped: true));
+        Assert.Equal(0, ConversationKeyboard.Held(blocks, gone, from: blocks.Count, forward: true, i => i >= 2, wrapped: true));
+        Assert.Null(ConversationKeyboard.Held(blocks, gone, from: -1, forward: false, i => i <= 1));
+        Assert.Null(ConversationKeyboard.Held(blocks, gone, from: -1, forward: false, i => true, wrapped: true));
     }
 }

@@ -122,15 +122,15 @@ public sealed partial class SessionView
     // first holds it.
     void OnLeavingBlock(UIElement sender, LosingFocusEventArgs e)
     {
-        if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } index) { e.Cancel = true; FocusBlock(index, e.Direction == FocusNavigationDirection.Next); }
+        if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } passed) { e.Cancel = true; FocusBlock(passed.Index, e.Direction == FocusNavigationDirection.Next, passed.Wrapped); }
     }
 
     void OnReachingBlock(UIElement sender, GettingFocusEventArgs e)
     {
-        if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } index) { e.Cancel = true; FocusBlock(index, e.Direction == FocusNavigationDirection.Next); }
+        if (TabPassed(e.OldFocusedElement, e.NewFocusedElement, e.Direction) is { } passed) { e.Cancel = true; FocusBlock(passed.Index, e.Direction == FocusNavigationDirection.Next, passed.Wrapped); }
     }
 
-    int? TabPassed(DependencyObject? from, DependencyObject? to, FocusNavigationDirection direction)
+    (int Index, bool Wrapped)? TabPassed(DependencyObject? from, DependencyObject? to, FocusNavigationDirection direction)
     {
         if (direction is not (FocusNavigationDirection.Next or FocusNavigationDirection.Previous)) { return null; }
         // Not while the list is hidden (the Delegates or Tools tab), nor for a move made on from a
@@ -141,7 +141,16 @@ public sealed partial class SessionView
         // A move with neither end in the conversation's tree (within a flyout, say) isn't ours.
         if (was is null && now is null) { return null; }
         var (f, t) = ConversationKeyboard.Ends(was, now, blocks.Count, forward);
-        return ConversationKeyboard.Passed(blocks, f, t, forward, i => ConversationList.ContainerFromIndex(i) is not null);
+        // Two ends at one place (both before the list, say) wrapped when the second comes first.
+        var wrapped = ConversationKeyboard.Wrapped(f, t, forward, f == t ? Precedes(to, from) : null);
+        return ConversationKeyboard.Passed(blocks, f, t, forward, i => ConversationList.ContainerFromIndex(i) is not null, wrapped) is { } index ? (index, wrapped) : null;
+    }
+
+    // Whether a comes before b in the visual tree; null for one element, or two in different trees.
+    static bool? Precedes(DependencyObject? a, DependencyObject? b)
+    {
+        static DependencyObject? Drawn(DependencyObject? e) => e is TextElement t ? t.ContentStart?.VisualParent : e;
+        return (Drawn(a), Drawn(b)) is ({ } x, { } y) && x != y ? Before(x, y) : null;
     }
 
     // Where in the conversation an element is: -1 its header or anything before the list, a block's
@@ -191,7 +200,7 @@ public sealed partial class SessionView
     // last, going back), as the keyboard had put it there. Should it hold none after all, Tab goes on
     // from where it was; should it not be realised even after a few frames of layout, Tab goes on
     // past it rather than staying where it was.
-    void FocusBlock(int index, bool forward)
+    void FocusBlock(int index, bool forward, bool wrapped)
     {
         var target = blocks[index];
         var direction = forward ? FocusNavigationDirection.Next : FocusNavigationDirection.Previous;
@@ -205,7 +214,7 @@ public sealed partial class SessionView
         void Bring()
         {
             var from = PlaceOf(XamlRoot is { } r ? FocusManager.GetFocusedElement(r) as DependencyObject : null);
-            if (ConversationKeyboard.Held(blocks, target, from, forward, i => ConversationList.ContainerFromIndex(i) is not null) is not { } at)
+            if (ConversationKeyboard.Held(blocks, target, from, forward, i => ConversationList.ContainerFromIndex(i) is not null, wrapped) is not { } at)
             {
                 PassOn();
                 return;
