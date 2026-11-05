@@ -527,9 +527,13 @@ public sealed class RestoreTests : IDisposable
         source.Sessions.Add(S("a"));
         source.HeldNow = null;
         Time.Advance(RestoreRecorder.JudgeEvery);
+        Time.Advance(RestoreRecorder.Coalesce);
 
         Assert.Null(r.Notice);
         Assert.Empty(told);
+        // Written as live before its event arrives, so a crash now still keeps it.
+        Assert.Equal(["a"], Written().Sessions.Select(e => e.Id));
+        Assert.Empty(Written().Owed);
     }
 
     [Fact]

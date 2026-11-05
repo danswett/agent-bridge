@@ -348,8 +348,14 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             var w = owed[i];
             if (live.TryGetValue(w.Entry.Id, out var e) && e.Gone is null) { owed.RemoveAt(i); continue; }
             // The source as it is now, not only as its events have told us: a hold that has just
-            // lifted clears before the sessions it found are dispatched here.
-            if (!w.Decided && source.Get(w.Entry.Id) is not null) { owed.RemoveAt(i); continue; }
+            // lifted clears before the sessions it found are dispatched here. Recorded live at once,
+            // so a write before its event arrives still keeps it.
+            if (!w.Decided && source.Get(w.Entry.Id) is { } current && From(current, now) is { } adopted)
+            {
+                live[adopted.Id] = adopted;
+                owed.RemoveAt(i);
+                continue;
+            }
             if (w.Decided && now - w.At >= OwedFor) { owed.RemoveAt(i); continue; }
             if (w.Decided) { continue; }
             var settled = options.EndsSettled?.Invoke(w.Entry.Agent) ?? true;
