@@ -1605,6 +1605,48 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal(1, Assert.Single(told).Restored);
     }
 
+    // ---- Copilot on #837 at f8f8919b ----
+
+    // A second request for a restore still pending that starts nothing (busy at folder trust) leaves
+    // the first's protection as it was: every worktree, its folder not known.
+    [Fact]
+    public async Task A_second_restore_request_that_starts_nothing_keeps_the_first_requests_worktree_protection()
+    {
+        var resumer = new Resumer();
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Unconfirmed, "Copilot in App is asking whether to trust the folder; left for a person at the machine") { Session = "s" });
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Busy, "a folder-trust question is waiting for a person at the machine"));
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await r.RestoreAsync(new RestoreAsk { Session = "s", Cause = RestoreCause.Crash, By = "host-signin" })).Outcome);
+        Assert.Null(r.Folders());
+
+        Assert.Equal(LaunchOutcome.Busy, (await r.RestoreAsync(new RestoreAsk { Session = "s", Cause = RestoreCause.Crash, By = "host-signin" })).Outcome);
+
+        Assert.Null(r.Folders());
+    }
+
+    // While its agent's discovery is held, a listed session is not known to be live: its restore's
+    // stamp stays past ten minutes, and one that died in the hold is a loop once the hold lifts.
+    [Fact]
+    public async Task A_restore_stamp_is_kept_while_its_agents_discovery_is_held()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer();
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => told.Count == 1);
+        source.Upsert(S("a"));
+        source.HeldNow = new DiscoveryHeld("the copilot processes could not be listed", [AgentKind.Copilot]);
+
+        Time.Advance(RestoreRecorder.LoopWithin + TimeSpan.FromMinutes(1));
+        Assert.NotNull(Assert.Single(Written().Sessions).Restored);
+
+        source.HeldNow = null;
+        source.Remove("a");
+        Time.Advance(RestoreRecorder.JudgeEvery);
+        Assert.Equal(1, r.Notice!.Loops);
+    }
+
     [Fact]
     public async Task What_restored_sessions_lost_is_kept_for_the_push()
     {

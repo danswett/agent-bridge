@@ -175,6 +175,8 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     // A restore the launcher says is busy (a folder-trust question waiting for a person, discovery
     // held) is tried again after this.
     public static readonly TimeSpan BusyRetry = TimeSpan.FromSeconds(15);
+    // A restore's stamp due to go while its agent's discovery is held is looked at again this often.
+    public static readonly TimeSpan HeldRetry = TimeSpan.FromMinutes(1);
     public const string RestorePrincipal = "host-restore";
     // What the record keeps of launches whose sessions have not been seen (bounded, never growing).
     const int LaunchesKept = 256;
@@ -838,6 +840,8 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         RestoreLaunch? launch;
         Undo undo;
         TaskCompletionSource done;
+        bool hadRequest;
+        string? earlierFolder;
         lock (gate)
         {
             if (stopped || stopping.IsCancellationRequested) { return Stopping; }
@@ -860,6 +864,9 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             }
             inFlight.Add(ask.Session);
             diedDuring.Remove(ask.Session);
+            // An earlier request still pending (unconfirmed, or reloaded from stamps) is put back if
+            // this one starts nothing: removed, its worktree could be reclaimed while it is pending.
+            hadRequest = requested.TryGetValue(ask.Session, out earlierFolder);
             if (!owed.Any(w => w.Entry.Id == ask.Session)) { requested[ask.Session] = known?.Cwd; }
             done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             requests.Add(done.Task);
@@ -890,8 +897,9 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                     else if (outcome is LaunchOutcome.Busy or LaunchOutcome.Refused)
                     {
                         UndoLocked(undo);
-                        // Started nothing: no folder of its to keep.
-                        requested.Remove(ask.Session);
+                        // Started nothing: no folder of its own to keep, only an earlier request's.
+                        if (hadRequest) { requested[ask.Session] = earlierFolder; }
+                        else { requested.Remove(ask.Session); }
                     }
                     ScheduleWriteLocked(Coalesce);
                 }
@@ -1224,11 +1232,16 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         // A restored session seen live for LoopWithin is no longer one that died soon after its
         // restore. One not seen live yet (waiting at folder trust) keeps its stamp, however long
         // that takes; one that went keeps it for as long as it is kept at all.
+        var held = source.Held?.Agents ?? [];
         foreach (var id in restoredAt.Keys.ToList())
         {
             if (live.TryGetValue(id, out var e) && e.Gone is null && liveSince.TryGetValue(id, out var since))
             {
                 if (now - since < LoopWithin) { Next(since + LoopWithin); continue; }
+                // While its agent's discovery is held the source keeps the sessions it listed, so
+                // still listed is not still live: one that died in the hold, its stamp gone, would
+                // not read as a loop once the hold lifts and it is found gone.
+                if (held.Contains(e.Agent)) { Next(now + HeldRetry); continue; }
                 restoredAt.Remove(id);
                 liveSince.Remove(id);
                 if (e.Restored is not null) { live[id] = e with { Restored = null }; }
