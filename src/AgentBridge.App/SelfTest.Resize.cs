@@ -19,7 +19,7 @@ static partial class SelfTest
 {
     const double SweepWide = 1560, SweepNarrow = 400, SweepStep = 8, SweepHeight = 900;
     // A hang guard, not a bar: the two sweeps share 30 s, the light one at most half, which keeps the
-    // whole self-test well inside its 180 s (build/app-self-test.ps1) on CI's arm64 runner. A sweep
+    // whole self-test well inside its 360 s (build/app-self-test.ps1) on CI's arm64 runner. A sweep
     // that runs out is cut short and reported so (lightFinished, heavyFinished); it fails the check
     // only when it never crossed all three width classes, since how fast a runner draws is reported
     // and never judged (#681).
