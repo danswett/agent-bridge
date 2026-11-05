@@ -333,19 +333,17 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `pwa-e2e` runs `test/e2e`, in both browsers, in the one job that builds the dev stack. The
      shards set `PWA_SKIP_E2E`, so `test/e2e` is left out of them rather than skipping itself;
      together the five run every spec. The one PWA job these replace took a median of 15
-     minutes.
+     minutes. Each `pwa-ui` leg downloads Playwright's system packages before installing them,
+     and if apt's first mirror hasn't finished in five minutes it fetches the rest from the
+     runner's Canonical fallback, `https://archive.ubuntu.com` (main run 41927187905 lost a
+     WebKit shard to that mirror at 100 kB/s).
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
      runner and every `*.csproj`, `Directory.*` file, `nuget.config`, `global.json` and the
      tool manifest; Playwright's browsers for `spikes-linux`, `pwa-ui` (per browser) and
-     `pwa-e2e`, keyed by Playwright's version. `pwa-ui` also caches the `.deb` files of the
-     system packages `--with-deps` installs, keyed by Ubuntu release, Playwright's version and
-     browser, since a slow apt mirror once held a WebKit shard in that install past its
-     20 minutes (main run 41927187905); apt still installs them every run and uses a cached
-     `.deb` only when it matches the signed index, so the cache spares the download and nothing
-     else. Only `main` saves a cache, so a pull request can't fill the repository's 10 GB or
-     seed what main restores; a pull request restores main's, and
+     `pwa-e2e`, keyed by Playwright's version. Only `main` saves a cache, so a pull request can't
+     fill the repository's 10 GB or seed what main restores; a pull request restores main's, and
      the nearest older NuGet key when its projects differ. `app` and `publish` restore nothing:
      the package main publishes is built from what the feeds serve.
    - CodeQL on a pull request analyses only the languages the change reaches (`codeql.yml`
