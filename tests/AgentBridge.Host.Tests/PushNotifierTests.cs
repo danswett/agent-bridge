@@ -144,7 +144,7 @@ public sealed class PushNotifierTests : IDisposable
         await After(TimeSpan.Zero);
 
         var received = Received();
-        Assert.Equal([Laptop, Phone], received.Select(r => r.Device).Order(StringComparer.Ordinal));
+        Assert.Equal([Phone, Laptop], received.Select(r => r.Device).Order(StringComparer.Ordinal));
         var (_, n, ttl, urgency, topic) = received.Single(r => r.Device == Phone);
         Assert.Equal("restored", Kind(n));
         Assert.Equal("DEV restarted", n.GetProperty("title").GetString());
