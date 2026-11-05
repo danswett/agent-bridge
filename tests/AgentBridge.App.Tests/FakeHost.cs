@@ -466,10 +466,97 @@ static class Wait
             // its UI thread held), not that what it waited for never came.
             if (now > deadline)
             {
-                throw new TimeoutException($"timed out waiting for {what} (longest gap between looks {longest.TotalMilliseconds:F0} ms; "
-                    + $"pool threads {ThreadPool.ThreadCount}, queued {ThreadPool.PendingWorkItemCount}){(why is null ? "" : $": {TestUi.Read(why)}")}");
+                throw TimedOut(what, longest, why is null ? null : TestUi.Read(why));
             }
             await Task.Delay(20);
+        }
+    }
+
+    internal static TimeoutException TimedOut(string what, TimeSpan longest, string? details) =>
+        new($"timed out waiting for {what} (longest gap between looks {longest.TotalMilliseconds:F0} ms; "
+            + $"pool threads {ThreadPool.ThreadCount}, queued {ThreadPool.PendingWorkItemCount}){(details is null ? "" : $": {details}")}");
+}
+
+// Only counts and phase times cross the pipe/UI boundary; never file contents.
+sealed class AttachmentDeliveryEvidence(long expectedBytes, TimeProvider? time = null)
+{
+    enum Phase { Waiting, Start, Chunks, AllBytes, Reply, Acknowledged, TerminalUi }
+    readonly object gate = new();
+    readonly TimeProvider clock = time ?? TimeProvider.System;
+    readonly long began = (time ?? TimeProvider.System).GetTimestamp();
+    Phase phase;
+    long? start, firstChunk, lastChunk, reply, acknowledged, terminal;
+    long bytes;
+    int chunks;
+    string? outcome, error;
+    string status = "not observed";
+    DeliveryState? uiState;
+
+    void Reached(Phase next)
+    {
+        if (next > phase) { phase = next; }
+    }
+
+    public void AttachmentStarted()
+    {
+        lock (gate) { start ??= clock.GetTimestamp(); Reached(Phase.Start); }
+    }
+
+    public void ChunkReceived(int count)
+    {
+        lock (gate)
+        {
+            firstChunk ??= clock.GetTimestamp();
+            lastChunk = clock.GetTimestamp();
+            bytes += count;
+            chunks++;
+            Reached(bytes == expectedBytes ? Phase.AllBytes : Phase.Chunks);
+        }
+    }
+
+    public void ReplyReceived()
+    {
+        lock (gate) { reply ??= clock.GetTimestamp(); Reached(Phase.Reply); }
+    }
+
+    public void ReplyAcknowledged(string? value)
+    {
+        lock (gate) { acknowledged ??= clock.GetTimestamp(); outcome = value; Reached(Phase.Acknowledged); }
+    }
+
+    public void ObserveUi(string value, string? failure, DeliveryState? state)
+    {
+        lock (gate)
+        {
+            status = value;
+            error = failure;
+            uiState = state;
+            if (state is DeliveryState.Done or DeliveryState.Failed)
+            {
+                terminal ??= clock.GetTimestamp();
+                Reached(Phase.TerminalUi);
+            }
+        }
+    }
+
+    public string Describe()
+    {
+        lock (gate)
+        {
+            var last = phase switch
+            {
+                Phase.Start => "attachment start received", Phase.Chunks => "attachment chunk received",
+                Phase.AllBytes => "all attachment bytes received", Phase.Reply => "reply received",
+                Phase.Acknowledged => "reply acknowledged", Phase.TerminalUi => "terminal UI observed",
+                _ => "waiting for attachment start",
+            };
+            string At(long? stamp) => stamp is { } t
+                ? clock.GetElapsedTime(began, t).TotalMilliseconds.ToString("F0", System.Globalization.CultureInfo.InvariantCulture) + " ms"
+                : "not observed";
+            return $"last phase={last}; attachment start={At(start)}; chunks={chunks}, bytes={bytes}/{expectedBytes}, "
+                + $"first chunk={At(firstChunk)}, last chunk={At(lastChunk)}; reply received={At(reply)}; "
+                + $"reply acknowledgement={At(acknowledged)}, outcome={outcome ?? "none"}; terminal UI={At(terminal)}, "
+                + $"state={uiState?.ToString() ?? "not observed"}, status={status}, error={error ?? "none"}";
         }
     }
 }

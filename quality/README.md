@@ -504,6 +504,10 @@ changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
   summary lists per-project counts and times and the 10 slowest tests. Next, each suite's
   duration is compared with its catalog `baseline`, and one that grows more than 50% slower
   gets flagged in the PR summary.
+  - The CardTests chunked large-file case includes phase evidence in its existing timeout
+    (#513): attachment start, chunk bytes/count and timings, reply receipt, client-observed
+    acknowledgement, and terminal UI state. The last phase distinguishes pipe progress from
+    UI settlement; it does not extend the wait or replace delivered/byte assertions.
 - **Flakes:** a test that passes and fails on the same code is flaky. It's reported, never
   silently retried to green. The flake record is the `flaky` label and its issues, one per test,
   each with its run links and counts.
