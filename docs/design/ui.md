@@ -1453,8 +1453,8 @@ action lives on the machine, not on each row. The field names follow Connection'
 | Where in §2.2 | When | Glyph | Status text | Action |
 |---|---|---|---|---|
 | After rule 1 | `attention.kind: signInNeeded` with `recovery: pending` (signed in; the host hasn't seen the model answer yet) | `idle` | "Signed in · waiting for the session to confirm" | None; Continue (§6.12) where the session died mid-turn |
-| After the row above | `attention.kind: signInNeeded` with any other `recovery` (or none) | `needs` | "Needs sign-in · *Agent*" (and "· @*account*" when known) | **Sign in**, only with the `sessions.signin` capability and a `signIn` value the client knows; no button otherwise (A7) |
-| Refines rule 3 | `working` with `attention.kind: notResponding` | `failed` | "Not responding · since *time*" | None; there is nothing safe to press yet |
+| After the row above | `attention.kind: signInNeeded` with any other `recovery` (or none) | `needs` | "Needs sign-in", with the machine as line 2's second fact (§2.2); the agent and "@*account*" are in the banner, Needs you and Details | **Sign in**, only with the `sessions.signin` capability and a `signIn` value the client knows; no button otherwise (A7) |
+| Refines rule 3 | `working` with `attention.kind: notResponding` | `failed` | "Not responding", with the machine as line 2's second fact; the trailing age says since when, and Details gives the time | None; there is nothing safe to press yet |
 | Before rule 4 | Main agent idle, and `attention.kind: error` | `failed` | "Not authorised", "Rate limited" or "Agent error", from `attention.errorClass` `auth`, `rate` or `other` (an unknown class reads as "Agent error"; a new class gets its words here first), plus "· N delegates still running" when background agents survive the turn | None on the row; the agent's own words go in Details |
 
 The error rule sits after the question rules and before rules 4 and 5, so background work
@@ -1558,7 +1558,7 @@ count, and its row to "Needs sign-in". Sessions that confirm leave the count one
 
 | Use | Text |
 |---|---|
-| Row | "Needs sign-in · *Agent*"; "Signed in · waiting for the session to confirm"; "Not responding · since *time*"; "Not authorised"; "Rate limited"; "Agent error" |
+| Row | "Needs sign-in · *machine*"; "Signed in · waiting for the session to confirm"; "Not responding · *machine*" (age trailing); "Not authorised"; "Rate limited"; "Agent error" |
 | Banner | "*Agent* on *machine* needs sign-in"; "*n* sessions affected"; "Waiting for sign-in · code expires *time*"; "Signed in · waiting for *n* sessions to confirm"; "Signed in · *n* sessions recovered"; "Recovered by itself"; "Sign-in failed · *reason*"; "Sign in at the machine · *reason*"; "Couldn't start sign-in. Try again."; "*machine* can't be reached now" |
 | Sheet | "Starting *Agent*'s sign-in on *machine*…"; "Open this page and enter the code."; "Expires *time*"; "Code expired"; "This sign-in code couldn't be shown." |
 | Buttons | "Sign in"; "Show code"; "Open"; "Copy"; "Cancel"; "Try again" |
