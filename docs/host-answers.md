@@ -91,8 +91,10 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     last: exactly one form heading, a "Copilot needs information." row right under the
     frame's top rule and one column in from it (an MCP server's elicitation is headed with its
     own name, and may have a field of the same name; the question, a field's title or an
-    option reading the same are the form's own, and never counted, Copilot 4478963305), the
-    whole question under it
+    option reading the same are the form's own, and never counted, Copilot 4478963305), its
+    frame closed by the same rule with nothing drawn under it (the CLI draws a prompt in place
+    of its input box and footer, so another form or an input under it is refused, Copilot
+    4479698033, and everything below is read inside the frame), the whole question under it
     (its lines, each wrapped onto as many rows as it takes), with more than one field the tab
     bar naming exactly this form's fields in order (titles as written, brackets included; the
     field being answered may be in the bar's own brackets), the field's own heading on a row

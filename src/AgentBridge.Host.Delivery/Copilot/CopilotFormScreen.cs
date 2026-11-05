@@ -42,8 +42,23 @@ public static partial class CopilotFormScreen
     {
         const string Prompted = "a permission prompt showed on the session's screen in place of the question's form";
         const string NotForm = "the session's screen no longer showed the question's form";
+        const string Under = "something other than the question's form was drawn under it on the session's screen";
         var headed = Enumerable.Range(0, rows.Count).Where(r => Heads(rows, r)).ToList();
         if (headed.Count != 1) { return rows.Any(Permission) ? Prompted : NotForm; }
+        // The form's frame closes with the top's own rule again (`MIo`), and the frame is the
+        // last thing drawn: the CLI draws a prompt (`ekn`, an elicitation among them) in place of
+        // its input box and that box's footer, so nothing is under a form it is showing. Read to
+        // the end of the screen, the hints could be another form's (an MCP server's elicitation
+        // drawn under it), and an input drawn there (a shell's) was not looked at, though keys go
+        // to whichever is live (#510 review, Copilot 4479698033). Everything after this is read
+        // inside the frame.
+        var top = rows[headed[0] - 1].TrimEnd(' ');
+        var bottom = headed[0] + 1;
+        while (bottom < rows.Count && rows[bottom].TrimEnd(' ') != top) { bottom++; }
+        if (bottom >= rows.Count) { return rows.Any(Permission) ? Prompted : NotForm; }
+        if (rows.Skip(bottom + 1).Any(r => r.Trim(' ').Length > 0)) { return rows.Skip(bottom + 1).Any(Permission) ? Prompted : Under; }
+        var frame = rows;
+        rows = [.. rows.Take(bottom)];
         var at = headed[0] + 1;
         // The whole question, as drawn: its lines, each wrapped onto as many rows as it takes.
         if (Collapse(form.Message ?? "") is { Length: > 0 } message)
@@ -83,7 +98,7 @@ public static partial class CopilotFormScreen
         // A permission prompt drawn beside the form, above its heading or below its hints. What
         // is inside the form (an option, or words typed into a field, reading "1. Yes") is the
         // form's own.
-        return rows.Take(headed[0]).Concat(rows.Skip(end + 1)).Any(Permission) ? Prompted : null;
+        return frame.Take(headed[0]).Concat(rows.Skip(end + 1)).Any(Permission) ? Prompted : null;
     }
 
     static bool Permission(string row) => PermissionRow().IsMatch(row);

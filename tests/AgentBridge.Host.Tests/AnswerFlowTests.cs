@@ -1410,6 +1410,26 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Empty(injector.Refused);
     }
 
+    [Theory]
+    // Under this question's whole form: an MCP server's elicitation, whose hints were taken for
+    // the form's own, or an input in shell mode (#510 review, Copilot 4479698033). The CLI draws
+    // nothing under a form it is showing, so keys would go to what is drawn there.
+    [InlineData("mcp")]
+    [InlineData("shell")]
+    public async Task Anything_drawn_under_the_questions_form_refuses_the_answer_before_any_key(string under)
+    {
+        injector.Screen = () => under == "mcp"
+            ? [.. WhichOne, .. Framed("Which one?", ["pick"], 0, ["  \u276F a", "    b", "    c"]).Select(r => r.Replace("Copilot needs information.", "github needs information."))]
+            : [.. WhichOne, "\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584", "\u2503 Execute shell command", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580", " Shell \u00B7 Allow All"];
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("drawn under it", reason);
+        Assert.Empty(injector.Attempts);
+    }
+
     [Fact]
     public async Task Two_forms_on_the_screen_at_once_are_still_refused_before_any_key()
     {
