@@ -1,25 +1,37 @@
 # Epic dashboard (#756, part 1)
 
 [Epic dashboard](../../.github/workflows/epic-dashboard.yml) checks hourly at minute 23,
-on issue close/reopen, on a published release, and on manual dispatch. Only `main` in
-`danswett/agent-bridge` may run the job. Concurrent events coalesce. It rewrites only
+on issue close/reopen, on main-push CI completion, and on manual dispatch. Only `main` in
+`danswett/agent-bridge` may run either job. Concurrent events coalesce. It rewrites only
 [#755's body](https://github.com/danswett/agent-bridge/issues/755), never comments or Project
 fields. Shipped-in stamping and Pages charts are separate work.
 
 GitHub's [`release` event has a tag ref](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#release),
-so the required main-only guard skips it. Also,
+so there is no direct release trigger. Also,
 [events from `GITHUB_TOKEN` do not start downstream workflows](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow).
 The workflow therefore also listens for completion of this repository's main-push
 **CI** workflow, which publishes the releases. This trusted main-ref path refreshes
 after automated releases even if a later CI job fails. It never consumes upstream
-artifacts, caches or code. A release published manually outside CI is picked up by
+CI artifacts, caches or code. A release published manually outside CI is picked up by
 the next hourly run (or manual dispatch on `main`), not by its tag-ref event.
 
 `dashboard.py` is Product's reference generator with paginated reads and offline rendering.
 Its `project`, `render` and `compare` commands only read and print to stdout; the final
-workflow step owns the write. Project data uses a separate read credential; public issues,
-labels, releases and the body edit use `GITHUB_TOKEN` (`contents: read`, `issues: write`).
-The Project credential is present only in the Project GraphQL step.
+workflow step owns the write. Credentials are isolated across jobs:
+
+- **`read`** uses environment `epic-dashboard` and only `contents: read` for its
+  `GITHUB_TOKEN`. The Project secret is present only in its GraphQL step. It uploads
+  only `dashboard-project.json` as a same-run artifact, retained for **one day**.
+- **`write`** needs `read`, has no environment or Project secret, and downloads only
+  that run's snapshot. Public issues, labels, releases and the body edit use its own
+  `GITHUB_TOKEN` (`contents: read`, `issues: write`).
+
+The Project token and the issue-write token are never in the same job. Both jobs have
+the main/repository guard and a separate job-level concurrency group with
+`cancel-in-progress: false`: skipped events cannot cancel real work, reads coalesce
+without interrupting a read, and only one render/compare/edit can run at a time.
+`tools/epic-dashboard/**` is a sensitive merge-rule path and its unit suite is
+security-sensitive, so future generator-only changes still require independent review.
 
 The layout, epic order, baseline and Beta 1 gate follow the reference in #756. Tracker
 numbers, not titles, identify epics, so renames preserve the stable dashboard name.
