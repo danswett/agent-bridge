@@ -35,6 +35,11 @@ public interface IRestoreMarks
 {
     void Mark(string id, SessionRestored? mark);
 
+    // The restore's boundary without the badge, until it is shown with Mark (the same mark): from
+    // before the launch, so what the interrupted run left is never shown on the restored session,
+    // while restored and Continue wait for its window to be seen ready.
+    void Hold(string id, SessionRestored mark);
+
     // An attempt that started nothing takes back the mark it showed: the mark before it comes back as
     // it was then (Continue gone if a turn had started since), or none. Nothing if another mark has
     // been shown since.
@@ -223,9 +228,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     readonly HashSet<string> inRun = new(StringComparer.Ordinal);
     // Being resumed now, by the queue or on request: never a second attempt at the same session.
     readonly HashSet<string> inFlight = new(StringComparer.Ordinal);
-    // Restores the launcher could not confirm (a folder-trust question, a window not seen ready):
-    // counted restored once the session registers, offered until then.
-    readonly Dictionary<string, RestoreEntry> unconfirmed = new(StringComparer.Ordinal);
+
     // Cancelled as the host stops: a restore still waiting its turn starts nothing.
     readonly CancellationTokenSource stopping = new();
     Task active = Task.CompletedTask;
@@ -479,13 +482,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             {
                 // Resumed since (from Launch): live again, so no longer owed.
                 var resumed = owed.RemoveAll(w => w.Entry.Id == s.Id) + said.RemoveAll(w => w.Entry.Id == s.Id) > 0;
-                // A restore that could not be confirmed has registered: restored after all.
-                if (unconfirmed.Remove(s.Id, out var waited) && !inRun.Contains(s.Id))
-                {
-                    restoredThisRun.Add(s.Id);
-                    restoredBy[s.Id] = Loss(waited);
-                    resumed = true;
-                }
+
                 if (resumed) { BuildNoticeLocked(); }
                 goneBeforeStart.Remove(s.Id);
                 if (From(s, now) is not { } e) { return; }
@@ -644,21 +641,25 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             var now = time.GetUtcNow();
             switch (result.Outcome)
             {
-                // Not confirmed ready, but registered already: restored.
-                case LaunchOutcome.Unconfirmed when Registered(entry.Id):
                 case LaunchOutcome.Started:
+                    // Seen ready: restored, and only now shown so, with Continue.
                     restoredBy[entry.Id] = Loss(entry);
                     // Unless it has already registered and died: then it is judged, and if it died
                     // offered as a loop, not counted restored.
-                    if (!inRun.Contains(entry.Id)) { restoredThisRun.Add(entry.Id); }
+                    if (!inRun.Contains(entry.Id))
+                    {
+                        restoredThisRun.Add(entry.Id);
+                        RevealLocked(entry.Id);
+                    }
                     log($"restore: session {Short(entry.Id)} restored, idle");
                     break;
                 case LaunchOutcome.Unconfirmed:
-                    // Started, but not seen to register (a folder-trust question for a person, a
-                    // window not seen ready): offered until it registers, then counted restored. One
-                    // that never does stays offered, stamped, and is not tried again.
-                    if (owed.Any(x => x.Entry.Id == entry.Id)) { unconfirmed[entry.Id] = entry; }
-                    log($"restore: session {Short(entry.Id)} started, not confirmed ({result.Reason}); offered until it registers");
+                    // Started, but its window not seen ready (a folder-trust question for a person,
+                    // or a window not recognised): never counted restored nor shown with Continue,
+                    // since a reply's Enter there would answer the question (replies are held:
+                    // LaunchService.HeldForReply). Offered while it has not registered; stamped,
+                    // and not tried again.
+                    log($"restore: session {Short(entry.Id)} started, not seen ready ({result.Reason}); not counted restored");
                     break;
                 case LaunchOutcome.Busy:
                     // Waiting on a person at the machine (folder trust), or on discovery: nothing
@@ -721,7 +722,6 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     // takes away an earlier restore's protection.
     sealed record Undo(string Id, DateTimeOffset? At, DateTimeOffset? Since, DateTimeOffset? Owed, DateTimeOffset? Live, (SessionRestored Mark, DateTimeOffset Until)? Shown);
 
-    bool Registered(string id) => live.TryGetValue(id, out var e) && e.Gone is null;
 
     // Stamped and marked before the launch.
     Undo StampLocked(string id, DateTimeOffset now, RestoreCause cause, DateTimeOffset went, bool midTurn, bool questionLost)
@@ -817,12 +817,13 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             inFlight.Remove(ask.Session);
             if (!stopped)
             {
-                if (result.Outcome is LaunchOutcome.Started || (result.Outcome is LaunchOutcome.Unconfirmed && Registered(ask.Session)))
+                // Seen ready: restored, and shown so. Unless it has already registered and died: then
+                // it is judged, as a loop. Not seen ready (unconfirmed): stamped, never shown.
+                if (result.Outcome is LaunchOutcome.Started && !inRun.Contains(ask.Session))
                 {
-                    // Unless it has already registered and died: then it is judged, as a loop.
-                    if (!inRun.Contains(ask.Session)) { restoredThisRun.Add(ask.Session); }
+                    restoredThisRun.Add(ask.Session);
+                    RevealLocked(ask.Session);
                 }
-                else if (result.Outcome is LaunchOutcome.Unconfirmed && owed.FirstOrDefault(w => w.Entry.Id == ask.Session) is { } waiting) { unconfirmed[ask.Session] = waiting.Entry; }
                 else if (result.Outcome is LaunchOutcome.Busy or LaunchOutcome.Refused) { UndoLocked(undo); }
                 ScheduleWriteLocked(Coalesce);
             }
@@ -830,8 +831,10 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         log($"restore: session {Short(ask.Session)} asked by {ask.By}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}");
         return result;
     }
-    // The restored mark, shown on the session for this host run and at most ShownFor; Continue's words
-    // only for one that went mid-turn.
+    // The restored mark, for this host run and at most ShownFor; Continue's words only for one that
+    // went mid-turn. Held (the boundary, no badge) from before the launch, and shown once the launch
+    // has seen the window ready (RevealLocked): never on a window that may be asking whether to trust
+    // its folder.
     void MarkLocked(string id, DateTimeOffset now, RestoreCause cause, DateTimeOffset went, bool midTurn, bool questionLost)
     {
         var mark = new SessionRestored
@@ -843,8 +846,13 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             Continue = midTurn ? ContinueText(cause, went, options.Zone ?? TimeZoneInfo.Local) : null,
         };
         shown[id] = (mark, now + RestoreProtocol.ShownFor);
-        options.Marks?.Mark(id, mark);
+        options.Marks?.Hold(id, mark);
         ArmMarkLocked(id, RestoreProtocol.ShownFor);
+    }
+
+    void RevealLocked(string id)
+    {
+        if (shown.TryGetValue(id, out var s)) { options.Marks?.Mark(id, s.Mark); }
     }
 
     void ArmMarkLocked(string id, TimeSpan due)
@@ -1173,13 +1181,15 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     // the last record; one still waiting its turn starts nothing.
     public async ValueTask DisposeAsync()
     {
+        stopping.Cancel();
+        // Read after the cancel: the queue starts nothing once it is cancelled (PumpLocked), so the
+        // restore under way now is the last one.
         Task under;
         lock (gate)
         {
             if (stopped) { return; }
             under = active;
         }
-        stopping.Cancel();
         await Task.WhenAny(under, Task.Delay(StopWait)).ConfigureAwait(false);
         source.Changed -= OnChanged;
         lock (gate)

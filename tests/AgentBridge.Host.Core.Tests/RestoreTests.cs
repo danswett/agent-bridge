@@ -1220,6 +1220,28 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal(((bool?)null, (string?)null), (after.Restored!.MidTurn, after.Restored.Continue));
     }
 
+    // Held while its window has not been seen ready: no restored mark and no Continue, but the
+    // interrupted turn is not shown; shown once the launch has seen the window ready.
+    [Fact]
+    public async Task A_held_restore_shows_no_continue_until_its_window_is_seen_ready()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999993";
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var real = f.Source();
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2));
+        await real.RefreshAsync();
+        var mark = new SessionRestored { At = Fixture.T0.AddSeconds(5), Cause = RestoreCause.Reboot, MidTurn = true, Continue = "carry on" };
+
+        real.Hold(Id, mark);
+        await Until(() => real.Get(Id)!.Status == SessionStatus.Idle);
+        Assert.Null(real.Get(Id)!.Restored);
+
+        real.Mark(Id, mark);
+        await Until(() => real.Get(Id)!.Restored is not null);
+        Assert.Equal("carry on", real.Get(Id)!.Restored!.Continue);
+    }
+
     // The badge goes after a day; the restore does not: the interrupted turn is still not shown.
     [Fact]
     public async Task The_interrupted_turn_stays_hidden_after_the_restored_badge_goes()
@@ -1486,10 +1508,10 @@ public sealed class RestoreTests : IDisposable
         Assert.Single(resumer.Asked);
     }
 
-    // A restore the launcher could not confirm stays offered until its session registers, and is
-    // counted restored then; one that never registers is not hidden.
+    // A restore the launcher could not confirm (its window at folder trust) stays offered until its
+    // session registers, and is never counted restored or shown so: its window was never seen ready.
     [Fact]
-    public async Task An_unconfirmed_restore_is_offered_until_its_session_registers()
+    public async Task An_unconfirmed_restore_is_offered_until_it_registers_and_never_shown_restored()
     {
         Previous(Fixture.T0, false, E("a"));
         var resumer = new Resumer();
@@ -1500,7 +1522,9 @@ public sealed class RestoreTests : IDisposable
 
         Assert.Equal((0, 1), (r.Notice!.Restored, r.Notice.Offered.Count));
         source.Upsert(S("a"));
-        Assert.Equal((1, 0), (r.Notice!.Restored, r.Notice.Offered.Count));
+        Assert.Equal((0, 0), (r.Notice?.Restored ?? 0, r.Notice?.Offered.Count ?? 0));
+        Assert.False(marks.Of.ContainsKey("a"));
+        Assert.True(marks.Held.ContainsKey("a"));
     }
 
     // Registered and gone before the launch returned: offered as a loop, not hidden as restored.
@@ -1525,13 +1549,13 @@ public sealed class RestoreTests : IDisposable
         Assert.Empty(r.RestoredLosses());
     }
 
-    // Registered before the launcher could see its window ready: restored, not left waiting for a
-    // registration that has already come. Guards the split of unconfirmed restores, whose other half
-    // (one not registered yet stays offered) An_unconfirmed_restore_is_offered_until_its_session_registers holds.
+    // Registered, but its window never seen ready (it may be asking whether to trust its folder): not
+    // counted restored, and no restored mark or Continue shown, which one tap would send into that
+    // question. The boundary is held, so its interrupted turn is not shown either.
     [Fact]
-    public async Task A_restore_that_registered_before_its_launch_came_back_unconfirmed_is_counted_restored()
+    public async Task A_restore_whose_window_was_not_seen_ready_is_not_counted_and_shows_no_continue()
     {
-        Previous(Fixture.T0, false, E("a"));
+        Previous(Fixture.T0, false, E("a", turn: RestoreTurn.Working));
         var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
         resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Unconfirmed, "Copilot in App started, but its window was not seen ready; check at the machine") { Session = "a" });
         await using var r = Recorder(resumer: resumer);
@@ -1540,9 +1564,13 @@ public sealed class RestoreTests : IDisposable
 
         source.Upsert(S("a"));
         resumer.Gate!.SetResult();
-        await Until(() => told.Count == 1);
+        await Until(() => Logged("not seen ready"));
+        Time.Advance(RestoreRecorder.NoticeAfter);
 
-        Assert.Equal((1, 0), (told[0].Restored, told[0].Offered.Count));
+        Assert.Empty(told);
+        Assert.Equal(0, r.Notice?.Restored ?? 0);
+        Assert.False(marks.Of.ContainsKey("a"));
+        Assert.NotNull(marks.Held["a"].Continue);
     }
 
     // A request that started nothing (busy) takes back only its own mark: the one an earlier restore
@@ -1618,7 +1646,7 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal(LaunchOutcome.Refused, withdrawn.Outcome);
         Assert.Equal(["a"], resumer.Asked.Select(x => x.Id));
         Assert.False(Written().Stamps.ContainsKey("x"));
-        Assert.Null(marks.Of["x"]);
+        Assert.False(marks.Held.ContainsKey("x") || marks.Of.ContainsKey("x"));
     }
 
     // The expiry of a mark since replaced, already under way when it was replaced, takes nothing away.
@@ -1689,13 +1717,17 @@ public sealed class RestoreTests : IDisposable
     {
         public readonly System.Collections.Concurrent.ConcurrentDictionary<string, SessionRestored?> Of = new(StringComparer.Ordinal);
         public readonly System.Collections.Concurrent.ConcurrentDictionary<string, SessionRestored?> Before = new(StringComparer.Ordinal);
+        // Held, not shown (the boundary): restored and Continue wait for the window to be seen ready.
+        public readonly System.Collections.Concurrent.ConcurrentDictionary<string, SessionRestored> Held = new(StringComparer.Ordinal);
         public void Mark(string id, SessionRestored? mark)
         {
-            Before[id] = Of.GetValueOrDefault(id);
+            if (mark is null || !(Held.TryGetValue(id, out var held) && held == mark)) { Before[id] = Of.GetValueOrDefault(id); }
             Of[id] = mark;
         }
+        public void Hold(string id, SessionRestored mark) => Held[id] = mark;
         public void Revert(string id, SessionRestored mark)
         {
+            if (Held.TryGetValue(id, out var held) && held == mark) { Held.TryRemove(id, out _); }
             if (Of.GetValueOrDefault(id) == mark) { Of[id] = Before.TryRemove(id, out var was) ? was : null; }
         }
     }

@@ -411,6 +411,46 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Empty(starter.Specs);
     }
 
+    // A restore whose Copilot registers and then asks whether to trust its folder: replies are held
+    // while it asks (Enter would answer it), and let through once its window is seen ready.
+    [Fact]
+    public async Task A_reply_is_held_while_a_restored_Copilot_asks_whether_to_trust_its_folder()
+    {
+        const string Id = "7e7e7e7e-7e7e-4e7e-8e7e-7e7e7e7e7e7e";
+        Resumable(Id, app, "At trust");
+        screens.Rows = ["Confirm folder trust", app, "Do you trust the files in this folder?", "❯ 1. Yes", "  2. Yes, and remember this folder for future sessions", "  3. No (Esc)"];
+        var launcher = Launcher(Config());
+
+        var o = await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+
+        Assert.Equal(LaunchOutcome.Unconfirmed, o.Outcome);
+        Assert.Contains("has not been seen ready", launcher.HeldForReply(Id));
+        Assert.Null(launcher.HeldForReply("7f7f7f7f-7f7f-4f7f-8f7f-7f7f7f7f7f7f"));
+        Assert.Empty(screens.Typed);
+        screens.Rows = CopilotReady;
+        await WaitAsync(() => Task.FromResult(launcher.HeldForReply(Id) is null));
+    }
+
+    // Followed no longer (its window never seen ready), the agent still running: replies stay held,
+    // until a turn has run there, which a person got past the question to give.
+    [Fact]
+    public async Task A_reply_stays_held_after_following_ends_unready_until_a_turn_runs_at_the_machine()
+    {
+        const string Id = "7e7e7e7e-7e7e-4e7e-8e7e-7e7e7e7e7e7f";
+        Resumable(Id, app, "Left at trust");
+        screens.Rows = ["Confirm folder trust", app, "Do you trust the files in this folder?", "❯ 1. Yes", "  2. Yes, and remember this folder for future sessions", "  3. No (Esc)"];
+        var launcher = Launcher(Config(), follow: TimeSpan.FromSeconds(1));
+
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("stopped watching", StringComparison.Ordinal))));
+        Assert.NotNull(launcher.HeldForReply(Id));
+
+        Fixture.Append(Path.Combine(f.CopilotHome, "session-state", Id, "events.jsonl"),
+            Copilot.User("trusted it, then this", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
+        await source.RefreshAsync();
+        Assert.Null(launcher.HeldForReply(Id));
+    }
+
     // The resume list reads only the newest 200 sessions of each agent; a restore names its session,
     // and finds it whatever its age.
     [Fact]

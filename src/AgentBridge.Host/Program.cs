@@ -444,6 +444,9 @@ async Task<int> ServeAsync(HostHandover handover)
     restore.Restore(launcher);
     restore.Start();
     transfers.Launcher = launcher;
+    // No reply into a session whose launch here has not seen its window ready (a restore at folder
+    // trust above all): Enter would answer the question (#780).
+    if (replies is ReplyService typist) { typist.LaunchHeld = launcher.HeldForReply; }
     // Folder-trust questions answered by a person from their devices, where config.json allows it.
     var trustAnswers = new FolderTrustAnswers(identity.Key, launcher, Log) { Trust = trustedPeers };
     // Before the connector, which launches from the card through it.

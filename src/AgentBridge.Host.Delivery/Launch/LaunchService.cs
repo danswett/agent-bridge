@@ -140,6 +140,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     readonly OutcomeMemory<TrustAnswerResult> trustAnswers;
     readonly SemaphoreSlim starting = new(1, 1);
     readonly Lock pendingGate = new();
+    // Sessions whose launch here was never seen ready, with the agent it started and the turns the
+    // session had then (HeldForReply). Under pendingGate; dropped once that agent has gone, or a turn
+    // has run since: a person got past whatever its window asked.
+    readonly Dictionary<string, (Started Started, string Label, int Turns)> neverReady = new(StringComparer.OrdinalIgnoreCase);
     readonly List<Pending> pending = [];
     // Every session id a launch has started an agent on (given, resumed, or the Codex session
     // bound to it), with its process: while that process runs, the session is not resumed
@@ -957,6 +961,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 if (registered is { } id)
                 {
                     p.RegisteredAt ??= now;
+                    p.TurnsAtRegistration ??= Turns(id);
                     p.LiveId = id;
                     Noted(p, id);
                     if (!p.Launcher.RegistersBeforeReady || p.Ready)
@@ -993,6 +998,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                         return;
                     }
                     p.RegisteredAt ??= options.Time.GetUtcNow();
+                    p.TurnsAtRegistration ??= Turns(late);
                     p.LiveId = late;
                     Noted(p, late);
                     if (!p.Launcher.RegistersBeforeReady || p.Ready)
@@ -1085,7 +1091,17 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         }
         finally
         {
-            lock (pendingGate) { pending.Remove(p); }
+            // Stopped following before its window was seen ready: replies stay held while that agent
+            // runs, until a turn runs (HeldForReply).
+            var started = p.RegisteredLate || p.Decided.Task.IsCompletedSuccessfully && p.Decided.Task.Result.Outcome == LaunchOutcome.Started;
+            var unready = !started && !p.Closed ? p.LiveId ?? (p.SessionId.Length > 0 ? p.SessionId : null) : null;
+            // Counted from its registration: a turn that ran since, while it was followed, counts.
+            var turns = unready is null ? 0 : p.TurnsAtRegistration ?? Turns(unready);
+            lock (pendingGate)
+            {
+                pending.Remove(p);
+                if (unready is not null && starter.Running(p.Started)) { neverReady[unready] = (p.Started, p.Launcher.Label, turns); }
+            }
             if (p.Reservation is { } token && p.Worktree is { } worktree)
             {
                 // Only once it has registered: one still starting stays protected, and one that
@@ -1135,6 +1151,34 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return !p.CodexBefore.Contains(id)
             && (process?.StartedAt ?? source.Get(id)?.StartedAt) is { } at && at >= p.Started.StartedAt - TimeSpan.FromSeconds(2);
     }
+
+    // Why a reply must not be typed into this session yet (ReplyService.LaunchHeld): a launch of it
+    // here is still being followed and has not seen its window ready, or stopped following before
+    // it did, and that agent still runs. Its window may show a startup question, folder trust most
+    // of all, which a reply's Enter would answer; only a person at the machine answers that (#780).
+    public string? HeldForReply(string sessionId)
+    {
+        (Started Started, string Label, int Turns) held;
+        lock (pendingGate)
+        {
+            var p = pending.FirstOrDefault(x => !x.Closed && (x.LiveId == sessionId || x.SessionId == sessionId)
+                && !(x.Decided.Task.IsCompletedSuccessfully && x.Decided.Task.Result.Outcome == LaunchOutcome.Started));
+            if (p is not null) { return NotReady(p.Launcher.Label); }
+            if (!neverReady.TryGetValue(sessionId, out held)) { return null; }
+        }
+        // Outside pendingGate: the source has a lock of its own.
+        var turns = Turns(sessionId);
+        lock (pendingGate)
+        {
+            if (starter.Running(held.Started) && turns <= held.Turns) { return NotReady(held.Label); }
+            neverReady.Remove(sessionId);
+            return null;
+        }
+        static string NotReady(string label) =>
+            $"{label} was started here and its window has not been seen ready, so it may still be asking a startup question (such as whether to trust its folder) that a reply would answer; answer it at the machine (a prompt typed there lets replies through)";
+    }
+
+    int Turns(string sessionId) => source.Get(sessionId)?.Activity?.TurnCount ?? 0;
 
     // Whether a launch has started an agent on this session that is still running.
     bool Starting(string sessionId)
@@ -1493,6 +1537,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         // window never seen ready, and whether its launcher exited, handing the session on.
         public volatile bool Ready;
         public DateTimeOffset? RegisteredAt { get; set; }
+        // The session's turns when it registered, before any the new agent could run.
+        public int? TurnsAtRegistration { get; set; }
         public bool ReadyMissed { get; set; }
         public bool HandedOn { get; set; }
         public bool RegisteredLate { get; set; }

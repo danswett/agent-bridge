@@ -83,7 +83,7 @@ public sealed class CopilotReplyTests : IDisposable
     }
 
     [Fact]
-    public void A_question_left_open_by_a_killed_cli_asks_no_more_once_a_new_cli_resumes_the_session_but_one_it_asks_again_does()
+    public void What_a_killed_cli_left_asking_keeps_a_reply_out_after_a_new_cli_resumes_until_something_settles_it_but_is_no_longer_answerable()
     {
         Fixture.Append(events, Copilot.User("go", 1), Ask("q1", 2), Copilot.Event("permission.requested", new { requestId = "r1", permissionRequest = new { kind = "shell" } }, 3));
         Assert.True(CopilotPrompts.Before(events).Asking);
@@ -92,14 +92,25 @@ public sealed class CopilotReplyTests : IDisposable
         // No shutdown: the CLI was killed. A subagent's resume (none is written) would end nothing.
         Fixture.Append(events, Copilot.Event("session.resume", new { }, 30, agentId: "helper"));
         Assert.True(CopilotPrompts.Before(events).Asking);
+        // The new CLI may still show them: a reply waits (Resumed says why), an answer is stale.
         Fixture.Append(events, Copilot.Event("session.resume", new { }, 31));
-        Assert.False(CopilotPrompts.Before(events).Asking);
+        var resumed = CopilotPrompts.Before(events);
+        Assert.Equal((true, true), (resumed.Asking, resumed.Resumed));
         var after = CopilotPermissionTranscript.Before(events, "r1");
         Assert.Null(after.Request);
         Assert.Equal((0, 0), (after.PendingPermissions, after.PendingAsks));
 
+        // A question asked since is shown in their place; once it is answered, nothing asks.
         Fixture.Append(events, Ask("q2", 32));
-        Assert.True(CopilotPrompts.Before(events).Asking);
+        Assert.Equal((true, false), (CopilotPrompts.Before(events).Asking, CopilotPrompts.Before(events).Resumed));
+        Fixture.Append(events, Copilot.Answered("q2", 33), Copilot.ToolDone("q2", 34));
+        Assert.False(CopilotPrompts.Before(events).Asking);
+
+        // Left open again and resumed again: a prompt typed at the machine settles it.
+        Fixture.Append(events, Ask("q3", 40), Copilot.Event("session.resume", new { }, 41));
+        Assert.True(CopilotPrompts.Before(events).Resumed);
+        Fixture.Append(events, Copilot.User("typed here", 42));
+        Assert.False(CopilotPrompts.Before(events).Asking);
     }
 
     [Fact]

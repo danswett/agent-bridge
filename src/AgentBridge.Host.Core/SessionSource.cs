@@ -851,15 +851,34 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 if (!_restoreMarks.TryGetValue(id, out var showing) || !showing.Shown) { return; }
                 showing.Shown = false;
             }
-            else
-            {
-                if (_restoreMarks.TryGetValue(id, out var was) && was.Given == mark && was.Shown) { return; }
-                if (was is not null) { _restoreMarksBefore[id] = was; } else { _restoreMarksBefore.Remove(id); }
-                _restoreMarks[id] = new RestoreMarkState(mark);
-            }
+            else if (!SetMark(id, mark, shown: true)) { return; }
             if (!_entries.ContainsKey(id)) { return; }
         }
         _ = Task.Run(() => RecommitDriverAsync(id));
+    }
+
+    public void Hold(string id, SessionRestored mark)
+    {
+        lock (_gate)
+        {
+            if (!SetMark(id, mark, shown: false) || !_entries.ContainsKey(id)) { return; }
+        }
+        _ = Task.Run(() => RecommitDriverAsync(id));
+    }
+
+    // Under _gate. The same mark held earlier is shown in place, keeping what it has seen since (its
+    // prompt baseline, Continue gone); another replaces it, kept for Revert. Whether anything changed.
+    bool SetMark(string id, SessionRestored mark, bool shown)
+    {
+        if (_restoreMarks.TryGetValue(id, out var was) && was.Given == mark)
+        {
+            if (was.Shown || !shown) { return false; }
+            was.Shown = true;
+            return true;
+        }
+        if (was is not null) { _restoreMarksBefore[id] = was; } else { _restoreMarksBefore.Remove(id); }
+        _restoreMarks[id] = new RestoreMarkState(mark) { Shown = shown };
+        return true;
     }
 
     public void Revert(string id, SessionRestored mark)

@@ -706,6 +706,41 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Empty(injector.Plans);
     }
 
+    // A new CLI resumed the session while an approval was open, and wrote nothing of it again: it may
+    // still be on the screen, where a reply's Enter would accept it. The reply waits; one typed at the
+    // machine since (the input was free) lets replies through again.
+    [Fact]
+    public async Task A_permission_left_open_when_a_new_cli_resumed_the_session_keeps_a_reply_out_until_the_person_types_at_the_machine()
+    {
+        var ch = await OpenAsync();
+        Fixture.Append(events, Copilot.Event("permission.requested", new { requestId = "r1", permissionRequest = new { kind = "shell", toolCallId = "c9" } }, second++),
+            Copilot.Event("session.resume", new { }, second++));
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Question);
+
+        var (outcome, reason) = await ReplyAsync(ch, "carry on");
+
+        Assert.Equal("refused", outcome);
+        Assert.StartsWith("the session was resumed in a new Copilot while a question or approval was open", reason);
+        Assert.Empty(injector.Plans);
+        Fixture.Append(events, Prompt("typed at the machine"), Copilot.TurnStart(second++), Copilot.TurnEnd(second++));
+        Assert.Equal("delivered", (await ReplyAsync(ch, "carry on")).Outcome);
+    }
+
+    // A session whose launch here has not yet seen its window ready (a restore at folder trust) is
+    // not typed into: Enter would answer the question.
+    [Fact]
+    public async Task A_reply_is_refused_while_the_launch_of_its_session_has_not_seen_its_window_ready()
+    {
+        var replier = Replier();
+        replier.LaunchHeld = id => id == Id ? "Copilot was started here and its window has not been seen ready" : null;
+        Serve(Answerer(), replier);
+        var ch = await OpenAsync();
+
+        Assert.Equal(("refused", "Copilot was started here and its window has not been seen ready"), await ReplyAsync(ch, "carry on"));
+        Assert.Empty(injector.Plans);
+    }
+
     [Fact]
     public async Task A_transcript_that_cannot_be_read_cannot_say_nothing_is_asking_so_nothing_is_typed()
     {
