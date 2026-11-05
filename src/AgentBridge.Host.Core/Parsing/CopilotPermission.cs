@@ -71,6 +71,33 @@ public sealed record CopilotDialog(string Title, IReadOnlyList<CopilotDialogPart
 // Boxed: Lines are drawn one to a row, as written, in a box; else Lines[0] is text, wrapped.
 public sealed record CopilotDialogPart(bool Boxed, IReadOnlyList<string> Lines);
 
+// What decides, while several permission prompts wait, whether one can be told from the others on
+// the session's screen (#690). The host lists a prompt as answerable only when its answer could
+// be typed (SessionTracker), and types only then (CopilotPermissionScreen).
+public static class CopilotDialogs
+{
+    // Whether two dialogs could draw the same: every part alike once all white space is gone. A
+    // box wraps a long line hard at its width, so one line on two rows reads like two lines, and
+    // trailing white space is not drawn.
+    public static bool Alike(CopilotDialog a, CopilotDialog b) =>
+        Squeeze(a.Title) == Squeeze(b.Title) && Squeeze(a.Question) == Squeeze(b.Question) && a.Body.Count == b.Body.Count
+        && a.Body.Zip(b.Body).All(p => p.First.Boxed == p.Second.Boxed && Squeeze(string.Concat(p.First.Lines)) == Squeeze(string.Concat(p.Second.Lines)));
+
+    // Text that could draw a part of Copilot's own frame (a line-drawing character), be drawn
+    // other than as given (a tab), or hide what is drawn (ShownText.Misleads).
+    public static bool Unsafe(string text) => text.Any(c => c is >= '\u2500' and <= '\u257F' or '\t') || AgentBridge.Protocol.ShownText.Misleads(text);
+
+    // Whether the first of several waiting prompts can be told from the others on screen: its
+    // dialog is known, nothing given for any of them is unsafe, and none would draw the same.
+    public static bool Identifiable(CopilotPermissionPrompt mine, IEnumerable<CopilotPermissionPrompt> others)
+    {
+        if (mine.Dialog is not { } dialog || mine.Drawn.Any(Unsafe)) { return false; }
+        return others.All(o => !o.Drawn.Any(Unsafe) && (o.Dialog is not { } theirs || !Alike(dialog, theirs)));
+    }
+
+    static string Squeeze(string text) => string.Concat(text.Where(c => !char.IsWhiteSpace(c)));
+}
+
 public static partial class CopilotPermission
 {
     // The kinds whose prompt is a plain approve-once / deny choice in every Copilot build seen

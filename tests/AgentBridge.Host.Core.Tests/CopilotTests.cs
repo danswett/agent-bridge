@@ -420,6 +420,32 @@ public class CopilotTests
         Assert.Null(alone.AnswerAtMachine);
     }
 
+    // Another waiting request that would be drawn the same (here, the same command with a trailing
+    // space, which is not drawn) cannot be told from it on screen, so the first is answered at the
+    // machine until that one ends; a distinct one beside it changes nothing (Copilot review of #769).
+    [Fact]
+    public async Task A_permission_another_waiting_one_would_draw_the_same_as_is_answered_at_the_machine_until_that_one_ends()
+    {
+        await using var s = new Session_();
+        System.Text.Json.Nodes.JsonObject Command(string text)
+        {
+            var o = Copilot.Prompts["commands"].DeepClone().AsObject();
+            o["fullCommandText"] = text;
+            return o;
+        }
+
+        var alike = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Command("npm test"), 2),
+            Copilot.Permission("r2", "c2", Command("npm test "), 3), Copilot.Permission("r3", "c3", Command("npm run lint"), 4))).Question!;
+        var told = (await s.After(Copilot.PermissionDone("r2", "c2", "denied-interactively-by-user", 5))).Question!;
+        var alone = (await s.After(Copilot.PermissionDone("r3", "c3", "approved", 6))).Question!;
+
+        Assert.Equal((true, 3), (alike.AnswerAtMachine == true, alike.Waiting));
+        Assert.Equal((false, 2), (told.AnswerAtMachine == true, told.Waiting));
+        Assert.Equal((false, (int?)null), (alone.AnswerAtMachine == true, alone.Waiting));
+        Assert.StartsWith("r1#", alike.Id);
+        Assert.Equal([alike.Id, alike.Id], new[] { told.Id, alone.Id });
+    }
+
     [Fact]
     public async Task A_request_to_run_outside_the_sandbox_and_a_kind_the_host_does_not_drive_are_answered_only_at_the_machine()
     {

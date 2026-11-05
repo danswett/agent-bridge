@@ -235,6 +235,13 @@ public sealed class CopilotPermissionTests : IDisposable
         }
         Assert.Contains("cannot be checked against the session's screen", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, Crowd([])).Problem);
         Assert.Contains("cannot tell this kind", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, waiting with { Dialog = null }).Problem);
+        // Another that would be drawn the same: the same command wrapped where this one breaks a
+        // line, or with white space that is not drawn.
+        foreach (var twin in (string[][])[["git push origin", "main --force-with-lease"], ["git push origin main --force-with-lease  "]])
+        {
+            var alike = new AgentBridge.Host.Core.Parsing.CopilotDialog("Push the branch", [new(true, twin)], "Do you want to run this command?");
+            Assert.Contains("would be drawn the same", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, Crowd(["x"], alike)).Problem);
+        }
     }
 
     // The shape seen in #690: a read of one file outside the session's paths, offering read-only

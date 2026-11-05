@@ -519,7 +519,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "permission.completed":
                 {
                     var request = Json.Str(data, "requestId");
-                    if (request is not null && _permissionQuestion.Remove(request, out var question)) { S.Answer(question); S.Unidentified.Remove(question); }
+                    if (request is not null && _permissionQuestion.Remove(request, out var question)) { S.Answer(question); S.Permissions.Remove(question); }
                     break;
                 }
             default:
@@ -590,7 +590,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         if (CopilotPermission.Describe(data) is not { } prompt) { return; }
         var id = prompt.QuestionId;
         _permissionQuestion[prompt.RequestId] = id;
-        if (prompt.Dialog is null) { S.Unidentified.Add(id); }
+        S.Permissions[id] = prompt;
         var agent = stamped ?? (prompt.ToolCallId is { } call ? S.Tools.Find(call)?.Agent ?? S.Background.CallAgent(call) : null);
         // An agent asking is working, though a cold read may have seen nothing else of its run.
         if (agent is not null) { S.Background.AgentActive(agent, at); }

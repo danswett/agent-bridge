@@ -111,9 +111,9 @@ internal sealed class SessionState
     // session.attention (#800): what went wrong that the status cannot say. An error lasts until
     // the next turn, a sign-in until the model is seen answering (CopilotParser.Answered).
     public Attention? Attention;
-    // Copilot permission prompts whose dialog the host cannot identify on screen among others
-    // waiting (CopilotPermissionPrompt.Dialog is null): answered at the machine while others wait.
-    public readonly HashSet<string> Unidentified = new(StringComparer.Ordinal);
+    // Each pending Copilot permission prompt, by its question id: whether it can be told from the
+    // others waiting on the session's screen is read from them (CopilotDialogs.Identifiable).
+    public readonly Dictionary<string, CopilotPermissionPrompt> Permissions = new(StringComparer.Ordinal);
 
     public SessionStatus Effective => (interrupted.Count > 0 ? Pending.Any(q => !interrupted.Contains(q.Id)) : Pending.Count > 0) ? SessionStatus.Waiting : Status;
     public DateTimeOffset? EffectiveSince;
@@ -134,7 +134,7 @@ internal sealed class SessionState
         interrupted.Clear();
         knownSeen.Clear();
         backlog = askedFrom is not null;
-        Unidentified.Clear();
+        Permissions.Clear();
     }
 
     // Called after every event, with its time, so StatusSince is when the change happened

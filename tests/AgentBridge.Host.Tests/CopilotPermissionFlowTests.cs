@@ -518,7 +518,10 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
 
     const string Different = "the machine is showing a different permission (shell, request r2); answer at the machine";
     const string NotDrawn = "the session's screen does not show this permission as Copilot draws it, so it cannot say which waiting permission it is; answer at the machine";
-    const string Forged = "a waiting permission holds characters that could be drawn as part of Copilot's own dialog or hide what it draws, so the screen cannot say which is shown; answer at the machine";
+    // Both are listed as answered at the machine (SessionTracker), and refused there before the
+    // screen is read; the screen check refuses them too should the listing be a pass behind
+    // (CopilotPermissionTests).
+    const string AtMachine = "Copilot permission prompts can only be answered at the machine";
 
     [Theory]
     // Wrapped: r2's one line ends in r1's command on a row of its own.
@@ -576,7 +579,8 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
     {
         var result = await Answer(first, other, CopilotScreen.Shell("Run it", first.Split('\n')));
 
-        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "another waiting permission (shell, request r2) would be drawn the same, so the screen cannot say which is shown; answer at the machine"), result);
+        Assert.True(source.Get(Id)!.Question!.AnswerAtMachine);
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, AtMachine), result);
         Assert.Empty(injector.Plans);
     }
 
@@ -618,7 +622,8 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
     {
         var result = await Answer(first, second, CopilotScreen.Shell("Run it", second.Split('\n')));
 
-        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, Forged), result);
+        Assert.True(source.Get(Id)!.Question!.AnswerAtMachine);
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, AtMachine), result);
         Assert.Empty(injector.Plans);
     }
 

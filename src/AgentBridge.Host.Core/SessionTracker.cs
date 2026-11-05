@@ -200,10 +200,15 @@ internal sealed class SessionTracker
             var approvals = pending.Where(q => q.Kind == QuestionKind.Approval).ToList();
             if (approvals.Count > 1)
             {
-                // One whose dialog the host cannot tell from the others' is never typed for while
-                // they wait (CopilotPermissionScreen), so it is shown as answered at the machine.
+                // One the host cannot tell from the others on screen (a dialog it does not know,
+                // text that could draw part of Copilot's frame, or another that would be drawn
+                // the same) is never typed for while they wait (CopilotPermissionScreen), so it is
+                // shown as answered at the machine, under the same id, until it can be.
                 question = approvals[0] with { Waiting = approvals.Count };
-                if (_state.Unidentified.Contains(question.Id)) { question = question with { AnswerAtMachine = true }; }
+                var told = _state.Permissions.TryGetValue(question.Id, out var mine)
+                    && approvals.Skip(1).All(a => _state.Permissions.ContainsKey(a.Id))
+                    && CopilotDialogs.Identifiable(mine, approvals.Skip(1).Select(a => _state.Permissions[a.Id]));
+                if (!told) { question = question with { AnswerAtMachine = true }; }
             }
         }
         // Delivery types only into the main agent's ask_user (AnswerService refuses a stamped

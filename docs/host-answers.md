@@ -205,8 +205,9 @@ text, which another request's command can end in or its diff hold). The key goes
   reads like two lines, and trailing white space is not drawn);
 * and this request is the earliest still waiting.
 
-A listed prompt of any other kind is `answerAtMachine` while others wait, and answerable
-again once it is the only one. Otherwise it is `refused` ("the machine is showing a different permission (path access,
+A listed prompt the host cannot tell from the others so (any other kind, text that could
+draw part of the frame, or another waiting request that would be drawn the same) is
+`answerAtMachine` while that holds, and answerable again under the same id once it does not. Otherwise it is `refused` ("the machine is showing a different permission (path access,
 request ed05e9d7)" when another's dialog is the one drawn, or why the screen cannot say),
 and never typed for the request on screen instead: answer it at the machine. The key is
 held from the frame's top edge. The transcript is checked so before the screen is read and
