@@ -1454,7 +1454,10 @@ action lives on the machine, not on each row. The field names here are the clien
 |---|---|---|---|---|
 | After rule 1 | `status: signInNeeded` | `needs` | "Needs sign-in · *Agent*" (and "· @*account*" when known) | **Sign in**, only with the `agents.signIn` capability; no button without it (A7) |
 | Refines rule 3 | `working` with `notResponding` | `failed` | "Not responding · since *time*" | None; there is nothing safe to press yet |
-| Refines rule 6 | Idle, and the last turn ended on `error` | `failed` | "Quota reached", "Rate limited", "Model unavailable", "Network error" or "Agent error", from `error.kind` (an unknown kind reads as "Agent error") | None on the row; the agent's own words go in Details |
+| Before rule 4 | Main agent idle, and its last turn ended on `error` | `failed` | "Quota reached", "Rate limited", "Model unavailable", "Network error" or "Agent error", from `error.kind` (an unknown kind reads as "Agent error"), plus "· N delegates still running" when background agents survive the turn | None on the row; the agent's own words go in Details |
+
+The error rule sits after the question rules and before rules 4 and 5, so background work
+that survives a failed turn never hides the error behind "Delegating".
 
 - `signInNeeded` counts in Needs you and sorts with the other `needs` rows. "Not responding"
   and the error rows don't count in Needs you: nothing a person does on the row fixes them.
@@ -1472,8 +1475,11 @@ action lives on the machine, not on each row. The field names here are the clien
 - Title: "*Agent* on *machine* needs sign-in" plus "· @*account*" when known. Line 2: "*n*
   sessions affected", with the affected sessions' titles from the client's own records (never
   from text in the record).
-- One button, **Sign in**, only with the capability. Without it the line reads "Sign in at the
-  machine" with no button, and the issue that leaves it so carries `needs-rdp` (#696).
+- One button, **Sign in**, only with the capability. Without it there is no button and no
+  instruction: a missing capability doesn't prove the agent can't sign in from a device.
+- "Sign in at the machine · *reason*" shows only when the host itself says the provider has no
+  device sign-in (`signIn: machine`, with its reason). The issue that leaves a provider so
+  carries `needs-rdp` (#696).
 - Not dismissible while it lasts: it goes by itself when `state` becomes `resumed`.
 - States:
 
@@ -1497,14 +1503,15 @@ action lives on the machine, not on each row. The field names here are the clien
   - "Expires *time*" in Pacific.
   - Buttons: **Cancel** is the default and the Escape action; Open and Copy are secondary.
     Nothing is copied or opened without a press.
-- **A URL not on the allowlist, or a malformed code:** the sheet shows "This sign-in link
-  wasn't recognised, so it isn't shown. Sign in at the machine." No link and no raw text.
+- **A URL not on the allowlist, or a malformed code:** the sheet shows "This sign-in code
+  couldn't be shown." with **Try again** (a new request) and Cancel. No link and no raw text,
+  and it doesn't send the person to the machine: that's only for the host's `signIn: machine`.
 - **Expired:** the code is hidden and the sheet says "Code expired" with Try again, even before
   the host updates.
 - **Success:** the sheet closes and the banner goes to `resumed`. Sessions that died mid-turn
   show §6.12's **Continue**; nothing is typed for them.
-- The code and URL never appear in a notification, a toast, Home Assistant, a log or the
-  clipboard without a press.
+- The code and URL never appear in a notification, a toast, Home Assistant or a log, even after
+  a press. They reach the clipboard only when the person presses Copy.
 
 **Push and toast**
 
@@ -1519,8 +1526,11 @@ action lives on the machine, not on each row. The field names here are the clien
 
 - The banner is a polite live region, announced once per new (machine, agent, account) (A6).
 - Sign in's accessible name: "Sign in to *Agent* on *machine*" (A1).
-- The sheet traps focus, starts on Cancel, and returns focus to the button that opened it (A3,
-  A4). The code is read character by character ("Code: A B C D, 1 2 3 4").
+- The sheet traps focus and starts on Cancel (A3, A4). When it closes, focus goes to the button
+  that opened it if that button still exists (Cancel, failure, expiry). On success the button
+  is gone, so focus goes to the banner's "Signed in · *n* sessions resumed" line, which takes
+  focus programmatically only; if the banner has already gone, to the session list's heading.
+  A sheet opened from a push uses the same rule. The code is read character by character ("Code: A B C D, 1 2 3 4").
 - Reduced motion: the ring is still; the banner and sheet appear without animation (A10).
 - Every state is told apart by its words as well as its glyph.
 
@@ -1529,8 +1539,8 @@ action lives on the machine, not on each row. The field names here are the clien
 | Use | Text |
 |---|---|
 | Row | "Needs sign-in · *Agent*"; "Not responding · since *time*"; "Quota reached"; "Rate limited"; "Model unavailable"; "Network error"; "Agent error" |
-| Banner | "*Agent* on *machine* needs sign-in"; "*n* sessions affected"; "Waiting for sign-in · code expires *time*"; "Signed in · *n* sessions resumed"; "Recovered by itself"; "Sign-in failed · *reason*"; "Sign in at the machine" |
-| Sheet | "Starting *Agent*'s sign-in on *machine*…"; "Open this page and enter the code."; "Expires *time*"; "Code expired"; "This sign-in link wasn't recognised, so it isn't shown. Sign in at the machine." |
+| Banner | "*Agent* on *machine* needs sign-in"; "*n* sessions affected"; "Waiting for sign-in · code expires *time*"; "Signed in · *n* sessions resumed"; "Recovered by itself"; "Sign-in failed · *reason*"; "Sign in at the machine · *reason*" |
+| Sheet | "Starting *Agent*'s sign-in on *machine*…"; "Open this page and enter the code."; "Expires *time*"; "Code expired"; "This sign-in code couldn't be shown." |
 | Buttons | "Sign in"; "Show code"; "Open"; "Copy"; "Cancel"; "Try again" |
 | Push | "*Agent* on *machine* needs sign-in" / "*n* sessions affected" |
 
