@@ -336,6 +336,8 @@ acknowledgement) is always there, empty when there are none. A signed command's 
 body's JSON bytes, and this input begins with its own label, so neither ever verifies as the
 other. The library takes the raw ECDH secret, which the caller's key store computes.
 
+## Vectors
+
 [vectors/roster.json](vectors/roster.json) holds fixed test keys (`d`, `public`, `device`) and:
 
 * `framing`, `base64url`, `points`, `der`, `ids`, `fingerprint`: the primitives.
