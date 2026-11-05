@@ -17,8 +17,19 @@ public sealed partial class LaunchViewModel
     // clock here ahead of the machine's would otherwise list again and again.
     static readonly TimeSpan BusySlack = TimeSpan.FromSeconds(1);
     static readonly TimeSpan BusyAtLeast = TimeSpan.FromSeconds(5);
+    // As long as the machine follows a launch whose agent asks about its folder
+    // (LaunchServiceOptions.TrustFollowFor): a start seen after that is not shown as this one's.
+    static readonly TimeSpan LateFollowFor = TimeSpan.FromMinutes(30);
 
     ITimer? busyTimer;
+    // The newest listed question's two minutes were already up when the timer was last set: what
+    // the machine is busy with may not be that question (a Bypass Permissions busy), so it is not
+    // listed again every few seconds.
+    bool busyOverdue;
+    // One listing at a time for sessions that register while the machine is busy, and one more
+    // for any that came during it.
+    bool busyRelisting;
+    bool busyRelistAgain;
     // The sessions the machine shown had when it said it was busy: a new one may be the one
     // that kept it busy, now registered.
     HashSet<string>? busySessions;
@@ -29,8 +40,13 @@ public sealed partial class LaunchViewModel
     // (LaunchService: a registered session has started, unless its agent registers before its
     // window is ready). A Copilot or Agency does (Launchers' RegistersBeforeReady), so its appearing
     // proves nothing, and only a Trust answered here that starts it says it started. Nor does one
-    // already listed when the outcome came, or one ending.
-    sealed record LateStart(Machine Machine, string Request, string Session, string? Trust, string? Folder);
+    // already listed when the outcome came, one ending, or one seen after LateFollowFor. Agent and
+    // AskedAt tell its question from another launch's into the same folder once its id changes.
+    sealed record LateStart(Machine Machine, string Request, string Session, DateTimeOffset At, TrustQuestion? Question)
+    {
+        public bool Asked(TrustQuestion q) => Question is { } mine
+            && (mine.Id == q.Id || (mine.Folder == q.Folder && mine.Agent == q.Agent && mine.AskedAt == q.AskedAt));
+    }
     LateStart? late;
     // The launch shown as started since its unconfirmed outcome, by request.
     string? startedLate;
@@ -56,8 +72,10 @@ public sealed partial class LaunchViewModel
     {
         if (OutcomeOf(d) != "unconfirmed" || lost is not null || m != lastMachine || last?.Request != d.Request) { return; }
         if (Result(d) is not { Session: { } id } r || m.Host.Sessions.Get(id) is not null) { return; }
-        late = new LateStart(m, d.Request, id, r.Trust?.Id, r.Trust?.Folder);
+        late = new LateStart(m, d.Request, id, main.Time.GetUtcNow(), r.Trust);
     }
+
+    bool Current(LateStart l) => main.Time.GetUtcNow() - l.At <= LateFollowFor;
 
     void OnSession(Machine m, Session s)
     {
@@ -65,7 +83,7 @@ public sealed partial class LaunchViewModel
         if (late is { } l && l.Machine == m && l.Session == s.Id && s.Status != SessionStatus.Ending)
         {
             late = null;
-            if (s.Agent != AgentKind.Copilot)
+            if (s.Agent != AgentKind.Copilot && Current(l))
             {
                 StartedLate(l);
                 // Its question and the busy it kept are gone.
@@ -74,17 +92,38 @@ public sealed partial class LaunchViewModel
         }
         // A session new since the machine said it was busy may be the one that kept it busy.
         if (busySessions is { } known && shown && machine == m && options?.Busy is { Length: > 0 } && known.Add(s.Id)) { relist = true; }
-        if (relist) { _ = RefreshAsync(); }
+        if (relist) { RelistBusy(); }
     }
 
-    // As a launch that started at once: its prompt went with it, and its card opens.
+    void RelistBusy()
+    {
+        if (busyRelisting) { busyRelistAgain = true; return; }
+        busyRelisting = true;
+        _ = Run();
+        async Task Run()
+        {
+            try { await RefreshAsync(); }
+            finally
+            {
+                ui.Post(() =>
+                {
+                    busyRelisting = false;
+                    if (busyRelistAgain) { busyRelistAgain = false; if (shown) { RelistBusy(); } }
+                });
+            }
+        }
+    }
+
+    // As a launch that started at once: its prompt went with it, and its card opens, but only
+    // while the page shows that machine: a start minutes later must not take the person away from
+    // whatever they are doing now.
     void StartedLate(LateStart l)
     {
         if (lost is not null || last is not { } e || e.Request != l.Request) { return; }
         startedLate = l.Request;
-        if (l.Trust is not null && askedBy.TryGetValue(l.Machine.Key, out var by) && by.Question == l.Trust) { askedBy.Remove(l.Machine.Key); }
+        if (l.Question is { } q && askedBy.TryGetValue(l.Machine.Key, out var by) && by.Question == q.Id) { askedBy.Remove(l.Machine.Key); }
         if (e.Payload is LaunchRequest sent && (string.IsNullOrWhiteSpace(prompt) ? null : prompt) == sent.Prompt) { Prompt = ""; }
-        main.Open(l.Machine.Key, l.Session, untilItArrives: true);
+        if (shown && machine == l.Machine) { main.Open(l.Machine.Key, l.Session, untilItArrives: true); }
         Show();
     }
 
@@ -96,15 +135,20 @@ public sealed partial class LaunchViewModel
         if (options?.Busy is not { Length: > 0 })
         {
             busySessions = null;
+            busyOverdue = false;
             return;
         }
         busySessions = [.. m.Host.Sessions.All.Select(s => s.Id)];
         var asked = (m.IsLocal ? localTrust ?? options.Trust : options.Trust) ?? [];
-        // Bypass Permissions' busy names no question, nor one older than two minutes: the most it lasts.
+        // Bypass Permissions' busy names no question: two minutes is the most it lasts.
         var left = asked.Count > 0 ? asked.Max(q => q.AskedAt) + BusyFor - main.Time.GetUtcNow() : BusyFor;
         // A question whose two minutes are already up here (a clock ahead of the machine's) is
-        // listed again soon, not after another two.
-        var wait = asked.Count > 0 ? TimeSpan.FromTicks(Math.Clamp((left + BusySlack).Ticks, BusyAtLeast.Ticks, (BusyFor + BusySlack).Ticks)) : BusyFor + BusySlack;
+        // listed again soon, not after another two; but once only, as a busy still there then is
+        // not that question's.
+        var overdue = asked.Count > 0 && left <= TimeSpan.Zero;
+        var wait = overdue && busyOverdue ? BusyFor + BusySlack
+            : TimeSpan.FromTicks(Math.Clamp((left + BusySlack).Ticks, BusyAtLeast.Ticks, (BusyFor + BusySlack).Ticks));
+        busyOverdue = overdue;
         var load = loads;
         busyTimer = main.Time.CreateTimer(_ => ui.Post(() =>
         {
@@ -117,5 +161,6 @@ public sealed partial class LaunchViewModel
         busyTimer?.Dispose();
         busyTimer = null;
         busySessions = null;
+        busyOverdue = false;
     }
 }

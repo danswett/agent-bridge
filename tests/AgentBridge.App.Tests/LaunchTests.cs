@@ -45,7 +45,7 @@ public sealed class LaunchTests : IAsyncLifetime
         host.Start();
         connection = host.Connect(ui);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
-        main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui) { RetryDelay = TimeSpan.FromMilliseconds(100) }, Folds = new FoldStore(null),         Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel()) { Time = clock };
+        main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui) { RetryDelay = TimeSpan.FromMilliseconds(100) }, Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel()) { Time = clock };
         launch = new LaunchViewModel(main, ui);
         launch.Opened();
         await Wait.UntilAsync(() => launch.ShowForm, "the machine's choices");
@@ -451,6 +451,69 @@ public sealed class LaunchTests : IAsyncLifetime
         Assert.Equal("", launch.Prompt);
         await Wait.UntilAsync(() => opened.Contains("new-1") && launch.Busy == "", "its card to open, and the busy to go");
         Assert.Single(Sent());
+    }
+
+    // Engineering's review of #891: a start seen minutes later, with the page left, says so on
+    // the page but does not take the person away from what they are doing now.
+    [Fact]
+    public async Task A_launch_that_starts_late_while_the_page_is_not_shown_says_so_without_opening_its_card()
+    {
+        var opened = new List<string>();
+        main.OpenRequested += c => opened.Add(c.Id);
+        var question = Asking(clock.GetUtcNow());
+        outcome = _ => AskingResult(question);
+        options = options with { Busy = Waiting, Trust = [question] };
+        ui.Post(() => { launch.Prompt = Long; launch.Launch(); });
+        await Wait.UntilAsync(() => launch.State == "unconfirmed", "not confirmed");
+        ui.Post(launch.Closed);
+
+        await host.SendAsync(Events.SessionUpsert, Make.Session("new-1", updated: Make.T0.AddMinutes(10)) with { Agent = AgentKind.Claude });
+
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        Assert.Equal("", launch.Prompt);
+        await Task.Delay(200);
+        Assert.Empty(opened);
+    }
+
+    // Followed no longer than the machine follows it: a session that appears after that is not
+    // shown as this launch's start.
+    [Fact]
+    public async Task A_launch_not_confirmed_is_not_taken_as_started_by_a_session_that_appears_after_the_machine_stopped_following_it()
+    {
+        var opened = new List<string>();
+        main.OpenRequested += c => opened.Add(c.Id);
+        var question = Asking(clock.GetUtcNow());
+        outcome = _ => AskingResult(question);
+        ui.Post(() => { launch.Prompt = Long; launch.Launch(); });
+        await Wait.UntilAsync(() => launch.State == "unconfirmed", "not confirmed");
+
+        clock.Advance(TimeSpan.FromMinutes(31));
+        await host.SendAsync(Events.SessionUpsert, Make.Session("new-1", updated: Make.T0.AddMinutes(31)) with { Agent = AgentKind.Claude });
+        await Wait.UntilAsync(() => connection.Sessions.Get("new-1") is not null, "its session listed");
+
+        Assert.Equal("unconfirmed", launch.State);
+        Assert.Equal(Long, launch.Prompt);
+        Assert.Empty(opened);
+    }
+
+    // A busy still there once the newest question's two minutes are up here is not that question's
+    // (a Bypass Permissions busy beside an older folder question): listed again once soon, then
+    // after two minutes, not every few seconds.
+    [Fact]
+    public async Task A_busy_that_outlasts_its_listed_question_is_not_listed_again_every_few_seconds()
+    {
+        options = options with { Busy = Waiting, Trust = [Asking(clock.GetUtcNow() - TimeSpan.FromMinutes(3))] };
+        await launch.RefreshAsync();
+        var asked = Volatile.Read(ref optionsAsked);
+
+        clock.Advance(TimeSpan.FromSeconds(6));
+        await Wait.UntilAsync(() => Volatile.Read(ref optionsAsked) == asked + 1 && launch.CanReload, "listed again once soon");
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await Task.Delay(200);
+        Assert.Equal(asked + 1, Volatile.Read(ref optionsAsked));
+
+        clock.Advance(TimeSpan.FromSeconds(62));
+        await Wait.UntilAsync(() => Volatile.Read(ref optionsAsked) == asked + 2, "listed again after two minutes");
     }
 
     // A Copilot registers before its window is ready: neither its session appearing nor its

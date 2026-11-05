@@ -332,9 +332,10 @@ public sealed partial class LaunchViewModel
         if (machine?.Key == answer.Machine && shown) { _ = RefreshAsync(); }
     }
 
-    // The launch followed for its session asked this question: by its id, or its folder, as one
-    // whose words changed is asked again under a new id.
-    bool Following(TrustAnswer answer) => late is { } l && l.Machine.Key == answer.Machine && (l.Trust == answer.Question.Id || l.Folder == answer.Question.Folder);
+    // The launch followed for its session asked this question: by its id, or, as one whose words
+    // changed is asked again under a new id, by its folder, agent and when it was first asked,
+    // never by folder alone: another launch into the same folder asks a question of its own.
+    bool Following(TrustAnswer answer) => late is { } l && l.Machine.Key == answer.Machine && Current(l) && l.Asked(answer.Question);
 
     // The relay or this machine's loopback came up after this machine's questions were listed
     // through the pipe alone: list them through the relay now, so one this app may answer offers
