@@ -347,7 +347,12 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             // request's parsing budget stops it.
             bool Line(long lineStart, ReadOnlySpan<byte> inChunk, long chunkAt)
             {
-                var go = lineStart >= next || found is not (true, false) || Examine(lineStart, next, inChunk, chunkAt, starts);
+                // A line too long to read is judged by its start alone, as live judges it
+                // (TranscriptParser, Dropped): judged whole, a Claude tool result whose block type
+                // came after its first 4 KiB was a turn's middle here while live had lost the turn,
+                // so activity.turn was absent with no unreadable turn to show (review of #686).
+                var tooLong = next - lineStart - 1 > b.MaxLineBytes;
+                var go = lineStart >= next || (!tooLong && found is not (true, false)) || Examine(lineStart, next, inChunk, chunkAt, starts);
                 next = lineStart;
                 found = default;
                 carried = 0;

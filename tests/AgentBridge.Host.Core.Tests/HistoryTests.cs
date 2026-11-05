@@ -963,6 +963,69 @@ public class HistoryTests
         Assert.Equal(QuestionOutcome.Answered, parts.Single(p => p.Kind == HistoryPartKind.Question).Outcome);
     }
 
+    // Found in review of #686: a Claude tool result longer than the host reads is judged by its
+    // first 4 KiB, live and in history alike. With its block's type past them, live lost the turn
+    // (activity.turn absent) while history, which searched the whole line, kept the reply under the
+    // prompt before: no unreadable turn for the absent one. Claude writes the type first, and then
+    // both keep the turn.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_claude_tool_result_longer_than_the_host_reads_is_judged_by_its_start_live_and_in_history(bool typePastStart)
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        var block = typePastStart
+            ? new JsonObject { ["content"] = new string('r', 6000), ["type"] = "tool_result", ["tool_use_id"] = "t1", ["is_error"] = false }
+            : new JsonObject { ["type"] = "tool_result", ["tool_use_id"] = "t1", ["content"] = new string('r', 6000), ["is_error"] = false };
+        var result = new JsonObject
+        {
+            ["parentUuid"] = null, ["isSidechain"] = false, ["type"] = "user",
+            ["message"] = new JsonObject { ["role"] = "user", ["content"] = new JsonArray(block) },
+            ["uuid"] = Guid.NewGuid().ToString(), ["timestamp"] = Copilot.At(3), ["sessionId"] = "claude-session",
+        }.ToJsonString();
+        Fixture.Append(transcript,
+            Claude.User("go", 1),
+            Claude.Assistant(2, "tool_use", Claude.ToolUse("t1", "Bash", new JsonObject { ["command"] = "ls" })),
+            result,
+            Claude.Assistant(4, "end_turn", Claude.Text("after it")));
+        var o = f.Options();
+        await using var source = new SessionSource(new SessionSourceOptions
+        {
+            CopilotHome = o.CopilotHome, ClaudeHome = o.ClaudeHome, CodexHome = o.CodexHome, ClaudeRegistrationRoots = o.ClaudeRegistrationRoots,
+            CodexRegistrationRoots = o.CodexRegistrationRoots, UseFileSystemWatcher = false, MaxLineBytes = 2048,
+        }, f.Processes, f.Time);
+        await source.RefreshAsync();
+        var live = source.Get(Id)!.Activity.Turn;
+
+        var whole = await source.HistoryAsync(Id, null, 20);
+        var newest = await source.HistoryAsync(Id, null, 1);
+        var older = newest.Before is { } before ? await source.HistoryAsync(Id, before, 1) : null;
+
+        var go = whole.Turns!.First();
+        Assert.Equal("go", Prompt(go));
+        if (typePastStart)
+        {
+            Assert.Null(live);
+            Assert.Equal(2, whole.Turns!.Count);
+            Assert.True(whole.Turns[1].Unreadable);
+            Assert.DoesNotContain(go.Parts, p => p.Text == "after it");
+        }
+        else
+        {
+            Assert.Equal(go.Id, live);
+            Assert.Single(whole.Turns!);
+            Assert.Contains(go.Parts, p => p.Text == "after it");
+        }
+        // Paged one at a time it is the same turns, and the page holding "go" is the start: no
+        // empty page after it (the first-prompt check judges a long line by its start too).
+        Assert.Equal(whole.Turns!.Select(t => t.Id), (older?.Turns ?? []).Concat(newest.Turns!).Select(t => t.Id));
+        Assert.NotNull((older ?? newest).Start?.At);
+        Assert.Null((older ?? newest).Before);
+    }
+
     [Fact]
     public async Task A_synchronous_task_calls_failed_end_holding_half_a_surrogate_pair_still_ends_it_and_withdraws_its_approval()
     {
