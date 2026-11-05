@@ -31,6 +31,12 @@ public sealed class RosterPropertyTests
         ["reciprocal"] = RosterRecoveryTests.Reciprocal,
         ["tie"] = RosterRecoveryTests.Tie,
         ["mutual"] = RosterRecoveryTests.Mutual,
+        ["kept-own-adds"] = RosterPrecedenceTests.KeptOwnAdds,
+        ["thief-keep-list"] = RosterPrecedenceTests.ThiefKeepList,
+        ["wiping"] = () => RosterPrecedenceTests.Wiping(personKeeps: false),
+        ["wiping-kept"] = () => RosterPrecedenceTests.Wiping(personKeeps: true),
+        ["rank-one-against-two"] = RosterPrecedenceTests.RankOneAgainstTwo,
+        ["yielding"] = RosterPrecedenceTests.Yielding,
     };
 
     // The labels in a random order in which every entry still follows its parents.
