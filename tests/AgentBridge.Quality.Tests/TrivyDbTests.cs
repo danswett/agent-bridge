@@ -22,6 +22,8 @@ public class TrivyDbTests
         }
         New-Item -ItemType Directory -Force (Join-Path $cache 'db') | Out-Null
         Set-Content -LiteralPath (Join-Path $cache 'db' 'trivy.db') -Value 'db'
+        # Like a native Trivy's exit status: a script that ends without exit leaves LASTEXITCODE as it was.
+        exit 0
         """;
 
     [Fact]
