@@ -54,7 +54,7 @@ public sealed class HeavyDemoTests
     [Fact]
     public void The_heavy_demo_is_as_heavy_as_a_real_window_and_within_what_a_host_may_send()
     {
-        var sessions = DemoHost.Heavy(DateTimeOffset.UtcNow);
+        var sessions = DemoHost.Heavy(Make.T0);
         var heavy = sessions.Single(s => s.Id == DemoHost.HeavyId);
         var blocks = MarkdownModel.Parse(heavy.Activity.Response);
         var items = blocks.Sum(b => b is MdList list ? list.Items.Count : 1);
@@ -71,7 +71,7 @@ public sealed class HeavyDemoTests
     [Fact]
     public void The_heavy_response_ends_with_a_run_of_linked_paragraphs_after_the_blocks_it_had_before()
     {
-        var heavy = DemoHost.Heavy(DateTimeOffset.UtcNow).Single(s => s.Id == DemoHost.HeavyId);
+        var heavy = DemoHost.Heavy(Make.T0).Single(s => s.Id == DemoHost.HeavyId);
         var blocks = MarkdownModel.Parse(heavy.Activity.Response);
         static bool Linked(MdBlock b) => b is MdParagraph p && p.Inlines.Any(i => i is MdLink);
         var run = blocks.Skip(blocks.Count - 1 - DemoHost.HeavyLinkedRun).Take(DemoHost.HeavyLinkedRun).ToList();
@@ -89,7 +89,7 @@ public sealed class HeavyDemoTests
     [Fact]
     public void The_heavy_response_has_a_quoted_log_taller_than_any_view_with_a_link_on_its_first_line_and_its_last()
     {
-        var heavy = DemoHost.Heavy(DateTimeOffset.UtcNow).Single(s => s.Id == DemoHost.HeavyId);
+        var heavy = DemoHost.Heavy(Make.T0).Single(s => s.Id == DemoHost.HeavyId);
         var blocks = MarkdownModel.Parse(heavy.Activity.Response);
 
         var quote = Assert.IsType<MdQuote>(blocks[DemoHost.HeavyTall]);

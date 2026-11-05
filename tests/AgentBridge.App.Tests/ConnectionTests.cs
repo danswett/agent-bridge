@@ -429,7 +429,7 @@ public sealed class ConnectionTests : IAsyncLifetime
 
         first.Release();
         await Wait.UntilAsync(() => first.Drained, "the first channel's pump to read the gap");
-        await Task.Delay(300);
+        await Wait.UntilAsync(() => first.Handled, "the first channel's pump to have handled it");
         Assert.True(TestUi.Read(() => machine.Current));
     }
 
@@ -440,10 +440,33 @@ public sealed class ConnectionTests : IAsyncLifetime
         readonly System.Threading.Channels.Channel<AgentBridge.Transport.ChannelEvent> events = System.Threading.Channels.Channel.CreateUnbounded<AgentBridge.Transport.ChannelEvent>();
         volatile TaskCompletionSource? held;
         int holding;
+        readonly PumpedReader reader;
+
+        // The events as the app's pump reads them (HostConnection.PumpAsync: await foreach over
+        // ReadAllAsync, each event handled before the next is asked for). The enumeration ends, and
+        // Done is set, only once the pump has finished with the last event it was given.
+        sealed class PumpedReader(System.Threading.Channels.ChannelReader<AgentBridge.Transport.ChannelEvent> inner)
+            : System.Threading.Channels.ChannelReader<AgentBridge.Transport.ChannelEvent>
+        {
+            volatile bool done;
+            public bool Done => done;
+            public override Task Completion => inner.Completion;
+            public override bool TryRead([System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out AgentBridge.Transport.ChannelEvent item) => inner.TryRead(out item);
+            public override ValueTask<bool> WaitToReadAsync(CancellationToken cancellationToken = default) => inner.WaitToReadAsync(cancellationToken);
+            public override async IAsyncEnumerable<AgentBridge.Transport.ChannelEvent> ReadAllAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+            {
+                try
+                {
+                    await foreach (var e in inner.ReadAllAsync(cancellationToken)) { yield return e; }
+                }
+                finally { done = true; }
+            }
+        }
 
         public GatedChannel(IClientChannel inner)
         {
             this.inner = inner;
+            reader = new PumpedReader(events.Reader);
             _ = Task.Run(async () =>
             {
                 await foreach (var e in inner.Events.ReadAllAsync())
@@ -458,10 +481,13 @@ public sealed class ConnectionTests : IAsyncLifetime
         public int Holding => Volatile.Read(ref holding);
         // Everything passed on and read by the pump.
         public bool Drained => events.Reader.Completion.IsCompleted;
+        // The pump has finished with this channel's events, the last one handled: it came back for
+        // more and found none, or let go of them.
+        public bool Handled => reader.Done;
         public void Hold() => held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         public void Release() { var h = held; held = null; h?.TrySetResult(); }
 
-        public System.Threading.Channels.ChannelReader<AgentBridge.Transport.ChannelEvent> Events => events.Reader;
+        public System.Threading.Channels.ChannelReader<AgentBridge.Transport.ChannelEvent> Events => reader;
         public Exception? CloseReason => inner.CloseReason;
         public string PeerId => inner.PeerId;
         public string PeerName => inner.PeerName;
@@ -1399,7 +1425,7 @@ public sealed class ConnectionTests : IAsyncLifetime
 
         first.Release();
         await Wait.UntilAsync(() => first.Drained, "the first channel's pump to read its change");
-        await Task.Delay(300);
+        await Wait.UntilAsync(() => first.Handled, "the first channel's pump to have handled it");
         Assert.Equal("Newer", TestUi.Read(() => conn.Sessions.Get("a")!.Title));
     }
 
@@ -1444,7 +1470,7 @@ public sealed class ConnectionTests : IAsyncLifetime
 
         first.Release();
         await Wait.UntilAsync(() => first.Drained, "the first channel's pump to read it");
-        await Task.Delay(300);
+        await Wait.UntilAsync(() => first.Handled, "the first channel's pump to have handled it");
         Assert.False(TestUi.Read(() => conn.Sessions.Unsure));
         Assert.NotNull(TestUi.Read(() => conn.Sessions.ResumeFrom("run-1")));
     }

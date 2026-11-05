@@ -1,5 +1,6 @@
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // The Sessions page's panes by window width (ui.md §5.2, #180): three panes from 1280, two
@@ -14,6 +15,8 @@ public sealed class PaneLayoutTests : IAsyncLifetime
     MainViewModel main = null!;
     PaneLayoutViewModel layout = null!;
     readonly System.Collections.Concurrent.ConcurrentQueue<string> fetched = new();
+    // The cards' clock: their ages and times read from it, not the wall clock.
+    readonly FakeTimeProvider clock = new(Make.T0.AddMinutes(5));
 
     public Task InitializeAsync()
     {
@@ -21,7 +24,7 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         host.Sessions.Add(Make.Session("busy", status: SessionStatus.Working, background: new Background { Agents = 2, Shells = 1 }, updated: Make.T0.AddMinutes(1)));
         host.Start();
         connection = host.Connect(ui, start: false);
-        main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection, FetchDetail = id => { fetched.Enqueue(id); return Task.FromResult<Session?>(null); } }, new UsageViewModel());
+        main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection, Time = clock, FetchDetail = id => { fetched.Enqueue(id); return Task.FromResult<Session?>(null); } }, new UsageViewModel());
         layout = new PaneLayoutViewModel(main);
         connection.Start();
         return Wait.UntilAsync(() => main.Sessions.Count == 2, "the sessions");
@@ -509,7 +512,7 @@ public sealed class PaneLayoutTests : IAsyncLifetime
     public async Task The_main_agents_answer_beside_a_delegates_is_dated_by_when_the_main_agent_wrote_it()
     {
         // A delegate's update moved the session's time; the main agent wrote five hours ago.
-        var now = DateTimeOffset.UtcNow;
+        var now = clock.GetUtcNow();
         await host.SendAsync(Events.SessionUpsert, Make.Session("busy", updated: now) with
         {
             Activity = new Activity
