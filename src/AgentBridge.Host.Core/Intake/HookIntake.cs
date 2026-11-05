@@ -181,6 +181,14 @@ public sealed class HookIntake : IAsyncDisposable
     // until it has started. The intake settles only the markers in the runtime it took, so one in
     // another registration root discovery still reads (the default runtime, the legacy temp
     // folder) is never answerable from here: nothing withdraws it once answered at the terminal.
+    // Whether the restore record may read a Claude or Codex session's ending (#780; Copilot's are in
+    // its own events): on a profile never migrated, from the agents' own files, at once; on a migrated
+    // one, once the running intake has drained what the hooks spooled while the host was down; and
+    // while its intake.json cannot be read, never, since no intake runs then. Read as settled there,
+    // a SessionEnd left in the spool made a session that ended cleanly read as one that died.
+    public static Func<AgentKind, bool> EndingsSettled(bool migrated, string? problem, Func<HookIntake?> running) =>
+        agent => agent == AgentKind.Copilot || (problem is null && (!migrated || running() is { Drained: true }));
+
     public static Func<string, string?>? AnswerGate(string? runtimeRoot, string? problem, Func<HookIntake?> running)
     {
         if (problem is not null) { return _ => $"this profile's hook intake is off ({problem}), so Codex approvals left from before cannot be checked; answer at the machine"; }

@@ -104,11 +104,10 @@ public sealed record HostSettings(bool RemoteApproval)
     {
         var path = Path.Combine(folder, FileName);
         string text;
-        try
-        {
-            if (!File.Exists(path)) { return (Default, null); }
-            text = File.ReadAllText(path);
-        }
+        // Only "not found" is absent. File.Exists also said false for a config.json that is a folder
+        // or whose metadata could not be read, which read as no settings at all: everything on.
+        try { text = File.ReadAllText(path); }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return (Default, null); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             return (Off, $"{path} could not be read ({e.Message}); remote approval of permission prompts, launching, notifications and agent usage are off, and the host is read-only");

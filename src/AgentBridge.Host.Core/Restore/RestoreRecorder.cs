@@ -118,6 +118,9 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     // Judged to have died while sessions.restoreOnStart is off: said in the notice, never kept.
     readonly List<RestoreOwed> said = [];
     DateTimeOffset started;
+    // Started, on the monotonic clock: how long the notice is shown and the hold's wait before the
+    // push are elapsed time. Measured on the wall clock, one set back days kept both going for days.
+    long startedStamp;
     bool running;
     bool stopped;
     // The earlier record could not be read: what waits to be restored is unknown for this run.
@@ -152,7 +155,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         get
         {
             RestoreNotice? n;
-            lock (gate) { n = notice is not null && time.GetUtcNow() - started < RestoreProtocol.ShownFor ? notice : null; }
+            lock (gate) { n = notice is not null && time.GetElapsedTime(startedStamp) < RestoreProtocol.ShownFor ? notice : null; }
             if (n is null || n.Why == RestoreWhy.Off) { return n; }
             var why = options.ReadOnly() is null ? RestoreWhy.Pending : RestoreWhy.ReadOnly;
             return n.Why == why ? n : n with { Why = why };
@@ -220,9 +223,11 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         lock (gate)
         {
             // Owed ones too: one still being judged when the host stopped may be found running now.
+            // Every one: LaunchesKept bounds launches not yet seen (Launched). Capped here too, a session
+            // past it was written again without its settings, which were lost.
             foreach (var e in (previous?.Sessions ?? []).Concat((previous?.Owed ?? []).Select(w => w.Entry)))
             {
-                if (e.Launch is { } l && launched.Count < LaunchesKept) { launched.TryAdd(e.Id, l); }
+                if (e.Launch is { } l) { launched.TryAdd(e.Id, l); }
             }
         }
         // Heard from now, so nothing between the snapshot and this is missed; the snapshot is taken
@@ -234,6 +239,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         {
             var now = time.GetUtcNow();
             started = now;
+            startedStamp = time.GetTimestamp();
             running = true;
             unreadable = problem is not null;
             foreach (var s in snapshot)
@@ -453,7 +459,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         BuildNoticeLocked();
         if (told || notice is null) { return null; }
         var waiting = owed.Count(w => !w.Decided);
-        if (waiting > 0 && now - started < NoticeAfter) { return null; }
+        if (waiting > 0 && time.GetElapsedTime(startedStamp) < NoticeAfter) { return null; }
         // The push says only what this start found: an offer an earlier one pushed is in hello alone.
         var found = owed.Where(w => w.Decided).Concat(said).Where(w => judgedNow.Contains(w.Entry.Id)).OrderByDescending(w => w.Entry.Seen).ToList();
         if (found.Count == 0) { return null; }

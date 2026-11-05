@@ -133,12 +133,10 @@ public static class RestoreFiles
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return true; }
     }
 
-    // Moved aside, not deleted, so a person can see what could not be read; one is kept.
-    public static void SetAside(string path)
-    {
-        try { File.Move(path, path + ".unreadable", overwrite: true); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
-    }
+    // Moved aside, not deleted, so a person can see what could not be read; one is kept. A move that
+    // fails throws: swallowed, the run went on to write over the record it could not move, and the
+    // next start found a readable record and no .unreadable, its worktree protection gone.
+    public static void SetAside(string path) => File.Move(path, path + ".unreadable", overwrite: true);
 }
 
 // When the machine started. Windows counts its tick from boot, sleep included; Linux says btime in

@@ -767,6 +767,22 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_Claude_or_Codex_ending_is_never_settled_while_intake_json_cannot_be_read_and_is_once_the_intake_has_drained()
+    {
+        var broken = HookIntake.EndingsSettled(migrated: false, problem: "intake.json is not valid", () => null);
+        Assert.False(broken(AgentKind.Claude));
+        Assert.False(broken(AgentKind.Codex));
+        Assert.True(broken(AgentKind.Copilot));
+        Assert.True(HookIntake.EndingsSettled(migrated: false, problem: null, () => null)(AgentKind.Claude));
+        Assert.False(HookIntake.EndingsSettled(migrated: true, problem: null, () => null)(AgentKind.Codex));
+        var intake = Intake();
+        var settled = HookIntake.EndingsSettled(migrated: true, problem: null, () => intake);
+        Assert.False(settled(AgentKind.Codex));
+        intake.Pass();
+        Assert.True(settled(AgentKind.Codex));
+    }
+
+    [Fact]
     public void A_Codex_approval_recorded_outside_the_runtime_the_intake_settles_is_never_answerable()
     {
         var intake = Intake();

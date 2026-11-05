@@ -231,7 +231,8 @@ renamed over the last, so a power cut leaves the record before or the record aft
 goes stays in it for 60 s more, because a shutting-down machine ends its agents before its host. A
 record that cannot be read (or one from a newer host) is set aside as `restore.json.unreadable`,
 offers nothing, and keeps every worktree, on that start and every later one, until a person
-removes that file: what was owed is unknown, and unknown is never read as nothing owed.
+removes that file: what was owed is unknown, and unknown is never read as nothing owed. One that
+cannot be moved aside is left as it is and never written over: the record does not start that run.
 
 **At start**, after discovery's first pass, each session the last run saw live is judged:
 
@@ -241,7 +242,7 @@ removes that file: what was owed is unknown, and unknown is never read as nothin
 | Its agent's discovery is held ([v1-sessions.md](protocol/v1-sessions.md#discovery-held)) | Waits, and is judged once it can be: never read as gone (§6.3, #43) |
 | The machine booted since (boot times more than 2 minutes apart), or on Windows the person's logon is new (a sign-out, or a shutdown with Fast Startup, which keeps the boot time): an empty, volatile key of the profile's, `HKCU\Software\AgentBridge\logon-<hash>`, which Windows drops with the logon and which holds no value (uninstall removes any left behind) | Died: a shutdown or a sign-out ends every session, so an ending written as it went down is the shutdown's |
 | Same boot, and the last run saw it go | Ended under the host's eyes |
-| Same boot, and its agent's endings are not yet all taken in (on a machine migrated from agent-ha-bridge, a Claude or Codex SessionEnd still in the hook intake's spool) | Waits until the intake has drained the spool, then is judged |
+| Same boot, and its agent's endings are not yet all taken in (on a machine migrated from agent-ha-bridge, a Claude or Codex SessionEnd still in the hook intake's spool) | Waits until the intake has drained the spool, then is judged; while the profile's `intake.json` cannot be read no intake runs, and it waits |
 | Same boot, and its agent recorded a normal end | Ended. Copilot: a `session.shutdown` of the main agent after the last `user.message` and the last `session.resume` in its `events.jsonl`. Claude and Codex: its hook registration says `Ended` (their SessionEnd hook), the newest of its roots; an ending read while discovery was held is kept, since the intake may prune the registration before the hold lifts |
 | Otherwise | Died with the host |
 
@@ -267,6 +268,8 @@ keeps a live session's; one owed without a folder or with one that cannot be res
 record ahead of it. One more than 2 minutes ahead is read as now: an offer is kept, and let go a week
 from then. No timer is set more than a day ahead, and one that fires early only looks again, since the
 system's timers refuse anything past about 49.7 days and that refusal stopped the host at every start.
+How long `hello` says what went (24 hours) and the 10 minutes before a partial notification are
+counted on the monotonic clock, so a clock set back stretches neither.
 Anything else that stops the record from starting, or from being looked at later, is logged and keeps
 every worktree for that run; the host goes on serving.
 

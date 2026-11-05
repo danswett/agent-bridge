@@ -14,6 +14,22 @@ public sealed class HostSettingsTests : IDisposable
         return HostSettings.Load(folder);
     }
 
+    // Only a file not found is absent: a config.json that is a folder (or whose metadata cannot be
+    // read) was read as no settings at all, restore and remote approval on, by File.Exists.
+    [Fact]
+    public void A_config_json_that_cannot_be_read_as_a_file_turns_everything_off_rather_than_reading_as_absent()
+    {
+        Directory.CreateDirectory(Path.Combine(folder, HostSettings.FileName));
+
+        var (settings, problem) = HostSettings.Load(folder);
+
+        Assert.Contains("could not be read", problem);
+        Assert.False(settings.RestoreOnStart);
+        Assert.False(settings.RemoteApproval);
+        Assert.True(settings.ReadOnly);
+        Assert.Equal((HostSettings.Default, (string?)null), HostSettings.Load(Path.Combine(folder, "missing")));
+    }
+
     [Fact]
     public void Remote_approval_is_on_without_a_file_or_a_setting_and_off_only_when_set_false()
     {

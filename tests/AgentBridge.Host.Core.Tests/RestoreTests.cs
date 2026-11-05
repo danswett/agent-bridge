@@ -600,6 +600,71 @@ public sealed class RestoreTests : IDisposable
         Assert.DoesNotContain(logs, l => l.StartsWith("restore: could not", StringComparison.Ordinal));
     }
 
+    // Copilot on #813: how long the notice is shown, and how long a hold waits before the push, are
+    // elapsed time. On the wall clock, one set back days kept the push back and the notice up for days.
+    [Fact]
+    public async Task A_clock_set_back_stretches_neither_the_wait_for_a_held_session_nor_the_notice()
+    {
+        Previous(Fixture.T0, false, E("a"), E("b", AgentKind.Claude));
+        source.HeldNow = new DiscoveryHeld("the copilot processes could not be listed", [AgentKind.Copilot]);
+        var clock = new SystemLimits(Time);
+        await using var r = Recorder(clock: clock);
+        r.Start();
+        Assert.Empty(told);
+
+        clock.SetBack(TimeSpan.FromDays(3));
+        clock.Advance(RestoreRecorder.NoticeAfter + RestoreRecorder.JudgeEvery);
+        Assert.Equal(1, Assert.Single(told).Waiting);
+
+        source.HeldNow = null;
+        ends.Of["a"] = false;
+        clock.Advance(RestoreProtocol.ShownFor);
+        Assert.Null(r.Notice);
+    }
+
+    // Copilot on #813: a record that cannot be moved aside is never written over. Swallowed, the run
+    // wrote its own record in its place, and the next start read that, with no .unreadable to keep
+    // the worktrees of the sessions in the one it lost.
+    [Fact]
+    public async Task A_record_that_cannot_be_set_aside_is_never_written_over_and_keeps_every_worktree()
+    {
+        File.WriteAllText(Record, "{ not json");
+        // In the way of the move: a folder, with something in it, that a file cannot replace.
+        Directory.CreateDirectory(Path.Combine(Record + ".unreadable", "held"));
+        source.Sessions.Add(S("a"));
+        var logs = new List<string>();
+        await using (var r = Recorder(logs: logs))
+        {
+            r.Start();
+            source.Upsert(S("a", SessionStatus.Working));
+            Time.Advance(RestoreRecorder.Coalesce);
+
+            Assert.Null(r.Folders());
+            Assert.Null(r.Notice);
+        }
+
+        Assert.Equal("{ not json", File.ReadAllText(Record));
+        Assert.Contains(logs, l => l.StartsWith("restore: could not start", StringComparison.Ordinal));
+    }
+
+    // Copilot on #813: what each session was launched with is kept for every one the last run
+    // recorded. Capped at the launches kept, the rest were written again without it.
+    [Fact]
+    public async Task Every_live_session_keeps_what_it_was_launched_with_however_many_the_last_run_recorded()
+    {
+        var launch = new RestoreLaunch("agency", "Bridge", false, null, null, null, null, "ask");
+        var entries = Enumerable.Range(0, 300).Select(i => E($"s{i:D3}") with { Launch = launch }).ToArray();
+        Previous(Fixture.T0, false, entries);
+        source.Sessions.AddRange(entries.Select(e => S(e.Id)));
+        await using var r = Recorder();
+
+        r.Start();
+
+        var written = Written().Sessions;
+        Assert.Equal(300, written.Count);
+        Assert.All(written, s => Assert.Equal(launch, s.Launch));
+    }
+
     // Whatever stops the start is said, and every worktree is kept for the run: what is owed is not
     // known, and the host goes on serving rather than stop at every start.
     [Fact]
@@ -626,6 +691,9 @@ public sealed class RestoreTests : IDisposable
         public void SetBack(TimeSpan by) => offset -= by;
         public void Advance(TimeSpan by) => inner.Advance(by);
         public override DateTimeOffset GetUtcNow() => inner.GetUtcNow() + offset;
+        // The monotonic clock is not set back.
+        public override long GetTimestamp() => inner.GetTimestamp();
+        public override long TimestampFrequency => inner.TimestampFrequency;
 
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
