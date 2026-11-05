@@ -396,6 +396,97 @@ public sealed class PushNotifierTests : IDisposable
         Assert.DoesNotContain(Received(), r => Kind(r.Notification) == "finished");
     }
 
+    // #841: the finished notice that would have replaced an answered question on the phone did
+    // not go, so the question's resolution goes instead; the phone never keeps it.
+    [Fact]
+    public async Task An_answered_question_is_resolved_when_its_finished_push_is_withdrawn_for_a_failed_sign_in()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, notifier.Pending);
+
+        source.Upsert(S("s1", SessionStatus.Working, response: "Done.", turns: 1));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        sender.Connected = true;
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(["question", "resolved"], Received().Select(r => Kind(r.Notification)));
+    }
+
+    [Fact]
+    public async Task An_answered_question_is_resolved_when_its_finished_push_in_flight_meets_a_failed_sign_in()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Respond = _ =>
+        {
+            if (sender.Attempts != 2) { return new PushResult(201, null); }
+            source.Upsert(S("s1", SessionStatus.Working, response: "Done.", turns: 1));
+            source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+            return new PushResult(503, "unavailable");
+        };
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+
+        await After(TimeSpan.FromSeconds(3));
+        await After(TimeSpan.FromMinutes(1));
+
+        Assert.Equal(["question", "resolved"], Received().Select(r => Kind(r.Notification)));
+    }
+
+    // Refused by one device only: the question is resolved there, while another device's
+    // finished push, held by the collapse window, still goes.
+    [Fact]
+    public async Task An_answered_question_is_resolved_only_on_the_device_that_refused_its_finished_push()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        var laptop = 0;
+        sender.Respond = e => e.EndsWith(Laptop) && ++laptop % 2 == 1 ? new PushResult(403, "forbidden") : new PushResult(201, null);
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Earlier.", turns: 1));
+        await After(TimeSpan.FromSeconds(3));
+        source.Upsert(S("s1", SessionStatus.Waiting, response: "Earlier.", turns: 1, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Working, response: "Earlier.", turns: 1));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2));
+
+        await After(TimeSpan.FromSeconds(3));
+        await After(new PushOptions().FinishedCollapse);
+
+        Assert.Equal(["finished", "question", "finished"], Received().Where(r => r.Device == Phone).Select(r => Kind(r.Notification)));
+        Assert.Equal(["question", "resolved"], Received().Where(r => r.Device == Laptop).Select(r => Kind(r.Notification)));
+    }
+
+    // Still asked: nothing is resolved.
+    [Fact]
+    public async Task A_question_asked_again_is_not_resolved_when_a_finished_push_is_withdrawn()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+
+        source.Upsert(S("s1", SessionStatus.Waiting, response: "Done.", turns: 2, question: Q("q1")) with { Attention = SignedOut });
+        sender.Connected = true;
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(["question"], Received().Select(r => Kind(r.Notification)));
+    }
+
     [Fact]
     public async Task A_collapsed_finished_turn_is_dropped_if_the_session_is_working_again_when_it_is_due()
     {
