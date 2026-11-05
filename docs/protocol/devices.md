@@ -6,10 +6,11 @@ design, its reasons and its proofs are in
 wire contract implementations share. It is not [roster.md](roster.md), the relay's list of
 machines seen online.
 
-**Status: R1a, the encoding.** This covers framing, ids, entries, their strict parsing,
-presence assertions and the values enrollment computes. The acceptance rule (design §3.3 to
-§3.5), person commands, head attestations and vetoes come in R1b and R1c. It is a library only:
-nothing in the host, the relay or a client uses it yet (slices R2 to R5).
+**Status: R1a and R1b.** R1a is the encoding: framing, ids, entries, their strict parsing,
+presence assertions and the values enrollment computes. R1b is the acceptance rule and state in
+C# (design §3.3 to §3.5). The PWA's port of the rule, person commands, head attestations and
+vetoes come in R1c. It is a library only: nothing in the host, the relay or a client uses it yet
+(slices R2 to R5).
 
 | Implementation | Where |
 |---|---|
@@ -172,6 +173,95 @@ above. A code is shown as two groups of three digits. What a person types is acc
 dropped, only as exactly six ASCII digits, and compared without an early exit. The QR secret `q`
 is 16 bytes.
 
+## Acceptance and state
+
+A verifier (`RosterVerifier`) holds one generation's accepted entries as a DAG and decides each
+entry offered to it, in an order where every entry follows its parents. This is design §3.3 to
+§3.5; the scenarios of §10 are its tests and [vectors/roster-state.json](vectors/roster-state.json)
+its shared vectors. Each entry is judged in the **history state of its parents** alone (the
+state of the entries that are its ancestors, quarantine ignored), so what a verifier decides
+about it does not depend on what else it holds or on delivery order. The tests check both
+properties on every scenario: each of 12 random parent-first orders reaches the same state and the
+same verdicts (commutativity, convergence), and a verifier holding only an entry's ancestors
+judges it as one holding everything does (prefix reduction).
+
+### Verdicts
+
+| Verdict | Meaning |
+|---|---|
+| `accepted` | Applied (a probationary device's grants are applied and held, below) |
+| `quarantined` | Kept and gossiped, not applied: outside the window, a fifth head, or descending from a quarantined entry |
+| `duplicate` | Already held |
+| `refused` | Refused with a code below. One refused only for `cap` or `budget` is kept aside (at most 2,048) in case a removal brings it as evidence; it is never applied |
+
+### Checks, in order
+
+The first that fails gives the code, so every implementation refuses with the same one. The
+signer is the add that made `by` active in the parents' state; "confirmed" is in that state.
+
+1. `account`, `generation`: the verifier's.
+2. `parent`: every `prev` held; a first entry is a genesis. `genesis`: a second genesis.
+3. `seq`: one more than the largest parent's (0 for the genesis).
+4. A genesis then needs only its own `signature` and `presence`.
+5. `signer`: `by` is active and a person's device. `signature`, then `presence`: a device whose
+   presence is `key` carries no `uv`; `webauthn` carries an assertion that passes the checks
+   above; `none` cannot sign. Then the same three for a `cosigner`.
+6. By op:
+   * `add`: `readded` (its id was added in its history), `active-cap` (64 active), `cap` (512 adds
+     or 4,096 entries other than removals), `budget` (the signer's 64 adds).
+   * `remove`: `target` (an ancestor add of that id, active); `seniority` (uncosigned, not a
+     self-removal, and the signer's add is not an ancestor of the target's); `cosign` (both
+     signers confirmed, and their approval lineages, cut at the target, disjoint); `keep` (each
+     kept add an ancestor in the target's subtree, signed by the target or another kept add, and
+     no copy: no other add of its id in the history); `signer` (a signer that is the target, or in
+     its subtree and not kept, unless it is a self-removal); `budget` (64 removals). Removals are
+     never refused for the generation's caps.
+   * `rename`: `target`; `seniority` (the target is the signer's own add or junior to it);
+     `budget` (8 renames of one add); `cap`.
+   * `confirm`: `target`; `confirm` (the signer is confirmed, signed the target's add, and the
+     target is not yet confirmed); `cap`; `budget` (64).
+   * `merge`: `merge` (one of its two to four parents an ancestor of another); `cap`; `budget` (64).
+7. An entry on a parent kept aside is refused `evidence`. A removal on such ancestors admits them
+   as evidence only if it is not a self-removal, each is signed by the target or a device of its
+   subtree the removal does not keep, at most 256 come from each signer at this verifier and
+   1,024 in all; otherwise it is refused `evidence`.
+
+### Quarantine
+
+An entry other than a removal, merge or genesis is quarantined on arrival when more than **8**
+unquarantined entries it does not descend from are held (the window), or when it would make more
+than **4** heads. Quarantine is inherited by descendants. A merge with `adopt` adopts its
+ancestors once its signer is not quarantined, which can let another adopting merge adopt in turn;
+adoption is irrevocable, as is local adoption of a head by the person at the machine
+(`Adopt`). A quarantined removal applies when it is valid in the state of its unquarantined
+ancestors.
+
+### State
+
+The applied state is computed from the unquarantined entries and the quarantined removals that
+apply, in the order of design §3.5: what each removal takes (its target, and the adds of the
+target's subtree under it that it does not keep) and bars; the raw void chains; which removals
+shield their descendants (rank, then the rules for yields and for revoking the other's signer);
+the final void causes; for each id, its adds neither void nor revoked, where a senior signer's add
+displaces a junior's and the displaced adds and what they granted are void; then the active, the
+confirmed, the conflicted (several adds of one id, none winning) and the names (the latest
+non-void rename, the smallest hash among concurrent ones).
+
+**Probation** (§3.4): an add that is not the genesis and not confirmed is on probation for 72 hours
+of the verifier's running time from when it first accepted it (an earlier time reported at
+enrollment can be adopted). A device whose approval lineage passes through a device on probation,
+or through a held device, is **held**: active, shown, and not **served**.
+
+### Where a removal is signed
+
+`RemovalParents.Choose` gives the parent a remover's client signs a `remove` on (§3.3): of the
+unquarantined entries under every holder's last attested heads and the relay's head, the smallest
+(fewest ancestors, then lowest hash) holding the target's add, the signers' adds, a cosigned
+removal's confirms and the kept adds, with no grant of the target or its subtree under it other
+than the kept adds and what they need. When every such entry has some, it takes the smallest and
+names the grants it cannot void by position. When none is under every holder, it takes the one
+with the fewest ancestors outside what they all hold, and names the holders that lack it.
+
 ## Vectors
 
 [vectors/roster.json](vectors/roster.json) holds fixed test keys (`d`, `public`, `device`) and:
@@ -187,6 +277,14 @@ is 16 bytes.
   and the `code` of each that fails.
 * `enrollment`: exchanges (the first has a code with a leading zero), typed codes, and QR MACs and
   invite hints.
+
+[vectors/roster-state.json](vectors/roster-state.json) holds the acceptance rule's scenarios, each
+with its `devices` (name to id), its `entries` (label, hash, wrapper) and its `steps`: an
+`offer` of an entry with its `verdict` and refusal `reason`, `hours` that move the running-time
+clock first (alone, they record who is `serving` then), or an `adopt` of a head. Its `state` is
+what the verifier then applies: the active devices with the add, confirmation and name of each,
+the conflicted ids, the heads, the quarantined entries, the evidence and who is served. The PWA's
+port replays it in R1c.
 
 ## Open questions
 
@@ -205,3 +303,6 @@ check to change:
 | The origin an assertion must name | Exactly `https://` + `rpId` |
 | The challenge role for person commands and vetoes | Decided in R1c |
 | How the QR identifies N's `sign` key when N shows it | Decided with R3 |
+| How many entries refused for a cap or budget a verifier keeps aside as possible evidence | 2,048, twice the evidence it can admit; past that they are refused and dropped |
+| Whether a held device's renames are held | Not held: only grants that make a device active are |
+| What "distinct heads" means for a merge's parents | No parent an ancestor of another |
