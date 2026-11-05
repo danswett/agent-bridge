@@ -13,7 +13,7 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     // What one read remembers, Keep entries of each at most (Newest): past that the oldest goes,
     // never the newest. Refusing new ones once full lost what the newest records said, which are the
     // ones a page shows: a permission's outcome, and whose a call was, so a delegate's approval read
-    // as the main agent's (review of #686). What the session knows starts each, and goes first.
+    // as the main agent's (review of #686). What the session knows is kept apart, never dropped.
     const int Keep = 4096;
 
     // The main agent's own delegates, by id, with their names: those this read saw start, and those
@@ -115,33 +115,41 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
         }
     }
 
-    // A map of at most `keep` entries that drops its oldest to take a new one. Setting a key it
-    // holds keeps its place; one removed and set again is new. The order holds stale keys of removed
-    // entries, which are passed over and pruned once it is twice the size.
+    // A map that keeps what the session knows (its seed) whole, and of what this read adds at most
+    // `keep` entries, dropping its oldest to take a new one. The seed is never dropped: it is what
+    // makes a turn read the same whatever page it is on, and evicting it let thousands of delegates
+    // on an earlier page of the same read drop a report a later turn read alone kept (review of
+    // #686). Setting a key it holds keeps its place; one removed and set again is new. The order
+    // holds stale keys of removed entries, which are passed over and pruned once it is twice the size.
     sealed class Newest<T>
     {
         readonly int _keep;
+        readonly Dictionary<string, T> _seed = new(StringComparer.Ordinal);
         readonly Dictionary<string, (T Value, long Stamp)> _map = new(StringComparer.Ordinal);
         readonly Queue<(string Key, long Stamp)> _order = new();
         long _next;
 
         public Newest(int keep, IEnumerable<KeyValuePair<string, T>>? seed = null)
         {
-            var initial = seed?.ToList() ?? [];
-            // What the session knows is never dropped to make room for itself.
-            _keep = Math.Max(keep, initial.Count);
-            foreach (var (key, value) in initial) { Set(key, value); }
+            _keep = keep;
+            foreach (var (key, value) in seed ?? []) { _seed[key] = value; }
         }
 
-        public bool Contains(string key) => _map.ContainsKey(key);
+        public bool Contains(string key) => _map.ContainsKey(key) || _seed.ContainsKey(key);
 
-        public T? Get(string key) => _map.TryGetValue(key, out var e) ? e.Value : default;
+        public T? Get(string key) => _map.TryGetValue(key, out var e) ? e.Value : _seed.TryGetValue(key, out var s) ? s : default;
 
-        public IEnumerable<(string Key, T Value)> Entries => _map.Select(e => (e.Key, e.Value.Value));
+        public IEnumerable<(string Key, T Value)> Entries =>
+            _seed.Where(s => !_map.ContainsKey(s.Key)).Select(s => (s.Key, s.Value)).Concat(_map.Select(e => (e.Key, e.Value.Value)));
 
         // The entry it dropped to make room, if any.
         public KeyValuePair<string, T>? Set(string key, T value)
         {
+            if (_seed.ContainsKey(key))
+            {
+                _seed[key] = value;
+                return null;
+            }
             if (_map.TryGetValue(key, out var held))
             {
                 _map[key] = (value, held.Stamp);
@@ -168,10 +176,16 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
             return dropped;
         }
 
-        public void Remove(string key) => _map.Remove(key);
+        // An explicit removal takes the key from the seed too.
+        public void Remove(string key)
+        {
+            _map.Remove(key);
+            _seed.Remove(key);
+        }
 
         public void Clear()
         {
+            _seed.Clear();
             _map.Clear();
             _order.Clear();
         }

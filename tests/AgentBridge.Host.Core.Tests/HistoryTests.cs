@@ -885,6 +885,40 @@ public class HistoryTests
         Assert.Equal("agent-1", asked.Question!.Agent);
     }
 
+    // Found in review of #686: dropping the oldest entries dropped what the session knows too, so
+    // thousands of delegates on an earlier turn of the same page evicted a delegate the session
+    // lists, and its report in the next turn was there read alone and missing read with them.
+    [Fact]
+    public async Task A_delegates_report_reads_the_same_whatever_the_page_after_thousands_of_others()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+        [
+            Copilot.User("start", 1),
+            Copilot.ToolStart("tx", "task", new { description = "Long job", prompt = "go" }, 2),
+            Copilot.SubagentStarted("tx", "agent-x", 2),
+        ]);
+        // Seen as it happened, so the session knows agent-x (a transcript this long read at first
+        // sight is read from its tail).
+        await s.After(
+        [
+            Copilot.User("many", 3),
+            .. Enumerable.Range(0, 5_000).SelectMany(i => new[]
+            {
+                Copilot.ToolStart($"t{i}", "task", new { description = $"Job {i}", prompt = "go" }, 4),
+                Copilot.SubagentStarted($"t{i}", $"agent-{i}", 4),
+                Copilot.SubagentCompleted($"t{i}", $"agent-{i}", 4),
+            }),
+            Copilot.User("later", 5),
+            // Named by itself: its task call is long past what the session keeps of task calls.
+            Copilot.AgentIdle("agent-x", 6),
+        ]);
+
+        var alone = (await s.Page(limit: 1)).Turns!.Single();
+        var together = (await s.Page(limit: 3)).Turns![2];
+        Assert.Equal(["agent-x"], alone.Parts.Where(p => p.Delegate is { Event: DelegateEventKind.Reported }).Select(p => p.Delegate!.Agent));
+        Assert.Equal(JsonSerializer.Serialize(alone, ProtocolJson.Options), JsonSerializer.Serialize(together, ProtocolJson.Options));
+    }
     // The same: past 4,096 delegates started in one read, a new one was not known as the main
     // agent's, so its report back was dropped.
     [Fact]
