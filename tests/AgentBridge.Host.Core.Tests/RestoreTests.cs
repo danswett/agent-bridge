@@ -754,8 +754,7 @@ public sealed class RestoreTests : IDisposable
         // In the way of the move: a folder, with something in it, that a file cannot replace.
         Directory.CreateDirectory(Path.Combine(Record + ".unreadable", "held"));
         source.Sessions.Add(S("a"));
-        var logs = new List<string>();
-        await using (var r = Recorder(logs: logs))
+        await using (var r = Recorder())
         {
             r.Start();
             source.Upsert(S("a", SessionStatus.Working));
@@ -766,7 +765,7 @@ public sealed class RestoreTests : IDisposable
         }
 
         Assert.Equal("{ not json", File.ReadAllText(Record));
-        Assert.Contains(logs, l => l.StartsWith("restore: could not start", StringComparison.Ordinal));
+        Assert.True(Logged("restore: could not start"));
     }
 
     // Copilot on #813: what each session was launched with is kept for every one the last run
@@ -1518,6 +1517,92 @@ public sealed class RestoreTests : IDisposable
         Assert.NotNull(marks.Of["a"]?.Continue);
         Assert.Equal(1, r.Notice?.Restored);
         Assert.Contains(r.RestoredLosses(), l => l.Id == "a");
+    }
+
+    // ---- Copilot on #837 at fcdac180 ----
+
+    // A restore on request that had not registered when the host went is still a request at the next
+    // start: its folder is not known, so every worktree is kept until it registers.
+    [Fact]
+    public async Task A_restore_on_request_not_yet_registered_when_the_host_went_keeps_every_worktree_at_the_next_start()
+    {
+        var resumer = new Resumer();
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Unconfirmed, "Copilot in App is asking whether to trust the folder; left for a person at the machine") { Session = "s" });
+        await using (var first = Recorder(resumer: resumer))
+        {
+            first.Start();
+            await first.RestoreAsync(new RestoreAsk { Session = "s", Cause = RestoreCause.Crash, By = "host-signin" });
+            Assert.Null(first.Folders());
+        }
+        Assert.True(Written().Stamps.ContainsKey("s"));
+
+        await using var second = Recorder(resumer: new Resumer());
+        second.Start();
+        Assert.Null(second.Folders());
+
+        source.Upsert(S("s"));
+        Assert.Empty(second.Folders()!);
+    }
+
+    // An offer an earlier run restored, whose restore had not registered when the machine went down:
+    // it went again straight after its restore, so it is a loop.
+    [Fact]
+    public async Task An_offer_whose_restore_had_not_registered_when_the_machine_rebooted_is_a_loop()
+    {
+        var now = Time.GetUtcNow();
+        RestoreFiles.Write(Record, new RestoreFile
+        {
+            Boot = Fixture.T0.AddDays(-1), Instance = "run1", Written = now.AddMinutes(-1),
+            Owed = [new RestoreOwed(E("a"), RestoreCause.Reboot, now.AddMinutes(-5), now.AddMinutes(-2), Decided: true, Restored: now.AddMinutes(-1))],
+        });
+        await using var r = Recorder(resumer: new Resumer());
+
+        r.Start();
+
+        Assert.Equal(["a"], r.Notice!.Offered.Select(o => o.Id));
+        Assert.Equal(1, r.Notice.Loops);
+    }
+
+    // Seen ready after the session has lived ten minutes (its stamp taken away then) at folder trust,
+    // which the launch follows for longer: still this attempt's, so counted and shown restored.
+    [Fact]
+    public async Task A_restore_seen_ready_after_its_stamp_was_taken_away_is_still_counted_restored()
+    {
+        Previous(Fixture.T0, false, E("a", turn: RestoreTurn.Working));
+        var resumer = new Resumer();
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Unconfirmed, "Copilot in App is asking whether to trust the folder; left for a person at the machine") { Session = "a" });
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => Logged("not seen ready"));
+        source.Upsert(S("a"));
+        Time.Advance(RestoreRecorder.LoopWithin + TimeSpan.FromMinutes(1));
+        Assert.Null(Assert.Single(Written().Sessions).Restored);
+
+        r.SeenReadyLate("a");
+
+        Assert.Equal(1, r.Notice?.Restored);
+        Assert.NotNull(marks.Of["a"]?.Continue);
+    }
+
+    // The only session registers before its launch answers Unconfirmed: its owed entry goes with it.
+    // Seen ready later, the push is sent then, saying it was restored.
+    [Fact]
+    public async Task A_restore_that_registered_before_its_unconfirmed_answer_and_is_seen_ready_later_sends_the_push()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Unconfirmed, "Copilot in App is asking whether to trust the folder; left for a person at the machine") { Session = "a" });
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => resumer.Asked.Count == 1);
+        source.Upsert(S("a"));
+        resumer.Gate!.SetResult();
+        await Until(() => Logged("not seen ready"));
+        Assert.Empty(told);
+
+        r.SeenReadyLate("a");
+
+        Assert.Equal(1, Assert.Single(told).Restored);
     }
 
     [Fact]

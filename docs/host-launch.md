@@ -258,7 +258,7 @@ one at a time, each as a resume from Launch would be (`launch <id> (host-restore
 every check that resume meets (agent-ha-bridge, `launch.enabled`, discovery held, its folder still
 approved, not already running, busy while a folder-trust or Bypass Permissions question waits for a
 person) and no prompt, so the session opens **idle** and nothing is typed. Folder trust is never
-answered: a restore that meets the question is `unconfirmed`: never counted restored nor shown with `restored` or Continue (one tap would type into the question), with replies to it refused while its window has not been seen ready (`LaunchService.HeldForReply`), and offered until its session registers; seen ready later, while its launch still follows it, it is counted and shown restored then (`LaunchService.SeenReadyLate`), and the next waits while launches are
+answered: a restore that meets the question is `unconfirmed`: never counted restored nor shown with `restored` or Continue (one tap would type into the question), with replies to it refused while its window has not been seen ready (`LaunchService.HeldForReply`), and offered until its session registers; seen ready later, while its launch still follows it (even after its stamp is cleared, 10 minutes live), it is counted and shown restored then (`LaunchService.SeenReadyLate`), with the notification sent then if it was all that one waited for, and the next waits while launches are
 busy, trying again every 15 s. It is not limited to the resume list's length: the session is found by its id, whatever its age. Its settings are what
 this host launched it with, each kept only while `launch.options` still offers it (else the
 machine's default), and one that launch left to the agent is left to it; a session started by hand, of which nothing is known, asks permission, whatever
@@ -271,7 +271,7 @@ Continue is an ordinary `session.reply` a person sends, with no more trust than 
 sends it, and `midTurn` and `continue` go once a prompt arrives after the restore, whether its turn is still running when the host looks or has already ended. A question or approval the interrupted run left waiting is not shown as asked (`questionLost` says it went); one asked after the restore is. Nor is the turn it was in shown as running: the session reads idle until a prompt arrives after the restore. Replies still read the transcript first and refuse while it holds an unanswered ask, since typing into a question the agent may still show would answer it; for Copilot, a turn left open by a CLI that was killed ends with the new CLI's `session.resume`, but what it left asking still keeps replies out (the new CLI may show it again without writing it again, and Enter would accept it) until it is completed, aborted, replaced by a question asked since, or a prompt is typed at the machine; an answer to it is refused as stale.
 
 **Crash loops.** Each restore is stamped in the record **before** its launch (on its owed entry, or in `stamps` for one the record holds no entry of), so a session that registers and dies at once, with the host, is still known as restored. A restore that starts nothing (busy, refused, or withdrawn because the host is stopping or its caller cancelled it before the agent started) puts back what was there before, its own stamp and mark only; a restore that registers and dies before its launch returns is offered as a loop. A restored session that dies before it has been seen live 10 minutes (with the host
-watching, judged as at a start, so one its agent ended normally does not count; or found dead at the next start) is not restored again: it is kept owed, offered, and counted in
+watching, judged as at a start, so one its agent ended normally does not count; or found dead at the next start, including an offer an earlier run restored whose session had not registered) is not restored again: it is kept owed, offered, and counted in
 `loops`. Its stamp is cleared only once it has been seen live that long; one still waiting to register (at folder trust) keeps it. A host that keeps starting
 cannot restore one more than once. A host that stops while a restore waits its turn starts nothing more, and lets the one under way finish (a few seconds at most) before its last write, whether the queue's or one asked for; a stamp carried by no entry that never registers goes after 24 hours, with a write due then.
 
@@ -295,7 +295,7 @@ read-only, or while that session is already running or being restored.
 
 **Worktrees.** The reclaimer keeps the worktree of every session owed or still being judged, as it
 keeps a live session's, and of a session restored on request until it registers, starts nothing, or
-its stamp goes (every worktree, while its folder is not known). A folder deleted since is placed under what is left of its path, so it keeps
+its stamp goes (every worktree, while its folder is not known, and across a restart, when only its stamp is left). A folder deleted since is placed under what is left of its path, so it keeps
 the worktree it was in; one owed without a folder, one whose place cannot be resolved (a link that
 cannot be read), or a record set aside, keeps every worktree.
 

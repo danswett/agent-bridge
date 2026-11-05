@@ -416,6 +416,13 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             goneBeforeStart.Clear();
             // Restored lately and still running: its ten minutes start again from now.
             foreach (var id in live.Keys.Where(restoredAt.ContainsKey)) { liveSince.TryAdd(id, now); }
+            // A restore on request that had not registered when the host went: still a request, its
+            // folder unknown, so every worktree is kept until it registers or its stamp lapses. Before,
+            // a restart dropped it, and its worktree could be reclaimed before it registered.
+            foreach (var id in previous?.Stamps?.Keys ?? [])
+            {
+                if (!(live.TryGetValue(id, out var found) && found.Gone is null)) { requested.TryAdd(id, null); }
+            }
             if (previous is not null)
             {
                 // A marker missing in the logon the record was written in is not a new logon: it
@@ -441,7 +448,9 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                 foreach (var w in previous.Owed)
                 {
                     if (!Keeps || (w.Decided && now - w.At >= OwedFor) || !seen.Add(w.Entry.Id)) { continue; }
-                    if (w.Decided) { owed.Add(w); continue; }
+                    // Stamped, and not found running (adopted then): its restore started and it went
+                    // again before it had lived, with the host. A loop, never offered as a plain death.
+                    if (w.Decided) { owed.Add(w.Restored is not null && w.Loop != true ? w with { Loop = true } : w); continue; }
                     owed.Add(cause == RestoreCause.Reboot ? w with { Cause = cause } : w);
                     judgedNow.Add(w.Entry.Id);
                 }
@@ -589,6 +598,11 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         foreach (var (id, since) in liveSince.ToList())
         {
             if (since - now > AheadTolerance) { liveSince[id] = now; }
+        }
+        // Read as now with the stamp they were taken from, so the two still match (SeenReadyLate).
+        foreach (var (id, u) in unconfirmed.ToList())
+        {
+            if (u.Stamp - now > AheadTolerance) { unconfirmed[id] = u with { Stamp = now }; }
         }
         if (retryAt - now > BusyRetry + AheadTolerance) { retryAt = now; }
     }
@@ -897,19 +911,26 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     // attempt that was unconfirmed, still the session's, and while it lives.
     public void SeenReadyLate(string id)
     {
+        RestoreNotice? ready;
         lock (gate)
         {
             if (stopped) { return; }
             if (inFlight.Contains(id)) { readyLate.Add(id); return; }
             if (!unconfirmed.Remove(id, out var u)) { return; }
-            if (!restoredAt.TryGetValue(id, out var stamp) || stamp != u.Stamp || (live.TryGetValue(id, out var e) && e.Gone is not null)) { return; }
+            // Another attempt's stamp is not this one's. No stamp at all is: it is taken away once the
+            // session has lived LoopWithin, and a window at folder trust is followed for longer.
+            if ((restoredAt.TryGetValue(id, out var stamp) && stamp != u.Stamp) || (live.TryGetValue(id, out var e) && e.Gone is not null)) { return; }
             if (u.Queue) { restoredBy[id] = u.Loss; }
             restoredThisRun.Add(id);
             RevealLocked(id);
             BuildNoticeLocked();
+            // The push, if this was all it waited for: a session that registered before its launch
+            // answered took its owed entry and the judging with it, so nothing else would send it.
+            ready = AdvanceLocked(time.GetUtcNow());
             ScheduleWriteLocked(Coalesce);
             log($"restore: session {Short(id)} seen ready after all; restored, idle");
         }
+        if (ready is not null) { Tell(ready); }
     }
     // The restored mark, for this host run and at most ShownFor; Continue's words only for one that
     // went mid-turn. Held (the boundary, no badge) from before the launch, and shown once the launch
