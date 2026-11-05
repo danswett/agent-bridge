@@ -185,6 +185,10 @@ properties on every scenario: each of 12 random parent-first orders reaches the 
 same verdicts (commutativity, convergence), and a verifier holding only an entry's ancestors
 judges it as one holding everything does (prefix reduction).
 
+R1b covers §10's acceptance and state scenarios. Its relay, host and client scenarios (`roster.submit`,
+frontiers and evidence across hosts, freshness, replay marks, client mode) are tested with the slices
+that build them (R2 to R5), and its person-command, attestation and veto scenarios with R1c.
+
 ### Verdicts
 
 | Verdict | Meaning |

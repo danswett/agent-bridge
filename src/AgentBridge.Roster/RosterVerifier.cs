@@ -52,6 +52,11 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
     public const int MaxHeads = 4;
     public const int MaxAdds = 512;
     public const int MaxEntries = 4096;
+
+    // The generation's caps as this verifier applies them: always MaxAdds and MaxEntries, except in
+    // tests that fill a smaller cap rather than write thousands of entries.
+    internal int AddCap { get; init; } = MaxAdds;
+    internal int EntryCap { get; init; } = MaxEntries;
     public const int MaxActive = 64;
     public const int SignerBudget = 64;
     public const int RenamesPerAdd = 8;
@@ -302,7 +307,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
                         if (_g[a].IsAdd && _g[a].DeviceId == body.Device!.Id) { return Invalid.Readded; }
                     }
                     if (p.ActiveCount >= MaxActive) { return Invalid.ActiveCap; }
-                    if (_adds >= MaxAdds || _nonRemovals >= MaxEntries) { return Invalid.Cap; }
+                    if (_adds >= AddCap || _nonRemovals >= EntryCap) { return Invalid.Cap; }
                     return OverBudget(signer, EntryOp.Add);
                 }
             case EntryOp.Remove:
@@ -344,14 +349,14 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
                     facts = facts with { Target = t };
                     if (t != signer && !_g.IsAncestor(signer, t)) { return Invalid.Seniority; }
                     if (_renames.GetValueOrDefault(t) >= RenamesPerAdd) { return Invalid.Budget; }
-                    return _nonRemovals >= MaxEntries ? Invalid.Cap : null;
+                    return _nonRemovals >= EntryCap ? Invalid.Cap : null;
                 }
             case EntryOp.Confirm:
                 {
                     if (TargetOf(body, ancestors, p) is not { } t) { return Invalid.Target; }
                     facts = facts with { Target = t };
                     if (!p.IsConfirmed(signer) || _g[t].Signer != signer || p.IsConfirmed(t)) { return Invalid.Confirm; }
-                    if (_nonRemovals >= MaxEntries) { return Invalid.Cap; }
+                    if (_nonRemovals >= EntryCap) { return Invalid.Cap; }
                     return OverBudget(signer, EntryOp.Confirm);
                 }
             case EntryOp.Merge:
@@ -361,7 +366,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
                     {
                         if (parents.Any(b => _g.IsAncestor(a, b))) { return Invalid.Merge; }
                     }
-                    if (_nonRemovals >= MaxEntries) { return Invalid.Cap; }
+                    if (_nonRemovals >= EntryCap) { return Invalid.Cap; }
                     return OverBudget(signer, EntryOp.Merge);
                 }
         }
