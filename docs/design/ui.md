@@ -1069,7 +1069,7 @@ up / Repair and Remove connection. You can't tell whether anything is needed. No
 | State | Mark (§2.1) | Headline | Verb |
 |---|---|---|---|
 | Ready | `done` in `ready` | "Ready · last hook 3:01 PM" (or "· test session passed 3:01 PM") | None |
-| Not tested yet | `idle`, Neutral | "Set up · not tested yet" | **Test session** (#716). Until it ships: no button, and the hint "Start a session in it to confirm" |
+| Not tested yet | `idle`, Neutral | "Set up · not tested yet" | **Test session** (#716). Until it ships: no button, and a hint. Copilot CLI and Claude Code: "Start a session in it to confirm". Agency, whose hooks can't confirm it: "Agency can't be checked yet" |
 | Not set up | `needs` | "Not set up" | **Set up** |
 | Needs repair | `failed`, Danger | Names what failed ("Hooks changed outside Slipgates") | **Repair hooks** |
 | Managed elsewhere | `failed`, Danger | Names the owner ("Hooks managed by policy") | None |
@@ -1083,9 +1083,10 @@ up / Repair and Remove connection. You can't tell whether anything is needed. No
 
   Agency shares Copilot CLI's hooks, so its hooks prove nothing about Agency. Agency is Ready
   only from a passed test session.
-- **The other states also need evidence.** A bridge setup record with nothing heard yet is Not
-  tested yet, never Needs repair, so a healthy machine never shows Repair on its rows. No setup
-  record is Not set up. Repair is offered only when the host reports the hooks failed or changed.
+- **The other states also need evidence.** A bridge setup record, with this profile's hook
+  intake on and nothing heard yet, is Not tested yet, never Needs repair, so a healthy machine
+  never shows Repair on its rows. No setup record, or intake off for this profile, is Not set
+  up, with Set up, which turns intake on (#705). Repair is offered only when the host reports the hooks failed or changed.
 - **Sign-in and trust** are never shown as checked until the host can observe them. They stay
   neutral rows in Details and don't affect the roll-up.
 
