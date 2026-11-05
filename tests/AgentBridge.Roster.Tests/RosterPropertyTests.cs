@@ -65,6 +65,9 @@ public sealed class RosterPropertyTests
         ["partitioned-unconfirmed"] = () => RosterCopyTests.Partitioned(confirmed: false),
         ["copies-across-ids"] = RosterCopyTests.CopiesAcrossIds,
         ["target-cannot-choose"] = RosterCopyTests.TargetCannotChoose,
+        ["barred-grants"] = RosterWindowTests.BarredGrants,
+        ["raw-chain"] = RosterWindowTests.RawChain,
+        ["cascade-voids-winner"] = () => RosterWindowTests.CascadeVoidsWinner(removeCopier: true),
     };
 
     // The labels in a random order in which every entry still follows its parents.
