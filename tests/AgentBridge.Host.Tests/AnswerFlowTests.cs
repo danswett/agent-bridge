@@ -1043,8 +1043,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
     [Theory]
     // Fields of the same heading the tab hints do tell apart (the first and the last, or the
-    // first and one between), and a title whose spaces are not the ones the screen shows (a
-    // no-break space, a run of spaces, spaces at its ends): all answered as usual.
+    // first and one between), and a title with a no-break space, a run of spaces and spaces at
+    // its ends, drawn as written with its colon after it (`Dxn`: `t,":"`): all answered as usual.
     [InlineData("first-and-last")]
     [InlineData("first-and-between")]
     [InlineData("spaces")]
@@ -1053,8 +1053,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var three = form == "first-and-between";
         object answer = three ? new { one = "b", two = "c", last = "a" } : new { one = "b", two = "c" };
         string[] names = three ? ["one", "two", "last"] : ["one", "two"];
-        string[] labels = form switch { "spaces" => ["Pick one", "two"], "first-and-between" => ["Pick", "Pick", "last"], _ => ["Pick", "Pick"] };
         var title = form == "spaces" ? "\u00A0Pick  one " : "Pick";
+        string[] labels = form switch { "spaces" => [title, "two"], "first-and-between" => ["Pick", "Pick", "last"], _ => ["Pick", "Pick"] };
         var list = new { type = "string", title, @enum = new[] { "a", "b", "c" } };
         var other = new { type = "string", title = form == "spaces" ? "two" : "Pick", @enum = new[] { "a", "b", "c" } };
         await AskFieldsAsync(three
@@ -1267,6 +1267,50 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         Assert.Equal("delivered", result.GetProperty("outcome").GetString());
         Assert.Equal(2, Enters());
+    }
+
+    [Theory]
+    // A list's title with white space at either end, or a no-break space, drawn as written with
+    // its colon after it (`Dxn`: `t,":"`, never trimmed): "Pick one " is "Pick one :". The
+    // heading looked for is the title and colon as drawn, so the list after the first field is
+    // found, not refused once the first has been committed (#510 review, Copilot 5780656913).
+    [InlineData("Pick one ")]
+    [InlineData(" Pick one")]
+    [InlineData("Pick\u00A0one\u00A0")]
+    public async Task A_list_whose_title_has_white_space_at_its_ends_is_found_by_its_heading_as_drawn(string title)
+    {
+        var answer = new { first = "b", pick = "c" };
+        string[] names = ["first", "pick"];
+        await AskFieldsAsync(new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, pick = new { type = "string", @enum = new[] { "a", "b", "c" }, title } }, 2, answer);
+        injector.Screen = () => FieldsScreen(names, labels: ["first", title]);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(2, Enters());
+    }
+
+    [Theory]
+    // A later field whose title is white space alone: a text box draws it as a blank row, a
+    // list as a lone colon. It is refused before the first key, not found missing once the
+    // field before it has been answered (#510 review, Copilot 5780656913).
+    [InlineData("string")]
+    [InlineData("enum")]
+    public async Task A_later_field_titled_with_white_space_alone_is_refused_before_any_key(string kind)
+    {
+        var answer = new { first = "b", note = kind == "enum" ? "c" : Feedback };
+        string[] names = ["first", "note"];
+        object note = kind == "enum" ? new { type = "string", @enum = new[] { "a", "b", "c" }, title = "   " } : new { type = "string", title = "   " };
+        await AskFieldsAsync(new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, note }, 2, answer);
+        injector.Screen = () => FieldsScreen(names, labels: ["first", "   "]);
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("\"note\"", reason);
+        Assert.Empty(injector.Attempts);
     }
 
     [Theory]

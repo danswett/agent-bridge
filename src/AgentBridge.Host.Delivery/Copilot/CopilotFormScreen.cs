@@ -90,9 +90,13 @@ public static partial class CopilotFormScreen
     // The field's heading as drawn: a text or number box's title alone, any other's with a
     // colon (`Fxn`, `Lxn`; `Dxn`, `Oxn`, `Nxn`). Read as "<title>:" for every field, the text
     // field after a list was never found: the list was picked and committed, and the form left
-    // half answered (#510 review, Copilot 5780329899).
+    // half answered (#510 review, Copilot 5780329899). The colon is added to the title as
+    // written before the whitespace is collapsed, as the CLI draws the two together (`t,":"`,
+    // never trimmed): "Pick one " is drawn "Pick one :", which the title collapsed first and the
+    // colon added after read as "Pick one:", and the list was refused after the fields before it
+    // had been committed (Copilot 5780656913).
     static string Headed(CopilotField field) =>
-        Collapse(field.Label!) + (field.Kind is CopilotFieldKind.Text or CopilotFieldKind.Number ? "" : ":");
+        Collapse(field.Label! + (field.Kind is CopilotFieldKind.Text or CopilotFieldKind.Number ? "" : ":"));
 
     // Why two of the form's fields could not be told apart on screen, or null. The field being
     // answered is known by its heading and, among several, by the tab hints, which say only

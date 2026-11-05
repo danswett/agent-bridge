@@ -90,11 +90,15 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields, string? Mes
     // The field's heading as Copilot CLI 1.0.105 draws it (`Uxn`: `title ?? name`; a list's,
     // Yes/No's or multi-select's component adds a colon, a text or number box's does not). A
     // title that is not a string, or an empty one (drawn as nothing at all), is not a heading
-    // the host can look for.
+    // the host can look for. Nor is one of white space alone: a text or number box draws it as a
+    // blank row, which cannot be told from the blank rows around it, and a list's as a lone
+    // colon. Without a label every field of the form is refused before the first key, rather
+    // than this one only once the fields before it have been answered (#510 review, Copilot
+    // 5780656913).
     static string? Label(string name, JsonElement p) =>
-        !p.TryGetProperty("title", out var title) || title.ValueKind == JsonValueKind.Null ? name
+        (!p.TryGetProperty("title", out var title) || title.ValueKind == JsonValueKind.Null ? name
         : title.ValueKind == JsonValueKind.String && title.GetString() is { Length: > 0 } text ? text
-        : null;
+        : null) is { } label && !string.IsNullOrWhiteSpace(label) ? label : null;
 
     static (CopilotField?, string?) Field(string name, JsonElement p, PatternBudget patterns)
     {

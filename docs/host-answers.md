@@ -97,7 +97,10 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     between the first and the last): the tab bar marks the field being answered by colour
     alone, which the screen read does not carry, so a repaint while the CLI still showed the
     first could pass for the second. Headings are compared with every run of whitespace, a
-    no-break space included, as one space and the ends trimmed; a heading or question the
+    no-break space included, as one space and the ends trimmed, a list's colon taken with its
+    title as the CLI draws them together, untrimmed ("Pick one " is "Pick one :"); a title of
+    white space alone, drawn as a blank row or a lone colon, is refused before the first key;
+    a heading or question the
     console wraps mid-word, or a title with a line break, is refused rather than typed into
     (#848). With more than one field, the tab bar read at the first field, before any key,
     vouches for every later field's title: a bar too wide for the window shows only some
