@@ -43,7 +43,7 @@ public sealed class ToastPlanner
         public Question? ShownQuestion;
         public HashSet<string> Notified = new(StringComparer.Ordinal);
         public string? FinishedKey;
-        // The session ran (left idle) after its finished toast went up: a failure now ends a later
+        // The main agent ran (working) after its finished toast went up: a failure now ends a later
         // turn, not the one that toast is for (#878).
         public bool RanSinceFinished;
         public (ToastKind Kind, DateTimeOffset At, string? Question)? Due;
@@ -121,7 +121,9 @@ public sealed class ToastPlanner
     // ran since, or its turn and answer were others) stays (#878).
     void Unfinish(Tracked t, Session s)
     {
-        if (s.Status != SessionStatus.Idle) { t.RanSinceFinished = true; }
+        // Working, not just any status but idle: a delegate's question makes the session waiting while
+        // the main agent's turn stays the one the toast is for.
+        if (s.Status == SessionStatus.Working) { t.RanSinceFinished = true; }
         if (!Stopped(s)) { return; }
         if (t.Due is { Kind: ToastKind.Finished }) { t.Due = null; }
         if (t.Shown is null && !t.RanSinceFinished && t.FinishedKey == FinishedKeyOf(s) && finished.Remove(s.Id)) { sink.Withdraw(TagOf(s.Id)); }

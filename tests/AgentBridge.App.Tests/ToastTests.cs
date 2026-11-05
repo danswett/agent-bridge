@@ -302,6 +302,23 @@ public sealed class ToastTests
         Assert.Single(sink.Shown);
     }
 
+    // #878: a delegate asking while the main agent stays idle is no new turn: the toasted turn's
+    // failure, arriving after it, still withdraws that turn's finished toast.
+    [Fact]
+    public void A_delegates_question_before_the_toasted_turns_failure_leaves_it_that_turns_to_withdraw()
+    {
+        var p = Planner();
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s1", response: "Done.", turns: 2));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        p.Upsert(Make.Session("s1", status: SessionStatus.Waiting, question: Make.Choice() with { Agent = "agent-1" }, response: "Done.", turns: 2) with { WaitingOn = "agent-1" });
+        p.Upsert(AuthState.Attach(Make.Session("s1", response: "Done.", turns: 2), JsonSerializer.SerializeToElement(new { attention = new { kind = "error", errorClass = "auth" } })));
+        Assert.Equal([ToastPlanner.Tag("s1", null)], sink.Withdrawn);
+    }
+
     [Fact]
     public void A_finished_turn_whose_main_agent_words_are_gone_when_it_is_due_raises_nothing()
     {

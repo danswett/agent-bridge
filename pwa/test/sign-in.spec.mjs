@@ -750,13 +750,13 @@ test('the banner\'s and the sheet\'s names are the words shown, and a tap draws 
 // checked to be what it says before it is taken, and attached to the test's results.
 async function capture(locator, name, testInfo) {
   const path = testInfo.outputPath(name);
-  await locator.screenshot({ path, animations: 'disabled' });
+  await locator.screenshot({ path });
   await testInfo.attach(name, { path, contentType: 'image/png' });
 }
 
 for (const look of [{ name: 'dark', media: { colorScheme: 'dark' } }, { name: 'forced-colors', media: { colorScheme: 'light', forcedColors: 'active' } }]) {
   test(`captures the banner and the sheet in ${look.name} (#800)`, async ({ page, browserName }, testInfo) => {
-    test.skip(Boolean(look.media.forcedColors) && browserName !== 'chromium', 'forced colours are emulated in Chromium only');
+    test.skip(browserName !== 'chromium', 'captured in Chromium: WebKit draws a screenshot with a style the CSP refuses');
     await page.emulateMedia(look.media);
     await openDemo(page);
     await expect(signIn(page)).toBeVisible();
@@ -769,7 +769,8 @@ for (const look of [{ name: 'dark', media: { colorScheme: 'dark' } }, { name: 'f
   });
 }
 
-test('captures every state of the banner and the sheet: no claim, the code shown, Failed, an expired code and confirming (#800)', async ({ page }, testInfo) => {
+test('captures every state of the banner and the sheet: no claim, the code shown, Failed, an expired code and confirming (#800)', async ({ page, browserName }, testInfo) => {
+  test.skip(browserName !== 'chromium', 'captured in Chromium: WebKit draws a screenshot with a style the CSP refuses');
   await openDemo(page);
   await expect(signIn(page)).toBeVisible();
 

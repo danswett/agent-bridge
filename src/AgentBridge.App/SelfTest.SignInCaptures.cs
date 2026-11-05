@@ -38,7 +38,12 @@ static partial class SelfTest
                 var fill = up switch { Panel p => p.Background, Border b => b.Background, Control c => c.Background, _ => null };
                 if (fill is SolidColorBrush { Color.A: 255 } solid) { return solid.Color; }
             }
-            return window.RootElement.ActualTheme == ElementTheme.Dark ? Windows.UI.Color.FromArgb(255, 0x20, 0x23, 0x26) : Windows.UI.Color.FromArgb(255, 255, 255, 255);
+            // Nothing opaque under it (Dark's window is see-through): the theme's shell, from the
+            // generated brushes, never a colour of the self-test's own.
+            var theme = window.RootElement.ActualTheme == ElementTheme.Dark ? "Dark" : "Light";
+            return Application.Current.Resources.MergedDictionaries
+                .Select(d => d.ThemeDictionaries.TryGetValue(theme, out var td) && td is ResourceDictionary rd && rd.TryGetValue("AbShell", out var b) && b is SolidColorBrush s ? s.Color : (Windows.UI.Color?)null)
+                .FirstOrDefault(c => c is not null) ?? default;
         }
         Task Shot(UIElement element, string file) => Picture(element, file, Under(element));
         // The sheet is a popup, outside the root whose theme is set here; with Windows itself in that
