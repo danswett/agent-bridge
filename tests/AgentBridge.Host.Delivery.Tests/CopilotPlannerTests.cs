@@ -567,17 +567,6 @@ public class CopilotPlannerTests
 
         Assert.True(ratio < 10, $"reading 4x the options took {ratio:F1}x as long");
     }
-    // A schema's option list is its enum or oneOf, which allows nothing else, but every one was
-    // offered Other, and the words typed there were recorded outside the schema (review of #844).
-    [Fact]
-    public void A_schema_option_list_offers_no_other_answer_and_one_sent_is_refused()
-    {
-        var (_, question) = Ask(Pick);
-
-        Assert.NotEqual(true, question.Fields.Single().AllowOther);
-        Assert.EndsWith("this choice takes no other answer", Answers.Check(question, Answer(new { pick = new { other = "none of these" } })));
-    }
-
     // An empty answer is typed as nothing, and Copilot then records no answer at all to a field
     // the form requires (review of #844).
     [Fact]
@@ -816,13 +805,7 @@ public class CopilotPlannerTests
     [Fact]
     public void Words_through_Other_walk_up_to_the_top_then_down_past_the_last_option_and_submit_separately()
     {
-        // The walk itself, planned directly: no question offers Other now, since a schema list is
-        // closed and Answers.Check refuses words for it first (review of #844). Kept so that
-        // offering it again, if Product decides so, is one line in QuestionMapper.
-        var (form, _) = Ask(Pick);
-        var (planned, problem) = CopilotPlanner.Plan(form, Answer(new { pick = new { other = "none of these 🙂" } }));
-        Assert.Null(problem);
-        var plan = planned!;
+        var plan = Plan(Pick, Answer(new { pick = new { other = "none of these 🙂" } }));
 
         // Four options: three Ups reach the top from any row, four Downs open Other.
         Assert.Equal([(U + U + U + D + D + D + D, false), ("none of these 🙂", true)], Keys(plan));
