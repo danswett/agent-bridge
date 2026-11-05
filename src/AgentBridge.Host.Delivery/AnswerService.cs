@@ -325,6 +325,10 @@ public sealed class AnswerService : ISessionAnswerer
             // the screen checks would pass and the rest of the keys go to that call. Counted, one
             // ask closing as another opened passed (Copilot 4479319296, Trust's re-review).
             if (prompts.Asks!.Any(id => id != question.Id)) { return "Copilot asked another question while the answer was being typed"; }
+            // And this one still waiting: a turn ended on an error closes it with no answer or
+            // end of the session on its call, before the listing or the screen says so (Copilot
+            // 4480250639).
+            if (!prompts.Asks!.Contains(question.Id)) { return "the question was closed while the answer was being typed"; }
             return Target(session, AgentKind.Copilot)?.Reason;
         }
 
@@ -360,6 +364,9 @@ public sealed class AnswerService : ISessionAnswerer
             {
                 return Refused("Copilot has more than one prompt waiting, and the screen shows only one of them; answer at the machine");
             }
+            // Closed with no record on its call, as a turn that ended on an error closes it (Copilot
+            // 4480250639): the listing may not have caught up.
+            if (!prompts.Asks!.Contains(question.Id)) { return Stale("the session is no longer asking that question"); }
 
             var (form, unreadable) = CopilotForm.Read(arguments);
             if (form is null) { return Refused(unreadable!); }

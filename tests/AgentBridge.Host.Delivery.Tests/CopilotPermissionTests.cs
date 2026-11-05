@@ -550,6 +550,12 @@ public sealed class CopilotPermissionTests : IDisposable
         Assert.Equal((2, "r2"), (ended.PendingPermissions, ended.Request?.RequestId));
         Assert.Equal(["q8"], ended.Asks!);
         Assert.Null(CopilotPermissionTranscript.Before(events, "r1").Request);
+
+        // The main agent's prompts opened after the error are its next turn's, and wait.
+        Fixture.Append(events, Copilot.Permission("r5", "c5", Copilot.Prompts["commands"], 11), Copilot.ToolStart("q5", "ask_user", new { message = "?" }, 12));
+        var next = watch.Read();
+        Assert.Equal(3, next.PendingPermissions);
+        Assert.Equal(["q5", "q8"], next.Asks!.Order());
     }
 
     [Fact]

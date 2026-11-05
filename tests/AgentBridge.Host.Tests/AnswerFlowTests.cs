@@ -1333,6 +1333,40 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_turn_ending_on_an_error_between_writes_stops_the_answer_before_the_listing_or_screen_catch_up()
+    {
+        // The error closes q2 with nothing on its call; the listing and the screen have not
+        // changed yet, so only the waiting asks say so (Copilot 4480250639).
+        await AskFormAsync();
+        DrawsWords();
+        injector.OnInject = () =>
+        {
+            if (injector.Plans.Count == 1) { Fixture.Append(events, Copilot.Event("session.error", new { errorType = "server", statusCode = 500 }, second++)); }
+        };
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        Assert.Contains("question was closed", result.GetProperty("reason").GetString());
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_question_closed_by_a_turn_ending_error_before_the_first_key_gets_nothing()
+    {
+        await AskFormAsync();
+        DrawsWords();
+        Fixture.Append(events, Copilot.Event("session.error", new { errorType = "server", statusCode = 500 }, second++));
+        var ch = await OpenAsync();
+
+        var (outcome, _) = await AnswerAsync(ch, FormAnswer, question: "q2");
+
+        Assert.Equal("stale", outcome);
+        Assert.Empty(injector.Attempts);
+    }
+
+    [Fact]
     public async Task A_check_that_fails_after_the_first_write_leaves_the_answer_typed_unconfirmed_and_read_back_later()
     {
         // Thrown on, it reached the catch that says nothing was typed, and the answer was never
