@@ -1108,7 +1108,8 @@ question, as choosing its row does.
   for header actions, and a `ToggleButton` for Needs you · N.
 - **Tray and toasts:** the tray's tooltip and the rail's Sessions badge carry N ("Agent
   Bridge · 3 need you"). A question's toast follows the rules above: an approval's toast has
-  Open only.
+  Open only. Every toast is silent (#754): none plays Windows' default sound, and any sound
+  comes back only as an owner-approved spec here first.
 - **Banners** sit over every page, `InfoBar`s in this order (#293):
   - What stops the app from its job: the host not running, refusing the app, connecting, or
     view only. Warning, with no close button: it goes once that is put right.

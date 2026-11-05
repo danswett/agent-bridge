@@ -551,8 +551,11 @@ offered again ("The question changed since, so answer it again"). A finished tur
 off on its own). A click opens the app on that session, waiting for it to arrive if the
 click is what started the app. Nothing is raised while the app's window is in front.
 Toasts go quietly into Notification Center, without popping up, while Windows says the
-person is busy (Focus Assist, presentation mode, a full-screen app). The app keeps running
-in the notification area when its window closes, so toasts keep coming.
+person is busy (Focus Assist, presentation mode, a full-screen app). Every toast is silent
+(`<audio silent="true"/>`, added where `ToastXml` closes each toast, so one put up again
+under its tag is silent too): without it Windows plays its default sound, which dinged for
+every question (#754). The app keeps running in the notification area when its window
+closes, so toasts keep coming.
 
 The activator is the app's own (`INotificationActivationCallback` in an HKCU
 `LocalServer32` registration, S3 finding 1, without the toolkit S3 used), under the AUMID

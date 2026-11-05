@@ -327,16 +327,14 @@ public static partial class ToastXml
             // Forms, multi-select and anything answered at the machine: the card has it.
             b.Append(Action("Open", open));
         }
-        b.Append("</actions></toast>");
-        return b.ToString();
+        b.Append("</actions>");
+        return End(b);
     }
 
     public static string Finished(Session s, string? machine, string? machineKey = null)
     {
         var preview = Plain(ToastPlanner.MainResponse(s), 300);
-        var b = Start(Args(machineKey, ("action", "open"), ("session", s.Id)), Title(s), $"{Machine(machine)}finished", preview);
-        b.Append("</toast>");
-        return b.ToString();
+        return End(Start(Args(machineKey, ("action", "open"), ("session", s.Id)), Title(s), $"{Machine(machine)}finished", preview));
     }
 
     // The first start after an update (AutoUpdater.Announce): what changed, from the release's
@@ -344,12 +342,17 @@ public static partial class ToastXml
     public static string Updated(string version, string from, string? notes)
     {
         var body = Plain(notes, 300);
-        return Start(Args(("action", "open")), $"{Product.Name} updated to {version}", $"from {from}", body.Length > 0 ? body : null).Append("</toast>").ToString();
+        return End(Start(Args(("action", "open")), $"{Product.Name} updated to {version}", $"from {from}", body.Length > 0 ? body : null));
     }
 
     // What became of an answer given on a toast, replacing that toast.
     public static string Outcome(string sessionId, string title, string text, string? machineKey = null) =>
-        Start(Args(machineKey, ("action", "open"), ("session", sessionId)), title, text, null).Append("<audio silent=\"true\"/></toast>").ToString();
+        End(Start(Args(machineKey, ("action", "open"), ("session", sessionId)), title, text, null));
+
+    // Every toast closes here, silent (#754): a toast with no <audio> plays Windows' default
+    // sound, and with only Outcome's silenced, question toasts dinged all day. Any sound comes
+    // back only as an owner-approved spec in docs/design/ui.md.
+    static string End(StringBuilder b) => b.Append("<audio silent=\"true\"/></toast>").ToString();
 
     static StringBuilder Start(string launch, string title, string line, string? body)
     {

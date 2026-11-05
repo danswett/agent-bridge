@@ -360,6 +360,62 @@ public sealed class ToastTests
         Assert.All(args, a => Assert.Equal("q<1>", a.Question));
     }
 
+    // A toast with no <audio> plays Windows' default sound (#754).
+    static void AssertSilent(string xml)
+    {
+        var toast = XElement.Parse(xml);
+        Assert.Equal("toast", toast.Name.LocalName);
+        var audio = Assert.Single(toast.Elements("audio"));
+        Assert.Equal("true", (string?)audio.Attribute("silent"));
+        Assert.Null(audio.Attribute("src"));
+    }
+
+    [Fact]
+    public void Every_toast_builder_makes_a_silent_toast_whatever_it_shows()
+    {
+        var builders = new Dictionary<string, string[]>
+        {
+            [nameof(ToastXml.Question)] =
+            [
+                ToastXml.Question(Make.Session(question: Make.Choice(other: true)), Caps, null),
+                ToastXml.Question(Make.Session(question: Make.Choice("q", true, "a", "b", "c", "d", "e")), Caps, "PC", "remote-id"),
+                ToastXml.Question(Make.Session(question: Make.Choice("q", false, "a", "b", "c", "d", "e", "f")), Caps, null),
+                ToastXml.Question(Make.Session(question: Make.Free()), Caps, null),
+                ToastXml.Question(Make.Session(question: Make.Form(new Field { Name = "a", Type = FieldType.Text }, new Field { Name = "b", Type = FieldType.Boolean })), Caps, null),
+                ToastXml.Question(Make.Session(question: Make.Approval()), Caps, "PC"),
+                ToastXml.Question(Make.Session(question: Make.Approval() with { AnswerAtMachine = true }), Caps, "PC"),
+                ToastXml.Question(Make.Session(question: Make.Choice()), [Capabilities.SessionsRead], null),
+            ],
+            [nameof(ToastXml.Finished)] = [ToastXml.Finished(Make.Session(response: "All **green**."), "PC", "remote-id"), ToastXml.Finished(Make.Session(), null)],
+            [nameof(ToastXml.Updated)] = [ToastXml.Updated("0.1.9", "0.1.8", "- Quieter toasts"), ToastXml.Updated("0.1.9", "0.1.8", null)],
+            [nameof(ToastXml.Outcome)] = [ToastXml.Outcome("s1", "A session", "Sent.", "remote-id"), ToastXml.Outcome("s1", "A session", "Sent.")],
+        };
+        // A builder added later is held to this too: every public method that makes a toast is listed.
+        var made = typeof(ToastXml).GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(m => m.ReturnType == typeof(string) && m.Name is not (nameof(ToastXml.Args) or nameof(ToastXml.Plain)))
+            .Select(m => m.Name).Distinct().Order();
+        Assert.Equal(builders.Keys.Order(), made);
+
+        Assert.All(builders.Values.SelectMany(x => x), AssertSilent);
+    }
+
+    [Fact]
+    public void A_question_toast_replaced_under_its_tag_and_a_finished_turns_toast_stay_silent()
+    {
+        var p = Planner();
+        p.Upsert(Make.Session(question: Make.Choice()));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        p.Upsert(Make.Session(question: Make.Choice() with { AnswerAtMachine = true }));
+        p.Upsert(Make.Session(status: SessionStatus.Working));
+        p.Upsert(Make.Session(response: "Done.", turns: 2));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+
+        Assert.Equal(["s1", "s1", "s1"], sink.Shown.Select(n => n.Tag));
+        Assert.All(sink.Shown, n => AssertSilent(n.Xml));
+    }
+
     [Fact]
     public void A_click_on_a_toast_reads_back_as_the_answer_the_card_would_send()
     {
