@@ -97,15 +97,35 @@ static partial class SelfTest
             // Signed in at github.com: the sessions wait to confirm, never recovered on signin.done alone.
             if (await Until(() => Verb() is not null, TimeSpan.FromSeconds(5))) { Press(Verb()!); }
             await Until(() => Sheet() is not null, TimeSpan.FromSeconds(10));
-            await remote.FinishSignInAsync("signedIn");
+            // signin.done before the host's pending (#878): focus goes to the status line, never back to
+            // Sign in, and stays on it as the banner is drawn anew for confirming.
+            await remote.FinishSignInAsync("signedIn", pendingFirst: false);
+            string Focused() => FocusManager.GetFocusedElement(root) is FrameworkElement fe ? $"{fe.GetType().Name} {AutomationProperties.GetAutomationId(fe)} '{AutomationProperties.GetName(fe)}'" : "nothing";
+            bool OnStatus(string? line = null) => FocusManager.GetFocusedElement(root) is ContentControl c && c.IsLoaded && AutomationProperties.GetAutomationId(c) == "SignInStatus"
+                && (line is null || AutomationProperties.GetName(c) == line);
+            var beforePending = await Until(() => Sheet() is null && OnStatus(), TimeSpan.FromSeconds(10));
+            check(beforePending, $"puts focus on the banner's status line when the sheet closes on success before the host's pending, not on Sign in (#878; focus on {Focused()})");
+            await remote.SignedInPendingAsync();
             string Text0(string id) => main.AllCards.FirstOrDefault(c => c.Id == id)?.Line.Text ?? "";
             var confirming = await Until(() => Sheet() is null && main.SignIns.Any(b => b.Line == "Signed in \u00b7 waiting for 3 sessions to confirm")
                 && DemoHost.SignInSessions.All(id => Text0(id) == "Signed in \u00b7 waiting for the session to confirm"), TimeSpan.FromSeconds(15));
-            var onStatus = await Until(() => FocusManager.GetFocusedElement(root) is ContentControl c && AutomationProperties.GetAutomationId(c) == "SignInStatus", TimeSpan.FromSeconds(5));
-            var focusedNow = FocusManager.GetFocusedElement(root) is FrameworkElement fe ? $"{fe.GetType().Name} {AutomationProperties.GetAutomationId(fe)}" : "nothing";
-            check(onStatus, $"puts focus on the banner's status line when the sheet closes on success, its button gone (ui.md §6.13; focus on {focusedNow})");
+            var onStatus = await Until(() => OnStatus("Signed in \u00b7 waiting for 3 sessions to confirm"), TimeSpan.FromSeconds(5));
+            check(onStatus, $"puts focus on the banner's status line when the sheet closes on success, its button gone, and keeps it there as the banner is drawn anew (ui.md §6.13; focus on {Focused()})");
             check(confirming && !main.SignIns.Any(b => b.Line.Contains("recovered", StringComparison.Ordinal)) && Verb() is null && main.Waiting == waiting,
                 $"says signed in and waiting for the sessions to confirm, never recovered, with nothing to press and nothing in Needs you ({string.Join(" | ", main.SignIns.Select(b => b.Line))})");
+            // Signed in, then failed again while confirming: a new attempt cancelled puts focus back on
+            // Sign in, not on the status line as the earlier success did (r4483045694). Signing in once
+            // more still counts as this device's when the sessions recover.
+            await remote.FailSignInAgainAsync();
+            if (await Until(() => Verb() is not null, TimeSpan.FromSeconds(10))) { Press(Verb()!); }
+            await Until(() => Sheet() is not null, TimeSpan.FromSeconds(10));
+            if (Sheet() is { } againSheet && Find<Button>(againSheet).FirstOrDefault(b => b.Name == "CloseButton") is { } againCancel) { Press(againCancel); }
+            var backOnVerb = await Until(() => Sheet() is null && Verb() is { } v && ReferenceEquals(FocusManager.GetFocusedElement(root), v), TimeSpan.FromSeconds(10));
+            check(backOnVerb, $"puts focus back on Sign in when a later attempt is cancelled, after an earlier one signed in (r4483045694; focus on {Focused()})");
+            if (Verb() is { } once) { Press(once); }
+            await Until(() => Sheet() is not null, TimeSpan.FromSeconds(10));
+            await remote.FinishSignInAsync("signedIn");
+            await Until(() => Sheet() is null && main.SignIns.Any(b => b.Line == "Signed in \u00b7 waiting for 3 sessions to confirm"), TimeSpan.FromSeconds(15));
             await remote.ConfirmSignInAsync();
             var signedIn = await Until(() => main.SignIns.Any(b => b.Line == "Signed in \u00b7 3 sessions recovered") && DemoHost.SignInSessions.All(id => Row(id) == "Idle"), TimeSpan.FromSeconds(15));
             check(signedIn, "says the sessions recovered, and they are idle again, only once the host clears them");

@@ -276,6 +276,116 @@ public sealed class ToastTests
         Assert.Equal([ToastPlanner.Tag("s4", null)], sink.Withdrawn);
     }
 
+    // #878: a later turn that fails withdraws nothing of an earlier turn that really finished, even
+    // with that turn's answer still the session's latest; and raises no toast of its own.
+    [Fact]
+    public void A_later_turn_that_fails_leaves_an_earlier_turns_finished_toast_up()
+    {
+        static Session Stopped(string id, int turns) =>
+            AuthState.Attach(Make.Session(id, response: "Done.", turns: turns), JsonSerializer.SerializeToElement(new { attention = new { kind = "signInNeeded", agent = "copilot" } }));
+        var p = Planner();
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s1", response: "Done.", turns: 2));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        // The next turn runs, and ends on a 401 with the old answer still there, its turn count the
+        // same or moved on.
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working, response: "Done.", turns: 2));
+        p.Upsert(Stopped("s1", 2));
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working, response: "Done.", turns: 2));
+        p.Upsert(Stopped("s1", 3));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Empty(sink.Withdrawn);
+        Assert.Single(sink.Shown);
+    }
+
+    // #878: a failure that replaces the turn's response (the parser's "Turn error" notice) is still
+    // that turn's: its finished toast is withdrawn.
+    [Fact]
+    public void A_failure_that_replaces_the_turns_response_still_withdraws_that_turns_finished_toast()
+    {
+        var p = Planner();
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s1", response: "Done.", turns: 2));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        p.Upsert(AuthState.Attach(Make.Session("s1", response: "Turn error: the request failed.", turns: 2), JsonSerializer.SerializeToElement(new { attention = new { kind = "error", errorClass = "auth" } })));
+        Assert.Equal([ToastPlanner.Tag("s1", null)], sink.Withdrawn);
+    }
+
+    // #878: a later turn known only by its count (no working seen) that arrives already stopped is
+    // not the toasted turn: its finished toast stays.
+    [Fact]
+    public void A_later_turn_that_arrives_already_stopped_leaves_the_earlier_turns_finished_toast_up()
+    {
+        var p = Planner();
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s1", response: "Done.", turns: 2));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        p.Upsert(AuthState.Attach(Make.Session("s1", response: "Done.", turns: 3), JsonSerializer.SerializeToElement(new { attention = new { kind = "signInNeeded", agent = "copilot" } })));
+        Assert.Empty(sink.Withdrawn);
+    }
+
+    // #878: the toasted turn's failure keeping a delegate's question pending: the host counts the
+    // turn one short while the session waits, yet it is the same turn, and its toast is withdrawn.
+    [Fact]
+    public void A_failure_that_keeps_a_delegates_question_pending_still_withdraws_that_turns_finished_toast()
+    {
+        var p = Planner();
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s1", response: "Done.", turns: 2));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        var waiting = Make.Session("s1", status: SessionStatus.Waiting, question: Make.Choice() with { Agent = "agent-1" }, response: "Done.", turns: 1) with { WaitingOn = "agent-1" };
+        p.Upsert(AuthState.Attach(waiting, JsonSerializer.SerializeToElement(new { attention = new { kind = "error", errorClass = "auth" } })));
+        Assert.Equal([ToastPlanner.Tag("s1", null)], sink.Withdrawn);
+    }
+
+    // #878 (r4483045584): the next prompt's turn fails while a delegate's question keeps the session
+    // waiting, the main agent never seen working: the host counts that turn one short, so its count
+    // is the toasted turn's, but its prompt is the next one, and the earlier turn's toast stays.
+    [Fact]
+    public void A_later_prompts_turn_that_fails_while_a_delegate_asks_leaves_the_earlier_turns_finished_toast_up()
+    {
+        var p = Planner();
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s1", response: "Done.", turns: 2));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        var waiting = Make.Session("s1", status: SessionStatus.Waiting, question: Make.Choice() with { Agent = "agent-1" }, response: "Done.", turns: 2) with { WaitingOn = "agent-1" };
+        p.Upsert(AuthState.Attach(waiting, JsonSerializer.SerializeToElement(new { attention = new { kind = "error", errorClass = "auth" } })));
+        Assert.Empty(sink.Withdrawn);
+    }
+
+    // #878: a delegate asking while the main agent stays idle is no new turn: the toasted turn's
+    // failure, arriving after it, still withdraws that turn's finished toast.
+    [Fact]
+    public void A_delegates_question_before_the_toasted_turns_failure_leaves_it_that_turns_to_withdraw()
+    {
+        var p = Planner();
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s1", response: "Done.", turns: 2));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        p.Upsert(Make.Session("s1", status: SessionStatus.Waiting, question: Make.Choice() with { Agent = "agent-1" }, response: "Done.", turns: 2) with { WaitingOn = "agent-1" });
+        p.Upsert(AuthState.Attach(Make.Session("s1", response: "Done.", turns: 2), JsonSerializer.SerializeToElement(new { attention = new { kind = "error", errorClass = "auth" } })));
+        Assert.Equal([ToastPlanner.Tag("s1", null)], sink.Withdrawn);
+    }
+
     [Fact]
     public void A_finished_turn_whose_main_agent_words_are_gone_when_it_is_due_raises_nothing()
     {

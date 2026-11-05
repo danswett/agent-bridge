@@ -90,6 +90,9 @@ public sealed record HaConnectorOptions
     // How long a session must stay at rest after a turn before the turn is pushed as finished (the
     // host's own notifier waits as long): a question answered at the machine passes through idle.
     public TimeSpan FinishedDelay { get; init; } = TimeSpan.FromSeconds(3);
+    // How soon a sign-in notice is sent again while an agent still needs signing in (#800, the
+    // host's signIn push: at most hourly).
+    public TimeSpan SignInRepeat { get; init; } = TimeSpan.FromHours(1);
     // The host's own updates through the machine's update entity (homeAssistant.updates.checkForUpdates,
     // agent-ha-bridge's updates.checkForUpdates): off, nothing is looked up and the Install and
     // Check buttons are not served.
@@ -383,6 +386,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             await Step("sessions", () => SessionsAsync(now, cancellationToken));
             await Step("answers", () => AnswersAsync(now, cancellationToken));
             await Step("buttons", () => ButtonsAsync(now, cancellationToken));
+            await Step("signin", () => SignInAsync(now, cancellationToken));
             await Step("finished", () => FinishedAsync(now, cancellationToken));
             await Step("launch", () => LaunchAsync(now, cancellationToken));
             await Step("update", () => UpdatesAsync(now, cancellationToken));
@@ -1138,6 +1142,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             lock (gate)
             {
                 LoadOnPhones(doc.RootElement);
+                LoadSignIns(doc.RootElement);
                 LoadUpdateAttempt(doc.RootElement);
             }
             return [.. new[] { "retiring", "starting" }
@@ -1179,6 +1184,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                 ["retiring"] = new JsonArray([.. retiring.Keys.Order(StringComparer.Ordinal).Select(n => (JsonNode)n)]),
                 ["starting"] = new JsonArray([.. starting.Values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(n => (JsonNode)n)]),
                 ["onPhones"] = OnPhonesLedger(),
+                ["signIn"] = SignInLedger(),
                 ["update"] = UpdateAttemptLedger(),
             });
         }

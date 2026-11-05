@@ -30,6 +30,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     string? others;
     int? othersAskedFor;
     Func<string?>? othersProbe;
+    // How the app's link reaches the host, when a test makes it hang.
+    Func<CancellationToken, Task<LocalChannel>>? linkConnect;
     // The app's updater as Settings shares it, when a test plays Settings too.
     ObservedUpdater? shared;
 
@@ -88,7 +90,10 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         host.Status = status ?? FakeHost.StatusOf();
         host.Sessions.AddRange(sessions);
         host.Start();
-        connection = host.Connect(new LockedDispatcher());
+        connection = linkConnect is { } connect
+            ? new HostConnection(connect, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) }
+            : host.Connect(new LockedDispatcher(), start: false);
+        connection.Start();
         manager = new HostManager(new InstallLayout(app, host.Folder, "test"), tasks, processes,
             ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
         {
@@ -342,16 +347,353 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
-    public async Task Without_a_running_host_to_say_what_its_sessions_are_doing_nothing_is_installed()
+    public async Task Without_a_running_host_to_say_what_its_sessions_are_doing_nothing_is_installed_though_releases_are_still_found()
     {
         await StartAsync();
-        await host.StopAsync();
+        // Stopped on purpose, so the app does not start it again.
+        await manager.StopAsync();
         await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the host gone");
 
         await TwoIdleTicksAsync();
 
-        Assert.Equal(0, updater.Checks);
+        // Found while the host is gone, so an update it holds for long is told to the owner (#800).
+        Assert.Equal(1, updater.Checks);
+        Assert.Equal("0.2.0", auto.Pending);
         Assert.False(updater.Applied);
+        Assert.Equal(AutoUpdater.HostGone, auto.State.Waiting);
+    }
+
+    // #800: VM2's app lost its link to a live host and sat on an old release for ~20 h, the six
+    // hours restarted at every tick and one log line said so.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_update_the_lost_host_holds_past_six_hours_is_told_to_the_owner_then_and_not_before_and_again_only_daily()
+    {
+        await StartAsync();
+        await auto.TickAsync();
+        Assert.Equal("0.2.0", auto.Pending);
+        await manager.StopAsync();
+        await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the host gone");
+
+        for (var i = 0; i < 6 * 60 - 2; i++)
+        {
+            time.Advance(TimeSpan.FromMinutes(1));
+            await auto.TickAsync();
+        }
+        Assert.DoesNotContain(log, l => l.Contains("Needs you", StringComparison.Ordinal));
+        Assert.Equal(AutoUpdater.HostGone, auto.State.Waiting);
+
+        time.Advance(TimeSpan.FromMinutes(2));
+        await auto.TickAsync();
+        var told = Assert.Single(log, l => l.Contains("Needs you", StringComparison.Ordinal));
+        Assert.Contains("the update to 0.2.0 has waited since", told);
+        Assert.Contains(AutoUpdater.HostGone, told);
+        Assert.StartsWith("Needs you: the update to 0.2.0", auto.State.Waiting);
+        Assert.Equal(UpdatePhase.Waiting, auto.State.Phase);
+
+        for (var i = 0; i < 23; i++)
+        {
+            time.Advance(TimeSpan.FromHours(1));
+            await auto.TickAsync();
+        }
+        Assert.Single(log, l => l.Contains("Needs you", StringComparison.Ordinal));
+        time.Advance(TimeSpan.FromHours(1));
+        await auto.TickAsync();
+        Assert.Equal(2, log.Count(l => l.Contains("Needs you", StringComparison.Ordinal)));
+    }
+
+    // The host back after holding an update past six hours: idle sessions take it as ever, but
+    // it is not forced at the first tick (#800 review).
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task The_host_back_after_holding_an_update_six_hours_installs_once_idle_not_at_the_first_tick()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        await auto.TickAsync();
+        Assert.Equal("0.2.0", auto.Pending);
+        await HostGoneForAsync(TimeSpan.FromHours(7));
+
+        await HostBackAsync();
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+
+        time.Advance(AutoUpdater.IdleFor);
+        await auto.TickAsync();
+        Assert.True(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task The_host_back_after_holding_an_update_six_hours_with_busy_sessions_forces_it_only_after_twenty_minutes()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        await HostGoneForAsync(TimeSpan.FromHours(7));
+
+        await HostBackAsync();
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+        Assert.Contains($"installs anyway at {(time.GetUtcNow() + AutoUpdater.ReturnGrace).ToLocalTime():g}", auto.State.Waiting);
+        time.Advance(AutoUpdater.ReturnGrace - TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.True(updater.Applied);
+    }
+
+    async Task HostGoneForAsync(TimeSpan gone)
+    {
+        await manager.StopAsync();
+        await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the host gone", TimeSpan.FromSeconds(30));
+        for (var at = TimeSpan.Zero; at < gone; at += TimeSpan.FromHours(1))
+        {
+            time.Advance(TimeSpan.FromHours(1));
+            await auto.TickAsync();
+        }
+    }
+
+    async Task HostBackAsync()
+    {
+        host.Start();
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Complete, "the host back", TimeSpan.FromSeconds(30));
+        time.Advance(TimeSpan.FromMinutes(1));
+    }
+
+    // #800 review: a start from the updater raced Settings' Stop and updates, and undid hosts left
+    // down on purpose. Whether a host runs is the person's, and the app's own start's.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task The_updater_never_starts_a_host_however_long_the_link_is_down()
+    {
+        await StartAsync();
+        await host.StopAsync();
+        await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the host gone", TimeSpan.FromSeconds(30));
+
+        for (var i = 0; i < 3 * 60; i++)
+        {
+            await auto.TickAsync();
+            time.Advance(TimeSpan.FromMinutes(1));
+        }
+
+        Assert.Empty(processes.Started);
+        Assert.Empty(tasks.Ran);
+        Assert.Contains(log, l => l.Contains("does not answer on its pipe", StringComparison.Ordinal) && l.Contains("not starting it", StringComparison.Ordinal));
+    }
+
+    // VM2's case (#800): the host alive, the app's link to it stuck in an attempt that never ends.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_link_stuck_while_its_host_answers_is_made_again_before_the_update_is_refused_again()
+    {
+        var hang = 0;
+        linkConnect = async ct =>
+        {
+            if (Interlocked.Exchange(ref hang, 0) == 1) { await Task.Delay(Timeout.Infinite, ct); }
+            return await LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromSeconds(1), ct);
+        };
+        await StartAsync();
+        Volatile.Write(ref hang, 1);
+        await host.StopAsync();
+        host.Start();
+        await Wait.UntilAsync(() => connection.State != LinkState.Connected && Volatile.Read(ref hang) == 0, "the link's attempt hung", TimeSpan.FromSeconds(30));
+
+        await auto.TickAsync();
+
+        Assert.Contains(log, l => l.Contains("the host answers on its pipe", StringComparison.Ordinal) && l.Contains("ended the link's attempt under way and started a new one", StringComparison.Ordinal));
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the link made again", TimeSpan.FromSeconds(30));
+        Assert.Empty(processes.Started);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_refusal_that_lasts_is_logged_every_hour_and_re_attaching_no_more_often()
+    {
+        await StartAsync();
+        await host.StopAsync();
+        await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the host gone", TimeSpan.FromSeconds(30));
+
+        for (var i = 0; i < 121; i++)
+        {
+            await auto.TickAsync();
+            time.Advance(TimeSpan.FromMinutes(1));
+        }
+
+        // At 0, 60 and 120 minutes; re-attaching (at 0, 1, 3, 7, 15, 31, 61 and 91) at 0 and 61.
+        Assert.Equal(3, log.Count(l => l.Contains($"not installing updates: {AutoUpdater.HostGone}", StringComparison.Ordinal)));
+        Assert.Equal(2, log.Count(l => l.Contains("does not answer on its pipe", StringComparison.Ordinal)));
+    }
+
+    // #800 review: a connected host whose sessions are never read in full held the update with
+    // nothing said, and showed an "installs anyway" time already past.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Sessions_never_read_in_full_are_told_as_the_machine_holding_the_update_and_a_press_stays_queued()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        await auto.TickAsync();
+        Assert.Equal("0.2.0", auto.Pending);
+        connection.Sessions.BeginSnapshot();
+        await AskedAsync(UpdateAskKind.Install, "5e1f0c2a-7d3b-4c9e-8a61-0f2b3c4d5e6f");
+
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.Equal(AutoUpdater.SessionsUnread, auto.State.Waiting);
+
+        time.Advance(AutoUpdater.WaitAtMost);
+        await auto.TickAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.StartsWith("Needs you: the update to 0.2.0", auto.State.Waiting);
+        Assert.DoesNotContain("installs anyway at", auto.State.Waiting);
+        Assert.Contains(log, l => l.Contains("Needs you", StringComparison.Ordinal) && l.Contains(AutoUpdater.SessionsUnread, StringComparison.Ordinal));
+        Assert.Equal("5e1f0c2a-7d3b-4c9e-8a61-0f2b3c4d5e6f", auto.State.Request);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_rate_limit_reset_five_minutes_away_is_retried_then_even_after_a_press_just_before_it()
+    {
+        updater.Found = null;
+        await StartAsync();
+        updater.CheckFails = new UpdateRateLimitedException("403 (rate limit exceeded)", time.GetUtcNow() + TimeSpan.FromMinutes(5));
+        await auto.TickAsync();
+        Assert.Equal(1, updater.Checks);
+        updater.CheckFails = null;
+
+        time.Advance(TimeSpan.FromMinutes(4));
+        await AskedAsync(UpdateAskKind.Check, "0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f");
+        Assert.Equal(1, updater.Checks);
+        Assert.Equal((UpdateOutcome.Failed, "0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f"), (prefs.LastUpdate!.Outcome, prefs.LastUpdate.Request));
+        Assert.Contains("rate limit", prefs.LastUpdate.Reason);
+
+        // Over at its end: a check then that fails for anything else leaves the next to CheckEvery.
+        updater.CheckFails = new HttpRequestException("No such host is known.");
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.Equal(2, updater.Checks);
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.CheckEvery - TimeSpan.FromMinutes(2));
+        await auto.TickAsync();
+        Assert.Equal(2, updater.Checks);
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.Equal(3, updater.Checks);
+    }
+
+    // #923 review: a reset under CheckAgainAfter away, and a press at it, was answered from the
+    // cached failure, and the feed was not asked for CheckEvery more.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_check_pressed_as_a_short_rate_limit_hold_ends_asks_the_feed_rather_than_the_cached_failure()
+    {
+        updater.Found = null;
+        await StartAsync();
+        updater.CheckFails = new UpdateRateLimitedException("403 (rate limit exceeded)", time.GetUtcNow() + TimeSpan.FromSeconds(30));
+        await auto.TickAsync();
+        Assert.Equal(1, updater.Checks);
+        updater.CheckFails = null;
+
+        time.Advance(TimeSpan.FromSeconds(30));
+        await AskedAsync(UpdateAskKind.Check, "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d");
+
+        Assert.Equal(2, updater.Checks);
+        Assert.Equal((UpdateOutcome.Current, "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"), (prefs.LastUpdate!.Outcome, prefs.LastUpdate.Request));
+    }
+
+    // #923 review: a tick after another profile's refusal cleared it unasked, started the grace
+    // and dropped "Needs you" though that profile still ran.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_overdue_update_another_profile_still_holds_keeps_needs_you_and_its_grace_starts_only_once_that_profile_stops()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        others = "another profile's host (pid 77) runs from this installation";
+        time.Advance(AutoUpdater.WaitAtMost);
+        await auto.TickAsync();
+        Assert.StartsWith("Needs you: the update to 0.2.0", auto.State.Waiting);
+
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.StartsWith("Needs you: the update to 0.2.0", auto.State.Waiting);
+        Assert.Contains(others, auto.State.Waiting);
+
+        others = null;
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.Contains($"installs anyway at {(time.GetUtcNow() + AutoUpdater.ReturnGrace).ToLocalTime():g}", auto.State.Waiting);
+        time.Advance(AutoUpdater.ReturnGrace - TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.True(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Checks_the_feeds_rate_limit_refused_back_off_and_say_why()
+    {
+        updater.CheckFails = new HttpRequestException("Response status code does not indicate success: 403 (rate limit exceeded).", null, System.Net.HttpStatusCode.Forbidden);
+        updater.Found = null;
+        await StartAsync();
+
+        await auto.TickAsync();
+        Assert.Equal(1, updater.Checks);
+        Assert.Equal(UpdateOutcome.Failed, auto.State.Last!.Outcome);
+        Assert.Contains("rate limit", auto.State.Last.Reason);
+
+        // Not at the next half hour: an hour, then two, and never longer.
+        time.Advance(AutoUpdater.CheckEvery);
+        await auto.TickAsync();
+        Assert.Equal(1, updater.Checks);
+        time.Advance(AutoUpdater.CheckEvery);
+        await auto.TickAsync();
+        Assert.Equal(2, updater.Checks);
+        time.Advance(AutoUpdater.CheckBackoffAtMost - TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.Equal(2, updater.Checks);
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.Equal(3, updater.Checks);
+        time.Advance(AutoUpdater.CheckBackoffAtMost);
+        await auto.TickAsync();
+        Assert.Equal(4, updater.Checks);
+
+        // The feed's own word on when to ask again is taken, and success ends the backoff.
+        time.Advance(AutoUpdater.CheckBackoffAtMost);
+        updater.CheckFails = new UpdateRateLimitedException("403 (rate limit exceeded)", time.GetUtcNow() + TimeSpan.FromMinutes(45));
+        await auto.TickAsync();
+        Assert.Equal(5, updater.Checks);
+        updater.CheckFails = null;
+        time.Advance(TimeSpan.FromMinutes(44));
+        await auto.TickAsync();
+        Assert.Equal(5, updater.Checks);
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.Equal(6, updater.Checks);
+        time.Advance(AutoUpdater.CheckEvery);
+        await auto.TickAsync();
+        Assert.Equal(7, updater.Checks);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_rate_limited_check_right_after_an_update_leaves_the_update_for_the_devices_to_see()
+    {
+        updater.CheckFails = new HttpRequestException("Response status code does not indicate success: 403 (rate limit exceeded).", null, System.Net.HttpStatusCode.Forbidden);
+        prefs = prefs with { LastUpdate = new UpdateResult { Outcome = UpdateOutcome.Updated, From = "0.0.9", To = "0.1.0", Request = "r1", At = time.GetUtcNow() } };
+        await StartAsync();
+
+        await auto.TickAsync();
+
+        Assert.Equal(1, updater.Checks);
+        Assert.Equal((UpdateOutcome.Updated, "r1"), (prefs.LastUpdate!.Outcome, prefs.LastUpdate.Request));
+        Assert.Equal(UpdateOutcome.Updated, auto.State.Last!.Outcome);
     }
 
     [Fact]

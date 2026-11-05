@@ -44,9 +44,12 @@ public sealed partial class LaunchViewModel
     // AskedAt tell its question from another launch's into the same folder once its id changes.
     sealed record LateStart(Machine Machine, string Request, string Session, DateTimeOffset At, TrustQuestion? Question)
     {
-        public bool Asked(TrustQuestion q) => Question is { } mine
-            && (mine.Id == q.Id || (mine.Folder == q.Folder && mine.Agent == q.Agent && mine.AskedAt == q.AskedAt));
+        public bool Asked(TrustQuestion q) => Question is { } mine && SameQuestion(mine, q);
     }
+
+    // The same question, though the machine may have asked it again under a new id since (#901).
+    static bool SameQuestion(TrustQuestion mine, TrustQuestion q) =>
+        mine.Id == q.Id || (mine.Folder == q.Folder && mine.Agent == q.Agent && mine.AskedAt == q.AskedAt);
     LateStart? late;
     // The launch shown as started since its unconfirmed outcome, by request.
     string? startedLate;
@@ -121,7 +124,7 @@ public sealed partial class LaunchViewModel
     {
         if (lost is not null || last is not { } e || e.Request != l.Request) { return; }
         startedLate = l.Request;
-        if (l.Question is { } q && askedBy.TryGetValue(l.Machine.Key, out var by) && by.Question == q.Id) { askedBy.Remove(l.Machine.Key); }
+        if (l.Question is { } q && askedBy.TryGetValue(l.Machine.Key, out var by) && SameQuestion(by.Question, q)) { askedBy.Remove(l.Machine.Key); }
         if (e.Payload is LaunchRequest sent && (string.IsNullOrWhiteSpace(prompt) ? null : prompt) == sent.Prompt) { Prompt = ""; }
         if (shown && machine == l.Machine) { main.Open(l.Machine.Key, l.Session, untilItArrives: true); }
         Show();

@@ -43,6 +43,12 @@ public sealed class ToastPlanner
         public Question? ShownQuestion;
         public HashSet<string> Notified = new(StringComparer.Ordinal);
         public string? FinishedKey;
+        // The main agent ran (working) after its finished toast went up: a failure now ends a later
+        // turn, not the one that toast is for (#878).
+        public bool RanSinceFinished;
+        // The prompt whose turn the finished toast up is for (PromptOf): a failure can replace the
+        // response in the same turn (the parser's "Turn error" notice), so its text is no way to know it.
+        public int? FinishedTurn;
         public (ToastKind Kind, DateTimeOffset At, string? Question)? Due;
         // While a delegate's question is pending (NoteWait).
         public bool WaitFromTurn;
@@ -113,12 +119,23 @@ public sealed class ToastPlanner
     // own; a sign-in's is the host's push.
     static bool Stopped(Session s) => AuthState.Of(s)?.Kind is AuthState.Error or AuthState.SignInNeeded;
 
+    // Which prompt's turn the session is on: turnCount is the prompts sent, less one while a turn is
+    // in progress (working or waiting; v1-sessions.md), so this is the prompts sent. A later prompt's
+    // turn waiting on a delegate's question has the same count as the finished turn before it, but
+    // not the same prompt; the finished turn's own failure, a delegate's question pending, has both.
+    static int? PromptOf(Session s) => s.Activity.TurnCount is { } n ? n + (s.Status is SessionStatus.Working or SessionStatus.Waiting ? 1 : 0) : null;
+
     // One due is dropped, and one up is withdrawn, when the attention comes after the turn ended.
+    // Only the toast for this same turn: one for an earlier turn that really finished (the main
+    // agent ran since, or a later prompt's turn is the one that stopped) stays (#878).
     void Unfinish(Tracked t, Session s)
     {
+        // Working, not just any status but idle: a delegate's question makes the session waiting while
+        // the main agent's turn stays the one the toast is for.
+        if (s.Status == SessionStatus.Working) { t.RanSinceFinished = true; }
         if (!Stopped(s)) { return; }
         if (t.Due is { Kind: ToastKind.Finished }) { t.Due = null; }
-        if (finished.Remove(s.Id) && t.Shown is null) { sink.Withdraw(TagOf(s.Id)); }
+        if (t.Shown is null && !t.RanSinceFinished && !(PromptOf(s) > t.FinishedTurn) && finished.Remove(s.Id)) { sink.Withdraw(TagOf(s.Id)); }
     }
 
     public void Upsert(Session s)
@@ -251,6 +268,8 @@ public sealed class ToastPlanner
                 t.FinishedKey = key;
                 if (!Enabled() || !FinishedEnabled() || WindowActive()) { continue; }
                 finished.Add(id);
+                t.RanSinceFinished = false;
+                t.FinishedTurn = PromptOf(s);
                 sink.Show(new ToastNotice(TagOf(id), ToastXml.Finished(s, MachineName(), MachineKey), Quiet()));
             }
         }

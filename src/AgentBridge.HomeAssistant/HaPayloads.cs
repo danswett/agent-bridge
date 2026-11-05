@@ -76,7 +76,42 @@ public static class HaPayloads
     // The status sensor's state, from Set-CopilotMqttStatus's vocabulary. A session idle on its
     // own turn but still waiting for background agents or commands it started reads "agents"
     // or "shell", which the card shows in words and not as idle.
-    public static string Status(Session s) => s.Status switch
+    //
+    // Over it, what the host says is wrong with the session (Session.attention, #800), in the
+    // words and order of the clients' status rules (App.Core StatusRules, AuthState): a session
+    // whose agent needs sign-in, whose turn ended on an error or that has stopped answering is
+    // never "idle" or "working" here. The host keeps its status truthful underneath (idle after a
+    // failed turn), so on main HA read a signed-out session as idle beside the last turn's reply.
+    // The card shows the state as it is, so these are the words a person reads.
+    public static string Status(Session s)
+    {
+        var a = s.Attention;
+        if (a is null || s.Status == SessionStatus.Ending) { return BaseStatus(s); }
+        // The session's own question first (rule 1); a delegate's comes after sign-in (rule 2).
+        if (s.Status == SessionStatus.Waiting && (s.WaitingOn ?? s.Question?.Agent) is null) { return "waiting"; }
+        if (a.Kind == AttentionKind.SignInNeeded) { return a.Recovery == RecoveryState.Pending ? SignInConfirming : NeedsSignIn; }
+        if (s.Status == SessionStatus.Waiting) { return "waiting"; }
+        if (a.Kind == AttentionKind.NotResponding) { return NotResponding; }
+        if (s.Status == SessionStatus.Working) { return "working"; }
+        // Error, and a kind this connector does not know, which the protocol reads as an error.
+        return ErrorWords(a.ErrorClass);
+    }
+
+    public const string NeedsSignIn = "Needs sign-in";
+    public const string SignInConfirming = "Signed in · waiting for the session to confirm";
+    public const string NotResponding = "Not responding";
+
+    // AuthState.ErrorWords: a class without words of its own, or none, is "Agent error".
+    public static string ErrorWords(ErrorClass? errorClass) => errorClass switch
+    {
+        Protocol.ErrorClass.Auth => "Not authorised",
+        Protocol.ErrorClass.Rate => "Rate limited",
+        _ => "Agent error",
+    };
+
+    // The status as the session's own state has it, without its attention: what End session
+    // judges an idle session by, as the host itself does.
+    public static string BaseStatus(Session s) => s.Status switch
     {
         SessionStatus.Working => "working",
         SessionStatus.Waiting => "waiting",
@@ -88,7 +123,8 @@ public static class HaPayloads
 
     // The status sensor's attributes: Add-DaemonTuningAttributes over session, machine,
     // process_id and updated. Settings and counts that are empty or zero are left out, so the
-    // card can tell "not known" from a value and never says "0 compactions".
+    // card can tell "not known" from a value and never says "0 compactions". attention is added
+    // only while the host sets it, so any other session's attributes are exactly the daemon's.
     public static JsonObject StatusAttributes(Session s, string sessionName, string machineName, DateTimeOffset now)
     {
         var a = new JsonObject
@@ -102,8 +138,65 @@ public static class HaPayloads
         if (s.Activity.Background is { Agents: > 0 } b) { a["background_agents"] = b.Agents; }
         if (s.Activity.Background is { Shells: > 0 } sh) { a["background_shells"] = sh.Shells; }
         if (s.Activity.Compactions is > 0 and var c) { a["compactions"] = c; }
+        if (Attention(s.Attention) is { } attention) { a["attention"] = attention; }
         return a;
     }
+
+    static readonly string[] Providers = ["github", "anthropic", "openai"];
+
+    // Session.attention for an automation or a card to read: kind (sign_in_needed, error or
+    // not_responding, §3 of #800's 6646501884), error_class for an error, provider for a sign-in,
+    // the host's own sentence and when it began. Never the account, a sign-in code or URL, or the
+    // agent's words: message is composed by the host from fixed templates (AgentErrors.Template,
+    // #841). A value this connector does not know makes no claim, as on the clients: an unknown
+    // kind is an error, an unknown class "other", and a provider not one of the three is left out.
+    public static JsonObject? Attention(Attention? a)
+    {
+        if (a is null) { return null; }
+        var o = new JsonObject
+        {
+            ["kind"] = a.Kind switch
+            {
+                AttentionKind.SignInNeeded => "sign_in_needed",
+                AttentionKind.NotResponding => "not_responding",
+                _ => "error",
+            },
+        };
+        if (a.Kind is not (AttentionKind.SignInNeeded or AttentionKind.NotResponding))
+        {
+            o["error_class"] = a.ErrorClass switch
+            {
+                Protocol.ErrorClass.Auth => "auth",
+                Protocol.ErrorClass.Rate => "rate",
+                Protocol.ErrorClass.Quota => "quota",
+                Protocol.ErrorClass.Model => "model",
+                Protocol.ErrorClass.Network => "network",
+                _ => "other",
+            };
+        }
+        if (a.Kind == AttentionKind.SignInNeeded && a.Provider is { } provider && Providers.Contains(provider)) { o["provider"] = provider; }
+        if (Message(a.Message) is { } message) { o["message"] = message; }
+        o["since"] = Stamp(a.Since);
+        return o;
+    }
+
+    // The host's sentence on one line, within the protocol's limit, its template markup broken as
+    // a session's name is: Home Assistant renders templates in what a dashboard shows.
+    static string? Message(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) { return null; }
+        var one = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (one.Length > Limits.AttentionMessage) { one = SafeCut(one, Limits.AttentionMessage - 3) + "..."; }
+        return NeutraliseTemplates(one);
+    }
+
+    // A session whose agent needs a person to sign it in again: not one signed in and waiting for
+    // the session to confirm (recovery pending), which needs nobody.
+    public static bool NeedsPerson(Session s) => s.Attention is { Kind: AttentionKind.SignInNeeded } a && a.Recovery != RecoveryState.Pending;
+
+    // A turn that ended on an error or a failed sign-in did not finish (#845; PushNotifier.Failed):
+    // the reply beside it is the turn before's. A kind not known here is an error.
+    public static bool Failed(Session s) => s.Attention is { Kind: not AttentionKind.NotResponding };
 
     // The activity sensor's state: what the session is doing in a line, cut to Home Assistant's
     // 255 characters (Set-CopilotMqttActivity). "Running: <tool>" and a reply's first line are

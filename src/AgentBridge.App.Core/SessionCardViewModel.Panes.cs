@@ -112,6 +112,8 @@ public sealed partial class SessionCardViewModel
         // never a link, and only here, never on its row.
         // The host's sentence for what is wrong (6649775484), as it is: never the agent's own text.
         if (AuthState.Of(session)?.Message is { } said) { rows.Add(new("Message", said)); }
+        // Not responding: the time it went silent, which the row's age counts from (ui.md §6.13).
+        if (AuthState.Clock(SilentSince) is { } silent) { rows.Add(new("Not responding since", silent)); }
         if (View != "idle") { rows.Add(new("For", Words.Duration(session.StatusSince, now))); }
         rows.Add(new("Updated", Words.Ago(session.UpdatedAt, now)));
         rows.Add(new("ID", session.Id, Mono: true));
