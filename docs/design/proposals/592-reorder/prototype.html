@@ -749,6 +749,8 @@ content.addEventListener('click', (e) => {
   rehit = null;
   const li = hit ? hit.li : e.target.closest('.slot');
   if (!li || (hit ? hit.onGrip : e.target.closest('.grip'))) return;
+  // Enter or Space on a card fading out after its session ended still clicks it; it's gone.
+  if (!items[li.dataset.key]) return;
   selected = li.dataset.key;
   syncDom();
   // The press focused the card that was sliding under it; keys must act on the one now there.
@@ -822,9 +824,11 @@ function endSession(key) {
 }
 
 function removeKeys(keys) {
+  let hadFocus = false;
   for (const k of keys) {
     if (!items[k]) continue;
     const el = els.get(k);
+    if (el.contains(document.activeElement)) hadFocus = true;
     order = order.filter((x) => x !== k);
     delete items[k];
     els.delete(k);
@@ -832,6 +836,8 @@ function removeKeys(keys) {
     setTimeout(() => el.remove(), 120);
   }
   if (selected && !items[selected]) selected = order[0];
+  // Focus left on a departing card would be lost when it's removed; it moves to the selected one.
+  if (hadFocus && selected && els.get(selected)) $('.row-main', els.get(selected)).focus({ preventScroll: true });
 }
 
 function placeSocket(instant) {
