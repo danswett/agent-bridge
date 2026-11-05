@@ -6950,6 +6950,28 @@
           "reason": "\"ticket\" needs an answer"
         },
         {
+          "name": "a-required-text-field-of-only-control-characters",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q4",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "fields": {
+              "runs": 4,
+              "ticket": "\u0085\u001B ",
+              "mail": "someone@example.com",
+              "day": "2028-02-29",
+              "above": 0.5,
+              "pair": [
+                "host",
+                "pwa"
+              ]
+            }
+          },
+          "context": "a-form-with-constraints",
+          "refusedBy": "Answers.Check",
+          "reason": "\"ticket\" needs an answer"
+        },
+        {
           "name": "a-required-text-field-left-empty",
           "json": {
             "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",

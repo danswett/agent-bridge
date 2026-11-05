@@ -352,6 +352,7 @@ public static class ProtocolVectors
             .Refused("text-shorter-than-its-minimum", Answer(limited, Inside("ticket", "AB-1")), limited)
             .Refused("whitespace-that-is-not-an-email-address", Answer(limited, Inside("mail", "   ")), limited)
             .Refused("a-required-text-field-of-only-spaces", Answer(limited, Inside("ticket", "   ")), limited)
+            .Refused("a-required-text-field-of-only-control-characters", Answer(limited, Inside("ticket", "\u0085\u001b ")), limited)
             .Refused("a-required-text-field-left-empty", Answer(limited, Inside("ticket", "")), limited)
             .Refused("text-longer-than-its-maximum-in-utf16-units", Answer(limited, Inside("ticket", "ABCDEFGHI-1\U0001F600")), limited)
             .Refused("text-off-its-pattern", Answer(limited, Inside("ticket", "ABC-12x")), limited)

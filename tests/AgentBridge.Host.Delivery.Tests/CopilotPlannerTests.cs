@@ -575,7 +575,8 @@ public class CopilotPlannerTests
         Assert.True(ratio < 10, $"reading 4x the options took {ratio:F1}x as long");
     }
     // An empty answer is typed as nothing, and Copilot then records no answer at all to a field
-    // the form requires; one of only spaces might be recorded trimmed to that (review of #844).
+    // the form requires; one of only spaces might be recorded trimmed to that, and so might one of
+    // control characters, which are typed as spaces though trim() alone keeps them (review of #844).
     [Fact]
     public void An_empty_or_blank_answer_to_a_required_text_field_is_refused()
     {
@@ -583,7 +584,20 @@ public class CopilotPlannerTests
 
         Assert.Equal("\"t\" needs an answer", Answers.Check(question, Answer(new { t = "" })));
         Assert.Equal("\"t\" needs an answer", Answers.Check(question, Answer(new { t = " \t\u00A0" })));
+        Assert.Equal("\"t\" needs an answer", Answers.Check(question, Answer(new { t = "\u0085" })));
+        Assert.Equal("\"t\" needs an answer", Answers.Check(question, Answer(new { t = "\u0001" })));
+        Assert.Equal("\"t\" needs an answer", Answers.Check(question, Answer(new { t = "\u001b " })));
         Assert.Null(Answers.Check(question, Answer(new { t = " a " })));
+    }
+
+    // Words around control characters are still an answer, typed as Collapse makes them.
+    [Theory]
+    [InlineData(" a", " a")]
+    [InlineData("\u0001a", " a")]
+    public void A_required_text_answer_with_words_is_still_typed(string text, string typed)
+    {
+        const string Required = """{ "message": "m", "requestedSchema": { "properties": { "t": { "type": "string" } }, "required": ["t"] } }""";
+        Assert.Equal([(typed, true)], Keys(Plan(Required, Answer(new { t = text }))));
     }
 
     [Fact]

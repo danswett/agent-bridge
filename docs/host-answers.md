@@ -100,10 +100,12 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     (JavaScript's `trim`), and refused if either form breaks a limit: the form passes it on as
     typed, but a trim where it is recorded is not ruled out, and "  ab" is 4 typed and 2 trimmed.
     Text of only spaces, tabs or no-break spaces is checked so too, and an empty or blank answer
-    to a required text field is refused, since it records no answer or might. A required text
-    field whose default is only such spaces is therefore answered at the machine: that default is
-    the one answer it can be given from another device, and it is blank. An empty default opens
-    nothing and stays answerable. Whether Copilot trims a text box's words before recording them
+    to a required text field is refused, since it records no answer or might. Blank there counts
+    control characters too: the host types them as spaces (`InjectableText.Collapse`), so
+    `"\u0085"` would go as a space that `trim()` empties (`FieldConstraints.BlankOnceTyped`, which
+    the PWA mirrors). A required text field whose default is blank so is therefore answered at
+    the machine: that default is the one answer it can be given from another device, and it is
+    blank. An empty default opens nothing and stays answerable. Whether Copilot trims a text box's words before recording them
     is not settled: its form passes them on as typed (`Fxn`, and `Uxn`'s accept step), but the
     native layer after it was not traced, which is why both forms are checked.
   * An option list whose `default` is present but is not one of its options, `null` included,

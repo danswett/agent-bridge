@@ -87,6 +87,19 @@ public sealed partial record FieldConstraints
     // which .NET's Trim() leaves.
     public static string Trimmed(string text) => text.Trim(JsTrim);
 
+    // Whether text is nothing once typed and trimmed: a host types every control character as a
+    // space (InjectableText.Collapse), which trim() then drops, though trim() alone keeps one. So
+    // "\u0085" or "\u001b " passed as an answer to a required field, typed as spaces (review of
+    // #844). The PWA mirrors this as /\p{Cc}/ then trim().
+    public static bool BlankOnceTyped(string text)
+    {
+        foreach (var c in text)
+        {
+            if (!char.IsControl(c) && Array.IndexOf(JsTrim, c) < 0) { return false; }
+        }
+        return true;
+    }
+
     static readonly char[] JsTrim =
     [
         '\t', '\n', '\v', '\f', '\r', ' ', '\u00A0', '\u1680', '\u2000', '\u2001', '\u2002', '\u2003', '\u2004',

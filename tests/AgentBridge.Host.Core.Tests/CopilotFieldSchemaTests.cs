@@ -102,6 +102,7 @@ public class CopilotFieldSchemaTests
     [Theory]
     [InlineData("\"   \"", true, true)]
     [InlineData("\" \\t\\u00A0\"", true, true)]
+    [InlineData("\"\\u0085\\u001b\"", true, true)]
     [InlineData("\"\"", true, false)]
     [InlineData("\" a \"", true, false)]
     [InlineData("\"   \"", false, false)]

@@ -40,8 +40,9 @@ public static class Answers
                 continue;
             }
             // Empty text is typed as nothing, which a form records as no answer at all, and text of
-            // only spaces might be recorded trimmed to that (review of #844).
-            if (field.Required == true && field.Type == FieldType.Text && value.ValueKind == JsonValueKind.String && FieldConstraints.Trimmed(value.GetString()!).Length == 0)
+            // only spaces, or of control characters typed as spaces, might be recorded trimmed to
+            // that (review of #844).
+            if (field.Required == true && field.Type == FieldType.Text && value.ValueKind == JsonValueKind.String && FieldConstraints.BlankOnceTyped(value.GetString()!))
             {
                 return $"\"{Label(field)}\" needs an answer";
             }

@@ -573,9 +573,10 @@ Free text of nothing but what shows as nothing (white space, control and format 
 default-ignorables such as U+3164, marks with no base; see `session.reply`) is empty, and
 `refused` as such.
 A field's `constraints` (below) are checked too: a value outside them is `refused`, with why.
-An empty or blank value (`""`, or text JavaScript's `trim()` leaves empty) for a `required`
-`text` field is `refused` as needing an answer: typing nothing records no answer, and blank text
-might be recorded trimmed to nothing.
+An empty or blank value for a `required` `text` field is `refused` as needing an answer: `""`,
+or text that is empty once its control characters (Cc) are made spaces, as a host types them,
+and JavaScript's `trim()` is applied (so `"   "`, `"\u0085"` and `"\u001b "` alike). Typing
+nothing records no answer, and blank text might be recorded trimmed to nothing.
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
 Result: `{ "outcome": "<outcome>", "reason": "<text>" }`, with `reason` present for
@@ -1347,7 +1348,7 @@ breaks flattened. A field whose constraints a host cannot check exactly (a bound
 hold as another number, a length that is not a whole number, a pattern it cannot read as
 JavaScript does, or patterns past the 250 ms one question's patterns share), or whose pre-filled
 default breaks them (checked so too), makes its question `answerAtMachine`. So does a `required`
-`text` field whose pre-filled default is blank (non-empty, but empty once trimmed): that default
+`text` field whose pre-filled default is blank (non-empty, but blank as above): that default
 is the only answer it can be given from another device, and it is refused as blank. So does a
 `choice` whose schema, or a `multi` whose `items`, has text constraints. A client checking a
 `pattern` reads it as JavaScript does, without flags: `\d` and `\w` are ASCII.
