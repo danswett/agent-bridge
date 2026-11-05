@@ -452,6 +452,8 @@ static partial class SelfTest
             var stopBottom = stop is FrameworkElement s ? Top(s, scroll) + s.ActualHeight : Top(before, scroll) + before.ActualHeight;
             Log($"block {code + 1} ({block.ActualHeight:0.#} px tall) top {top:0.#} px, Copy's {copyTop:0.#} px, the last stop of block {from + 1} ({stop.GetType().Name}) ends {stopBottom:0.#} px from the view's top, in a {scroll.ViewportHeight:0.#} px view");
             if (!ConversationKeyboard.WhollyInView(top, block.ActualHeight, scroll.ViewportHeight) || stopBottom > -30) { setup += $"; block {code + 1} wholly in view with the last stop of block {from + 1} 30 px or more above the view: top {top:0.#} px, that stop ends {stopBottom:0.#} px"; continue; }
+            // The case is block 28's, 3 px below the top: any other place is a different test.
+            if (Math.Abs(top - 3) > 0.5) { setup += $"; block {code + 1} measured at {top:0.#} px from the view's top, not 3 px"; continue; }
 
             var held = new TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>((_, e) => e.Handled = true);
             var (offsetBefore, topBefore) = (scroll.VerticalOffset, top);
@@ -474,6 +476,7 @@ static partial class SelfTest
             using var requests = new BringIntoViewLog(list, scroll, Log);
             scroll.AddHandler(UIElement.PreviewKeyDownEvent, heard, true);
             requests.Mark("Tab pressed");
+            requests.WatchKeys("leaving container", before);
             try
             {
                 method = Press(window.Handle, VirtualKey.Tab, foreground: true, extended: false);
@@ -522,6 +525,8 @@ static partial class SelfTest
             if (SessionView.Shallowest<ScrollContentPresenter>(scroll) is { } presenter) { Listen("scroll content presenter", presenter); }
             else { log("no ScrollContentPresenter found under the scroller"); }
             Listen("scroller", scroll);
+            WatchKeys("list", list);
+            WatchKeys("scroller", scroll);
             for (var i = 0; i < list.Items.Count; i++)
             {
                 if (list.ContainerFromIndex(i) is ListViewItem item) { HookContainer(item); }
@@ -548,8 +553,27 @@ static partial class SelfTest
             if (!args.InRecycleQueue && args.ItemContainer is ListViewItem item) { HookContainer(item); }
         }
 
-        void OnViewChanging(object? sender, ScrollViewerViewChangingEventArgs e) =>
-            log($"the view changing at {clock.ElapsedMilliseconds} ms from {scroll.VerticalOffset:0.#} px to {e.NextView.VerticalOffset:0.#} px, finally {e.FinalView.VerticalOffset:0.#} px, inertial {e.IsInertial}");
+        void OnViewChanging(object? sender, ScrollViewerViewChangingEventArgs e)
+        {
+            var focused = list.XamlRoot is { } root ? FocusManager.GetFocusedElement(root) : null;
+            var element = focused is TextElement t ? t.ContentStart?.VisualParent : focused as UIElement;
+            var where = element is not null && BlockOf(list, focused) is not null ? $", {element.TransformToVisual(scroll).TransformPoint(default).Y:0.#} px from the view's top" : "";
+            log($"the view changing at {clock.ElapsedMilliseconds} ms from {scroll.VerticalOffset:0.#} px to {e.NextView.VerticalOffset:0.#} px, finally {e.FinalView.VerticalOffset:0.#} px, inertial {e.IsInertial}, focus on {focused?.GetType().Name ?? "nothing"} in {(BlockOf(list, focused) is { } at ? $"block {at + 1}" : "no block")}{where}");
+        }
+
+        readonly List<(UIElement Target, RoutedEvent Event, KeyEventHandler Handler)> keys = [];
+
+        // Every PreviewKeyDown and KeyDown that reaches the element, handled or not, with the key,
+        // whether it was handled by then and the view's offset, on the log's clock.
+        public void WatchKeys(string where, UIElement target)
+        {
+            foreach (var (name, routed) in new[] { ("PreviewKeyDown", UIElement.PreviewKeyDownEvent), ("KeyDown", UIElement.KeyDownEvent) })
+            {
+                var handler = new KeyEventHandler((_, e) => log($"{name} on the {where} at {clock.ElapsedMilliseconds} ms: {e.Key}, handled {e.Handled}, the view at {scroll.VerticalOffset:0.#} px"));
+                target.AddHandler(routed, handler, true);
+                keys.Add((target, routed, handler));
+            }
+        }
 
         void Listen(string where, UIElement target)
         {
@@ -577,6 +601,8 @@ static partial class SelfTest
         {
             foreach (var (target, handler) in heard) { target.BringIntoViewRequested -= handler; }
             heard.Clear();
+            foreach (var (target, routed, handler) in keys) { target.RemoveHandler(routed, handler); }
+            keys.Clear();
             containers.Clear();
             SessionView.Diagnostics = null;
             list.ContainerContentChanging -= OnContainer;

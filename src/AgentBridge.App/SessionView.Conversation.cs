@@ -98,6 +98,7 @@ public sealed partial class SessionView
         // once what has focus has had them.
         scroll.PreviewKeyDown += (_, e) => OnReadingKey(e, early: true);
         scroll.KeyDown += (_, e) => OnReadingKey(e, early: false);
+        ConversationList.PreviewKeyDown += OnTabFromOffScreen;
     }
 
     // The keys that scroll a page scroll the conversation, as its ScrollViewer did (ui.md §6.4),
@@ -315,22 +316,20 @@ public sealed partial class SessionView
                 return;
             }
             target = blocks[at];
-            var offsetThen = ConversationScroll?.VerticalOffset;
-            var wholly = ConversationList.ContainerFromIndex(at) is FrameworkElement shown && shown.ActualHeight > 0 && ConversationScroll is { } s && ConversationKeyboard.WhollyInView(Top(shown, s), shown.ActualHeight, s.ViewportHeight);
-            // Not for a block already wholly in view: ScrollIntoView moved the view -315 px for one at the top edge when focus was on a stop out of view (#881, run 42060617165).
-            if (!ReferenceEquals(brought, target) && !wholly)
+            if (!ReferenceEquals(brought, target))
             {
+                var offsetThen = ConversationScroll?.VerticalOffset;
+                var wholly = Diagnostics is not null && ConversationList.ContainerFromIndex(at) is FrameworkElement shown && ConversationScroll is { } s && ConversationKeyboard.WhollyInView(Top(shown, s), shown.ActualHeight, s.ViewportHeight);
                 ConversationList.ScrollIntoView(target, ScrollIntoViewAlignment.Leading);
                 brought = target;
                 if (Diagnostics is { } diag && ConversationScroll is { } scrolled)
                 {
-                    diag($"FocusBlock's ScrollIntoView(block {at + 1}, Leading): Resume's move is block {move.Block + 1}, the block not wholly in view and {(ConversationList.ContainerFromIndex(at) is null ? "not " : "")}realised, the view at {offsetThen:0.#} px before and {scrolled.VerticalOffset:0.#} px straight after");
+                    diag($"FocusBlock's ScrollIntoView(block {at + 1}, Leading): Resume's move is block {move.Block + 1}, the block {(wholly ? "wholly" : "not wholly")} in view and {(ConversationList.ContainerFromIndex(at) is null ? "not " : "")}realised, the view at {offsetThen:0.#} px before and {scrolled.VerticalOffset:0.#} px straight after");
                     EventHandler<ScrollViewerViewChangedEventArgs>? next = null;
                     next = (_, e) => { diag($"the next ViewChanged after that ScrollIntoView: {scrolled.VerticalOffset:0.#} px{(e.IsIntermediate ? " (intermediate)" : "")}"); scrolled.ViewChanged -= next; };
                     scrolled.ViewChanged += next;
                 }
             }
-            else if (wholly) { Diagnostics?.Invoke($"FocusBlock's ScrollIntoView(block {at + 1}) skipped: the block is wholly in view, the view at {offsetThen:0.#} px"); }
             ConversationList.UpdateLayout();
             if (Diagnostics is { } afterLayout) { afterLayout($"FocusBlock after UpdateLayout for block {at + 1}: the view at {ConversationScroll?.VerticalOffset:0.#} px"); }
             if (ConversationList.ContainerFromIndex(at) is not { } container)
@@ -373,6 +372,12 @@ public sealed partial class SessionView
             _ = FocusManager.TryFocusAsync(stop, FocusState.Keyboard);
             return;
         }
+        FocusHolding(container, source, stop);
+    }
+
+    // Focus on a stop with the focus manager's scroll to it held (HoldFocusScroll).
+    void FocusHolding(UIElement container, UIElement source, DependencyObject stop)
+    {
         var (release, leaving) = HoldFocusScroll(container, source);
         FocusManager.TryFocusAsync(stop, FocusState.Keyboard).Completed = (op, status) =>
         {
@@ -380,6 +385,51 @@ public sealed partial class SessionView
         };
         // Only once focus has moved: the move itself may raise LosingFocus here.
         leaving();
+    }
+
+    // Tab or Shift+Tab with focus on a stop not wholly in view (#881). The focus manager scrolls that
+    // stop into view before it searches (CI run 42062988585: the view moved -315 px for a Tab onto a
+    // block wholly in view, with no scroll of ours running), which rule E forbids (ui.md §6.4). So
+    // the search is made here from the same stop, the move it finds is made as the focus handlers
+    // make it (a block passed is held, FocusBlock; one wholly in view is landed on with the focus
+    // manager's scroll held, InViewAtTab), and the key is handled so the manager's own never runs.
+    // Focus order is the manager's own search; no result (the end of the window) is left to it.
+    // Only for a stop that is not wholly in view: one in view keeps the manager's Tab, whatever block it is in.
+    void OnTabFromOffScreen(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key != VirtualKey.Tab || e.Handled || lettingTabPass || ConversationScroll is not { } scroll || XamlRoot is not { } root || root.Content is not { } within
+            || ConversationList.Visibility != Visibility.Visible || !ConversationList.IsLoaded) { return; }
+        static bool Pressed(VirtualKey k) => InputKeyboardSource.GetKeyStateForCurrentThread(k).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        if (Pressed(VirtualKey.Control) || Pressed(VirtualKey.Menu) || Pressed(VirtualKey.LeftWindows) || Pressed(VirtualKey.RightWindows)) { return; }
+        var focused = FocusManager.GetFocusedElement(root) as DependencyObject;
+        if (PlaceOf(focused) is not (>= 0 and var at) || at >= blocks.Count || Drawn(focused, scroll) is not { } drawn
+            || ConversationKeyboard.WhollyInView(drawn.Top, drawn.Bottom - drawn.Top, scroll.ViewportHeight)) { return; }
+        var forward = !Pressed(VirtualKey.Shift);
+        var direction = forward ? FocusNavigationDirection.Next : FocusNavigationDirection.Previous;
+        if (FocusManager.FindNextElement(direction, new FindNextElementOptions { SearchRoot = within }) is not { } to || ReferenceEquals(to, focused)) { return; }
+        e.Handled = true;
+        var passed = TabPassed(focused, to, direction);
+        var kept = passed is null ? InViewAtTab(to, direction) : null;
+        Diagnostics?.Invoke($"Tab from a stop out of view in block {at + 1} ({drawn.Top:0.#} to {drawn.Bottom:0.#} px), found by us and handled: to block {Where(PlaceOf(to))}, Tab passes block {(passed is { } p ? (p.Index + 1).ToString() : "none")}, landing held {kept is not null}, the view at {scroll.VerticalOffset:0.#} px");
+        if (passed is { } through) { FocusBlock(through.Index, forward, through.Wrapped, focused); }
+        else if (kept is { } k) { FocusHolding(k.Container, k.Source, to); }
+        else { _ = FocusManager.TryFocusAsync(to, FocusState.Keyboard); }
+    }
+
+    // Where a stop is drawn against the view, top and bottom; null for anything that isn't an element or a link.
+    static (double Top, double Bottom)? Drawn(DependencyObject? stop, UIElement view)
+    {
+        switch (stop)
+        {
+            case FrameworkElement f:
+                var top = Top(f, view);
+                return (top, top + f.ActualHeight);
+            case TextElement { ContentStart: { VisualParent: UIElement text } start, ContentEnd: { } end }:
+                var (first, last) = (start.GetCharacterRect(LogicalDirection.Forward), end.GetCharacterRect(LogicalDirection.Backward));
+                var origin = Top(text, view);
+                return (origin + Math.Min(first.Top, last.Top), origin + Math.Max(first.Bottom, last.Bottom));
+            default: return null;
+        }
     }
 
     // The focus manager's scroll to a stop just focused in a block, held back once: its request is
