@@ -1,5 +1,5 @@
 {
-  "about": "The device roster's acceptance rule and state (#55 R1b): each scenario's entries offered in order, each step's verdict (accepted, quarantined, evidence, duplicate, refused) and refusal code, and the state the verifier then applies. Steps with hours move the verifier's running-time clock first; a step with only hours records who is served then; a step with adopt adopts that head locally. Every entry is in entries, by label, whether or not a step offers it.",
+  "about": "The device roster's acceptance rule and state (#55 R1b): each scenario's entries offered in order, each step's verdict (accepted, quarantined, duplicate or refused) and refusal code, and the state the verifier then applies. Steps with hours move the verifier's running-time clock first; a step with only hours records who is served then; a step with adopt adopts that head locally. Every entry is in entries, by label, whether or not a step offers it.",
   "spec": "devices.md",
   "generatedBy": "tests/AgentBridge.Roster.Tests/RosterStateVectorTests.cs",
   "account": "owner@example",
