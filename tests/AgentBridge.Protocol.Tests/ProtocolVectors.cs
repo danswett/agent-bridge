@@ -106,6 +106,8 @@ public static class ProtocolVectors
         Model = "claude-opus-5.5", Status = SessionStatus.Waiting, StatusSince = T1, StartedAt = T0, UpdatedAt = T1, ProcessId = 4120, Activity = FullActivity,
         Question = Form, Driver = DriverKind.Agent, DriverPrincipal = "homeassistant:0f1e2d3c", Subagents = [Delegate, Nested], SubagentsMore = 2, WaitingOn = null,
     };
+    // #800: VM1's sign-in failure as a host shows it, with the sentence the host composes (#841).
+    static readonly Attention SignInNeeded = new() { Kind = AttentionKind.SignInNeeded, Since = T0, Agent = AgentKind.Copilot, Provider = "github", Account = "mona", Message = "Copilot needs you to sign in again (401).", SignIn = SignInWhere.Phone, Recovery = RecoveryState.Checking };
     static readonly Session MinimalSession = new() { Id = "b7e1c2d3-0000-4000-8000-000000000001", Agent = AgentKind.Claude, Status = SessionStatus.Idle, StatusSince = T0, UpdatedAt = T0, Activity = new Activity() };
 
     static readonly DiscoveryHeld Held = new("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot]);
@@ -212,11 +214,20 @@ public static class ProtocolVectors
             .Valid("ended", Nested)
             .Valid("in-full-from-session-get", Delegate with { Status = SubagentStatus.Idle, Outcome = SubagentOutcome.Done, EndedAt = T1, CurrentTool = null, Shells = 0, Response = "Two failures.", ResponseTruncated = true, Reasoning = "Summing up", History = [Finished] })
             .Reads("unknown-kind-status-and-outcome", """{"id":"agent-9","kind":"swarm","status":"sleeping","outcome":"exploded","shells":0}""");
+        f.Record<Attention>(Host)
+            .Valid("sign-in-needed", SignInNeeded)
+            .Valid("an-error-with-a-retry", new Attention { Kind = AttentionKind.Error, Since = T0, Agent = AgentKind.Claude, Message = "Claude Code hit a rate limit (429).", ErrorClass = ErrorClass.Rate, RetryAt = T1 })
+            .Valid("not-responding", new Attention { Kind = AttentionKind.NotResponding, Since = T0, Agent = AgentKind.Codex, LastEventAt = T0 })
+            // Signed in, and still signInNeeded until the model is seen answering (#800 ruling).
+            .Valid("signed-in-waiting-for-the-model", new Attention { Kind = AttentionKind.SignInNeeded, Since = T0, Agent = AgentKind.Copilot, Provider = "github", SignIn = SignInWhere.Phone, Recovery = RecoveryState.Pending })
+            .Reads("unknown-values-and-fields-from-a-newer-host", """{"kind":"paused","since":"2026-10-28T04:22:43.182Z","errorClass":"cosmic","signIn":"watch","recovery":"teleporting","somethingNew":{"a":1}}""");
         f.Record<Session>(Host)
             .Valid("full", FullSession)
             .Valid("minimal", MinimalSession)
             .Valid("waiting-on-a-delegate", MinimalSession with { Agent = AgentKind.Copilot, Status = SessionStatus.Waiting, Question = Plain with { Agent = "agent-1", AnswerAtMachine = true }, Subagents = [Delegate with { Status = SubagentStatus.Waiting }], WaitingOn = "agent-1" })
             .Valid("ending", MinimalSession with { Agent = AgentKind.Codex, Status = SessionStatus.Ending })
+            // Idle, as its turn ended, with why beside it (#800): an older client reads only that.
+            .Valid("signed-out", MinimalSession with { Agent = AgentKind.Copilot, Attention = SignInNeeded })
             .Reads("unknown-values-and-fields-from-a-newer-host", """{"id":"x","agent":"gemini","status":"thinking","driver":"robot","statusSince":"2026-10-28T04:22:43.182Z","updatedAt":"2026-10-28T04:22:43.182Z","activity":{"mood":"good"},"somethingNew":{"a":1}}""")
             // A field that cannot be read is absent, and a required one its default, as the reads say.
             .Reads("a-title-that-is-not-text-and-no-status", Broken(MinimalSession with { Title = "Fix the build" }, j => { j["title"] = 5; j.Remove("status"); }))

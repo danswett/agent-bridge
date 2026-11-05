@@ -54,6 +54,9 @@ internal sealed class SessionState
     public readonly BackgroundWork Background = new();
     // Questions the agent is waiting on, oldest first; the newest is the one shown.
     public readonly List<Question> Pending = [];
+    // session.attention (#800): what went wrong that the status cannot say. An error lasts until
+    // the next turn, a sign-in until the model is seen answering (CopilotParser.Answered).
+    public Attention? Attention;
 
     public SessionStatus Effective => Pending.Count > 0 ? SessionStatus.Waiting : Status;
     public DateTimeOffset? EffectiveSince;
@@ -69,6 +72,7 @@ internal sealed class SessionState
         Tools.Clear();
         Background.Clear();
         Pending.Clear();
+        Attention = null;
     }
 
     // Called after every event, with its time, so StatusSince is when the change happened
@@ -125,6 +129,16 @@ internal sealed class SessionState
     {
         Tools.FailRunning(at);
         Pending.Clear();
+        Status = SessionStatus.Idle;
+    }
+
+    // The main agent's turn failed (#800, a session.error): its own tools and questions end with
+    // it. A background delegate may still be running, and its permission prompt is still the
+    // person's to answer.
+    public void FailTurn(DateTimeOffset? at)
+    {
+        Tools.FailRunning(at, mainOnly: true);
+        Pending.RemoveAll(q => q.Agent is null);
         Status = SessionStatus.Idle;
     }
 }
@@ -188,9 +202,10 @@ internal sealed class ToolHistory
 
     public bool AnyRunning => _entries.Any(e => e.Status == ToolStatus.Running);
 
-    public void FailRunning(DateTimeOffset? at)
+    // mainOnly: the main agent's tools, leaving a live delegate's running.
+    public void FailRunning(DateTimeOffset? at, bool mainOnly = false)
     {
-        foreach (var e in _entries.Where(e => e.Status == ToolStatus.Running))
+        foreach (var e in _entries.Where(e => e.Status == ToolStatus.Running && (!mainOnly || e.Agent is null)))
         {
             e.Status = ToolStatus.Failed;
             e.EndedAt = at;

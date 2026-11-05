@@ -1046,7 +1046,7 @@ agent-ha-bridge notifies a phone through Home Assistant.
 | `kind` | When | Once per |
 |---|---|---|
 | `question` | A session has a pending `question`, still pending 2 s later. A question already pending when the host starts is notified too, as agent-ha-bridge's daemon does after a restart | Question `id`, for the life of the session: further upserts, or the question briefly reading as pending again after an answer is typed, do not repeat it |
-| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Not to a device that is on screen now, subscribed to the host on a channel whose [`sessions.focus`](#sessionsfocus) last said `"visible": true`, unless a question notice of that session is still on it (the `finished` replaces it). Waiting on a sub-agent's question (`waitingOn`) counts if the main agent's turn was running when that wait began, or its own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified | Finished turn: the same `turnCount` and response seen ending again is not repeated |
+| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Not to a device that is on screen now, subscribed to the host on a channel whose [`sessions.focus`](#sessionsfocus) last said `"visible": true`, unless a question notice of that session is still on it (the `finished` replaces it). Waiting on a sub-agent's question (`waitingOn`) counts if the main agent's turn was running when that wait began, or its own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified. Nor is a turn that ended on an error or a failed sign-in (`attention` `error` or `signInNeeded`): it is idle with the previous turn's answer still beside it, which a `finished` would quote as the new one's; one already due or held for the session is withdrawn while that attention lasts. A `finished` that would have replaced an answered question and does not go (withdrawn so, or refused by a device) sends that question's `resolved` instead to the devices still showing it, unless it is asked again | Finished turn: the same `turnCount` and response seen ending again is not repeated |
 | `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead | Question |
 
 A device is sent at most one `finished` per session every 10 minutes. One that follows sooner
@@ -1166,6 +1166,7 @@ is for disposable evaluation, not production service enrollment.
 | `subagents` | [Subagent](#subagent)[]? | The sub-agents the session started, at any depth ([design/subagents.md](../design/subagents.md)): running ones (`working`, `waiting`) first, newest start first, then the most recently finished. At most 20, and fewer if the [session budget](#session-budget) trims them. Absent when there are none. Finished ones stay until the session ends. Only Copilot sends them so far |
 | `subagentsMore` | number? | Entries left out of `subagents`, by the host's limit or the budget. Absent when none are |
 | `waitingOn` | string? | Status precedence rule 2: the id of the sub-agent whose question is `question`, while the session has none of its own. Absent otherwise |
+| `attention` | [Attention](#attention)? | **New (#800).** What is wrong with the session that `status` cannot say: its agent needs signing in again, its turn ended on an error, or it stopped responding. Absent when nothing is |
 
 **Status precedence** with sub-agents (first match wins): the session's own question
 (`waiting`); a sub-agent's question (`waiting`, with `waitingOn`); the main agent's turn
@@ -1174,6 +1175,89 @@ running (`working`); the main agent idle with background agents or commands stil
 and it was already `waiting` for a sub-agent's permission prompt before hosts said whose it
 was.
 
+### Attention
+
+**New (#800).** What is wrong with a session that its `status` cannot say, shown over the
+status rather than instead of it.
+
+```json
+"attention": {
+  "kind": "signInNeeded",
+  "since": "2026-11-04T23:45:05.000Z",
+  "agent": "copilot",
+  "provider": "github",
+  "message": "Copilot needs you to sign in again (401)."
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `kind` | `"signInNeeded"` \| `"error"` \| `"notResponding"` | A client reads an unknown kind as `error` |
+| `since` | time | When it began: the error's time, or for `notResponding` the last event's |
+| `agent` | `"copilot"` \| `"claude"` \| `"codex"`? | The session's agent, repeated so the per-machine roll-up and the push read the same way |
+| `provider` | string? | `signInNeeded`: whose sign-in it is, `github`, `anthropic` or `openai` |
+| `account` | string? | `signInNeeded`: the account, when the host knows it from metadata (the login the CLI reports), never from a token. Absent when unknown |
+| `message` | string? | One plain-text sentence the **host composes** from `kind`, `errorClass`, `statusCode` and `provider` alone, at most 300 bytes: "Copilot needs you to sign in again (401).", "Copilot hit a rate limit (429).", "Copilot stopped with an error." **No part of the agent's own error text is ever in it** (#841): redacting arbitrary text never closed, and this field reaches every client and HA. A client may show it in Details, as text and never as a link; its row words come from `kind` and `errorClass` (ui.md §6.13) |
+| `errorClass` | `"auth"` \| `"rate"` \| `"quota"` \| `"model"` \| `"network"` \| `"other"`? | `error`: what sort, from the agent's structured fields, never its wording. Unknown reads as `other` |
+| `retryAt` | time? | `error`: when the agent said it can be tried again (a rate limit, a quota) |
+| `signIn` | `"phone"` \| `"machine"` \| `"unknown"`? | `signInNeeded`: `phone` when this host can relay the agent's own device-code sign-in to a person's device; `machine` only when the host knows it can be signed in nowhere else. Absent while not known; a host never sends `unknown`. A value a client does not know reads as `unknown`, which claims nothing: no sign-in from the phone is offered on it, and it is not said to be the machine's only |
+| `recovery` | `"checking"` \| `"signingIn"` \| `"pending"` \| `"failed"`? | `signInNeeded`: the host is checking for a still-valid stored credential, a person has started signing in, the agent is signed in again and the host is waiting for the session to show it (`pending`), or the check found none (`failed`). Absent otherwise. Unknown reads as `failed` |
+| `lastEventAt` | time? | `notResponding`: the transcript's last event |
+
+* **`status` stays truthful.** A turn that ended on an error or a sign-in failure has ended, so
+  the session is `idle` (or `waiting` if a question is pending), with `attention` beside it. A
+  prompt sent while it still needs sign-in shows `working`, still with `signInNeeded`, until the
+  agent answers or fails again. `notResponding` is a session still `working`. A client shows
+  "Needs sign-in", the error's words or "Not responding" over the status, ranks it with the
+  sessions that need the person, and never shows it as plain idle or with a stale age.
+* **It goes**, and `session.patch` carries `"attention": null`:
+  * `error`: when the next turn starts: a prompt or a turn start, not context the CLI adds within
+    a turn (memory, a skill) or its own notice of the error.
+  * `signInNeeded`: only when the model is seen answering, in a message of its own words or a
+    tool it asked for, dated after the latest sign-in failure. A prompt, a turn starting or
+    ending, a hook and anything the bridge typed are written whether the agent can reach its
+    model or not, so none of them clears it: on VM1 (#800) a session ended a turn between two
+    sign-in failures 51 ms apart. A sign-in alone never clears it: once one finishes
+    (`signin.done` `signedIn`, when `sessions.signin` comes) or a still-valid credential is found,
+    it stays `signInNeeded` with `recovery` `pending` until that same evidence, and no newer
+    failure, shows the session can reach its model. A host that did not read part of a long
+    transcript (past its skim budget) keeps a failure it read before that part: bytes never read
+    are no evidence. Only what it does read after them clears it, by the same evidence, and a
+    newer failure there moves `since`.
+* A change to it moves `updatedAt`. It is a few hundred bytes and never trimmed by the
+  [session budget](#session-budget).
+* **Older clients** ignore it and read the status, so a signed-out session reads as idle to them.
+
+**What a host sends today.** Copilot only, from the `session.error` record that ends a turn,
+read by its structured fields (VM1's sign-in failures, #800, carry all three):
+
+* `signInNeeded` (provider `github`) when `remediation` is `"sign_in"`, `errorType` is
+  `"authorization"` or `statusCode` is 401;
+* `error` for any other, with `errorClass` `auth` for status 403, `rate` for 429 and `other`
+  otherwise, except while the session needs sign-in, which another error does not replace;
+* nothing for an `errorType` of `"model_call"`, which the CLI retries within the turn, or
+  `"hook"`, which ends nothing. A delegate's error is its own, not the session's.
+
+`message` comes from one table (`AgentErrors.Template`), with the agent's name and the status
+code when it is an HTTP status (100 to 599):
+
+| `kind` / `errorClass` | `message` |
+|---|---|
+| `signInNeeded` | "*Agent* needs you to sign in again (*status*)." |
+| `error` / `auth` | "*Agent* was not authorised (*status*)." |
+| `error` / `rate` | "*Agent* hit a rate limit (*status*)." |
+| `error` / `quota` | "*Agent* has used up its quota (*status*)." |
+| `error` / `model` | "*Agent*'s model returned an error (*status*)." |
+| `error` / `network` | "*Agent* couldn't reach its service (*status*)." |
+| `error` / `other` | "*Agent* stopped with an error (*status*)." |
+| `notResponding` | "*Agent* isn't responding." |
+
+Claude Code and Codex send none yet: their records are read only once a real, redacted sample of
+each has been captured. `notResponding`, `account`, `signIn`, `recovery`, the per-machine
+roll-up in `hello`, the `signIn` and `signedIn` notices and the `sessions.signin` capability
+(relaying the agent's own device-code sign-in to a person's device) follow in later slices of
+#800; their shape is in [#800](https://github.com/danswett/agent-bridge/issues/800#issuecomment-6646501884),
+and this section grows with each.
 ### Driver
 
 Whether a person or an agent is driving the session: agent-ha-bridge's purple edge, drawn in
@@ -1356,7 +1440,7 @@ session is at most 40 KiB.
 
 | Agent | Sessions | Activity and status | Question |
 |---|---|---|---|
-| Copilot CLI | `~/.copilot/session-state/<id>/` with a live `inuse.<pid>.lock`, plus `workspace.yaml` | From `events.jsonl`: `user.message`, `assistant.message` (`content`, `toolRequests`), `tool.execution_start` and `_complete`, `assistant.turn_start` and `_end`, `session.compaction_complete`, `session.model_change` | A `tool.execution_start` with `toolName: "ask_user"`, using its `arguments.message` and `arguments.requestedSchema`. Pending until a `human_response.recorded` or `tool.execution_complete` with the same `toolCallId`. A `permission.requested` (its `promptRequest`, else its `permissionRequest`) is an `approval`, pending until the `permission.completed` with the same `requestId` |
+| Copilot CLI | `~/.copilot/session-state/<id>/` with a live `inuse.<pid>.lock`, plus `workspace.yaml` | From `events.jsonl`: `user.message`, `assistant.message` (`content`, `toolRequests`), `tool.execution_start` and `_complete`, `assistant.turn_start` and `_end`, `session.compaction_complete`, `session.model_change`, and `session.error` for [`attention`](#attention) | A `tool.execution_start` with `toolName: "ask_user"`, using its `arguments.message` and `arguments.requestedSchema`. Pending until a `human_response.recorded` or `tool.execution_complete` with the same `toolCallId`. A `permission.requested` (its `promptRequest`, else its `permissionRequest`) is an `approval`, pending until the `permission.completed` with the same `requestId` |
 | Claude Code | The bridge's registration files, else Claude Code's own `~/.claude/sessions/<pid>.json` (an interactive CLI, its pid running, written no earlier than that process started); and `~/.claude/projects/<slug>/<id>.jsonl` | Transcript `assistant` entries (`text`, `thinking`, `tool_use`) and `user` entries | A `tool_use` named `AskUserQuestion`, pending until a `tool_result` with its id. Claude Code 2.1.312 writes that `tool_use` only once the question is answered, so without agent-ha-bridge's `PreToolUse` hook a waiting question is not seen. A permission prompt, which only agent-ha-bridge's hook reports (its status `waiting`, newer than the transcript, over a running tool), is an `approval` with that tool's id, `answerAtMachine` |
 | Codex | The bridge's registration files, else (Windows) `~/.codex/thread-writer-locks/<id>.lock`, as the Restart Manager reports who holds it open. The lock must be held by exactly one running `codex.exe`, and that one must be an interactive terminal: its command line read, with no subcommand (a prompt at most), `resume` or `fork`, and no `app-server` or `mcp-server` argument. That is a Codex run with `--no-daemon`, not `exec`, `review`, `migrate-rollouts` and the like. A lock shared with the daemon or with an unreadable Codex names nobody. Each decision is checked again after 30 s. A terminal holding several locks is the session of the one whose rollout `session_meta` is its own top-level thread (`id` and `session_id` equal, `thread_source` "user") with an event since it started, else of none. A lone lock whose rollout names another thread (a sub-agent's) is not a session either. A registration agent-ha-bridge marked ended keeps its thread from being found this way; and `~/.codex/sessions/…/rollout-*.jsonl` | Rollout `event_msg` payloads | An approval agent-ha-bridge's hook recorded in `<id>.approval.json` beside the registration: an `approval` whose `id` is the marker's `DecisionId` (its generation), `answerAtMachine` once the marker records agent-ha-bridge's own attempt (`DeliveryAttempted`). An `exec_approval_request` or `apply_patch_approval_request` in the rollout with no marker is an `approval` keyed by its `call_id`, `answerAtMachine` |
 
