@@ -512,12 +512,20 @@ public sealed class SettingsViewModel : Observable
         }
         if (gone == hostsGone) { Note(agent, new(result.Detail, result.Completed ? Tone.Ok : Tone.Bad, Removed: remove && result.Completed)); }
         await host.RefreshStatusAsync();
-        if (!result.Completed) { throw new InvalidOperationException(result.Detail); }
+        // A setup or removal that failed can have changed some hooks too (a removal that stopped
+        // part-way leaves a setup that didn't finish), so the evidence is checked afresh either way;
+        // the cached readiness would hide Repair until another scan (#705 review). After a failure,
+        // the failure is what's said, not a scan's error.
         if (host.Can(HostOps.AgentReadinessCapability))
         {
-            await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromMinutes(1));
-            await host.RefreshStatusAsync();
+            try
+            {
+                await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromMinutes(1));
+                await host.RefreshStatusAsync();
+            }
+            catch (Exception e) when (!result.Completed && e is not (OutOfMemoryException or StackOverflowException)) { }
         }
+        if (!result.Completed) { throw new InvalidOperationException(result.Detail); }
     });
 
     public Task InstallAgentAsync(string agent) => RunAsync(async () =>

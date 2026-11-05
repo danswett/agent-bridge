@@ -590,6 +590,29 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_removal_that_fails_part_way_is_scanned_afresh_so_its_row_offers_repair()
+    {
+        // The host's readiness is a cached report that only a scan renews: the failed removal left a
+        // setup that didn't finish, which the cache doesn't show.
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = new(DateTimeOffset.UtcNow, [Agent("codex", "Codex", ReadinessState.Unknown, hooksDetail: RecordIntakeOn)]) });
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
+        host.On(HostOps.AgentsSetup, _ => new AgentSetupResult(false, "Removal incomplete: the Codex plugin is still installed.", false));
+        host.On(HostOps.AgentsRefresh, _ =>
+        {
+            host.Status = host.Status with { Agents = new(DateTimeOffset.UtcNow, [Agent("codex", "Codex", ReadinessState.Failed, hooksDetail: "Hook setup for this profile did not complete; its registrations may be partial. Repair setup.")]) };
+            return host.Status.Agents;
+        });
+        Assert.Null(settings.Agents.Single().SetUpVerb);
+
+        await settings.SetUpAgentAsync("codex", remove: true);
+
+        Assert.Single(host.Sent(HostOps.AgentsRefresh));
+        Assert.Equal("Repair", settings.Agents.Single().SetUpVerb);
+        Assert.Equal("Removal incomplete: the Codex plugin is still installed.", settings.Agents.Single().Status);
+        Assert.Equal("Removal incomplete: the Codex plugin is still installed.", settings.Error);
+    }
+
+    [Fact]
     public async Task A_removal_that_leaves_the_owned_record_offers_set_up_again_through_a_fresh_check()
     {
         // Copilot CLI's removal keeps its record when other entries share the file, and an older host
