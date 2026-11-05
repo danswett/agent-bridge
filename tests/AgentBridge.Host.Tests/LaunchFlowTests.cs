@@ -411,7 +411,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal(("busy", "Busy: Copilot in App is waiting for a person to answer whether to trust that folder, so nothing was launched. Try again in a couple of minutes."), Pair(second));
         // Listed as what the machine is waiting on, not as a launch turned away: the first one
         // did start, and its person may be the one reading it (#122).
-        Assert.Equal("Copilot in App is waiting for a person to answer whether to trust that folder; another launch waits until then.",
+        Assert.Equal("Copilot in App is asking whether to trust its folder. New launches wait until it's answered.",
             (await RequestAsync(ch, LaunchProtocol.Options, new { })).GetProperty("busy").GetString());
         Assert.Single(starter.Specs);
         // Read, never typed into.

@@ -268,7 +268,7 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
         var options = await RequestAsync(ch, LaunchProtocol.Options, new { });
         Assert.False(options.TryGetProperty("trust", out _));
         // What the machine lists says what it is waiting on; a launch turned away says it was (#122).
-        Assert.Equal("Claude in App is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all); another launch waits until then.",
+        Assert.Equal("Claude in App is asking whether to allow Bypass Permissions. New launches wait until it's answered.",
             options.GetProperty("busy").GetString());
         var busy = await LaunchTrustAsync(ch, new { workspace = "API" });
         Assert.Equal("busy", busy.GetProperty("outcome").GetString());
@@ -301,7 +301,7 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
         Assert.Equal(2, screens.Plans.Count);
         var options = await RequestAsync(ch, LaunchProtocol.Options, new { });
         Assert.False(options.TryGetProperty("trust", out _));
-        Assert.StartsWith("Claude in App is waiting for a person at the machine to confirm Bypass Permissions mode", options.GetProperty("busy").GetString());
+        Assert.StartsWith("Claude in App is asking whether to allow Bypass Permissions", options.GetProperty("busy").GetString());
     }
 
     [Fact]

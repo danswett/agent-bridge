@@ -1060,10 +1060,17 @@ public sealed partial class LaunchService : ISessionLauncher
             bool Asking(Pending x, StartupQuestion q) => x.Asks(q) && x.TrustAt is { } at && now - at <= options.TrustBusyFor;
             var p = pending.FirstOrDefault(x => Asking(x, StartupQuestion.Trust)) ?? pending.FirstOrDefault(x => Asking(x, StartupQuestion.BypassPermissions));
             if (p is null) { return null; }
-            var waiting = p.Question == StartupQuestion.BypassPermissions
+            var bypass = p.Question == StartupQuestion.BypassPermissions;
+            if (status)
+            {
+                return bypass
+                    ? $"{p.Launcher.Label} in {p.Where} is asking whether to allow Bypass Permissions. New launches wait until it's answered."
+                    : $"{p.Launcher.Label} in {p.Where} is asking whether to trust its folder. New launches wait until it's answered.";
+            }
+            var waiting = bypass
                 ? $"{p.Launcher.Label} in {p.Where} is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all)"
                 : $"{p.Launcher.Label} in {p.Where} is waiting for a person to answer whether to trust that folder";
-            return status ? $"{waiting}; another launch waits until then." : $"Busy: {waiting}, so nothing was launched. Try again in a couple of minutes.";
+            return $"Busy: {waiting}, so nothing was launched. Try again in a couple of minutes.";
         }
     }
 

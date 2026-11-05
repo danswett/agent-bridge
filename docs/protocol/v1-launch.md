@@ -50,7 +50,7 @@ Request `data`: `{}`. Result, what `session.launch` can name on this machine now
     { "id": "0f3c…", "agent": "copilot", "launcher": "agency", "title": "Fix the flaky test - bridge", "cwd": "C:\\Users\\me\\repos\\wt\\bridge-20261028-131443", "workspace": "Bridge", "updatedAt": "2026-10-28T04:22:43.182Z" }
   ],
   "defaults": { "agent": "agency", "workspace": "Bridge", "permissions": "ask" },
-  "busy": "Claude in Bridge is waiting for a person to answer whether to trust that folder; another launch waits until then."
+  "busy": "Claude in Bridge is asking whether to trust its folder. New launches wait until it's answered."
 }
 ```
 

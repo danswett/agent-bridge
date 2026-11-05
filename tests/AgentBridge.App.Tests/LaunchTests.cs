@@ -384,7 +384,7 @@ public sealed class LaunchTests : IAsyncLifetime
         Assert.Equal($"Test PC is busy: {Waiting}", launch.Busy);
     }
 
-    const string Waiting = "Claude in bridge is waiting for a person to answer whether to trust that folder; another launch waits until then.";
+    const string Waiting = "Claude in bridge is asking whether to trust its folder. New launches wait until it's answered.";
 
     static TrustQuestion Asking(DateTimeOffset at) => new()
     {
@@ -417,7 +417,7 @@ public sealed class LaunchTests : IAsyncLifetime
     [Fact]
     public async Task What_the_machine_says_is_busy_is_listed_again_when_a_session_registers()
     {
-        options = options with { Busy = "Claude in bridge is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all); another launch waits until then." };
+        options = options with { Busy = "Claude in bridge is asking whether to allow Bypass Permissions. New launches wait until it's answered." };
         await launch.RefreshAsync();
         Assert.NotEqual("", launch.Busy);
         options = options with { Busy = null };
