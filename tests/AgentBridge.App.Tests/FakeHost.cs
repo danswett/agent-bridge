@@ -491,6 +491,7 @@ sealed class AttachmentDeliveryEvidence(long expectedBytes, TimeProvider? time =
     string? outcome, error;
     string status = "not observed";
     DeliveryState? uiState;
+    Tone uiTone = Tone.None;
 
     void Reached(Phase next)
     {
@@ -524,14 +525,16 @@ sealed class AttachmentDeliveryEvidence(long expectedBytes, TimeProvider? time =
         lock (gate) { acknowledged ??= clock.GetTimestamp(); outcome = value; Reached(Phase.Acknowledged); }
     }
 
-    public void ObserveUi(string value, string? failure, DeliveryState? state)
+    public void ObserveUi(string value, Tone tone, string? failure, DeliveryState? state)
     {
         lock (gate)
         {
             status = value;
             error = failure;
             uiState = state;
-            if (state is DeliveryState.Done or DeliveryState.Failed)
+            uiTone = tone;
+            // Delivery completion is upstream of the view model settling its presentation.
+            if (!string.IsNullOrWhiteSpace(value) && tone is Tone.Ok or Tone.Bad or Tone.Warn)
             {
                 terminal ??= clock.GetTimestamp();
                 Reached(Phase.TerminalUi);
@@ -556,7 +559,7 @@ sealed class AttachmentDeliveryEvidence(long expectedBytes, TimeProvider? time =
             return $"last phase={last}; attachment start={At(start)}; chunks={chunks}, bytes={bytes}/{expectedBytes}, "
                 + $"first chunk={At(firstChunk)}, last chunk={At(lastChunk)}; reply received={At(reply)}; "
                 + $"reply acknowledgement={At(acknowledged)}, outcome={outcome ?? "none"}; terminal UI={At(terminal)}, "
-                + $"state={uiState?.ToString() ?? "not observed"}, status={status}, error={error ?? "none"}";
+                + $"state={uiState?.ToString() ?? "not observed"}, tone={uiTone}, status={status}, error={error ?? "none"}";
         }
     }
 }

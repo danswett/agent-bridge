@@ -436,12 +436,12 @@ public sealed class CardTests : IAsyncLifetime
             var r = new ReplyViewModel(session, attach: true, deliveries, connection, new Shrinker(), large: true);
             bool Delivered()
             {
-                evidence.ObserveUi(r.StatusText, r.Error, state);
+                evidence.ObserveUi(r.StatusText, r.StatusTone, r.Error, state);
                 return r.StatusText == "Delivered. The session has your reply.";
             }
             string Why()
             {
-                evidence.ObserveUi(r.StatusText, r.Error, state);
+                evidence.ObserveUi(r.StatusText, r.StatusTone, r.Error, state);
                 return evidence.Describe();
             }
 

@@ -508,6 +508,7 @@ changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
     (#513): attachment start, chunk bytes/count and timings, reply receipt, client-observed
     acknowledgement, and terminal UI state. The last phase distinguishes pipe progress from
     UI settlement; it does not extend the wait or replace delivered/byte assertions.
+    UI settlement uses the view model's status/tone, independently of the delivery state.
 - **Flakes:** a test that passes and fails on the same code is flaky. It's reported, never
   silently retried to green. The flake record is the `flaky` label and its issues, one per test,
   each with its run links and counts.
