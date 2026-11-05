@@ -156,7 +156,11 @@ function notice(message) {
   const withdraw = kind === 'resolved' || cls === 'fyi';
   // Done is always silent, whatever the push says, and nothing to renotify: the host's word
   // is the first safeguard, this the second. A silent notice that renotifies is a TypeError.
-  const silent = withdraw || cls === 'done' || n.silent === true;
+  // A push whose kind and class disagree (a finished that needs you; the host never sends one)
+  // takes the quieter reading, so it never alerts as "finished"; a question called done is
+  // already silent above.
+  const disagrees = kind === 'finished' && cls === 'needsYou';
+  const silent = withdraw || cls === 'done' || disagrees || n.silent === true;
   const options = {
     // A withdrawn notice may flash, so what it says must be true: never the question's placeholder.
     body: text(n.body) ?? (withdraw ? text(n.title) ?? NAME : 'A session needs you.'),

@@ -103,6 +103,13 @@ test('a done notification is silent and never alerts again, whatever the push sa
   assert.equal(sw.open.length, 1, 'replaced in place, not stacked');
 });
 
+test('a push whose kind and class disagree takes the quieter reading: a finished that needs you never alerts as finished', async () => {
+  const sw = worker();
+  await sw.fire('push', push(classed('finished', 'needsYou', { silent: false })));
+  await sw.fire('push', push(classed('question', 'done', { silent: false })));
+  assert.deepEqual(sw.shown.map((n) => [n.silent, n.renotify]), [[true, false], [true, false]]);
+});
+
 test('a silent finished push shows rather than throwing on silent with renotify', async () => {
   const sw = worker();
   await sw.fire('push', push(notice('finished', { silent: true })));
