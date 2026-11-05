@@ -87,7 +87,7 @@ public sealed partial class LaunchViewModel
     // shows when its machine is picked again.
     readonly Dictionary<string, TrustAnswer> trustAnswers = new(StringComparer.Ordinal);
     // By machine key: the question an unconfirmed launch from here met, and the prompt it sent.
-    readonly Dictionary<string, (string Question, string? Prompt, string Request)> askedBy = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (TrustQuestion Question, string? Prompt, string Request)> askedBy = new(StringComparer.Ordinal);
     readonly Dictionary<string, TrustCard> trustCards = new(StringComparer.Ordinal);
     // This machine's questions as its host lists them through the relay, where each says whether
     // this app may answer it: the pipe's never can. Null until asked, or when it could not be.
@@ -310,7 +310,7 @@ public sealed partial class LaunchViewModel
             // prompt went with it, as for a launch that starts at once, and must not go again with
             // the next launch. Only that launch, however many busy ones (which send nothing) came
             // after it, and only its prompt unchanged: one typed since stays.
-            if (askedBy.TryGetValue(answer.Machine, out var by) && by.Question == answer.Question.Id)
+            if (askedBy.TryGetValue(answer.Machine, out var by) && SameQuestion(by.Question, answer.Question))
             {
                 askedBy.Remove(answer.Machine);
                 if ((string.IsNullOrWhiteSpace(prompt) ? null : prompt) == by.Prompt) { Prompt = ""; }
@@ -321,7 +321,13 @@ public sealed partial class LaunchViewModel
             }
             if (Following(answer))
             {
-                if (lost is null && last?.Request == late!.Request) { startedLate = late.Request; Show(); }
+                // Its unchanged prompt goes too: once late is let go, StartedLate never clears it.
+                if (lost is null && last is { } launched && launched.Request == late!.Request)
+                {
+                    if (launched.Payload is LaunchRequest sent && (string.IsNullOrWhiteSpace(prompt) ? null : prompt) == sent.Prompt) { Prompt = ""; }
+                    startedLate = late.Request;
+                    Show();
+                }
                 late = null;
             }
             if (TrustResult(d)?.Session is { } id) { main.Open(answer.Machine, id, untilItArrives: true); }

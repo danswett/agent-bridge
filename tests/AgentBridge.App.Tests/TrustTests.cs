@@ -301,6 +301,57 @@ public sealed class TrustTests : IAsyncLifetime
         Assert.Equal("", page.Prompt);
     }
 
+    // #901: the machine asks the launch's question again under a new id between the launch's
+    // outcome and the Trust pressed here. The answer is still that launch's, so its prompt goes:
+    // left in the box, it invited a second press and a second session.
+    [Fact]
+    public async Task Trusting_a_followed_launchs_question_asked_again_under_a_new_id_clears_its_prompt()
+    {
+        var page = await LaunchAskedAgainAsync(session: "s-1");
+        Assert.Equal("unconfirmed", page.State);
+        answer = _ => new TrustAnswerResult(TrustAnswerOutcome.Started) { Session = "s-1" };
+
+        var card = page.TrustQuestions.Single();
+        remoteTrust = [];
+        ui.Post(card.Trust);
+        await Wait.UntilAsync(() => card.State == "started", "started");
+        await Wait.UntilAsync(() => page.State == "started", "the launch started");
+        Assert.Equal(("Session started.", ""), (page.StatusText, page.Prompt));
+    }
+
+    [Fact]
+    public async Task Trusting_an_unfollowed_launchs_question_asked_again_under_a_new_id_clears_its_prompt()
+    {
+        var page = await LaunchAskedAgainAsync(session: null);
+        var card = page.TrustQuestions.Single();
+        remoteTrust = [];
+        ui.Post(card.Trust);
+        await Wait.UntilAsync(() => card.State == "started", "started");
+        await Wait.UntilAsync(() => page.State == "started", "the launch started");
+        Assert.Equal(("Session started.", ""), (page.StatusText, page.Prompt));
+    }
+
+    // A launch whose outcome names q-1, by the time the machine is listed again asked as q-1b:
+    // the same folder, agent and time asked.
+    async Task<LaunchViewModel> LaunchAskedAgainAsync(string? session)
+    {
+        remoteTrust = [];
+        remoteHost.On(LaunchProtocol.Launch, _ =>
+        {
+            remoteTrust = [Question() with { Id = "q-1b" }];
+            return new LaunchResult(LaunchOutcome.Unconfirmed, "Codex started, and is asking whether to trust there") { Session = session, Trust = Question() };
+        });
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var page = LaunchPage.Open(main, ui);
+        await Wait.UntilAsync(() => page.Machines.Count == 2, "both machines");
+        ui.Post(() => page.SelectedMachine = page.Machines.Single(m => m.Value == "remote-id"));
+        await Wait.UntilAsync(() => page.CanLaunch, "the form");
+        ui.Post(() => page.Prompt = "fix the build");
+        ui.Post(page.Launch);
+        await Wait.UntilAsync(() => page.TrustQuestions is [{ Id: "q-1b", CanAnswer: true }], "the question asked again");
+        return page;
+    }
+
     [Fact]
     public async Task Quit_says_the_agent_was_not_trusted_and_closed()
     {
