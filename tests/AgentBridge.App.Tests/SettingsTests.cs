@@ -545,7 +545,7 @@ public sealed class SettingsTests : IAsyncLifetime
         var row = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.NeedsAction, hooksDetail: RecordIntakeOff), canManage: true, setup: HookSetup.Incomplete);
 
         Assert.Equal("Repair", row.SetUpVerb);
-        Assert.False(row.KeepsFailure);
+        Assert.False(row.Keeps(new("Hook setup incomplete: fixture partial work", Tone.Bad)));
     }
 
     [Fact]
@@ -558,6 +558,34 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.True(row.NotTested);
         Assert.Equal("Not tested yet", row.Status);
         Assert.DoesNotContain("Ready", row.StatusName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_removal_that_leaves_the_owned_record_offers_set_up_again_through_a_fresh_check()
+    {
+        // Copilot CLI's removal keeps its record when other entries share the file, and an older host
+        // then reads it as set up and not tested.
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = new(DateTimeOffset.UtcNow, [Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn)]) });
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
+        host.On(HostOps.AgentsSetup, _ => new AgentSetupResult(true, "Removed this installation's hook registrations.", false));
+        host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
+        Assert.Null(settings.Agents.Single().SetUpVerb);
+
+        await settings.SetUpAgentAsync("copilot", remove: true);
+        await settings.CheckAgentsAsync();
+
+        Assert.Equal("Set up", settings.Agents.Single().SetUpVerb);
+        Assert.Equal("Removed this installation's hook registrations.", settings.Agents.Single().Status);
+    }
+
+    [Fact]
+    public void A_removal_the_host_reads_as_a_setup_that_did_not_finish_offers_set_up_not_repair()
+    {
+        var row = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Failed), canManage: true,
+            note: new("Removed this installation's hook registrations.", Tone.Ok, Removed: true), setup: HookSetup.Incomplete);
+
+        Assert.Equal("Set up", row.SetUpVerb);
+        Assert.True(row.Keeps(new("Removed.", Tone.Ok, Removed: true)));
     }
 
     [Fact]

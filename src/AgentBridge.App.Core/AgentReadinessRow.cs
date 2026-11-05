@@ -29,6 +29,10 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     {
         // Another profile's or a read-only host's hooks are not this app's to change.
         (ReadinessState.Blocked, _) => null,
+        // Removing Copilot CLI's connection can leave its owned record, when other entries share the
+        // file (StandaloneHooks.RemoveAsync), which a host reads as set up, or as a setup that didn't
+        // finish. This row's own removal, which a fresh check keeps, says it isn't (#705 review).
+        (ReadinessState.Unknown, _) or (_, HookSetup.Incomplete) when note is { Removed: true } => "Set up",
         (_, HookSetup.Incomplete) or (ReadinessState.Failed, _) => "Repair",
         (ReadinessState.Missing or ReadinessState.NeedsAction, _) => "Set up",
         (ReadinessState.Unknown, HookSetup.Completed) => null,
@@ -46,8 +50,11 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     // setup isn't evidence that hooks work (#783 D2).
     public bool NotTested => agent.Installation.State == ReadinessState.Working && agent.Hooks.State == ReadinessState.Unknown
         && Setup switch { HookSetup.Completed => true, HookSetup.Unknown => OwnedRecord, _ => false };
-    // An older host's row whose own failed setup a fresh check keeps (SettingsViewModel.CheckAgentsAsync).
-    internal bool KeepsFailure => Setup == HookSetup.Unknown && NotTested;
+    // What of this row's last setup a fresh check keeps (SettingsViewModel.CheckAgentsAsync): a
+    // removal the host can't tell from a setup, and on an older host a failed setup it reads as set up.
+    internal bool Keeps(AgentSetupNote note) => note.Removed
+        ? NotTested || Setup == HookSetup.Incomplete
+        : note.Tone == Tone.Bad && Setup == HookSetup.Unknown && NotTested;
     public bool ShowSetUp => SetUpVerb is not null;
     public bool CanSetUp => canManage && ShowSetUp;
     public string SetUpName => $"{SetUpVerb ?? "Set up"} {Label}";
@@ -78,4 +85,4 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
 
 // What a setup on one row last said: "Setting up…" while it runs, then the host's words, in the
 // Danger role when it failed.
-public sealed record AgentSetupNote(string Text, Tone Tone);
+public sealed record AgentSetupNote(string Text, Tone Tone, bool Removed = false);

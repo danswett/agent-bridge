@@ -986,7 +986,9 @@ static partial class SelfTest
             var on = await Until(() => new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast, TimeSpan.FromSeconds(15));
             await Task.Delay(1500);
             check(on, "sees Windows' high contrast turned on");
-            await CheckAgentRowRepainted(window, main, failedRow, check);
+            // Only a pass that turned it on is a transition: on already, the line was drawn in it.
+            if (contrast.TurnedOn) { await CheckAgentRowRepainted(window, main, failedRow, check); }
+            else if (main.Settings is { } drawn) { await drawn.CheckAgentsAsync(); }
             var hcBroken = await DrawPages(window, "HighContrast", outFile, check);
             check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
             await PictureYoursInHighContrast(window, check, outFile);

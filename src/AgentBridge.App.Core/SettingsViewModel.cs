@@ -464,12 +464,13 @@ public sealed class SettingsViewModel : Observable
         if (!HostRunning || !host.Can(HostOps.AgentReadinessCapability)) { throw new InvalidOperationException(AgentsState); }
         // A fresh check can wait for one active scan before its own four bounded probes.
         var fresh = await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromMinutes(1));
-        // Fresh evidence replaces what the last setups said of each row. An older host can't say a
-        // setup didn't finish (AgentReadinessRow.SetUpVerb), so there a failure on a row it reads as
-        // set up and not tested stays, and with it Repair (#705 review).
+        // Fresh evidence replaces what the last setups said of each row, but for what the host can't
+        // say (AgentReadinessRow.Keeps): a removal that left the owned record, which keeps Set up, and
+        // on an older host a failure on a row it reads as set up and not tested, which keeps Repair
+        // (#705 review).
         foreach (var (id, note) in agentNotes.ToList())
         {
-            if (note.Tone != Tone.Bad || fresh?.Agents.FirstOrDefault(a => a.Id == id) is not { } agent || !new AgentReadinessRow(agent).KeepsFailure)
+            if (fresh?.Agents.FirstOrDefault(a => a.Id == id) is not { } agent || !new AgentReadinessRow(agent).Keeps(note))
             {
                 agentNotes.Remove(id);
             }
@@ -503,7 +504,7 @@ public sealed class SettingsViewModel : Observable
             if (gone == hostsGone) { Note(agent, new(e is TimeoutException or OperationCanceledException ? "It took too long, and some hooks may have changed. Check again before trying again." : e.Message, Tone.Bad)); }
             throw;
         }
-        if (gone == hostsGone) { Note(agent, new(result.Detail, result.Completed ? Tone.Ok : Tone.Bad)); }
+        if (gone == hostsGone) { Note(agent, new(result.Detail, result.Completed ? Tone.Ok : Tone.Bad, Removed: remove && result.Completed)); }
         await host.RefreshStatusAsync();
         if (!result.Completed) { throw new InvalidOperationException(result.Detail); }
         if (host.Can(HostOps.AgentReadinessCapability))
