@@ -500,4 +500,57 @@ public sealed class ConversationKeyboardTests
         Assert.Null(ConversationKeyboard.Held(blocks, gone, from: -1, forward: false, i => i <= 1));
         Assert.Null(ConversationKeyboard.Held(blocks, gone, from: -1, forward: false, i => true, wrapped: true));
     }
+
+    [Fact]
+    public void A_response_cut_by_2048_of_its_4096_blocks_changes_the_list_once_for_each_block_and_moves_no_other()
+    {
+        var had = MarkdownModel.Parse(string.Join("\n\n", Enumerable.Range(0, 4096).Select(i => $"Block {i}.")));
+        var shown = new ConversationItems(had.Select(b => new ConversationBlock(b)));
+        var kept = shown[2048];
+        var changes = new List<System.Collections.Specialized.NotifyCollectionChangedAction>();
+        shown.CollectionChanged += (_, e) => changes.Add(e.Action);
+
+        Assert.True(ConversationBlocks.Update(shown, [.. had.Skip(2048), .. MarkdownModel.Parse("Block 4096.")]));
+
+        Assert.Equal(2049, shown.Count);
+        Assert.Same(kept, shown[0]);
+        Assert.Equal(2048, changes.Count(a => a == System.Collections.Specialized.NotifyCollectionChangedAction.Remove));
+        Assert.Equal(1, changes.Count(a => a == System.Collections.Specialized.NotifyCollectionChangedAction.Add));
+        Assert.Equal(2049, changes.Count);
+        Assert.Equal(0, shown.Shifted);
+    }
+
+    [Fact]
+    public void Blocks_added_and_removed_anywhere_keep_a_lists_order_and_each_change_names_its_place()
+    {
+        var random = new Random(765);
+        var items = new ConversationItems();
+        var expected = new List<ConversationBlock>();
+        var mirrored = new List<ConversationBlock>();
+        items.CollectionChanged += (_, e) =>
+        {
+            if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Add) { mirrored.Insert(e.NewStartingIndex, (ConversationBlock)e.NewItems![0]!); }
+            else if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Remove) { Assert.Same(mirrored[e.OldStartingIndex], e.OldItems![0]); mirrored.RemoveAt(e.OldStartingIndex); }
+        };
+        var block = MarkdownModel.Parse("A block.")[0];
+        for (var step = 0; step < 5000; step++)
+        {
+            if (expected.Count > 0 && random.Next(3) == 0)
+            {
+                var at = random.Next(4) switch { 0 => 0, 1 => expected.Count - 1, _ => random.Next(expected.Count) };
+                expected.RemoveAt(at);
+                items.RemoveAt(at);
+            }
+            else
+            {
+                var at = random.Next(4) switch { 0 => 0, 1 => expected.Count, _ => random.Next(expected.Count + 1) };
+                var added = new ConversationBlock(block);
+                expected.Insert(at, added);
+                items.Insert(at, added);
+            }
+        }
+
+        Assert.Equal(expected, items);
+        Assert.Equal(expected, mirrored);
+    }
 }

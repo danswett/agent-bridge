@@ -253,6 +253,56 @@ static partial class SelfTest
         finally { panel.CacheLength = cache; }
     }
 
+    // A link is a text element in its block's text, not a control (#829): in the window itself, Tab
+    // from a link in a realised block goes to the link in the next block, which the list had not
+    // realised, the block found from each link through its text block. The blocks above the view are
+    // unrealised too, some with a Copy button, so a link whose block went unfound would send Tab
+    // elsewhere. Null when Tab gets it right.
+    static async Task<string?> TabbedLink(ListView list)
+    {
+        if (list.ItemsPanelRoot is not ItemsStackPanel panel || list.ItemsSource is not IList<ConversationBlock> blocks || list.XamlRoot?.Content is not { } root
+            || SessionView.Shallowest<ScrollViewer>(list) is not { } scroll) { return "a list of blocks"; }
+        static bool Linked(ConversationBlock block) => block.Block is MdParagraph p && p.Inlines.Any(i => i is MdLink);
+        var cache = panel.CacheLength;
+        try
+        {
+            panel.CacheLength = 0;
+            // Past the response's first screen, so the first of two linked blocks can sit at the foot of the view.
+            var tries = 0;
+            for (var a = 25; a + 1 < blocks.Count && tries < 3; a++)
+            {
+                if (!Linked(blocks[a]) || !Linked(blocks[a + 1])) { continue; }
+                tries++;
+                list.ScrollIntoView(blocks[a], ScrollIntoViewAlignment.Leading);
+                if (!await Until(() => list.ContainerFromIndex(a) is FrameworkElement, TimeSpan.FromSeconds(2)) || list.ContainerFromIndex(a) is not FrameworkElement placed) { continue; }
+                // Its foot 2 DIP below the view's (its text in view, the space under it not), the next block just past the view.
+                var foot = placed.TransformToVisual(scroll).TransformPoint(default).Y + placed.ActualHeight;
+                scroll.ChangeView(null, scroll.VerticalOffset + foot - 2 - scroll.ViewportHeight, null, disableAnimation: true);
+                await Until(() => list.ContainerFromIndex(a) is FrameworkElement b && Math.Abs(b.TransformToVisual(scroll).TransformPoint(default).Y + b.ActualHeight - scroll.ViewportHeight - 2) <= 1 && list.ContainerFromIndex(a + 1) is null, TimeSpan.FromSeconds(2));
+                if (list.ContainerFromIndex(a) is not FrameworkElement shown || list.ContainerFromIndex(a + 1) is not null) { continue; }
+                if (FocusManager.FindLastFocusableElement(shown) is not Hyperlink link) { return $"a link last in block {a + 1}, not {FocusManager.FindLastFocusableElement(shown)?.GetType().Name ?? "nothing"}"; }
+                await FocusManager.TryFocusAsync(link, FocusState.Keyboard);
+                if (list.ContainerFromIndex(a + 1) is not null) { continue; }
+                FocusManager.TryMoveFocus(FocusNavigationDirection.Next, new FindNextElementOptions { SearchRoot = root });
+                object? container = null;
+                var landed = await Until(() =>
+                {
+                    var f = FocusManager.GetFocusedElement(list.XamlRoot);
+                    if (f is ListViewItem or ListView) { container = f; return true; }
+                    return f is Hyperlink && BlockOf(list, f) == a + 1;
+                }, TimeSpan.FromSeconds(3));
+                if (container is not null) { return $"focus on a block's container: {container.GetType().Name}"; }
+                var on = FocusManager.GetFocusedElement(list.XamlRoot);
+                AppLog.Write($"self-test: Tab from a link in block {a + 1} went to {on?.GetType().Name ?? "nothing"} in block {(BlockOf(list, on) is { } at ? at + 1 : 0)}");
+                if (!landed) { return $"Tab from the link in block {a + 1} to the link in block {a + 2}: it went to {(BlockOf(list, on) is { } to ? $"block {to + 1}" : on?.GetType().Name ?? "nothing")}"; }
+                var first = list.ContainerFromIndex(a + 1) is { } realised ? FocusManager.FindFirstFocusableElement(realised) : null;
+                return ReferenceEquals(on, first) ? null : $"Tab into block {a + 2} on its first link, not {on?.GetType().Name ?? "nothing"}";
+            }
+            return "two linked blocks in a row, the second unrealised with the first in view";
+        }
+        finally { panel.CacheLength = cache; }
+    }
+
     // The block an element is in, a link in its text block included; null outside the blocks.
     static int? BlockOf(ListView list, object? element)
     {

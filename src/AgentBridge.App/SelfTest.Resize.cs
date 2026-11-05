@@ -74,6 +74,8 @@ static partial class SelfTest
         check(unkeyed is null, $"scrolls the conversation's text with Page Down and Down pressed on a link in it, focus left where it was and nothing selected ({pressedBy}){Not(unkeyed)}");
         var untabbed = list is null ? "measured: the response not drawn" : await Tabbed(list);
         check(untabbed is null, $"takes Tab from the last link or Copy button the conversation has drawn to the first in the next block with one, which it realises, inside the block and not onto it{Not(untabbed)}");
+        var unlinked = list is null ? "measured: the response not drawn" : await TabbedLink(list);
+        check(unlinked is null, $"takes Tab from a link in the conversation to the link in the next block, which it realises, each block found from its link{Not(unlinked)}");
         var chrome = list is null ? "measured: the response not drawn" : Contained(list);
         check(chrome is null, $"draws no block's container as a tab stop, selected, filled or with a focus visual of its own{Not(chrome)}");
         var unreachable = list is null ? "measured: the response not drawn" : await Reachable(list);
@@ -105,6 +107,7 @@ static partial class SelfTest
             ["keysPressedBy"] = pressedBy,
             ["containerProblem"] = chrome,
             ["tabProblem"] = untabbed,
+            ["linkTabProblem"] = unlinked,
             ["captures"] = new[] { Path.GetFileName(Path.ChangeExtension(outFile, ".resize.before.png")), Path.GetFileName(Path.ChangeExtension(outFile, ".resize.after.png")) },
         };
         result["resize"] = report;

@@ -88,7 +88,7 @@ public sealed partial class DemoHost
         Subagents = HeavySubagents(at),
     };
 
-    // HeavyBlocks short blocks, as a long turn's response is: paragraphs, headings, code and lists.
+    // HeavyBlocks short blocks, as a long turn's response is: paragraphs, some with a link, headings, code and lists.
     static string HeavyResponse()
     {
         string[] said =
@@ -107,6 +107,8 @@ public sealed partial class DemoHost
         for (var i = 0; items < HeavyBlocks; i++)
         {
             if (i % 25 == 0) { blocks.Add($"## Step {i / 25 + 1}"); items++; }
+            // Two linked paragraphs in a row, so Tab goes from a link to a link in the next block.
+            else if (i % 25 is 12 or 13) { blocks.Add($"Case {i} is in [the layout notes](https://github.com/danswett/agent-bridge/blob/main/docs/design/ui.md)."); items++; }
             else if (i % 11 == 5) { blocks.Add($"```\ndotnet test --filter Case{i}\n```"); items++; }
             else if (i % 17 == 8) { blocks.Add($"- the list's divider\n- the inspector's divider\n- the window's edge, case {i}"); items += 3; }
             else { blocks.Add(said[i % said.Length]); items++; }

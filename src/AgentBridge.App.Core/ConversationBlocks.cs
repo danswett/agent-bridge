@@ -64,14 +64,16 @@ public static class ConversationBlocks
     // falling between two blocks alike or partway through what is now its first block included.
     // The longest run of blocks kept wins, the first found of two as long. False, with nothing
     // changed, when nothing can be kept: the caller replaces the items whole, in one reset rather
-    // than an add for each block.
-    public static bool Update(ObservableCollection<ConversationBlock> shown, IReadOnlyList<MdBlock> next) => Update(shown, next, Same);
+    // than an add for each block. Otherwise one change for each block removed or added, the fewest
+    // the list takes short of a reset, which would lose its realised blocks and its place; over
+    // ConversationItems none of them moves another block, so a cut of any size is linear.
+    public static bool Update(Collection<ConversationBlock> shown, IReadOnlyList<MdBlock> next) => Update(shown, next, Same);
 
     // Linear in the blocks, never quadratic on repeated text (4,096 paragraphs alike once made 16.8
     // million comparisons on the UI thread): how far each shown block runs alike with next, from
     // next[0] and from next[1], is the Z-function of next's tail, a stop, then the shown blocks,
     // which compares each block a bounded number of times.
-    internal static bool Update(ObservableCollection<ConversationBlock> shown, IReadOnlyList<MdBlock> next, Func<MdBlock, MdBlock, bool> same)
+    internal static bool Update(Collection<ConversationBlock> shown, IReadOnlyList<MdBlock> next, Func<MdBlock, MdBlock, bool> same)
     {
         // The run kept: from shown[start] and next[from] on. next[0] is new when a cut fell inside it.
         var (start, from, kept) = (0, 0, 0);
