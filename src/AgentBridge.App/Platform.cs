@@ -16,6 +16,33 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     UpdateManager? manager;
     UpdateInfo? pending;
     string? source;
+    bool github;
+    static readonly HttpClient RateLimits = new() { Timeout = TimeSpan.FromSeconds(10) };
+
+    // When GitHub's API lets this address ask again: its rate_limit endpoint, which costs nothing
+    // against the limit, says so in X-RateLimit-Reset (Velopack's error carries no headers). Null
+    // when it can't be told, or the limit isn't spent (another 403), and the caller backs off itself.
+    static async Task<DateTimeOffset?> GithubResetAsync()
+    {
+        try
+        {
+            using var ask = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/rate_limit");
+            ask.Headers.UserAgent.ParseAdd("agent-bridge-app");
+            using var answer = await RateLimits.SendAsync(ask);
+            if (answer.Headers.RetryAfter is { } after)
+            {
+                if (after.Date is { } date) { return date; }
+                if (after.Delta is { } delta) { return DateTimeOffset.UtcNow + delta; }
+            }
+            if (answer.Headers.TryGetValues("X-RateLimit-Remaining", out var left) && left.FirstOrDefault() is "0"
+                && answer.Headers.TryGetValues("X-RateLimit-Reset", out var reset) && long.TryParse(reset.FirstOrDefault(), out var seconds))
+            {
+                return DateTimeOffset.FromUnixTimeSeconds(seconds);
+            }
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or ArgumentOutOfRangeException) { }
+        return null;
+    }
 
     public static string FeedFile => Path.Combine(Paths.AppData, "feed.txt");
 
@@ -39,6 +66,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
                 ? new SimpleWebSource(feed)
                 : new SimpleFileSource(new DirectoryInfo(feed));
         source = key;
+        github = feed.Length == 0;
         pending = null;
         downloaded = null;
         // No channel named: the installed package's own decides, `win` for x64 and `win-arm64` for
@@ -49,7 +77,14 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     public async Task<string?> CheckAsync()
     {
         var from = Manager();
-        var found = await from.CheckForUpdatesAsync();
+        UpdateInfo? found;
+        try { found = await from.CheckForUpdatesAsync(); }
+        // GitHub's unauthenticated API allows 60 requests an hour per address, which machines
+        // behind one address share (#800): the reset it reports is when to ask again.
+        catch (HttpRequestException e) when (github && e.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.TooManyRequests)
+        {
+            throw new UpdateRateLimitedException(e.Message, await GithubResetAsync(), e);
+        }
         // The feed or the pre-release choice changed while this check ran (one by Settings, one
         // automatic, may overlap): its answer is the old source's, and must not undo the change by
         // becoming pending again. What the current source has found stands.

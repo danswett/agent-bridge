@@ -48,6 +48,25 @@ public sealed class AutoUpdater
     public const string Restarted = "the app on this machine restarted before carrying it out; press it again";
     // How a press the app came to only after the host had let it go ends (UpdateProtocol.Lapses).
     public const string Lapsed = "this machine's app did not take it within 10 minutes of the press; press it again";
+    // The refusals that are the person's choice, which hold an update for as long as they like.
+    // Every other refusal is the machine's (the host gone, another profile running, its status
+    // unreadable), which must not hold one silently for ever: on 2026-11-04 a VM's app lost its
+    // link to a live host and sat on an old release for ~20 h, logging nothing (#800).
+    public const string SwitchedOff = "Install updates automatically is off";
+    public const string DevelopmentCopy = "this is a development copy";
+    public const string HostGone = "the host is not running, so whether its sessions are busy cannot be told";
+    // A refusal still in force is logged again this often, not only when it changes.
+    public static readonly TimeSpan SayAgainAfter = TimeSpan.FromHours(1);
+    // An update held past WaitAtMost by the machine is told to the owner, again this often.
+    public static readonly TimeSpan NeedsYouAgainAfter = TimeSpan.FromDays(1);
+    // Re-attaching to a host the link has lost: at once, then backing off to this at most.
+    public static readonly TimeSpan ReattachFirst = TimeSpan.FromMinutes(1);
+    public static readonly TimeSpan ReattachAtMost = TimeSpan.FromMinutes(30);
+    // Release checks the feed refused for its rate limit are held off for what it asks, or
+    // otherwise for twice as long each time, up to this.
+    public static readonly TimeSpan CheckBackoffAtMost = CheckEvery * 4;
+    // A Retry-After or rate-limit reset further off than this is not believed.
+    static readonly TimeSpan CheckHintAtMost = TimeSpan.FromDays(1);
 
     // Shared with Settings, whose checks and downloads it reports too.
     readonly ObservedUpdater updater;
@@ -71,6 +90,16 @@ public sealed class AutoUpdater
     string? lastFailure;
     DateTimeOffset? idleSince;
     string? lastWhyNot;
+    // When the refusal in force was last logged, and the owner last told of an update it holds.
+    DateTimeOffset? saidAt;
+    DateTimeOffset? neededYouAt;
+    // The next re-attach to a lost host allowed, and the wait after it.
+    DateTimeOffset? reattachAt;
+    TimeSpan reattachWait = ReattachFirst;
+    // Release checks held off after the feed's rate limit refused them, and why.
+    DateTimeOffset? checksHeldUntil;
+    string? checksHeld;
+    int rateLimited;
     int busy;
     int again;
     // Presses from other devices being carried out, and whether the install one has been checked
@@ -176,10 +205,20 @@ public sealed class AutoUpdater
     string WaitingFor()
     {
         var until = $"; it installs anyway at {(WaitFrom() + WaitAtMost).ToLocalTime():g}";
-        if (lastWhyNot is { } why) { return why; }
+        if (lastWhyNot is { } why) { return Overdue(why, time.GetUtcNow()) is { } since ? NeedsYouText(Pending!, since, why) : why; }
         return Idle ? $"no session has been busy for {IdleFor.TotalMinutes:0} minutes yet{until}"
             : $"a session on this machine has a turn running or a question waiting{until}";
     }
+
+    // The person's own choice: anything else that refuses is the machine holding the update.
+    static bool Chosen(string why) => why is SwitchedOff or DevelopmentCopy;
+
+    // Since when an update the machine refuses has waited, once that is longer than WaitAtMost.
+    DateTimeOffset? Overdue(string? why, DateTimeOffset now) =>
+        why is not null && !Chosen(why) && Pending is not null && now - WaitFrom() >= WaitAtMost ? WaitFrom() : null;
+
+    static string NeedsYouText(string release, DateTimeOffset since, string why) =>
+        $"Needs you: the update to {release} has waited since {since.ToLocalTime():g} because {why}";
 
     // A press from another device (UpdateReporter): Check, or Install now. A newer press of the
     // same kind takes over from an older one, whose device then sees another request under way.
@@ -240,12 +279,9 @@ public sealed class AutoUpdater
     // person pressed Install on another device, which stands in for the switch.
     public string? WhyNot(bool asked = false)
     {
-        if (!asked && !prefs().AutoUpdate) { return "Install updates automatically is off"; }
-        if (updater.InstalledVersion is null) { return "this is a development copy"; }
-        if (host.State != LinkState.Connected || host.Status is null)
-        {
-            return "the host is not running, so whether its sessions are busy cannot be told";
-        }
+        if (!asked && !prefs().AutoUpdate) { return SwitchedOff; }
+        if (updater.InstalledVersion is null) { return DevelopmentCopy; }
+        if (host.State != LinkState.Connected || host.Status is null) { return HostGone; }
         return null;
     }
 
@@ -271,10 +307,11 @@ public sealed class AutoUpdater
     // device pressed (automatic installs off), no earlier than the press: a release found by a
     // check long before, and never installed by itself, must not go at once whatever the sessions
     // are doing.
-    // Nor earlier than installing was last allowed: a release a check found with automatic installs
-    // off, kept while every tick refused to install it, must not go at once whatever the sessions
-    // are doing when they are turned on hours later (or another profile stops, or the host comes
-    // back).
+    // Nor earlier than installing was last allowed by the person: a release a check found with
+    // automatic installs off, kept while every tick refused to install it, must not go at once
+    // whatever the sessions are doing when they are turned on hours later. The machine's own
+    // refusals (the host gone, another profile running) do not restart it: they restarted it at
+    // every tick, so the six hours never ran out behind one (#800).
     DateTimeOffset WaitFrom()
     {
         var from = !prefs().AutoUpdate && Asked(UpdateAskKind.Install) is not null && installAskedAt > foundAt ? installAskedAt : foundAt;
@@ -328,13 +365,21 @@ public sealed class AutoUpdater
             }
             var asked = Asked(UpdateAskKind.Install) is not null;
             var why = WhyNot(asked);
-            // Nothing installs, and a check is made only when a device asked for one. Said to the
-            // devices too: the switch turned off while a release waited leaves it to install when
-            // asked, no longer waiting by itself.
-            if (why is not null && Asked(UpdateAskKind.Check) is null) { Refused(why); idleSince = null; Changed(); return; }
+            // The link to the host lost: tried again (reconnected, or the host started) before
+            // refusing again, so a link that went stale is not left so for good (#800).
+            if (why == HostGone)
+            {
+                await ReattachAsync();
+                why = WhyNot(asked);
+            }
+            // Nothing installs, and a check is made only when a device asked for one, or the machine
+            // rather than the person holds the install: a release found is then pending, and one
+            // held past WaitAtMost is told to the owner. Said to the devices too: the switch turned
+            // off while a release waited leaves it to install when asked, no longer by itself.
+            if (why is not null && Chosen(why) && Asked(UpdateAskKind.Check) is null) { Refused(why); idleSince = null; Changed(); return; }
             var now = time.GetUtcNow();
             Due(now);
-            if (checkNow || checkedAt is null || now - checkedAt >= CheckEvery)
+            if (checkNow || ((checkedAt is null || now - checkedAt >= CheckEvery) && !(now < checksHeldUntil)))
             {
                 checkNow = false;
                 checkedAt = now;
@@ -392,12 +437,21 @@ public sealed class AutoUpdater
             }
             else
             {
+                // Held off after the feed's rate limit: asking again only extends it (#800).
+                if (checksHeldUntil is { } until && now < until) { throw new InvalidOperationException(checksHeld); }
                 try { found = await updater.CheckAsync(); }
                 catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
                 {
+                    if (RateLimited(e) is { } limited)
+                    {
+                        var held = HoldChecks(now, limited.RetryAt, e.Message);
+                        (lastCheckAt, lastCheckFailed) = (now, held);
+                        throw new InvalidOperationException(held, e);
+                    }
                     (lastCheckAt, lastCheckFailed) = (now, e.Message);
                     throw;
                 }
+                (rateLimited, checksHeldUntil, checksHeld) = (0, null, null);
                 // As of when it was asked: a press after that, a minute on, asks again.
                 (lastCheckAt, lastCheckFailed) = (now, null);
             }
@@ -465,11 +519,102 @@ public sealed class AutoUpdater
 
     bool Refused(string? why)
     {
-        if (why != lastWhyNot && why is not null) { log($"auto-update: not installing updates: {why}"); }
+        var now = time.GetUtcNow();
+        // Logged when it changes, and again every SayAgainAfter while it lasts: logged only when it
+        // changed, a refusal that lasted ~20 h left one line (#800).
+        if (why is not null && (why != lastWhyNot || saidAt is not { } said || now - said >= SayAgainAfter))
+        {
+            var link = why == HostGone ? $" (the app's link to it: {host.State}{(host.StateDetail is { } d ? $", {d}" : "")})" : "";
+            log($"auto-update: not installing updates: {why}{link}");
+            saidAt = now;
+        }
         lastWhyNot = why;
-        if (why is null) { allowedSince ??= time.GetUtcNow(); }
-        else { allowedSince = null; }
+        if (why is null) { saidAt = null; }
+        if (why != HostGone) { (reattachAt, reattachWait) = (null, ReattachFirst); }
+        if (why is not null && Chosen(why)) { allowedSince = null; }
+        else { allowedSince ??= now; }
+        // Not forgotten when the refusal lifts for a moment: a link that flaps tells the owner
+        // no more than daily either.
+        if (Overdue(why, now) is { } since && (neededYouAt is not { } told || now - told >= NeedsYouAgainAfter))
+        {
+            neededYouAt = now;
+            log($"auto-update: {NeedsYouText(Pending!, since, why!)}");
+            Changed();
+        }
         return why is not null;
+    }
+
+    // The app's link to its host is not up (or has no status): the link asked to try again now,
+    // and the host started if it is not running and was not stopped on purpose, as the app does
+    // when it starts. At once, then backing off to ReattachAtMost while it stays lost.
+    async Task ReattachAsync()
+    {
+        var now = time.GetUtcNow();
+        if (reattachAt is { } at && now < at) { return; }
+        // Settings' Update and restart stops the host on purpose.
+        if (manager.UpdateUnderWay) { return; }
+        reattachAt = now + reattachWait;
+        reattachWait = reattachWait * 2 < ReattachAtMost ? reattachWait * 2 : ReattachAtMost;
+        try
+        {
+            using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            if (host.State == LinkState.Connected)
+            {
+                log("auto-update: the app's link to the host has no status from it; asking for it again");
+                await host.RefreshStatusAsync(bound.Token);
+                return;
+            }
+            host.RetryNow();
+            if (await manager.IsRunningAsync(bound.Token))
+            {
+                log($"auto-update: the host answers on its pipe, but the app's link to it is {host.State}{(host.StateDetail is { } d ? $" ({d})" : "")}; asked it to reconnect");
+                return;
+            }
+            if (!manager.HostInstalled || manager.StoppedOnPurpose)
+            {
+                log("auto-update: the host is not running, and was stopped on purpose (or is not installed); not starting it");
+                return;
+            }
+            log("auto-update: the host is not running; starting it");
+            await manager.StartAsync();
+        }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            log($"auto-update: re-attaching to the host failed: {e.Message}; trying again after {reattachAt.Value.ToLocalTime():t}");
+        }
+    }
+
+    // A check the feed refused for its rate limit (GitHub's 403 "rate limit exceeded", or a 429):
+    // none until what it asked (Retry-After, X-RateLimit-Reset), or else twice the last hold, from
+    // CheckEvery*2 up to CheckBackoffAtMost. Said to the devices once each time (State.Last),
+    // unless a press is being answered, which ends with it.
+    string HoldChecks(DateTimeOffset now, DateTimeOffset? retryAt, string failure)
+    {
+        rateLimited++;
+        var backoff = TimeSpan.FromTicks(CheckEvery.Ticks * (1L << Math.Min(rateLimited, 8)));
+        var until = retryAt is { } r && r > now && r - now <= CheckHintAtMost ? r
+            : now + (backoff < CheckBackoffAtMost ? backoff : CheckBackoffAtMost);
+        checksHeldUntil = until;
+        checksHeld = $"the release feed's rate limit refused the check ({failure}); checking again after {until.ToLocalTime():t}";
+        checkedAt = until - CheckEvery;
+        // Not over an outcome the devices may not have seen yet: the update just made (its first
+        // check, right after the restart, is the likeliest to be refused) or a press answered.
+        var last = prefs().LastUpdate;
+        var unseen = last is { } l && (l.Outcome == UpdateOutcome.Updated || l.Request is not null) && now - l.At < NeedsYouAgainAfter;
+        if (!unseen && Asked(UpdateAskKind.Check) is null && Asked(UpdateAskKind.Install) is null) { Remember(UpdateOutcome.Failed, checksHeld, null, null); }
+        return checksHeld;
+    }
+
+    // Whether a check failed for the feed's rate limit, and until when it asked to be left alone.
+    static (DateTimeOffset? RetryAt, bool _)? RateLimited(Exception e)
+    {
+        for (var x = e; x is not null; x = x.InnerException)
+        {
+            if (x is UpdateRateLimitedException limited) { return (limited.RetryAt, true); }
+            if (x is HttpRequestException { StatusCode: System.Net.HttpStatusCode.TooManyRequests }) { return (null, true); }
+            if (x is HttpRequestException { StatusCode: System.Net.HttpStatusCode.Forbidden } && x.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase)) { return (null, true); }
+        }
+        return null;
     }
 
     async Task InstallAsync(string because)

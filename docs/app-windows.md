@@ -287,6 +287,30 @@ into one folder with one version. An app update is a host update, so they never 
     running or its sessions are not yet read in full (`sessions.synced`), so that it cannot say
     whether they are busy. Just before stopping the host it asks again: `host.status` from the
     host itself, and the processes running from the package.
+  * Those are the machine's refusals, and they don't hold an update silently for ever (#800: a
+    VM's app lost its link to a live host and sat on an old release for ~20 h, one log line
+    saying so). It still checks and downloads behind them (only "Install updates automatically"
+    off stops the checks). The six hours run from the first find through them, so a host back
+    after six hours installs at the next tick whatever its sessions are doing; only the switch
+    turned off restarts them. A refusal in force is logged again every hour, with the app's link
+    state while the host is the reason. A release held past six hours is told to the owner: the
+    update state the devices see (`waiting`) reads "Needs you: the update to X has waited since T
+    because Y", and the app logs that line at most daily.
+  * The link to the host lost (not `Connected`, or no `host.status` on it): before refusing again
+    the app re-attaches, at once and then backing off to every 30 minutes. It asks a connected
+    link for its status again; asks the link to reconnect now (`HostConnection.RetryNow`) and, if
+    the host doesn't answer on its pipe, starts it as the app's own start does
+    (`HostManager.StartAsync`), unless it was stopped on purpose (its launcher's stop marker,
+    `HostManager.StoppedOnPurpose`) or Settings' Update and restart is under way.
+  * A release check the feed refuses for its rate limit (GitHub's unauthenticated 60 requests an
+    hour per address, which machines behind one address share: a 403 "rate limit exceeded", or a
+    429) holds the checks off until GitHub's `Retry-After` or `X-RateLimit-Reset` (read from its
+    free `rate_limit` endpoint, as Velopack's error carries no headers), or otherwise for an hour,
+    then two hours each time, until one succeeds. A press from a device in the meantime is
+    answered with the reason without asking the feed. The reason goes to the devices as the last
+    update's outcome (`failed`), once each time, though never over an update made, or a press
+        answered, in the last day, which the devices may not have seen yet. Velopack's `GithubSource` is given no token, so
+        the checks are unauthenticated.
   * Settings and the automatic updates share one updater, and only the release actually
     downloaded is applied (`IUpdater.Ready`), checked again immediately before the host stops: a
     release replaced since (a check from Settings, or "Include pre-releases" or `feed.txt`
