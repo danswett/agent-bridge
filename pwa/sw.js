@@ -18,18 +18,19 @@ const VERSION = 'dev';
 const CACHE = `${PREFIX}${VERSION}`;
 // The product's name, for a notification that has no title of its own: written by
 // tools/brand.mjs from js/brand.js, which a classic worker can't import.
-const NAME = 'Agent Bridge';
+const NAME = 'Slipgates';
 // The app's bundle: its entry and every chunk it imports, written by tools/build-site.mjs. The
 // demo's own chunk is left out, as only the demo asks for it.
 const BUNDLE = [];
 const SHELL = [
-  './', './index.html', './app.css', './design/tokens.css', './design/sprite.svg',
+  './', './index.html', './app.css', './design/tokens.css', './design/sprite.svg', './design/brand.js',
   './design/fonts/SlipgatesSans.woff2', './design/fonts/SlipgatesSans-Italic.woff2',
   './design/fonts/SlipgatesMono-Regular.woff2', './design/fonts/SlipgatesMono-Italic.woff2', './design/fonts/SlipgatesMono-Medium.woff2',
   './design/fonts/SlipgatesMono-MediumItalic.woff2', './design/fonts/SlipgatesMono-SemiBold.woff2',
   './design/fonts/SlipgatesMono-SemiBoldItalic.woff2', './design/fonts/SlipgatesMono-Bold.woff2', './design/fonts/SlipgatesMono-BoldItalic.woff2',
   './manifest.webmanifest', './icon.svg', './icons/icon-192.png', './icons/icon-512.png',
-  './icons/maskable-192.png', './icons/maskable-512.png', './icons/apple-touch-icon.png',
+  './icons/maskable-192.png', './icons/maskable-512.png', './icons/monochrome-192.png', './icons/monochrome-512.png',
+  './icons/apple-touch-icon.png', './icons/badge-96.png',
   './fixtures/sessions-list.json',
   ...BUNDLE,
 ];
@@ -149,6 +150,8 @@ function notice(message) {
     body: text(n.body) ?? 'A session needs you.',
     // A PNG: not every platform's notifications draw an SVG.
     icon: 'icons/icon-192.png',
+    // Android draws the badge in the status bar by its alpha alone: the mark, as ic_stat_slipgates.
+    badge: 'icons/badge-96.png',
     lang: text(n.lang) ?? 'en',
     data: { url: inApp(text(n.navigate)), kind, machine: text(d.machine), session: text(d.session), question: text(d.question) },
   };

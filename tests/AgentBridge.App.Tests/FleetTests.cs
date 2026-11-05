@@ -278,9 +278,9 @@ public sealed class FleetTests : IAsyncLifetime
         await BothMachinesAsync();
         ui.Post(() => main.SelectedMachine = main.Machines.Single(m => m.Key == "remote-id"));
 
-        // The relay connection itself went: nothing says the machine has.
+        // The relay connection itself went: nothing says the machine has. The fleet reads the link
+        // on its Changed, posted to this test's UI turn and run there, so it is done when Set returns.
         link.Set(FleetState.Connecting);
-        await Task.Delay(200);
         Assert.NotNull(Card("there"));
 
         link.Set(FleetState.Connected, ("host-id", "Test PC"));
@@ -495,7 +495,9 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.False(TestUi.Read(() => question.CanAnswer));
         ui.Post(() => question.Choose(question.Fields[0].Options.Single(o => o.Value == "sqlite")));
         Assert.Equal(0, TestUi.Read(() => main.Waiting));
-        await Task.Delay(200);
+        // An answer sent would have been written as it was chosen: once the other machine's host has
+        // everything sent before this, none was.
+        await Remote().Host.CallAsync(FakeHost.Barrier);
         Assert.Empty(remoteHost.Sent(Ops.SessionAnswer));
     }
 
@@ -1427,8 +1429,8 @@ public sealed class FleetTests : IAsyncLifetime
         link.Raise();
         await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
 
+        // The fleet reads the link on its Changed, run on this test's UI turn: done when Set returns.
         link.Set(FleetState.Connecting);
-        await Task.Delay(200);
         Assert.Single(Offline());
 
         // A drop between reading the state and reading the list is the same.
@@ -1436,7 +1438,6 @@ public sealed class FleetTests : IAsyncLifetime
         await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
         link.BeforeOfflineRead = () => link.Quietly(FleetState.Connecting, ("host-id", "Test PC"), ("remote-id", "Build server"));
         link.Raise();
-        await Task.Delay(200);
         Assert.Single(Offline());
 
         // An older relay keeps no roster: nothing listed, and nothing to forget.
@@ -1636,6 +1637,38 @@ public sealed class RelayFleetLinkTests
         await Wait.UntilAsync(() => host.Relay.Presence.Any(p => p.Id == link.DeviceId), "the app in the host's presence", Patience);
         Assert.Equal("app", host.Relay.Presence.Single(p => p.Id == link.DeviceId).Kind);
         Assert.Equal(1, Volatile.Read(ref asked));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_renamed_app_comes_back_under_its_new_name_as_the_same_device_not_a_second_one()
+    {
+        // An install from before the rebrand (#537) connected as "… · Agent Bridge app"; after the
+        // update it connects with the same key under the new name. The name is display only: the
+        // device is its key, so other machines see one device, renamed, not a new one to approve.
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(7, "octo");
+        await using var host = await relay.ConnectAsync(token, "Build server", "host");
+        var key = P256KeyPair.Generate();
+        RelayAccount Account() => new(relay.Url.ToString(), token, "7", "octo");
+        string id;
+        await using (var before = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(Account()), key, "Test PC · Agent Bridge app"))
+        {
+            before.Start();
+            await Wait.UntilAsync(() => host.Relay.Presence.Any(p => p.Id == before.DeviceId), "the app before the update", Patience);
+            id = before.DeviceId!;
+            Assert.Equal("Test PC · Agent Bridge app", host.Relay.Presence.Single(p => p.Id == id).Name);
+        }
+        await Wait.UntilAsync(() => host.Relay.Presence.All(p => p.Id != id), "the app gone for its update", Patience);
+
+        await using var after = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(Account()), key, Product.DeviceName("Test PC"));
+        after.Start();
+        await Wait.UntilAsync(() => host.Relay.Presence.Any(p => p.Id == after.DeviceId), "the app after the update", Patience);
+
+        Assert.Equal(id, after.DeviceId);
+        var app = Assert.Single(host.Relay.Presence, p => p.Kind == "app");
+        Assert.Equal(id, app.Id);
+        Assert.Equal($"Test PC · {Product.Name}", app.Name);
     }
 
     [Fact]

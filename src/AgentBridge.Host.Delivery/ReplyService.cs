@@ -104,20 +104,25 @@ public sealed class ReplyService : ISessionReplier
     readonly ConcurrentDictionary<string, byte> preReading = new(StringComparer.Ordinal);
     readonly AttachmentStore? attachments;
 
-    public ReplyService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
+    // Test-only compatibility overload; production must pass the shared gate explicitly.
+    internal ReplyService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
         IConsoleInjector injector, ReplyOptions options, Action<string>? log = null, DeliveryGate? gate = null,
         AttachmentStore? attachments = null)
+        : this(gate ?? new DeliveryGate(), source, processes, probe, guard, injector, options, log, attachments) { }
+
+    public ReplyService(DeliveryGate gate, ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
+        IConsoleInjector injector, ReplyOptions options, Action<string>? log = null, AttachmentStore? attachments = null)
     {
         this.source = source;
         this.processes = processes;
         this.probe = probe;
         this.guard = guard;
-        this.injector = injector;
+        this.injector = new GateTrackedInjector(injector, gate);
         this.options = options;
         this.log = log ?? (_ => { });
-        this.gate = gate ?? new DeliveryGate();
+        this.gate = gate ?? throw new ArgumentNullException(nameof(gate));
         this.attachments = attachments;
-        requests = new OutcomeMemory<ReplyResult>(options.Time, options.RememberFor);
+        requests = new OutcomeMemory<ReplyResult>(options.Time, options.RememberFor, this.gate, Busy);
         if (options.PreRead && options.PlatformSupported)
         {
             source.Changed += OnSessionChanged;
@@ -201,7 +206,7 @@ public sealed class ReplyService : ISessionReplier
             return Task.FromResult(Refused("request must be a UUID"));
         }
         return requests.Once(key, watch, () => new DeliveryTimeline(options.Time, "reply", key, log), t => DeliverAsync(request, key, peer ?? "", t), result =>
-            log($"reply {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
+            log($"reply {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({ReplyReasons.Shared(result.Reason)})")}"));
     }
 
     async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline)
@@ -290,6 +295,13 @@ public sealed class ReplyService : ISessionReplier
             text = line;
         }
         var (keys, words) = CopilotReply.Plan(text);
+        // The input box is read before the reply waits for its turn, so one that already has
+        // words in it, or is in shell mode, is refused at once; and read again, and held to,
+        // once the turn has come (#825). Only a box seen with words in it, or in shell mode, is
+        // refused here: a screen without one may be asking something (a permission prompt, or
+        // the folder-trust question before a transcript exists), which the checks in the turn
+        // name better, and still refuse before any key.
+        if (await InputBoxAsync(pid) is { Seen: true, Problem: { } early }) { return Done(Refused(early)); }
         // Caught up before the typing turn is taken, so the first reply to a session with a
         // long transcript reads it without holding up every other delivery; the read in the
         // turn only covers what has been written since.
@@ -328,6 +340,42 @@ public sealed class ReplyService : ISessionReplier
             if (!before.Readable) { return Done(Refused("the session's transcript could not be read, so nothing is typed; reply at the machine")); }
             if (before.Asking) { return Done(Asking()); }
             from = before.ScannedTo;
+            // Typed only into Copilot's input box, empty and outside shell mode, as the screen
+            // shows it now: words left in it would go with the reply, and in shell mode Enter runs
+            // what it holds as a shell command. The keys are held to those rows (KeySend.Expect),
+            // so words typed at the machine, or shell mode entered, after this read and before the
+            // first key, stop them in the worker, with nothing typed (#825). Their Enter is a send
+            // of its own, held to the box's bottom edge: a box that moved or went (a dialog drawn
+            // in its place while the words were typed) gets no Enter, and the words stay in it.
+            var (box, problem, _, _) = await InputBoxAsync(pid);
+            if (box is null) { return Done(Refused(problem!)); }
+            // Both are held to the footer's mode too, in the same read: the box's rows read the same
+            // empty, in vim's normal mode, or in shell mode holding only a space ('!' then a space),
+            // and only the footer under them says which. The footer must still be there, and show
+            // neither mode; and before the Enter, the box's text must not start with '!' (#843
+            // review). What is left is the moment between the worker's read and the CLI taking
+            // the key, which no read can close.
+            var line = keys.Sends.Single();
+            var footer = box.Rows[^1].Row + 1;
+            ScreenRowCheck[] mode =
+            [
+                new(footer, ScreenCheck.WithAny, CopilotInputBoxReader.FooterSigns),
+                new(footer, ScreenCheck.WithoutParts, CopilotInputBoxReader.UnsafeFooter),
+                // Under 80 columns a turn's row has no mode labels to check, so a turn that starts
+                // after the read is refused too, as one running at the read is (Trust's #843
+                // re-review).
+                .. CopilotInputBoxReader.Narrow(box) ? [new ScreenRowCheck(footer, ScreenCheck.WithNone, CopilotInputBoxReader.TurnSigns)] : Array.Empty<ScreenRowCheck>(),
+                // Still at the bottom: nothing but blank rows under the footer, as the reader
+                // required. Rows that read like the box and its footer can be printed above the
+                // real ones (a draft in them, or a dialog in their place); with only the box and
+                // footer rows held, a screen that grew that under them passed (#843 review).
+                new(footer + 1, ScreenCheck.BlankFrom, []),
+            ];
+            keys = new KeyPlan(
+            [
+                line with { Enter = false, EnterDelayMs = 0, PauseAfterMs = line.EnterDelayMs, Expect = box.Rows, Checks = mode },
+                new KeySend("", true, 0, line.PauseAfterMs, [box.Rows[^1]], [.. mode, new(box.Rows[1].Row, ScreenCheck.NotStartingWith, CopilotInputBoxReader.Bang)]),
+            ]);
 
             timeline.InjectStart();
             try { result = await injector.InjectAsync(pid, keys); }
@@ -344,12 +392,27 @@ public sealed class ReplyService : ISessionReplier
         log($"typed a reply into {Short(session.Id)} (pid {pid}){(staged.Count > 0 ? $" with {staged.Count} attachment(s)" : "")}: {keys.Describe()} -> {result.Status} {result.Detail}");
         return result.Status switch
         {
-            InjectionStatus.NothingTyped => Done(Refused(result.Detail)),
+            InjectionStatus.NothingTyped => Done(Refused(result.Detail == WorkerInjector.ScreenChanged
+                ? "Copilot's input box changed just as the reply was to be typed, so nothing was typed; try again, or reply at the machine"
+                : result.Detail)),
+            InjectionStatus.Interrupted when result.Detail == WorkerInjector.ScreenChangedPartway =>
+                new Attempt(Unconfirmed("the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent; the words are left in the box at the machine, to send or clear there"), null, KeysWent: true),
             InjectionStatus.Interrupted => new Attempt(Unconfirmed($"{result.Detail}; part of the reply may have reached the session, so check at the machine"), null, KeysWent: true),
             _ => new Attempt(null, new Typed(() => ConfirmAsync(transcript, from, words, staged, timeline)), KeysWent: true),
         };
 
         static Attempt Done(ReplyResult r) => new(r, null);
+    }
+
+    // Copilot's input box, as the session's screen shows it now, or why no reply can be typed
+    // into it: a screen that cannot be read cannot say the box is empty.
+    async Task<(CopilotInputBox? Box, string? Problem, bool Seen, CopilotInputBoxState? State)> InputBoxAsync(int pid)
+    {
+        ConsoleScreen screen;
+        try { screen = await injector.ReadScreenAsync(pid); }
+        catch (Exception e) { return (null, $"the host could not read the session's screen ({e.Message}); reply at the machine", false, null); }
+        if (screen.Rows is not { } rows) { return (null, screen.Problem ?? "the host could not read the session's screen; reply at the machine", false, null); }
+        return CopilotInputBoxReader.Read(rows);
     }
 
     // A reply to Claude Code or Codex, typed as agent-ha-bridge types one (Invoke-DaemonReply):

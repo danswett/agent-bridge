@@ -112,6 +112,10 @@ public sealed class PushNotifier : IAsyncDisposable
         public Due? Due;
         // The question on devices now (notified, not yet resolved).
         public string? Shown;
+        // The question a finished notice made due has replaced, until that notice goes: one that
+        // is then withdrawn or dropped never replaced it on the device, so it is Shown again and
+        // resolved (Unreplaced).
+        public string? Replaced;
         public string? FinishedKey;
         // The main agent's answer as last seen outside a wait on a delegate: answering a
         // delegate's question while the main agent stayed idle ends no turn of its.
@@ -368,6 +372,17 @@ public sealed class PushNotifier : IAsyncDisposable
         // its turn was running then.
         var baseline = t.MainKey;
         var wasRunning = t.MainRunning;
+        // A turn that ended on an error or a failed sign-in did not finish (#845): it is idle,
+        // truthfully, with the last turn's answer still beside it, and a finished notice quoted
+        // that answer as if the new prompt had got it. None goes while the attention lasts: one
+        // due or queued for the session is withdrawn here, before a delegate's question still
+        // pending can return early, and every one is checked again as it is made and sent.
+        if (Failed(s))
+        {
+            if (t.Due is { Kind: NoticeKind.Finished }) { t.Due = null; }
+            outbox.RemoveAll(o => o.Session == s.Id && o.Kind == NoticeKind.Finished);
+            Unreplaced(t, now);
+        }
         if (s.WaitingOn is null)
         {
             t.MainKey = MainKey(s);
@@ -401,7 +416,7 @@ public sealed class PushNotifier : IAsyncDisposable
         var turnRan = prev is { Status: SessionStatus.Waiting, WaitingOn: not null }
             ? wasRunning || (baseline is { } before && MainKey(s) != before)
             : prev is { Status: SessionStatus.Working or SessionStatus.Waiting };
-        if (s.Status == SessionStatus.Idle && turnRan
+        if (!Failed(s) && s.Status == SessionStatus.Idle && turnRan
             && !string.IsNullOrWhiteSpace(OwnResponse(s)) && FinishedKey(s) != t.FinishedKey)
         {
             t.Due = new Due(NoticeKind.Finished, now + options.FinishedDelay, null);
@@ -412,6 +427,20 @@ public sealed class PushNotifier : IAsyncDisposable
         // after replaces it with its own notice.
         if (t.Shown is { } shown && t.Due is null) { t.Due = new Due(NoticeKind.Resolved, now + options.QuestionDelay, shown); }
     }
+
+    // A finished notice that replaced a question on devices did not go (#841): withdrawn or
+    // dropped for a failed turn's attention, which holds back every device's. The answered
+    // question is still on those devices, so it is Shown again and its resolution goes, only
+    // where shownOn says it is, and only once it is no longer asked (MakeDue's Resolved case).
+    void Unreplaced(Tracked t, DateTimeOffset now)
+    {
+        if (t.Replaced is not { } q) { return; }
+        t.Replaced = null;
+        t.Shown ??= q;
+        t.Due ??= new Due(NoticeKind.Resolved, now, t.Shown);
+    }
+
+    static bool Failed(Session? s) => s?.Attention is { Kind: AttentionKind.Error or AttentionKind.SignInNeeded };
 
     static string FinishedKey(Session s) =>
         $"{s.Activity.TurnCount}:{MainKey(s)}";
@@ -469,6 +498,13 @@ public sealed class PushNotifier : IAsyncDisposable
                 // A finished notice that waited (the relay down, the rate limit, a retry, or
                 // collapsed) is not sent to a device now on screen; a collapsed one only while
                 // still true.
+                // Nor while the session's turn ended in failure (#845), however it came back to
+                // the outbox: a retry, or a reconnect, after the attention began.
+                if (ready.Kind == NoticeKind.Finished && Failed(sessions.GetValueOrDefault(ready.Session)?.Last))
+                {
+                    Unreplaced(sessions[ready.Session], now);
+                    continue;
+                }
                 if (ready.Kind == NoticeKind.Finished && (Sees(ready.Device, ready.Session)
                     || ready.Collapsed && sessions.GetValueOrDefault(ready.Session) is not { Removed: false, Last: { Status: SessionStatus.Idle, Question: null } })) { continue; }
                 if (!MayNotify(found) || ready.Grant != found.Grant) { continue; }
@@ -554,6 +590,15 @@ public sealed class PushNotifier : IAsyncDisposable
             log($"push to {sub.Name}: {r.Status} {r.Error}; retrying");
             return;
         }
+        // Refused for this device only: other devices' finished notices may still go, so the
+        // answered question it left on this one is resolved here alone, never one asked again,
+        // and never over a newer notice already waiting for it.
+        if (o.Kind == NoticeKind.Finished && sessions.TryGetValue(o.Session, out var t) && t.Replaced is { } replaced
+            && t.Last is { } last && last.Question?.Id != replaced && shownOn.GetValueOrDefault(key) == replaced
+            && !outbox.Any(x => x.Device == o.Device && x.Session == o.Session))
+        {
+            Enqueue(last, NoticeKind.Resolved, replaced, [sub], ended: t.Removed);
+        }
         log($"push to {sub.Name} refused: {r.Status} {r.Error}; dropped");
     }
 
@@ -587,8 +632,9 @@ public sealed class PushNotifier : IAsyncDisposable
                     t.Shown = due.Question;
                     Enqueue(s!, NoticeKind.Question, due.Question, store.All);
                     break;
-                case NoticeKind.Finished when !t.Removed && s is { Status: SessionStatus.Idle, Question: null }:
+                case NoticeKind.Finished when !t.Removed && s is { Status: SessionStatus.Idle, Question: null } && !Failed(s):
                     t.FinishedKey = FinishedKey(s);
+                    t.Replaced = t.Shown ?? t.Replaced;
                     t.Shown = null;
                     var unseen = new List<PushSubscriber>();
                     foreach (var d in store.All)

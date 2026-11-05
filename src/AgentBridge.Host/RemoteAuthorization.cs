@@ -17,6 +17,7 @@ public sealed class RemoteAuthorization : IDisposable
         LaunchProtocol.Options, LaunchProtocol.Launch, TrustProtocol.Answer,
         UsageProtocol.Get, UsageProtocol.Subscribe,
         UpdateProtocol.Get, UpdateProtocol.Subscribe, UpdateProtocol.Check, UpdateProtocol.Install,
+        AgentSignIn.Start, AgentSignIn.Cancel,
     ];
     static readonly HashSet<string> HostCapabilities =
         [UsageProtocol.Capability, UsageProtocol.SharedCapability, TransferProtocol.ServeCapability];

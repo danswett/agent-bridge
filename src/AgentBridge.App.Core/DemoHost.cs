@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -9,7 +10,7 @@ namespace AgentBridge.App.Core;
 // its own, answering every op as a cooperative host would. For trying the app without a host
 // or agents, for screenshots, and for CI's check that the published app starts and draws
 // cards. It never touches the real host, its profile or any session.
-public sealed class DemoHost : IAsyncDisposable
+public sealed partial class DemoHost : IAsyncDisposable
 {
     readonly LocalServer server;
     readonly Dictionary<string, Session> sessions = new(StringComparer.Ordinal);
@@ -19,6 +20,11 @@ public sealed class DemoHost : IAsyncDisposable
     readonly Dictionary<string, long> attachments = [];
     readonly Dictionary<string, LaunchResult> launches = [];
     readonly List<ResumableSession> resumable = [];
+    // #800: each session's attention as the host sends it (Session.attention), and this demo's
+    // sign-in flows, each with the channels in it: a code goes to those alone.
+    readonly Dictionary<string, JsonObject> attention = new(StringComparer.Ordinal);
+    readonly Dictionary<string, List<IProtocolChannel>> flows = new(StringComparer.Ordinal);
+    int flowCount;
     long revision = 118;
 
     public string Folder { get; }
@@ -180,9 +186,14 @@ public sealed class DemoHost : IAsyncDisposable
         switch (op)
         {
             case Ops.Hello:
-                return Done(new HelloResult(1, new MachineInfo(MachineId, MachineName, "windows", version, Dev: true, Sessions: Count), remote
-                    ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability]
-                    : [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, HostOps.Capability]));
+                {
+                    var hello = new HelloResult(1, new MachineInfo(MachineId, MachineName, "windows", version, Dev: true, Sessions: Count), remote
+                        ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, AuthState.Capability]
+                        : [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, HostOps.Capability]);
+                    // Held for a test: the reply a recovery reads before it subscribes again.
+                    if (HoldHello is { } hold) { HoldHello = null; return After(hold.Task, hello); }
+                    return Done(hello);
+                }
             case HostOps.Status or HostOps.Subscribe when !remote:
                 return Done(Status());
             case UsageProtocol.Get or UsageProtocol.Subscribe:
@@ -201,7 +212,7 @@ public sealed class DemoHost : IAsyncDisposable
                     }
                     return Done(new ChannelReply(new SubscribeResult(rev, snapshot.Count), async c =>
                     {
-                        foreach (var s in snapshot) { await c.SendEventAsync(Events.SessionUpsert, s.WithoutHistory()); }
+                        foreach (var s in snapshot) { await c.SendEventAsync(Events.SessionUpsert, Wire(s)); }
                         await c.SendEventAsync(Events.SessionsSynced, new SessionsSynced(rev, holds));
                     }));
                 }
@@ -212,7 +223,7 @@ public sealed class DemoHost : IAsyncDisposable
                     {
                         if (!sessions.TryGetValue(id, out var s)) { return Done(new { missing = true }); }
                         if (data.TryGetProperty("agent", out var agent) && agent.GetString() is { } a) { return Done(DelegateDetail(s, a, now)); }
-                        return Done(s with { Activity = s.Activity with { History = History(now) } });
+                        return Done(s with { Activity = s.Activity with { History = s.Activity.History ?? History(now) } });
                     }
                 }
             case Ops.SessionAnswer:
@@ -286,12 +297,274 @@ public sealed class DemoHost : IAsyncDisposable
                 throw new InvalidOperationException("this host is not signed in to the relay");
             case HostOps.Settings or HostOps.Restart or HostOps.Stop or HostOps.SignInCancel:
                 throw new InvalidOperationException("the demo host cannot do that");
+            case AuthState.Start when remote:
+                return StartSignInAsync(ch);
+            case AuthState.Cancel when remote:
+                return CancelSignInAsync(data);
             default:
                 return Done(null);
         }
     }
 
     static Task<object?> Done(object? result) => Task.FromResult(result);
+
+    // A session as sent: without its history, and with its attention (#800) when it has one.
+    JsonObject Wire(Session s)
+    {
+        var json = JsonSerializer.SerializeToNode(s.WithoutHistory(), ProtocolJson.Options)!.AsObject();
+        lock (gate) { if (attention.TryGetValue(s.Id, out var a)) { json["attention"] = a.DeepClone(); } }
+        return json;
+    }
+
+    // #800's scenario, on the other machine (Remote): three Copilot sessions whose agent needs
+    // sign-in for one account, a Claude turn that ended on its quota, and a Codex session that has
+    // stopped answering. For the self-test, and for trying the banner and sheet.
+    public const string SignInAccount = "demo-user";
+    public static readonly IReadOnlyList<string> SignInSessions = ["demo-signin-1", "demo-signin-2", "demo-signin-3"];
+
+    public async Task NeedSignInAsync()
+    {
+        var now = DateTimeOffset.UtcNow;
+        string[] titles = ["Coordinate the release", "Fix the relay reconnect", "Review the usage panel"];
+        for (var i = 0; i < SignInSessions.Count; i++)
+        {
+            var since = now.AddMinutes(-4 - i);
+            SetAttention(SignInSessions[i], new JsonObject { ["kind"] = AuthState.SignInNeeded, ["since"] = since.ToString("O"), ["agent"] = "copilot", ["provider"] = "github", ["account"] = SignInAccount, ["message"] = "Copilot needs you to sign in again (401).", ["signIn"] = "phone" });
+            await Change(Example(SignInSessions[i], AgentKind.Copilot, titles[i], SessionStatus.Idle, since));
+        }
+        SetAttention("demo-error-quota", new JsonObject { ["kind"] = AuthState.Error, ["since"] = now.AddMinutes(-2).ToString("O"), ["agent"] = "claude", ["errorClass"] = "quota", ["message"] = "Claude stopped with an error.", ["retryAt"] = now.AddHours(2).ToString("O") });
+        // This one and the next are driven by an agent: their rows still say what is wrong.
+        await Change(Example("demo-error-quota", AgentKind.Claude, "Summarise the incident", SessionStatus.Idle, now.AddMinutes(-2)) with { Driver = DriverKind.Agent, DriverPrincipal = "homeassistant:demo" });
+        SetAttention("demo-stalled", new JsonObject { ["kind"] = AuthState.NotResponding, ["since"] = now.AddMinutes(-1).ToString("O"), ["agent"] = "codex", ["lastEventAt"] = now.AddMinutes(-12).ToString("O") });
+        await Change(Example("demo-stalled", AgentKind.Codex, "Migrate the settings store", SessionStatus.Working, now.AddMinutes(-15)) with { Driver = DriverKind.Agent, DriverPrincipal = "homeassistant:demo" }, finishes: false);
+    }
+
+    // The scenario's sessions gone, as they came.
+    public async Task EndSignInScenarioAsync()
+    {
+        foreach (var id in SignInSessions.Append("demo-error-quota").Append("demo-stalled")) { lock (gate) { attention.Remove(id); } await RemoveAsync(id); }
+        lock (gate) { flows.Clear(); }
+    }
+
+    // What the next signin.code says: GitHub's, unless a test sets a spoof.
+    public string NextUserCode { get; set; } = "WDJB-MJHT";
+    public string NextVerificationUri { get; set; } = "https://github.com/login/device";
+    // How long the next code lives, and how long the next start's result takes (its code comes first).
+    public TimeSpan NextCodeLife { get; set; } = TimeSpan.FromMinutes(15);
+    public TimeSpan NextStartDelay { get; set; }
+    // The next start fails, with these words (which the app never shows).
+    public string? NextStartFailure { get; set; }
+    // How long the next cancel takes to finish.
+    public TimeSpan NextCancelDelay { get; set; }
+    // The next start is refused, with this reason and no flow.
+    public string? NextStartRefusal { get; set; }
+    // How long after a start its code is sent: late, it comes after a Cancel (the demo sends it anyway).
+    public TimeSpan NextCodeDelay { get; set; } = TimeSpan.FromMilliseconds(100);
+    // The ops a person's presses sent, in order: what the self-test reads to know nothing was sent unpressed.
+    public List<string> SignInLog { get; } = [];
+
+    void SetAttention(string id, JsonObject? a) { lock (gate) { if (a is null) { attention.Remove(id); } else { attention[id] = a; } } }
+
+    static Session Example(string id, AgentKind agent, string title, SessionStatus status, DateTimeOffset since) => new()
+    {
+        Id = id,
+        Agent = agent,
+        Title = title,
+        Repository = "danswett/agent-bridge",
+        Branch = "main",
+        Status = status,
+        StatusSince = since,
+        UpdatedAt = since,
+        Activity = new Activity { TurnCount = 3 },
+    };
+
+    // signin.start: a flow that this channel is in, joined if one runs; its code a moment later,
+    // to the channels in it alone, never in a session or a snapshot.
+    async Task<object?> StartSignInAsync(IProtocolChannel ch)
+    {
+        var delay = NextStartDelay;
+        NextStartDelay = TimeSpan.Zero;
+        if (NextStartFailure is { } failure) { NextStartFailure = null; throw new InvalidOperationException(failure); }
+        if (NextStartRefusal is { } refusal)
+        {
+            NextStartRefusal = null;
+            lock (gate) { SignInLog.Add(AuthState.Start); }
+            if (delay > TimeSpan.Zero) { await Task.Delay(delay); }
+            return new { outcome = "refused", reason = refusal };
+        }
+        var result = StartSignIn(ch);
+        if (delay > TimeSpan.Zero) { await Task.Delay(delay); }
+        return result;
+    }
+
+    object StartSignIn(IProtocolChannel ch)
+    {
+        string flow;
+        bool busy;
+        lock (gate)
+        {
+            SignInLog.Add(AuthState.Start);
+            busy = flows.Count > 0;
+            flow = busy ? flows.Keys.First() : $"flow-{++flowCount}";
+            if (!flows.TryGetValue(flow, out var chans)) { flows[flow] = chans = []; }
+            if (!chans.Contains(ch)) { chans.Add(ch); }
+        }
+        var after = NextCodeDelay;
+        NextCodeDelay = TimeSpan.FromMilliseconds(100);
+        _ = SendCodeAsync(ch, flow, after);
+        return new { outcome = busy ? "busy" : "started", flow };
+    }
+
+    async Task SendCodeAsync(IProtocolChannel ch, string flow, TimeSpan after)
+    {
+        await Task.Delay(after);
+        try { await ch.SendEventAsync(AuthState.CodeEvent, new { flow, agent = "copilot", userCode = NextUserCode, verificationUri = NextVerificationUri, expiresAt = DateTimeOffset.UtcNow.Add(NextCodeLife).ToString("O") }); }
+        catch (IOException) { }
+    }
+
+    // A cancel slow to finish: its reply waits, and "cancelled" is logged once it has.
+    async Task<object?> CancelSignInAsync(JsonElement data)
+    {
+        var result = CancelSignIn(data);
+        var delay = NextCancelDelay;
+        NextCancelDelay = TimeSpan.Zero;
+        if (delay > TimeSpan.Zero)
+        {
+            await Task.Delay(delay);
+            lock (gate) { SignInLog.Add("cancelled"); }
+        }
+        return result;
+    }
+
+    object CancelSignIn(JsonElement data)
+    {
+        var flow = data.TryGetProperty("flow", out var f) ? f.GetString() : null;
+        lock (gate)
+        {
+            SignInLog.Add(AuthState.Cancel);
+            if (flow is not null) { flows.Remove(flow); }
+        }
+        return new { outcome = "cancelled" };
+    }
+
+    // The person entered the code at github.com (or didn't): signin.done to the flow's channels.
+    // Signed in doesn't clear the sessions: under #800's clear gate the host only marks them pending
+    // (signed in, waiting for the session to confirm) until the model answers (ConfirmSignInAsync).
+    // Signed in with pendingFirst false sends signin.done before the host's pending, which
+    // SignedInPendingAsync then sends: the order a slow host may give.
+    public async Task FinishSignInAsync(string outcome, string? reason = null, bool pendingFirst = true)
+    {
+        List<(string Flow, List<IProtocolChannel> Channels)> done;
+        lock (gate)
+        {
+            done = [.. flows.Select(p => (Flow: p.Key, Channels: p.Value))];
+            flows.Clear();
+        }
+        IReadOnlyList<string> resumed = outcome == "signedIn" ? SignInSessions : [];
+        if (outcome == "signedIn" && pendingFirst) { await MarkSignInAsync("pending"); }
+        foreach (var (flow, chans) in done)
+        {
+            foreach (var ch in chans.Where(c => c.IsOpen))
+            {
+                try { await ch.SendEventAsync(AuthState.DoneEvent, new { flow, outcome, reason, resumed, @continue = Array.Empty<string>() }); }
+                catch (IOException) { }
+            }
+        }
+    }
+
+    public Task SignedInPendingAsync() => MarkSignInAsync("pending");
+
+    // The model answered after the sign-in: the clear gate passes and the host clears the sessions.
+    public Task ConfirmSignInAsync() => ClearSignInAsync();
+
+    // The next turn failed sign-in again: back to needing it, with a new since.
+    public Task FailSignInAgainAsync() => MarkSignInAsync("failed", again: true);
+
+    // A sign-in under way from another device (recovery signingIn): the banner offers Show code. Off,
+    // the sessions just need sign-in again.
+    public async Task SignInUnderWayAsync(bool on)
+    {
+        if (on) { await MarkSignInAsync("signingIn"); return; }
+        foreach (var id in SignInSessions)
+        {
+            Session? s;
+            lock (gate)
+            {
+                if (!attention.TryGetValue(id, out var a)) { continue; }
+                a.Remove("recovery");
+                s = sessions.GetValueOrDefault(id);
+            }
+            if (s is not null) { await Change(s with { UpdatedAt = DateTimeOffset.UtcNow }); }
+        }
+    }
+
+    async Task MarkSignInAsync(string recovery, bool again = false)
+    {
+        var now = DateTimeOffset.UtcNow;
+        foreach (var id in SignInSessions)
+        {
+            Session? s;
+            lock (gate)
+            {
+                if (!attention.TryGetValue(id, out var a)) { continue; }
+                a["recovery"] = recovery;
+                if (again) { a["since"] = now.ToString("O"); }
+                s = sessions.GetValueOrDefault(id);
+            }
+            if (s is not null) { await Change(s with { UpdatedAt = now }); }
+        }
+    }
+
+    // The next hello's reply waits for this.
+    public TaskCompletionSource? HoldHello { get; set; }
+
+    static async Task<object?> After(Task wait, object value)
+    {
+        await wait;
+        return value;
+    }
+
+    // The channels subscribed to its sessions, for a test to lose events on.
+    public IReadOnlyList<IProtocolChannel> Subscribers { get { lock (gate) { return [.. subscribers]; } } }
+
+    // A sign-in another device started: a press here joins it (busy).
+    public void SignInElsewhere() { lock (gate) { flows[$"flow-{++flowCount}"] = []; } }
+
+    // How the host says the sessions can be signed in: phone, machine, or null for no claim.
+    public async Task SignInWayAsync(string? way)
+    {
+        foreach (var id in SignInSessions)
+        {
+            Session? s;
+            lock (gate)
+            {
+                if (!attention.TryGetValue(id, out var a)) { continue; }
+                if (way is null) { a.Remove("signIn"); } else { a["signIn"] = way; }
+                s = sessions.GetValueOrDefault(id);
+            }
+            if (s is not null) { await Change(s with { UpdatedAt = DateTimeOffset.UtcNow }); }
+        }
+    }
+
+    // A sign-in session renamed while it still needs sign-in: its banner's list is drawn again.
+    public async Task RetitleAsync(string id, string title)
+    {
+        Session? s;
+        lock (gate) { s = sessions.GetValueOrDefault(id); }
+        if (s is not null) { await Change(s with { Title = title, UpdatedAt = DateTimeOffset.UtcNow }); }
+    }
+
+    // The sessions' attention cleared: a stored sign-in that still worked, or a person's once the
+    // session confirmed.
+    public async Task ClearSignInAsync()
+    {
+        foreach (var id in SignInSessions)
+        {
+            Session? s;
+            lock (gate) { attention.Remove(id); s = sessions.GetValueOrDefault(id); }
+            if (s is not null) { await Change(s with { UpdatedAt = DateTimeOffset.UtcNow }); }
+        }
+    }
 
     // What the demo offers to launch: three agents (Codex needs a first message), one approved
     // workspace that starts each session in a worktree of its own, and one ended session.
@@ -359,7 +632,13 @@ public sealed class DemoHost : IAsyncDisposable
         return result;
     }
 
-    async Task Change(Session next)
+    // A session as a host would send it next, for the self-test: a schedule's or an agent's prompt
+    // arriving (#489), which nothing in the demo sends on its own.
+    public Task Upsert(Session next) => Change(next);
+
+    // finishes: a turn started here ends a moment later, as an agent's would; not a session that has
+    // stopped answering (#800).
+    async Task Change(Session next, bool finishes = true)
     {
         await Task.Delay(400);
         IProtocolChannel[] to;
@@ -369,14 +648,15 @@ public sealed class DemoHost : IAsyncDisposable
             revision++;
             to = [.. subscribers.Where(s => s.IsOpen)];
         }
-        foreach (var ch in to) { try { await ch.SendEventAsync(Events.SessionUpsert, next.WithoutHistory()); } catch (IOException) { } }
+        foreach (var ch in to) { try { await ch.SendEventAsync(Events.SessionUpsert, Wire(next)); } catch (IOException) { } }
         // The agent takes the answer or reply and finishes its turn a little later.
-        if (next.Status == SessionStatus.Working)
+        if (finishes && next.Status == SessionStatus.Working)
         {
             await Task.Delay(3000);
             var done = DateTimeOffset.UtcNow;
-            // The main agent wrote last: the top-level text is its own again.
-            await Change(next with { Status = SessionStatus.Idle, StatusSince = done, UpdatedAt = done, Activity = next.Activity with { Response = "Done: that's taken care of.", TurnCount = (next.Activity.TurnCount ?? 0) + 1, Reasoning = null, Source = null, Own = null } });
+            // The main agent wrote last: the top-level text is its own again. A few short blocks, so a
+            // conversation's pictures show the space between them (#765).
+            await Change(next with { Status = SessionStatus.Idle, StatusSince = done, UpdatedAt = done, Activity = next.Activity with { Response = "Done: that's taken care of.\n\nThe branch is pushed.\n\n- the suite passes\n- nothing else is open", TurnCount = (next.Activity.TurnCount ?? 0) + 1, Reasoning = null, Source = null, Own = null } });
         }
     }
 

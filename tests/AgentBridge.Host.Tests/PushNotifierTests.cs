@@ -64,7 +64,7 @@ public sealed class PushNotifierTests : IDisposable
 
     PushPeer Peer(string device, string account = Account, bool inAccount = true) => new(device, device == Phone ? "iPhone" : "Laptop", account, inAccount);
 
-    object? Subscribe(string device, string? endpoint = null, PushPeer? peer = null)
+    object? Subscribe(string device, string? endpoint = null, PushPeer? peer = null, string? name = null)
     {
         if (!browsers.TryGetValue(device, out var b)) { browsers[device] = b = (P256KeyPair.Generate(), System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)); }
         var data = JsonSerializer.SerializeToElement(new
@@ -72,7 +72,7 @@ public sealed class PushNotifierTests : IDisposable
             endpoint = endpoint ?? $"https://web.push.apple.com/{device}",
             keys = new { p256dh = B64Url.Encode(b.Key.Public), auth = B64Url.Encode(b.Auth) },
             app = "https://danswett.github.io/agent-bridge/app/",
-            device = device == Phone ? "iPhone" : "Laptop",
+            device = name ?? (device == Phone ? "iPhone" : "Laptop"),
         });
         return notifier.Handle(peer ?? Peer(device), Ops.PushSubscribe, data);
     }
@@ -304,6 +304,187 @@ public sealed class PushNotifierTests : IDisposable
         await TurnAsync("four", 4);
         Assert.Equal(3, sender.Sent.Count);
         Assert.Equal("DEV · finished\nfour", LastBody());
+    }
+
+    static readonly Attention SignedOut = new() { Kind = AttentionKind.SignInNeeded, Since = T, Agent = AgentKind.Copilot, Provider = "github" };
+
+    // #845: the failed turn leaves the last answer beside a truthful idle; quoted as "finished",
+    // it read as the new prompt's answer.
+    [Fact]
+    public async Task A_new_prompt_that_fails_sign_in_after_an_earlier_answer_sends_no_finished_push()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "The build is green."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Single(sender.Sent);
+        await After(new PushOptions().FinishedCollapse);
+
+        source.Upsert(S("s1", SessionStatus.Working, response: "The build is green.", turns: 1));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "The build is green.", turns: 2) with { Attention = SignedOut });
+        await After(new PushOptions().FinishedCollapse);
+
+        Assert.Single(sender.Sent);
+    }
+
+    [Fact]
+    public async Task A_finished_turn_still_queued_when_the_next_prompt_fails_sign_in_is_withdrawn()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "one"));
+        await After(TimeSpan.FromSeconds(3));
+        source.Upsert(S("s1", SessionStatus.Working, response: "one"));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "two", turns: 2));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, notifier.Pending);
+
+        source.Upsert(S("s1", SessionStatus.Working, response: "two", turns: 2));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "two", turns: 3) with { Attention = SignedOut });
+        await After(new PushOptions().FinishedCollapse);
+
+        Assert.Single(sender.Sent);
+        Assert.Equal(0, notifier.Pending);
+    }
+
+    // A finished push in flight when the next prompt fails sign-in comes back as a retry: it is
+    // checked again as it goes, and not sent while the attention lasts.
+    [Fact]
+    public async Task A_finished_push_retried_after_the_next_prompt_failed_sign_in_is_not_sent()
+    {
+        Start();
+        Subscribe(Phone);
+        var first = true;
+        sender.Respond = _ =>
+        {
+            if (!first) { return new PushResult(201, null); }
+            first = false;
+            source.Upsert(S("s1", SessionStatus.Working, response: "The build is green.", turns: 1));
+            source.Upsert(S("s1", SessionStatus.Idle, response: "The build is green.", turns: 2) with { Attention = SignedOut });
+            return new PushResult(503, "unavailable");
+        };
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "The build is green."));
+
+        await After(TimeSpan.FromSeconds(3));
+        await After(TimeSpan.FromMinutes(1));
+
+        Assert.Empty(sender.Sent);
+        Assert.True(sender.Attempts == 1, $"tried {sender.Attempts} times");
+    }
+
+    // A delegate's question still pending returns before the cleanup once did: the finished
+    // notice waiting for the relay went out with the stale answer when it came back.
+    [Fact]
+    public async Task A_finished_push_waiting_for_the_relay_is_withdrawn_when_sign_in_fails_with_a_delegates_question_pending()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "The build is green."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, notifier.Pending);
+
+        source.Upsert(S("s1", SessionStatus.Waiting, response: "The build is green.", turns: 2, question: Q("dq") with { Agent = "agent-1" }) with { WaitingOn = "agent-1", Attention = SignedOut });
+        Assert.Equal(0, notifier.Pending);
+        sender.Connected = true;
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.DoesNotContain(Received(), r => Kind(r.Notification) == "finished");
+    }
+
+    // #841: the finished notice that would have replaced an answered question on the phone did
+    // not go, so the question's resolution goes instead; the phone never keeps it.
+    [Fact]
+    public async Task An_answered_question_is_resolved_when_its_finished_push_is_withdrawn_for_a_failed_sign_in()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, notifier.Pending);
+
+        source.Upsert(S("s1", SessionStatus.Working, response: "Done.", turns: 1));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        sender.Connected = true;
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(["question", "resolved"], Received().Select(r => Kind(r.Notification)));
+    }
+
+    [Fact]
+    public async Task An_answered_question_is_resolved_when_its_finished_push_in_flight_meets_a_failed_sign_in()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Respond = _ =>
+        {
+            if (sender.Attempts != 2) { return new PushResult(201, null); }
+            source.Upsert(S("s1", SessionStatus.Working, response: "Done.", turns: 1));
+            source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+            return new PushResult(503, "unavailable");
+        };
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+
+        await After(TimeSpan.FromSeconds(3));
+        await After(TimeSpan.FromMinutes(1));
+
+        Assert.Equal(["question", "resolved"], Received().Select(r => Kind(r.Notification)));
+    }
+
+    // Refused by one device only: the question is resolved there, while another device's
+    // finished push, held by the collapse window, still goes.
+    [Fact]
+    public async Task An_answered_question_is_resolved_only_on_the_device_that_refused_its_finished_push()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        var laptop = 0;
+        sender.Respond = e => e.EndsWith(Laptop) && ++laptop % 2 == 1 ? new PushResult(403, "forbidden") : new PushResult(201, null);
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Earlier.", turns: 1));
+        await After(TimeSpan.FromSeconds(3));
+        source.Upsert(S("s1", SessionStatus.Waiting, response: "Earlier.", turns: 1, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Working, response: "Earlier.", turns: 1));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2));
+
+        await After(TimeSpan.FromSeconds(3));
+        await After(new PushOptions().FinishedCollapse);
+
+        Assert.Equal(["finished", "question", "finished"], Received().Where(r => r.Device == Phone).Select(r => Kind(r.Notification)));
+        Assert.Equal(["question", "resolved"], Received().Where(r => r.Device == Laptop).Select(r => Kind(r.Notification)));
+    }
+
+    // Still asked: nothing is resolved.
+    [Fact]
+    public async Task A_question_asked_again_is_not_resolved_when_a_finished_push_is_withdrawn()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+
+        source.Upsert(S("s1", SessionStatus.Waiting, response: "Done.", turns: 2, question: Q("q1")) with { Attention = SignedOut });
+        sender.Connected = true;
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(["question"], Received().Select(r => Kind(r.Notification)));
     }
 
     [Fact]
@@ -760,6 +941,20 @@ public sealed class PushNotifierTests : IDisposable
         // The same browser endpoint registered by a new device key (the app was reinstalled).
         Subscribe(Laptop, endpoint: "https://web.push.apple.com/renewed");
         Assert.Equal(Laptop, Assert.Single(store.All).Device);
+    }
+
+    // The rebrand (#538) changes the name a device registers with ("iPhone · Agent Bridge" becomes
+    // "iPhone · Slipgates") on every installed app's next registration: it must stay the same
+    // device with its one subscription, not a second one or a new device to approve.
+    [Fact]
+    public void A_device_registering_again_under_a_new_name_keeps_its_one_subscription_with_the_new_name()
+    {
+        Start();
+        Subscribe(Phone, name: "iPhone · Agent Bridge");
+        var before = Assert.Single(store.All);
+        Subscribe(Phone, name: "iPhone · Slipgates");
+        var after = Assert.Single(store.All);
+        Assert.Equal((Phone, before.Endpoint, before.P256dh, "iPhone · Slipgates"), (after.Device, after.Endpoint, after.P256dh, after.Name));
     }
 
     RemoteAuthorization Enforce(P256KeyPair host, P256KeyPair person)

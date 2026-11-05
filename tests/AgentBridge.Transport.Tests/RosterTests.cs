@@ -15,6 +15,22 @@ public class RosterTests
 {
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
 
+    static async Task WhileSamplingAsync(Func<CancellationToken, Task> sample, Func<Task> action)
+    {
+        using var stop = new CancellationTokenSource();
+        var reader = Task.Run(() => sample(stop.Token));
+        Exception? failure = null;
+        try { await action(); }
+        catch (Exception e) { failure = e; throw; }
+        finally
+        {
+            await stop.CancelAsync();
+            try { await reader; }
+            // A sampler failure must not hide the reconnect or wait failure.
+            catch (Exception) when (failure is not null) { }
+        }
+    }
+
     static async Task<KnownMachine> UntilKnownAsync(Device d, string id)
     {
         KnownMachine? hit = null;
@@ -128,6 +144,87 @@ public class RosterTests
             await UntilGoneAsync(app, gone.Id);
             await UntilGoneAsync(otherHost, gone.Id);
         }
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_host_coming_back_online_is_in_presence_or_the_offline_list_of_every_snapshot_never_neither()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(1, "octo");
+        var app = await relay.ConnectAsync(token, "app", "app");
+        var gone = await relay.ConnectAsync(token, "desk", "host");
+        await LeaveAsync(relay, gone, app);
+        await UntilKnownAsync(app, gone.Id);
+        var before = app.Relay.Snapshot;
+
+        // Read as a usage poll reads it, over and over while the host comes back (#206): each
+        // snapshot's two lists are one presence message's, so the host is never in neither.
+        var neither = 0;
+        var samples = 0;
+        var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var online = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await WhileSamplingAsync(async stop =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                var snap = app.Relay.Snapshot;
+                if (snap.Presence.Any(p => p.Id == gone.Id)) { online.TrySetResult(); }
+                else if (snap.Known?.Any(k => k.Id == gone.Id) != true) { neither++; }
+                samples++;
+                reading.TrySetResult();
+                await Task.Yield();
+            }
+        }, async () =>
+        {
+            await reading.Task.WaitAsync(Patience);
+            await using var again = await relay.ConnectAsync(token, "desk", "host", gone.Key);
+            await app.Relay.WaitForPeerAsync(p => p.Id == gone.Id, Patience);
+            await online.Task.WaitAsync(Patience);
+            var now = app.Relay.Snapshot;
+            Assert.Contains(now.Presence, p => p.Id == gone.Id);
+            Assert.DoesNotContain(now.Known!, k => k.Id == gone.Id);
+        });
+
+        Assert.True(samples > 0);
+        Assert.Equal(0, neither);
+        Assert.DoesNotContain(before.Presence, p => p.Id == gone.Id);
+        Assert.Contains(before.Known!, k => k.Id == gone.Id);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_failed_reconnect_cancels_and_awaits_the_sampler_without_hiding_its_failure(bool samplerFails)
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failure = new IOException("reconnect failed");
+        var operation = WhileSamplingAsync(async stop =>
+        {
+            using var registration = stop.Register(() => cancelled.TrySetResult());
+            started.TrySetResult();
+            await finish.Task;
+            if (samplerFails) { throw new InvalidOperationException("sampler failed"); }
+        }, async () =>
+        {
+            await started.Task.WaitAsync(Patience);
+            throw failure;
+        });
+
+        try
+        {
+            await cancelled.Task.WaitAsync(Patience);
+            Assert.False(operation.IsCompleted);
+        }
+        finally
+        {
+            finish.TrySetResult();
+            try { await operation; }
+            catch (Exception) { }
+        }
+        Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => operation));
     }
 
     [Fact]
@@ -251,6 +348,28 @@ public class RosterTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_host_receives_confirmation_when_its_first_complete_roster_was_delayed()
+    {
+        var store = new FlakyStore { Down = true };
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        await using var relay = await TestRelay.StartAsync(o =>
+        {
+            o.TokenKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+            o.Roster.Store = store;
+            o.Roster.Time = time;
+            o.Roster.StoreTimeout = TimeSpan.FromMilliseconds(100);
+        });
+        var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "Desk", "host");
+        Assert.Null(host.Relay.Snapshot.Known);
+
+        store.Down = false;
+        await relay.App.Services.GetRequiredService<MachineRoster>().FlushAsync();
+
+        await Wait.UntilAsync(() => host.Relay.Snapshot is { Known: not null, Previous.Known: not null }, "the first complete roster and its confirmation");
+    }
+
+    [Fact]
     public async Task A_stored_roster_needs_the_token_key_so_it_can_be_found_after_a_restart()
     {
         var o = new RelayOptions { Roster = { Store = new ThrowingStore() } };
@@ -285,6 +404,27 @@ public class RosterTests
 
     static RosterDocument Read(MemoryRosterStore store, MachineRoster roster, string account) =>
         JsonSerializer.Deserialize<RosterDocument>(store.ReadAsync(roster.NameOf(account), default).Result!.Body, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_host_leaving_presence_is_known_even_while_disconnect_or_replacement_bookkeeping_lags(bool replaced)
+    {
+        var (roster, _) = Replica(new MemoryRosterStore(), Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
+        var host = Id();
+        await roster.ConnectedAsync("1", host, "desk", "host");
+        if (replaced) { await roster.ConnectedAsync("1", host, "desk replacement", "host"); }
+        var devices = new HashSet<string>(StringComparer.Ordinal) { host };
+        Assert.Empty(roster.Known("1", devices.Contains)!);
+
+        // The old hub could remove the slot before updating Online; an older replaced socket
+        // can also keep that count above zero after the replacement leaves.
+        devices.Remove(host);
+        Assert.Contains(roster.Known("1", devices.Contains)!, m => m.Id == host);
+        roster.Disconnected("1", host, "host");
+        Assert.Contains(roster.Known("1", devices.Contains)!, m => m.Id == host);
+        if (replaced) { roster.Disconnected("1", host, "host"); }
+    }
 
     [Fact]
     public async Task A_host_in_a_reconnect_loop_costs_one_write_per_interval_and_a_reader_writes_nothing()

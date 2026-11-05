@@ -27,6 +27,7 @@ public static class Answers
         }
         if (answer.Text is not null) { return "this question takes fields, not a text answer"; }
         var given = answer.Fields ?? new Dictionary<string, JsonElement>();
+        var patterns = new PatternBudget();
         foreach (var name in given.Keys)
         {
             if (!question.Fields.Any(f => f.Name == name)) { return $"the question has no field \"{name}\""; }
@@ -38,7 +39,14 @@ public static class Answers
                 if (field.Required == true) { return $"\"{Label(field)}\" needs an answer"; }
                 continue;
             }
-            if (ValueProblem(field, value) is { } problem) { return $"\"{Label(field)}\": {problem}"; }
+            // Empty text is typed as nothing, which a form records as no answer at all, and text of
+            // only spaces, or of control characters typed as spaces, might be recorded trimmed to
+            // that (review of #844).
+            if (field.Required == true && field.Type == FieldType.Text && value.ValueKind == JsonValueKind.String && FieldConstraints.BlankOnceTyped(value.GetString()!))
+            {
+                return $"\"{Label(field)}\" needs an answer";
+            }
+            if ((ValueProblem(field, value) ?? field.Constraints?.Problem(field.Type, value, patterns)) is { } problem) { return $"\"{Label(field)}\": {problem}"; }
         }
         return given.Count == 0 ? "the answer is empty" : null;
     }

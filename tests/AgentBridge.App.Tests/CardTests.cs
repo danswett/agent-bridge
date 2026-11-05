@@ -399,26 +399,68 @@ public sealed class CardTests : IAsyncLifetime
     [Fact]
     public async Task On_a_host_that_takes_large_files_over_its_pipe_a_file_over_256_KiB_goes_as_it_is_in_chunks()
     {
-        host.On(Ops.AttachmentStart, _ => new AttachmentState(0, false));
+        var evidence = new AttachmentDeliveryEvidence(300_000);
+        host.On(Ops.AttachmentStart, _ =>
+        {
+            evidence.AttachmentStarted();
+            return new AttachmentState(0, false);
+        });
         long received = 0;
-        host.On(Ops.AttachmentChunk, d => { received += Convert.FromBase64String(d.GetProperty("data").GetString()!).Length; return new AttachmentState(received, received == 300_000); });
-        host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Delivered));
-        var r = new ReplyViewModel(Make.Session(), attach: true, deliveries, connection, new Shrinker(), large: true);
+        host.On(Ops.AttachmentChunk, d =>
+        {
+            var bytes = Convert.FromBase64String(d.GetProperty("data").GetString()!).Length;
+            var total = Interlocked.Add(ref received, bytes);
+            evidence.ChunkReceived(bytes);
+            return new AttachmentState(total, total == 300_000);
+        });
+        host.On(Ops.SessionReply, _ =>
+        {
+            evidence.ReplyReceived();
+            return new ReplyResult(AnswerOutcome.Delivered);
+        });
+        var session = Make.Session();
+        DeliveryState? state = null;
+        void Observe(Delivery d)
+        {
+            if (d.Key != $"reply|{session.Id}") { return; }
+            state = d.State;
+            // A generated timeout's Done state is not a reply acknowledgement.
+            if (d.State == DeliveryState.Done && d.Result.ValueKind == JsonValueKind.Object)
+            {
+                evidence.ReplyAcknowledged(d.Outcome);
+            }
+        }
+        deliveries.Changed += Observe;
+        try
+        {
+            var r = new ReplyViewModel(session, attach: true, deliveries, connection, new Shrinker(), large: true);
+            bool Delivered()
+            {
+                evidence.ObserveUi(r.StatusText, r.StatusTone, r.Error, state);
+                return r.StatusText == "Delivered. The session has your reply.";
+            }
+            string Why()
+            {
+                evidence.ObserveUi(r.StatusText, r.StatusTone, r.Error, state);
+                return evidence.Describe();
+            }
 
-        await r.AddAsync("report.pdf", "application/pdf", new byte[300_000]);
-        var file = Assert.Single(r.Attachments);
-        Assert.Equal((300_000L, false), (file.Size, file.Resized));
-        r.Refuse("video.mp4", "video/mp4", 150L * 1024 * 1024);
-        Assert.Equal("Couldn't attach video.mp4: it is 150.0 MiB, over the 100.0 MiB limit for an attachment.", r.Error);
-        r.Send();
+            await r.AddAsync("report.pdf", "application/pdf", new byte[300_000]);
+            var file = Assert.Single(r.Attachments);
+            Assert.Equal((300_000L, false), (file.Size, file.Resized));
+            r.Refuse("video.mp4", "video/mp4", 150L * 1024 * 1024);
+            Assert.Equal("Couldn't attach video.mp4: it is 150.0 MiB, over the 100.0 MiB limit for an attachment.", r.Error);
+            r.Send();
 
-        await Wait.UntilAsync(() => r.StatusText == "Delivered. The session has your reply.", "delivered");
-        Assert.Equal(300_000, received);
-        Assert.Equal(300_000L, host.Sent(Ops.AttachmentStart)[0].GetProperty("size").GetInt64());
+            await Wait.UntilAsync(Delivered, "delivered", why: Why);
+            Assert.Equal(300_000, received);
+            Assert.Equal(300_000L, host.Sent(Ops.AttachmentStart)[0].GetProperty("size").GetInt64());
 
-        // A host that stops offering them takes 256 KiB again.
-        r.Update(Make.Session(), takesFiles: true);
-        Assert.Equal(AttachmentLimits.Bytes, r.MaxBytes);
+            // A host that stops offering them takes 256 KiB again.
+            r.Update(Make.Session(), takesFiles: true);
+            Assert.Equal(AttachmentLimits.Bytes, r.MaxBytes);
+        }
+        finally { deliveries.Changed -= Observe; }
     }
 
     // The relay's blob store as a test stands it in: what was put, for whom, and what was deleted.
@@ -621,6 +663,32 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Contains("&#x202E;", card.Question.Message);
     }
 
+    // #878, ui.md §6.13: a Not responding row's trailing age says since when the host last heard
+    // from the agent (lastEventAt, else since), not the session's last update, and Details gives the
+    // time; the answer's age stays the session's.
+    [Fact]
+    public void A_Not_responding_rows_age_counts_from_the_agents_last_event_else_since_and_Details_gives_the_time()
+    {
+        static Session Stalled(object attention) => AuthState.Attach(Make.Session(status: SessionStatus.Working, response: "Running.", updated: Make.T0), JsonSerializer.SerializeToElement(new { attention }));
+        var now = clock.GetUtcNow();
+        var card = new SessionCardViewModel(Stalled(new { kind = "notResponding", since = Make.T0.AddMinutes(-20).ToString("O"), lastEventAt = Make.T0.AddMinutes(-30).ToString("O") }), Context());
+        card.RefreshTimes();
+        Assert.Equal("Not responding", card.Line.FirstFact);
+        Assert.Equal((Words.Age(Make.T0.AddMinutes(-30), now), Words.Age(Make.T0, now)), (card.AgeText, card.ResponseAgeText));
+        Assert.Equal(AuthState.Clock(Make.T0.AddMinutes(-30)), card.Details.Single(d => d.Label == "Not responding since").Value);
+
+        card.Update(Stalled(new { kind = "notResponding", since = Make.T0.AddMinutes(-20).ToString("O") }));
+        card.RefreshTimes();
+        Assert.Equal(Words.Age(Make.T0.AddMinutes(-20), now), card.AgeText);
+        Assert.Equal(AuthState.Clock(Make.T0.AddMinutes(-20)), card.Details.Single(d => d.Label == "Not responding since").Value);
+
+        // Any other row counts from its update, and has no such fact.
+        card.Update(Make.Session(status: SessionStatus.Working, updated: Make.T0));
+        card.RefreshTimes();
+        Assert.Equal(Words.Age(Make.T0, now), card.AgeText);
+        Assert.DoesNotContain("Not responding since", card.Details.Select(d => d.Label));
+    }
+
     [Fact]
     public void A_card_says_what_the_session_is_doing_in_the_words_and_glyph_of_the_status_rules()
     {
@@ -774,6 +842,63 @@ public sealed class CardTests : IAsyncLifetime
         var card = new SessionCardViewModel(asking, Context());
         Assert.Equal("Delegate x, idle, DEV-VM2 asks", card.RowStatus);
         Assert.Equal("A session, Delegate x idle DEV-VM2 asks, danswett/agent-bridge, 5m, Test PC", card.RowLabel);
+    }
+
+    [Fact]
+    public void A_prompt_the_person_didnt_type_is_not_their_bubble_but_a_collapsed_line_Show_prompt_opens()
+    {
+        var scheduled = Make.Session(turns: 3) with { Activity = new Activity { UserMessage = "Check the build.\nThen stop.", UserMessageFrom = UserMessageFrom.Schedule, UserMessageLabel = "4", TurnCount = 3 } };
+        var card = new SessionCardViewModel(scheduled, Context());
+        Assert.False(card.HasUserMessage);
+        Assert.True(card.HasPrompt);
+        Assert.Equal((true, false), (card.PromptIsSchedule, card.PromptIsDriven));
+        Assert.Equal("Scheduled prompt · #4", card.PromptLabel);
+        Assert.Equal(("Check the build. Then stop.", true), (card.PromptPreview, card.HasPromptPreview));
+        Assert.Equal((false, "Show prompt", "Scheduled prompt 4, Show prompt"), (card.PromptOpen, card.PromptToggleText, card.PromptToggleName));
+        // Seen first after its turn: the protocol doesn't date a prompt, so it has no age.
+        Assert.False(card.HasPromptAge);
+
+        card.PromptOpen = true;
+        Assert.Equal((false, "Hide prompt", "Scheduled prompt 4, Hide prompt"), (card.HasPromptPreview, card.PromptToggleText, card.PromptToggleName));
+        Assert.Equal("Check the build.\nThen stop.", card.PromptText);
+        // An update to the same prompt leaves it as the person left it.
+        card.Update(scheduled with { UpdatedAt = Make.T0.AddMinutes(1), Activity = scheduled.Activity with { Response = "Green." } });
+        Assert.True(card.PromptOpen);
+
+        var agent = Make.Session() with { Driver = DriverKind.Agent, DriverPrincipal = "homeassistant:0f1e2d3c", Activity = new Activity { UserMessage = "Run it.", UserMessageFrom = UserMessageFrom.Agent, TurnCount = 1 } };
+        var sent = new SessionCardViewModel(agent, Context());
+        Assert.Equal((true, "Sent by an agent", "homeassistant:0f1e2d3c", true), (sent.PromptIsDriven, sent.PromptLabel, sent.PromptBy, sent.HasPromptBy));
+        Assert.Equal("Prompt sent by an agent, Show prompt", sent.PromptToggleName);
+    }
+
+    [Fact]
+    public void A_schedule_firing_again_with_the_same_words_folds_to_same_as_last_time_dated_by_its_turn_and_collapsed()
+    {
+        var idle = Make.Session(turns: 3) with { Activity = new Activity { UserMessage = "Check the build.", UserMessageFrom = UserMessageFrom.Schedule, UserMessageLabel = "4", TurnCount = 3 } };
+        var card = new SessionCardViewModel(idle, Context());
+        card.PromptOpen = true;
+        var began = Make.T0.AddMinutes(2);
+        card.Update(idle with { Status = SessionStatus.Working, StatusSince = began, UpdatedAt = began });
+        // The same words while its turn runs: nothing to tell from a turn of the same prompt yet.
+        Assert.Equal("Scheduled prompt · #4", card.PromptLabel);
+        card.Update(idle with { UpdatedAt = began.AddSeconds(30), Activity = idle.Activity with { TurnCount = 4 } });
+        Assert.Equal("Scheduled prompt · #4 · same as last time", card.PromptLabel);
+        Assert.Equal(("", false), (card.PromptPreview, card.HasPromptPreview));
+        Assert.False(card.PromptOpen);
+        Assert.Equal((true, "3m"), (card.HasPromptAge, card.PromptAgeText));
+
+        card.Update(idle with { Status = SessionStatus.Working, StatusSince = began, Activity = idle.Activity with { UserMessage = "Check the relay.", TurnCount = 4 } });
+        Assert.Equal("Scheduled prompt · #4", card.PromptLabel);
+        Assert.Equal("Check the relay.", card.PromptPreview);
+    }
+
+    [Fact]
+    public void A_prompt_from_a_host_that_doesnt_say_who_sent_it_or_from_the_person_keeps_the_bubble()
+    {
+        var card = new SessionCardViewModel(Make.Session() with { Activity = new Activity { UserMessage = "Ship it.", TurnCount = 1 } }, Context());
+        Assert.Equal((true, "Ship it.", false), (card.HasUserMessage, card.UserMessage, card.HasPrompt));
+        card.Update(Make.Session() with { Activity = new Activity { UserMessage = "Stop that.", UserMessageFrom = UserMessageFrom.Person, TurnCount = 2 } });
+        Assert.Equal((true, "Stop that.", false), (card.HasUserMessage, card.UserMessage, card.HasPrompt));
     }
 
     [Fact]

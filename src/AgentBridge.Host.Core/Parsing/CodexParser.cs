@@ -31,6 +31,8 @@ namespace AgentBridge.Host.Core.Parsing;
 // so what it says reaches this one only through these, never as its response. It stays open
 // for more input until closed, so a finished one is idle, not ended. Its own sub-agents would
 // be in its own rollout, which is not read: they are neither listed nor counted.
+// Sign-in and turn-ending errors (session.attention): TODO(#800), once a real redacted sample of
+// Codex's is captured (AgentErrors). None was on VM1, and no string is guessed meanwhile.
 internal sealed class CodexParser(SessionState state, TimeProvider time) : TranscriptParser(state, time)
 {
     static readonly IReadOnlyList<byte[]> Markers =

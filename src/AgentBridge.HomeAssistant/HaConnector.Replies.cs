@@ -157,12 +157,14 @@ public sealed partial class HaConnector
             case AnswerOutcome.Unconfirmed:
                 // The keys may have gone in: treated as sent, so nothing is sent again by itself.
                 if (!done.Box) { p.Reply.PayloadDeliveredAt = now; }
-                await TransientAsync(p, "Reply unconfirmed - check the terminal", new JsonObject { ["error"] = result.Reason ?? "" }, ct);
+                await TransientAsync(p, "Reply unconfirmed - check the terminal", new JsonObject { ["error"] = ReplyReasons.Shared(result.Reason ?? "") }, ct);
                 break;
             default:
                 // No turn is coming, so the arm would only mark whatever is typed next.
                 if (ours) { p.DriverPendingAt = null; }
-                var extra = new JsonObject { ["error"] = result.Reason ?? result.Outcome.ToString() };
+                // Home Assistant keeps it in its history: a draft left at the machine is said by its
+                // length only (ReplyReasons, #843 review).
+                var extra = new JsonObject { ["error"] = result.Reason is { } reason ? ReplyReasons.Shared(reason) : result.Outcome.ToString() };
                 // A failure to fetch or decode what came with it is the daemon's own sentence,
                 // with nothing tried; one the delivery refused names the words it did not send.
                 if (!done.Failed) { extra["unsent"] = done.Shown; }

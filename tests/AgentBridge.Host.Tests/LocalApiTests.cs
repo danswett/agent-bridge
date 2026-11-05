@@ -219,6 +219,8 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(report.CheckedAt, pushed.CheckedAt);
         Assert.Equal(4, pushed.Agents.Count);
         Assert.All(pushed.Agents, a => Assert.Equal(ReadinessState.Missing, a.Installation.State));
+        Assert.All(pushed.Agents, a => Assert.Equal(HookSetupState.NotSetUp, a.HookSetup));
+        Assert.Contains("\"hookSetup\":\"notSetUp\"", JsonSerializer.Serialize(pushed, ProtocolJson.Options));
     }
 
     [Theory]

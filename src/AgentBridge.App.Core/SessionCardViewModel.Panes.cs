@@ -30,7 +30,8 @@ public sealed partial class SessionCardViewModel
     // (#286): "Waiting on you · 2 delegates still running" is one fact on a row and both in the
     // header.
     public string RowStatus => DriverDrawn ? DriverText : Line.FirstFact;
-    bool DriverDrawn => Driven && Glyph != StatusGlyph.Needs;
+    // Nor over rules 10-12 (#800), which say what is wrong; the glyph keeps the driven badge.
+    bool DriverDrawn => Driven && Glyph != StatusGlyph.Needs && Line.Rule is not (StatusRules.SignIn or StatusRules.Error or StatusRules.NotResponding);
     public string RowPlace => Machine ?? Place;
     public string RowFacts => string.Join(StatusLine.Separator, new[] { RowStatus, RowPlace }.Where(s => !string.IsNullOrEmpty(s)));
 
@@ -107,6 +108,12 @@ public sealed partial class SessionCardViewModel
         if (session.Activity.TurnCount is { } t) { rows.Add(new("Turns", t.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
         if (session.Activity.Compactions is > 0 and var c) { rows.Add(new("Compactions", c.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
         if (session.ProcessId is { } pid) { rows.Add(new("Process", pid.ToString(System.Globalization.CultureInfo.InvariantCulture), Mono: true)); }
+        // What the agent said went wrong (#800): plain text, revealed and cut short by AuthState,
+        // never a link, and only here, never on its row.
+        // The host's sentence for what is wrong (6649775484), as it is: never the agent's own text.
+        if (AuthState.Of(session)?.Message is { } said) { rows.Add(new("Message", said)); }
+        // Not responding: the time it went silent, which the row's age counts from (ui.md §6.13).
+        if (AuthState.Clock(SilentSince) is { } silent) { rows.Add(new("Not responding since", silent)); }
         if (View != "idle") { rows.Add(new("For", Words.Duration(session.StatusSince, now))); }
         rows.Add(new("Updated", Words.Ago(session.UpdatedAt, now)));
         rows.Add(new("ID", session.Id, Mono: true));

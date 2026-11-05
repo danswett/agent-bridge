@@ -26,4 +26,9 @@
     <Compile Include="..\AgentBridge.Protocol.Tests\VectorFiles.cs" Link="VectorFiles.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Copilot CLI screens built from captured screens and its rendering code (#825). -->
+    <None Include="..\fixtures\screens\*" Link="fixtures\screens\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

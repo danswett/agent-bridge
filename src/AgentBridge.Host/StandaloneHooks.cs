@@ -239,8 +239,11 @@ public sealed class StandaloneHooks(
             var backup = Path.Combine(HookFolder, "backups", "claude-settings.json");
             if (!File.Exists(backup)) { DurableFile.Replace(backup, File.ReadAllBytes(path), null); }
         }
-        // Save ownership first: an interrupted install can be safely retried or removed.
-        DurableFile.Replace(owner, Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile }), ownerBefore);
+        // Save ownership first: an interrupted install can be safely retried or removed. The
+        // record is rewritten without setupCompleted, so an earlier completed setup cannot
+        // outlive a repair that fails below; readiness reports this record as incomplete.
+        var incomplete = Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile });
+        DurableFile.Replace(owner, incomplete, ownerBefore);
         RefreshFiles(profile, hookSource);
         instructions.Apply(InstructionBackup(agent));
         if (root is not null) { DurableFile.Replace(path, Bytes(root), before); }
@@ -260,6 +263,10 @@ public sealed class StandaloneHooks(
             savedState = savedState with { Homes = saved with { ClaudeConfigDirExplicit = explicitConfigDir } };
         }
         savedState.Save(profile);
+        // Only now, after registrations, the Codex plugin and intake are all written, does the
+        // record say setup completed. That is setup evidence, not proof that hooks run.
+        DurableFile.Replace(owner, Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile, ["setupCompleted"] = true }),
+            MigrationRecord.Hash(incomplete));
         output.WriteLine($"Registered. Restart the host from the {Product.App}, then start new agent sessions to load the hooks.");
         if (agent == "codex") { output.WriteLine("Start Codex at this machine and approve its hook trust prompt once; until then Codex silently skips its hooks."); }
     }
@@ -291,6 +298,13 @@ public sealed class StandaloneHooks(
         Preflight(agent, removing: true);
         output.WriteLine($"{(dryRun ? "Would remove" : "Removing")} only {agent} hooks owned by {profile}.");
         if (dryRun) { return; }
+        // Clear completion before the first cleanup step: a removal that fails or is cancelled
+        // part way (plugin removed but not its marketplace, instructions left behind) must read
+        // as incomplete and keep ownership for Repair, not as a completed setup. Preflight just
+        // verified, under the lock, that this record is this profile's own.
+        var owner = Path.Combine(Home(agent), OwnerFile);
+        var incomplete = Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile });
+        DurableFile.Replace(owner, incomplete, MigrationRecord.Hash(owner));
         if (agent == "codex")
         {
             if (present)
@@ -305,10 +319,10 @@ public sealed class StandaloneHooks(
             else { DurableFile.Replace(path, original ?? Bytes(root), before); }
         }
         instructions.Apply(InstructionBackup(agent));
-        var owner = Path.Combine(Home(agent), OwnerFile);
-        // A dedicated Copilot file with somebody else's additions must remain attributable,
-        // otherwise reinstall would have to claim an unowned file or permanently refuse it.
-        if (agent != "copilot" || !File.Exists(path)) { DurableFile.Remove(owner, MigrationRecord.Hash(owner)); }
+        // Ownership goes only after every cleanup step succeeded. A dedicated Copilot file with
+        // somebody else's additions must remain attributable, otherwise reinstall would have to
+        // claim an unowned file or permanently refuse it; its record stays without completion.
+        if (agent != "copilot" || !File.Exists(path)) { DurableFile.Remove(owner, MigrationRecord.Hash(incomplete)); }
         // Keep the private runtime and binary: sessions already open retain their commands.
         output.WriteLine("Removed. Existing sessions keep their hooks until they end; other settings and Codex hook trust were left alone.");
     }

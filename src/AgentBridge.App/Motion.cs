@@ -130,6 +130,29 @@ public static class Motion
     static CubicBezierEasingFunction Ease(Compositor c, MotionEase e) =>
         c.CreateCubicBezierEasingFunction(new Vector2((float)e.X1, (float)e.Y1), new Vector2((float)e.X2, (float)e.Y2));
 
+    // A disclosure's chevron turning about its centre (§5.3, Disclosure): to point down open and
+    // back shut, with the entry's timing opening and its exit's closing; at once with animations
+    // off, or when `instant` (a first draw, another session).
+    public static void Turn(FrameworkElement chevron, string entry, bool open, bool instant = false)
+    {
+        var visual = ElementCompositionPreview.GetElementVisual(chevron);
+        visual.CenterPoint = new Vector3((float)chevron.Width / 2, (float)chevron.Height / 2, 0);
+        var to = open ? 90f : 0f;
+        var step = instant ? MotionStep.None : open ? Catalogue.Enter(entry, Enabled) : Catalogue.Exit(entry, Enabled);
+        visual.StopAnimation("RotationAngleInDegrees");
+        // Set where it ends, and turned from where it was set last: a visual's getter reads what was
+        // set, never an animation's value, so this keeps the angle it points at readable.
+        var from = visual.RotationAngleInDegrees;
+        visual.RotationAngleInDegrees = to;
+        if (!step.Runs || from == to) { return; }
+        var c = visual.Compositor;
+        var turn = c.CreateScalarKeyFrameAnimation();
+        turn.InsertKeyFrame(0, from);
+        turn.InsertKeyFrame(1, to, Ease(c, step.Ease));
+        turn.Duration = step.Duration;
+        visual.StartAnimation("RotationAngleInDegrees", turn);
+    }
+
     // The trailing side, as a direction: right, or left in a right-to-left layout.
     public static Vector2 Trailing(FrameworkElement element) => new(element.FlowDirection == FlowDirection.RightToLeft ? -1 : 1, 0);
 

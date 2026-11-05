@@ -409,7 +409,10 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
 
         var second = await LaunchAsync(ch, new { workspace = "API" });
         Assert.Equal(("busy", "Busy: Copilot in App is waiting for a person to answer whether to trust that folder, so nothing was launched. Try again in a couple of minutes."), Pair(second));
-        Assert.Contains("waiting for a person", (await RequestAsync(ch, LaunchProtocol.Options, new { })).GetProperty("busy").GetString());
+        // Listed as what the machine is waiting on, not as a launch turned away: the first one
+        // did start, and its person may be the one reading it (#122).
+        Assert.Equal("Copilot in App is asking whether to trust its folder. New launches wait until it's answered.",
+            (await RequestAsync(ch, LaunchProtocol.Options, new { })).GetProperty("busy").GetString());
         Assert.Single(starter.Specs);
         // Read, never typed into.
         Assert.Empty(screens.Typed);
@@ -882,7 +885,7 @@ public abstract partial class LaunchFlowFixture
             var rows = Rows ?? [];
             foreach (var expect in plan.Sends.SelectMany(s => s.Expect ?? []))
             {
-                if (expect.Row >= rows.Count || rows[expect.Row].TrimEnd() != expect.Text.TrimEnd()) { return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, "fail screen 0")); }
+                if (expect.Row >= rows.Count || rows[expect.Row].TrimEnd(' ') != expect.Text.TrimEnd(' ')) { return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, "fail screen 0")); }
             }
             OnTyped?.Invoke(plan);
             return Task.FromResult(Then ?? new InjectionResult(InjectionStatus.Typed, "ok"));
@@ -898,7 +901,7 @@ public abstract partial class LaunchFlowFixture
             // The window as it is when the read begins, returned once the read is done.
             var rows = Rows ?? [];
             if (Reading is { } reading) { await reading(); }
-            return new ConsoleScreen(rows, null);
+            return new ConsoleScreen([.. rows.Select(Worker.Read)], null);
         }
 
         // Awaited while a read is on its way: where a test holds one.
