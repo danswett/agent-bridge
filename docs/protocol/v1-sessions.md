@@ -1340,7 +1340,7 @@ the text it would type, line breaks flattened. A field whose constraints a host 
 exactly (a bound JavaScript would hold as another number, a length that is not a whole number,
 a pattern it cannot read as JavaScript does, or patterns past the 250 ms one question's patterns
 share), or whose pre-filled default breaks them, makes its question `answerAtMachine`, as does a
-`choice` whose schema has text constraints. A client checking a `pattern` reads it as JavaScript
+`choice` whose schema, or a `multi` whose `items`, has text constraints. A client checking a `pattern` reads it as JavaScript
 does, without flags: `\d` and `\w` are ASCII.
 
 ### Option

@@ -49,14 +49,17 @@ public static class CopilotFieldConstraints
                     Format = Format(p, ref problem),
                 };
                 break;
+            // Likewise a checkbox list whose items carry text limits: its options are not checked
+            // against them (review of #844).
+            case CopilotFieldSchema.Input.Multi when p.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Object && TextLimited(items):
+                return (null, "is a list of choices with text limits the host does not check");
             case CopilotFieldSchema.Input.Multi:
                 c = new FieldConstraints { MinItems = Count(p, "minItems", ref problem), MaxItems = Count(p, "maxItems", ref problem) };
                 break;
             // A string list (`enum` or `oneOf`) with text constraints: its options, and the words
             // its Other takes, are not checked against them here, so it is answered at the machine
             // rather than let "toolong" through a maxLength of 2 (review of #844).
-            case CopilotFieldSchema.Input.Choice when Has(p, "minLength", out _) || Has(p, "maxLength", out _) || Has(p, "pattern", out _)
-                || (Has(p, "format", out var f) && f.ValueKind == JsonValueKind.String && FieldConstraints.Formats.Contains(f.GetString())):
+            case CopilotFieldSchema.Input.Choice when TextLimited(p):
                 return (null, "is a list of choices with text limits the host does not check");
             default:
                 return (null, null);
@@ -70,6 +73,10 @@ public static class CopilotFieldConstraints
             var broken => (null, $"has a default outside its own limits ({broken})"),
         };
     }
+
+    static bool TextLimited(JsonElement o) =>
+        Has(o, "minLength", out _) || Has(o, "maxLength", out _) || Has(o, "pattern", out _)
+        || (Has(o, "format", out var f) && f.ValueKind == JsonValueKind.String && FieldConstraints.Formats.Contains(f.GetString()));
 
     const string Uncheckable = "has limits the host cannot check exactly";
 

@@ -258,6 +258,10 @@ public class CopilotPlannerTests
         Assert.Equal("\"t\": does not match the form the question asks for", Outside(Schema("t", """{ "type": "string", "pattern": "^[\\w.]+$" }"""), Answer(new { t = "a\u0130" })));
         Assert.Equal("\"t\": does not match the form the question asks for", Outside(Schema("t", """{ "type": "string", "pattern": "^\\d+$" }"""), Answer(new { t = "\u0661" })));
         Assert.Equal([("a_1", true)], Keys(Plan(Schema("t", """{ "type": "string", "pattern": "^\\w+$" }"""), Answer(new { t = "a_1" }))));
+        // A hyphen first or last in a class is itself in both engines, so the class stays checkable.
+        Assert.Equal([("a-1", true)], Keys(Plan(Schema("t", """{ "type": "string", "pattern": "^[\\w-]+$" }"""), Answer(new { t = "a-1" }))));
+        Assert.Equal([("-b", true)], Keys(Plan(Schema("t", """{ "type": "string", "pattern": "^[-\\w]+$" }"""), Answer(new { t = "-b" }))));
+        Assert.Equal("\"t\": does not match the form the question asks for", Outside(Schema("t", """{ "type": "string", "pattern": "^[\\w-]+$" }"""), Answer(new { t = "a\u0130" })));
     }
     [Fact]
     public void Text_is_checked_as_it_would_be_typed_with_its_line_breaks_flattened()
@@ -300,7 +304,9 @@ public class CopilotPlannerTests
     [InlineData("""{ "type": "string", "pattern": "^[\\s-\\uFFFF]+$" }""")]
     [InlineData("""{ "type": "string", "pattern": "\\bword\\b" }""")]
     // A list of choices with text limits, which its options and Other are not checked against.
-    [InlineData("""{ "type": "string", "enum": ["ok", "toolong"], "maxLength": 2 }""")]    // A default outside the field's own constraints, which is the only answer it can be given.
+    [InlineData("""{ "type": "string", "enum": ["ok", "toolong"], "maxLength": 2 }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["ok", "toolong"], "maxLength": 2 } }""")]
+    // A default outside the field's own constraints, which is the only answer it can be given.
     [InlineData("""{ "type": "integer", "minimum": 5, "default": 3 }""")]
     [InlineData("""{ "type": "string", "maxLength": 2, "default": "none" }""")]
     public void A_field_whose_constraints_cannot_be_checked_exactly_or_whose_default_breaks_them_is_answered_at_the_machine(string property)

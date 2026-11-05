@@ -131,6 +131,8 @@ public sealed partial record FieldConstraints
         if (pattern.Length > MaxPatternLength) { return null; }
         var b = new StringBuilder(pattern.Length + 16);
         var inClass = false;
+        // Where the open class's members start, after its [ and any ^.
+        var classStart = -1;
         for (var i = 0; i < pattern.Length; i++)
         {
             var c = pattern[i];
@@ -139,9 +141,11 @@ public sealed partial record FieldConstraints
                 if (i + 1 >= pattern.Length) { return null; }
                 var e = pattern[++i];
                 // A class escape beside a hyphen in a class: JavaScript reads the hyphen as itself,
-                // and the escape written out as a set would make it a range (review of #844).
+                // and the escape written out as a set would make it a range (review of #844). A
+                // hyphen first or last in the class is itself in both, written out or not.
                 if (inClass && e is 's' or 'S' or 'd' or 'D' or 'w' or 'W'
-                    && ((i >= 2 && pattern[i - 2] == '-') || (i + 1 < pattern.Length && pattern[i + 1] == '-'))) { return null; }
+                    && ((i >= 2 && pattern[i - 2] == '-' && i - 2 != classStart)
+                        || (i + 1 < pattern.Length && pattern[i + 1] == '-' && !(i + 2 < pattern.Length && pattern[i + 2] == ']')))) { return null; }
                 switch (e)
                 {
                     case 's': b.Append(inClass ? JsSpace : $"[{JsSpace}]"); continue;
@@ -189,6 +193,7 @@ public sealed partial record FieldConstraints
                     inClass = true;
                     b.Append(c);
                     if (i + 1 < pattern.Length && pattern[i + 1] == '^') { b.Append('^'); i++; }
+                    classStart = i + 1;
                     break;
                 case '(' when i + 1 < pattern.Length && pattern[i + 1] == '?':
                     if (i + 2 >= pattern.Length || pattern[i + 2] is not (':' or '=' or '!')) { return null; }
