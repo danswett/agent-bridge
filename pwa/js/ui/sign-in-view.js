@@ -24,7 +24,7 @@ const keyOf = (hostId, agent, account) => `${hostId}\n${agent}\n${account ?? ''}
 
 // What the banners show, from every machine shown. Pure, so each case is tested on its own.
 // links: [{ hostId, name, rollUp: hello.machine.signIn, sessions: [session], canSignIn }]
-// flows: Map key -> this device's flow ({ state, attempt, flow, code, outcome, reason, atMachine })
+// flows: Map key -> this device's flow ({ state, attempt, flow, code, outcome, reason })
 // resolved: Map key -> { kind: 'signedIn' | 'recovered', count, at, agent, account, hostId, name }
 // A banner is needed while any of its sessions needs sign-in; confirming once every one is signed
 // in and waiting for the session to confirm (recovery pending); and resolved only once the host has
@@ -73,8 +73,6 @@ export function signInBanners(links, { flows = new Map(), resolved = new Map(), 
       const flow = flows.get(g.key) ?? null;
       const code = flow?.code && !flow.code.refused && flowExpired(flow.code, now) ? null : flow?.code ?? null;
       const expired = !!flow?.code && !flow.code.refused && !code;
-      // A machine-only result with no reason is still one: its presence says so, not its text.
-      const told = flow?.atMachine !== undefined && flow?.atMachine !== null;
       const waiting = !g.needed.length && g.confirming.length > 0 && !['starting', 'pending'].includes(flow?.state);
       const shown = g.needed.length ? g.needed : g.confirming;
       out.push({
@@ -88,12 +86,11 @@ export function signInBanners(links, { flows = new Map(), resolved = new Map(), 
         sessions: shown.map((s) => ({ id: s.id, title: s.title || 'Untitled session' })),
         // Only a provider the host says has no device flow is signed in at the machine. A value this
         // client doesn't know, or none, is not that (the no-RDP rule, #696).
-        atMachine: g.signIn === 'machine' || told,
-        atMachineReason: told ? flow.atMachine || null : null,
+        atMachine: g.signIn === 'machine',
         recovery: g.recovery,
         // Sign in only where the host says a person's device can (signIn phone): an unknown value or
         // none makes no claim, so no button either (6648000166).
-        canSignIn: !waiting && canSignIn && g.signIn === 'phone' && !told,
+        canSignIn: !waiting && canSignIn && g.signIn === 'phone',
         flow: flow ? { ...flow, code: expired ? null : code, expired: expired || flow.outcome === 'expired' } : null,
       });
     }
@@ -121,7 +118,7 @@ export function bannerWords(b) {
   }
   const f = b.flow;
   let line = `${plural(b.sessions.length, 'session', 'sessions')} affected`;
-  if (b.atMachine) { line = b.atMachineReason ? `Sign in at the machine \u00b7 ${b.atMachineReason}` : 'Sign in at the machine'; }
+  if (b.atMachine) { line = 'Sign in at the machine'; }
   else if (f?.outcome === 'failed') { line = f.reason ? `Sign-in failed \u00b7 ${f.reason}` : 'Sign-in failed'; }
   else if (f?.outcome === 'refused') { line = f.reason ? `Sign-in refused \u00b7 ${f.reason}` : 'Sign-in refused'; }
   else if (f?.expired) { line = 'Code expired'; }
@@ -300,13 +297,15 @@ export class SignInBanners {
     this.container.hidden = all.length === 0;
     this.#speak();
     this.#drawSheet(all.find((b) => b.key === this.#sheet?.key) ?? null);
-    // Back to the control that opened the sheet, or its banner when that has gone (§9.1 A4): after
-    // drawing, as the button is not there while its flow runs. With both gone (the machine away),
-    // the Sessions heading (§6.13), never nowhere.
+    // Back to the control that opened the sheet, or, when that has gone, its banner's status line
+    // ("Signed in · waiting for…" once a person signed in, as in the app), else the banner (§9.1 A4):
+    // after drawing, as the button is not there while its flow runs. With all gone (the machine
+    // away), the Sessions heading (§6.13), never nowhere.
     const back = this.#focusBack;
     this.#focusBack = null;
     if (back) {
-      const target = back.opener?.isConnected ? back.opener : this.#views.get(back.key)?.el;
+      const view = this.#views.get(back.key);
+      const target = back.opener?.isConnected ? back.opener : view && !view.els.line.hidden ? view.els.line : view?.el;
       target?.focus({ preventScroll: true });
       if (!target || this.container.ownerDocument?.activeElement !== target) {
         const heading = this.fallback();
@@ -351,7 +350,8 @@ export class SignInBanners {
     const view = { key: b.key, state: viewState(b), entry: b, els: {} };
     const els = view.els;
     els.head = h('p', { class: 'sign-in-head' });
-    els.line = h('p', { class: 'sign-in-line' });
+    // Focusable from script only (never a Tab stop): where focus goes once the button has gone.
+    els.line = h('p', { class: 'sign-in-line', tabindex: '-1' });
     els.sessions = h('ul', { class: 'sign-in-sessions' });
     // Not a live region: it is in the list pane, which a phone hides, and drawn on every render. A
     // failed start is said politely through the sign-in live region instead (#start).
@@ -725,6 +725,8 @@ export class SignInBanners {
   // With the account: nothing of its machines stays on the page.
   stop() {
     clearInterval(this.ticker);
+    this.#toSay = [];
+    this.live?.replaceChildren();
     for (const u of this.unwatch) { u?.(); }
     this.unwatch = [];
     this.#views.clear();

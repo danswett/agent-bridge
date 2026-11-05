@@ -585,15 +585,24 @@ test('no code outlives a cancel, its expiry or its machine going away, and a mac
   await expect(page.locator('#sign-in-said')).not.toContainText('recovered');
 });
 
+test('signed out, nothing said about the account\'s machines stays in the live region (#878)', async ({ page }) => {
+  await openDemo(page);
+  await expect(page.locator('#sign-in-said .sign-in-said-line')).toHaveText(['Copilot on DEV-VM1 needs sign-in']);
+  await page.evaluate(() => window.agentBridgeDemo.page.signIns.stop());
+  await expect(page.locator('#sign-in-said')).toBeEmpty();
+});
+
 test('once the person signs in, the sessions wait to confirm, never recovered until the host clears them', async ({ page }) => {
   await openDemo(page);
   await signIn(page).click();
   await expect(sheet(page).locator('.sign-in-code')).toBeVisible();
   await page.evaluate(() => window.agentBridgeDemo.finishSignIn('signedIn'));
 
-  // signin.done alone: the sheet closes, and the host's recovery pending says the rest.
+  // signin.done alone: the sheet closes, and the host's recovery pending says the rest. Focus goes
+  // to that line, as in the app, Sign in having gone with the sheet (#878).
   await expect(sheet(page)).toBeHidden();
   await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
+  await expect(banner(page).locator('.sign-in-line')).toBeFocused();
   await expect(page.locator('#sign-in-said .sign-in-said-line').last()).toHaveText('Copilot on DEV-VM1: Signed in \u00b7 waiting for 4 sessions to confirm');
   await expect(banner(page).locator('.sign-in-start')).toHaveCount(0);
   for (const id of SESSIONS) { await expect(row(page, id).locator('.row-status')).toHaveText('Signed in \u00b7 waiting for the session to confirm'); }
@@ -744,10 +753,14 @@ test('the banner\'s and the sheet\'s names are the words shown, and a tap draws 
   await context.close();
 });
 
-// The captures owed before sessions.signin is turned on (#800, Creative 6655285995), the app's
-// beside them in its self-test: the banner and the sheet in Dark and in forced colours, and every
-// state they can be in (no claim, the code shown, Failed, an expired code, confirming). Each is
-// checked to be what it says before it is taken, and attached to the test's results.
+// The captures owed before sessions.signin is turned on (#800, Creative 6655285995, and #895
+// 6660406957), the app's beside them in its self-test: every state of the banner and the sheet, in
+// Light, Dark and forced colours. They are the banner as it first comes, a Needs sign-in row, a
+// signIn this client doesn't know (no claim, nothing to press), a sign-in under way from another
+// device (Show code, the sheet closed), the sheet with its code and the banner behind it, Failed,
+// an expired code, and signed in waiting for the sessions to confirm. Each is checked to be what it
+// says before it is taken, and attached to the test's results. In Chromium: WebKit draws a
+// screenshot with a style the CSP refuses, and the states are proven in every browser above.
 async function capture(locator, name, testInfo) {
   const path = testInfo.outputPath(name);
   await locator.screenshot({ path });
@@ -765,65 +778,77 @@ async function captureUnderSheet(page, name, testInfo) {
   expect(await page.evaluate(() => window.agentBridgeDemo.signInLog.filter((l) => l.op === 'signin.cancel'))).toEqual([]);
 }
 
-for (const look of [{ name: 'dark', media: { colorScheme: 'dark' } }, { name: 'forced-colors', media: { colorScheme: 'light', forcedColors: 'active' } }]) {
-  test(`captures the banner and the sheet in ${look.name} (#800)`, async ({ page, browserName }, testInfo) => {
+async function setAttention(page, change) {
+  await page.evaluate(({ ids, change }) => {
+    const d = window.agentBridgeDemo;
+    for (const id of ids) {
+      const s = d.host.get(id);
+      const attention = { ...s.attention, ...change };
+      for (const [k, v] of Object.entries(change)) { if (v === null) { delete attention[k]; } }
+      d.upsert({ ...s, attention });
+    }
+  }, { ids: SESSIONS, change });
+}
+
+for (const look of [
+  { name: 'light', suffix: '', media: { colorScheme: 'light' } },
+  { name: 'dark', suffix: '.dark', media: { colorScheme: 'dark' } },
+  { name: 'forced colours', suffix: '.forced-colors', media: { colorScheme: 'light', forcedColors: 'active' } },
+]) {
+  test(`captures every state of the banner and the sheet, and a Needs sign-in row, in ${look.name} (#800)`, async ({ page, browserName }, testInfo) => {
     test.skip(browserName !== 'chromium', 'captured in Chromium: WebKit draws a screenshot with a style the CSP refuses');
+    const name = (what) => `signin-${what}${look.suffix}.png`;
     await page.emulateMedia(look.media);
     await openDemo(page);
     await expect(signIn(page)).toBeVisible();
-    await capture(banner(page), `signin-banner.${look.name}.png`, testInfo);
+    await capture(banner(page), name('banner'), testInfo);
+    await expect(row(page, 'signin-1').locator('.row-status')).toHaveText('Needs sign-in');
+    await capture(row(page, 'signin-1'), name('row'), testInfo);
+
+    // A way to sign in this client doesn't know: no claim, so nothing to press, never "at the machine".
+    await setAttention(page, { signIn: 'rdp' });
+    await expect(banner(page).locator('.sign-in-start')).toHaveCount(0);
+    await expect(banner(page).locator('.sign-in-line')).toHaveText('4 sessions affected');
+    await expect(banner(page)).not.toContainText('at the machine');
+    await capture(banner(page), name('no-claim'), testInfo);
+    await setAttention(page, { signIn: 'phone' });
+
+    // A sign-in another device runs: Show code, the sheet closed here.
+    await setAttention(page, { recovery: 'signingIn' });
+    await expect(banner(page).getByRole('button', { name: 'Show code for Copilot on DEV-VM1' })).toBeVisible();
+    await expect(banner(page).locator('.sign-in-line')).toHaveText('Waiting for sign-in');
+    await expect(sheet(page)).toBeHidden();
+    await capture(banner(page), name('show-code'), testInfo);
+    await setAttention(page, { recovery: null });
+
     await signIn(page).click();
     await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
-    await expect(banner(page).locator('.sign-in-line')).toHaveText(/^Waiting for sign-in/);
-    await capture(sheet(page), `signin-sheet.${look.name}.png`, testInfo);
-    await captureUnderSheet(page, `signin-code-shown.${look.name}.png`, testInfo);
+    await expect(banner(page).locator('.sign-in-line')).toHaveText(/^Waiting for sign-in · code expires/);
+    await capture(sheet(page), name('sheet'), testInfo);
+    await captureUnderSheet(page, name('code-shown'), testInfo);
+
+    // The demo's done carries no reason, as the protocol's signin.done has none (#834, #841).
+    await page.evaluate(() => window.agentBridgeDemo.finishSignIn('failed'));
+    await expect(sheet(page)).toBeHidden();
+    await expect(banner(page).locator('.sign-in-line')).toHaveText('Sign-in failed');
+    const again = banner(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' });
+    await expect(again).toBeVisible();
+    await capture(banner(page), name('failed'), testInfo);
+
+    await page.evaluate(() => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 1500).toISOString() }; });
+    await again.click();
+    await expect(sheet(page).locator('.sign-in-expired')).toHaveText('Code expired', { timeout: 8000 });
+    await expect(sheet(page)).not.toContainText('WDJB');
+    await capture(sheet(page), name('expired'), testInfo);
+    await page.keyboard.press('Escape');
+    await expect(sheet(page)).toBeHidden();
+
+    // Cancelled, the expired attempt is gone: Sign in again.
+    await page.evaluate(() => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() }; });
+    await signIn(page).click();
+    await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
+    await page.evaluate(() => window.agentBridgeDemo.finishSignIn('signedIn'));
+    await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
+    await capture(banner(page), name('confirming'), testInfo);
   });
 }
-
-test('captures every state of the banner and the sheet: no claim, the code shown, Failed, an expired code and confirming (#800)', async ({ page, browserName }, testInfo) => {
-  test.skip(browserName !== 'chromium', 'captured in Chromium: WebKit draws a screenshot with a style the CSP refuses');
-  await openDemo(page);
-  await expect(signIn(page)).toBeVisible();
-
-  // A way to sign in this client doesn't know: no claim, so nothing to press, never "at the machine".
-  await page.evaluate((ids) => {
-    const d = window.agentBridgeDemo;
-    for (const id of ids) { const s = d.host.get(id); d.upsert({ ...s, attention: { ...s.attention, signIn: 'rdp' } }); }
-  }, SESSIONS);
-  await expect(banner(page).locator('.sign-in-start')).toHaveCount(0);
-  await expect(banner(page)).not.toContainText('at the machine');
-  await capture(banner(page), 'signin-no-claim.png', testInfo);
-  await page.evaluate((ids) => {
-    const d = window.agentBridgeDemo;
-    for (const id of ids) { const s = d.host.get(id); d.upsert({ ...s, attention: { ...s.attention, signIn: 'phone' } }); }
-  }, SESSIONS);
-
-  await signIn(page).click();
-  await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
-  await expect(banner(page).locator('.sign-in-line')).toHaveText(/^Waiting for sign-in/);
-  await capture(sheet(page), 'signin-sheet.png', testInfo);
-  await captureUnderSheet(page, 'signin-code-shown.png', testInfo);
-
-  await page.evaluate(() => window.agentBridgeDemo.finishSignIn('failed'));
-  await expect(sheet(page)).toBeHidden();
-  await expect(banner(page).locator('.sign-in-line')).toHaveText('Sign-in failed');
-  const again = banner(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' });
-  await expect(again).toBeVisible();
-  await capture(banner(page), 'signin-failed.png', testInfo);
-
-  await page.evaluate(() => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 1500).toISOString() }; });
-  await again.click();
-  await expect(sheet(page).locator('.sign-in-expired')).toHaveText('Code expired', { timeout: 8000 });
-  await expect(sheet(page)).not.toContainText('WDJB');
-  await capture(sheet(page), 'signin-expired.png', testInfo);
-  await page.keyboard.press('Escape');
-  await expect(sheet(page)).toBeHidden();
-
-  await page.evaluate(() => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() }; });
-  // Cancelled, the expired attempt is gone: Sign in again.
-  await signIn(page).click();
-  await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
-  await page.evaluate(() => window.agentBridgeDemo.finishSignIn('signedIn'));
-  await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
-  await capture(banner(page), 'signin-confirming.png', testInfo);
-});

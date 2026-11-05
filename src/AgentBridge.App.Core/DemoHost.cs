@@ -476,6 +476,24 @@ public sealed partial class DemoHost : IAsyncDisposable
     // The next turn failed sign-in again: back to needing it, with a new since.
     public Task FailSignInAgainAsync() => MarkSignInAsync("failed", again: true);
 
+    // A sign-in under way from another device (recovery signingIn): the banner offers Show code. Off,
+    // the sessions just need sign-in again.
+    public async Task SignInUnderWayAsync(bool on)
+    {
+        if (on) { await MarkSignInAsync("signingIn"); return; }
+        foreach (var id in SignInSessions)
+        {
+            Session? s;
+            lock (gate)
+            {
+                if (!attention.TryGetValue(id, out var a)) { continue; }
+                a.Remove("recovery");
+                s = sessions.GetValueOrDefault(id);
+            }
+            if (s is not null) { await Change(s with { UpdatedAt = DateTimeOffset.UtcNow }); }
+        }
+    }
+
     async Task MarkSignInAsync(string recovery, bool again = false)
     {
         var now = DateTimeOffset.UtcNow;

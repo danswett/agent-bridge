@@ -47,7 +47,9 @@ public sealed class ToastPlanner
         // turn, not the one that toast is for (#878).
         public bool RanSinceFinished;
         // The turn the finished toast up is for, by count alone: a failure can replace the response
-        // in the same turn (the parser's "Turn error" notice), so its text is no way to know it.
+        // in the same turn (the parser's "Turn error" notice), so its text is no way to know it. A
+        // count above it is a later turn; one below is the same turn while the session isn't idle
+        // (the host counts an unfinished turn one short, SessionTracker's TurnCount).
         public int? FinishedTurn;
         public (ToastKind Kind, DateTimeOffset At, string? Question)? Due;
         // While a delegate's question is pending (NoteWait).
@@ -121,7 +123,7 @@ public sealed class ToastPlanner
 
     // One due is dropped, and one up is withdrawn, when the attention comes after the turn ended.
     // Only the toast for this same turn: one for an earlier turn that really finished (the main
-    // agent ran since, or the turn count moved on) stays (#878).
+    // agent ran since, or the turn count moved past it) stays (#878).
     void Unfinish(Tracked t, Session s)
     {
         // Working, not just any status but idle: a delegate's question makes the session waiting while
@@ -129,7 +131,7 @@ public sealed class ToastPlanner
         if (s.Status == SessionStatus.Working) { t.RanSinceFinished = true; }
         if (!Stopped(s)) { return; }
         if (t.Due is { Kind: ToastKind.Finished }) { t.Due = null; }
-        if (t.Shown is null && !t.RanSinceFinished && t.FinishedTurn == s.Activity.TurnCount && finished.Remove(s.Id)) { sink.Withdraw(TagOf(s.Id)); }
+        if (t.Shown is null && !t.RanSinceFinished && !(s.Activity.TurnCount > t.FinishedTurn) && finished.Remove(s.Id)) { sink.Withdraw(TagOf(s.Id)); }
     }
 
     public void Upsert(Session s)

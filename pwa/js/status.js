@@ -142,8 +142,6 @@ function foregroundTask(s) {
   return list.find((a) => a.kind === 'task' && RUNNING.has(a.status) && a.name && foreground(a)) ?? null;
 }
 
-// The glyph's accessible name (ui.md §9): "Plan Migration to Windows App, delegating to 3
-// agents, DEV-VM1", with the driver said in words, since the badge is only a shape.
 // Since when a Not responding session (rule 12) has been silent: when the host last heard from the
 // agent (attention.lastEventAt), else since it said so (attention.since); null for any other row
 // (#878, ui.md §6.13).
@@ -158,6 +156,8 @@ export function rowAt(s) {
   return silentSince(s) ?? s.updatedAt;
 }
 
+// The glyph's accessible name (ui.md §9): "Plan Migration to Windows App, delegating to 3
+// agents, DEV-VM1", with the driver said in words, since the badge is only a shape.
 export function statusLabel(status, { title, machine = null } = {}) {
   return [title || 'Untitled session', status.spoken, status.driven ? 'driven by an agent' : null, machine].filter(Boolean).join(', ');
 }

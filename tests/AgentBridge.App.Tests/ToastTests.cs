@@ -318,6 +318,39 @@ public sealed class ToastTests
         Assert.Equal([ToastPlanner.Tag("s1", null)], sink.Withdrawn);
     }
 
+    // #878: a later turn known only by its count (no working seen) that arrives already stopped is
+    // not the toasted turn: its finished toast stays.
+    [Fact]
+    public void A_later_turn_that_arrives_already_stopped_leaves_the_earlier_turns_finished_toast_up()
+    {
+        var p = Planner();
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s1", response: "Done.", turns: 2));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        p.Upsert(AuthState.Attach(Make.Session("s1", response: "Done.", turns: 3), JsonSerializer.SerializeToElement(new { attention = new { kind = "signInNeeded", agent = "copilot" } })));
+        Assert.Empty(sink.Withdrawn);
+    }
+
+    // #878: the toasted turn's failure keeping a delegate's question pending: the host counts the
+    // turn one short while the session waits, yet it is the same turn, and its toast is withdrawn.
+    [Fact]
+    public void A_failure_that_keeps_a_delegates_question_pending_still_withdraws_that_turns_finished_toast()
+    {
+        var p = Planner();
+        p.Upsert(Make.Session("s1", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s1", response: "Done.", turns: 2));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        var waiting = Make.Session("s1", status: SessionStatus.Waiting, question: Make.Choice() with { Agent = "agent-1" }, response: "Done.", turns: 1) with { WaitingOn = "agent-1" };
+        p.Upsert(AuthState.Attach(waiting, JsonSerializer.SerializeToElement(new { attention = new { kind = "error", errorClass = "auth" } })));
+        Assert.Equal([ToastPlanner.Tag("s1", null)], sink.Withdrawn);
+    }
+
     // #878: a delegate asking while the main agent stays idle is no new turn: the toasted turn's
     // failure, arriving after it, still withdraws that turn's finished toast.
     [Fact]
