@@ -75,10 +75,14 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     prompt can open over the form at any moment and Enter picks whatever it highlights
     (sec-510, Copilot 4478363609). The last checks before typing (step 5: agent-ha-bridge, the
     call still unanswered, no other prompt waiting, the process) are made again before each
-    write, and once more when the injector holds the typing slot (`KeyPlan.Proceed`); the
-    prompts waiting are kept up to date from what the transcript has gained since the last
-    check (`CopilotPermissionWatch`), not read from its start each time with that slot held.
-    A refused write stops everything after it.
+    write, and once more when the injector holds the typing slot (`KeyPlan.Proceed`), with
+    another ask opened since the first key (a delegate's, whose form can read the same) a
+    reason to stop too. The call and the prompts waiting are kept up to date from what the
+    transcript has gained since the call was validated (`CopilotCallWatch`,
+    `CopilotPermissionWatch`), not searched again with that slot held; a transcript that can
+    no longer be read, or is shorter than what was read, stops it. A check that fails stops
+    it as any other reason does: once keys have gone, the answer is typed and unconfirmed, and
+    read back later. A refused write stops everything after it.
   * The rows a field's keys or Enter are held to must show the form at that field
     (`CopilotFormScreen`, from 1.0.105's `MIo`, `Uxn`, `Da` and `Ft`), each part below the
     last: exactly one form heading, a "Copilot needs information." row right under the

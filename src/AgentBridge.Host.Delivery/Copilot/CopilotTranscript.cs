@@ -12,7 +12,8 @@ public sealed record CopilotCallState(
     CopilotAnswerRecord? Answer,
     bool SessionEnded,
     long ScannedTo,
-    bool Resumed = false);
+    bool Resumed = false,
+    bool Readable = true);
 
 // HumanContent is response.content of human_response.recorded; otherwise the call's
 // tool.execution_complete, with its result text or its failure. At is that record's own
@@ -43,7 +44,8 @@ public static class CopilotTranscript
         return state!;
     }
 
-    // Reads from a known line boundary (an earlier ScannedTo) for records of the call.
+    // Reads from a known line boundary (an earlier ScannedTo) for records of the call. Readable
+    // is false when the transcript could not be read.
     public static CopilotCallState Since(string path, string toolCallId, long from) => Scan(path, toolCallId, from, requireStart: false);
 
     static CopilotCallState Scan(string path, string toolCallId, long from, bool requireStart)
@@ -63,7 +65,7 @@ public static class CopilotTranscript
         // it so the next scan reads it whole.
         if (Jsonl.Lines(path, from, skipFirst: requireStart, Line) is not { } scannedTo)
         {
-            return new CopilotCallState(null, true, null, false, from);
+            return new CopilotCallState(null, true, null, false, from, Readable: false);
         }
         var answer = human is { } h ? new CopilotAnswerRecord(h, completed is not null, completed?.Succeeded ?? true, completed?.ResultText, humanAt) : completed;
         return new CopilotCallState(arguments, main, started ? answer : null, started && ended, scannedTo, started && ended && resumed);
@@ -132,4 +134,25 @@ public static class CopilotTranscript
 
     static string? Str(JsonElement e, string name) =>
         e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+}
+
+// One call's records as the transcript gains them: each Read takes in only the lines added since
+// the last, from a line boundary already read (the ScannedTo of the Find that validated the call),
+// and says what they hold of it, an answer or the session's end. The checks before each write of
+// an answer read so, with the typing slot every session shares held (#510 review, Copilot
+// 4479319394). A transcript that cannot be read, or is shorter than what was read (Copilot only
+// appends, so it was replaced or cut), is not Readable: nothing more is typed into it.
+public sealed class CopilotCallWatch(string path, string toolCallId, long from)
+{
+    // The bytes the last Read took in.
+    public long LastRead { get; private set; }
+
+    public CopilotCallState Read()
+    {
+        LastRead = 0;
+        if (Jsonl.Length(path) < from) { return new CopilotCallState(null, true, null, false, from, Readable: false); }
+        var state = CopilotTranscript.Since(path, toolCallId, from);
+        if (state.Readable) { (LastRead, from) = (state.ScannedTo - from, state.ScannedTo); }
+        return state;
+    }
 }

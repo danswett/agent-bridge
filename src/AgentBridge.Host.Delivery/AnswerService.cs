@@ -294,15 +294,37 @@ public sealed class AnswerService : ISessionAnswerer
         // up to date from what the transcript gains, not read again from its start each time
         // (Copilot 4478363669): these checks run with the typing slot every session shares held.
         var waiting = new CopilotPermissionWatch(transcript, "");
+        // The question's call, likewise: found and validated once, before the first key, then
+        // read only from where that read stopped, for an answer or the session's end (Copilot
+        // 4479319394; searched from the end before every write, it read up to the whole
+        // transcript, twice a write, with the slot held). A transcript that cannot be read, or
+        // is shorter than what was read (replaced, or cut), stops it.
+        CopilotCallWatch? asked = null;
+        // The asks waiting when the first key went, this question among them.
+        var asksAtStart = 0;
         string? StillAsked()
+        {
+            // A check that fails once keys have gone stops the answer there, as any other reason
+            // does: reported typed and unconfirmed, and read back later. Thrown on, it reached
+            // DeliverAsync's catch, which says nothing was typed (Copilot 4479319354).
+            try { return Asked(); }
+            catch (Exception e) { return $"the host could not check the session again ({e.Message})"; }
+        }
+        string? Asked()
         {
             if (probe.Active() is { } active) { return active; }
             if (source.Get(session.Id)?.Question?.Id != question.Id) { return "the session is no longer asking that question"; }
-            var now = CopilotTranscript.Find(transcript, question.Id);
-            if (now.Arguments is null || now.Answer is not null || now.SessionEnded) { return "the question was answered or closed while the answer was being typed"; }
+            if (asked is null) { return "the question was not found in the session's transcript"; }
+            var now = asked.Read();
+            if (!now.Readable) { return "the session's transcript could no longer be read, or was replaced or cut short"; }
+            if (now.Answer is not null || now.SessionEnded) { return "the question was answered or closed while the answer was being typed"; }
             var prompts = waiting.Read();
             if (!prompts.Readable) { return "the session's transcript could no longer be read"; }
             if (prompts.PendingPermissions > 0) { return "Copilot opened another prompt while the answer was being typed"; }
+            // An ask opened since the first key (a delegate's) can be drawn as a form reading the
+            // same as this one, and the session's listing keeps this one's id, so the screen
+            // checks would pass and the rest of the keys go to that call (Copilot 4479319296).
+            if (prompts.PendingAsks > asksAtStart) { return "Copilot asked another question while the answer was being typed"; }
             return Target(session, AgentKind.Copilot)?.Reason;
         }
 
@@ -325,11 +347,13 @@ public sealed class AnswerService : ISessionAnswerer
             if (call.Resumed && call.Answer is null) { return Stale("the session was resumed in a new Copilot CLI since it asked that question; answer at the machine"); }
             if (call.Answer is not null || call.SessionEnded) { return Stale("the question has already been answered"); }
             if (!call.IsMainAgent) { return Refused("the question was asked by a subagent; answer at the machine"); }
+            asked = new CopilotCallWatch(transcript, question.Id, call.ScannedTo);
             // Keys go to whichever prompt the CLI shows, and a permission dialog (a sub-agent's,
             // say) can be shown over this question, which is the one listed (#173). Read just
             // before typing, since the host's view may be a pass behind.
             var prompts = waiting.Read();
             if (!prompts.Readable) { return Refused("the session's transcript could not be read, so nothing is typed; answer at the machine"); }
+            asksAtStart = prompts.PendingAsks;
             if (prompts.PendingPermissions > 0)
             {
                 return Refused("Copilot has more than one prompt waiting, and the screen shows only one of them; answer at the machine");
@@ -710,12 +734,17 @@ public sealed class AnswerService : ISessionAnswerer
         {
             var state = CopilotTranscript.Since(transcript, toolCallId, from);
             if (state.Answer is not { } record) { return null; }
-            if (!record.Completed)
+            // A form is confirmed only by its structured answer, so a completion found first (its
+            // rendering alone) waits for it, as ConfirmAsync does, up to ConfirmTimeout from when
+            // a read first found the record. Taken at once, it settled as recorded, and the
+            // structured answer written just after never reached the client (Copilot 4479319436).
+            var structured = record.HumanContent is null && plan.Text is null;
+            if (!record.Completed || structured)
             {
                 var now = options.Time.GetUtcNow();
                 DateTimeOffset first;
                 lock (seen) { first = seen.Value ??= now; }
-                if (now - first < CompletionGrace)
+                if ((!record.Completed && now - first < CompletionGrace) || (structured && now - first < options.ConfirmTimeout))
                 {
                     await Task.Delay(options.PollInterval, options.Time);
                     continue;

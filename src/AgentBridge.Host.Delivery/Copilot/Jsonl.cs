@@ -19,11 +19,19 @@ internal static class Jsonl
     // Every complete line from `from`, with the offset it starts at; a line longer than any
     // event is skipped. A window starting inside a line (skipFirst) skips that partial line.
     // Returns the offset just after the last complete line, so a trailing line still being
-    // written is read whole next time; null when the file cannot be opened.
+    // written is read whole next time; null when the file cannot be opened or read.
     public static long? Lines(string path, long from, bool skipFirst, JsonlLine line)
     {
         using var stream = Open(path);
         if (stream is null) { return null; }
+        // A read that fails once the file is open is a file that cannot be read, as one that
+        // cannot be opened is, not an exception for the caller (#510 review, Copilot 4479319354).
+        try { return Read(stream, from, skipFirst, line); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    static long Read(FileStream stream, long from, bool skipFirst, JsonlLine line)
+    {
         stream.Seek(from, SeekOrigin.Begin);
         var skipping = skipFirst && from > 0;
         var buffer = new List<byte>(4096);

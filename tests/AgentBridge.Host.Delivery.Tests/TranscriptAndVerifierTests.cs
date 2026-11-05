@@ -47,6 +47,36 @@ public sealed class CopilotTranscriptTests : IDisposable
     }
 
     [Fact]
+    public void A_call_kept_up_to_date_is_read_from_what_the_transcript_gained_and_a_shorter_transcript_is_unreadable()
+    {
+        // Checked before every write of an answer, with the typing slot every session shares
+        // held: only the lines added since the call was validated (Copilot 4479319394).
+        Fixture.Append(events, [.. Enumerable.Range(0, 2000).Select(i => Copilot.ToolStart($"t{i}", "powershell", new { command = $"echo {i}" }, i))]);
+        Fixture.Append(events, Copilot.ToolStart("q1", "ask_user", new { message = "m", requestedSchema = Schema }, 2001));
+        var call = CopilotTranscript.Find(events, "q1");
+        var watch = new CopilotCallWatch(events, "q1", call.ScannedTo);
+
+        var none = watch.Read();
+        Assert.Equal((true, (CopilotAnswerRecord?)null, 0L), (none.Readable, none.Answer, watch.LastRead));
+
+        var before = new FileInfo(events).Length;
+        Fixture.Append(events, Copilot.ToolStart("c1", "powershell", new { command = "ls" }, 2002));
+        Assert.Null(watch.Read().Answer);
+        Assert.Equal(new FileInfo(events).Length - before, watch.LastRead);
+
+        before = new FileInfo(events).Length;
+        Fixture.Append(events, Recorded("q1", new { pick = "b" }, 2003));
+        Assert.Equal("b", watch.Read().Answer!.HumanContent!.Value.GetProperty("pick").GetString());
+        Assert.Equal(new FileInfo(events).Length - before, watch.LastRead);
+
+        // Replaced by something shorter, the question's start still in it: not the transcript read.
+        File.WriteAllText(events, "");
+        Fixture.Append(events, Copilot.ToolStart("q1", "ask_user", new { message = "m", requestedSchema = Schema }, 1));
+        Assert.False(watch.Read().Readable);
+        Assert.False(new CopilotCallWatch(events + ".missing", "q1", 0).Read().Readable);
+    }
+
+    [Fact]
     public void The_sessions_own_abort_ends_its_question_and_a_subagents_does_not()
     {
         Fixture.Append(events, Copilot.ToolStart("q1", "ask_user", new { message = "m" }, 1), Copilot.Event("abort", new { reason = "x" }, 2, agentId: "helper"));

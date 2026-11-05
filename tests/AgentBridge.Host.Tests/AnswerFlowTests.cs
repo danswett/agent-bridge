@@ -1212,6 +1212,85 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Empty(injector.Attempts);
     }
 
+    // ---- the checks between writes (Copilot review 5783440771) ----
+
+    [Fact]
+    public async Task A_delegates_question_asked_between_writes_stops_the_answer_though_its_form_reads_the_same()
+    {
+        // The delegate's form reads exactly as this one does, so the screen checks would pass;
+        // the session's listing keeps this question's id. Only the transcript tells them apart.
+        await AskFormAsync();
+        DrawsWords();
+        injector.OnInject = () =>
+        {
+            if (injector.Plans.Count == 1)
+            {
+                Fixture.Append(events, Copilot.ToolStart("q9", "ask_user", new
+                {
+                    message = "Approve the mark?",
+                    requestedSchema = new
+                    {
+                        properties = new { pick = new { type = "string", @enum = new[] { "a", "b", "c" } }, feedback = new { type = "string", title = "Feedback (optional)" } },
+                        required = new[] { "pick" },
+                    },
+                }, second++, "helper"));
+            }
+        };
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        Assert.Contains("asked another question", result.GetProperty("reason").GetString());
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_check_that_fails_after_the_first_write_leaves_the_answer_typed_unconfirmed_and_read_back_later()
+    {
+        // Thrown on, it reached the catch that says nothing was typed, and the answer was never
+        // read back (Copilot 4479319354).
+        await AskFormAsync();
+        DrawsWords();
+        injector.OnInject = () => { if (injector.Plans.Count == 1) { probe.Fails = new IOException("the disk went away"); } };
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+
+        var first = await AnswerResultAsync(ch, FormAnswer, request);
+        Assert.Equal(("unconfirmed", "typed"), (first.GetProperty("outcome").GetString(), Stage(first)));
+        Assert.Contains("could not check the session again", first.GetProperty("reason").GetString());
+        Assert.Single(injector.Plans);
+
+        probe.Fails = null;
+        Fixture.Append(events, Recorded("q2", FormAnswer), Copilot.ToolDone("q2", second++));
+        Assert.Equal("delivered", (await AnswerResultAsync(await OpenAsync(), FormAnswer, request)).GetProperty("outcome").GetString());
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_transcript_cut_short_between_writes_stops_the_answer_though_it_still_asks_the_question()
+    {
+        // Copilot only appends: a shorter transcript is not the one the question was found in
+        // (Copilot 4479319394, failing closed).
+        await AskFormAsync();
+        DrawsWords();
+        injector.OnInject = () =>
+        {
+            if (injector.Plans.Count == 1)
+            {
+                var lines = File.ReadAllText(events).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                File.WriteAllText(events, string.Concat(lines.Skip(1).Select(l => l + "\n")));
+            }
+        };
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        Assert.Contains("replaced or cut short", result.GetProperty("reason").GetString());
+        Assert.Single(injector.Plans);
+    }
+
     // ---- the form's own heading, never a row of it that reads the same (Copilot 4478963305) ----
 
     const string FormHeading = "Copilot needs information.";
@@ -1663,6 +1742,25 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_late_completion_found_before_its_structured_answer_waits_for_it_and_one_resend_is_delivered()
+    {
+        // A reconnect's resend finds the call's completion (its rendering) first, and the
+        // structured answer written a moment after: one resend reconciles it (Copilot 4479319436).
+        await AskFormAsync();
+        DrawsWords();
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+        Assert.Equal("typed", Stage(await AnswerResultAsync(ch, FormAnswer, request)));
+
+        Fixture.Append(events, Copilot.ToolDone("q2", second++));
+        var late = Task.Delay(300).ContinueWith(_ => Fixture.Append(events, Recorded("q2", FormAnswer)), TaskScheduler.Default);
+        var again = await AnswerResultAsync(await OpenAsync(), FormAnswer, request);
+        await late;
+
+        Assert.Equal("delivered", again.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
     public async Task A_late_record_whose_completion_never_follows_settles_on_the_one_resend_a_reconnect_makes()
     {
         await AskFormAsync();
@@ -1777,8 +1875,10 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     {
         public string? Reason;
         public Queue<string?>? Answers;
+        // Thrown by every check while set: a check that cannot be made.
+        public Exception? Fails;
 
-        public string? Active() => Answers is { Count: > 0 } queue ? queue.Dequeue() : Reason;
+        public string? Active() => Fails is { } fails ? throw fails : Answers is { Count: > 0 } queue ? queue.Dequeue() : Reason;
     }
 
     sealed class NoGuard : ITargetGuard
