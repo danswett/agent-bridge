@@ -7,6 +7,37 @@ restart; it must not introduce another planned-state message. Connection
 (`eb29d6d8`) reviews this contract before code; Engineering supplies the
 independent sensitive review. Nothing here authorizes a remote management action.
 
+## Shared host-side quiet and send/ack seam
+
+#805 owns the single
+[`TryAcquireQuiet` / `AnnouncePlanned` / `CommitDeparture` contract](../design/host-liveness.md#shared-bounded-quiet-primitive-805-owns-it).
+#819 unattended host-only update, #801 remote restart/stop and the watchdog consume
+it; they must not introduce another fence or third safety definition.
+It means **"quiet now", not "fully idle"**: an always-Working session alone
+cannot block acquisition. Active delivery/typing, uncertain input and competing
+lifecycle exclusion do. Acquisition waits at most ten seconds; the nonrenewable
+provisional lease lasts 30 seconds, including the five-second announcement wait.
+Commit transfers the same fence to a departure guard, never unlocks under typing
+or restarts on a stale/expired lease. The design defines the closed blocked reasons
+and fail-closed exit/guard lifetime; this API is not a relay/agent operation.
+
+`AnnouncePlanned(lease, plan, cancellation)` sends this document's one message and
+returns a matching durable `PlannedStateReceipt` or a closed blocker.
+It maps missing/failed acknowledgement to `announce-failed`, not permission to
+depart. Required target/authorization/package eligibility is separate from quiet
+and is rechecked at commit; none of those checks may reintroduce session-wide idle.
+
+For `reason: update`, announce **at apply time**, after acquiring quiet and before
+restart, defaulting `expectedReturnSeconds` to **90**. Both the person-chosen path
+and the [owner-approved unattended host-only path](https://github.com/danswett/agent-bridge/issues/819#issuecomment-6647803922)
+consume it. Unattended host-only apply cannot stop the App or bypass #516/#719's
+explicit App restart, and requires announcement capability plus durable acceptance
+within five seconds. On any abort after sending, including a timed-out/uncertain
+acknowledgement, send `phase: cancelled` with the same transition and a greater
+sequence; a late receipt cannot revive invalid lease authority. The host-only
+decision is not permission to apply the shared package while it would close a
+running App; that remains an apply-eligibility/package-boundary dependency.
+
 ## Transport and negotiation
 
 These are relay JSON text controls, like [roster presence](roster.md), **not**
@@ -83,8 +114,11 @@ with `announce-failed`. If the capability is absent, #801's independently
 authorized restart/stop still proceeds with legacy offline presentation and
 its cached E2E command result, without a relay reason or no-return push.
 OS power/session events are best effort and cannot be held indefinitely.
-If an authorized action aborts after success, #801 sends cancellation and answers
-refused over E2E; if cancellation cannot arrive, departBy bounds stale intent.
+If an action aborts after sending (even if acknowledgement was lost), its host
+lifecycle coordinator sends cancellation; #801 answers refused over E2E.
+If cancellation cannot arrive, departBy bounds stale intent. In particular,
+#819's unattended update never applies on an absent/failed receipt; the legacy
+capability fallback above is for #801's authorized restart/stop only.
 
 Lifecycle state is not a command, authorization grant, remote stop request or
 reason to suppress any existing auth/transport failure.
