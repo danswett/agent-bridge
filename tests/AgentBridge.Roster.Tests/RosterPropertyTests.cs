@@ -67,6 +67,7 @@ public sealed class RosterPropertyTests
         ["target-cannot-choose"] = RosterCopyTests.TargetCannotChoose,
         ["duplicate-removed"] = () => RosterCopyTests.DuplicateRemoved(seenByRemover: false),
         ["duplicate-removed-barred"] = () => RosterCopyTests.DuplicateRemoved(seenByRemover: true),
+        ["copy-cycle"] = RosterCopyTests.CopyCycle,
         ["barred-grants"] = RosterWindowTests.BarredGrants,
         ["raw-chain"] = RosterWindowTests.RawChain,
         ["cascade-voids-winner"] = () => RosterWindowTests.CascadeVoidsWinner(removeCopier: true),
