@@ -854,10 +854,17 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             agent = known?.Agent ?? AgentKind.Unknown;
             launch = known is null ? launched.GetValueOrDefault(ask.Session) : LaunchOf(known);
             cancellationToken.ThrowIfCancellationRequested();
+            // A recorder that never started, or failed, has no record to write the stamp in: only an
+            // in-memory one, which a crash loses, and its crash-loop protection with it (Copilot on
+            // #837). Nothing is stamped or marked then.
+            if (!running || failed)
+            {
+                return new LaunchResult(LaunchOutcome.Busy, "the host's restore record is not available, so a restore cannot be written down before it starts; try again once the host has restarted");
+            }
             var now = time.GetUtcNow();
             undo = StampLocked(ask.Session, now, ask.Cause, ask.Since ?? now, ask.MidTurn, ask.QuestionLost);
             // Written down first, in Stamps if the record holds no entry of it.
-            if (running && !WriteLocked(now))
+            if (!WriteLocked(now))
             {
                 UndoLocked(undo);
                 return new LaunchResult(LaunchOutcome.Busy, "the host could not write down the restore before starting it; try again");

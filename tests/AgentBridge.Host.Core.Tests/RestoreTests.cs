@@ -1285,6 +1285,27 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal((200, SessionStatus.Idle, (Question?)null), (resumed.ProcessId, resumed.Status, resumed.Question));
     }
 
+    // Copilot on #837: Claude keeps a question the interrupted run left (an AskUserQuestion with no
+    // result) pending, so its status reads Waiting. A prompt after the restore and the tool call it
+    // started are shown working, not idle, and the old question is still not shown as asked.
+    [Fact]
+    public async Task A_restored_claude_session_shows_a_new_turn_working_while_the_interrupted_question_has_no_result()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999997";
+        var transcript = f.ClaudeTranscript(Id);
+        Fixture.Append(transcript, Claude.User("plan it", 1), Claude.Assistant(2, "tool_use", Claude.ToolUse("ask1", "AskUserQuestion", Claude.Ask(("Which database?", false, ["PostgreSQL", "SQLite"])))));
+        f.ClaudeSessionFile(700, Id);
+        f.Processes.Run(AgentKind.Claude, 700);
+        await using var real = f.Source();
+        real.Mark(Id, new SessionRestored { At = Fixture.T0.AddSeconds(5), Cause = RestoreCause.Reboot, QuestionLost = true });
+        Fixture.Append(transcript, Claude.User("carry on", 10), Claude.Assistant(11, "tool_use", Claude.ToolUse("t1", "Bash", new System.Text.Json.Nodes.JsonObject { ["command"] = "ls" })));
+
+        await real.RefreshAsync();
+
+        var after = real.Get(Id)!;
+        Assert.Equal((SessionStatus.Working, (Question?)null), (after.Status, after.Question));
+    }
+
     // ---- #837 review: the restore lifecycle ----
 
     // The restore's stamp is written down before its launch: a session that registers and then dies
@@ -1696,6 +1717,28 @@ public sealed class RestoreTests : IDisposable
 
         Assert.Equal(LaunchOutcome.Refused, (await retry).Outcome);
         Assert.Equal(first, Assert.IsType<SessionRestored>(marks.Of.GetValueOrDefault("s")).At);
+    }
+
+    // ---- Copilot on #837 at 48232df5 ----
+
+    // A record that could not be set aside stops the recorder's start: no stamp can be written down,
+    // so a restore on request is busy and starts nothing. Started on an in-memory stamp, a crash would
+    // lose it, and the session could be restored again and again.
+    [Fact]
+    public async Task A_restore_on_request_is_busy_and_starts_nothing_while_the_recorder_could_not_start()
+    {
+        File.WriteAllText(Record, "{ not json");
+        Directory.CreateDirectory(Path.Combine(Record + ".unreadable", "held"));
+        var resumer = new Resumer();
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        Assert.True(Logged("restore: could not start"));
+
+        var result = await r.RestoreAsync(new RestoreAsk { Session = "s", Cause = RestoreCause.Crash, By = "host-signin" });
+
+        Assert.Equal(LaunchOutcome.Busy, result.Outcome);
+        Assert.Empty(resumer.Asked);
+        Assert.False(marks.Held.ContainsKey("s"));
     }
 
     [Fact]

@@ -657,7 +657,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                         return Refused($"'{fetched.About.Title}' is a {theirs} session, so it resumes in {theirs}, not {plan.Launcher.Label}");
                     }
                 }
-                return await StartAsync(plan, claim, key, handed, fetched, ct);
+                return await StartAsync(plan, claim, key, handed, fetched, ct, restoring);
             }
             finally
             {
@@ -792,7 +792,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer), null);
     }
 
-    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default)
+    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false)
     {
         Pending follow;
         LaunchedWith launched;
@@ -813,6 +813,14 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // bound to its launch as the first new Codex session to appear: with Codex's
             // discovery held, one that was running unseen could appear first and be taken for it.
             if (HeldFor(plan) is { } held) { return new LaunchResult(LaunchOutcome.Busy, HeldReason(held)); }
+            // Read once, so the arguments checked are the ones passed. A restore opens idle: extra
+            // arguments carrying a prompt would submit one with nobody pressing Continue (Copilot on
+            // #837), so it is refused before anything is made, and stays offered.
+            var extras = Config.Agent(plan.Launcher.Id).ExtraArgs;
+            if (restoring && Launchers.PromptFlag(plan.Launcher) is var flag && extras.Contains(flag, StringComparer.Ordinal))
+            {
+                return Refused($"{plan.Launcher.Label}'s extraArgs in the host's config carry {flag}, which would start the restored session with a prompt; resume it from Launch");
+            }
 
             var directory = plan.Directory;
             string? worktree = null;
@@ -854,7 +862,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             var newId = fetched is not null ? Guid.NewGuid().ToString() : null;
             var sessionId = newId ?? plan.Resume?.Id ?? (plan.Launcher.ChoosesOwnSessionId ? "" : Guid.NewGuid().ToString());
             var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null || newId is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
-                Config.Agent(plan.Launcher.Id).ExtraArgs, plan.Profile, prompt);
+                extras, plan.Profile, prompt);
             var environment = new Dictionary<string, string?>
             {
                 [Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched",

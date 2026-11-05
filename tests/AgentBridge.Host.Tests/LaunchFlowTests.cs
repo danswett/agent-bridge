@@ -378,6 +378,19 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         // Live now: a second restore is refused, as a second resume from Launch is.
         Assert.Equal(LaunchOutcome.Refused, (await launcher.ResumeAsync(new ResumeAsk(Hand, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
         Assert.Equal(2, starter.Specs.Count);
+
+        // Copilot on #837: extra arguments from the config that carry a prompt (-i) would make the
+        // restore submit one. Refused before anything starts, so it stays offered for Launch.
+        const string Prompted = "76767676-7676-4676-8676-767676767676";
+        Resumable(Prompted, app, "Extra prompt");
+        var prompted = await Launcher(Config(c => c with
+        {
+            ResumeCount = 0,
+            Agents = new Dictionary<string, AgentConfig> { ["copilot"] = new() { ExtraArgs = ["-i", "continue the work"] } },
+        })).ResumeAsync(new ResumeAsk(Prompted, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+        Assert.Equal(LaunchOutcome.Refused, prompted.Outcome);
+        Assert.Contains("extraArgs", prompted.Reason, StringComparison.Ordinal);
+        Assert.Equal(2, starter.Specs.Count);
     }
 
     [Fact]

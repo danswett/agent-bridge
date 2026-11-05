@@ -206,6 +206,7 @@ internal sealed class SessionTracker
         }
 
         var effective = question is not null ? SessionStatus.Waiting : status;
+        TurnStatus = status;
         DateTimeOffset since;
         if (_lastStatus == effective)
         {
@@ -385,6 +386,9 @@ internal sealed class SessionTracker
     // How many prompts the transcript has had, so the driver can tell when more than one came in one
     // read, and so cannot know which of them a reply's arm was for.
     public int Prompts => _state.Prompts;
+    // The turn's own status, before a pending question makes it Waiting: what a restored session
+    // shows once a question the interrupted run left is set aside (SessionSource.Commit, #780).
+    public SessionStatus TurnStatus { get; private set; }
     public DateTimeOffset? LastPromptAt => _state.LastPromptAt;
 
     // The sub-agents with a question pending.

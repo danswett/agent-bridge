@@ -82,7 +82,14 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
                 updated = File.GetLastWriteTimeUtc(events);
                 if (string.IsNullOrWhiteSpace(summary)) { summary = FirstPrompt(events, Ends); }
             }
-            if (string.IsNullOrWhiteSpace(summary)) { continue; }
+            if (string.IsNullOrWhiteSpace(summary))
+            {
+                // Listed, one with nothing to call it by was never used. Asked for by its id (a
+                // restore after a reboot), it is known live once, so it is still resumable: refused
+                // as "No resumable session", it was never restored (Copilot on #837).
+                if (only is null) { continue; }
+                summary = "Copilot session";
+            }
             yield return new ResumeEntry(id.ToLowerInvariant(), AgentKind.Copilot, "copilot", summary, folder, updated);
         }
     }

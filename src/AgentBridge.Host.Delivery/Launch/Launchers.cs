@@ -43,6 +43,11 @@ public static class Launchers
 
     public static Launcher? Find(string? id) => All.FirstOrDefault(l => l.Id == id);
 
+    // The argument Arguments puts a prompt behind on this agent's command line: -i for Copilot and
+    // Agency, -- for Claude and Codex. A restore passes no prompt; one in the extra arguments would
+    // make it submit one, and nothing is ever typed into a restored session automatically (#780).
+    public static string PromptFlag(Launcher launcher) => launcher.Tuning is "claude" or "codex" ? "--" : "-i";
+
     // Effort names ordered weakest first, as agent-ha-bridge's $script:BridgeEffortOrder.
     public static readonly IReadOnlyList<string> EffortOrder = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 

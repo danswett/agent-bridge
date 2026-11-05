@@ -257,9 +257,9 @@ uncertain (above): not offered, its folder kept.
 one at a time, each as a resume from Launch would be (`launch <id> (host-restore): …` in the log):
 every check that resume meets (agent-ha-bridge, `launch.enabled`, discovery held, its folder still
 approved, not already running, busy while a folder-trust or Bypass Permissions question waits for a
-person) and no prompt, so the session opens **idle** and nothing is typed. Folder trust is never
+person) and no prompt, so the session opens **idle** and nothing is typed. A restore is refused, and the session stays offered, while the agent's `extraArgs` in `config.json` carry the argument a prompt goes behind (`-i` for Copilot and Agency, `--` for Claude and Codex): passed on, it would submit one. Folder trust is never
 answered: a restore that meets the question is `unconfirmed`: never counted restored nor shown with `restored` or Continue (one tap would type into the question), with replies to it refused while its window has not been seen ready (`LaunchService.HeldForReply`), and offered until its session registers; seen ready later, while its launch still follows it (even after its stamp is cleared, 10 minutes live), it is counted and shown restored then (`LaunchService.SeenReadyLate`), with the notification sent then if it was all that one waited for, and the next waits while launches are
-busy, trying again every 15 s. It is not limited to the resume list's length: the session is found by its id, whatever its age. Its settings are what
+busy, trying again every 15 s. It is not limited to the resume list's length: the session is found by its id, whatever its age, and a Copilot session with no summary or prompt to name it is found too, as "Copilot session". Its settings are what
 this host launched it with, each kept only while `launch.options` still offers it (else the
 machine's default), and one that launch left to the agent is left to it; a session started by hand, of which nothing is known, asks permission, whatever
 the machine's default is: it is never given Allow all it may not have had. A restore that is refused
@@ -291,7 +291,9 @@ said and nothing is kept owed, and what earlier starts kept owed is let go. Off 
 **For other callers** (#800, sessions an expired sign-in stopped): `ISessionRestorer.RestoreAsync`
 resumes one session the same way, through the same one-at-a-time queue and checks, marks it restored
 with the cause it is given and Continue when it went mid-turn, and is refused while the machine is
-read-only, or while that session is already running or being restored.
+read-only, or while that session is already running or being restored. It is busy, and starts nothing,
+while the restore record cannot take its stamp first: the recorder did not start (a record that could
+not be set aside) or failed, or the write failed.
 
 **Worktrees.** The reclaimer keeps the worktree of every session owed or still being judged, as it
 keeps a live session's, and of a session restored on request until it registers, starts nothing, or

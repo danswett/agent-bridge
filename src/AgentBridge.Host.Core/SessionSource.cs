@@ -924,6 +924,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         SessionRestored? restored;
         DateTimeOffset? boundary = null;
         var prompted = false;
+        var turn = SessionStatus.Idle;
         lock (_gate)
         {
             endingSince = _ending.TryGetValue(full.Id, out var at) ? at : null;
@@ -944,6 +945,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 }
                 boundary = state.Mark.At;
                 restored = state.Shown ? state.Mark : null;
+                turn = entry.Tracker.TurnStatus;
             }
         }
         (DriverKind? Kind, string? Principal) driver = (null, null);
@@ -995,7 +997,11 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             // unanswered ask: typing into a question the agent may still show would answer it.
             if (shown.Status == SessionStatus.Waiting && shown.StatusSince < restoredAt && (shown.Question is null || shown.Question.AskedAt < restoredAt))
             {
-                shown = shown with { Question = null, WaitingOn = null, Status = SessionStatus.Idle, StatusSince = restoredAt };
+                // Set aside, the status is the turn's own: a prompt since the restore that started
+                // work (the old question still without its result) is shown working, not idle
+                // (Copilot on #837). Replies still read the transcript first, as above.
+                var working = prompted && turn == SessionStatus.Working;
+                shown = shown with { Question = null, WaitingOn = null, Status = working ? SessionStatus.Working : SessionStatus.Idle, StatusSince = restoredAt };
             }
             // Nor is the turn the interrupted run was in: resumed with no prompt, the agent is idle
             // until a prompt arrives after the restore, whatever its transcript last said.
