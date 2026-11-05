@@ -17,6 +17,12 @@ public interface ISessionLauncher
 
     Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default);
 
+    Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot guarantee standard permissions for verification."));
+
+    // Also raised when registration succeeds after the initial answer was unconfirmed.
+    event Action<Guid, string>? SessionStarted { add { } remove { } }
+
     // The agents launches started that still run, registered or not: whatever runs inside one
     // is an agent's, and may not manage the host (§6.3 invariant 13).
     IReadOnlyList<Started> LaunchedProcesses() => [];
@@ -125,6 +131,8 @@ public sealed class LaunchServiceOptions
 //     (OutcomeMemory). One start at a time, so worktrees and Codex's binding cannot race.
 public sealed partial class LaunchService : ISessionLauncher
 {
+    public event Action<Guid, string>? SessionStarted;
+
     readonly ISessionSource source;
     readonly IAgentHaBridgeProbe probe;
     readonly IConsoleInjector injector;
@@ -481,6 +489,18 @@ public sealed partial class LaunchService : ISessionLauncher
     public bool Running(string id) => source.Get(id) is not null || Starting(id);
 
     // ---- session.launch ----
+
+    public Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default)
+    {
+        if (Launchers.Find(request.Agent) is not { } agent) { return Task.FromResult(Refused("Choose an explicit agent for verification.")); }
+        // Extra arguments are provider-defined, including aliases and config overrides. Do
+        // not claim standard permissions by attempting an incomplete bypass-flag denylist.
+        if (Config.Agent(agent.Id).ExtraArgs.Count > 0)
+        {
+            return Task.FromResult(Refused($"Verification cannot guarantee standard permissions with configured launch.agents.{agent.Id}.extraArgs. Remove those extra arguments at the machine before testing; nothing was started."));
+        }
+        return LaunchAsync(request with { Permissions = LaunchProtocol.Ask }, peer, cancellationToken);
+    }
 
     public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default)
     {
@@ -1043,6 +1063,7 @@ public sealed partial class LaunchService : ISessionLauncher
 
     void Decide(Pending p, LaunchResult result)
     {
+        if (result.Outcome == LaunchOutcome.Started && result.Session is { } id) { SessionStarted?.Invoke(p.Key, id); }
         if (!p.Decided.TrySetResult(result) && result.Outcome == LaunchOutcome.Started) { p.RegisteredLate = true; }
     }
 

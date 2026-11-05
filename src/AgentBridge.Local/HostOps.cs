@@ -15,6 +15,9 @@ public static class HostOps
     public const string AgentInstallCapability = "host.agents.install";
     public const string AgentsInstall = "host.agents.install";
     public const string AgentsInstallCancel = "host.agents.install.cancel";
+    public const string AgentVerificationCapability = "host.agents.verify";
+    public const string AgentsVerify = "host.agents.verify";
+    public const string AgentsVerifyCancel = "host.agents.verify.cancel";
 
     public const string Status = "host.status";
     // Answers with the status, then sends a host.status event whenever it changes.
@@ -130,6 +133,8 @@ public sealed record HostStatus
     // Read-only setup evidence; absent on older hosts and until the first scan completes.
     public AgentReadinessReport? Agents { get; init; }
     public AgentInstallProgress? AgentInstallation { get; init; }
+    // Current-host-run tests, latest per selected launcher; no persisted ready flags.
+    public IReadOnlyList<AgentVerificationReport>? AgentVerifications { get; init; }
 }
 
 // host.signIn: start GitHub's device flow through this relay (or the one the profile used).
