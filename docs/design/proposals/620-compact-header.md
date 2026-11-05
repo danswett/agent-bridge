@@ -7,8 +7,8 @@
 > purpose").
 >
 > 1. One meta line, never wrapped.
-> 2. The Delegates tab carries the running count and the `needs` glyph ("Delegates, 1 asking").
->    With none running, there is no count.
+> 2. The Delegates tab carries the running count and the `needs` glyph ("Delegates, 2 running,
+>    1 asking"). With none running, there is no count.
 > 3. A delegate's question stays in the conversation, naming the delegate.
 > 4. The tabs keep their own row. At rest: the title, the meta line, the tabs.
 > 5. Collapse on scroll as below (D1, D2).
@@ -16,7 +16,8 @@
 > D3–D6 are superseded for the header. The design is in [At rest,
 > revised](#at-rest-revised-2026-11-05). It measures **152 pt at rest** on a 390 × 844 phone,
 > against Product's estimate of about 150.
->> **Decided (owner, 2026-11-04).** The owner chose every recommended option:
+>
+> **Decided (owner, 2026-11-04).** The owner chose every recommended option:
 >
 > - **D1:** collapse on scroll, riding with the finger near the top, then 64 pt up to come back
 >   and 32 pt down to go.
