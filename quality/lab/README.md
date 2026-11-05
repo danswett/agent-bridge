@@ -35,7 +35,7 @@ Where this file and those comments disagree, the comments win and this file is f
 | Lab cost and age alerts (`infra/modules/monitoring.bicep`) | **Unbuilt** | SRE |
 | Dogfood's checks (#736) | Consume this same lab, never a second lab or runner | Dogfood |
 | Admission of lab evidence | Quality alone | Quality |
-| Audio-endpoint acceptance (§12) | **Unbuilt**: future and capability-qualified; no lab machine has a proven audio endpoint | Platform |
+| Audio-endpoint acceptance (§12) | **Unbuilt**: future, separate and non-gating; no lab machine has a proven audio endpoint | Platform |
 
 The catalog's `lab-e2e-simulated` stays `planned` and `lab-e2e-agents` stays `partial` (the
 shadow soak, not this lab) until a scenario runs here.
@@ -252,8 +252,8 @@ it is up. This section is that check, specified only:
 
 - No runner, scenario, script or resource for it exists, and nothing here has run.
 - No lab machine is known to have an audio endpoint.
-- It is not a prerequisite for #792 or its admission. It doesn't change §3's v1 or v2 steps,
-  and it doesn't change their bar.
+- It is not a prerequisite for #792 or its admission. It is separate, non-gating evidence: it
+  doesn't change §3's v1 or v2 steps or bars, or §7's and §8's result and outcomes.
 - It grants no VM, resource, spend or runtime permission. It adds no second lab, no extra VM
   and no audio hardware.
 
@@ -269,7 +269,7 @@ These never count as a target:
   provides one.
 
 How a lab image gets an endpoint, in S0, with no extra VM, hardware or spend, is unproven.
-Until it is proven, every case below is `skipped`.
+Until it is proven, every case below is `unverified`.
 
 **What isn't proof of silence.** None of these shows that a toast is silent:
 
@@ -318,33 +318,49 @@ Each case passes only when all of the following hold:
 - **Controls and settings held:** both controls passed, and every recheck found step 1's
   settings at their baseline.
 
-**Outcomes.** These use §7's and §8's vocabulary, with each case as its own step, named
-`audio-<case>`, beside the coverage version's steps. The rows are read in order, and the first
-that applies to a step decides it.
+**Outcomes.** Each case gets its own verdict. The rows are read in order, and the first that
+applies to a case decides it.
 
-| What happened | Audio steps | Run's `outcome` (§8) |
-|---|---|---|
-| Before any case: no endpoint, an endpoint only through RDP, or a baseline or before-control that failed | Each `skipped`, with `detail` beginning `unverified:` and the reason | Unaffected: the coverage version's steps decide |
-| A recheck found any setting of step 1 changed from its baseline, whatever changed it | Each `fail`, with `detail` beginning `settings changed:` and the setting | `fail` |
-| A case made a sound, didn't show, or its actions failed | That step `fail` | `fail` |
-| The after-control failed, and settings were unchanged | Steps already `fail` stay `fail`. The rest are `skipped`, with `detail` beginning `invalid:` | `invalid` (§8: no evidence, at most one diagnosed retry), or `fail` if a step failed |
-| Both controls passed, settings were unchanged at every recheck, and the toast showed, its actions worked and it made no sound | `pass` | As the other steps decide |
+| What happened | The case's verdict |
+|---|---|
+| Before any case: no endpoint, an endpoint only through RDP, or a baseline or before-control that failed | `unverified`, with the reason |
+| A recheck found any setting of step 1 changed from its baseline, whatever changed it | Every case `fail`, naming the setting |
+| The case made a sound, didn't show, or its actions failed | `fail` |
+| The after-control failed or couldn't run, and settings were unchanged | `invalid`, unless already `fail` |
+| Both controls passed, settings were unchanged at every recheck, and the toast showed, its actions worked and it made no sound | `pass` |
+
+The role's audio verdict is:
+
+- `pass` only if every case passed;
+- otherwise `fail` if any case failed;
+- otherwise `invalid` if any case was invalid;
+- otherwise `unverified`.
 
 Missing an endpoint is not a sound regression, and a changed setting is not a claim about what
-changed it. Either way, the silence isn't credited. Only the first row is `skipped` as
-unverified coverage, and only for what was known before any case ran. A failure after the
-cases started is never hidden as a clean `skipped`.
+changed it. Either way, the silence isn't credited. `unverified` is only for what was known
+before any case ran; a failure after the cases started is never reported as `unverified`.
+Nothing short of `pass` satisfies this acceptance, and the XML and unit tests can't stand in
+for it.
 
-No `skipped` audio step is ever a pass, and none satisfies this acceptance. The XML and unit
-tests can't stand in for it either.
+**Separate from the run's result, and not gating.** The verdicts go in their own report, a
+future `audio-acceptance.json` beside the run's `result.json` in `-Out`. That file is design
+only. It names the same `runId`, `cutId`, `role`, `architecture`, `source` and `build` as that
+`result.json`, so it is bound to the same run, cut and artifacts.
 
-The `audio-` steps are capability-qualified. Without a proven endpoint they neither fail nor
-pass the run, and they never excuse a v1 or v2 step.
+The audio cases are never steps in `result.json`, and an audio verdict never changes:
 
-The relay-churn and lost-VM rules of §8 still make the whole run `invalid`, audio steps
-included.
+- the run's `outcome` or steps (§7, §8);
+- whether the cut or the other role is `invalid`;
+- the one diagnosed retry;
+- §3's v1 and v2 bars, Beta1's three releases included.
 
-**Evidence.** Each audio step records:
+An audio `fail`, `invalid` or `unverified` is reported as it is, beside the run's outcome and
+in the weekly #357 summary, and stays unaccepted until a later run passes. A run that passes
+is never reported as an audio pass, and there is no waiver. A bad audio verdict buys no extra
+attempt, VM or resource. Whether Quality admits this report, and for what, is future reviewed
+work.
+
+**Evidence.** The report records, for each run and role:
 
 - the OS build, role and architecture, and the session's endpoint capability: present or not,
   and both controls' results;
