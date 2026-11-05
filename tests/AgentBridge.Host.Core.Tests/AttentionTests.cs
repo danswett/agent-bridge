@@ -50,7 +50,7 @@ public class AttentionTests
         var session = await s.After(Copilot.User("Carry on with the release", 1), Copilot.TurnStart(2), Error(SignedOut, 3));
 
         Assert.Equal(SessionStatus.Idle, session.Status);
-        Assert.Equal(new Attention { Kind = AttentionKind.SignInNeeded, Since = Fixture.T0.AddSeconds(3), Agent = AgentKind.Copilot, Provider = "github", Message = Vm1Message }, session.Attention);
+        Assert.Equal(new Attention { Kind = AttentionKind.SignInNeeded, Since = Fixture.T0.AddSeconds(3), Agent = AgentKind.Copilot, Provider = "github", Message = "Copilot needs you to sign in again (401)." }, session.Attention);
     }
 
     [Fact]
@@ -346,7 +346,7 @@ public class AttentionTests
             Error(new { errorType = "session", message = "Turn error: too many requests", statusCode = 429 }, 3));
 
         Assert.Equal(SessionStatus.Idle, session.Status);
-        Assert.Equal(new Attention { Kind = AttentionKind.Error, Since = Fixture.T0.AddSeconds(3), Agent = AgentKind.Copilot, Message = "Turn error: too many requests", ErrorClass = ErrorClass.Rate }, session.Attention);
+        Assert.Equal(new Attention { Kind = AttentionKind.Error, Since = Fixture.T0.AddSeconds(3), Agent = AgentKind.Copilot, Message = "Copilot hit a rate limit (429).", ErrorClass = ErrorClass.Rate }, session.Attention);
     }
 
     // The CLI retries a failed model call within the turn, and a hook's failure ends nothing.
@@ -431,6 +431,34 @@ public class AttentionTests
         const string message = "Authorization error. Your credentials may be expired or invalid. The password field, tokens: 3, mytoken=visible, secretary=Ann, pwdx: 2, keyed: yes.";
 
         Assert.Equal(message, AgentErrors.Shown(message));
+    }
+
+    // #841: attention carries no agent text at all, only the host's sentence for the fields: a
+    // redaction blocklist missed a new shape every round (camelCase keys the last).
+    const string Secrets = "Authorization: Bearer Bearer abc123 db_password=hunter2x GITHUB_TOKEN=ghx1 {\"dbPassword\":\"camel secret\"} authToken=camel2 userPassword: p4ss mona@example.com C:\\Users\\mona\\notes.txt";
+
+    [Theory]
+    [InlineData("authorization", 401, "Copilot needs you to sign in again (401).")]
+    [InlineData("session", 429, "Copilot hit a rate limit (429).")]
+    [InlineData("session", 403, "Copilot was not authorised (403).")]
+    [InlineData("execution", null, "Copilot stopped with an error.")]
+    public async Task An_error_full_of_secrets_reaches_attention_only_as_the_hosts_sentence(string type, int? status, string message)
+    {
+        await using var s = new Session_();
+        var data = new System.Text.Json.Nodes.JsonObject { ["errorType"] = type, ["message"] = Secrets };
+        if (status is { } code) { data["statusCode"] = code; }
+
+        var session = await s.After(Copilot.User("Go", 1), Copilot.TurnStart(2), Error(data, 3));
+
+        Assert.Equal(message, session.Attention?.Message);
+        var json = System.Text.Json.JsonSerializer.Serialize(session.Attention, ProtocolJson.Options);
+        foreach (var piece in new[] { "abc123", "hunter2x", "ghx1", "camel", "p4ss", "mona", "notes" }) { Assert.DoesNotContain(piece, json); }
+    }
+
+    [Fact]
+    public void A_json_key_joined_to_a_prefix_is_taken_out_with_its_quoted_value()
+    {
+        Assert.Equal("Failed: {\"db_[token]}", AgentErrors.Shown("Failed: {\"db_password\": \"two words\"}"));
     }
 
     [Fact]

@@ -1182,7 +1182,7 @@ status rather than instead of it.
   "since": "2026-11-04T23:45:05.000Z",
   "agent": "copilot",
   "provider": "github",
-  "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]"
+  "message": "Copilot needs you to sign in again (401)."
 }
 ```
 
@@ -1193,7 +1193,7 @@ status rather than instead of it.
 | `agent` | `"copilot"` \| `"claude"` \| `"codex"`? | The session's agent, repeated so the per-machine roll-up and the push read the same way |
 | `provider` | string? | `signInNeeded`: whose sign-in it is, `github`, `anthropic` or `openai` |
 | `account` | string? | `signInNeeded`: the account, when the host knows it from metadata (the login the CLI reports), never from a token. Absent when unknown |
-| `message` | string? | The agent's own words, plain text on one line, at most 300 bytes. The host takes out anything that could be a token, a sign-in code, an email address, a path, a link or a request id before sending it. A client shows it as text and **never as a link** |
+| `message` | string? | One plain-text sentence the **host composes** from `kind`, `errorClass`, `statusCode` and `provider` alone, at most 300 bytes: "Copilot needs you to sign in again (401).", "Copilot hit a rate limit (429).", "Copilot stopped with an error." **No part of the agent's own error text is ever in it** (#841): redacting arbitrary text never closed, and this field reaches every client and HA. A client may show it in Details, as text and never as a link; its row words come from `kind` and `errorClass` (ui.md §6.13) |
 | `errorClass` | `"auth"` \| `"rate"` \| `"quota"` \| `"model"` \| `"network"` \| `"other"`? | `error`: what sort, from the agent's structured fields, never its wording. Unknown reads as `other` |
 | `retryAt` | time? | `error`: when the agent said it can be tried again (a rate limit, a quota) |
 | `signIn` | `"phone"` \| `"machine"` \| `"unknown"`? | `signInNeeded`: `phone` when this host can relay the agent's own device-code sign-in to a person's device; `machine` only when the host knows it can be signed in nowhere else. Absent while not known; a host never sends `unknown`. A value a client does not know reads as `unknown`, which claims nothing: no sign-in from the phone is offered on it, and it is not said to be the machine's only |
@@ -1204,7 +1204,7 @@ status rather than instead of it.
   the session is `idle` (or `waiting` if a question is pending), with `attention` beside it. A
   prompt sent while it still needs sign-in shows `working`, still with `signInNeeded`, until the
   agent answers or fails again. `notResponding` is a session still `working`. A client shows
-  "Needs sign-in", "Error · *message*" or "Not responding" over the status, ranks it with the
+  "Needs sign-in", the error's words or "Not responding" over the status, ranks it with the
   sessions that need the person, and never shows it as plain idle or with a stale age.
 * **It goes**, and `session.patch` carries `"attention": null`:
   * `error`: when the next turn starts: a prompt or a turn start, not context the CLI adds within
@@ -1233,6 +1233,20 @@ read by its structured fields (VM1's sign-in failures, #800, carry all three):
   otherwise, except while the session needs sign-in, which another error does not replace;
 * nothing for an `errorType` of `"model_call"`, which the CLI retries within the turn, or
   `"hook"`, which ends nothing. A delegate's error is its own, not the session's.
+
+`message` comes from one table (`AgentErrors.Template`), with the agent's name and the status
+code when it is an HTTP status (100 to 599):
+
+| `kind` / `errorClass` | `message` |
+|---|---|
+| `signInNeeded` | "*Agent* needs you to sign in again (*status*)." |
+| `error` / `auth` | "*Agent* was not authorised (*status*)." |
+| `error` / `rate` | "*Agent* hit a rate limit (*status*)." |
+| `error` / `quota` | "*Agent* has used up its quota (*status*)." |
+| `error` / `model` | "*Agent*'s model returned an error (*status*)." |
+| `error` / `network` | "*Agent* couldn't reach its service (*status*)." |
+| `error` / `other` | "*Agent* stopped with an error (*status*)." |
+| `notResponding` | "*Agent* isn't responding." |
 
 Claude Code and Codex send none yet: their records are read only once a real, redacted sample of
 each has been captured. `notResponding`, `account`, `signIn`, `recovery`, the per-machine

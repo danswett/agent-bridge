@@ -23,30 +23,55 @@ internal static partial class AgentErrors
         var type = Json.Str(data, "errorType");
         if (type is "model_call" or "hook") { return null; }
         var status = Json.Int(data, "statusCode");
-        var message = Shown(Json.Str(data, "message"));
         if (Json.Str(data, "remediation") == "sign_in" || type == "authorization" || status == 401)
         {
-            return new Attention { Kind = AttentionKind.SignInNeeded, Since = at, Agent = AgentKind.Copilot, Provider = "github", Message = message };
+            return new Attention { Kind = AttentionKind.SignInNeeded, Since = at, Agent = AgentKind.Copilot, Provider = "github", Message = Template(AttentionKind.SignInNeeded, null, status, AgentKind.Copilot) };
         }
+        var errorClass = status switch { 403 => ErrorClass.Auth, 429 => ErrorClass.Rate, _ => ErrorClass.Other };
         return new Attention
         {
             Kind = AttentionKind.Error,
             Since = at,
             Agent = AgentKind.Copilot,
-            Message = message,
-            ErrorClass = status switch { 403 => ErrorClass.Auth, 429 => ErrorClass.Rate, _ => ErrorClass.Other },
+            Message = Template(AttentionKind.Error, errorClass, status, AgentKind.Copilot),
+            ErrorClass = errorClass,
         };
+    }
+
+    // attention.message (#841, Engineering): composed by the host from the structured fields
+    // alone, never from the agent's words. Redacting arbitrary error text is a blocklist that
+    // never closed (Basic, _-joined keys, a repeated Bearer, camelCase keys in three rounds), and
+    // this field reaches every client, HA and the phone. The words follow ui.md §6.13 (#814):
+    // "Needs sign-in", "Not authorised", "Rate limited", "Agent error".
+    static readonly Dictionary<(AttentionKind, ErrorClass?), string> Templates = new()
+    {
+        [(AttentionKind.SignInNeeded, null)] = "{0} needs you to sign in again",
+        [(AttentionKind.Error, ErrorClass.Auth)] = "{0} was not authorised",
+        [(AttentionKind.Error, ErrorClass.Rate)] = "{0} hit a rate limit",
+        [(AttentionKind.Error, ErrorClass.Quota)] = "{0} has used up its quota",
+        [(AttentionKind.Error, ErrorClass.Model)] = "{0}'s model returned an error",
+        [(AttentionKind.Error, ErrorClass.Network)] = "{0} couldn't reach its service",
+        [(AttentionKind.Error, ErrorClass.Other)] = "{0} stopped with an error",
+        [(AttentionKind.NotResponding, null)] = "{0} isn't responding",
+    };
+
+    internal static string Template(AttentionKind kind, ErrorClass? errorClass, int? status, AgentKind agent)
+    {
+        var words = Templates.GetValueOrDefault((kind, errorClass)) ?? Templates[(AttentionKind.Error, ErrorClass.Other)];
+        var name = agent switch { AgentKind.Copilot => "Copilot", AgentKind.Claude => "Claude Code", AgentKind.Codex => "Codex", _ => "The agent" };
+        var code = status is >= 100 and <= 599 ? $" ({status})" : "";
+        return string.Format(System.Globalization.CultureInfo.InvariantCulture, words, name) + code + ".";
     }
 
     // Longer than any error message a CLI writes; matching stops there.
     const int Scanned = 4 * 1024;
 
-    // The agent's words as any client may show them: one line, within Limits.AttentionMessage,
-    // with nothing in it that could be a credential, a sign-in code, an account's email, a path
-    // on the machine, a link or a request id. The message reaches the phone, the app and HA alike
-    // (rule 5: no token in any of them), so a link is never sent either: the only
-    // link a sign-in shows is the allowlisted one the device flow relays. A message the patterns
-    // take too long over is not shown at all, never shown as it was.
+    // The CLI's turn-error notice as any client may show it in activity.response (#840), which
+    // main sent as written; attention never carries agent text (Template). One line, within
+    // Limits.AttentionMessage, with what could be a credential, a sign-in code, an email, a path,
+    // a link or a request id taken out as far as these patterns reach: a blocklist, so a best
+    // effort here and never relied on for a new field (#841). A message the patterns take too
+    // long over is not shown at all, never shown as it was.
     internal static string? Shown(string? message)
     {
         if (Text.NonBlank(message) is not { } text) { return null; }

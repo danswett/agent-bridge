@@ -2426,7 +2426,7 @@
             "agent": "copilot",
             "provider": "github",
             "account": "mona",
-            "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+            "message": "Copilot needs you to sign in again (401).",
             "signIn": "phone",
             "recovery": "checking"
           }
@@ -2437,7 +2437,7 @@
             "kind": "error",
             "since": "2026-10-28T04:22:43.182Z",
             "agent": "claude",
-            "message": "Rate limit reached.",
+            "message": "Claude Code hit a rate limit (429).",
             "errorClass": "rate",
             "retryAt": "2026-10-28T04:25:43.182Z"
           }
@@ -2489,7 +2489,7 @@
             "agent": "copilot",
             "provider": "github",
             "account": "mona",
-            "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+            "message": "Copilot needs you to sign in again (401).",
             "signIn": "phone",
             "recovery": "checking"
           },
@@ -2499,7 +2499,7 @@
             "agent": "copilot",
             "provider": "github",
             "account": "mona",
-            "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+            "message": "Copilot needs you to sign in again (401).",
             "signIn": "phone",
             "recovery": "checking"
           }
@@ -2511,7 +2511,7 @@
             "agent": "copilot",
             "provider": "github",
             "account": "mona",
-            "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+            "message": "Copilot needs you to sign in again (401).",
             "signIn": "phone",
             "recovery": "checking"
           },
@@ -2521,7 +2521,7 @@
             "agent": "copilot",
             "provider": "github",
             "account": "mona",
-            "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+            "message": "Copilot needs you to sign in again (401).",
             "signIn": "phone",
             "recovery": "checking"
           }
@@ -2534,7 +2534,7 @@
             "agent": "copilot",
             "provider": 42,
             "account": "mona",
-            "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+            "message": "Copilot needs you to sign in again (401).",
             "signIn": "phone",
             "recovery": "checking"
           },
@@ -2543,7 +2543,7 @@
             "since": "2026-10-28T04:22:43.182Z",
             "agent": "copilot",
             "account": "mona",
-            "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+            "message": "Copilot needs you to sign in again (401).",
             "signIn": "phone",
             "recovery": "checking"
           }
@@ -2774,7 +2774,7 @@
               "agent": "copilot",
               "provider": "github",
               "account": "mona",
-              "message": "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
+              "message": "Copilot needs you to sign in again (401).",
               "signIn": "phone",
               "recovery": "checking"
             }

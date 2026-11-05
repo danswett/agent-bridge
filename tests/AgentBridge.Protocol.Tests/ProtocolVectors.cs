@@ -106,8 +106,8 @@ public static class ProtocolVectors
         Model = "claude-opus-5.5", Status = SessionStatus.Waiting, StatusSince = T1, StartedAt = T0, UpdatedAt = T1, ProcessId = 4120, Activity = FullActivity,
         Question = Form, Driver = DriverKind.Agent, DriverPrincipal = "homeassistant:0f1e2d3c", Subagents = [Delegate, Nested], SubagentsMore = 2, WaitingOn = null,
     };
-    // #800: VM1's sign-in failure as a host shows it, its message as Copilot wrote it, redacted.
-    static readonly Attention SignInNeeded = new() { Kind = AttentionKind.SignInNeeded, Since = T0, Agent = AgentKind.Copilot, Provider = "github", Account = "mona", Message = "Authorization error. Your credentials may be expired or invalid. [request-id redacted]", SignIn = SignInWhere.Phone, Recovery = RecoveryState.Checking };
+    // #800: VM1's sign-in failure as a host shows it, with the sentence the host composes (#841).
+    static readonly Attention SignInNeeded = new() { Kind = AttentionKind.SignInNeeded, Since = T0, Agent = AgentKind.Copilot, Provider = "github", Account = "mona", Message = "Copilot needs you to sign in again (401).", SignIn = SignInWhere.Phone, Recovery = RecoveryState.Checking };
     static readonly Session MinimalSession = new() { Id = "b7e1c2d3-0000-4000-8000-000000000001", Agent = AgentKind.Claude, Status = SessionStatus.Idle, StatusSince = T0, UpdatedAt = T0, Activity = new Activity() };
 
     static readonly DiscoveryHeld Held = new("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot]);
@@ -216,7 +216,7 @@ public static class ProtocolVectors
             .Reads("unknown-kind-status-and-outcome", """{"id":"agent-9","kind":"swarm","status":"sleeping","outcome":"exploded","shells":0}""");
         f.Record<Attention>(Host)
             .Valid("sign-in-needed", SignInNeeded)
-            .Valid("an-error-with-a-retry", new Attention { Kind = AttentionKind.Error, Since = T0, Agent = AgentKind.Claude, Message = "Rate limit reached.", ErrorClass = ErrorClass.Rate, RetryAt = T1 })
+            .Valid("an-error-with-a-retry", new Attention { Kind = AttentionKind.Error, Since = T0, Agent = AgentKind.Claude, Message = "Claude Code hit a rate limit (429).", ErrorClass = ErrorClass.Rate, RetryAt = T1 })
             .Valid("not-responding", new Attention { Kind = AttentionKind.NotResponding, Since = T0, Agent = AgentKind.Codex, LastEventAt = T0 })
             // Signed in, and still signInNeeded until the model is seen answering (#800 ruling).
             .Valid("signed-in-waiting-for-the-model", new Attention { Kind = AttentionKind.SignInNeeded, Since = T0, Agent = AgentKind.Copilot, Provider = "github", SignIn = SignInWhere.Phone, Recovery = RecoveryState.Pending })

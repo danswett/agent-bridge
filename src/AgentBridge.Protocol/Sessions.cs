@@ -97,7 +97,7 @@ public static class Limits
     public const int SubagentName = 120;
     public const int SubagentTask = 512;
     public const int SubagentLine = 300;
-    // session.attention.message: the agent's own words about what went wrong (#800).
+    // session.attention.message: the host's own sentence about what went wrong (#800, #841).
     public const int AttentionMessage = 300;
     // Entries a host lists, running ones first; SessionBudget.Fit may cap them further.
     public const int Subagents = 20;
@@ -369,7 +369,8 @@ public sealed record Session
 
 // session.attention (#800, v1-sessions.md "Attention"). Which fields a kind uses is the spec's;
 // a reader takes whatever is there. Nothing in it is a credential, a sign-in code or a link:
-// message is the agent's own words with those taken out, shown as text only.
+// message is a sentence the host composes from kind, errorClass, statusCode and provider alone,
+// never the agent's words (#841), shown as text only.
 public sealed record Attention
 {
     public required AttentionKind Kind { get; init; }
@@ -380,7 +381,7 @@ public sealed record Attention
     public string? Provider { get; init; }
     // SignInNeeded: the account, when the host knows it from metadata, never from a token.
     public string? Account { get; init; }
-    // Within Limits.AttentionMessage, redacted by the host before it is sent.
+    // Host-composed from the structured fields, never agent text; within Limits.AttentionMessage.
     public string? Message { get; init; }
     public ErrorClass? ErrorClass { get; init; }
     // Error: when the agent said it can be tried again (a rate limit, a quota).
