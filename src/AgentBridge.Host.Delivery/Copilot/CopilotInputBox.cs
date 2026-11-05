@@ -27,7 +27,23 @@ public sealed record CopilotInputBox(IReadOnlyList<ScreenRow> Rows, string Conte
     public bool Empty => Content.Length == 0;
 }
 
-public static class CopilotInputBoxReader
+// What the screen shows of the one input box it holds, whatever is in it, for a caller that
+// acts on what a person left there (#804's Clear and send). Read only; it decides nothing, and
+// the reader's refusals do not depend on it.
+//   * Rows: the box's rows as read, its edges included.
+//   * Content: all of its text, as drawn, its lines joined by '\n'. In shell mode an empty box
+//     draws its placeholder, which reads as "Execute shell command".
+//   * Lines: how many text rows the box draws between its edges.
+//   * Shell: in shell mode, by the plain box's glyph, the placeholder, or the footer's label.
+//   * Main: the prompt's own box, at the bottom of the screen directly over its footer (or a
+//     turn's row) with nothing but blank rows below.
+//   * Complete: its top edge is on screen, so Content is all of it. Only a rail box can be
+//     seen cut off (its '┃' rows running from the top of the window); the plain box's lines
+//     with its first rule and glyph row scrolled away cannot be told from output, and are not
+//     a box at all.
+public sealed record CopilotInputBoxState(IReadOnlyList<ScreenRow> Rows, string Content, int Lines, bool Shell, bool Main, bool Complete);
+
+public static partial class CopilotInputBoxReader
 {
     const char RailTop = '\u257B';
     const char Rail = '\u2503';
@@ -50,37 +66,49 @@ public static class CopilotInputBoxReader
     // review); one drawn above the real box, or above a dialog in its place, is not anchored
     // there. Rail and plain boxes are looked for together, and the screen must show exactly
     // one, so a forged rail cannot hide the real plain box under it.
-    public static (CopilotInputBox? Box, string? Problem, bool Seen) Read(IReadOnlyList<string> rows)
+    //
+    // State is what the screen shows of the box, whenever it shows exactly one, refused or not
+    // (CopilotInputBoxState).
+    public static (CopilotInputBox? Box, string? Problem, bool Seen, CopilotInputBoxState? State) Read(IReadOnlyList<string> rows)
     {
+        const string NotFound = "the host could not find Copilot's input box on the session's screen, so it may be asking something there; answer it at the machine, or reply at the machine";
         var found = Rails(rows).Concat(Plain(rows)).ToList();
-        if (found.Count != 1)
+        // Exactly one whole box; one cut off at the top counts only where there is no other, so
+        // it is described but never changes what is refused.
+        var whole = found.Where(b => b.Complete).ToList();
+        if (whole.Count != 1 && !(whole.Count == 0 && found.Count == 1)) { return (null, NotFound, false, null); }
+        if (whole.Count == 1) { found = whole; }
+        var (box, glyph, below, complete) = found[0];
+        var working = below < rows.Count && Working(rows[below]);
+        var main = below < rows.Count && (working || IsFooter(rows[below])) && !rows.Skip(below + 1).Any(r => r.Trim().Length > 0);
+        var shell = glyph == ShellGlyph || box.Content == ShellPlaceholder || (main && Shell(rows[below]));
+        var state = new CopilotInputBoxState(box.Rows, box.Content, box.Rows.Count - (complete ? 2 : 1), shell, main, complete);
+        // A box cut off at the top was never one the host could find.
+        if (!complete) { return (null, NotFound, false, state); }
+        if (!main)
         {
-            return (null, "the host could not find Copilot's input box on the session's screen, so it may be asking something there; answer it at the machine, or reply at the machine", false);
-        }
-        var (box, glyph, below) = found[0];
-        if (below >= rows.Count || !IsFooter(rows[below]) || rows.Skip(below + 1).Any(r => r.Trim().Length > 0))
-        {
-            return (null, "the host could not find Copilot's input box at the bottom of the session's screen, over its footer, so it may be asking something there; answer it at the machine, or reply at the machine", false);
+            return (null, "the host could not find Copilot's input box at the bottom of the session's screen, over its footer, so it may be asking something there; answer it at the machine, or reply at the machine", false, state);
         }
         var footer = rows[below];
-        if (Parts(footer).Contains(VimNormal))
+        if (Has(footer, VimNormal))
         {
-            return (null, "Copilot's input box at the machine is in vim normal mode, where typed keys act as commands; go back to insert mode there first, or reply at the machine", true);
+            return (null, "Copilot's input box at the machine is in vim normal mode, where typed keys act as commands; go back to insert mode there first, or reply at the machine", true, state);
         }
-        if (glyph == ShellGlyph || box.Content == ShellPlaceholder || Shell(footer))
+        if (shell)
         {
-            return (null, "Copilot's input box at the machine is in shell mode, where a reply would run as a shell command; leave shell mode there (Esc) first, or reply at the machine", true);
+            return (null, "Copilot's input box at the machine is in shell mode, where a reply would run as a shell command; leave shell mode there (Esc) first, or reply at the machine", true, state);
         }
         if (!box.Empty)
         {
-            return (null, $"something is already typed in Copilot's input box at the machine (\"{Shown(box.Content)}\"); send or clear it there first", true);
+            return (null, $"something is already typed in Copilot's input box at the machine (\"{Shown(box.Content)}\"); send or clear it there first", true, state);
         }
-        // An empty box's footer lists the commands (`rDo`, drawn only while the box is empty).
-        if (glyph is not (null or Glyph) || !Parts(footer).Contains("/ commands"))
+        // An idle footer lists the commands while the box is empty (`rDo`), and only then, so it
+        // must; a turn's own row never does, so there the box's own rows, read empty, decide.
+        if (glyph is not (null or Glyph) || (!working && !Has(footer, "/ commands")))
         {
-            return (null, "the host could not tell that Copilot's input box is the one for a prompt, outside shell mode; reply at the machine", false);
+            return (null, "the host could not tell that Copilot's input box is the one for a prompt, outside shell mode; reply at the machine", false, state);
         }
-        return (box, null, true);
+        return (box, null, true, state);
     }
 
     // What is in the box, as a person is shown it: hidden characters escaped (ShownText.Reveal),
@@ -95,8 +123,27 @@ public static class CopilotInputBoxReader
     // hint ("esc exit shell mode").
     static bool Shell(string row) => Parts(row).Any(part => part is "Shell" or "shell" or "esc exit shell mode");
 
-    // The footer's parts, between its '·' separators (`oDo`, `Ft`, `Zlt`).
-    static List<string> Parts(string row) => [.. row.Split('\u00B7').Select(part => part.Trim())];
+    // The footer's parts, between its '·' separators (`oDo`, `Ft`, `Zlt`, `Xlt`). The model or
+    // agent shown at the row's right end (`LMe`) is set apart by spaces only, so a run of two or
+    // more spaces divides parts too.
+    static List<string> Parts(string row) =>
+        [.. row.Split('\u00B7').SelectMany(part => System.Text.RegularExpressions.Regex.Split(part, " {2,}")).Select(part => part.Trim()).Where(part => part.Length > 0)];
+
+    static bool Has(string row, string part) => Parts(row).Contains(part);
+
+    // The row a running turn draws in the footer's place (1.0.105's `LMe` with its activity
+    // indicator): the vim mode and, in plan, autopilot or shell mode, the mode label, each with
+    // a '·' after it; the spinner ("Working", the turn's intent, "Executing"); then Esc's hint
+    // ("esc interrupt", "esc esc interrupt", "esc stop agents", "esc edit prompt", "esc again
+    // to …") and, where the CLI offers it, "· <key> enqueue". No commands or sidebar hints. A
+    // row with neither of the turn's own hints (a turn being cancelled drops them) is not taken
+    // for it. With the hints hidden (`hideToggleHelp`) the idle footer is drawn empty, so no
+    // reply is typed into an idle session there (refused, as a box with no footer); a turn's row
+    // keeps Esc's hint, which is not one of the hidden ones.
+    static bool Working(string row) => TurnHints().IsMatch(row);
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"\besc (?:esc )?(?:interrupt|stop agents|edit prompt|again to \S)|\S \benqueue\b")]
+    private static partial System.Text.RegularExpressions.Regex TurnHints();
 
     // What the footer under the prompt's box may carry (1.0.105's `oDo`): the sidebar hint, the
     // vim mode (`XDn`), the mode label (`Jlt`/`vEe`), the commands (`rDo`), the shell hint, and
@@ -113,26 +160,30 @@ public static class CopilotInputBoxReader
     const string VimNormal = "-- NORMAL --";
 
     // Every rail box: '╻' over '┃' rows to '╹'. Its text is what follows each '┃'.
-    static List<(CopilotInputBox Box, string? Glyph, int Below)> Rails(IReadOnlyList<string> rows)
+    // A box whose '┃' rows start at the window's first row is one cut off at the top (Complete
+    // false): taller than the window, its top edge scrolled away.
+    static List<(CopilotInputBox Box, string? Glyph, int Below, bool Complete)> Rails(IReadOnlyList<string> rows)
     {
-        var found = new List<(CopilotInputBox, string?, int)>();
+        var found = new List<(CopilotInputBox, string?, int, bool)>();
         for (var i = 0; i < rows.Count; i++)
         {
-            if (!rows[i].TrimStart().StartsWith(RailTop)) { continue; }
-            var end = i + 1;
+            var complete = rows[i].TrimStart().StartsWith(RailTop);
+            if (!complete && !(i == 0 && rows[0].TrimStart().StartsWith(Rail))) { continue; }
+            var first = complete ? i + 1 : i;
+            var end = first;
             while (end < rows.Count && rows[end].TrimStart().StartsWith(Rail)) { end++; }
-            if (end == i + 1 || end >= rows.Count || !rows[end].TrimStart().StartsWith(RailBottom)) { continue; }
-            var lines = Enumerable.Range(i + 1, end - i - 1).Select(r => rows[r].TrimStart()[1..].Trim()).ToList();
-            found.Add((new CopilotInputBox(Held(rows, i, end), Text(lines)), null, end + 1));
+            if (end == first || end >= rows.Count || !rows[end].TrimStart().StartsWith(RailBottom)) { continue; }
+            var lines = Enumerable.Range(first, end - first).Select(r => rows[r].TrimStart()[1..].Trim()).ToList();
+            found.Add((new CopilotInputBox(Held(rows, i, end), Text(lines)), null, end + 1, complete));
             i = end;
         }
         return found;
     }
 
     // Every box drawn without the frame: a row led by the prompt glyph between two '─' rules.
-    static List<(CopilotInputBox Box, string? Glyph, int Below)> Plain(IReadOnlyList<string> rows)
+    static List<(CopilotInputBox Box, string? Glyph, int Below, bool Complete)> Plain(IReadOnlyList<string> rows)
     {
-        var found = new List<(CopilotInputBox, string?, int)>();
+        var found = new List<(CopilotInputBox, string?, int, bool)>();
         for (var i = 0; i + 2 < rows.Count; i++)
         {
             if (!IsRule(rows[i])) { continue; }
@@ -144,7 +195,7 @@ public static class CopilotInputBoxReader
             if (end >= rows.Count) { continue; }
             var lines = new List<string> { first[glyph.Length..].Trim() };
             lines.AddRange(Enumerable.Range(i + 2, end - i - 2).Select(r => rows[r].Trim()));
-            found.Add((new CopilotInputBox(Held(rows, i, end), Text(lines)), glyph, end + 1));
+            found.Add((new CopilotInputBox(Held(rows, i, end), Text(lines)), glyph, end + 1, true));
             i = end;
         }
         return found;

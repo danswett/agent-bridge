@@ -23,11 +23,18 @@ public class CopilotInputBoxTests
         var c = Fixture().Single(x => x!["name"]!.GetValue<string>() == name)!;
         var rows = c["rows"]!.AsArray().Select(r => r!.GetValue<string>()).ToList();
 
-        var (box, problem, seen) = CopilotInputBoxReader.Read(rows);
+        var (box, problem, seen, state) = CopilotInputBoxReader.Read(rows);
 
         // Only the prompt's own box, seen, may be refused for what is in it before the typing
         // turn; anything else is left to the checks in the turn, which may name a question.
         Assert.Equal(c["expect"]!.GetValue<string>() is "ok" or "draft" or "shell" or "vim", seen);
+        // Whatever is refused, the box the screen shows is described as it is (for #804).
+        if (seen)
+        {
+            Assert.True(state is { Main: true, Complete: true });
+            Assert.Equal(c["expect"]!.GetValue<string>() == "shell", state!.Shell);
+            if (c["content"]?.GetValue<string>() is { } content) { Assert.Equal(content, state.Content); }
+        }
         switch (c["expect"]!.GetValue<string>())
         {
             case "ok":
@@ -72,9 +79,60 @@ public class CopilotInputBoxTests
     {
         // The placeholder alone is enough: an empty box in shell mode shows it, and a person
         // could not be typing it into a prompt box without being refused for a draft anyway.
-        var (box, problem, _) = CopilotInputBoxReader.Read(["\u257B\u2584\u2584\u2584", "\u2503 Execute shell command", "\u2579\u2580\u2580\u2580", " \u2190 open sidebar \u00B7 / commands"]);
+        var (box, problem, _, _) = CopilotInputBoxReader.Read(["\u257B\u2584\u2584\u2584", "\u2503 Execute shell command", "\u2579\u2580\u2580\u2580", " \u2190 open sidebar \u00B7 / commands"]);
 
         Assert.Null(box);
         Assert.Contains("shell mode", problem);
     }
+
+    static readonly string[] Rail = ["\u257B\u2584\u2584\u2584\u2584", "\u2503", "\u2579\u2580\u2580\u2580\u2580"];
+    const string Idle = " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help";
+    const string WithText = " Interactive \u00B7 Allow All \u00B7 @ files \u00B7 # issues";
+
+    [Fact]
+    public void A_draft_is_described_whole_its_lines_counted_and_its_rows_given_though_the_reply_is_refused()
+    {
+        string[] rows = ["\u25CF Done.", Rail[0], "\u2503 first line", "\u2503 second line", Rail[2], WithText];
+
+        var (box, problem, seen, state) = CopilotInputBoxReader.Read(rows);
+
+        Assert.Null(box);
+        Assert.StartsWith("something is already typed", problem);
+        Assert.True(seen);
+        Assert.Equal(("first line\nsecond line", 2, false, true, true), (state!.Content, state.Lines, state.Shell, state.Main, state.Complete));
+        Assert.Equal([1, 2, 3, 4], state.Rows.Select(r => r.Row));
+    }
+
+    [Fact]
+    public void A_draft_taller_than_the_window_is_described_as_cut_off_and_refused_as_before()
+    {
+        // Its top edge scrolled away: the '┃' rows start at the window's first row.
+        string[] rows = ["\u2503 line 7", "\u2503 line 8", Rail[2], WithText];
+
+        var (box, problem, seen, state) = CopilotInputBoxReader.Read(rows);
+
+        Assert.Null(box);
+        Assert.StartsWith("the host could not find Copilot's input box", problem);
+        Assert.False(seen);
+        Assert.Equal(("line 7\nline 8", 2, true, false), (state!.Content, state.Lines, state.Main, state.Complete));
+    }
+
+    [Fact]
+    public void A_box_not_at_the_bottom_over_the_footer_is_described_as_not_the_prompts_and_a_screen_of_two_is_not_described()
+    {
+        var (_, _, _, alone) = CopilotInputBoxReader.Read([.. Rail, Idle, "some text below"]);
+        var (_, _, _, two) = CopilotInputBoxReader.Read([.. Rail, "", .. Rail, Idle]);
+
+        Assert.False(alone!.Main);
+        Assert.Null(two);
+    }
+
+    [Fact]
+    public void An_empty_box_in_shell_mode_is_described_in_shell_mode_with_its_placeholder_as_drawn()
+    {
+        var (_, _, _, state) = CopilotInputBoxReader.Read([Rail[0], "\u2503 Execute shell command", Rail[2], " \u2190 open sidebar \u00B7 Shell \u00B7 Allow All \u00B7 / commands"]);
+
+        Assert.Equal(("Execute shell command", true, true), (state!.Content, state.Shell, state.Main));
+    }
 }
+

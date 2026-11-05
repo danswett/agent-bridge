@@ -342,7 +342,7 @@ public sealed class ReplyService : ISessionReplier
             // first key, stop them in the worker, with nothing typed (#825). Their Enter is a send
             // of its own, held to the box's bottom edge: a box that moved or went (a dialog drawn
             // in its place while the words were typed) gets no Enter, and the words stay in it.
-            var (box, problem, _) = await InputBoxAsync(pid);
+            var (box, problem, _, _) = await InputBoxAsync(pid);
             if (box is null) { return Done(Refused(problem!)); }
             var line = keys.Sends.Single();
             keys = new KeyPlan(
@@ -380,12 +380,12 @@ public sealed class ReplyService : ISessionReplier
 
     // Copilot's input box, as the session's screen shows it now, or why no reply can be typed
     // into it: a screen that cannot be read cannot say the box is empty.
-    async Task<(CopilotInputBox? Box, string? Problem, bool Seen)> InputBoxAsync(int pid)
+    async Task<(CopilotInputBox? Box, string? Problem, bool Seen, CopilotInputBoxState? State)> InputBoxAsync(int pid)
     {
         ConsoleScreen screen;
         try { screen = await injector.ReadScreenAsync(pid); }
-        catch (Exception e) { return (null, $"the host could not read the session's screen ({e.Message}); reply at the machine", false); }
-        if (screen.Rows is not { } rows) { return (null, screen.Problem ?? "the host could not read the session's screen; reply at the machine", false); }
+        catch (Exception e) { return (null, $"the host could not read the session's screen ({e.Message}); reply at the machine", false, null); }
+        if (screen.Rows is not { } rows) { return (null, screen.Problem ?? "the host could not read the session's screen; reply at the machine", false, null); }
         return CopilotInputBoxReader.Read(rows);
     }
 

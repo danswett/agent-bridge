@@ -340,6 +340,8 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Fixture.Append(events, Prompt("next task"), Copilot.TurnStart(second++), Copilot.ToolStart("t1", "powershell", new { command = "dotnet test" }, second++));
         await source.RefreshAsync();
         Assert.Equal(SessionStatus.Working, source.Get(Id)!.Status);
+        // While the turn runs, the footer's place holds the turn's own row (#843 review).
+        injector.Screen = _ => CopilotWorking;
         // Copilot writes a steering prompt when its next round starts, after the running tool.
         injector.OnInject = plan => _ = Task.Delay(700).ContinueWith(_ => Fixture.Append(events,
             Copilot.ToolDone("t1", second++), Copilot.TurnStart(second++), Prompt(plan.Sends[0].Text, "steering")), TaskScheduler.Default);
@@ -403,6 +405,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     {
         Fixture.Append(events, Prompt("next task"), Copilot.TurnStart(second++), Copilot.ToolStart("t1", "powershell", new { command = "dotnet test" }, second++));
         await source.RefreshAsync();
+        injector.Screen = _ => CopilotWorking;
         injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text, "steering"));
         var ch = await OpenAsync();
 
@@ -1018,6 +1021,34 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     // Copilot CLI 1.0.105 ready for a prompt, as captured live (LaunchFlowTests.CopilotReady):
     // its rail input box, empty, and the prompt's footer.
     static readonly IReadOnlyList<string> CopilotIdle = ["\u25CF Done.", "", "\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584", "\u2503", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580", " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 tab next tab"];
+
+    // The same box while a turn runs: in the footer's place, the turn's own row (1.0.105's `LMe`
+    // activity layout: spinner, Esc's hint, the enqueue hint), with no commands hint.
+    static readonly IReadOnlyList<string> CopilotWorking = [.. CopilotIdle.Take(5), " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue"];
+
+    [Theory]
+    // In the turn's row: a draft, shell mode's label, or vim's normal mode, as in the idle footer.
+    [InlineData("draft")]
+    [InlineData("shell")]
+    [InlineData("vim")]
+    public async Task A_reply_to_a_working_Copilot_is_refused_for_a_draft_shell_mode_or_vim_normal_mode_as_when_idle(string state)
+    {
+        Fixture.Append(events, Prompt("next task"), Copilot.TurnStart(second++), Copilot.ToolStart("t1", "powershell", new { command = "dotnet test" }, second++));
+        await source.RefreshAsync();
+        injector.Screen = _ => state switch
+        {
+            "draft" => [.. CopilotIdle.Take(3), "\u2503 half a thought", CopilotIdle[4], CopilotWorking[5]],
+            "shell" => [.. CopilotIdle.Take(3), "\u2503 Execute shell command", CopilotIdle[4], " Shell \u00B7 Allow All \u00B7 \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue"],
+            _ => [.. CopilotIdle.Take(5), " -- NORMAL -- \u00B7 \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue"],
+        };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "also run the e2e tests");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains(state switch { "draft" => "already typed", "shell" => "shell mode", _ => "vim normal mode" }, reason);
+        Assert.Empty(injector.Plans);
+    }
 
     // The same screen with words in the box (a person's draft), or in shell mode.
     // Its footer as Copilot draws it then (oDo): with text in the box, the mode label and, out

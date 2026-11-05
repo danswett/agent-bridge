@@ -239,6 +239,72 @@
         "some text below"
       ],
       "expect": "unidentified"
+    },
+    {
+      "name": "working-empty",
+      "source": "the captured empty rail box, under it the turn's row: cli-main.js LMe with its activity indicator, drawn in the footer's place while a turn runs: a spinner frame (rr; the glyph varies) with yut's 'Working', then sm('esc', 'interrupt'), '·' and sm(<enqueue key>, 'enqueue'); no rDo commands or sidebar hint",
+      "rows": [
+        "● Running the tests.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ◐ Working esc interrupt · ctrl+q enqueue"
+      ],
+      "expect": "ok"
+    },
+    {
+      "name": "working-draft",
+      "source": "as working-empty, with text in the box one column in",
+      "rows": [
+        "● Running the tests.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃ half a thought",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ◐ Working esc interrupt · ctrl+q enqueue"
+      ],
+      "expect": "draft",
+      "content": "half a thought"
+    },
+    {
+      "name": "working-shell",
+      "source": "as working-empty in shell mode: the placeholder (W), and Xlt's label 'Shell · Allow All' then '·' (activity) before the spinner",
+      "rows": [
+        "● Running the tests.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃ Execute shell command",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " Shell · Allow All · ◐ Working esc interrupt · ctrl+q enqueue"
+      ],
+      "expect": "shell"
+    },
+    {
+      "name": "working-vim-normal",
+      "source": "as working-empty with vim's normal mode first (Zlt: '-- NORMAL --' then '·')",
+      "rows": [
+        "● Running the tests.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " -- NORMAL -- · ◐ Working esc interrupt · ctrl+q enqueue"
+      ],
+      "expect": "vim"
+    },
+    {
+      "name": "working-cancelling",
+      "source": "as working-empty while the turn is cancelled: yut's 'Cancelling', and LMe's activity indicator drops Esc's and the enqueue hints (os === 'cancelling'), leaving nothing the host can tell the turn's row by",
+      "rows": [
+        "● Running the tests.",
+        "",
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+        "┃",
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ◐ Cancelling"
+      ],
+      "expect": "unidentified"
     }
   ]
 }
