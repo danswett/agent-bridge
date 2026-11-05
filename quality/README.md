@@ -325,7 +325,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
 
    The jobs, and what each one's for (#459):
    - `light` holds the small Linux checks on one runner: `design-gen`, `a11y-contrast`,
-     `pwa-unit` with its coverage pass, `pwa-site-csp` and `docs-links`. Each step runs when its
+     `pwa-unit` with its coverage pass, `pwa-site-csp`, `playwright-apt` and `docs-links`. Each step runs when its
      suite is selected, and every selected one runs even after another fails. It isn't folded
      into `plan`, since a failure there would skip every job that needs the plan.
    - `pwa-ui` runs Playwright on four runners: Chromium in one, WebKit (about twice as slow) in
@@ -333,12 +333,14 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `pwa-e2e` runs `test/e2e`, in both browsers, in the one job that builds the dev stack. The
      shards set `PWA_SKIP_E2E`, so `test/e2e` is left out of them rather than skipping itself;
      together the five run every spec. The one PWA job these replace took a median of 15
-     minutes. Each `pwa-ui` leg downloads Playwright's system packages before installing them,
-     and if apt's first mirror hasn't finished in five minutes it fetches the rest from the
-     runner's Canonical fallback, `https://archive.ubuntu.com` (main run 41927187905 lost a
-     WebKit shard to that mirror at 100 kB/s). WebKit's legs, which download 114 MB of
-     packages, get 35 minutes and Chromium's 20, so a fallback download still leaves time for
-     the tests.
+     minutes. Every job that runs `playwright install --with-deps` (each `pwa-ui` leg, `pwa-e2e`
+     and `spikes-linux`) first downloads Playwright's system packages through
+     `.github/actions/playwright-system-packages`, and if apt's first mirror hasn't finished in
+     five minutes it fetches the rest from the runner's Canonical fallback,
+     `https://archive.ubuntu.com` (main run 41927187905 lost a WebKit shard to that mirror at
+     100 kB/s, and main run 41952998347 `pwa-e2e`). Each of those jobs gets 35 minutes, so a
+     fallback download still leaves time for the tests; the browsers' own download, on a cache
+     miss, is unchanged.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
