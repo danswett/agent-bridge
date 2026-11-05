@@ -45,6 +45,7 @@ internal static class QuestionMapper
     {
         var message = Json.Str(arguments, "message") ?? Json.Str(arguments, "question") ?? "";
         IReadOnlyList<Field> fields = [];
+        var atMachine = false;
         var choices = ChoiceList(Json.Get(arguments, "choices"));
         if (choices.Count > 0)
         {
@@ -68,6 +69,10 @@ internal static class QuestionMapper
             // it only in a question that is that one list: the Down past its last option
             // opens Other there, and in a tabbed form or a checkbox list it does not.
             if (fields is [{ Type: FieldType.Choice } only]) { fields = [only with { AllowOther = true }]; }
+            // A field the CLI draws as something other than its schema says, or that cannot be
+            // told, is never typed into, so a client shows the question to be answered at the
+            // machine rather than offer what the host would then refuse (#662).
+            atMachine = !Drivable(schema);
         }
         return new Question
         {
@@ -77,6 +82,7 @@ internal static class QuestionMapper
             Truncated = IsCut(message),
             Fields = fields,
             AskedAt = askedAt,
+            AnswerAtMachine = atMachine ? true : null,
         };
     }
 
@@ -123,30 +129,39 @@ internal static class QuestionMapper
         return fields;
     }
 
+    // Whether every field of a schema reads as one input Copilot CLI is known to draw for it.
+    static bool Drivable(JsonElement schema)
+    {
+        if (schema.ValueKind == JsonValueKind.String)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(schema.GetString() ?? "");
+                return Drivable(doc.RootElement);
+            }
+            catch (JsonException) { return true; }
+        }
+        if (Json.Obj(schema, "properties") is not { } properties) { return true; }
+        return properties.EnumerateObject().All(p => p.Value.ValueKind != JsonValueKind.Object || CopilotFieldSchema.Read(p.Value).Problem is null);
+    }
+
+    // Each field as the input Copilot CLI draws for it (CopilotFieldSchema), which is not
+    // always what its keywords suggest: a number with an `enum` is still a number box, and a
+    // string with only `anyOf` a text box.
     static Field SchemaField(string name, JsonElement p, bool required)
     {
-        var type = Json.Str(p, "type");
-        FieldType kind;
-        IReadOnlyList<Option>? options = null;
-        if (type == "array")
+        var (input, choices, _) = CopilotFieldSchema.Read(p);
+        var kind = input switch
         {
-            kind = FieldType.Multi;
-            options = Json.Obj(p, "items") is { } items ? Options(items) : null;
-        }
-        else if (Options(p) is { Count: > 0 } choices)
-        {
-            kind = FieldType.Choice;
-            options = choices;
-        }
-        else
-        {
-            kind = type switch
-            {
-                "boolean" => FieldType.Boolean,
-                "number" or "integer" => FieldType.Number,
-                _ => FieldType.Text,
-            };
-        }
+            CopilotFieldSchema.Input.Multi => FieldType.Multi,
+            CopilotFieldSchema.Input.Choice => FieldType.Choice,
+            CopilotFieldSchema.Input.Boolean => FieldType.Boolean,
+            CopilotFieldSchema.Input.Number => FieldType.Number,
+            _ => FieldType.Text,
+        };
+        IReadOnlyList<Option>? options = kind is FieldType.Multi or FieldType.Choice && choices.Count > 0
+            ? [.. choices.Select(c => new Option(Scalar(c.Value), c.Label is { } label && label != Scalar(c.Value) ? label : null))]
+            : null;
         return new Field
         {
             Name = name,
@@ -157,38 +172,6 @@ internal static class QuestionMapper
             Default = Json.Get(p, "default") is { } d ? Json.Detach(d) : null,
             Required = required ? true : null,
         };
-    }
-
-    // Options from `enum` (labelled by `enumNames` when present), or from `oneOf` /
-    // `anyOf` entries of `{const, title}`. The value is what the agent records as the
-    // answer and the label what to show; they differ exactly when a form is written the
-    // richer way, which is when confusing them matters.
-    static List<Option>? Options(JsonElement p)
-    {
-        if (Json.Arr(p, "enum") is { } values)
-        {
-            var labels = Json.Arr(p, "enumNames") is { } n ? n.EnumerateArray().Select(x => x.ValueKind == JsonValueKind.String ? x.GetString() : null).ToList() : [];
-            var i = 0;
-            var list = new List<Option>();
-            foreach (var v in values.EnumerateArray())
-            {
-                var label = i < labels.Count ? labels[i] : null;
-                list.Add(new Option(Scalar(v), string.IsNullOrEmpty(label) ? null : label));
-                i++;
-            }
-            return list;
-        }
-        var entries = Json.Arr(p, "oneOf") ?? Json.Arr(p, "anyOf");
-        if (entries is not { } e) { return null; }
-        var options = new List<Option>();
-        foreach (var entry in e.EnumerateArray())
-        {
-            var title = Json.Str(entry, "title");
-            var value = Json.Get(entry, "const") is { } c ? Scalar(c) : title;
-            if (value is null) { continue; }
-            options.Add(new Option(value, title is not null && title != value ? title : null));
-        }
-        return options;
     }
 
     static string Scalar(JsonElement v) => v.ValueKind == JsonValueKind.String ? v.GetString()! : v.GetRawText();

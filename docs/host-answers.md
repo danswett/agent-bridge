@@ -10,7 +10,7 @@ how the host does it and what it refuses.
 | Agent | Question | Answered |
 |---|---|---|
 | Copilot CLI | `ask_user` with no form: free text | Yes: the words, then Enter |
-| Copilot CLI | `ask_user` form (`requestedSchema`): `choice` (`enum`, `oneOf`, `anyOf`), `boolean`, `multi` (`type: array`), `text`, `number`, any number of fields | Yes |
+| Copilot CLI | `ask_user` form (`requestedSchema`): `choice` (`type: string` with `enum` or `oneOf`), `boolean`, `multi` (`type: array`, items `anyOf` or `enum`), `text`, `number`, any number of fields | Yes |
 | Copilot CLI | Other words for a question that is one option list | Yes (`allowOther` is set on exactly that shape) |
 | Copilot CLI | Other in a form of several fields, or in a checkbox list | Refused: no walk reaches it |
 | Copilot CLI | The older `question` / `choices` format | Refused: agent-ha-bridge never drove it, and no current build writes it |
@@ -53,9 +53,40 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     answer. An empty answer only where `minItems` allows it. That Up stops at the first
     row of a checkbox list, as it does in a single-choice list, is assumed rather than
     seen live: check it on the test VM.
-  * text and number: the words (a number as its JSON text). An optional text field left
+  * text and number: the words (a number as plain decimal, below). An optional text field left
     out is skipped with Enter; an option list cannot be left out, since Enter commits
     whatever its caret is on.
+  * text and number with a schema `default` (#662): Copilot opens the field with the default
+    already typed in, and keys typed there are added to it (`90` typed into a field that
+    opened with `90` was recorded as `9090`). Nothing known here clears it, so an answer
+    that is the default, as the prompt shows it, types nothing and only the field's Enter goes,
+    keeping it; any other answer to the field, or none, is `refused` whole before a key goes:
+    `answer at the machine (this field has a pre-filled default)`. A text field's `null` or
+    empty default fills nothing in, and is typed as before; a number field's `null` default
+    opens reading `null`, so it is refused like any other. Numbers are compared exactly, and
+    one that cannot be (an exponent too large to hold, or no finite value) is refused. Copilot
+    is JavaScript and holds every number as the nearest double, so a default, an answer or a
+    number option it would hold as another number (`9007199254740993` becomes
+    `9007199254740992`, `1e-400` becomes `0`) is refused before a key goes. A number is typed
+    as plain decimal (`1e5` as `100000`): the number box drops a key that leaves its text not
+    a number, and `1e` is not one; one longer than 40 characters is refused. A number
+    field's string default is recorded by the CLI as `Number(text)`, so `"3"` is kept as `3`;
+    only a string that is plainly a JSON number is read so. Seen in a real session for a number field; a text field is
+    assumed to open the same way. Claude's and Codex's prompts take no typed field values, so
+    have no such field.
+  * An option list whose `default` is present but is not one of its options, `null` included,
+    opens on its Other box (`Dxn` in 1.0.105), where the walk from the top row ends a row off;
+    it is refused, and shown to be answered at the machine. So are a checkbox list with no
+    options (no `items` object, or one naming none) and one whose default does not name its
+    options.
+  * Every field is read as Copilot CLI draws it, which is by its `type` alone (`cli-main.js`
+    `tle` in 1.0.105): a `number` or `integer` is a number box even with an `enum` (whose Up
+    and Down add or take one, so walking it as a list recorded a different number), and a
+    `string` with only `anyOf` is a text box. Options come from `oneOf` before `enum`, and a
+    checkbox list's from `items.anyOf` before `items.enum`, each by its `const`. A field the CLI
+    would draw as something its schema does not mean (options with no `type`, a `type` it does
+    not know, an option with no `const`) is never typed into, and the question is shown to be
+    answered at the machine.
 * **Other** (a lone option list): Up × (N−1), Down × N as one burst with no Enter, 400 ms
   for Other to hand over the input, then the words, 300 ms, Enter (agent-ha-bridge #240:
   Down on the last option opens Other at once, and an empty Enter returns to the last
