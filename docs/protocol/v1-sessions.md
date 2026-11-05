@@ -573,6 +573,9 @@ Free text of nothing but what shows as nothing (white space, control and format 
 default-ignorables such as U+3164, marks with no base; see `session.reply`) is empty, and
 `refused` as such.
 A field's `constraints` (below) are checked too: a value outside them is `refused`, with why.
+An empty or blank value (`""`, or text JavaScript's `trim()` leaves empty) for a `required`
+`text` field is `refused` as needing an answer: typing nothing records no answer, and blank text
+might be recorded trimmed to nothing.
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
 Result: `{ "outcome": "<outcome>", "reason": "<text>" }`, with `reason` present for
@@ -1335,13 +1338,19 @@ and lets the host refuse it. Not strict: a reader that cannot read them reads th
 | `minItems`, `maxItems` | int? | How many options a `multi` takes |
 
 Numbers are compared exactly as written, never as doubles; a host carries only bounds a
-JavaScript client holds exactly. Text is checked unless it is blank (no answer), a host's on
-the text it would type, line breaks flattened. A field whose constraints a host cannot check
-exactly (a bound JavaScript would hold as another number, a length that is not a whole number,
-a pattern it cannot read as JavaScript does, or patterns past the 250 ms one question's patterns
-share), or whose pre-filled default breaks them, makes its question `answerAtMachine`, as does a
-`choice` whose schema, or a `multi` whose `items`, has text constraints. A client checking a `pattern` reads it as JavaScript
-does, without flags: `\d` and `\w` are ASCII.
+JavaScript client holds exactly. Text is checked unless it is empty (`""`, no answer); text of
+only white space is checked like any other. It is checked both as typed and as trimmed with
+JavaScript's `trim()`, and refused if either form breaks a length, `pattern` or `format` limit:
+Copilot CLI's form passes text on as typed, but a trim where it is recorded is not ruled out,
+and `"  ab"` is 4 characters typed and 2 trimmed. A host checks the text it would type, line
+breaks flattened. A field whose constraints a host cannot check exactly (a bound JavaScript would
+hold as another number, a length that is not a whole number, a pattern it cannot read as
+JavaScript does, or patterns past the 250 ms one question's patterns share), or whose pre-filled
+default breaks them (checked so too), makes its question `answerAtMachine`. So does a `required`
+`text` field whose pre-filled default is blank (non-empty, but empty once trimmed): that default
+is the only answer it can be given from another device, and it is refused as blank. So does a
+`choice` whose schema, or a `multi` whose `items`, has text constraints. A client checking a
+`pattern` reads it as JavaScript does, without flags: `\d` and `\w` are ASCII.
 
 ### Option
 
