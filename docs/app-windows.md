@@ -448,6 +448,11 @@ connector's Install button on a machine the dashboard drives.
 * **Pruning:** the newest 20 pre-releases stay; older ones are deleted with their assets, and
   their tags stay. A full (non-pre-release) release, a draft, or a release not tagged
   `v<major>.<minor>.<patch>` is never touched.
+* **GitHub failing a call:** listing and deleting releases are each tried 3 times (waits of 2 s
+  and 8 s), because GitHub's API now and then fails a single call. A DELETE that failed but went
+  through counts as done. Pruning that still fails, after the release is out, is a warning, not a
+  red `main`; the next publish prunes again. A leftover draft that can't be deleted still stops the
+  publish before anything is uploaded (#907).
 * **Pull requests** prove it without publishing: each app job runs the same script with
   `-DryRun` on its own folder, which checks the folder and its delta against the latest release
   as above, has vpk read it into a scratch feed (`vpk upload local`) that must list that
