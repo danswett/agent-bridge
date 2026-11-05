@@ -40,6 +40,9 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
         public bool Working;
         public bool Said;
         public int Owed;
+        // Claude's notices this turn may still report for it (RunNoticed): one for a run that
+        // began in an earlier turn, or for the run its start began, and one for each message.
+        public int Allowed = 1;
     }
 
     public void TurnBegins() => _runs.Clear();
@@ -123,7 +126,7 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
         // review of #292).
         if (listed.TryGetValue(agent, out var known) && known is not null) { name = known; }
         if (_main.Count < Keep || _main.ContainsKey(agent)) { _main[agent] = name ?? _main.GetValueOrDefault(agent); }
-        if (RunOf(agent) is { } run) { (run.Working, run.Said, run.Owed) = (true, false, 0); }
+        if (RunOf(agent) is { } run) { (run.Working, run.Said, run.Owed, run.Allowed) = (true, false, 0, 1); }
         turn.Delegate(new DelegateEvent { Agent = agent, Event = DelegateEventKind.Started, Name = name, Kind = kind }, at);
     }
 
@@ -156,17 +159,27 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
         if (run.Working || !run.Said) { Report(turn, agent, run, outcome, at); }
     }
 
-    // Claude's notice of a delegate's end, which is the only way Claude says one, and which it
-    // writes once for every run: each is its run's end, reported whatever this turn heard first. A
-    // message can wake the delegate after one run stopped and before that run's notice was
-    // delivered; the next notice then ends the run it started. Spent on the run it came after,
-    // the second notice was dropped, losing the resumed run's report and outcome (found in review
-    // of #292). Live tells the two apart by when each was queued (ClaudeParser.Delivered), since
-    // it shows whether the delegate is running now; a turn need not, and the queue may be in an
-    // earlier turn.
+    // A message to a Claude delegate (SendMessage) starts another run, even while one is going or
+    // its notice is still to come: one more notice may report.
+    public void Messaged(string agent)
+    {
+        if (_main.ContainsKey(agent) && RunOf(agent) is { } run) { run.Allowed++; }
+    }
+
+    // Claude's notice of a delegate's end, the only way Claude says one. A message can wake the
+    // delegate after one run stopped and before that run's notice was delivered, so the next
+    // notice ends the run the message started: spending it on the run before dropped the resumed
+    // run's report and outcome (found in review of #292). Claude also fires a run's notice again,
+    // hours later (anthropics/claude-code#95742), which live takes once (BackgroundWork.AgentIdle):
+    // reported, a stale "completed" would follow a run's "failed" and repeats would push other
+    // delegates' parts past the turn's cap. So a turn reports one notice for each run it can hold
+    // (Run.Allowed), counted from its own records, so it reads the same on every page. Live tells
+    // the runs apart by when each notice was queued (ClaudeParser.Delivered); a turn cannot, as
+    // the queue may be in an earlier one.
     public void RunNoticed(TurnBuilder turn, string agent, SubagentOutcome outcome, DateTimeOffset at)
     {
-        if (!_main.ContainsKey(agent) || RunOf(agent) is not { } run) { return; }
+        if (!_main.ContainsKey(agent) || RunOf(agent) is not { } run || run.Allowed <= 0) { return; }
+        run.Allowed--;
         Report(turn, agent, run, outcome, at);
     }
 
@@ -449,6 +462,7 @@ internal sealed class ClaudeHistory : HistoryDialect
                                     var input = Json.Get(block, "input");
                                     turn.ToolStarted(id, name, ToolSummary.From(input), at);
                                     if (name == "AskUserQuestion" && input is { } i) { turn.Asked(QuestionMapper.FromClaudeAskUserQuestion(id, i, at), at); }
+                                    if (name == "SendMessage" && input is { ValueKind: JsonValueKind.Object } sent && Json.Str(sent, "to") is { } to) { context.Messaged(to); }
                                     break;
                                 }
                         }

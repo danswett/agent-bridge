@@ -981,7 +981,7 @@ public class HistoryTests
     static string Queued(string text, int s) =>
         new JsonObject { ["type"] = "queue-operation", ["operation"] = "enqueue", ["timestamp"] = Copilot.At(s), ["sessionId"] = Id, ["content"] = text }.ToJsonString();
 
-    static string TaskNotice(string status) => $"<task-notification>\n<task-id>a1b2</task-id>\n<status>{status}</status>\n</task-notification>";
+    static string TaskNotice(string status, string task = "a1b2") => $"<task-notification>\n<task-id>{task}</task-id>\n<status>{status}</status>\n</task-notification>";
 
     // Found in review of #292: the first run stopped, a message woke the delegate before that run's
     // notice was delivered, and the second run's notice was then dropped, so only the first run's
@@ -1042,6 +1042,67 @@ public class HistoryTests
         Assert.Equal(reports, Delegates(whole.Turns![1]));
         Assert.Equal(reports, Delegates(alone.Turns!.Single()));
         Assert.Equal([(DelegateEventKind.Started, (SubagentOutcome?)null, Fixture.T0.AddSeconds(3))], Delegates(whole.Turns[0]));
+    }
+
+    static async Task<HistoryResult> ReadClaude(params string[] lines)
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        Fixture.Append(transcript, lines);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        return await source.HistoryAsync(Id, null, 20);
+    }
+
+    // Found in review of #292: Claude fires a run's notice again, hours later
+    // (anthropics/claude-code#95742). Live takes it once, and so does a turn.
+    [Fact]
+    public async Task A_claude_notice_fired_again_for_the_same_run_is_reported_once()
+    {
+        var page = await ReadClaude(
+            Claude.User("explore", 1),
+            Claude.Assistant(2, "tool_use", Claude.ToolUse("agent1", "Agent", new JsonObject { ["description"] = "Explore the code", ["prompt"] = "look" })),
+            LaunchedAgent("agent1", "a1b2", "Explore the code", 3),
+            Notice(TaskNotice("completed"), 4),
+            Notice(TaskNotice("completed"), 5),
+            Notice(TaskNotice("completed"), 6));
+
+        Assert.Equal(
+            [(DelegateEventKind.Started, null, Fixture.T0.AddSeconds(3)), (DelegateEventKind.Reported, SubagentOutcome.Done, Fixture.T0.AddSeconds(4))],
+            Delegates(page.Turns!.Single()));
+    }
+
+    [Fact]
+    public async Task A_stale_claude_notice_after_the_resumed_runs_failure_leaves_failed_as_the_last_word()
+    {
+        var page = await ReadClaude([.. WokenBeforeItsNoticeWasDelivered(ownTurn: false), Notice(TaskNotice("completed"), 13)]);
+
+        var reports = Delegates(page.Turns!.Single()).Where(d => d.Item1 == DelegateEventKind.Reported).ToList();
+        Assert.Equal([(DelegateEventKind.Reported, SubagentOutcome.Done, Fixture.T0.AddSeconds(9)), (DelegateEventKind.Reported, SubagentOutcome.Failed, Fixture.T0.AddSeconds(11))], reports);
+    }
+
+    [Fact]
+    public async Task Claude_notices_fired_again_never_push_another_delegates_parts_out_of_the_turn()
+    {
+        var page = await ReadClaude(
+        [
+            Claude.User("explore", 1),
+            Claude.Assistant(2, "tool_use", Claude.ToolUse("agent0", "Agent", new JsonObject { ["description"] = "Check the docs", ["prompt"] = "look" })),
+            LaunchedAgent("agent0", "c3d4", "Check the docs", 3),
+            Notice(TaskNotice("completed", "c3d4"), 4),
+            Claude.Assistant(5, "tool_use", Claude.ToolUse("agent1", "Agent", new JsonObject { ["description"] = "Explore the code", ["prompt"] = "look" })),
+            LaunchedAgent("agent1", "a1b2", "Explore the code", 6),
+            .. Enumerable.Range(0, HistoryLimits.DelegatesPerTurn + 10).Select(i => Notice(TaskNotice("completed"), 7 + i)),
+        ]);
+
+        var delegates = page.Turns!.Single().Parts.Where(p => p.Delegate is not null).Select(p => (p.Delegate!.Event, p.Delegate.Name)).ToList();
+        Assert.Equal(
+            [(DelegateEventKind.Started, "Check the docs"), (DelegateEventKind.Reported, "Check the docs"),
+             (DelegateEventKind.Started, "Explore the code"), (DelegateEventKind.Reported, "Explore the code")],
+            delegates);
+        Assert.Null(page.Turns.Single().Truncated);
     }
 
     static string LaunchedAgent(string toolUseId, string agentId, string description, int s)

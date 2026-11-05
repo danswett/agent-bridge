@@ -343,11 +343,13 @@ turn was the latest, with the same `from`.
 
 A delegate is reported **once per run within a turn**, as the live list counts runs: a message to
 it (Copilot's stamped `user.message`, Codex's `send_input`, `resume_agent`, `send_message` or
-`followup_task`) starts another run. Claude says a run's end only by its notice, and writes one
-for every run, so each notice it marked is reported: a `SendMessage` can wake the delegate after
-one run stopped and before that run's notice is delivered, and the next notice then ends the run it
-started. A run's end said by the run itself (a
-completion, a failure, a Codex wait) and then by a notice in the same turn is one report: the
+`followup_task`) starts another run. Claude says a run's end only by its notice, so a turn reports
+one notice for each run it can hold: one for a run that began before it, one for the run its own
+start began, and one more for each `SendMessage` to the delegate, even while a run is going or its
+notice is still to come (a message can wake it after one run stopped and before that run's notice
+is delivered, and the next notice then ends the run it started). Further notices are not reported:
+Claude fires a run's notice again, sometimes hours later, and live takes it once. A run's end
+said by the run itself (a completion, a failure, a Codex wait) and then by a notice in the same turn is one report: the
 notice is spent on that run, never on one a message has started since. Each turn decides its
 reports from its own records alone, so **a turn reads the same whatever page it is on**: a run's end
 said in one turn and the notice the main agent took in a later turn is reported in each, as each
