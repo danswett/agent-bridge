@@ -46,7 +46,7 @@
   /* The conversation scrolls under the header, which floats over its top: collapsing never moves it. */
   .scroller { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: var(--full) 16px 16px; scroll-padding-top: calc(var(--covered, var(--full)) + 8px); }
   .head { position: absolute; left: 0; right: 0; top: 0; z-index: 2; pointer-events: none; }
-  /* touch-action: a vertical swipe on the header scrolls the conversation (script below); the chips still pan sideways. */
+  /* touch-action: a vertical swipe on the header scrolls the conversation (script below). */
   /* max-height: on a screen shorter than the header (a landscape phone) it scrolls within itself, so focus in it can always be shown. */
   .full { pointer-events: auto; touch-action: pan-x; max-height: var(--stage-h, none); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; background: var(--shell); border-bottom: 1px solid var(--stroke); transform: translateY(var(--ty)); will-change: transform; }
   .animating .full { transition: transform var(--dur) var(--ease); }
@@ -58,17 +58,20 @@
   [data-solid] .bar::before { opacity: 1; }
   [data-titled] .bt { opacity: 1; visibility: visible; transition: opacity var(--xfade) linear; }
 
-  /* The at-rest header: today's, unchanged. */
-  .top { display: grid; grid-template-columns: 1fr; padding: 8px 52px 12px; min-height: 151px; }
-  h2 { margin: 0; font-size: 24px; line-height: 32px; font-weight: 700; letter-spacing: -.01em; }
-  .meta { display: flex; gap: 6px; margin-top: 6px; font-size: 13px; line-height: 18px; color: var(--text2); }
+  /* The at-rest header (owner, 2026-11-05): a title of at most two lines, one meta line, and the tabs'
+     own row. There is no delegate strip on a phone: the Delegates tab carries its count and needs. */
+  .top { display: grid; grid-template-columns: 1fr; padding: 8px 52px 8px; border-bottom: 1px solid var(--stroke); }
+  h2 { margin: 0; font-size: 24px; line-height: 32px; font-weight: 700; letter-spacing: -.01em;
+       display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+  .meta { display: flex; gap: 6px; margin-top: 4px; font-size: 13px; line-height: 18px; color: var(--text2); white-space: nowrap; min-width: 0; }
+  .meta > span { display: flex; min-width: 0; }
+  .meta .mach { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .meta b { color: var(--needs-text); font-weight: 600; }
   .meta i { font-style: normal; color: var(--text); }
-  .chips { display: flex; gap: 8px; padding: 12px 16px; overflow-x: auto; border-top: 1px solid var(--stroke); scrollbar-width: none; }
-  .chip { flex: none; display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border-radius: 18px; background: var(--card); border: 1px solid var(--stroke); font-size: 13px; }
-  .chip span { color: var(--text2); }
-  .tabs { display: flex; gap: 20px; padding: 0 16px; height: 45px; border-top: 1px solid var(--stroke); }
-  .tab { position: relative; height: 44px; font-size: 14px; color: var(--text2); }
+  .tabs { display: flex; gap: 24px; height: 48px; align-items: center; padding: 0 16px; }
+  .tab { position: relative; display: flex; align-items: center; gap: 6px; height: 44px; font-size: 14px; color: var(--text2); white-space: nowrap; }
+  .tab .n { color: var(--text2); font-weight: 400; }
+  .tab .n:empty, .tab .glyph[hidden] { display: none; }
   .tab[aria-selected="true"] { color: var(--text); font-weight: 600; }
   .tab[aria-selected="true"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; border-radius: 2px; background: var(--bridge); }
   .glyph { flex: none; }
@@ -106,9 +109,10 @@
   }
   @media (forced-colors: active) {
     .full, .bar::before, .slot { background: Canvas; border-color: CanvasText; }
+    .top { border-color: CanvasText; }
     .bar::before { border-bottom: 1px solid CanvasText; }
     .tab[aria-selected="true"]::after { background: Highlight; }
-    .q, .chip, .you, .opt, .box { border-color: CanvasText; }
+    .q, .you, .opt, .box { border-color: CanvasText; }
     .glyph.needs { forced-color-adjust: none; color: Highlight; --needs-ink: HighlightText; }   /* keeps the S on its disc, as tokens.css maps needs */
   }
 </style>
@@ -131,16 +135,12 @@
             <h2 id="title">Fix the witness timer after a resume</h2>
             <div class="meta">
               <svg class="glyph needs" viewBox="0 0 48 48" width="16" height="16" aria-hidden="true" style="margin-top: 1px"><circle cx="24" cy="24" r="23" fill="currentColor"/><path fill="var(--needs-ink)" d="M37.965 12.623C38.409 12.623 38.562 12.834 38.425 13.256L37.695 15.504C37.558 15.926 37.267 16.138 36.823 16.138L25.48 16.138C23.2 16.138 20.898 16.795 19.161 18.317C17.69 19.606 16.812 21.369 16.773 23.334C16.785 23.778 16.569 24 16.125 24L13.936 24C13.492 24 13.265 23.778 13.257 23.334C13.296 20.367 14.601 17.652 16.819 15.696C19.206 13.592 22.328 12.623 25.48 12.623L37.965 12.623ZM10.035 35.378C9.591 35.378 9.438 35.166 9.575 34.744L10.305 32.496C10.442 32.074 10.733 31.863 11.177 31.863L22.52 31.863C24.8 31.863 27.102 31.205 28.839 29.683C30.31 28.394 31.188 26.631 31.227 24.666C31.215 24.222 31.431 24 31.875 24L34.064 24C34.508 24 34.735 24.222 34.743 24.666C34.704 27.633 33.399 30.348 31.181 32.304C28.794 34.408 25.672 35.378 22.52 35.378L10.035 35.378Z"/></svg>
-              <span id="meta"><b>Waiting on you</b> · 3 delegates still running · <i>Demo machine</i> · demo/agent-bridge</span>
+              <span id="meta"><b>Waiting on you</b>&nbsp;·&nbsp;<span class="mach">Demo machine</span></span>
             </div>
-          </div>
-          <div class="chips" aria-label="Delegates" role="group">
-            <button class="chip" type="button"><svg viewBox="0 0 48 48" width="16" height="16" aria-hidden="true" style="color: var(--active)"><path fill="currentColor" d="M42.872 8.625C43.472 8.625 43.679 8.91 43.494 9.481L42.506 12.519C42.321 13.09 41.928 13.375 41.328 13.375L26 13.375C22.919 13.375 19.809 14.264 17.461 16.321C15.473 18.062 14.286 20.445 14.233 23.101C14.25 23.7 13.958 24 13.358 24L10.399 24C9.799 24 9.494 23.7 9.483 23.1C9.536 19.09 11.298 15.421 14.296 12.778C17.522 9.935 21.741 8.625 26 8.625L42.872 8.625Z"/><path fill="currentColor" fill-opacity=".3" d="M5.128 39.375C4.528 39.375 4.321 39.09 4.506 38.519L5.494 35.481C5.679 34.91 6.072 34.625 6.672 34.625L22 34.625C25.081 34.625 28.191 33.736 30.539 31.679C32.527 29.938 33.714 27.555 33.767 24.899C33.75 24.3 34.042 24 34.642 24L37.601 24C38.201 24 38.506 24.3 38.517 24.9C38.464 28.91 36.702 32.579 33.704 35.222C30.478 38.065 26.259 39.375 22 39.375L5.128 39.375Z"/></svg><b>Read witness logic</b><span>17m · 2 nested</span></button>
-            <button class="chip" type="button"><svg viewBox="0 0 48 48" width="16" height="16" aria-hidden="true" style="color: var(--active)"><path fill="currentColor" d="M42.872 8.625C43.472 8.625 43.679 8.91 43.494 9.481L42.506 12.519C42.321 13.09 41.928 13.375 41.328 13.375L26 13.375C22.919 13.375 19.809 14.264 17.461 16.321C15.473 18.062 14.286 20.445 14.233 23.101C14.25 23.7 13.958 24 13.358 24L10.399 24C9.799 24 9.494 23.7 9.483 23.1C9.536 19.09 11.298 15.421 14.296 12.778C17.522 9.935 21.741 8.625 26 8.625L42.872 8.625Z"/><path fill="currentColor" fill-opacity=".3" d="M5.128 39.375C4.528 39.375 4.321 39.09 4.506 38.519L5.494 35.481C5.679 34.91 6.072 34.625 6.672 34.625L22 34.625C25.081 34.625 28.191 33.736 30.539 31.679C32.527 29.938 33.714 27.555 33.767 24.899C33.75 24.3 34.042 24 34.642 24L37.601 24C38.201 24 38.506 24.3 38.517 24.9C38.464 28.91 36.702 32.579 33.704 35.222C30.478 38.065 26.259 39.375 22 39.375L5.128 39.375Z"/></svg><b>Run full test suite</b><span>16m</span></button>
           </div>
           <div class="tabs" role="tablist" aria-label="Session">
             <button class="tab" role="tab" type="button" aria-selected="true">Conversation</button>
-            <button class="tab" role="tab" type="button" aria-selected="false" tabindex="-1">Delegates</button>
+            <button class="tab" role="tab" type="button" aria-selected="false" tabindex="-1" id="dtab" aria-label="Delegates, 2 running"><svg class="glyph needs" viewBox="0 0 48 48" width="16" height="16" aria-hidden="true" id="dneeds" hidden><circle cx="24" cy="24" r="23" fill="currentColor"/><path fill="var(--needs-ink)" d="M37.965 12.623C38.409 12.623 38.562 12.834 38.425 13.256L37.695 15.504C37.558 15.926 37.267 16.138 36.823 16.138L25.48 16.138C23.2 16.138 20.898 16.795 19.161 18.317C17.69 19.606 16.812 21.369 16.773 23.334C16.785 23.778 16.569 24 16.125 24L13.936 24C13.492 24 13.265 23.778 13.257 23.334C13.296 20.367 14.601 17.652 16.819 15.696C19.206 13.592 22.328 12.623 25.48 12.623L37.965 12.623ZM10.035 35.378C9.591 35.378 9.438 35.166 9.575 34.744L10.305 32.496C10.442 32.074 10.733 31.863 11.177 31.863L22.52 31.863C24.8 31.863 27.102 31.205 28.839 29.683C30.31 28.394 31.188 26.631 31.227 24.666C31.215 24.222 31.431 24 31.875 24L34.064 24C34.508 24 34.735 24.222 34.743 24.666C34.704 27.633 33.399 30.348 31.181 32.304C28.794 34.408 25.672 35.378 22.52 35.378L10.035 35.378Z"/></svg>Delegates<span class="n" id="dn">2</span></button>
             <button class="tab" role="tab" type="button" aria-selected="false" tabindex="-1">Tools</button>
           </div>
         </header>
@@ -169,6 +169,10 @@
   const BAR = 48, DOWN = 32, UP = 64, TITLE_IN = 40;
   const $ = (id) => document.getElementById(id);
   const phone = $('phone'), scroller = $('scroller'), full = $('full'), conv = $('conv'), bt = $('bt');
+  // The Delegates tab carries what the phone strip used to: ?d=ask has one delegate asking, ?d=0 none running.
+  const dq = new URLSearchParams(location.search).get('d');
+  if (dq === 'ask') { $('dneeds').removeAttribute('hidden'); $('dtab').setAttribute('aria-label', 'Delegates, 2 running, 1 asking'); }
+  if (dq === '0') { $('dn').textContent = ''; $('dtab').setAttribute('aria-label', 'Delegates'); }
 
   const turns = [
     ['you', 'Can you find out why the witness timer restarts after a resume? It happened twice this morning.'],

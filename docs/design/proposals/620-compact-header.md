@@ -1,11 +1,28 @@
 # Proposal #620: the phone session header collapses as you scroll
 
-> **Decided (owner, 2026-11-04).** The owner chose every recommended option:
+> **Revised (owner, 2026-11-05): the at-rest header shrinks too.** From a phone screenshot, the
+> owner called the at-rest header "a massive waste of space". A first ruling kept a strip of
+> working delegates sharing the tabs' row. A second, at 12:05 PT, replaced it: **no delegate
+> strip on a phone at all**, since it repeats the Delegates tab ("Every element should have a
+> purpose").
+>
+> 1. One meta line, never wrapped.
+> 2. The Delegates tab carries the running count and the `needs` glyph ("Delegates, 1 asking").
+>    With none running, there is no count.
+> 3. A delegate's question stays in the conversation, naming the delegate.
+> 4. The tabs keep their own row. At rest: the title, the meta line, the tabs.
+> 5. Collapse on scroll as below (D1, D2).
+>
+> D3–D6 are superseded for the header. The design is in [At rest,
+> revised](#at-rest-revised-2026-11-05). It measures **152 pt at rest** on a 390 × 844 phone,
+> against Product's estimate of about 150.
+>> **Decided (owner, 2026-11-04).** The owner chose every recommended option:
 >
 > - **D1:** collapse on scroll, riding with the finger near the top, then 64 pt up to come back
 >   and 32 pt down to go.
 > - **D2:** the bar holds Back, the glyph, the title on one line, and More.
-> - **D3–D6:** everything at rest, and the bottom, stays as it is today.
+> - **D3–D6:** everything at rest, and the bottom, stays as it is today. *(Superseded on
+>   2026-11-05 for the header, above. The reply box and notice still stay as they are.)*
 >
 > The text in [the ui.md section](#the-uimd-text) is now in [ui.md](../ui.md) §5.2, §5.3, §6.2,
 > §6.3 and §9, and the `collapse` motion is in `tokens.json`, both from #629. **ui.md is the
@@ -89,7 +106,62 @@ reading state: past the top of the turn, or on the way to the question.
 
 ## The design
 
+### At rest, revised (2026-11-05)
+
+This replaces "At rest: unchanged" below. ui.md §6.2 has the spec.
+
+- **The title:** 24/32 bold, between Back and More, at most two lines with an ellipsis. The full
+  title stays the h2's text, so it is read in full, and it is in Details.
+  - A two-line limit is the only way to the owner's target. A title with no limit can run to
+    four lines and 64 pt more.
+- **One meta line, never wrapped:** glyph · status · machine, plus the account only when it isn't
+  the person's own ("Delegating to 2 agents · DEV-VM2"). The status never shortens. The account,
+  then the machine, give way with an ellipsis. The repository goes to Details.
+- **The tabs, on their own row of 48.** No delegate strip on a phone.
+  - "Delegates 2" while two run, read "Delegates, 2 running". No count when none run.
+  - While one asks, the tab leads with the `needs` glyph, read "Delegates, 2 running, 1
+    asking". The question is answered in the conversation, never only in the tab.
+  - The row never changes height, so nothing below moves.
+
+**Measured** (the prototype, Chromium and WebKit, a two-line title):
+
+| Viewport | Header at rest, today → revised | Conversation at rest, today → revised | Scrolled |
+|---|---|---|---|
+| iPhone SE, 375 × 667 | 257 → **152** | 214 (32%) → **319 (48%)** | 423 (63%) |
+| iPhone 15, 390 × 844 | 257 → **152** | 391 (46%) → **496 (59%)** | 600 (71%) |
+| iPhone Pro Max, 430 × 932 | 239 → **152** | 497 (53%) → **584 (63%)** | 688 (74%) |
+| Android, 412 × 915 | 239 → **152** | 480 (52%) → **567 (62%)** | 671 (73%) |
+
+- It is 152 in every delegate state (running, asking, none) and with a four-line title
+  (clamped). With a one-line title it is 120.
+- The three tabs fit at 375 with room to spare: the last ends at 276 with the glyph.
+- The meta line stays one line with a 32-character machine name.
+- Nothing scrolls sideways, and the page has no errors.
+- The collapse distance is now 152 − 48 = 104.
+
+**Keyboard and screen reader** (checked in both engines):
+- Tab goes Back, More, the tabs (one stop, arrows inside), then the conversation.
+- There is one h2.
+
+**Captures** (390 × 844, reduced motion):
+
+| State | Capture |
+|---|---|
+| Two delegates running | [dark](620-compact-header/rest-dark.png) · [light](620-compact-header/rest-light.png) · [high contrast](620-compact-header/rest-hc.png) |
+| One asking | [dark](620-compact-header/rest-asking-dark.png) · [light](620-compact-header/rest-asking-light.png) · [high contrast](620-compact-header/rest-asking-hc.png) |
+| None running | [dark](620-compact-header/rest-none-dark.png) |
+| Long title and long machine name | [dark](620-compact-header/rest-long-dark.png) |
+| Scrolled | [dark](620-compact-header/rest-scrolled-dark.png) |
+| The Delegates tab focused | [dark](620-compact-header/rest-focus-tab-dark.png) |
+
+The prototype shows one asking with `?d=ask`, and none running with `?d=0`.
+
+**Where it applies:** the PWA on a phone, and native phones later. Tablet, desktop and the
+Windows app don't change, chips included. The owner asked Creative to apply the same test there;
+that is a separate proposal.
 ### At rest: unchanged
+
+*(Superseded on 2026-11-05 by [At rest, revised](#at-rest-revised-2026-11-05).)*
 
 A session always opens at rest, with the header in full:
 
@@ -218,6 +290,10 @@ at-rest header is the owner's, and the first scroll takes it away.
 
 ## Secondary decisions: the at-rest header and the bottom
 
+*(For the header, D3 and D4 are superseded on 2026-11-05 by [At rest,
+revised](#at-rest-revised-2026-11-05). D5 and D6 still stand as decided: the reply box and the
+notice stay as they are.)*
+
 These are optional. **Each recommends keeping today's design**, because:
 
 - the owner finds the at-rest header fine;
@@ -253,7 +329,7 @@ They are here so the owner can take any of them on with the collapse, and the bo
 
 The text proposed for ui.md. The owner accepted the recommendations, and #629 applied it,
 spelling a few points out in full (the tab order, reduced motion and the native clients).
-Where this differs from ui.md, ui.md wins. Sections not listed stay as they are.
+Where this differs from ui.md, ui.md wins. Sections not listed stay as they are. This is the 2026-11-04 text: the 2026-11-05 at-rest header is in ui.md §6.2, not here.
 
 **§5.2, Layout by window width** (append to the **Scrolling** bullet):
 
@@ -337,7 +413,7 @@ the recommended option of every decision (2026-11-04).**
 **D4. The chips and tabs at rest** (secondary).
 1. **Keep both rows.**
 2. One row: tabs, then chips, scrolling sideways (saves 53).
-3. The chips move into the Delegates tab, which shows a count (saves 61).
+3. The chips move into the Delegates tab, which shows a count (saves 61). *(Chosen on 2026-11-05, with the `needs` glyph on the tab and a two-line title.)*
 
 **D5. The reply box's starting height** (secondary).
 1. **Keep two rows, with Attach and Send under the text.**
@@ -359,7 +435,7 @@ All the boards on one page: [contact-sheet.png](620-compact-header/contact-sheet
 | Four phones | [dark](620-compact-header/proposal-620-sizes.png) · [light](620-compact-header/proposal-620-sizes-light.png) | Today and scrolled at 375 × 667, 390 × 844, 430 × 932 and Android 412 × 915: the table above |
 | PWA on Android, 412 × 915 | [dark](620-compact-header/proposal-620-android.png) · [light](620-compact-header/proposal-620-android-light.png) | The same collapse, read as Material's collapsing top app bar |
 | The rules | [dark](620-compact-header/proposal-620-rules.png) · [light](620-compact-header/proposal-620-rules-light.png) | At the top; riding up with the finger; compact; 40 up stays; 64 up comes back; waiting on you |
-| Optional, at rest (D3, D4) | [dark](620-compact-header/proposal-620-rest.png) · [light](620-compact-header/proposal-620-rest-light.png) | A long title today; a two-line limit; 20/26; tabs and chips in one row; chips in the Delegates tab |
+| Optional, at rest (D3, D4), superseded by the rest-*.png captures above | [dark](620-compact-header/proposal-620-rest.png) · [light](620-compact-header/proposal-620-rest-light.png) | A long title today; a two-line limit; 20/26; tabs and chips in one row; chips in the Delegates tab |
 | Optional, the bottom (D5, D6) | [dark](620-compact-header/proposal-620-bottom.png) · [light](620-compact-header/proposal-620-bottom-light.png) | Today's reply area; a one-line notice; a one-line box; both; the box grown |
 | Accessibility | [dark](620-compact-header/proposal-620-access.png) · [light](620-compact-header/proposal-620-access-light.png) | Focus expands the header; the screen reader's reading; high contrast (Night sky, Desert); reduced motion |
 

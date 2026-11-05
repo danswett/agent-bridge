@@ -41,6 +41,8 @@ without them: where they disagree, this page wins and the mock-ups get fixed.
 5. **The interface doesn't explain itself.** No helper sentences inside the UI ("Replies go
    to the main agent…"). If a control needs a sentence, the control is wrong. Tooltips and
    accessibility labels carry the detail.
+6. **Every element has a purpose** (the owner, 2026-11-05). Nothing is drawn twice on one
+   screen. If two elements show the same fact, one goes. A design review checks this first.
 
 ## 2. Status language
 
@@ -648,15 +650,35 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 ### 6.2 Session header
 
 - **Title:** the session name.
-- **One meta line:** glyph · status text (rule set §2.2) · machine · repo.
+- **One meta line:** glyph · status text (rule set §2.2) · machine · repo. A phone's is
+  shorter (below).
 - **Actions:** icon buttons with tooltips: Pin, Details (everything removed from rows),
   and toggle inspector. End session lives in Details on desktop, and in the overflow menu
   on phones.
 - **Phone:** Back (to the list) leads the header, and Pin, Details and End session are in its
   overflow menu.
+- **Phone: at rest (#620; the owner, 2026-11-05).** The title, one meta line and the tabs: 152
+  tall at 390 × 844 with a two-line title, in every delegate state.
+  - **The title:** 24/32 bold, between Back and More, **at most two lines** with an ellipsis.
+    The full title is the h2's text, so it is read in full, and it is in Details.
+  - **One meta line, never wrapped:** glyph · status (§2.2) · machine, and the account only
+    when it isn't the person's own ("Delegating to 2 agents · DEV-VM2"). The status is never
+    shortened. The account, then the machine, give way with an ending ellipsis, and their full
+    text is still read. The repository is in Details.
+  - **The tabs, on their own row of 48:** Conversation, Delegates, Tools.
+    - **There is no delegate strip on a phone,** whatever the delegates are doing. The
+      Delegates tab carries what it carried.
+    - **While delegates are running,** the tab's label has their count: "Delegates 2", read as
+      "Delegates, 2 running". With none running, there is no count.
+    - **While a delegate is asking,** the tab leads with the `needs` glyph, and its name says
+      so: "Delegates, 2 running, 1 asking". The question itself is in the conversation, naming
+      the delegate (#661, §7.0), and is answered there without opening the tab.
+    - The count and glyph change in place, so the row never changes height.
+    - The tabs are one Tab stop with arrows inside, as every tab list.
+  - Tablet, desktop and the Windows app keep the header above, chips included.
 - **Phone: collapse on scroll (#620).** A session opens with its header in full, as above. The
   header floats over the conversation's top, and the conversation scrolls under it.
-  - **Near the top,** scrolling down slides the title, meta line, chips and tabs up under a
+  - **Near the top,** scrolling down slides the title, meta line and tabs up under a
     pinned 48 bar: Back, the session's glyph, the title on one line with an ellipsis (17/22,
     semibold), More. The header follows the scroll with no easing (iOS's large title). The
     bar's fill, hairline and title fade in (`crossFade`) once the big title is under it (40).
@@ -678,7 +700,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **The title stays the one h2.** The bar's copy is drawn, not read; the status is read from
     the meta line. Nothing is announced. Focus moving into the header brings it back, and it
     stays while focus is there. The conversation's scroll padding is what the header covers
-    plus 8, so focus never lands under it. Tab order is Back, More, the chips, the tabs, then
+    plus 8, so focus never lands under it. Tab order is Back, More, the tabs, then
     the conversation.
   - **Reduced motion:** coming back and going are a cross-fade with no travel; near the top
     the header still follows the scroll. The thresholds don't change.
@@ -708,9 +730,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   Bridge. Finished delegates fold into a single "N finished" item.
 - **macOS:** the same, as a token row labelled "Delegates".
 - **Narrow desktop:** the Delegates tab.
-- **Phone:** one horizontal chip row. iOS opens a sheet with medium and large detents.
-  Android and the PWA open the delegate in place or as a pushed screen. The row scrolls away
-  with the header (§6.2) and comes back with it.
+- **Phone:** no chips (§6.2, the owner 2026-11-05). The Delegates tab carries the running count
+  and the `needs` glyph, and a delegate's question is answered in the conversation. iOS opens
+  a delegate from the tab in a sheet with medium and large detents. Android and the PWA open it
+  in place or as a pushed screen.
 - **Inspector:**
   - the delegate's name and glyph;
   - a property list: Status, Model, Kind (background or task), ID (mono). A delegate that asks
