@@ -52,6 +52,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     ];
 
     bool _turnAskedForTools;
+    // The host's sentence for the error that ended this turn, which the CLI's notice of it is
+    // shown as (MainText); none once the next turn starts.
+    string? _turnError;
     readonly Dictionary<string, string> _permissionQuestion = new(StringComparer.Ordinal);
     static readonly byte[] AssistantMessage = Marker("\"assistant.message\"");
     static readonly byte[] ToolStart = Marker("\"tool.execution_start\"");
@@ -73,6 +76,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     {
         base.Reset();
         _turnAskedForTools = false;
+        _turnError = null;
         _permissionQuestion.Clear();
     }
 
@@ -110,7 +114,11 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             // Answered): a signed-out session whose delegates wrote on past the parsed window
             // read as fine again after the host restarted.
             case "session.error" when !IsSubagent(e):
-                if (AgentErrors.Copilot(data, Json.Time(e, "timestamp") ?? Time.GetUtcNow()) is { } failure) { Failed(failure); }
+                if (AgentErrors.Copilot(data, Json.Time(e, "timestamp") ?? Time.GetUtcNow()) is { } failure)
+                {
+                    _turnError = failure.Message;
+                    Failed(failure);
+                }
                 break;
             case "assistant.turn_start" when !IsSubagent(e):
                 NewTurn();
@@ -232,6 +240,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         S.OwnResponseCut = false;
         S.OwnReasoning = null;
         S.OwnAt = null;
+        // Turns may have started and failed unread: a notice in the tail names no error of the
+        // skim's (#846), only the generic sentence unless its own error is read there.
+        _turnError = null;
         // A sign-in failure the skim read is kept: bytes never read are no evidence the model
         // answered, as a retry loop can write plenty without one (#800). The tail clears it only
         // with a main reply after it, and a newer failure there moves its since.
@@ -456,6 +467,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "session.error" when !sub:
                 {
                     if (AgentErrors.Copilot(data, Now(at)) is not { } attention) { return false; }
+                    _turnError = attention.Message;
                     S.FailTurn(at);
                     Failed(attention);
                     _turnAskedForTools = false;
@@ -521,6 +533,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     // bridge typed are all written whether the agent can reach its model or not.
     void NewTurn()
     {
+        _turnError = null;
         if (S.Attention is { Kind: not AttentionKind.SignInNeeded }) { S.Attention = null; }
     }
 
@@ -537,10 +550,15 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         if ((Asked(data) || (content is not null && !TurnErrorNotice(data))) && at is { } t && t > attention.Since) { S.Attention = null; }
     }
 
-    // The main agent's text as shown. The CLI's turn-error notice carries the error's own words,
-    // which are redacted as attention.message is (#840); a model's reply is the model's.
-    static string? MainText(JsonElement data) =>
-        TurnErrorNotice(data) ? AgentErrors.Shown(Json.Str(data, "content")) : Text.NonBlank(Json.Str(data, "content"));
+    // The main agent's text as shown; a model's reply is the model's. The CLI's turn-error notice
+    // carries the error's own words, which can hold a credential, a path or an address, and reach
+    // every client, HA and a finished push: it is shown as the host's sentence for the error that
+    // ended the turn (AgentErrors.Template), as attention.message is, and none of its words
+    // (#846). Redacting them was a blocklist that missed a new shape every round (#840, #841).
+    string? MainText(JsonElement data) =>
+        TurnErrorNotice(data)
+            ? TurnErrorNoticeText + " " + (_turnError ?? AgentErrors.Template(AttentionKind.Error, ErrorClass.Other, null, AgentKind.Copilot))
+            : Text.NonBlank(Json.Str(data, "content"));
 
     static bool Asked(JsonElement data) => Json.Arr(data, "toolRequests") is { } requests && requests.GetArrayLength() > 0;
 
