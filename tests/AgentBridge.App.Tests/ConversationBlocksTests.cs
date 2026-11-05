@@ -128,6 +128,91 @@ public sealed class ConversationBlocksTests
 
         Assert.Equal(["See the docs now.", "3. third\n4. fourth", "Name, Age\nAnn, 3"], shown.Select(b => b.ToString()));
     }
+
+    [Fact]
+    public void A_name_longer_than_500_characters_is_cut_at_a_whole_grapheme_with_an_ellipsis_and_the_text_is_kept_whole()
+    {
+        // An emoji of three joined by zero-width joiners, and a letter with its accent, across the cut.
+        var family = new string('a', 497) + "\U0001F468\u200D\U0001F469\u200D\U0001F467 and more";
+        var accent = new string('a', 498) + "e\u0301 and more";
+
+        var block = Shown(family)[0];
+
+        Assert.Equal(new string('a', 497) + "…", block.Name);
+        Assert.Equal(block.Name, block.ToString());
+        Assert.Equal(family, block.Text);
+        Assert.Equal(new string('a', 498) + "…", ConversationBlocks.NameOf(accent));
+        Assert.All(new[] { family, accent, new string('b', 2000) }, t => Assert.True(ConversationBlocks.NameOf(t).Length <= ConversationBlocks.NameLongest));
+    }
+
+    [Fact]
+    public void A_name_of_500_characters_or_fewer_is_the_text_as_it_is()
+    {
+        var full = new string('a', 499) + "z";
+
+        Assert.Equal(full, ConversationBlocks.NameOf(full));
+        Assert.Equal("Short.", ConversationBlocks.NameOf("Short."));
+    }
+
+    [Fact]
+    public void A_block_added_after_thousands_of_blocks_alike_compares_each_block_a_bounded_number_of_times()
+    {
+        // 4,096 one-character paragraphs and one more (12,289 bytes): once 16,781,312 comparisons.
+        var alike = string.Join("\n\n", Enumerable.Repeat("a", 4096));
+        var shown = Shown(alike);
+        var (first, last) = (shown[0], shown[^1]);
+        var next = MarkdownModel.Parse(alike + "\n\nb");
+        var compared = 0;
+
+        Assert.True(ConversationBlocks.Update(shown, next, (a, b) => { compared++; return ConversationBlocks.Same(a, b); }));
+
+        Assert.Equal(4097, shown.Count);
+        Assert.Same(first, shown[0]);
+        Assert.Same(last, shown[4095]);
+        Assert.Equal("b", shown[^1].Text);
+        Assert.InRange(compared, 1, 6 * (4096 + next.Count));
+    }
+
+    [Fact]
+    public void Blocks_are_kept_exactly_as_the_longest_run_compared_from_every_block_kept_them()
+    {
+        MdBlock[] kinds = [.. MarkdownModel.Parse("a\n\nb\n\nc")];
+        var random = new Random(765);
+        for (var round = 0; round < 2000; round++)
+        {
+            var had = Enumerable.Range(0, random.Next(0, 10)).Select(_ => new ConversationBlock(kinds[random.Next(kinds.Length)])).ToList();
+            var next = Enumerable.Range(0, random.Next(0, 10)).Select(_ => kinds[random.Next(kinds.Length)]).ToList();
+            var (linear, quadratic) = (new ObservableCollection<ConversationBlock>(had), new ObservableCollection<ConversationBlock>(had));
+
+            var kept = ConversationBlocks.Update(linear, next);
+
+            Assert.Equal(EveryRun(quadratic, next), kept);
+            Assert.Equal(quadratic.Select(b => had.IndexOf(b)), linear.Select(b => had.IndexOf(b)));
+            Assert.Equal(quadratic.Select(b => b.Block), linear.Select(b => b.Block));
+        }
+
+        // As Update kept blocks before it was made linear: every shown block compared from next[0]
+        // and from next[1], the first longest run kept.
+        static bool EveryRun(ObservableCollection<ConversationBlock> shown, IReadOnlyList<MdBlock> next)
+        {
+            var (start, from, kept) = (0, 0, 0);
+            for (var lead = 0; lead < Math.Min(2, next.Count); lead++)
+            {
+                for (var s = 0; s < shown.Count; s++)
+                {
+                    var run = 0;
+                    while (s + run < shown.Count && lead + run < next.Count && ConversationBlocks.Same(shown[s + run].Block, next[lead + run])) { run++; }
+                    if (run > kept) { (start, from, kept) = (s, lead, run); }
+                }
+            }
+            if (kept == 0) { return false; }
+            for (var i = shown.Count - 1; i >= start + kept; i--) { shown.RemoveAt(i); }
+            for (var i = 0; i < start; i++) { shown.RemoveAt(0); }
+            for (var i = from - 1; i >= 0; i--) { shown.Insert(0, new ConversationBlock(next[i])); }
+            for (var i = from + kept; i < next.Count; i++) { shown.Add(new ConversationBlock(next[i])); }
+            return true;
+        }
+    }
 }
 
 public sealed class ScrollAnchorTests
@@ -171,6 +256,24 @@ public sealed class ScrollAnchorTests
         Assert.Equal(0, anchor.OffsetFor(offset: 100, topNow: -400, scrollable: 1200));
         Assert.Equal(0, anchor.OffsetFor(offset: 100, topNow: 400, scrollable: -1));
     }
+
+    [Fact]
+    public void A_block_moved_under_a_still_view_by_a_height_corrected_above_it_is_put_back()
+    {
+        var anchor = new ScrollAnchor(12, -30);
+
+        Assert.Equal(1040, anchor.Correction(takenAt: 1000, offset: 1000, topNow: 10, scrollable: 5000));
+        Assert.Equal(975, anchor.Correction(takenAt: 1000, offset: 1000.25, topNow: -55.25, scrollable: 5000));
+    }
+
+    [Fact]
+    public void A_block_moved_by_a_scroll_or_not_moved_at_all_is_left_where_it_is()
+    {
+        var anchor = new ScrollAnchor(12, -30);
+
+        Assert.Null(anchor.Correction(takenAt: 1000, offset: 1100, topNow: -130, scrollable: 5000));
+        Assert.Null(anchor.Correction(takenAt: 1000, offset: 1000, topNow: -30.2, scrollable: 5000));
+    }
 }
 
 // The conversation read with the keyboard as a page (#765): the keys that scroll a page scroll it,
@@ -199,6 +302,19 @@ public sealed class ConversationKeyboardTests
         Assert.Equal(ReadingKey.End, ConversationKeyboard.Key(End, ctrl: true, shift: false, alt: false));
         Assert.Null(ConversationKeyboard.Key(Up, ctrl: false, shift: true, alt: true));
         Assert.Null(ConversationKeyboard.Key(0x41, ctrl: true, shift: false, alt: false));
+    }
+
+    [Fact]
+    public void A_key_pressed_in_a_text_input_or_a_control_that_uses_it_is_left_to_it_ctrl_home_and_ctrl_end_included()
+    {
+        foreach (var focus in new[] { KeyUser.Text, KeyUser.Selector })
+        {
+            Assert.All(new[] { Up, Down, 0x21, PageDown, Home, End }, k => Assert.Null(ConversationKeyboard.Key(k, ctrl: false, shift: false, alt: false, focus)));
+            Assert.Null(ConversationKeyboard.Key(Home, ctrl: true, shift: false, alt: false, focus));
+            Assert.Null(ConversationKeyboard.Key(End, ctrl: true, shift: false, alt: false, focus));
+        }
+        Assert.Equal(ReadingKey.PageDown, ConversationKeyboard.Key(PageDown, ctrl: false, shift: false, alt: false, KeyUser.None));
+        Assert.Equal(ReadingKey.Top, ConversationKeyboard.Key(Home, ctrl: true, shift: false, alt: false, KeyUser.None));
     }
 
     [Fact]

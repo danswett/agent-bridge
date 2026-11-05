@@ -4,6 +4,7 @@ using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
@@ -25,6 +26,13 @@ public sealed partial class SessionView
 
     ScrollViewer? ConversationScroll { get; set; }
     ScrollAnchor? anchor;
+    // The offset when the anchor was taken, or last put back: a layout that moves the anchor while
+    // the offset is still this moved it under a still view.
+    double anchorAt;
+    // While a finger or the touchpad pans the conversation: what moves then is the person's.
+    bool panning;
+    // While a scroll is under way (a key's animated page, a wheel): the view isn't still until it stops.
+    bool scrolling;
     // The offset a correction of ours asked for: its ViewChanged is not the person scrolling.
     double? anchoring;
     // Where the last scrolling key is taking the conversation, until that scroll has stopped.
@@ -62,26 +70,44 @@ public sealed partial class SessionView
             // A question still moving into view is held from the pointer until it has stopped.
             guard.Scrolled(DateTimeOffset.UtcNow);
             if (anchoring is not { } asked || Math.Abs(scroll.VerticalOffset - asked) >= 0.5) { TakeAnchor(); }
+            scrolling = e.IsIntermediate;
             if (!e.IsIntermediate) { anchoring = null; keyTarget = null; }
         };
-        scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; follow.PanStarted(); };
-        scroll.DirectManipulationCompleted += (_, _) => follow.PanEnded();
+        scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; panning = true; follow.PanStarted(); };
+        scroll.DirectManipulationCompleted += (_, _) => { panning = false; follow.PanEnded(); };
+        ConversationList.LayoutUpdated += OnConversationLaidOut;
         // Below the list, so the keys reach this before the list moves between its items: a key
         // from a block passes the block's container, which leaves it to the list.
         scroll.KeyDown += OnReadingKey;
     }
 
-    // The keys that scroll a page scroll the conversation, as its ScrollViewer did (ui.md §6.4).
+    // The keys that scroll a page scroll the conversation, as its ScrollViewer did (ui.md §6.4),
+    // unless what has focus is a text input or a control that uses the key, though it passed it on.
     void OnReadingKey(object sender, KeyRoutedEventArgs e)
     {
         if (ConversationScroll is not { } scroll) { return; }
         static bool Down(VirtualKey k) => InputKeyboardSource.GetKeyStateForCurrentThread(k).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-        if (ConversationKeyboard.Key((int)e.Key, Down(VirtualKey.Control), Down(VirtualKey.Shift), e.KeyStatus.IsMenuKeyDown || Down(VirtualKey.Menu)) is not { } key) { return; }
+        if (ConversationKeyboard.Key((int)e.Key, Down(VirtualKey.Control), Down(VirtualKey.Shift), e.KeyStatus.IsMenuKeyDown || Down(VirtualKey.Menu), KeyUserOf(e.OriginalSource as DependencyObject)) is not { } key) { return; }
         e.Handled = true;
         // From where the last key is taking it, so a key pressed while that scroll still moves adds to it.
         var from = keyTarget ?? scroll.VerticalOffset;
         var to = ConversationKeyboard.Offset(key, from, scroll.ViewportHeight, scroll.ScrollableHeight);
         if (Math.Abs(to - from) >= 0.5 && scroll.ChangeView(null, to, null, disableAnimation: !Motion.Scrolls)) { keyTarget = to; }
+    }
+
+    // What had focus when a key reached the conversation, from it up to the list: a text input, a
+    // control that uses the keys itself, or neither.
+    KeyUser KeyUserOf(DependencyObject? source)
+    {
+        for (var node = source is TextElement t ? t.ContentStart?.VisualParent : source; node is not null && node != ConversationList; node = VisualTreeHelper.GetParent(node))
+        {
+            switch (node)
+            {
+                case TextBox or RichEditBox or PasswordBox or AutoSuggestBox or NumberBox: return KeyUser.Text;
+                case Selector or Slider or RadioButton or RadioButtons or RatingControl or CalendarView or DatePicker or TimePicker or TreeView: return KeyUser.Selector;
+            }
+        }
+        return KeyUser.None;
     }
 
     // Tab and Shift+Tab stop in every block with a link or a Copy button, in order: one the list
@@ -157,20 +183,26 @@ public sealed partial class SessionView
         return null;
     }
 
-    // The block brought into view and laid out, then focus on its first stop (or last, going back),
-    // as the keyboard had put it there. Should it hold none after all, Tab goes on from where it was;
-    // should it not be realised even so, Tab goes on past it rather than staying where it was.
+    // The block brought into view at the leading edge and laid out, then focus on its first stop (or
+    // last, going back), as the keyboard had put it there. Should it hold none after all, Tab goes on
+    // from where it was; should it not be realised even after a few frames of layout, Tab goes on
+    // past it rather than staying where it was.
     void FocusBlock(int index, bool forward)
     {
         var wanted = blocks;
-        DispatcherQueue.TryEnqueue(() =>
+        var direction = forward ? FocusNavigationDirection.Next : FocusNavigationDirection.Previous;
+        var waited = 0;
+        DispatcherQueue.TryEnqueue(Bring);
+
+        void Bring()
         {
             if (blocks != wanted || index >= blocks.Count) { return; }
-            ConversationList.ScrollIntoView(blocks[index]);
+            if (waited == 0) { ConversationList.ScrollIntoView(blocks[index], ScrollIntoViewAlignment.Leading); }
             ConversationList.UpdateLayout();
-            var direction = forward ? FocusNavigationDirection.Next : FocusNavigationDirection.Previous;
             if (ConversationList.ContainerFromIndex(index) is not { } container)
             {
+                // Not laid out yet: again at the next layout, a few times at most.
+                if (++waited < 5 && DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, Bring)) { return; }
                 if (XamlRoot?.Content is not { } within) { return; }
                 lettingTabPass = true;
                 try { FocusManager.TryMoveFocus(direction, new FindNextElementOptions { SearchRoot = within }); }
@@ -181,10 +213,10 @@ public sealed partial class SessionView
             if (stop is not null) { _ = FocusManager.TryFocusAsync(stop, FocusState.Keyboard); }
             // Realised now, so the search passes it this time rather than coming back to it.
             else if (XamlRoot?.Content is { } root) { FocusManager.TryMoveFocus(direction, new FindNextElementOptions { SearchRoot = root }); }
-        });
+        }
     }
 
-    // The block across the viewport's top edge, where it starts against that edge.
+    // The block across the viewport's top edge, where it starts against that edge, and the offset then.
     void TakeAnchor()
     {
         anchor = null;
@@ -195,6 +227,7 @@ public sealed partial class SessionView
             if (ConversationList.ContainerFromIndex(i) is FrameworkElement c) { realised.Add((i, Top(c, scroll), c.ActualHeight)); }
         }
         anchor = ScrollAnchor.At(realised);
+        anchorAt = scroll.VerticalOffset;
     }
 
     // Laid out at a new width: the anchor block back where it was, in the same pass, before it is drawn.
@@ -203,7 +236,23 @@ public sealed partial class SessionView
         if (anchor is not { } a || ConversationScroll is not { } scroll || ConversationList.ContainerFromIndex(a.Index) is not FrameworkElement c) { return; }
         var to = a.OffsetFor(scroll.VerticalOffset, Top(c, scroll), scroll.ScrollableHeight);
         if (Math.Abs(to - scroll.VerticalOffset) < 0.5) { return; }
+        Anchoring(scroll, to);
+    }
+
+    // After any layout under a still view: a block above the anchor realised, or an estimated height
+    // corrected, put the anchor back where it was, so what is read never moves (ui.md §6.4). Not while
+    // the person pans or a scroll is under way, nor while a correction of ours is on its way.
+    void OnConversationLaidOut(object? sender, object e)
+    {
+        if (panning || scrolling || keyTarget is not null || anchoring is not null || anchor is not { } a || ConversationScroll is not { } scroll || !ConversationList.IsLoaded
+            || ConversationList.ContainerFromIndex(a.Index) is not FrameworkElement c) { return; }
+        if (a.Correction(anchorAt, scroll.VerticalOffset, Top(c, scroll), scroll.ScrollableHeight) is { } to) { Anchoring(scroll, to); }
+    }
+
+    void Anchoring(ScrollViewer scroll, double to)
+    {
         anchoring = to;
+        anchorAt = to;
         scroll.ChangeView(null, to, null, disableAnimation: true);
     }
 
@@ -212,7 +261,7 @@ public sealed partial class SessionView
     // Each block named by its text, as a screen reader finds it unrealised (ConversationBlock).
     void OnBlockShown(ListViewBase sender, ContainerContentChangingEventArgs args)
     {
-        if (!args.InRecycleQueue && args.Item is ConversationBlock block) { AutomationProperties.SetName(args.ItemContainer, block.Text); }
+        if (!args.InRecycleQueue && args.Item is ConversationBlock block) { AutomationProperties.SetName(args.ItemContainer, block.Name); }
     }
 
     // The list's own scroller: the first found going down, above anything its items hold.

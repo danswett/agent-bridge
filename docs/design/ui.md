@@ -707,19 +707,28 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   and no focus visual on an item; focus goes to the links and buttons inside a block, as before.
   - **The place is kept by the block, not the offset:** the block across the viewport's top edge
     stays where it was through a change of width (a live resize, a divider dragged), and as blocks
-    are laid out for the first time and their estimated heights are corrected. With the header at
-    the top, nothing is held.
-  - **Accessibility (#707):** a screen reader gets the response as a list, each block an item named
-    by its text and numbered in the set ("12 of 214"), so its scan and search reach a block that is
-    off screen and bring it into view.
+    are laid out for the first time and their estimated heights are corrected: a layout that moves
+    it while the view is still puts it back in the same pass, before it is drawn; a scroll or a pan
+    takes it again where it is. With the header at the top, nothing is held.
+  - **Accessibility (#707):** a screen reader gets the response as a list, each block a list item
+    numbered in the set ("12 of 214"), the header and footer outside it, so its scan and search
+    reach a block that is off screen and bring it into view. An item is named by its text, cut at
+    500 characters at a whole grapheme with "…"; the whole text is read from its content. Its
+    control type is said as the system says a list item.
   - **The keyboard reads it as a page, not a list:** the arrow keys scroll a line, Page Up and Page
     Down a viewport, Home and End (Ctrl too) to the top and the end, under reduced motion without
     animation; none moves between blocks, nor does any of them with Ctrl or Shift, and Left and
-    Right do nothing. A key with Alt is left to the window. Tab and Shift+Tab stop at every link
-    and Copy button in order, a block not yet laid out included: it is laid out and brought into
-    view as Tab reaches it.
+    Right do nothing. A key with Alt is left to the window, and one pressed in a text input or a
+    control that uses it (a combo box, a slider, a list of its own) to that control, Ctrl+Home and
+    Ctrl+End included. Tab and Shift+Tab stop at every link and Copy button in order, a block not
+    yet laid out included: it is brought into view at the leading edge and laid out, and focus goes
+    to its first stop (its last, going back); a block with none is passed. No block's container is
+    a stop, and in high contrast it has no fill: the block draws in the system's colours.
   - The self-test checks that a block stays in place through a live resize and the conversation is
-    drawn the same before and after it ([app-windows.md](../app-windows.md)).
+    drawn the same before and after it, that Page Down and Down scroll the text with focus and
+    selection left alone, that Tab reaches a block not yet laid out, that no container is a stop or
+    draws chrome, and that every block is a list item numbered in the set
+    ([app-windows.md](../app-windows.md)).
 - **Your messages:** a bubble at the right edge of the conversation's column (card fill,
   platform radius), at most 85% of the column's width, so a short message beside a short reply
   is still at the right (#255).

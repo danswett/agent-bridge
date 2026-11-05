@@ -61,58 +61,108 @@ static partial class SelfTest
             var measure = Math.Min(list.ActualWidth, (double)Application.Current.Resources["AbLayoutReadingMax"]);
             var from = (int)Math.Floor((list.ActualWidth - measure) / 2 * scale);
             var to = (int)Math.Ceiling(Math.Min((list.ActualWidth + measure) / 2, list.ActualWidth - 16) * scale);
+            // Anti-aliased edges may be drawn a step or two apart from one frame to the next (arm64's
+            // software rasteriser drew two edge pixels of the same text 1 apart in alpha), so a pixel
+            // differs only when a channel is more than Tolerance apart: a block moved by even a pixel
+            // differs by far more along every edge of its text.
+            const int Tolerance = 8;
             var differ = 0;
+            var largest = 0;
             for (var y = 0; y < height; y++)
             {
                 for (var x = Math.Max(0, from); x < Math.Min(width, to); x++)
                 {
                     var i = (y * width + x) * 4;
-                    if (pixels[i] != before.Pixels[i] || pixels[i + 1] != before.Pixels[i + 1] || pixels[i + 2] != before.Pixels[i + 2] || pixels[i + 3] != before.Pixels[i + 3]) { differ++; }
+                    var most = 0;
+                    for (var c = 0; c < 4; c++) { most = Math.Max(most, Math.Abs(pixels[i + c] - before.Pixels[i + c])); }
+                    largest = Math.Max(largest, most);
+                    if (most > Tolerance) { differ++; }
                 }
             }
-            if (differ > 0) { problems.Add($"{differ} pixels of the column drawn differently"); }
+            if (differ > 0) { problems.Add($"{differ} pixels of the column drawn differently, by up to {largest} in a channel"); }
+            else if (largest > 0) { AppLog.Write($"self-test: resize, the column drawn the same within {Tolerance} a channel (by up to {largest})"); }
         }
         return problems.Count > 0 ? string.Join(", ", problems) : null;
     }
 
-    // What a screen reader can't reach of the response: every block an item, numbered in the set,
-    // and the last, off screen, found by its text and brought into view. Null when it reaches all.
+    // What a screen reader is given wrong of the response's items: every block, realised or not, a
+    // list item numbered in a set of all the blocks, and every list item a block's, so the header
+    // and the footer are outside the set. Null when it is given all of them right.
+    static string? Listed(ListView list)
+    {
+        var count = list.Items.Count;
+        if (count == 0 || FrameworkElementAutomationPeer.CreatePeerForElement(list) is not ItemsControlAutomationPeer peer) { return "a list to read"; }
+        var problems = new List<string>();
+        for (var i = 0; i < count; i++)
+        {
+            var item = peer.CreateItemAutomationPeer(list.Items[i]);
+            if (item is null || item.GetAutomationControlType() != AutomationControlType.ListItem || item.GetSizeOfSet() != count || item.GetPositionInSet() != i + 1)
+            {
+                problems.Add($"block {i + 1} a list item, {i + 1} of {count}: {(item is null ? "no peer" : $"{item.GetAutomationControlType()}, {item.GetPositionInSet()} of {item.GetSizeOfSet()}")}");
+                break;
+            }
+        }
+        var listed = (peer.GetChildren() ?? []).Where(c => c.GetAutomationControlType() == AutomationControlType.ListItem).ToList();
+        if (listed.FirstOrDefault(c => c is not ItemAutomationPeer { Item: ConversationBlock }) is { } stray)
+        {
+            problems.Add($"the header and footer outside the set: \"{Clipped(stray.GetName())}\" a list item");
+        }
+        else if (listed.Count > count || listed.Any(c => c.GetSizeOfSet() != count))
+        {
+            problems.Add($"{listed.Count} list items for {count} blocks, each of {count}");
+        }
+        if (list.ItemsPanelRoot is ItemsStackPanel { FirstVisibleIndex: >= 0 } panel && list.ContainerFromIndex(panel.FirstVisibleIndex) is ListViewItem shown)
+        {
+            if (ItemSaid(peer, shown, panel.FirstVisibleIndex, count) is { } wrong) { problems.Add(wrong); }
+        }
+        else { problems.Add("a block in view"); }
+        return problems.Count > 0 ? string.Join(", ", problems) : null;
+    }
+
+    // What a screen reader can't reach of the response: the last block, off screen and unrealised,
+    // found by its name, realised and brought into view as a reader brings it. Null when it can.
     static async Task<string?> Reachable(ListView list)
     {
         var count = list.Items.Count;
         if (count == 0 || FrameworkElementAutomationPeer.CreatePeerForElement(list) is not ItemsControlAutomationPeer peer) { return "a list to read"; }
         var problems = new List<string>();
-        if (list.ItemsPanelRoot is ItemsStackPanel { FirstVisibleIndex: >= 0 } panel && list.ContainerFromIndex(panel.FirstVisibleIndex) is ListViewItem shown)
-        {
-            if (Said(peer, shown, panel.FirstVisibleIndex, count) is { } wrong) { problems.Add(wrong); }
-        }
-        else { problems.Add("a block in view"); }
         var last = (ConversationBlock)list.Items[count - 1];
         if (list.ContainerFromIndex(count - 1) is not null) { problems.Add("the last block off screen to begin with"); }
-        if (peer.GetPattern(PatternInterface.ItemContainer) is not IItemContainerProvider items || items.FindItemByProperty(null, AutomationElementIdentifiers.NameProperty, last.Text) is null)
+        if (peer.GetPattern(PatternInterface.ItemContainer) is not IItemContainerProvider items || items.FindItemByProperty(null, AutomationElementIdentifiers.NameProperty, last.Name) is null)
         {
-            problems.Add("the last block found by its text");
+            problems.Add("the last block found by its name");
         }
-        if (peer.CreateItemAutomationPeer(last)?.GetPattern(PatternInterface.VirtualizedItem) is IVirtualizedItemProvider virtualised) { virtualised.Realize(); }
+        var lastPeer = peer.CreateItemAutomationPeer(last);
+        if (lastPeer?.GetPattern(PatternInterface.VirtualizedItem) is IVirtualizedItemProvider virtualised) { virtualised.Realize(); }
         else { problems.Add("the last block realisable"); }
         if (!await Until(() => list.ContainerFromIndex(count - 1) is ListViewItem, TimeSpan.FromSeconds(5))) { problems.Add("the last block realised"); }
-        else if (Said(peer, list.ContainerFromIndex(count - 1) as ListViewItem, count - 1, count) is { } wrong) { problems.Add(wrong); }
-        return problems.Count > 0 ? string.Join(", ", problems) : null;
-
-        // As a screen reader is given it: the list's peer for the item, which works out its place in
-        // the set, not the container's own, which knows nothing of the list.
-        static string? Said(ItemsControlAutomationPeer peer, ListViewItem? item, int index, int count)
+        else
         {
-            var text = item?.Content is ConversationBlock b ? b.Text : null;
-            var itemPeer = item?.Content is { } content ? peer.CreateItemAutomationPeer(content) : null;
-            return itemPeer is null ? $"block {index + 1} as an item"
-                : itemPeer.GetPositionInSet() != index + 1 || itemPeer.GetSizeOfSet() != count || itemPeer.GetName() != text
-                    ? $"block {index + 1} said as \"{Clip(itemPeer.GetName())}\", {itemPeer.GetPositionInSet()} of {itemPeer.GetSizeOfSet()}"
-                    : null;
+            if (lastPeer?.GetPattern(PatternInterface.ScrollItem) is IScrollItemProvider scrolled) { scrolled.ScrollIntoView(); }
+            await Task.Delay(500);
+            if (ItemSaid(peer, list.ContainerFromIndex(count - 1) as ListViewItem, count - 1, count) is { } wrong) { problems.Add(wrong); }
+            else if (list.ContainerFromIndex(count - 1) is ListViewItem lastShown && SessionView.Shallowest<ScrollViewer>(list) is { } scroll
+                && lastShown.TransformToVisual(scroll).TransformPoint(default).Y is var top && (top >= scroll.ViewportHeight || top + lastShown.ActualHeight <= 0))
+            {
+                problems.Add($"the last block brought into view: at {top:0.#} px of {scroll.ViewportHeight:0.#}");
+            }
         }
-        static string Clip(string s) => s.Length > 40 ? s[..40] + "…" : s;
+        return problems.Count > 0 ? string.Join(", ", problems) : null;
     }
 
+    // As a screen reader is given it: the list's peer for the item, which works out its place in
+    // the set, not the container's own, which knows nothing of the list.
+    static string? ItemSaid(ItemsControlAutomationPeer peer, ListViewItem? item, int index, int count)
+    {
+        var name = item?.Content is ConversationBlock b ? b.Name : null;
+        var itemPeer = item?.Content is { } content ? peer.CreateItemAutomationPeer(content) : null;
+        return itemPeer is null ? $"block {index + 1} as an item"
+            : itemPeer.GetPositionInSet() != index + 1 || itemPeer.GetSizeOfSet() != count || itemPeer.GetName() != name
+                ? $"block {index + 1} said as \"{Clipped(itemPeer.GetName())}\", {itemPeer.GetPositionInSet()} of {itemPeer.GetSizeOfSet()}"
+                : null;
+    }
+
+    static string Clipped(string s) => s.Length > 40 ? s[..40] + "…" : s;
     // What Tab gets wrong in the response: from the last link or Copy button the list has realised,
     // Tab goes on to the first in the next block that has one, which the list had not realised,
     // and lands in the block, never on its container. The list's cache is cut to the viewport while
@@ -152,7 +202,15 @@ static partial class SelfTest
                     return BlockOf(list, f) == next;
                 }, TimeSpan.FromSeconds(3));
                 if (container is not null) { return $"focus on a block's container: {container.GetType().Name}"; }
-                if (landed) { return null; }
+                if (landed)
+                {
+                    // On the block's first stop, not merely in it, the block now realised.
+                    var on = FocusManager.GetFocusedElement(list.XamlRoot);
+                    var first = list.ContainerFromIndex(next) is { } realised ? FocusManager.FindFirstFocusableElement(realised) : null;
+                    return first is null ? $"block {next + 1} realised with a stop in it"
+                        : ReferenceEquals(on, first) ? null
+                        : $"Tab into block {next + 1} on its first stop ({first.GetType().Name}), not {on?.GetType().Name ?? "nothing"}";
+                }
                 var focused = FocusManager.GetFocusedElement(list.XamlRoot);
                 return $"Tab from block {from + 1} to block {next + 1}: it went to {(BlockOf(list, focused) is { } at ? $"block {at + 1}" : focused?.GetType().Name ?? "nothing")}";
             }

@@ -13,10 +13,12 @@ public static class ConversationKeyboard
     // its items for plain, Ctrl and Shift arrows and pages alike, so every one of them is taken:
     // Ctrl+Home and Ctrl+End go to the top and the end as in any document, and the rest with Ctrl
     // or Shift, and Left and Right (the text never scrolls sideways), don't move. Alt is left to
-    // the window's own keys.
-    public static ReadingKey? Key(int virtualKey, bool ctrl, bool shift, bool alt)
+    // the window's own keys. A key pressed in a text input, or in a control that uses it (a combo
+    // box, a slider, a list of its own), is that control's, though it passed it on: the caret, a
+    // value or a selection moves, never the page under it, Ctrl+Home and Ctrl+End included.
+    public static ReadingKey? Key(int virtualKey, bool ctrl, bool shift, bool alt, KeyUser focus = KeyUser.None)
     {
-        if (alt) { return null; }
+        if (alt || focus != KeyUser.None) { return null; }
         ReadingKey? key = virtualKey switch
         {
             0x26 => ReadingKey.LineUp,
@@ -89,3 +91,7 @@ public static class ConversationKeyboard
 }
 
 public enum ReadingKey { LineUp, LineDown, PageUp, PageDown, Top, End, Still }
+
+// What had focus when a reading key reached the conversation: a text input (its caret moves) or a
+// control that uses the key itself (a combo box, a slider, a list), or neither (a link, a button).
+public enum KeyUser { None, Text, Selector }

@@ -70,10 +70,16 @@ static partial class SelfTest
         await Picture(window.RootElement, Path.ChangeExtension(outFile, ".resize.png"));
         var moved = list is null || anchored is null ? "measured: the response not drawn" : await Anchored(list, anchored, outFile);
         check(moved is null, $"keeps the block at the top of the conversation where it was through a live resize, drawn the same before and after{Not(moved)}");
+        var (unkeyed, pressedBy) = list is null ? ("measured: the response not drawn", "none") : await Keyed(window, list);
+        check(unkeyed is null, $"scrolls the conversation's text with Page Down and Down pressed on a link in it, focus left where it was and nothing selected ({pressedBy}){Not(unkeyed)}");
         var untabbed = list is null ? "measured: the response not drawn" : await Tabbed(list);
-        check(untabbed is null, $"takes Tab from the last link or Copy button the conversation has drawn to the next, in a block not yet drawn, inside the block and not onto it{Not(untabbed)}");
+        check(untabbed is null, $"takes Tab from the last link or Copy button the conversation has drawn to the first in the next block with one, which it realises, inside the block and not onto it{Not(untabbed)}");
+        var chrome = list is null ? "measured: the response not drawn" : Contained(list);
+        check(chrome is null, $"draws no block's container as a tab stop, selected, filled or with a focus visual of its own{Not(chrome)}");
+        var unlisted = list is null ? "measured: the response not drawn" : Listed(list);
+        check(unlisted is null, $"gives a screen reader every block of the response as a list item, numbered in a set of all the blocks, and the header and footer outside it{Not(unlisted)}");
         var unreachable = list is null ? "measured: the response not drawn" : await Reachable(list);
-        check(unreachable is null, $"gives a screen reader every block of the response as an item of the list, counted, and one off screen found by its text and brought into view{Not(unreachable)}");
+        check(unreachable is null, $"finds the response's last block, off screen, by its name, and brings it into view for a screen reader{Not(unreachable)}");
         if (card is not null) { card.Delegates.FinishedOpen = false; }
         static string Not(string? wrong) => wrong is null ? "" : $": not {wrong}";
 
@@ -91,6 +97,10 @@ static partial class SelfTest
             ["anchorKept"] = moved is null,
             ["anchorProblem"] = moved,
             ["readerProblem"] = unreachable,
+            ["listProblem"] = unlisted,
+            ["keysProblem"] = unkeyed,
+            ["keysPressedBy"] = pressedBy,
+            ["containerProblem"] = chrome,
             ["tabProblem"] = untabbed,
             ["captures"] = new[] { Path.GetFileName(Path.ChangeExtension(outFile, ".resize.before.png")), Path.GetFileName(Path.ChangeExtension(outFile, ".resize.after.png")) },
         };

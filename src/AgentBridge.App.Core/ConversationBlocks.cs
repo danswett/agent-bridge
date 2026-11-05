@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Text;
 
 namespace AgentBridge.App.Core;
@@ -12,36 +13,64 @@ public sealed class ConversationBlock(MdBlock block)
 {
     public MdBlock Block { get; } = block;
 
-    // What the block says, as plain text: the item's name to a screen reader, whether or not the
-    // list has realised it, so Narrator's scan and search reach a block that is off screen (#707).
+    // What the block says, as plain text.
     public string Text { get; } = ConversationBlocks.TextOf(block);
+
+    // The item's name to a screen reader, whether or not the list has realised it, so Narrator's
+    // scan and search reach a block that is off screen (#707): its text, cut to 500 characters at
+    // a whole grapheme (NameOf). The whole text is still read from the item's content.
+    public string Name => name ??= ConversationBlocks.NameOf(Text);
+    string? name;
 
     // Whether Tab stops in it (a link, a Copy button), so Tab can bring it in unrealised.
     public bool Focusable { get; } = ConversationKeyboard.Focusable(block);
 
-    public override string ToString() => Text;
+    public override string ToString() => Name;
 }
 
 public static class ConversationBlocks
 {
+    public const int NameLongest = 500;
+
+    // A block's text as its item's name: when longer than NameLongest, cut at the last whole
+    // grapheme that fits with "…" after it, so an emoji or a letter and its accents is never split.
+    public static string NameOf(string text)
+    {
+        if (text.Length <= NameLongest) { return text; }
+        var end = 0;
+        while (end < text.Length)
+        {
+            var next = end + StringInfo.GetNextTextElementLength(text, end);
+            if (next > NameLongest - 1) { break; }
+            end = next;
+        }
+        return string.Concat(text.AsSpan(0, end), "…");
+    }
+
     // The list's items made to match a response's blocks, keeping each block already shown that
     // is still there: one realised stays as it is, where it is, and the list keeps the block at the
     // top of the viewport in place (KeepItemsInView). A response that grew keeps its head; one that
     // lost its earliest blocks (cut at the start to fit, SessionBudget) keeps the rest, the cut
     // falling between two blocks alike or partway through what is now its first block included.
-    // The longest run of blocks kept wins. False, with nothing changed, when nothing can be kept:
-    // the caller replaces the items whole, in one reset rather than an add for each block.
-    public static bool Update(ObservableCollection<ConversationBlock> shown, IReadOnlyList<MdBlock> next)
+    // The longest run of blocks kept wins, the first found of two as long. False, with nothing
+    // changed, when nothing can be kept: the caller replaces the items whole, in one reset rather
+    // than an add for each block.
+    public static bool Update(ObservableCollection<ConversationBlock> shown, IReadOnlyList<MdBlock> next) => Update(shown, next, Same);
+
+    // Linear in the blocks, never quadratic on repeated text (4,096 paragraphs alike once made 16.8
+    // million comparisons on the UI thread): how far each shown block runs alike with next, from
+    // next[0] and from next[1], is the Z-function of next's tail, a stop, then the shown blocks,
+    // which compares each block a bounded number of times.
+    internal static bool Update(ObservableCollection<ConversationBlock> shown, IReadOnlyList<MdBlock> next, Func<MdBlock, MdBlock, bool> same)
     {
         // The run kept: from shown[start] and next[from] on. next[0] is new when a cut fell inside it.
         var (start, from, kept) = (0, 0, 0);
         for (var lead = 0; lead < Math.Min(2, next.Count); lead++)
         {
+            var runs = Runs(shown, next, lead, same);
             for (var s = 0; s < shown.Count; s++)
             {
-                var run = 0;
-                while (s + run < shown.Count && lead + run < next.Count && Same(shown[s + run].Block, next[lead + run])) { run++; }
-                if (run > kept) { (start, from, kept) = (s, lead, run); }
+                if (runs[s] > kept) { (start, from, kept) = (s, lead, runs[s]); }
             }
         }
         if (kept == 0) { return false; }
@@ -50,6 +79,26 @@ public static class ConversationBlocks
         for (var i = from - 1; i >= 0; i--) { shown.Insert(0, new ConversationBlock(next[i])); }
         for (var i = from + kept; i < next.Count; i++) { shown.Add(new ConversationBlock(next[i])); }
         return true;
+    }
+
+    // For each shown[s], how many blocks from it are the same as next[lead] on: the Z-function of
+    // next[lead..], a stop alike with nothing, then shown.
+    static int[] Runs(IReadOnlyList<ConversationBlock> shown, IReadOnlyList<MdBlock> next, int lead, Func<MdBlock, MdBlock, bool> same)
+    {
+        var p = next.Count - lead;
+        var n = p + 1 + shown.Count;
+        MdBlock? At(int i) => i < p ? next[lead + i] : i == p ? null : shown[i - p - 1].Block;
+        bool Alike(int i, int j) => At(i) is { } a && At(j) is { } b && same(a, b);
+        var z = new int[n];
+        for (int i = 1, l = 0, r = 0; i < n; i++)
+        {
+            if (i < r) { z[i] = Math.Min(r - i, z[i - l]); }
+            while (i + z[i] < n && Alike(z[i], i + z[i])) { z[i]++; }
+            if (i + z[i] > r) { (l, r) = (i, i + z[i]); }
+        }
+        var runs = new int[shown.Count];
+        for (var s = 0; s < shown.Count; s++) { runs[s] = z[p + 1 + s]; }
+        return runs;
     }
 
     // The same block, drawn the same: records compare lists by reference, so their contents here.
@@ -146,4 +195,15 @@ public readonly record struct ScrollAnchor(int Index, double Top)
     // The offset that puts the block back where it was, now that it starts at topNow in the
     // viewport: within the scroller's range.
     public double OffsetFor(double offset, double topNow, double scrollable) => Math.Clamp(offset + topNow - Top, 0, Math.Max(0, scrollable));
+
+    // After any layout pass: the offset that puts the block back when layout moved it under a still
+    // view (a block above it realised, its estimated height corrected), or null when nothing moved
+    // it or the view moved since the anchor was taken at takenAt (the person scrolled, or the list
+    // kept the block in place itself), which takes the anchor again rather than undoing it.
+    public double? Correction(double takenAt, double offset, double topNow, double scrollable)
+    {
+        if (Math.Abs(offset - takenAt) >= 0.5) { return null; }
+        var to = OffsetFor(offset, topNow, scrollable);
+        return Math.Abs(to - offset) >= 0.5 ? to : null;
+    }
 }
