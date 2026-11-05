@@ -1377,6 +1377,57 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Empty(injector.Attempts);
     }
 
+    [Theory]
+    // The session's own output above the form, an agent's numbered list in it reading "1. Yes":
+    // right above the form, as it is drawn into the console (no pointer, the conversation's
+    // scrollbar down its right), or further up, under more output (Copilot 4484009805).
+    [InlineData("right above")]
+    [InlineData("scrollbar")]
+    [InlineData("further up")]
+    public async Task A_numbered_list_in_the_sessions_output_above_the_form_does_not_stop_the_answer(string where)
+    {
+        List<string> output = where switch
+        {
+            "right above" => ["\u25CF Which should I do?", "  1. Yes", "  2. No", ""],
+            "scrollbar" => ["\u25CF Which should I do?           \u2503", "  1. Yes                      \u2503", "  2. No                       \u2503", "                             \u2503"],
+            _ => ["\u25CF Plan:", "1. Yes, build it", "2. Test it", "3. No release", "", "\u25CB Asking user", ""],
+        };
+        injector.Screen = () => [.. output, .. WhichOne];
+        injector.OnInject = () => { if (Enters() == 1) { Fixture.Append(events, Recorded("q1", new { pick = "b" })); } };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal(("delivered", (string?)null), (outcome, reason));
+        Assert.Equal(1, Enters());
+    }
+
+    [Theory]
+    // A permission prompt drawn right against the form, as Copilot CLI 1.0.105 draws one (its
+    // list under the pointer, its key hints, its box when it has one): above it, bare or boxed,
+    // or under it, still stops the answer before any key.
+    [InlineData("above")]
+    [InlineData("above, boxed with hints")]
+    [InlineData("screen reader")]
+    [InlineData("under")]
+    public async Task A_permission_prompt_drawn_against_the_form_still_stops_the_answer(string where)
+    {
+        List<string> prompt = where switch
+        {
+            "above, boxed with hints" => ["\u256D\u2500\u2500\u2500\u2500\u256E", "\u2502 Run command \u2502", "\u2502 Do you want to run this command? \u2502", "\u2502 \u276F 1. Yes \u2502", "\u2502   2. Yes, and approve git for the rest of the running \u2502", "\u2502      session \u2502", "\u2502   3. No, and tell Copilot what to do differently (Esc to stop) \u2502", "\u2502 \u2502", "\u2502 \u2191\u2193 to navigate \u00B7 enter to select \u00B7 esc to \u2502", "\u2502 cancel \u2502", "\u2570\u2500\u2500\u2500\u2500\u256F"],
+            "screen reader" => ["Allow Copilot to run this command?", "  1. Yes", "Current selection: 2. No (Esc)", ""],
+            _ => ["Allow Copilot to run this command?", " \u276F 1. Yes", "   2. No (Esc)", "", " \u2191\u2193 to navigate \u00B7 enter to select \u00B7 esc to cancel"],
+        };
+        injector.Screen = () => where == "under" ? [.. WhichOne, .. prompt] : [.. prompt, "", .. WhichOne];
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("permission prompt", reason);
+        Assert.Empty(injector.Attempts);
+    }
+
     // ---- the checks between writes (Copilot review 5783440771) ----
 
     [Fact]

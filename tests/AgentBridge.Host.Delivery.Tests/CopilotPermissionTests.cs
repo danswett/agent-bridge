@@ -1,3 +1,4 @@
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Copilot;
 using Xunit;
@@ -556,6 +557,38 @@ public sealed class CopilotPermissionTests : IDisposable
         var next = watch.Read();
         Assert.Equal(3, next.PendingPermissions);
         Assert.Equal(["q5", "q8"], next.Asks!.Order());
+    }
+
+    [Fact]
+    public void Only_the_request_asked_about_is_described_and_the_others_are_still_attributed_by_their_tool_call()
+    {
+        // Describing formats and hashes what a request would run, and these reads hold the typing
+        // slot every session shares (Copilot 4484009896): the others are attributed by their
+        // tool call alone, promptRequest's or, without one, permissionRequest's.
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, Copilot.ToolStart("c2", "powershell", new { command = "ls" }, 1, agentId: "helper"),
+            Copilot.ToolStart("c3", "powershell", new { command = "ls" }, 2, agentId: "helper"),
+            Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 3),
+            Copilot.Event("permission.requested", new { requestId = "r2", promptRequest = new { kind = "write", fileName = "a.txt" }, permissionRequest = new { kind = "write", toolCallId = "c2" } }, 4),
+            Copilot.Event("permission.requested", new { requestId = "r3", permissionRequest = new { kind = "shell", toolCallId = "c3", fullCommandText = new string('x', 100_000) } }, 5),
+            Copilot.Permission("r4", "c4", Copilot.Prompts["read"], 6));
+        var described = new List<string?>();
+        var watch = new CopilotPermissionWatch(events, "r4", data =>
+        {
+            described.Add(data.GetProperty("requestId").GetString());
+            return CopilotPermission.Describe(data);
+        });
+
+        var read = watch.Read();
+        Assert.Equal((4, "r4"), (read.PendingPermissions, read.Request?.RequestId));
+        Assert.Equal(["r4"], described);
+
+        // r2 and r3 are the helper's, by their tool calls: the main agent's turn ending on an
+        // error ends r1 and r4, and leaves them.
+        Fixture.Append(events, Copilot.Event("session.error", new { errorType = "authorization", statusCode = 401, remediation = "sign_in" }, 7));
+        var ended = watch.Read();
+        Assert.Equal((2, null), (ended.PendingPermissions, ended.Request));
+        Assert.Equal(["r4"], described);
     }
 
     [Fact]

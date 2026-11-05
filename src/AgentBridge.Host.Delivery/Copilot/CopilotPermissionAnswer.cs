@@ -78,8 +78,9 @@ public static class CopilotPermissionTranscript
 // from the start each time, those checks grew with the transcript and held up every other
 // session's typing behind them (#510 review, Copilot 4478363669). A transcript shorter than
 // what was read is not the one that was read (Copilot only appends to it), and is read again
-// from the start.
-public sealed class CopilotPermissionWatch(string path, string requestId)
+// from the start. describe: how the request asked about is described (CopilotPermission.Describe
+// unless a test says otherwise); no other request is.
+public sealed class CopilotPermissionWatch(string path, string requestId, Func<JsonElement, CopilotPermissionPrompt?>? describe = null)
 {
     // In the order asked, each with the request as recorded (a Dictionary does not keep that order
     // once one is removed) and the agent asking it, null for the main agent's own: as the parser
@@ -113,7 +114,7 @@ public sealed class CopilotPermissionWatch(string path, string requestId)
         if (Jsonl.Lines(path, to, skipFirst: false, Line) is not { } end) { return new CopilotPermissionState(false, null, 0, 0, 0); }
         (LastRead, to) = (end - to, end);
         // Completed edits can carry entire files: format and hash only what is still waiting.
-        var pending = permissions.Select(p => (p.Id, Prompt: CopilotPermission.Describe(p.Data))).ToList();
+        var pending = permissions.Select(p => (p.Id, Prompt: (describe ?? CopilotPermission.Describe)(p.Data))).ToList();
         var at = pending.FindIndex(p => p.Id == requestId);
         return new CopilotPermissionState(true, at < 0 ? null : pending[at].Prompt, pending.Count, asks.Count, to, asks.Keys.ToHashSet(StringComparer.Ordinal))
         {
@@ -431,6 +432,54 @@ public static class CopilotPermissionScreen
             if (wanted.Any(w => above.Contains(w, StringComparison.Ordinal))) { return i; }
         }
         return -1;
+    }
+
+    // Whether a permission prompt is the last thing drawn above row `before`, with only blank
+    // rows (or a box's edges, or the conversation's scrollbar) between: where one would be drawn
+    // live, in the place the session draws its prompt. Read by its structure, as Copilot CLI
+    // 1.0.105 draws it (`cxo`'s permission, hook, path and URL prompts; their list, `tz`/`Xs`):
+    // a list of options numbered from 1 without a gap, every one "N. <label>" behind a
+    // two-column indicator, exactly one of them carrying the pointer (U+276F, or
+    // "Current selection:" for a screen reader); under it, its key hints ("↑↓ to navigate ·
+    // enter to select · esc to cancel", wrapping) unless hidden, then its box's bottom edge if
+    // it has one. Not any row reading "1. Yes": the session's own output above a form (an
+    // agent's numbered list) read so, and refused every answer to it (#510 review, Copilot
+    // 4484009805); a list the session printed has no pointer on one of its rows.
+    public static bool Ends(IReadOnlyList<string> rows, int before)
+    {
+        var r = Up(rows, before - 1);
+        // The key hints, wrapped onto up to three rows, the first saying "to navigate".
+        for (var k = r; k >= Math.Max(0, r - 2) && Item(rows[k]) is null; k--)
+        {
+            if (Clean(rows[k]).Text.Contains("to navigate", StringComparison.Ordinal))
+            {
+                r = Up(rows, k - 1);
+                break;
+            }
+        }
+        // The last option, with the rows its label wraps onto under it.
+        var last = r;
+        while (last >= 0 && last > r - 4 && Item(rows[last]) is null && Clean(rows[last]).Text.Length > 0) { last--; }
+        if (last < 0 || Item(rows[last]) is not { } item || item.Number < 2) { return false; }
+        // The options above it, each the one before, no blank row and no more than three wrapped
+        // rows between.
+        var (number, pointed, at) = (item.Number, item.Selected ? 1 : 0, last);
+        for (var i = last - 1; i >= 0 && number > 1 && at - i <= 4; i--)
+        {
+            if (Clean(rows[i]).Text.Length == 0) { return false; }
+            if (Item(rows[i]) is not { } above) { continue; }
+            if (above.Number != number - 1) { return false; }
+            (number, at) = (above.Number, i);
+            pointed += above.Selected ? 1 : 0;
+        }
+        return number == 1 && pointed == 1;
+    }
+
+    // The first row at or above `row` that is not blank once its frame is taken off.
+    static int Up(IReadOnlyList<string> rows, int row)
+    {
+        while (row >= 0 && Clean(rows[row]).Text.Length == 0) { row--; }
+        return row;
     }
 
     static (int Number, string Label, bool Selected)? Item(string row)

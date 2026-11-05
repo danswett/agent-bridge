@@ -31,7 +31,9 @@ namespace AgentBridge.Host.Delivery.Copilot;
 //     unless at the last field, "shift+tab prev" unless at the first, "ctrl+d decline",
 //     "esc cancel".
 //   * A permission prompt is a numbered list with a plain "1. Yes", drawn bare or inside a
-//     box's sides (docs/host-answers.md); a form's options are never numbered.
+//     box's sides (docs/host-answers.md), one of its options under the pointer; a form's
+//     options are never numbered. `cxo` draws one prompt at a time in the session's prompt
+//     place, so a live one replaces the form; one drawn against it is refused all the same.
 public static partial class CopilotFormScreen
 {
     const string Heading = "Copilot needs information.";
@@ -73,7 +75,7 @@ public static partial class CopilotFormScreen
         const string NotForm = "the session's screen no longer showed the question's form";
         const string Under = "something other than the question's form was drawn under it on the session's screen";
         var headed = Enumerable.Range(0, rows.Count).Where(r => Heads(rows, r)).ToList();
-        if (headed.Count != 1) { return rows.Any(Permission) ? Prompted : NotForm; }
+        if (headed.Count != 1) { return CopilotPermissionScreen.Ends(rows, rows.Count) ? Prompted : NotForm; }
         // The form's frame closes with the top's own rule again (`MIo`), and the frame is the
         // last thing drawn: the CLI draws a prompt (`ekn`, an elicitation among them) in place of
         // its input box and that box's footer, so nothing is under a form it is showing. Read to
@@ -84,8 +86,8 @@ public static partial class CopilotFormScreen
         var top = rows[headed[0] - 1].TrimEnd(' ');
         var bottom = headed[0] + 1;
         while (bottom < rows.Count && rows[bottom].TrimEnd(' ') != top) { bottom++; }
-        if (bottom >= rows.Count) { return rows.Any(Permission) ? Prompted : NotForm; }
-        if (rows.Skip(bottom + 1).Any(r => r.Trim(' ').Length > 0)) { return rows.Skip(bottom + 1).Any(Permission) ? Prompted : Under; }
+        if (bottom >= rows.Count) { return CopilotPermissionScreen.Ends(rows, rows.Count) ? Prompted : NotForm; }
+        if (rows.Skip(bottom + 1).Any(r => r.Trim(' ').Length > 0)) { return CopilotPermissionScreen.Ends(rows, rows.Count) ? Prompted : Under; }
         var frame = rows;
         rows = [.. rows.Take(bottom)];
         var at = headed[0] + 1;
@@ -125,10 +127,14 @@ public static partial class CopilotFormScreen
         if (at >= rows.Count || Collapse(rows[at]) != heading) { return off; }
         if (Hints(rows, at + 1, index, form.Fields.Count) is not var (start, end)) { return off; }
         (fieldHeading, hintsStart) = (at, start);
-        // A permission prompt drawn beside the form, above its heading or below its hints. What
-        // is inside the form (an option, or words typed into a field, reading "1. Yes") is the
-        // form's own.
-        return frame.Take(headed[0]).Concat(rows.Skip(end + 1)).Any(Permission) ? Prompted : null;
+        // A permission prompt drawn against the form: one ending just above its frame, read by
+        // its structure (CopilotPermissionScreen.Ends), not by any row of the session's output
+        // above it reading "1. Yes", which refused every answer to a form under an agent's
+        // numbered list (#510 review, Copilot 4484009805); or any "1. Yes" row inside the frame
+        // below its hints, where the form draws nothing of its own. What is inside the form
+        // above that (an option, or words typed into a field, reading "1. Yes") is the form's
+        // own.
+        return CopilotPermissionScreen.Ends(frame, headed[0] - 1) || rows.Skip(end + 1).Any(Permission) ? Prompted : null;
     }
 
     static bool Permission(string row) => PermissionRow().IsMatch(row);

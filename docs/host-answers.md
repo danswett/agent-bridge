@@ -123,9 +123,14 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     row (the last row ending "esc cancel", with the rows it wrapped from, every part one of
     the form's hints): "enter accept", "ctrl+d decline" and "esc cancel", with the field's
     place by "tab next" and "shift+tab prev" when there is more than one, read from that row
-    alone, since the question or the words typed may say them too; and no numbered "1. Yes"
-    row of a permission prompt, bare or between a box's sides, above the form's heading or
-    below its hints (an option, or words typed, reading "1. Yes" are the form's own). An `ask_user` with no form
+    alone, since the question or the words typed may say them too; and no permission prompt
+    drawn against the form: one ending just above its frame or drawn under it, read by its
+    structure (options numbered from 1 without a gap, exactly one under the pointer or
+    "Current selection:", then its key hints and its box's edge when it has them, bare or
+    between a box's sides), or a numbered "1. Yes" row inside the frame below its hints. An
+    agent's numbered list in the session's output above the form is not one: it has no
+    pointer, and read as one it refused every answer under it. An option, or words typed,
+    reading "1. Yes" are the form's own. An `ask_user` with no form
     schema is refused, `answer it at the machine`: how 1.0.105 draws one cannot be told from
     its code (its elicitations require a schema), so there is no form to hold the keys to.
     So is a form with two fields of the same heading the tab hints cannot tell apart (both
