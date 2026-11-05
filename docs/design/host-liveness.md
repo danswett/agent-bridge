@@ -90,10 +90,14 @@ forced recovery until all the following exist and pass the fault tests:**
    `inFlight == 0` heartbeat. It checks the journal is consistent and there is no
    unresolved `injecting` entry. Unknown, abandoned or unverifiable fence/journal
    state fails closed. A suspended/stuck injector also holds recovery off.
-4. With the fence held, request a cooperative quiesce/exit (10 seconds).
+4. With the fence held, consume the quiet lease into the same `DepartureGuard`
+   described below and request a cooperative quiesce/exit (10 seconds).
    Only if that fails may the launcher terminate **its own held child handle**,
-   never a PID found by name or an agent process tree, wait for exit and then
-   release the fence/start the replacement. No new host starts before exit.
+   never a PID found by name or an agent process tree. Prove the old host and
+   injector helpers have exited before starting the replacement; retain the
+   guard continuously through replacement journal ownership/recovery. Release
+   exclusion only after that handoff, never between termination and startup.
+   Unprovable exit leaves safety exclusion held and recovery degraded.
 5. Replacement restores queued input and durable dedup results, but **never
    automatically retypes an `injecting`/uncertain request**. Show "Delivery outcome
    unknown; check the terminal before sending again", preserving the draft and
@@ -106,6 +110,114 @@ Durable journal retention/cap and recovery UX require Connection/owner agreement
 before enabling the feature. OS power loss, forced sign-out and process crashes
 cannot promise atomic external terminal input; journal plus explicit uncertain
 outcome is the honest boundary, not a claim of exactly-once keys.
+
+### Shared bounded quiet primitive (#805 owns it)
+
+**"Quiet now", not "fully idle".** #819's automatic host update, #801's remote
+restart/stop and this watchdog consume **one** lifecycle coordinator over the
+delivery/mutation fence above. Neither #819 nor #801 may add another fence,
+whole-session idle test, idle-duration reset rule or third safety definition.
+An always-`Working` session may pass when no delivery is active; an `Idle`
+session with a typing worker must fail. A pending question or running agent turn
+does not itself block this primitive. Separate action authorization/eligibility
+checks remain mandatory, but cannot quietly reintroduce a whole-session idle
+requirement for this shared seam.
+
+Proposed in-process API contract, not implemented and not a public agent op:
+
+```text
+TryAcquireQuiet(maxWait, purpose, cancellation) -> QuietLease | Blocked(reason)
+AnnouncePlanned(lease, plan, cancellation) -> PlannedStateReceipt | Blocked(reason)
+CommitDeparture(lease, receiptOrLegacy, cancellation) -> DepartureGuard | Blocked(reason)
+QuietLease.Dispose() -> release provisional exclusion
+```
+
+`purpose` is closed: `AutomaticHostUpdate`, `PersonUpdate`, `RemoteRestart`,
+`RemoteStop`, `WatchdogRecovery`. It labels a previously authorized local
+lifecycle operation; choosing a purpose grants no authority. The launcher's
+private health channel adapts to the same coordinator/fence rules, not a second
+watchdog-only definition. Proposed phase-2 owner:
+`src/AgentBridge.Host/LifecycleCoordinator.cs` (not created in this docs PR);
+the launcher adapter uses its private contract and the same cross-process fence.
+Discovery progress, a pending sign-in flow or a waiting question alone are not
+quiet blockers. Unknown actual injector/delivery state is `JournalUncertain`,
+not permission to treat incomplete discovery as quiet. An active terminal-mutating
+launch/stop/transfer also owns this fence; it cannot race a departure.
+Do not assume #800's login subprocess survives a host restart merely because
+its flow status is not a quiet blocker: Connection must establish detached/
+supervisor ownership or safe transfer, otherwise refuse departure through the
+consumer's `EligibilityChanged` recheck for a host-owned nontransferable login.
+This lifecycle-safety dependency is not a whole-session idle check.
+
+- **Bounded acquisition:** `maxWait` is 0–10 seconds, default 5; reject invalid
+  arguments before waiting. Use monotonic awake time and honor cancellation.
+  At the bound, return the current closed blocker; never wait for an agent
+  session to become idle and never cancel/steal an active delivery to make room.
+  Waiting alone holds no lease and does not interrupt typing. Simultaneous
+  callers are serialized; a waiter cannot extend another caller's deadline.
+- **Atomic grant:** only while no delivery owns the mutation fence, no typing
+  helper remains active and the journal has no uncertain injection. Acquisition
+  and closing new delivery admission are one atomic operation. A new accepted
+  input cannot slip between a `quiet == true` check and restart. During exclusion,
+  refuse new deliveries before accepting/typing, preserving the client draft;
+  already accepted, durably queued input stays recoverable and is not dropped.
+  The lease never interrupts mid-typing. Readers, agent turns and transcript
+  collection may continue.
+- **Lease lifetime:** one nonrenewable **30-second** provisional lease from grant,
+  bound to the profile, current host generation, holder and one random transition.
+  Prepare/download/verify packages and check package/process eligibility before
+  acquisition, not under it. The five-second announcement timeout is inside,
+  not added to, those 30 seconds. Dispose, cancellation, generation change or
+  expiry invalidates the provisional authority and releases its exclusion; no
+  delayed callback/receipt may commit an invalid lease.
+- **Commit and handoff:** before expiry, atomically recheck the fence/journal,
+  current action eligibility and matching announcement receipt, then consume
+  the lease into a `DepartureGuard`. This transfers the same exclusion to the
+  supervisor/replacement handoff; it does not unlock and reacquire. The guard
+  excludes new deliveries until the old host and injector helpers have exited
+  and the replacement owns the recovered journal (or a deliberate stop completes).
+  It is not a renewable quiet lease. The ten-second cooperative-exit bound and
+  watchdog kill rules above still apply; if exit cannot safely be proved, retain
+  safety exclusion and report degraded rather than releasing it on a timer.
+  The bounded **decision/wait** never promises a bounded destructive operation.
+  Watchdog recovery may commit without a relay receipt only through its existing
+  private suspect/recovery path; it still needs the same lease and delivery checks.
+- **Abort:** any abort after sending a plan, including uncertain/timed-out
+  acknowledgement, sends `phase: cancelled` for the same transition with a greater
+  sequence (best effort if disconnected). Cancel before releasing when possible,
+  but never extend the 30-second provisional bound waiting for it. Fence checks
+  reject a late acknowledgement; `departBy`/generation rules bound stale relay
+  intent. Never turn an `AnnounceUnacked` failure into a restart.
+
+The shared result's **closed `BlockedReason` set**, used by acquire/announce/commit:
+
+| Reason | Meaning |
+|---|---|
+| `Typing` | A typing/injector helper currently owns the fence; takes precedence over `DeliveryInFlight`. |
+| `DeliveryInFlight` | An accepted delivery or terminal-mutating launch/stop/transfer owns the fence outside the typing stage, including final checks/outcome settlement. |
+| `JournalUncertain` | Unresolved injection, unavailable/inconsistent journal or abandoned/unverifiable fence; fail closed. |
+| `LifecycleInProgress` | Another provisional lease or departure guard owns exclusion. |
+| `AnnounceUnacked` | A sent plan lacks a successful, matching durable receipt within five seconds, or earlier uncertain intent has not been reconciled. Maps to `announce-failed` for #801/#819. |
+| `AnnounceUnavailable` | Required capability/store/transport is unavailable or the relay refuses the plan. Maps to `announce-failed`; #801's documented old-relay compatibility exception remains explicit. |
+| `LeaseExpired` | Lease expired, was consumed/disposed, or belongs to another holder/host generation; no commit authority. |
+| `EligibilityChanged` | The consumer's mandatory authorization/read-only/stop-marker/package-process eligibility recheck failed at commit; not a new idle test. |
+| `Cancelled` | Caller cancellation or OS suspend invalidated an uncommitted attempt. |
+
+No free-text exception becomes a reason and no session/device identity is logged.
+At acquisition timeout return `Typing`, `DeliveryInFlight` or the other actual
+blocker, not an ambiguous "busy"; at zero wait inspect once. Announce reasons are
+results of `AnnouncePlanned` (or unresolved prior intent), not a requirement to
+announce before acquiring. `AppRunning`, `OtherHostRunning`, `NotInstalled`,
+`NoVerifiedPackage`, halted release and wrong architecture belong to #819's
+separate typed apply/target eligibility, not new quiet definitions. A later
+eligibility change invalidates commit; nothing is forced.
+
+The host-side send/ack seam above uses the
+[single planned-state wire contract](../protocol/host-liveness.md), durably accepts
+within five seconds, and binds its receipt to this transition/current relay
+connection. It does not create another update message or installer. All of these
+API names and bounds await Connection/Engineering contract review, not runtime
+or rollout permission.
 
 ### Recovery budget and logs
 
@@ -146,8 +258,8 @@ two-second announcement wait; do not block shutdown/suspend indefinitely.
 | `sleep` | Suspend notification before sleep; clear on authenticated return. No return timer. |
 | `shutdown`, `reboot` | OS shutdown vs explicitly known reboot. If the OS cannot distinguish, use `shutdown`, not a guessed reboot/push timer. |
 | `sign-out` | Session ending or explicit product sign-out, before closing/revoking credentials. Does not expose the account or credential. |
-| `update` | After the person chooses apply and safe idle/drain checks pass, immediately before the updater stops the package. |
-| `restart`, `stop` | #801's authorized person's action, after authorization and idle drain, before exit. Hook repair is not a departure. |
+| `update` | At apply time after a shared quiet lease, before host restart: either an eligible unattended **host-only** update (#819) or the person-chosen update path. Not at download/check time. |
+| `restart`, `stop` | #801's authorized person's action, after authorization and the shared quiet lease, before exit. Hook repair is not a departure. |
 
 For deliberate product actions on a capable relay, await durable relay
 acknowledgement (five-second timeout) before committing the exit. Refuse with
@@ -159,10 +271,30 @@ publish `phase: cancelled` for the same transition. An OS shutdown still proceed
 if offline: absence of a reason is better than fabricated success.
 
 [#498](https://github.com/danswett/agent-bridge/issues/498) originally described
-automatic idle installs; **its newer owner comment delegates apply policy to
-#516: background download, then an explicit person's Restart to update**.
-Neither this design nor the existing text in `v1-update.md` authorizes silent
-auto-apply. Reuse `UpdateState` for download/version/progress and the single
+automatic idle installs; its later #516 direction keeps the **App** on an explicit
+person's Restart to update. The
+[newer host-only owner decision](https://github.com/danswett/agent-bridge/issues/819#issuecomment-6647803922)
+also permits automatic **host-only** convergence; it does not permit automatic
+App exit or a package apply that stops the App. Preserve both paths:
+
+- #819 checks the non-halted/no-downgrade/own-architecture verified target and
+  host-only package/process eligibility, then acquires the shared quiet lease.
+  At apply time it sends `reason: update`, default `expectedReturnSeconds: 90`,
+  requires durable acceptance within five seconds and commits the host-only
+  restart with that receipt. Failure/abort, including an apply precondition
+  changing, sends `phase: cancelled`; `announce-failed` never forces restart.
+  No negotiated announcement support means unattended apply is blocked, not
+  silently downgraded to #801's legacy exception.
+- A person-chosen update uses the same lease/announcement/cancellation seam and
+  existing authorization. #516/#719 retain explicit App restart; no new
+  auto-installer, scheduler, package copy or package-splitting claim is implied.
+  If the current package cannot apply without closing a running App/other host,
+  #819 reports that existing eligibility blocker and waits.
+
+This reconciles
+[#819's proposed seam, items 1–2](https://github.com/danswett/agent-bridge/issues/819#issuecomment-6648160430);
+it is a proposed shared contract, not approval of the remaining apply/target
+interfaces. Reuse `UpdateState` for download/version/progress and the single
 planned-state contract solely to bridge its disconnect; no competing update
 command/state machine. Replacement clears planned updating but E2E `UpdateResult`
 still establishes whether the update succeeded. Ninety seconds is the optimistic
@@ -335,6 +467,8 @@ than creating a broad soak/load harness.
 | `AgentBridge.App.Tests/HostSupervisorTests.cs` | "A host with no essential progress for sixty awake seconds is replaced only while the mutation fence is held." "A long asynchronous download does not cause a watchdog restart." "Suspend time does not consume the hang deadline." "Crashes and watchdog recoveries share a persisted hourly cap." "A stop marker wins over a pending recovery." |
 | `AgentBridge.Host.Delivery.Tests` | "A hang after the first key is never killed by the watchdog." "Acquiring the recovery fence prevents a queued delivery from starting." "A failed journal write refuses before typing." "A recovered uncertain delivery preserves input and never types it again." Include answer, reply and attachment paths and helper-process lifetime. |
 | `AgentBridge.Local.Tests` / `AgentBridge.Host.Tests` | "An agent cannot open the private watchdog channel or manufacture a health response." "Relay auth failure leaves a responsive host running." "A cancelled lifecycle operation withdraws its planned state." |
+| `AgentBridge.Host.Tests` / `AgentBridge.Host.Delivery.Tests` shared coordinator coverage | "An always Working session can acquire quiet when no delivery is active." "An Idle session with an active injector returns Typing." "A quiet waiter returns the closed blocker within its maximum wait." "A new delivery cannot enter after the quiet lease is granted." "No delivery is admitted between old-host exit and replacement journal ownership." "A late announcement receipt cannot commit an expired lease." "An expired provisional lease never releases a committed departure guard." |
+| `AgentBridge.App.Tests` / `AgentBridge.Host.Tests` update consumer coverage | "An unattended host-only update announces after quiet acquisition and before restart." "An unacknowledged update cancels its plan without applying." "A running App blocks host-only package apply without becoming an idle test." |
 | `AgentBridge.Transport.Tests/RelayTests.cs` and `RelayDeploymentTests.cs` | "An old replaced socket cannot overwrite its replacement's offline reason." "Unproved admission failure creates no offline record." "A plan expires if the host does not depart within two minutes." "A reconnect clears a plan before a due push can dispatch." "A reboot still missing after ten minutes sends at most one push across relay handover." |
 | `AgentBridge.Transport.Tests` push/roster coverage | "Quiet hours and the account cap suppress no-return pushes without hiding offline state." "A revoked target cannot receive a pre-sealed push." "Oversized plans and cross-account targets are refused before storage or HTTP." "Expired and forgotten lifecycle records are removed." "Relay metrics and logs contain no identity or address." |
 | `AgentBridge.Protocol.Tests` and PWA `test/unit/protocol-vectors.test.mjs` | "Unknown lifecycle capabilities retain legacy presence behavior." "Unknown reasons fall back to lost connection." Shared fixtures cover replay, cancellation, version/field/size limits, existing close-code meanings and absent close frames. |
@@ -350,7 +484,8 @@ fixtures. Never exercise them on the live bridge or an owner's workstation.
 **Connection (`eb29d6d8`):**
 
 1. Agree the essential-loop/private-pipe shape, #800 auth separation, replacement
-   generation fencing and capabilities in the wire contract.
+   generation fencing and capabilities in the wire contract, including the shared
+   quiet API's ten-second acquisition/30-second provisional bounds and guard handoff.
 2. Approve the durable delivery journal, cross-process injector fence and honest
    uncertain-outcome UX; define retention/size and request dedup across restarts.
    Without these, detection may ship but forced restart must remain disabled.
@@ -359,6 +494,9 @@ fixtures. Never exercise them on the live bridge or an owner's workstation.
 4. Confirm a failed negotiated acknowledgement refuses #801's deliberate remote
    departure, while old-relay compatibility proceeds without a reason/push and
    OS departure remains best effort.
+5. Resolve #801's Q-C8 with #800: a pending flow alone is not session-wide busy,
+   but a host-owned login child must survive/transfer safely or block commit via
+   `EligibilityChanged`; do not assume ongoing device-code recovery survives.
 
 **Owner / Engineering / Design, coordinated with #801 and #498/#516:**
 
