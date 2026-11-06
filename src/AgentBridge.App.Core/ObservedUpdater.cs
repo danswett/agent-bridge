@@ -15,6 +15,10 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     // when another holds it, so Settings' and the automatic one's overlapping made the second fail
     // (reported to every device as a failed update).
     readonly SemaphoreSlim downloading = new(1, 1);
+    // One check at a time, so what it found and when the feed was last asked (DiscoveredAt) are
+    // read together: overlapping, Settings' and the automatic one's could give one's older answer,
+    // from the machine's shared copy, the other's fresh fetch time (Copilot on #709, r4487867309).
+    readonly SemaphoreSlim checking = new(1, 1);
     // Which release's download last failed, when, and how many times in a row: not tried again
     // until RetryAt, whoever asks (Settings, the automatic updates, a device's press, or one
     // waiting above).
@@ -59,6 +63,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     {
         Interlocked.Increment(ref checks);
         Raise();
+        await checking.WaitAsync();
         try
         {
             var from = Bound();
@@ -72,6 +77,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         }
         finally
         {
+            checking.Release();
             Interlocked.Decrement(ref checks);
             Raise();
         }
@@ -137,6 +143,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         changes++;
         Found = null;
         CheckedAt = null;
+        FoundAsOf = null;
         failed = null;
         Raise();
     }
@@ -151,7 +158,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     string Bound()
     {
         var now = inner.Source;
-        if (bound is not null && bound != now) { (Found, CheckedAt, failed) = (null, null, null); }
+        if (bound is not null && bound != now) { (Found, CheckedAt, FoundAsOf, failed) = (null, null, null, null); }
         bound = now;
         return now;
     }

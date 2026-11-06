@@ -1075,6 +1075,55 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.DoesNotContain(said, char.IsDigit);
         Assert.DoesNotContain('\\', said);
     }
+    // Copilot on #709 (r4487867309), folded into #719: a check answered from the machine's shared
+    // copy of GitHub's list, overlapping one that fetched it afresh, was given the fresh fetch's
+    // time, so the devices were told an old answer was new. Checks through the shared updater now
+    // run one at a time, each reading its answer and its time together.
+    [Fact]
+    public async Task Overlapping_checks_never_give_an_older_answer_a_fresher_fetch_time()
+    {
+        var inner = new SharedList();
+        var observed = new ObservedUpdater(inner, time);
+        var cachedAt = time.GetUtcNow() - TimeSpan.FromMinutes(10);
+        // The first answered from the shared copy; the second fetches GitHub's list afresh.
+        inner.Lists.Enqueue(("0.2.0", cachedAt));
+        inner.Lists.Enqueue(("0.3.0", time.GetUtcNow()));
+        var first = observed.CheckAsync();
+        await Wait.UntilAsync(() => inner.Holds.Count == 1, "the first check");
+
+        var second = observed.CheckAsync();
+        inner.Holds[0].SetResult();
+        await first;
+
+        Assert.Equal(("0.2.0", (DateTimeOffset?)cachedAt), (observed.Found, observed.FoundAsOf));
+        await Wait.UntilAsync(() => inner.Holds.Count == 2, "the second check");
+        inner.Holds[1].SetResult();
+        await second;
+        Assert.Equal(("0.3.0", (DateTimeOffset?)time.GetUtcNow()), (observed.Found, observed.FoundAsOf));
+    }
+
+    // The machine's shared release list as the app's updater reads it: each check reads the list
+    // (from the shared copy, or GitHub afresh, which moves DiscoveredAt) as it starts, and returns
+    // its answer when the test lets it.
+    sealed class SharedList : IUpdater
+    {
+        public DateTimeOffset? DiscoveredAt { get; private set; }
+        public readonly Queue<(string? Answer, DateTimeOffset At)> Lists = new();
+        public readonly List<TaskCompletionSource> Holds = [];
+        public string? InstalledVersion => "0.1.0";
+        public string? Ready => null;
+        public async Task<string?> CheckAsync()
+        {
+            var (answer, at) = Lists.Dequeue();
+            DiscoveredAt = at;
+            var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (Holds) { Holds.Add(hold); }
+            await hold.Task;
+            return answer;
+        }
+        public Task DownloadAsync(Action<int> progress) => Task.CompletedTask;
+        public void ApplyAndRestart(string version) { }
+    }
     // The host back from a failed install is a gap: without a pause, every gap stopped it again.
     [Fact]
     [Trait("Category", "Network")]
@@ -1645,36 +1694,6 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.StartsWith("Needs you: the update to 0.3.0", auto.State.Waiting);
         Assert.EndsWith(AutoUpdater.DownloadFailing, auto.State.Waiting);
-    }
-
-    // Copilot's review of 31b83040: a check from Settings that succeeded while the refused check
-    // was still under way ended its hold, the hold timed from that check's start.
-    [Fact]
-    [Trait("Category", "Network")]
-    public async Task A_check_from_Settings_that_succeeds_while_the_refused_check_is_under_way_leaves_its_hold()
-    {
-        shared = new ObservedUpdater(updater, time);
-        updater.Found = null;
-        await StartAsync();
-        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        updater.CheckGate = gate;
-        var tick = Task.Run(auto.TickAsync);
-        await Wait.UntilAsync(() => updater.Checks == 1, "the check under way");
-        updater.CheckGate = null;
-
-        time.Advance(TimeSpan.FromMinutes(1));
-        Assert.Null(await shared.CheckAsync());
-        updater.CheckFails = Limited(time.GetUtcNow() + TimeSpan.FromHours(2));
-        time.Advance(TimeSpan.FromMinutes(1));
-        gate.SetResult();
-        await tick;
-        updater.CheckFails = null;
-
-        time.Advance(TimeSpan.FromMinutes(1));
-        await auto.TickAsync();
-        time.Advance(AutoUpdater.CheckEvery);
-        await auto.TickAsync();
-        Assert.Equal(2, updater.Checks);
     }
 
     // #923 review, under #516: another profile running from here keeps the update from the person

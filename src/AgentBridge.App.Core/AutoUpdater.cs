@@ -919,8 +919,9 @@ public sealed class AutoUpdater
         var until = retryAt is { } r && r > now && r - now <= CheckHintAtMost ? r
             : now + (backoff < CheckBackoffAtMost ? backoff : CheckBackoffAtMost);
         checksHeldUntil = until;
-        // Its end, not its start: a check from Settings that succeeded while this one was under
-        // way came before the refusal, and must not end its hold (Copilot, 31b83040).
+        // Its end, not its start: only a check that succeeded after the refusal ends its hold
+        // (Copilot, 31b83040). The shared updater now runs checks one at a time (ObservedUpdater),
+        // so Settings' can no longer succeed while this one is under way.
         heldAt = time.GetUtcNow();
         checksHeld = $"the release feed's rate limit refused the check ({failure}); checking again after {until.ToLocalTime():t}";
         // Not over an outcome the devices may not have seen yet: the update just made (its first
