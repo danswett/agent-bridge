@@ -79,7 +79,9 @@ public sealed partial class LaunchFlowTests
 
         var reply = await ReplyFromAsync(other, asking.Session!, "hello from the phone");
 
-        Assert.Equal(("refused", FirstReplyWords.AskingTrust("Copilot", answerableFromHere: fromDevices && approved)), reply);
+        Assert.Equal(("refused", fromDevices && approved
+            ? "Copilot is asking whether to trust its folder. Answer that first, then send this again"
+            : "Copilot is asking whether to trust its folder, and a reply would answer it. Answer it on that machine"), reply);
         Assert.Empty(screens.Typed);
     }
 

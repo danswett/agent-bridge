@@ -878,7 +878,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
         var (outcome, reason) = await ReplyAsync(ch, "hello there", id: FreshSession);
 
-        Assert.Equal(("refused", FirstReplyWords.AskingTrust("Copilot", answerableFromHere: false)), (outcome, reason));
+        Assert.Equal(("refused", "Copilot is asking whether to trust its folder, and a reply would answer it. Answer it on that machine"), (outcome, reason));
         Assert.Empty(injector.Plans);
         Assert.False(File.Exists(transcript));
     }

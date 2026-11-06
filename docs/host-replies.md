@@ -261,7 +261,7 @@ In order, for every reply:
    still show a startup question, folder trust above all, that Enter would answer, and a resume's
    transcript already exists, so the check below never catches it (`LaunchService.HeldForReply`,
    #780). While following it says what the window shows: the folder-trust question (answered from
-   a device where allowed, #947, else at the machine), another startup question (at the machine),
+   a device where allowed, #947, else on that machine), another startup question (on that machine),
    or only "still starting, send it again in a moment" (#1018). Once following has ended unready, it stays so while that agent runs (the launcher, or the
    process it handed the session to), until a prompt of the person's is in its transcript after the
    launch (Copilot; a turn count would not do: it leaves out the turn that prompt starts, and a new
