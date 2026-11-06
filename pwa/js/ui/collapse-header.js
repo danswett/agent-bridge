@@ -122,7 +122,7 @@ export function focusHidden(rect, { stage, covered }) {
 }
 
 export class CollapsingHeader {
-  #view; #head; #top; #bar; #scroller; #stream; #win; #doc;
+  #view; #head; #top; #bar; #scroller; #stream; #win; #doc; #foot;
   #phone; #reduced;
   #fold = new Fold();
   #on = false;
@@ -145,8 +145,11 @@ export class CollapsingHeader {
 
   // view: the session's view, which carries the properties the CSS reads. head: the floating header.
   // top: what slides under the bar (title, meta, tabs). bar: the pinned bar. scroller: the conversation.
-  constructor({ view, head, top, bar, scroller, win = globalThis.window }) {
+  // foot: the reply area's CollapsingFoot (collapse-foot.js), which mirrors it at the conversation's
+  // foot, or null.
+  constructor({ view, head, top, bar, scroller, foot = null, win = globalThis.window }) {
     this.#view = view;
+    this.#foot = foot;
     this.#head = head;
     this.#top = top;
     this.#bar = bar;
@@ -171,6 +174,9 @@ export class CollapsingHeader {
   covered() { return this.#on && !this.#paused ? this.#covered() : this.#on ? this.#fullH : 0; }
 
   #covered() { return Math.max(this.#barH, this.#fullH - this.#hidden()); }
+
+  // What the reply area covers of the conversation's foot now, in px.
+  footCovered() { return this.#on && !this.#paused ? this.#foot?.covered() ?? 0 : 0; }
 
   #hidden() {
     if (this.#paused) { return 0; }
@@ -204,7 +210,9 @@ export class CollapsingHeader {
       this.#observer = new this.#win.ResizeObserver(() => this.#measure());
       // The header's border box: its own padding growing moves what it covers as much as its content.
       for (const el of [this.#top, this.#bar, this.#view, sc, this.#stream]) { if (el) { this.#observer.observe(el, el === this.#top ? { box: 'border-box' } : undefined); } }
+      if (this.#foot) { this.#observer.observe(this.#foot.slot, { box: 'border-box' }); }
     }
+    this.#foot?.enable(signal);
     // Focus already in the header (a window narrowed to a phone's) holds it, as focus coming in does.
     this.#focusInside = this.#head.contains(this.#doc.activeElement);
     this.#measure();
@@ -227,6 +235,7 @@ export class CollapsingHeader {
     this.#focusInside = false;
     this.#fold = new Fold();
     this.#shown = {};
+    this.#foot?.disable();
     const v = this.#view;
     for (const p of ['--ty', '--covered', '--head-h', '--stage-h']) { v.style.removeProperty(p); }
     for (const a of ['data-state', 'data-solid', 'data-titled']) { v.removeAttribute(a); }
@@ -274,6 +283,7 @@ export class CollapsingHeader {
     f.held = null;
     f.dir = 0;
     f.run = 0;
+    this.#foot?.whole();
   }
 
   #measure() {
@@ -305,6 +315,7 @@ export class CollapsingHeader {
     v.style.setProperty('--head-h', `${this.#fullH}px`);
     // The padding moved the content, and so may content that grew or shrank: not scrolling.
     if (!this.#app) { this.#fold.sync(this.#scroller.scrollTop, this.#max()); }
+    this.#foot?.measure(!!this.#app);
     this.#render();
     this.#checkFocus();
   }
@@ -323,6 +334,7 @@ export class CollapsingHeader {
     flag('data-solid', p.solid);
     flag('data-titled', p.titled);
     if (this.#shown.state !== p.state) { this.#shown.state = p.state; v.dataset.state = p.state; }
+    this.#foot?.render(this.#paused);
   }
 
   #coversFocus() {
@@ -338,6 +350,7 @@ export class CollapsingHeader {
     const sc = this.#scroller;
     if (this.#app) {
       this.#fold.sync(sc.scrollTop, this.#max());
+      this.#foot?.sync();
       this.#armQuiet();
       return;
     }
@@ -352,6 +365,7 @@ export class CollapsingHeader {
     if (r.cancelFade) { this.#endFade(); }
     if (r.stopSlide) { this.#view.classList.remove('animating'); }
     if (r.action === 'hide') { this.#go(true); } else if (r.action === 'show') { this.#go(false); }
+    this.#foot?.scroll();
     this.#render();
   }
 
@@ -445,7 +459,7 @@ export class CollapsingHeader {
     if (!a || a === this.#scroller || !this.#scroller.contains(a)) { return; }
     const r = a.getBoundingClientRect();
     const s = this.#scroller.getBoundingClientRect();
-    if (!focusHidden(r, { stage: { top: s.top, bottom: s.bottom }, covered: this.#covered() })) { return; }
+    if (!focusHidden(r, { stage: { top: s.top, bottom: s.bottom - (this.#foot?.covered() ?? 0) }, covered: this.#covered() })) { return; }
     this.#holdAndRun(() => a.scrollIntoView({ block: 'nearest', behavior: 'instant' }));
   }
 
@@ -464,6 +478,9 @@ export class CollapsingHeader {
         f.held = this.#room;
       }
       const wasFull = f.hold(this.#hidden());
+      // The reply area folds with it on a screen shorter than twice the header (ui.md §6.5), judged on
+      // the whole header: an already compact header still folds a whole reply area.
+      this.#foot?.hold(this.#stageH < 2 * this.#fullH);
       this.#app = { wasFull, quiet: 0, limit: this.#later(() => this.#endApp(), APP_SCROLL_MAX_MS) };
       this.#render();
     }
@@ -485,6 +502,7 @@ export class CollapsingHeader {
     for (const t of [app.quiet, app.limit]) { clearTimeout(t); this.#timers.delete(t); }
     this.#fold.sync(this.#scroller.scrollTop, this.#max());
     this.#fold.release(app.wasFull);
+    this.#foot?.release();
     this.#render();
   }
 
