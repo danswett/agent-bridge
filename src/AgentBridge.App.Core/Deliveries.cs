@@ -79,7 +79,7 @@ public sealed record Delivery
 public sealed class Deliveries
 {
     const string NoOutcome = "no outcome came back from the machine in time";
-    const string TooOld = "too long has passed since it was first sent for the machine to still recognise it; check at the machine";
+    const string TooOld = "too long has passed since it was first sent for the machine to still recognise it";
     const string Restarted = $"the {Product.HostName} restarted before saying whether it went";
     const int MaxBusyResends = 5;
     // Deliveries whose timing marks are kept until their outcome: one that never has one (the app
