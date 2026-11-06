@@ -48,13 +48,18 @@ build is stopped by not promoting it past Dev, and machines on Beta never see it
    agent sessions):
    - if the host still runs and reaches the relay, wait for the reverted release (step 2):
      it's a higher version. The app downloads it, then waits for **Restart to update** at the
-     machine, or **Install** pressed from another device; it doesn't install by itself;
+     machine, or **Install** pressed from another device; it doesn't install by itself unless
+     **When an update is ready** is **Install between turns**, which installs it at the next gap;
    - if it doesn't, wait for step 2's release (the revert or fix, a **higher** version), then
      install that release by hand from its GitHub release page (`Setup.exe` for the machine's
      architecture). Don't install an older release: that's a downgrade.
-4. **Machines not yet updated:** on a current app, nothing installs until someone presses
-   **Restart to update** (or Install on another device); to stop one even downloading it, turn
-   off **Download updates automatically** in the app's Settings. An app from before #516 still
+4. **Machines not yet updated:** on a current app set to **Restart to update**, nothing
+   installs until someone presses it (or Install on another device). One set to **Install
+   between turns** (an agent machine) installs a release it has downloaded, the bad one
+   included, at the next gap between turns or at the six-hour backstop, with nobody pressing
+   anything: hold it back by setting **When an update is ready** to **Restart to update**, or
+   turn off **Download updates automatically**, in the app's Settings. Turning downloads off
+   also stops one even downloading it. An app from before #516 still
    installs by itself once the host is idle, or after 6 hours, including a bad release it has
    already downloaded: on those, turn off **Install updates automatically** in Settings.
 

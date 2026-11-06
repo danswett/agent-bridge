@@ -41,6 +41,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     Func<CancellationToken, Task<LocalChannel>>? linkConnect;
     // The app's updater as Settings shares it, when a test plays Settings too.
     ObservedUpdater? shared;
+    // The app's UI thread, when a test watches what the updater posts there.
+    IUiDispatcher? updaterUi;
 
     sealed class Updater : IUpdater
     {
@@ -136,7 +138,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Elevated = () => false,
             Time = held,
         };
-        auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time);
+        auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time, updaterUi);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Status is not null && connection.Sessions.All.Count == sessions.Length && connection.Sessions.Complete, "the connection");
     }
 
@@ -991,6 +993,54 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Empty(other.Sent(HostOps.Stop));
         Assert.Contains(otherLink.Sessions.All, s => s.Status == SessionStatus.Working);
     }
+    // Copilot on eae43827 (r4488279939): the settle timer fires on a thread of its own, while the
+    // sessions it reads change on the app's UI thread. Its tick is posted to the UI thread.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Set_to_install_between_turns_the_settled_gaps_tick_runs_on_the_apps_UI_thread()
+    {
+        InstallBetweenTurns();
+        var posted = new List<Action>();
+        updaterUi = new Recording(posted);
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        await auto.TickAsync();
+
+        time.Advance(AutoUpdater.SettleFor);
+        Assert.False(updater.Applied);
+        var tick = Assert.Single(posted);
+
+        tick();
+        await Wait.UntilAsync(() => updater.Applied, "the install between turns", TimeSpan.FromSeconds(5));
+    }
+
+    sealed class Recording(List<Action> posted) : IUiDispatcher
+    {
+        public void Post(Action action) { lock (posted) { posted.Add(action); } }
+    }
+
+    // Copilot on eae43827 (r4488279902): a device's Install keeps its own rule, the host idle for
+    // IdleFor, whatever the mode; Install between turns governs only what installs unasked. With
+    // downloads off, a press used to go ahead at a five-second gap.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Set_to_install_between_turns_a_devices_Install_still_waits_for_the_host_idle_for_two_minutes()
+    {
+        InstallBetweenTurns();
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        await PressAsync();
+        Assert.Equal("0.2.0", auto.Pending);
+
+        time.Advance(AutoUpdater.SettleFor);
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+
+        time.Advance(AutoUpdater.IdleFor);
+        await auto.TickAsync();
+        Assert.True(updater.Applied);
+    }
+
     // The host back from a failed install is a gap: without a pause, every gap stopped it again.
     [Fact]
     [Trait("Category", "Network")]

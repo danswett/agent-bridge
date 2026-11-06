@@ -392,7 +392,8 @@ into one folder with one version. An app update is a host update, so they never 
     field), the backstop skips. The update state's `waiting` then reads exactly "Update ready ·
     waiting for a question to be answered" (for the question; "Needs you: …" for not knowing), its
     phase `waiting` and `automatic` true, and the log says "Needs you: …" at most daily. The PWA's
-    update line and the app's machine rows show that line as it is. Changing the setting takes
+    update line and the app's machine rows show that line as it is. An Install pressed on another
+    device keeps its own rule in either mode (the host idle for two minutes). Changing the setting takes
     effect at once (the app looks again). Setting it from the phone is #801's.
   * **Ready:** a banner over every page, "Version *v* is ready. Restart to update." with
     **Restart to update** (an `InfoBar` with no close button, like the other app banners, so it

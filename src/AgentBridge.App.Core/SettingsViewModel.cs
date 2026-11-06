@@ -475,9 +475,11 @@ public sealed class SettingsViewModel : Observable
             // ready on the old one, and its Restart to update, go: now, or once Settings is idle.
             sourceAt++;
             Reconcile();
-            Save(prefs() with { Prereleases = value });
-            // Said to the devices, the banner and the toast too, rather than at the next check.
-            (updater as ObservedUpdater)?.SourceChanged();
+            // The shared updater told of the new source before anything hears of the change: the
+            // app's tick on PreferencesChanged would otherwise check and download under the old
+            // source's mark, which the next tick then threw away (Copilot, r4488279975). Said to
+            // the devices and the banner too, rather than at the next check.
+            Save(prefs() with { Prereleases = value }, () => (updater as ObservedUpdater)?.SourceChanged());
         }
     }
     public bool AutoUpdate { get => prefs().AutoUpdate; set { if (value != AutoUpdate) { Save(prefs() with { AutoUpdate = value }); } } }
@@ -610,9 +612,11 @@ public sealed class SettingsViewModel : Observable
 
     public event Action? PreferencesChanged;
 
-    void Save(AppPreferences next)
+    // before: what must follow the saving and come before anyone is told.
+    void Save(AppPreferences next, Action? before = null)
     {
         savePrefs(next);
+        before?.Invoke();
         RaiseAll();
         PreferencesChanged?.Invoke();
     }

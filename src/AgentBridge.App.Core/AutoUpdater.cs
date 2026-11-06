@@ -122,6 +122,9 @@ public sealed class AutoUpdater
     readonly Action<string> log;
     readonly Func<int?, string?> othersInPackage;
     readonly TimeProvider time;
+    // The app's UI thread, where the sessions this reads change: the settle timer's tick is posted
+    // there, never run on the timer's own thread (Copilot, r4488279939).
+    readonly IUiDispatcher ui;
     DateTimeOffset? checkedAt;
     // The last check's end, and its failure if it failed, which a press soon after is answered with.
     DateTimeOffset? lastCheckAt;
@@ -185,7 +188,7 @@ public sealed class AutoUpdater
     // A release downloaded is said by the app's banner and Settings, never a toast: toasts are
     // for what waits on the person, and an update can wait (Creative, #231 for a found agent).
     public AutoUpdater(IUpdater updater, HostConnection host, HostManager manager, Func<AppPreferences> prefs, Action<AppPreferences> save, Action<string> log,
-        Func<int?, string?> othersInPackage, TimeProvider? time = null)
+        Func<int?, string?> othersInPackage, TimeProvider? time = null, IUiDispatcher? ui = null)
     {
         this.updater = updater as ObservedUpdater ?? new ObservedUpdater(updater, time);
         this.updater.Changed += Changed;
@@ -197,6 +200,7 @@ public sealed class AutoUpdater
         this.log = log;
         this.othersInPackage = othersInPackage;
         this.time = time ?? TimeProvider.System;
+        this.ui = ui ?? InlineDispatcher.Instance;
         // A turn starting or a question arriving between ticks starts the idle wait again; so does a
         // snapshot read in full again (a reconnect, a gap), so idle seen before it does not count.
         // Nothing installs while one is being read (Due), and every reconnect ends in one.
@@ -486,12 +490,15 @@ public sealed class AutoUpdater
     }
 
     // Why the update goes ahead now, or null while it waits: an Install a device pressed, once the
-    // host has been idle for IdleFor; or, set to Install between turns, a gap settled for SettleFor,
-    // else the backstop at ForcedAt with no question waiting (BackstopHeld).
+    // host has been idle for IdleFor; or, unasked and set to Install between turns, a gap settled
+    // for SettleFor, else the backstop at ForcedAt with no question waiting (BackstopHeld).
     string? GoAhead(bool asked, DateTimeOffset now)
     {
         if (Pending is null) { return null; }
-        if (asked && Due(now)) { return $"another device asked for it and no session has been busy for {IdleFor.TotalMinutes:0} minutes"; }
+        // A device's Install keeps its own rule whatever the mode: nobody at the machine was warned,
+        // so the host idle for IdleFor, never a settled gap or the backstop (Copilot, r4488279902).
+        // Install between turns governs only what installs unasked.
+        if (asked) { return Due(now) ? $"another device asked for it and no session has been busy for {IdleFor.TotalMinutes:0} minutes" : null; }
         if (!BetweenTurns || InstallFailedLately(now)) { return null; }
         if (IdleSince(now, SettleFor)) { return "it installs between turns and no session here has a turn running or a question waiting"; }
         if (now >= ForcedAt(now) && BackstopHeld() is null) { return $"it installs between turns and has waited {WaitAtMost.TotalHours:0} hours with a turn always running"; }
@@ -521,7 +528,7 @@ public sealed class AutoUpdater
         lock (settleGate)
         {
             settle?.Dispose();
-            settle = time.CreateTimer(_ => _ = TickAsync(), null, left, Timeout.InfiniteTimeSpan);
+            settle = time.CreateTimer(_ => ui.Post(() => _ = TickAsync()), null, left, Timeout.InfiniteTimeSpan);
         }
     }
 

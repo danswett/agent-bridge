@@ -2188,6 +2188,25 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal(SettingsViewModel.WhenReadyBetweenTurns, settings.WhenReadyNote);
         Assert.DoesNotContain("at the machine", settings.WhenReadyNote, StringComparison.Ordinal);
     }
+    // Copilot on eae43827 (r4488279975): the app ticks its updater when a preference changes, so
+    // the shared updater must already know the source changed when it hears Include pre-releases did.
+    [Fact]
+    public async Task Include_pre_releases_changes_the_shared_source_before_anyone_hears_of_it()
+    {
+        await Connected();
+        var observed = new ObservedUpdater(updater);
+        var page = new SettingsViewModel(connection, manager, observed, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        var before = observed.Source;
+        string? heard = null;
+        page.PreferencesChanged += () => heard = observed.Source;
+
+        page.Prereleases = !page.Prereleases;
+
+        Assert.NotNull(heard);
+        Assert.NotEqual(before, heard);
+        Assert.Equal(observed.Source, heard);
+    }
+
     // Creative on #719 (6643004091): Settings' own download is said at most every quarter.
     [Fact]
     public async Task A_download_from_Settings_is_announced_at_most_every_quarter()
