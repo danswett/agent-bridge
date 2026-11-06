@@ -376,4 +376,6 @@ A reply that timed out with its prompt not found (not recorded, or another messa
 keeps its outcome, and the host keeps looking for its prompt, without taking it, for five minutes
 more (`ReplyOptions.LateWatch`, every 5 s), and logs a `late:` line: when it was recorded after
 all, or `not recorded within 300 s more`. `ops/tools/reply-confirm-delays.ps1` reads these lines
-from the host's log, read-only, into the delay from `typed` to `recorded` per agent and state.
+from the host's log, read-only, into the delay from `typed` to `recorded` per agent and state. It
+counts a reply as never recorded only once its late watch is known to be over (its `not recorded`
+line, or a log line 300 s after it); the rest, still watched or not observable, are reported apart.
