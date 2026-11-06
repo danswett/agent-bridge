@@ -696,8 +696,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **Mid-conversation,** 64 up in one direction brings the whole header back over the
     conversation (`collapse`), and 32 down sends it away. The count restarts when the
     direction changes, so reading back and forth changes nothing. A tap on the bar's title
-    brings it back, and the top always shows it in full. The reply area does the mirror image
-    (§6.5, #935), so the two never both take full room mid-conversation.
+    brings it back, and the top always shows it in full.
   - **Only the person's own scrolling counts:** a finger, a wheel, a trackpad, the keys or the
     scroll bar. A scroll the app makes (to a question, a restored position) and a response
     growing below leave the header as it was, except on a screen shorter than twice the

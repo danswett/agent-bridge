@@ -128,8 +128,6 @@ export class CollapsingHeader {
   #on = false;
   #paused = false;
   #focusInside = false;
-  #byPointer = false; // the person's last input was a pointer, not a key
-  #heldByKey = false; // the last focus move inside the header came by a key
   #fading = false;
   #app = null; // { wasFull, quiet, limit } while the app is scrolling
   #fullH = 0;
@@ -192,8 +190,6 @@ export class CollapsingHeader {
     // A person's touch or wheel on the conversation is done with the header: focus the app put there
     // when the session opened (the title) must not keep it whole.
     for (const type of ['wheel', 'touchstart', 'pointerdown']) { on(sc, type, () => this.#releaseHold(), { passive: true }); }
-    on(this.#doc, 'pointerdown', () => { this.#byPointer = true; }, { capture: true, passive: true });
-    on(this.#doc, 'keydown', () => { this.#byPointer = false; }, { capture: true, passive: true });
     on(sc, 'focusin', () => this.#checkFocusSoon());
     on(this.#head, 'focusin', () => this.#focusIn());
     on(this.#head, 'focusout', (e) => this.#focusOut(e));
@@ -375,7 +371,6 @@ export class CollapsingHeader {
   }
 
   #focusIn() {
-    this.#heldByKey = !this.#byPointer;
     this.#focusInside = true;
     if (this.#paused) { return; }
     const before = this.#hidden();
@@ -396,7 +391,8 @@ export class CollapsingHeader {
   // tell): focus a person moved into the header with keys (a tab, Back, More) holds it until it leaves.
   #releaseHold() {
     const a = this.#doc.activeElement;
-    if (!this.#focusInside || (this.#heldByKey && !a?.matches?.('.session-title'))) { return; }
+    // focus.js marks focus no key moved (data-focus-quiet); keyed focus, bar the title, holds.
+    if (!this.#focusInside || (a?.dataset && !('focusQuiet' in a.dataset) && !a.matches('.session-title'))) { return; }
     this.#focusInside = false;
     this.#render();
   }

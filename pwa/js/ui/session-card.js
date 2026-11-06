@@ -1451,9 +1451,10 @@ export class SessionCard {
     this.#scrollEnd = null;
     const v = view.getBoundingClientRect();
     const box = sc.getBoundingClientRect();
-    // What the floating header covers, and the 8 px the scroll leaves below it (scroll-padding-top).
+    // What the floating header covers, and the room the scroll leaves below it (scroll-padding-top).
     const covered = this.collapse?.covered() ?? 0;
-    const top = box.top + (covered > 0 ? covered + 8 : 0);
+    const room = covered > 0 ? parseFloat(sc.ownerDocument.defaultView?.getComputedStyle?.(sc).getPropertyValue('--ab-space-2')) || 0 : 0;
+    const top = box.top + (covered > 0 ? covered + room : 0);
     // A pixel's rounding is nowhere to go.
     const moves = sc.getClientRects().length > 0 && (v.top < top - 1 || v.bottom > box.bottom + 1);
     const scroll = () => view.scrollIntoView({ block: 'nearest', behavior });
