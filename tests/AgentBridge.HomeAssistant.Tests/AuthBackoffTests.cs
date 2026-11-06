@@ -97,6 +97,28 @@ public sealed class AuthBackoffTests : AuthBackoffFixture
     }
 
     [Fact]
+    public async Task A_record_unchanged_since_it_was_read_is_not_read_again_until_another_process_writes_it()
+    {
+        var ha = new Answering(time);
+        var guard = new HaAuthGuard(Record, time);
+        await Publish(Client(ha, guard));
+        var credential = guard.Credential(Url, Token);
+        // Written well before it is looked at, as the record is on most requests.
+        File.SetLastWriteTimeUtc(Record, DateTime.UtcNow.AddMinutes(-5));
+        guard.Refused(credential);
+        var reads = guard.Reads;
+
+        guard.Refused(credential);
+        guard.Refused(credential);
+        Assert.Equal(reads, guard.Reads);
+
+        var other = new HaAuthGuard(Record, time);
+        Assert.True(other.Forget(other.Credential(Url, Token)));
+        guard.Refused(credential);
+        Assert.Equal(reads + 1, guard.Reads);
+    }
+
+    [Fact]
     public async Task A_changed_token_gets_exactly_one_fresh_attempt_and_a_good_one_then_goes_through()
     {
         var ha = new Answering(time);

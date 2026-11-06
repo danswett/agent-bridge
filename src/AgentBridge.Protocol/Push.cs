@@ -35,8 +35,9 @@ public sealed record PushListResult(IReadOnlyList<PushDevice> Devices);
 
 public sealed record PushDevice(string Device, string Name, string Service, DateTimeOffset Since, bool Current);
 
+// SignIn (#800): one per machine, agent and account while sessions need sign-in; never per session.
 [UnknownAs(Question)]
-public enum NoticeKind { Question, Finished, Resolved }
+public enum NoticeKind { Question, Finished, Resolved, SignIn }
 
 // The plaintext of one push, before RFC 8291 encryption. It is a Declarative Web Push
 // message (web_push: 8030), which Safari 18.4+ shows without running the service worker,
@@ -69,8 +70,13 @@ public sealed record PushNoticeData
     public int V { get; init; } = 1;
     public required NoticeKind Kind { get; init; }
     public required string Machine { get; init; }
-    public required string Session { get; init; }
+    // Absent for SignIn, which is about a machine, never a session (#800 6646515428): an older
+    // client then opens the machine rather than a session view.
+    public string? Session { get; init; }
     public string? Question { get; init; }
+    // SignIn: whose sign-in it is, and how many sessions it stops. Never the account.
+    public AgentKind? Agent { get; init; }
+    public int? Sessions { get; init; }
     public required DateTimeOffset At { get; init; }
 }
 
@@ -99,10 +105,23 @@ public static class PushNotice
         return Convert.ToBase64String(hash, 0, 24).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 
-    public static string Navigate(string app, string machine, string session, string? question)
+    // A sign-in notice's own key in place of a session id, for its tag and topic: one per machine,
+    // agent and account. The account goes in only as the first 8 hex of its SHA-256, so neither
+    // the tag nor anything derived from it names it.
+    public static string SignInKey(AgentKind agent, string? account) =>
+        $"signin:{agent.ToString().ToLowerInvariant()}:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(account ?? "")))[..8].ToLowerInvariant()}";
+
+    // Opens the machine, never a session or a question (#800 6646515428): an older client, which
+    // reads the kind as a question, then shows no question view or answer controls.
+    public static string SignInNavigate(string app, string machine, AgentKind agent) =>
+        Link(app, $"host={Uri.EscapeDataString(machine)}&signin={agent.ToString().ToLowerInvariant()}");
+
+    public static string Navigate(string app, string machine, string session, string? question) =>
+        Link(app, $"host={Uri.EscapeDataString(machine)}&session={Uri.EscapeDataString(session)}" +
+            (question is null ? "" : $"&question={Uri.EscapeDataString(question)}"));
+
+    static string Link(string app, string q)
     {
-        var q = $"host={Uri.EscapeDataString(machine)}&session={Uri.EscapeDataString(session)}" +
-            (question is null ? "" : $"&question={Uri.EscapeDataString(question)}");
         var hash = app.IndexOf('#');
         if (hash >= 0) { app = app[..hash]; }
         return app + (app.Contains('?') ? "&" : "?") + q;

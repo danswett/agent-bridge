@@ -82,7 +82,7 @@ async function shown(message) {
   const handlers = {};
   const list = [];
   const self = {
-    registration: { scope: SCOPE, showNotification: async (title, options) => { list.push({ title, ...options }); } },
+    registration: { scope: SCOPE, showNotification: async (title, options) => { list.push({ title, ...options }); }, getNotifications: async () => [] },
     clients: { matchAll: async () => [], openWindow: async () => {}, claim() {} },
     addEventListener: (type, fn) => { handlers[type] = fn; },
     skipWaiting() {},
@@ -233,9 +233,10 @@ const READS = {
   UsageReader: { read: (j) => readUsage({ agents: [{ agent: 'copilot', label: 'Copilot', readBy: j }] }).agents[0].readBy },
   // Every push must show something, or iOS revokes the app's notifications (sw.js): the worker
   // shows a generic notice for whatever it cannot read, and never drops one.
-  PushMessage: { read: shown, unread: ['web_push', 'notification.data.v', 'notification.data.at'], refuses: 'a push is always shown' },
-  PushNotification: { read: async (j) => (await shown({ notification: j })).notification, unread: ['data.v', 'data.at'], refuses: 'a push is always shown' },
-  PushNoticeData: { read: async (j) => (await shown({ notification: { data: j } })).notification.data, unread: ['v', 'at'], refuses: 'a push is always shown' },
+  // agent and sessions: a signIn notice's (#800), which the worker shows only as its title and body.
+  PushMessage: { read: shown, unread: ['web_push', 'notification.data.v', 'notification.data.at', 'notification.data.agent', 'notification.data.sessions'], refuses: 'a push is always shown' },
+  PushNotification: { read: async (j) => (await shown({ notification: j })).notification, unread: ['data.v', 'data.at', 'data.agent', 'data.sessions'], refuses: 'a push is always shown' },
+  PushNoticeData: { read: async (j) => (await shown({ notification: { data: j } })).notification.data, unread: ['v', 'at', 'agent', 'sessions'], refuses: 'a push is always shown' },
 };
 
 // Records the PWA sends that it checks first, mirroring the host's check word for word.

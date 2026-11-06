@@ -32,10 +32,7 @@ const REGIONS = [
 
 // Pairs of stops known to go against the layout, each tracked by an issue: a selector for the
 // earlier stop, then one for the later.
-const KNOWN_ORDER = [
-  // On a desktop New is above Sort, but after it in the page (#371).
-  { from: '#session-sort', to: '.new-session', issue: 371 },
-];
+const KNOWN_ORDER = [];
 
 // Where focus is: which element (an id kept for it), its part of the page, where it sits in that
 // part (scrolled panes counted back, so a pane scrolling to it doesn't reorder it), which of
@@ -177,6 +174,24 @@ test.describe('on a desktop', () => {
     await open.focus();
     await expect(open).toBeFocused();
     expect((await focused(page)).shown, 'a ring on the row').toBe(true);
+  });
+
+  test('the list head draws Sort on its first line, before New, as Tab reaches them (ui.md §9.1 A3)', async ({ page, browserName }) => {
+    await openDemo(page);
+    const sort = page.locator('#session-sort');
+    const fresh = page.locator('#list-pane .new-session');
+    const [s, n, title] = await Promise.all([sort, fresh, page.locator('#sessions-h')].map((l) => l.boundingBox()));
+    // On one line: each one's middle within the other's height.
+    const sameLine = (a, b) => Math.abs((a.y + a.height / 2) - (b.y + b.height / 2)) < Math.min(a.height, b.height) / 2;
+    // Sort on the title's line, and New after it as a page reads: to its right, or on a line below.
+    expect({ sortOnFirstLine: sameLine(s, title), newAfterSort: sameLine(s, n) ? s.x + s.width <= n.x : n.y >= s.y + s.height })
+      .toEqual({ sortOnFirstLine: true, newAfterSort: true });
+    await sort.focus();
+    // WebKit's Tab here skips links, New among them (reachLink).
+    if (browserName !== 'webkit') {
+      await page.keyboard.press('Tab');
+      await expect(fresh).toBeFocused();
+    }
   });
 
   test('a session opens from its row with Enter, and its question is answered with Tab, Space and Enter', async ({ page }) => {

@@ -24,6 +24,12 @@ internal sealed class SessionTracker
     DateTimeOffset? _lastUpdatedAt;
     IReadOnlyList<Subagent>? _lastSubagents;
     DateTimeOffset _firstSeen;
+    // The last session built, and the nested agents' records it was built with.
+    Session? _built;
+    IReadOnlyList<ClaudeSubagents.Record> _nested = [];
+    // What the last build asked Stalled, while the session could be called Not responding: null
+    // when it could not (not working, or already showing another attention).
+    (SessionStatus Effective, DateTimeOffset? LastEvent, bool Background, IReadOnlyList<Subagent>? Subagents, int? More)? _stall;
 
     public SessionTracker(DiscoveredSession discovered, SessionSourceOptions options, TimeProvider time)
     {
@@ -41,8 +47,16 @@ internal sealed class SessionTracker
 
     public DiscoveredSession Discovered { get; private set; }
 
+    // Tests: the transcript being followed.
+    internal TranscriptTail? Tail => _tail;
+
     public Session Update(DiscoveredSession discovered)
     {
+        // What Build reads: the parsed transcript, its nested agents, discovery's view and the
+        // workspace, and for a working session the clock and its delegates' transcripts. Every pass
+        // rebuilt and re-serialised every session, changed or not: about 35 MB/min of the host's
+        // allocation (#608).
+        var changed = _built is null || discovered != Discovered;
         Discovered = discovered;
         if (discovered.TranscriptPath is { } path)
         {
@@ -50,20 +64,50 @@ internal sealed class SessionTracker
             {
                 _tail = new TranscriptTail(path, _options);
                 _subagents = null;
+                _nested = [];
                 _parser.Reset();
+                changed = true;
             }
-            _tail.Read(_parser);
+            // Unreadable too: a read can parse new lines and then fail (the anchor after them), and
+            // the parser has moved though the read says it failed. A transcript that stays
+            // unreadable is rebuilt each pass, which is rare and costs no revision (the JSON is
+            // the same).
+            changed |= _tail.Read(_parser) is TailOutcome.Appended or TailOutcome.Restarted or TailOutcome.Unreadable;
             // A nested Claude delegate's start and parent are written only beside the session's
             // transcript; one can exist only once a delegate of the session's does.
             if (_parser is ClaudeParser claude && _state.Background.HasAgents)
             {
                 _subagents ??= new ClaudeSubagents();
-                foreach (var record in _subagents.Read(path)) { claude.Nested(record); }
+                var nested = _subagents.Read(path);
+                // What Nested took counts as well as which records there are: a child sorted before
+                // its parent (spawnDepth left out reads as 2) is taken a pass later, from the same
+                // records (#634).
+                foreach (var record in nested) { changed |= claude.Nested(record); }
+                if (!nested.SequenceEqual(_nested)) { (_nested, changed) = (nested, true); }
             }
         }
-        if (discovered.StateDirectory is { } dir) { RefreshWorkspace(Path.Combine(dir, "workspace.yaml")); }
-        return Settle(Build());
+        if (discovered.StateDirectory is { } dir)
+        {
+            var workspace = _workspace;
+            RefreshWorkspace(Path.Combine(dir, "workspace.yaml"));
+            changed |= !ReferenceEquals(workspace, _workspace);
+        }
+        // Not responding (#800) comes from the clock and from the delegates' own transcripts, which
+        // nothing above looks at: a hung session is exactly one whose transcript stops changing, so
+        // skipping its build left it working with no attention for ever (#634 review, H1). Asked
+        // again with what the last build asked it; only a different answer builds the session.
+        if (!changed && _stall is { } stall
+            && Stalled(stall.Effective, stall.LastEvent, stall.Background, stall.Subagents, stall.More, _time.GetUtcNow()) != _built!.Attention)
+        {
+            changed = true;
+        }
+        if (!changed) { return _built!; }
+        Builds++;
+        return _built = Settle(Build());
     }
+
+    // Tests: how many times the session was built.
+    internal int Builds { get; private set; }
 
     // updatedAt moves only when something a client shows changed. An event can be of a
     // kind that usually matters (a turn starting) and still change nothing (the session
@@ -205,6 +249,9 @@ internal sealed class SessionTracker
         var ownReasoning = source?.Reasoning is not null || _state.Reasoning is null ? Limits.KeepEnd(_state.OwnReasoning, Limits.Reasoning).Text : null;
         var own = ownResponse is null && ownReasoning is null ? null
             : new OwnActivity { Response = ownResponse, ResponseTruncated = ownCut ? true : null, Reasoning = ownReasoning, At = _state.OwnAt };
+        var lastEvent = Later(_state.LastEventAt, hintAt);
+        var background = agents + shells > 0;
+        _stall = _state.Attention is null && effective == SessionStatus.Working ? (effective, lastEvent, background, subagents, more) : null;
 
         return new Session
         {
@@ -224,7 +271,7 @@ internal sealed class SessionTracker
             WaitingOn = question?.Agent,
             Subagents = subagents,
             SubagentsMore = more,
-            Attention = _state.Attention,
+            Attention = _state.Attention ?? Stalled(effective, lastEvent, background, subagents, more, now),
             Activity = new Activity
             {
                 Response = response,
@@ -242,6 +289,93 @@ internal sealed class SessionTracker
                 Own = own,
             },
         };
+    }
+
+    // Not responding (#800): still working, and nothing at all written for longer than a turn ever
+    // goes quiet. A 401 that the CLI never writes, or a CLI hung on its own network call, left a
+    // session reading working for an hour with nothing to say it had stopped. Never over a
+    // question (it is waiting on the person) or another attention; any event clears it.
+    Attention? Stalled(SessionStatus effective, DateTimeOffset? lastEvent, bool background, IReadOnlyList<Subagent>? subagents, int? more, DateTimeOffset now)
+    {
+        if (effective != SessionStatus.Working || lastEvent is not { } last) { return null; }
+        var busy = background || _state.Tools.Current() is not null;
+        var after = busy ? _options.NotRespondingBusyAfter : _options.NotRespondingAfter;
+        if (now - last < after) { return null; }
+        // A delegate that writes only its own transcript (Claude's beside the session's, Codex's a
+        // rollout of its own) leaves the session's quiet while it works. Its last event, read from
+        // that transcript, counts as the session's; one that cannot be checked never lets it read
+        // stalled: a false Not responding is worse than a late one.
+        if (DelegatesAlive(subagents, more, now, after)) { return null; }
+        var agent = Discovered.Agent;
+        return new Attention
+        {
+            Kind = AttentionKind.NotResponding,
+            Since = last,
+            Agent = agent,
+            Message = AgentErrors.Template(AttentionKind.NotResponding, null, null, agent),
+            LastEventAt = last,
+        };
+    }
+
+    static DateTimeOffset? Later(DateTimeOffset? a, DateTimeOffset? b) => a is null ? b : b is null ? a : a > b ? a : b;
+
+    // Whether the session's working delegates keep it alive (Claude's and Codex's: Copilot's write
+    // into the session's own events, already counted): one wrote an event within `after`, or not
+    // every one could be checked (more working than listed, a transcript not found or unread).
+    // Read only once the session already looks stalled.
+    bool DelegatesAlive(IReadOnlyList<Subagent>? subagents, int? more, DateTimeOffset now, TimeSpan after)
+    {
+        if (Discovered.Agent is not (AgentKind.Claude or AgentKind.Codex) || subagents is null) { return false; }
+        var working = subagents.Where(a => a.Status == SubagentStatus.Working).ToList();
+        if (working.Count == 0) { return false; }
+        // Working delegates are listed first: with every listed one working and more left out, the
+        // one still writing may be one that was not listed.
+        if (more > 0 && working.Count == subagents.Count) { return true; }
+        foreach (var a in working)
+        {
+            if (DelegateLastEvent(a) is not { } at || now - at < after) { return true; }
+        }
+        return false;
+    }
+
+    // What each delegate transcript's last event was, by the length it was read at: a stalled
+    // session is checked every pass, and a long transcript is not read again unchanged.
+    readonly Dictionary<string, (long Length, DateTimeOffset? At)> _delegateEvents = new(StringComparer.Ordinal);
+
+    // The last event a delegate wrote: the timestamp of the last complete record of its own
+    // transcript, never the file's write time, which Windows leaves stale while the writer holds
+    // the file open (CodexRollout.IsOwnThread). Null when it cannot be found or read.
+    DateTimeOffset? DelegateLastEvent(Subagent a)
+    {
+        if (Discovered.TranscriptPath is not { } transcript || Path.GetDirectoryName(transcript) is not { } here) { return null; }
+        if (a.Id.Length == 0 || !a.Id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_')) { return null; }
+        try
+        {
+            string? path;
+            if (Discovered.Agent == AgentKind.Claude)
+            {
+                path = Path.Combine(here, Path.GetFileNameWithoutExtension(transcript), "subagents", $"agent-{a.Id}.jsonl");
+                if (!File.Exists(path)) { return null; }
+            }
+            else
+            {
+                // A Codex sub-agent's rollout-<time>-<thread id>.jsonl, in the day folder it started
+                // in: the session's, or its own.
+                var days = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(here)));
+                var day = a.StartedAt is { } started && days is not null
+                    ? Path.Combine(days, started.UtcDateTime.ToString("yyyy/MM/dd", System.Globalization.CultureInfo.InvariantCulture)) : null;
+                path = new[] { here, day }.OfType<string>().Distinct().Where(Directory.Exists)
+                    .SelectMany(d => Directory.EnumerateFiles(d, $"rollout-*-{a.Id}.jsonl")).FirstOrDefault();
+                if (path is null) { return null; }
+            }
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (_delegateEvents.TryGetValue(path, out var known) && known.Length == stream.Length) { return known.At; }
+            var at = CodexRollout.LastTimestamp(stream);
+            if (_delegateEvents.Count > ClaudeSubagents.MaxRecords) { _delegateEvents.Clear(); }
+            _delegateEvents[path] = (stream.Length, at);
+            return at;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
     // Which prompt the session's userMessage is, for the driver (#489): its record where the parser

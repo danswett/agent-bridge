@@ -23,7 +23,9 @@ public enum ToastKind { Question, Finished, Outcome }
 // v1-sessions.md, Notifications) so the desktop and the phone agree: a question still pending
 // after 2 s, once per question; a turn that went from working to idle with a response, still
 // idle 3 s later, once per turn; a question answered anywhere (or a session gone) withdraws its
-// toast. Nothing while the app's window is in front: the card is already there.
+// toast. Nothing while the app's window is in front: the card is already there. Where the host
+// sends a notification class (#913) it has the last word: fyi never notifies, a question only
+// while the class is needsYou, a finished turn only as done (and quietly); none leaves the rules above.
 public sealed class ToastPlanner
 {
     public static readonly TimeSpan QuestionDelay = TimeSpan.FromSeconds(2);
@@ -97,8 +99,10 @@ public sealed class ToastPlanner
                 continue;
             }
             NoteWait(t, t.Last, s);
+            var was = t.Last;
             t.Last = s;
-            if (t.Shown is { } shown && s.Question?.Id != shown)
+            Recovered(was, s);
+            if (t.Shown is { } shown && (s.Question?.Id != shown || !MayAsk(s)))
             {
                 sink.Withdraw(TagOf(s.Id));
                 t.Shown = null;
@@ -116,7 +120,7 @@ public sealed class ToastPlanner
 
     // The agent stopped on an error, or needs sign-in (#800, ui.md §6.13): its turn didn't finish, so
     // there is no "finished" toast quoting the answer from before it. Errors get no notice of their
-    // own; a sign-in's is the host's push.
+    // own; a sign-in's is the toast per agent and account below (SignIns), as the host's push.
     static bool Stopped(Session s) => AuthState.Of(s)?.Kind is AuthState.Error or AuthState.SignInNeeded;
 
     // Which prompt's turn the session is on: turnCount is the prompts sent, less one while a turn is
@@ -147,8 +151,9 @@ public sealed class ToastPlanner
         }
         var before = t.Last;
         t.Last = s;
+        Recovered(before, s);
         NoteWait(t, before, s);
-        if (t.Shown is { } shown && s.Question?.Id != shown)
+        if (t.Shown is { } shown && (s.Question?.Id != shown || !MayAsk(s)))
         {
             sink.Withdraw(TagOf(s.Id));
             t.Shown = null;
@@ -210,6 +215,7 @@ public sealed class ToastPlanner
     public void Remove(string id)
     {
         if (!sessions.Remove(id, out var t)) { return; }
+        Recovered(t.Last, null);
         if (t.Shown is not null) { sink.Withdraw(TagOf(id)); }
     }
 
@@ -220,6 +226,8 @@ public sealed class ToastPlanner
         foreach (var (id, t) in sessions) { if (t.Shown is not null) { finished.Add(id); } }
         foreach (var id in finished) { sink.Withdraw(TagOf(id)); }
         finished.Clear();
+        foreach (var key in signIns.Keys) { sink.Withdraw(Tag(key, MachineKey)); }
+        signIns.Clear();
         sessions.Clear();
     }
 
@@ -250,7 +258,7 @@ public sealed class ToastPlanner
             t.Due = null;
             if (due.Kind == ToastKind.Question)
             {
-                if (s.Question is not { } q || q.Id != due.Question) { continue; }
+                if (s.Question is not { } q || q.Id != due.Question || !MayAsk(s)) { continue; }
                 t.Notified.Add(q.Id);
                 var again = t.Again == q.Id;
                 t.Again = null;
@@ -266,14 +274,78 @@ public sealed class ToastPlanner
                 // budget left them out): an empty toast says nothing.
                 if (s.Status != SessionStatus.Idle || t.FinishedKey == key || string.IsNullOrEmpty(MainResponse(s)) || Stopped(s)) { continue; }
                 t.FinishedKey = key;
-                if (!Enabled() || !FinishedEnabled() || WindowActive()) { continue; }
+                if (!MayFinish(s) || !Enabled() || !FinishedEnabled() || WindowActive()) { continue; }
                 finished.Add(id);
                 t.RanSinceFinished = false;
                 t.FinishedTurn = PromptOf(s);
-                sink.Show(new ToastNotice(TagOf(id), ToastXml.Finished(s, MachineName(), MachineKey), Quiet()));
+                // Done never pops up (#913): the host's class, not Windows' state, decides it.
+                sink.Show(new ToastNotice(TagOf(id), ToastXml.Finished(s, MachineName(), MachineKey), Quiet() || s.Class == NotificationClass.Done));
             }
         }
+        SignIns(now);
     }
+
+    public static readonly TimeSpan SignInRepeat = TimeSpan.FromHours(1);
+
+    // The sign-in toast a session counts toward, by its own agent and account (SignIns), or null.
+    static string? SignInKeyOf(Session? s) =>
+        s is not null && AuthState.Of(s) is { } a && AuthState.NeedsSignIn(a) ? PushNotice.SignInKey(s.Agent, a.Account) : null;
+
+    // The last session of a sign-in toast no longer needs it, seen as it changes rather than at the
+    // next tick: a new failure before that tick was otherwise the same incident, its toast held back
+    // for the rest of the hour. Withdrawn and forgotten, so the next failure toasts at once.
+    void Recovered(Session? was, Session? now)
+    {
+        if (SignInKeyOf(was) is not { } key || key == SignInKeyOf(now) || !signIns.ContainsKey(key)) { return; }
+        if (sessions.Values.Any(t => SignInKeyOf(t.Last) == key)) { return; }
+        signIns.Remove(key);
+        sink.Withdraw(Tag(key, MachineKey));
+    }
+
+    // Sign-in toasts up or made (#800, ui.md §6.13), by agent and account: when last raised, and for
+    // how many sessions.
+    readonly Dictionary<string, (DateTimeOffset At, int Count)> signIns = new(StringComparer.Ordinal);
+
+    // One toast per agent and account of the machine while any of its sessions needs sign-in, as the
+    // host's signIn push: at once, then again at most hourly; a change in how many sessions it stops
+    // replaces it quietly; withdrawn once none does. A turn that ended on a 401 is idle with the
+    // previous answer beside it, and nothing on the desktop said every session had stopped (#800 P0).
+    void SignIns(DateTimeOffset now)
+    {
+        // By the session's own agent, as SignInBanners does: attention.agent is optional, and one that
+        // left it out read as Unknown, merging two agents' sign-ins into one toast.
+        var groups = sessions.Values.Select(t => t.Last).OfType<Session>()
+            .Select(s => (Session: s, Attention: AuthState.Of(s)))
+            .Where(x => AuthState.NeedsSignIn(x.Attention))
+            .GroupBy(x => PushNotice.SignInKey(x.Session.Agent, x.Attention!.Account), StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => (Agent: g.First().Session.Agent, Count: g.Count()), StringComparer.Ordinal);
+        foreach (var key in signIns.Keys.Where(k => !groups.ContainsKey(k)).ToList())
+        {
+            signIns.Remove(key);
+            sink.Withdraw(Tag(key, MachineKey));
+        }
+        foreach (var (key, (agent, count)) in groups)
+        {
+            var known = signIns.TryGetValue(key, out var was);
+            var due = !known || now >= was.At + SignInRepeat;
+            if (!due && was.Count == count) { continue; }
+            // Not shown now (the window in front, or toasts off): the count stays the one on the
+            // toast, so the new one replaces it quietly as soon as it can be.
+            if (!Enabled() || WindowActive())
+            {
+                signIns[key] = (due ? now : was.At, known ? was.Count : 0);
+                continue;
+            }
+            signIns[key] = (due ? now : was.At, count);
+            sink.Show(new ToastNotice(Tag(key, MachineKey), ToastXml.SignIn(agent, count, MachineName(), MachineKey), Quiet() || !due));
+        }
+    }
+
+    // The host's notification class (#913) over the app's own rules, where it sends one: a question
+    // toast only while the session needs the person, a finished one only for Done (fyi never
+    // notifies). A host that sends none, or one this app doesn't know, leaves today's rules.
+    static bool MayAsk(Session s) => s.Class is null or NotificationClass.NeedsYou;
+    static bool MayFinish(Session s) => s.Class is null or NotificationClass.Done;
 
     string TagOf(string sessionId) => Tag(sessionId, MachineKey);
 
@@ -370,6 +442,12 @@ public static partial class ToastXml
         var preview = Plain(ToastPlanner.MainResponse(s), 300);
         return End(Start(Args(machineKey, ("action", "open"), ("session", s.Id)), Title(s), $"{Machine(machine)}finished", preview));
     }
+
+    // Sessions on a machine need sign-in (ui.md §6.13): its words, and nothing of the account, code,
+    // URL or the agent's own text. A click opens the app.
+    public static string SignIn(AgentKind agent, int sessions, string? machine, string? machineKey = null) =>
+        End(Start(Args(machineKey, ("action", "open")), $"{AuthState.AgentName(agent)} on {(string.IsNullOrEmpty(machine) ? "this machine" : machine)} needs sign-in",
+            sessions == 1 ? "1 session affected" : $"{sessions} sessions affected", null));
 
     // The first start after an update (AutoUpdater.Announce): what changed, from the release's
     // notes. A click opens the app.

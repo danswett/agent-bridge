@@ -379,8 +379,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `languages`, #464): C# for `.cs`, `.csproj`, `Directory.*` and the like; JavaScript for
      scripts, pages, npm manifests and `pwa/`; Actions for `.github/`. `main` and the weekly
      run analyse every language. CodeQL and dependency review skip drafts and run on ready for
-     review; CodeQL, Dependencies and Workflow lint each cancel a superseded run of the same
-     pull request, as ci.yml does.
+     review; CodeQL, Dependencies, Workflow lint and Apple clients each cancel a superseded run
+     of the same pull request, as ci.yml does. Only pull requests: these workflows group each
+     push run on `main` by its own run id, so none is cancelled. For ci.yml that matters beyond
+     publishing: a cancelled push run would be the latest finished one merge-rule's main_green
+     reads, and would hold every pull request as if main were red.
 
    A final `quality-gate` job (`if: always()`) needs all of them. It fails if any failed or was
    cancelled, and if any job the plan selected didn't succeed: on `main`, and when the whole ring
