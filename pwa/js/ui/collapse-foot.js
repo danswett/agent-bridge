@@ -276,12 +276,22 @@ export class CollapsingFoot {
   }
 
   // A tap on the bar's copy: the box, in full and focused. The words while they take any; else the
-  // notice's link, or the first control that takes focus.
+  // notice's link, or the first control that takes focus. With none (a question only the machine
+  // can answer disables them all) there is no focus to bring it back, so it returns as a scroll
+  // up would, to show its notice.
   #bringBack() {
     const usable = (el) => !el.disabled && el.getClientRects().length > 0;
     const input = this.#slot.querySelector('textarea');
     const target = input && usable(input) ? input : [...this.#slot.querySelectorAll(FOCUSABLE)].find(usable);
-    target?.focus({ preventScroll: true });
+    if (target) {
+      target.focus({ preventScroll: true });
+      return;
+    }
+    if (this.#fading) { this.#endFade(); }
+    this.#fold.returned = this.#fold.last > 0;
+    this.#fold.held = null;
+    this.#animate();
+    this.render();
   }
 
   // Focus anywhere in the reply area brings it back at once and holds it (ui.md §6.5): focus is

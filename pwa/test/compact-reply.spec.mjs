@@ -155,6 +155,36 @@ test.describe('on a phone', () => {
     expect((await head(v)).ty).toBe(before.ty);
   });
 
+  test('tapping the compact bar brings the area back, and a link in it still works from there', async ({ page }) => {
+    const v = await session(page);
+    await upsert(page, IDLE, { status: 'waiting', statusSince: later(), updatedAt: later(), question: choices('q-935-bar') });
+    await expect(box(v).locator('.reply-held')).toBeVisible();
+    await settle(v);
+    const max = await end(v);
+    await scrollTo(v, max);
+    await scrollTo(v, max - 400);
+    expect(await foot(v)).toMatchObject({ state: 'compact', solid: true });
+    await v.locator('.reply-copy').click();
+    await expect(box(v).getByRole('button', { name: 'Go to the question' })).toBeFocused();
+    expect(await foot(v)).toMatchObject({ fy: 0, solid: false });
+  });
+
+  test('a question only the machine can answer disables every control, and tapping the compact bar still brings the notice back', async ({ page }) => {
+    const v = await session(page);
+    const question = { id: 'q-935-machine', kind: 'form', message: 'Which run?', fields: [], askedAt: later(60_000), answerAtMachine: true };
+    await upsert(page, IDLE, { status: 'waiting', statusSince: later(), updatedAt: later(), question });
+    await expect(box(v).locator('.reply-held')).toBeVisible();
+    await expect(input(v)).toBeDisabled();
+    await settle(v);
+    const max = await end(v);
+    await scrollTo(v, max);
+    await scrollTo(v, max - 400);
+    expect(await foot(v)).toMatchObject({ state: 'compact', solid: true });
+    await v.locator('.reply-copy').click();
+    await expect.poll(() => foot(v)).toMatchObject({ fy: 0, solid: false });
+    await expect(box(v).locator('.reply-held')).toBeInViewport();
+  });
+
   test('a session opens with the reply area in full; reading back up it rides down, then is a pinned 48 bar', async ({ page }) => {
     const v = await session(page);
     await settle(v);
