@@ -260,7 +260,10 @@ does not; one whose first 4 KiB carry a turn's bytes is an `unreadable` turn, wh
 live parser can see of it too. Within a turn, a delegate's end withdraws the questions of the
 synchronous delegates below it, passing over at most 262,144 of them in the turn (64 times the
 4,096 delegates a read keeps); past that, an end withdraws only its own delegate's questions and
-the turn is `truncated`. A host reads at most two pages at once; a further request waits
+the turn is `truncated`. The `pattern`s of every `ask_user` one request reads share one 250 ms,
+the time one live `ask_user`'s patterns share: past it a pattern is one the host cannot check, so
+its question is answered at the machine, as live. A request that is cancelled stops between
+records rather than finishing its page. A host reads at most two pages at once; a further request waits
 its turn.
 
 The worst case for one request, every budget spent: it **parses** at most 72 MiB, the 32 MiB above

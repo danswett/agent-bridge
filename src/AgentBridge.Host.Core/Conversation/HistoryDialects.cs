@@ -64,6 +64,10 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     int _walked;
 
     public bool RemoteApproval { get; } = remoteApproval;
+    // What every ask_user this read meets may spend on its patterns, together (PatternBudget): each
+    // with its own 250 ms, a page of slow patterns held a history worker for minutes (Engineering's
+    // second-family review of #686). Past it, a pattern is one that can't be checked, as live.
+    public PatternBudget Patterns { get; init; } = new();
     // The session's own thread (Codex), from its first record.
     public string? Thread { get; set; }
 
@@ -422,11 +426,11 @@ internal sealed class CopilotHistory : HistoryDialect
                         // delegate being that delegate's. What it asks is still asked of the
                         // person, as live (status rule 2): the question is kept, with whose it is.
                         context.CallBy(id, agent);
-                        if (name == "ask_user" && arguments is { } asked) { turn.Asked(QuestionMapper.FromCopilotAskUser(id, asked, at) with { Agent = agent }, at); }
+                        if (name == "ask_user" && arguments is { } asked) { turn.Asked(QuestionMapper.FromCopilotAskUser(id, asked, at, context.Patterns) with { Agent = agent }, at); }
                         break;
                     }
                     turn.ToolStarted(id, name, ToolSummary.From(arguments), at);
-                    if (name == "ask_user" && arguments is { } ask) { turn.Asked(QuestionMapper.FromCopilotAskUser(id, ask, at), at); }
+                    if (name == "ask_user" && arguments is { } ask) { turn.Asked(QuestionMapper.FromCopilotAskUser(id, ask, at, context.Patterns), at); }
                     break;
                 }
             // Anyone's: a delegate's call ending answers its question as the main agent's does.

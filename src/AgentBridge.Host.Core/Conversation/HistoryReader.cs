@@ -16,6 +16,8 @@ internal sealed record HistoryBudgets
     // Where the session's first record and its first prompt are looked for.
     public long FirstBytes { get; init; } = 64L * 1024 * 1024;
     public int ChunkBytes { get; init; } = 1024 * 1024;
+    // What the patterns of every question one request reads may take, together (HistoryContext.Patterns).
+    public TimeSpan PatternTime { get; init; } = PatternBudget.Total;
 }
 
 // What the session knows that a page's own records may not say: the main agent's own delegates
@@ -54,7 +56,9 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
     public const string NotRead = "this session's transcript can't be read";
     public const string NoHistory = "this machine keeps no history for this agent";
 
-    public HistoryResult Read(string sessionId, AgentKind agent, string? path, string? before, int limit, HistorySeed seed, bool remoteApproval)
+    // cancellationToken is watched as records are read, not only before the read starts: one already
+    // running never stopped for it (Engineering's second-family review of #686).
+    public HistoryResult Read(string sessionId, AgentKind agent, string? path, string? before, int limit, HistorySeed seed, bool remoteApproval, CancellationToken cancellationToken = default)
     {
         if (HistoryDialect.For(agent) is not { } dialect) { return HistoryResult.NotAvailable(NoHistory); }
         if (path is null) { return HistoryResult.NotAvailable(NotFound); }
@@ -64,7 +68,11 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return HistoryResult.NotAvailable(NotRead); }
         using (handle)
         {
-            try { return new Pass(this, handle, sessionId, dialect, new HistoryContext(seed.Delegates, seed.Calls, remoteApproval, seed.CallOwners, seed.SyncAgents, seed.Parents), seed.AgentTurns).Page(before, limit); }
+            try
+            {
+                var context = new HistoryContext(seed.Delegates, seed.Calls, remoteApproval, seed.CallOwners, seed.SyncAgents, seed.Parents) { Patterns = new PatternBudget(_budgets.PatternTime) };
+                return new Pass(this, handle, sessionId, dialect, context, seed.AgentTurns, cancellationToken).Page(before, limit);
+            }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return HistoryResult.NotAvailable(NotRead); }
         }
     }
@@ -73,7 +81,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
     // newline), the turn's id, and what started it (null for one that could not be read).
     sealed record Start(long Offset, long End, byte[] Id, HistoryPrompt? Prompt, DateTimeOffset? At);
 
-    sealed class Pass(HistoryReader reader, SafeFileHandle file, string sessionId, HistoryDialect dialect, HistoryContext context, IReadOnlySet<string> agentTurns)
+    sealed class Pass(HistoryReader reader, SafeFileHandle file, string sessionId, HistoryDialect dialect, HistoryContext context, IReadOnlySet<string> agentTurns, CancellationToken cancellation)
     {
         delegate bool DroppedLine(ReadOnlySpan<byte> head, long offset);
 
@@ -297,6 +305,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 var pos = end;
                 while (pos > 0)
                 {
+                    cancellation.ThrowIfCancellationRequested();
                     if (scanned >= b.ScanBytes) { return (starts, false); }
                     var n = (int)Math.Min(b.ChunkBytes, pos);
                     pos -= n;
@@ -367,6 +376,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         {
             var content = ContentLength(start, end);
             if (content <= 0) { return true; }
+            cancellation.ThrowIfCancellationRequested();
             if (content > b.MaxLineBytes)
             {
                 // Too long to read. The live parser can see only such a line's start
@@ -509,6 +519,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 var pos = from;
                 while (pos < to)
                 {
+                    cancellation.ThrowIfCancellationRequested();
                     var n = (int)Math.Min(b.ChunkBytes, to - pos);
                     ReadAt(chunk.AsSpan(0, n), pos);
                     var i = 0;
@@ -532,6 +543,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                                 line.Write(chunk.AsSpan(i, newline));
                                 var whole = line.WrittenMemory;
                                 if (whole.Length > 0 && whole.Span[^1] == '\r') { whole = whole[..^1]; }
+                                cancellation.ThrowIfCancellationRequested();
                                 if (whole.Length > 0 && !onLine(whole, lineStart)) { return; }
                             }
                         }

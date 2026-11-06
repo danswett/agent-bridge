@@ -257,7 +257,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         }
         var reader = HistoryReader();
         await _historyReads.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { return await Task.Run(() => reader.Read(id, agent, transcript, before, limit, seed, _options.CopilotRemoteApproval), cancellationToken).ConfigureAwait(false); }
+        try { return await Task.Run(() => reader.Read(id, agent, transcript, before, limit, seed, _options.CopilotRemoteApproval, cancellationToken), cancellationToken).ConfigureAwait(false); }
         finally { _historyReads.Release(); }
     }
 

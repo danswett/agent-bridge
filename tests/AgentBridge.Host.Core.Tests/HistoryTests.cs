@@ -1707,6 +1707,61 @@ public class HistoryTests
         Assert.All(turns, t => Assert.Equal(t.Parts.Count, t.Parts.Select(p => p.Id).Distinct().Count()));
         if (agent != "claude") { Assert.Contains(turns.SelectMany(t => t.Parts), p => p.Delegate is { Event: DelegateEventKind.Started }); }
     }
+
+    // A transcript read by the real reader, dialect and builder alone: what live makes of the same
+    // records is not what these tests are about, and it would spend their time first.
+    static HistoryResult ReadAlone(Fixture f, IEnumerable<string> lines, CancellationToken cancellationToken = default)
+    {
+        var path = Path.Combine(f.Root, "alone.jsonl");
+        File.WriteAllLines(path, lines);
+        var seed = new HistorySeed(new Dictionary<string, string?>(), new Dictionary<string, string>());
+        return new HistoryReader(new HistoryBudgets(), new byte[32]).Read(Id, AgentKind.Copilot, path, null, HistoryLimits.DefaultTurns, seed, remoteApproval: false, cancellationToken);
+    }
+
+    // Found in Engineering's second-family review of #686: each historical ask_user had its own
+    // 250 ms for its patterns, so 12 records of ^(a+)+$ against a×40! took 3.18 s and a thousand could
+    // hold a history worker for minutes within the byte budget. One budget is the whole request's.
+    [Fact]
+    public void Many_questions_with_slow_patterns_share_one_budget_for_the_whole_read()
+    {
+        using var f = new Fixture();
+        const int N = 40;
+        var lines = new List<string> { Copilot.User("slow", 1) };
+        for (var i = 0; i < N; i++)
+        {
+            lines.Add(Copilot.ToolStart($"q{i}", "ask_user", new
+            {
+                message = "Pick",
+                requestedSchema = new { properties = new { x = new { type = "string", pattern = "^(a+)+$", @default = new string('a', 40) + "!" } } },
+            }, 2));
+        }
+        lines.Add(Copilot.User("after", 3));
+        lines.Add(Copilot.Assistant("done", 4));
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var page = ReadAlone(f, lines);
+        clock.Stop();
+
+        // A fresh 250 ms each is 10 s here; one budget for the read is 250 ms and the parsing.
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"took {clock.Elapsed}");
+        Assert.Equal(["slow", "after"], page.Turns!.Select(Prompt));
+        // Every pattern past the budget is one that can't be checked, answered at the machine, as
+        // an over-budget pattern is in a live ask_user.
+        Assert.All(page.Turns![0].Parts.Where(p => p.Question is not null), p => Assert.True(p.Question!.AnswerAtMachine));
+        Assert.Equal(HistoryLimits.QuestionsPerTurn, page.Turns![0].Parts.Count(p => p.Question is not null));
+    }
+
+    // Found in Engineering's second-family review of #686: the token went only to Task.Run, so a read
+    // already running never stopped for it.
+    [Fact]
+    public void A_cancelled_read_stops_rather_than_serving_a_page()
+    {
+        using var f = new Fixture();
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        Assert.ThrowsAny<OperationCanceledException>(() => ReadAlone(f, [Copilot.User("one", 1), Copilot.Assistant("done", 2)], cancelled.Token));
+    }
 }
 
 // Found in review of #686: a main-agent error visited every delegate question still pending, so a
