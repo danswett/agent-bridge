@@ -248,8 +248,9 @@ cannot be moved aside is left as it is and never written over: the record does n
 | Otherwise | Died with the host |
 
 The cause is `reboot` across boots or logons; on the same boot, `restart` if the last run wrote `stopped`, else
-`crash`. A session a person closed while the host was down, with nothing its agent records, reads as
-died: it is offered, never typed into.
+`crash`. A Copilot session a person closed while the host was down, with nothing its agent records, reads
+as died: it is offered, never typed into. A Claude or Codex one whose registration is gone reads as
+uncertain (above): not offered, its folder kept.
 
 **What died** is kept in the record as owed, offered for 7 days (counted from when it is offered, and let go on time while the host keeps
 running; one still being judged is never let go) unless it is resumed or seen live again, and said in `hello`'s `machine.restore` ([v1-sessions.md](protocol/v1-sessions.md#hello)) for
