@@ -149,7 +149,9 @@ public static class ReceiptWords
         if (cut)
         {
             var space = chars.Take(ValueMax + 1).ToList().FindLastIndex(r => r.Value == ' ');
-            shown = string.Concat(chars.Take(space >= MinCut ? space : ValueMax)).TrimEnd();
+            // The same spaces at the cut: a plain TrimEnd took a U+00A0 there, and the whole of a
+            // value of nothing else, before Reveal could escape it (#625, Engineering 6675224949).
+            shown = string.Concat(chars.Take(space >= MinCut ? space : ValueMax)).TrimEnd(Spaces);
         }
         return HiddenText.Reveal(cut || lines.Length > 1 ? $"{shown}…" : shown);
     }

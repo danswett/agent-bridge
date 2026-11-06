@@ -401,6 +401,16 @@ public sealed class ReceiptTests
         Assert.Equal("yes no", Value(" yes \t  no\t"));
     }
 
+    // #625, Engineering 6675224949: the cut at 40 characters trimmed every white space too.
+    [Fact]
+    public void A_free_text_answers_blank_looking_characters_at_the_cut_are_escaped_not_trimmed()
+    {
+        var text = Make.Choice() with { Fields = [] };
+        string? Value(string answer) => ReceiptWords.AnsweredValue(text, new AnswerRequest { Id = "s1", Question = "q1", Request = "r", Text = answer });
+        Assert.Equal(new string('a', 39) + "\\u00A0…", Value(new string('a', 39) + "\u00A0" + new string('b', 10)));
+        Assert.Equal(string.Concat(Enumerable.Repeat("\\u00A0", 40)) + "…", Value(new string('\u00A0', 45)));
+    }
+
     [Fact]
     public void A_confirmed_answers_value_draws_its_hidden_and_bidi_characters_as_escapes()
     {
