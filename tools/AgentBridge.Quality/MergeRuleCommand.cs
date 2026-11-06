@@ -560,23 +560,31 @@ static class MergeRuleCommand
     {
         if (!ReceiptsHidden(session.Config, facts))
             return facts;
-        var receipts = session.Config.IndependentReview;
+        var contexts = ReceiptContexts(session.Config);
         var history = RestPages(session, $"repos/{session.Slug}/commits/{facts.HeadSha}/statuses")
-            .Where(s => s.GetProperty("context").GetString() == receipts.Context)
+            .Where(s => s.GetProperty("context").GetString() is { } c && contexts.Contains(c))
             .Select(s => new StatusFact(
-                receipts.Context,
+                s.GetProperty("context").GetString()!,
                 s.GetProperty("state").GetString() ?? "",
                 s.GetProperty("description").GetString(),
                 Login(s.GetProperty("creator")),
                 DateTimeOffset.Parse(s.GetProperty("created_at").GetString()!, CultureInfo.InvariantCulture)))
             .ToList();
-        return facts with { Statuses = facts.Statuses.Where(s => s.Context != receipts.Context).Concat(history).ToList() };
+        return facts with { Statuses = facts.Statuses.Where(s => !contexts.Contains(s.Context)).Concat(history).ToList() };
     }
 
+    /// <summary>The receipt contexts: the independent review's, and the waiver's second review's when set.</summary>
+    static HashSet<string> ReceiptContexts(MergeRuleConfig config) =>
+        new[] { config.IndependentReview.Context, config.CopilotWaiver.SecondReview }
+            .Where(c => !string.IsNullOrWhiteSpace(c)).ToHashSet(StringComparer.Ordinal);
+
     /// <summary>Whether the newest receipt GraphQL shows isn't a listed poster's, so it may hide one that is.</summary>
-    static bool ReceiptsHidden(MergeRuleConfig config, PullRequestFacts facts) =>
-        facts.Statuses.Any(s => s.Context == config.IndependentReview.Context
+    static bool ReceiptsHidden(MergeRuleConfig config, PullRequestFacts facts)
+    {
+        var contexts = ReceiptContexts(config);
+        return facts.Statuses.Any(s => contexts.Contains(s.Context)
             && (s.Creator is null || !config.IndependentReview.Posters.Contains(s.Creator, StringComparer.OrdinalIgnoreCase)));
+    }
 
     static IEnumerable<JsonElement> RestPages(Session session, string path)
     {
@@ -629,10 +637,11 @@ static class MergeRuleCommand
             checksRead = commit.TryGetProperty("checkSuites", out var suites);
             if (checksRead)
                 (run, codeScanning, checks) = ReadChecks(suites, config);
-            // Every other status counts like a check; merge-rule is this verdict, and the receipt
-            // is judged on its own terms above.
+            // Every other status counts like a check; merge-rule is this verdict, and the receipts
+            // are judged on their own terms above.
+            var receiptContexts = ReceiptContexts(config);
             checks.AddRange(statuses
-                .Where(s => s.Context != MergeRule.StatusContext && s.Context != config.IndependentReview.Context)
+                .Where(s => s.Context != MergeRule.StatusContext && !receiptContexts.Contains(s.Context))
                 .Select(s => new CheckFact(s.Context, s.State switch { "success" => "success", "pending" or "expected" => "pending", _ => "failure" }, s.State)));
         }
 

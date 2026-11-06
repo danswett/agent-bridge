@@ -64,16 +64,23 @@ main_green:
   workflow: ci.yml
   exempt_labels: [fixes-main]
 
-# TEMPORARY (2026-11-05): Copilot code review's quota is exhausted for the owner's account; since
-# about 18:02 PT every review ends "insufficient remaining quota", and nothing could merge. The
-# owner decided (hub #689) to waive Copilot's review while Engineering's and Quality's reviews
-# still apply: a pull request with one of these labels may go without a completed Copilot review
-# on its head, but only with a success independent-review receipt on that head from one of
-# independent_review.posters. The label alone waives nothing, and every other requirement stands.
-# Adding a label takes triage rights: the merge coordinator adds it. Remove when quota is restored
-# (#955).
+# The standing rule (owner decision 2026-11-05, #955; it began as a stopgap when Copilot's review
+# quota ran out at about 18:02 PT): Copilot reviews only the security PRs Quality spends the
+# monthly included requests on. A pull request with one of these labels may go without a
+# completed Copilot review on its head, but only with a success independent-review receipt on that
+# head from one of independent_review.posters. One that needs that receipt (a sensitive path, a
+# security mark, an incomplete file list) also needs a success second_review receipt on the same
+# head from a poster, and the two descriptions must each name a model from a different family:
+# Copilot caught #836's HIGH after two claude-opus-5.5 reviews missed it, and the second family is
+# what stands in for that. Sensitive files under one_review_paths don't call for the second
+# (Product, hub 6675322154: a status.md row the receipt checked against its decision). The label
+# alone waives nothing, and every other requirement stands. Adding a label takes triage rights:
+# the merge coordinator adds it.
 copilot_waiver:
   labels: [copilot-waived]
+  second_review: independent-review-2
+  one_review_paths:
+    - docs/status.md
 
 # A pull request that changes any of these paths also needs the independent review. Globs as in
 # quality/catalog.yml (src/**trust** is any path below src/ with "trust" in it, folders included),
