@@ -134,14 +134,25 @@ export const receiptText = (d) => (d?.line ? (d.more ? `${d.text} · ${d.more}` 
 // the request on screen (voices), or else on the page's own line, never lost and never said on a
 // line now showing another request. said: what has been spoken; pending: what is to be, once the
 // limit allows.
+// Kept by recency (#965), and never let go while a view still draws the request (voices) or it
+// still has something to say (sayTimer): let go by age alone, a card still showing an outcome,
+// drawn afresh after more than KEEP newer requests, said it again. With more than KEEP in use at
+// once the map goes past KEEP until some are let go; each is held by a view on screen or by the
+// rate limit's second, so it is never larger than what is drawn plus what is about to be said.
 const KEEP = 50;
 const histories = new Map();
 function historyFor(request, now) {
   let h = histories.get(request);
-  if (!h) {
-    h = { start: now, stage: null, stageAt: now, sendingSince: null, delivering: false, said: new Set(), pending: null, pendingKey: null, saidAt: -Infinity, sayTimer: null, voices: new Set() };
+  if (h) {
+    histories.delete(request);
     histories.set(request, h);
-    if (histories.size > KEEP) { histories.delete(histories.keys().next().value); }
+    return h;
+  }
+  h = { start: now, stage: null, stageAt: now, sendingSince: null, delivering: false, said: new Set(), pending: null, pendingKey: null, saidAt: -Infinity, sayTimer: null, voices: new Set() };
+  histories.set(request, h);
+  for (const [key, old] of histories) {
+    if (histories.size <= KEEP || old === h) { break; }
+    if (old.voices.size === 0 && old.sayTimer === null) { histories.delete(key); }
   }
   return h;
 }
