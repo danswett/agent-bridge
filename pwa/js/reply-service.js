@@ -11,7 +11,7 @@
 // A large one goes through the relay's blob store, uploaded once and fetched by the machine.
 // The entry's progress is { sent, total, phase } in bytes while they go, and until the reply
 // itself is sent the person can cancel, which stops an upload where it is.
-import { AnswerService } from './answer-service.js';
+import { AnswerService, sent } from './answer-service.js';
 import { uploadAttachment } from './attachments.js';
 
 // Where an answer's entry keeps its question, a reply's keeps this.
@@ -29,7 +29,7 @@ export class ReplyService extends AnswerService {
   constructor(options) {
     super({
       ...options,
-      send: async (client, data, entry, progress) => {
+      send: async (client, data, entry, progress, stage) => {
         const files = entry?.answer?.attachments ?? [];
         const abort = new AbortController();
         this.#sending.set(entry.key, abort);
@@ -46,7 +46,8 @@ export class ReplyService extends AnswerService {
           abort.signal.throwIfAborted();
           this.#sending.delete(entry.key);
           if (files.length) { progress({ sent: total, total, phase: 'reply' }); }
-          return await client.reply(data);
+          // Its files' time is the tap's to sent, not the machine's.
+          return await client.reply(data, { onProgress: stage, onSent: sent(entry) });
         } catch (e) {
           if (abort.signal.aborted) { throw Object.assign(new Error(CANCELLED), { fromHost: true, reason: CANCELLED }); }
           throw e;
@@ -59,6 +60,7 @@ export class ReplyService extends AnswerService {
         ...(e.answer.attachments?.length ? { attachments: e.answer.attachments.map((f) => ({ id: f.id })) } : {}),
       }),
       final: () => false,
+      marks: 'reply',
     });
     this.#current = options.current;
     this.#blobs = options.blobs;

@@ -15,9 +15,19 @@
 // One never sent at all (given while disconnected) can't have been typed, so it waits for
 // a connection however long that takes.
 //
-// Entry states: 'sending' (a request is out), 'waiting' (no channel; resent when there is
-// one), 'failed' (the host answered the op with an error, not an outcome; resendable as
-// is), 'done' (outcome and reason set).
+// Entry states: 'sending' (a request is out), 'waiting' (no channel, reason 'not connected', and
+// resent when there is one; or no outcome on a channel still open, resent after retryMs; or
+// 'still being delivered'), 'failed' (the host answered the op with an error, not an outcome;
+// resendable as is), 'done' (outcome and reason set).
+//
+// While it is on its way, a host that offers sessions.progress says how far it has got, which
+// the entry keeps as its `stage`: 'received' (the host has it), 'typed' (the keys have gone),
+// or 'queued' (typed into a working session, which takes it at its next step). It only moves
+// forward, across resends of the same request: a repeat replays the stages reached, and what
+// has been typed stays typed. Null from a host that doesn't say (#600).
+//
+// `marks` ('reply' or 'answer') keeps this device's timing marks for each delivery, from the
+// tap to the outcome (timing.js); null keeps none.
 //
 // `current(hostId)` says whether that host is connected, and its HostClient: { client, hostId }
 // or null. Each entry goes to the host it was given for and to no other, so with several
@@ -28,15 +38,27 @@
 // swapped: the op it sends, the request it builds, and which outcomes are final. A settled
 // entry's `detail` is the whole result, for ops whose result says more than outcome and reason.
 
+import { ProgressStages } from './protocol.js';
+import { finished, marked, tapped } from './timing.js';
+
 const NO_OUTCOME = 'no outcome came back from the machine in time';
 const MAX_BUSY_RESENDS = 5;
+const STAGE_ORDER = { received: 1, typed: 2, queued: 2 };
+
+// Marks 'sent' for a request once the transport has taken it (HostClient's onSent): not as the call
+// returns, which counted a send the transport then refused, and the time it queued as the host's.
+export function sent(entry) {
+  return () => marked(entry.request, 'sent');
+}
 
 export class AnswerService {
   #entries = new Map();
   #listeners = new Map();
   #any = new Set();
 
-  // send(client, data, entry, progress): the op, which may call progress(anything) as it goes.
+  // send(client, data, entry, progress, stage): the op, which may call progress(anything) as it
+  // goes, and passes stage to the client as its onProgress for the host's progress frames. It
+  // marks 'sent' (timing.js) once the request itself has gone, after anything sent ahead of it.
   // payload(entry): its request data. final(entry): whether a settled outcome stands, so that
   // giving the answer again sends nothing.
   constructor({
@@ -47,7 +69,7 @@ export class AnswerService {
     giveUpMs = 9 * 60 * 1000,
     // How long one entry may go on being resent, when some ops take longer than others.
     giveUpFor = null,
-    send = (client, data) => client.answer(data),
+    send = (client, data, entry, progress, stage) => client.answer(data, { onProgress: stage, onSent: sent(entry) }),
     payload = (e) => ({ id: e.sessionId, question: e.questionId, request: e.request, ...e.answer }),
     final = (e) => !['busy', 'refused'].includes(e.outcome),
     // Whether busy on a resend means the first copy is still being delivered. A launch's host
@@ -57,8 +79,9 @@ export class AnswerService {
     // went offline, #269) takes nothing new: an answer, reply, stop or launch given from what it
     // showed before it went could act on a question or session that has gone since.
     accepts = () => true,
+    marks = null,
   }) {
-    Object.assign(this, { current, uuid, now, retryMs, giveUpMs, send, payload, final, resendOnBusy, accepts });
+    Object.assign(this, { current, uuid, now, retryMs, giveUpMs, send, payload, final, resendOnBusy, accepts, marks });
     this.giveUpFor = giveUpFor ?? (() => this.giveUpMs);
   }
 
@@ -86,10 +109,11 @@ export class AnswerService {
     if (!this.accepts(hostId)) { return null; }
     const entry = {
       key, hostId, sessionId, questionId, answer,
-      request: this.uuid(), state: 'sending', outcome: null, reason: null, progress: null,
+      request: this.uuid(), state: 'sending', outcome: null, reason: null, progress: null, stage: null,
       firstSentAt: null, attempts: 0, busyResends: 0, timer: null, token: 0,
     };
     this.#entries.set(key, entry);
+    if (this.marks) { tapped(this.marks, entry.request); }
     this.#attempt(entry);
     return this.#snapshot(entry);
   }
@@ -118,12 +142,13 @@ export class AnswerService {
 
   #snapshot(entry) {
     if (!entry) { return null; }
-    const { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts, progress, detail = null } = entry;
-    return { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts, progress, detail };
+    const { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts, progress, stage, detail = null } = entry;
+    return { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts, progress, stage, detail };
   }
 
   #set(entry, change) {
     Object.assign(entry, change);
+    if (change.state === 'done' && this.marks) { finished(entry.request, entry.outcome, entry.detail?.timings ?? null); }
     const snap = this.#snapshot(entry);
     for (const fn of [...(this.#listeners.get(entry.key) ?? []), ...this.#any]) {
       try { fn(snap); } catch (e) { console.error(e); }
@@ -156,9 +181,22 @@ export class AnswerService {
     const data = this.payload(entry);
     // What the op has done so far, for one that takes a while (a reply's files going first).
     const progress = (p) => { if (token === entry.token && entry.state === 'sending') { this.#set(entry, { progress: p }); } };
+    // How far the host has got with it (sessions.progress). A stage from an attempt given up
+    // on, one this app doesn't know (from a newer host), or one behind one already reached,
+    // changes nothing.
+    const stage = ({ stage: s, working }) => {
+      if (token !== entry.token || entry.state !== 'sending' || !ProgressStages.includes(s)) { return; }
+      const next = s === 'typed' && working ? 'queued' : s;
+      // Only forward: typed and queued share a rank, so frames alternating between them move nothing.
+      if ((STAGE_ORDER[next] ?? 0) <= (STAGE_ORDER[entry.stage] ?? 0)) { return; }
+      // Marked only when the stage moves on: a repeat replaying the stages so far, or a host
+      // saying the same again, adds nothing to the timing record.
+      if (this.marks) { marked(entry.request, next); }
+      this.#set(entry, { stage: next });
+    };
     let result;
     try {
-      result = await this.send(client, data, this.#snapshot(entry), progress);
+      result = await this.send(client, data, this.#snapshot(entry), progress, stage);
     } catch (e) {
       if (token !== entry.token) { return; }
       if (e?.fromHost === true) {
@@ -169,7 +207,9 @@ export class AnswerService {
       // already up (the reconnect beat this rejection), resend on it now; otherwise later.
       const now = this.current(entry.hostId);
       if (now?.client && !now.client.closed && now.client !== client && now.hostId === entry.hostId) { this.#attempt(entry); return; }
-      this.#wait(entry, e?.message ?? 'no response');
+      // A channel that went is no connection, as when there was none to send on: the receipt says
+      // it waits for the machine (ui.md §6.5). Still connected, it is a lost response, retried.
+      this.#wait(entry, client.closed ? 'not connected' : e?.message ?? 'no response');
       if (!client.closed) { entry.timer = setTimeout(() => this.#attempt(entry), this.retryMs); }
       return;
     }
