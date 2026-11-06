@@ -94,6 +94,14 @@ static partial class SelfTest
             Fields = [new Field { Name = "answer", Type = FieldType.Choice, Options = [new Option("fixes", "Fixes first"), new Option("docs", "Docs first")] }],
         };
 
+        // The colours of a button's in-flight ring, its ink and its fill, as drawn now.
+        static (Windows.UI.Color? Ring, Windows.UI.Color? Ink, Windows.UI.Color? Fill)? RingInk(Button? b)
+        {
+            if (b is null || Find<ProgressRing>(b).FirstOrDefault() is not { } ring) { return null; }
+            static Windows.UI.Color? Of(Microsoft.UI.Xaml.Media.Brush? brush) => (brush as Microsoft.UI.Xaml.Media.SolidColorBrush)?.Color;
+            return (Of(ring.Foreground), Of(b.Foreground), Of(b.Background));
+        }
+
         static void Press(Button b) => ((IInvokeProvider)new ButtonAutomationPeer(b).GetPattern(PatternInterface.Invoke)).Invoke();
 
     // The width an option's label is laid out at, beside the room kept for its ring (WithRing).
@@ -116,6 +124,11 @@ static partial class SelfTest
                 await Until(() => reply.Pending, TimeSpan.FromSeconds(2));
                 check(reply.Pending && reply.StatusText.Length == 0 && !reply.SendRest, $"shows only Send's ring while a reply goes, nothing on the line ({pass}: \"{reply.StatusText}\")");
                 await Draw("send-ring");
+                // The ring took the platform's accent, which is Send's own fill: teal on teal, a
+                // solid button with nothing turning on it.
+                var sendInk = RingInk(ById<Button>(window.Content, "SendReply"));
+                check(sendInk is { Ring: { } ringInk, Ink: { } buttonInk, Fill: var fill } && ringInk == buttonInk && ringInk != fill,
+                    $"draws Send's ring in Send's own ink, never its fill ({pass}: ring {sendInk?.Ring}, ink {sendInk?.Ink}, fill {sendInk?.Fill})");
                 var stalled = await Until(() => reply.StatusText == "Still sending…", TimeSpan.FromSeconds(8));
                 check(stalled, $"says Still sending… once 3 s pass with nothing heard ({pass}: \"{reply.StatusText}\")");
                 await Draw("still-sending");
