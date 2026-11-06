@@ -239,10 +239,13 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         // and a host not reached is taken for one already stopped.
         var quick = Manager(callTimeout: TimeSpan.FromMilliseconds(300), connectTimeout: TimeSpan.FromSeconds(5));
 
-        // No answer in time.
-        host.On(HostOps.ProbeHold, _ => { Thread.Sleep(2000); return new ProbeHoldResult(false); });
+        // No answer at all, so the hold's call timeout runs out however slow the runner: a 2 s sleep
+        // in the handler raced it.
+        var never = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(HostOps.ProbeHold, _ => never.Task);
         var timedOut = await Assert.ThrowsAsync<HostBusyException>(() => quick.StopAsync());
         Assert.Contains("could not say whether a usage probe", timedOut.Message, StringComparison.Ordinal);
+        never.SetResult(new ProbeHoldResult(false));
 
         // An answer that is an error.
         host.On(HostOps.ProbeHold, _ => throw new InvalidOperationException("the probes could not be looked at"));
@@ -425,7 +428,12 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var updating = Manager(others: [other.Folder], package: [4242, 6161]);
         var applied = false;
 
-        var busy = await Assert.ThrowsAsync<HostBusyException>(() => updating.StopAndApplyAsync(() => { }, () => applied = true));
+        // Its wait is run out on the held clock once the other host is first held, the deadline
+        // being set before that.
+        var update = updating.StopAndApplyAsync(() => { }, () => applied = true);
+        await Wait.UntilAsync(() => other.Sent(HostOps.ProbeHold).Count >= 1, "the other profile's first hold");
+        held.Advance(updating.ProbeWait + TimeSpan.FromSeconds(1));
+        var busy = await Assert.ThrowsAsync<HostBusyException>(() => update);
 
         Assert.Contains("still finishing", busy.Message, StringComparison.Ordinal);
         Assert.False(applied);
@@ -441,9 +449,13 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await StartAsync();
         var hook = Manager();
 
-        // Busy past what the hook has: left running, unasked, for Velopack to end.
+        // Busy past what the hook has: left running, unasked, for Velopack to end. Its wait is run
+        // out on the held clock once the first hold is asked, the deadline being set before it.
         host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
-        Assert.Contains("still finishing", await hook.StopWithinAsync(TimeSpan.FromMilliseconds(300)), StringComparison.Ordinal);
+        var busy = hook.StopWithinAsync(TimeSpan.FromMilliseconds(300));
+        await Wait.UntilAsync(() => host.Sent(HostOps.ProbeHold).Count >= 1, "the hook's first hold");
+        held.Advance(TimeSpan.FromMilliseconds(300) + TimeSpan.FromSeconds(1));
+        Assert.Contains("still finishing", await busy, StringComparison.Ordinal);
         Assert.Empty(host.Sent(HostOps.Stop));
         Assert.Empty(processes.Killed);
 
@@ -473,6 +485,9 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             ConnectTo = (folder, ct) => LocalClient.ConnectAsync(LocalEndpoint.For(folder), TimeSpan.FromMilliseconds(300), ct),
             PackageHosts = packageNow ?? (() => package ?? []),
             Elevated = () => false,
+            // As the fixture's manager: no wait runs out under a test on a slow runner, and one a
+            // test needs to run out is advanced by hand.
+            Time = held,
         };
 
     [Fact]
