@@ -1121,7 +1121,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             if (shown.Activity is { UserMessage: not null, UserMessageFrom: null } activity && agentsPrompt)
             {
                 shown = shown with { Activity = activity with { UserMessageFrom = UserMessageFrom.Agent } };
-                if (activity.Turn is { } turn) { lock (_gate) { entry.AgentTurn(turn); } }
+                if (activity.Turn is { } agentTurn) { lock (_gate) { entry.AgentTurn(agentTurn); } }
             }
         }
         Commits++;
