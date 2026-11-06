@@ -1220,11 +1220,17 @@ summary {
    needs ("Sent, but not confirmed. Check at machine before sending it again."), empty unless it
    has something to say: two lines in a narrow box (a phone, or a pane narrowed by the inspector),
    one in a wide one, so neither an exception nor the outcome moves the box or the card's
-   controls. A reply's room stays until the box is typed in again. A longer refusal may grow. */
-form.reply, form.answer { container: receipt / inline-size; }
-.answer-status { min-height: 1.4em; }
-@container receipt (max-width: 639px) { .answer-status { min-height: 2.8em; } }
-.answer-status.room:empty { display: block; visibility: hidden; }
+   controls. A reply's room stays until the box is typed in again. A longer refusal may grow.
+   A box under 640 px is narrow. That is measured without a container query: with a size
+   container in or around the conversation, WebKit lays it out once without the container's
+   contents whenever they change (a question redrawn, a reply's line), and clamps the
+   conversation's scroll to that shorter layout, so it jumped back (#631; the list pane's head
+   above met the same with its rows). Instead an empty float's top padding, a percentage of the
+   line's width (the box's, the line being the form's child), is 2.8em in a narrow box and none in
+   a wide one. */
+.answer-status { display: flow-root; min-height: 1.4em; }
+.answer-status::before { content: ""; float: left; padding-top: clamp(0px, (639.5px - 100%) * 1000, 2.8em); }
+.answer-status.room:empty { display: flow-root; visibility: hidden; }
 .answer-status.progress, .answer-receipt.progress, .answer-status.done, .answer-receipt.done { color: var(--ab-text2); }
 .answer-status.warn, .answer-receipt.warn { color: var(--ab-needs-text); }
 .answer-status.bad, .answer-receipt.bad { color: var(--ab-danger-text); }
