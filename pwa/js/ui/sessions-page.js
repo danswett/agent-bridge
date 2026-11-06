@@ -973,6 +973,14 @@ export class SessionsPage {
   // A session route's machine, for startup: shown on its own when it isn't the one remembered.
   get routedHost() { return this.shell?.route === 'sessions' && this.shell.rest.length >= 2 ? this.shell.rest[0] || null : null; }
 
+  // The list on screen, for a sign-in push's banner, which is on it (#969): the sessions page from
+  // any other, and on a phone the list rather than a session over it. A new entry, so back returns
+  // to where the person was. A desktop shows the list beside a session.
+  showList() {
+    if (!this.shell || (this.shell.route === 'sessions' && !(this.phone.matches && this.shell.rest.length))) { return; }
+    this.shell.go('sessions');
+  }
+
   #rememberLaunch(hostId) {
     this.#launchHost = hostId;
     this.#write(LAUNCH_HOST, hostId);

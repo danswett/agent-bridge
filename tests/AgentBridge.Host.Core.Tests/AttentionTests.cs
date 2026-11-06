@@ -412,6 +412,12 @@ public class AttentionTests
         Assert.Equal(SessionStatus.Working, session.Status);
     }
 
+    [Theory]
+    [InlineData(AgentKind.Claude, "Claude needs you to sign in again (401).")]
+    [InlineData(AgentKind.Codex, "Codex needs you to sign in again (401).")]
+    public void The_hosts_sentence_names_the_agent_as_every_title_does_Claude_never_Claude_Code(AgentKind agent, string message) =>
+        Assert.Equal(message, AgentErrors.Template(AttentionKind.SignInNeeded, null, 401, agent));
+
     // #841: attention carries no agent text at all, only the host's sentence for the fields: a
     // redaction blocklist missed a new shape every round (camelCase keys the last).
     const string Secrets = "Authorization: Bearer Bearer abc123 db_password=hunter2x GITHUB_TOKEN=ghx1 {\"dbPassword\":\"camel secret\"} authToken=camel2 userPassword: p4ss mona@example.com C:\\Users\\mona\\notes.txt";

@@ -87,8 +87,9 @@ function dropKeptUsage() {
 // The sessions on screen and what their cards and the launch panel send, once begun.
 let page = null;
 
-// ---- links: a notification's ?host=&session=&question= ----
-// The session a link asked for, until its card is on screen: { host, session, question }.
+// ---- links: a notification's ?host=&session=&question=, or ?host=&signin= ----
+// The session a link asked for, until its card is on screen: { host, session, question }; or the
+// sign-in banner, until it can be focused or is known gone: { host, signin }.
 let linked = null;
 // Set once signed in: goes to a link's machine.
 let followLink = null;
@@ -123,13 +124,16 @@ function watchFocus(want) {
 
 const ID = /^[0-9a-f]{32}$/;
 const param = (p, name) => { const v = p.get(name); return v && v.length <= 256 ? v : null; };
+// A sign-in push's agent (#969, v1-sessions.md Push signIn): one of these, or none. Any other is
+// ignored, and the link only shows its machine.
+const signInAgent = (p) => { const v = p.get('signin'); return ['copilot', 'claude', 'codex'].includes(v) ? v : null; };
 
-// A link's machine, session and question, taken out of the address so neither a reload nor a
-// later sign-in, possibly as another account, reuses it.
+// A link's machine, session and question, or the agent whose sign-in it is about, taken out of the
+// address so neither a reload nor a later sign-in, possibly as another account, reuses it.
 function takeLink() {
-  const link = { host: param(params, 'host'), session: param(params, 'session'), question: param(params, 'question') };
-  if (!['host', 'session', 'question'].some((k) => params.has(k))) { return null; }
-  for (const k of ['host', 'session', 'question']) { params.delete(k); }
+  const link = { host: param(params, 'host'), session: param(params, 'session'), question: param(params, 'question'), signin: signInAgent(params) };
+  if (!['host', 'session', 'question', 'signin'].some((k) => params.has(k))) { return null; }
+  for (const k of ['host', 'session', 'question', 'signin']) { params.delete(k); }
   const rest = params.toString();
   history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}${location.hash}`);
   return { ...link, host: link.host && ID.test(link.host) ? link.host : null };
@@ -146,6 +150,7 @@ function takeLink() {
 // another asked (#269 security review).
 function focusLinked() {
   if (!linked || !page?.hosts.shows(linked.host)) { return; }
+  if (linked.signin) { focusSignIn(); return; }
   const card = page.view.card(linked.host, linked.session);
   if (!card) { return; }
   if (!linked.shown) {
@@ -177,6 +182,28 @@ function focusLinked() {
   card.revealQuestion('auto', target);
 }
 
+// A sign-in push's link (#969): its machine's sign-in banner for its agent, with focus on the
+// banner's action, once that machine's list is whole (#269), when the banners say whether any
+// session still needs it; and only if the person has not moved on meanwhile (watchFocus). The
+// banners are on the sessions list, which another page, or a session over the list on a phone,
+// hides, and focus() on a hidden banner does nothing: so the list is shown first, before what has
+// focus is noted, and the link is let go only once its banner is on screen. No banner for it then
+// (signed in since): the machine as it is, and nothing said.
+function focusSignIn() {
+  if (!linked.shown) {
+    page.showList();
+    const want = { ...linked, shown: true, left: document.activeElement };
+    setLinked(want);
+    watchFocus(want);
+  }
+  if (!page.hosts.route(linked.host)) { return; }
+  const { host, signin, left } = linked;
+  const now = document.activeElement;
+  if (now && now !== document.body && now !== left) { setLinked(null); return; }
+  if (page.signIns?.reveal(host, signin) === 'hidden') { return; }
+  setLinked(null);
+}
+
 // A tap on a notification while the app is open: the worker says where to go.
 navigator.serviceWorker?.addEventListener('message', (e) => {
   if (e.data?.type !== 'agent-bridge.open' || typeof e.data.url !== 'string') { return; }
@@ -186,7 +213,7 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
   try { p = new URL(e.data.url).searchParams; } catch { return; }
   const host = param(p, 'host');
   if (!host || !ID.test(host)) { return; }
-  followLink?.({ host, session: param(p, 'session'), question: param(p, 'question') });
+  followLink?.({ host, session: param(p, 'session'), question: param(p, 'question'), signin: signInAgent(p) });
 });
 navigator.serviceWorker?.startMessages?.();
 
@@ -540,12 +567,14 @@ function begin(account) {
   const connection = new BridgeConnection({ base: BASE, key: identity.key, deviceId: identity.deviceId, name: deviceName(), account });
   const hosts = new HostSession({ connection, me: identity.deviceId });
   const link = takeLink();
-  setLinked(link?.host && link.session ? { host: link.host, session: link.session, question: link.question } : null);
+  // A session's link wins over a sign-in's: a push carries one or the other.
+  const wanted = (l) => (l?.host && l.session ? { host: l.host, session: l.session, question: l.question } : l?.host && l.signin ? { host: l.host, signin: l.signin } : null);
+  setLinked(wanted(link));
   // A link's machine is shown: with every other when every machine is, else on its own. A
   // notification is not a choice in the Machines panel, so what is remembered stays.
-  followLink = ({ host, session, question }) => {
-    setLinked(session ? { host, session, question } : null);
-    if (!hosts.all || !hosts.isOnline(host)) { hosts.visit(host); }
+  followLink = (l) => {
+    setLinked(wanted(l));
+    if (!hosts.all || !hosts.isOnline(l.host)) { hosts.visit(l.host); }
     focusLinked();
   };
   const fleet = new FleetStatus({ connection, hosts, book, me: identity.deviceId });
