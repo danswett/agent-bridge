@@ -101,3 +101,48 @@ public sealed record RestoreNotice
     public IReadOnlyList<RestoreSession> Offered { get; init; } = [];
     public int? OfferedMore { get; init; }
 }
+
+// restore.run (#948): restore, idle, every session the notice names, through the start-up restore's own
+// path. Request is the client's UUID for this press, with session.launch's semantics. Offer is the
+// notice's At, so a host that started again since refuses the run whole. Sessions are the ids the
+// confirmation listed (1 to MaxRunSessions, in the offer's order, no repeats). Progress asks for a frame
+// as each session's attempt ends.
+public sealed record RestoreRunRequest
+{
+    public required string Request { get; init; }
+    public required DateTimeOffset Offer { get; init; }
+    public required IReadOnlyList<string> Sessions { get; init; }
+    public bool? Progress { get; init; }
+}
+
+// One session's attempt, with session.launch's outcomes and meaning. Reason is present for anything
+// but Started. An outcome a client does not know reads as Unconfirmed: something may have started.
+public sealed record RestoreRunSession
+{
+    [Strict(Strictness.Identity)]
+    public required string Id { get; init; }
+    public required LaunchOutcome Outcome { get; init; }
+    public string? Reason { get; init; }
+}
+
+// The whole run, read first row that holds: Refused (nothing tried), Busy (nothing tried), Restored (every
+// session started), Partial (something started, so any unconfirmed counts), None (no agent started).
+// An outcome a client does not know reads as Partial.
+[UnknownAs(Partial)]
+public enum RestoreRunOutcome { Restored, Partial, None, Busy, Refused }
+
+public sealed record RestoreRunResult
+{
+    public required RestoreRunOutcome Outcome { get; init; }
+    public string? Reason { get; init; }
+    public IReadOnlyList<RestoreRunSession> Sessions { get; init; } = [];
+}
+
+// A frame sent as each session's attempt ends, before the response, when the request asked for them.
+public sealed record RestoreRunProgress
+{
+    public required string Session { get; init; }
+    public required LaunchOutcome Outcome { get; init; }
+    public required int Done { get; init; }
+    public required int Of { get; init; }
+}

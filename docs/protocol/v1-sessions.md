@@ -100,7 +100,7 @@ with the wrong type):
 | `LaunchAgent` ([v1-launch.md](v1-launch.md)) | `id` | |
 | `LaunchWorkspace` | `label` | |
 | `ResumableSession` | `id`, `launcher` | |
-| `RestoreSession` | `id` | |
+| `RestoreSession`, `RestoreRunSession` | `id` | |
 | `LaunchDefaults`, `LaunchedWith` | | `permissions` |
 | `LaunchedTransfer` | `from` | |
 | `TrustQuestion` | | `id`, `agent`, `kind`, `folder`, `root`, `rootNote`, `warning`, `answerable` |
