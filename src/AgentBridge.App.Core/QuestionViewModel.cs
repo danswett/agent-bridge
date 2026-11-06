@@ -18,7 +18,7 @@ public sealed partial class QuestionViewModel : Observable
     {
         // Said as "You answered · value" with the check badge (Describe).
         ["delivered"] = _ => "You answered",
-        // Describe names the machine itself (ui.md §6.5: "Check at machine before sending it again").
+        // Final: never "before sending it again" (ui.md §6.5, #967).
         ["unconfirmed"] = _ => ReceiptWords.AnswerUnconfirmed,
         ["stale"] = _ => "Already answered or gone: the session is no longer asking this.",
         ["busy"] = _ => "Another answer to this session is being delivered. Try again in a moment.",

@@ -1222,7 +1222,7 @@ summary {
 /* The receipt (ui.md §6.5, #600, #617): quiet unless something's wrong. Its line is words only,
    for an exception (in-flight words text2, an outcome's in its own colour), or "You answered ·
    value" in text2 once an answer is confirmed. From Send it keeps the room the longest outcome
-   needs ("Sent, but not confirmed. Check at machine before sending it again."), empty unless it
+   needs ("Sent, but not confirmed. Check the conversation before sending it again."), empty unless it
    has something to say: two lines in a narrow box (a phone, or a pane narrowed by the inspector),
    one in a wide one, so neither an exception nor the outcome moves the box or the card's
    controls. A reply's room stays until the box is typed in again. A longer refusal may grow. */

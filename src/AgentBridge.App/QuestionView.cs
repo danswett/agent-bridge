@@ -26,7 +26,7 @@ public sealed class QuestionView : StackPanel
     readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
     readonly Grid receipt = new();
     // Drawn clear and unheard under the words: the room the longest outcome needs at this width
-    // (ReceiptWords.Room), kept from Send so neither a stage nor the outcome moves what is below.
+    // (QuestionViewModel.Room), kept from Send so neither a stage nor the outcome moves what is below.
     readonly TextBlock room = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0, IsHitTestVisible = false };
     readonly TextBlock error = new() { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
     readonly Button resend = new() { Content = "Send again" };
