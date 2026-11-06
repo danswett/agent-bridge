@@ -367,7 +367,8 @@ test.describe('on a phone', () => {
   test('Escape closes the overflow menu first, leaving the session pushed, and the next Escape returns to the list', async ({ page }) => {
     const { v, open } = await pushed(page);
     const more = v.getByRole('button', { name: 'More' });
-    await tabTo(page, more, { max: 6 });
+    // On a phone More is in the pinned bar, before the title in the tab order (ui.md §6.2, #631).
+    await tabTo(page, more, { key: 'Shift+Tab', max: 6 });
     await page.keyboard.press('Enter');
     await expect(page.getByRole('menu')).toBeVisible();
     await page.keyboard.press('Escape');
