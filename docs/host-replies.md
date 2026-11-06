@@ -306,6 +306,13 @@ transcript; the reply is added to them, and the prompt recorded differs, so the 
 moments between the transcript check and the keys landing would take the words; the window
 is the worker's start-up, about the same as for an answer.
 
+**What a reason says.** A reply's or an answer's `reason` states only what happened, as a
+lowercase clause with no full stop, naming the agent's session: never where to look, which the
+client's receipt already says ("Check the conversation…", #967), and never "check at the
+machine" (#995). Where the host itself failed (an exception reading the screen, typing, or
+checking the transcript, or the attempt ledger unreadable), the reason is "the machine
+couldn't deliver it", and the exception's text goes to the host's log only (#802).
+
 ## Progress and timings
 
 A client that saw `sessions.progress` and sends `"progress": true` hears the reply's stages

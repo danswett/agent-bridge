@@ -19,16 +19,19 @@ public sealed class AttemptLedger
 
     readonly string? path;
     readonly TimeProvider time;
+    readonly Action<string> log;
     readonly Lock gate = new();
     Dictionary<string, DateTimeOffset>? attempts;
     string? broken;
 
     // path: where the ledger lives, in the host's own profile folder; null keeps it in memory
-    // for the life of the process only.
-    public AttemptLedger(string? path, TimeProvider? time = null)
+    // for the life of the process only. log: the host's log, which alone is told why the ledger
+    // could not be read or written (#995).
+    public AttemptLedger(string? path, TimeProvider? time = null, Action<string>? log = null)
     {
         this.path = path;
         this.time = time ?? TimeProvider.System;
+        this.log = log ?? (_ => { });
     }
 
     public static string Key(string agent, string sessionId, string questionId) => $"{agent}\u001f{sessionId}\u001f{questionId}";
@@ -39,7 +42,7 @@ public sealed class AttemptLedger
         lock (gate)
         {
             if (Load() is { } problem) { return problem; }
-            if (attempts!.ContainsKey(key)) { return "an answer was already typed into this prompt once, and is never typed again; check at the machine"; }
+            if (attempts!.ContainsKey(key)) { return "an answer was already typed into this prompt once, and is never typed again"; }
             attempts[key] = time.GetUtcNow();
             if (Save() is { } failed)
             {
@@ -80,7 +83,8 @@ public sealed class AttemptLedger
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
         {
-            broken = $"the host's record of answers already typed could not be read ({e.Message}), so nothing is typed; answer at the machine";
+            log($"the record of answers already typed ({path}) could not be read, so nothing is typed: {e.GetType().Name}: {e.Message}");
+            broken = DeliveryReasons.CouldNotDeliver;
             return broken;
         }
     }
@@ -105,7 +109,8 @@ public sealed class AttemptLedger
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return $"the host could not record the attempt ({e.Message}), so nothing is typed; answer at the machine";
+            log($"the attempt could not be recorded in {path}, so nothing is typed: {e.GetType().Name}: {e.Message}");
+            return DeliveryReasons.CouldNotDeliver;
         }
     }
 }

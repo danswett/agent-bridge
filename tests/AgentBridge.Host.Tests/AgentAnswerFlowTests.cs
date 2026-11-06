@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Host.Core;
@@ -19,6 +20,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
     readonly Probe probe = new();
     readonly Guard guard = new();
     readonly Injector injector = new();
+    readonly ConcurrentQueue<string> logged = new();
     // The answer's time: it moves on only while the answer waits between looks (#486).
     readonly PollClock clock = new();
     SessionSource source = null!;
@@ -64,7 +66,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         ClaudeReviewAfter = TimeSpan.FromMilliseconds(300),
         AttemptLedgerPath = ledger,
         Time = clock,
-    });
+    }, logged.Enqueue);
 
     static AnswerRequest Request(string session, string question, object fields) => new()
     {
@@ -115,6 +117,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
         Assert.Contains("did not record an answer", result.Reason);
+        Assert.DoesNotContain("at the machine", result.Reason);
         Assert.Equal(2, injector.Plans.Count);
     }
 
@@ -146,6 +149,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
         Assert.Contains("different answer", result.Reason);
+        Assert.DoesNotContain("at the machine", result.Reason);
     }
 
     [Fact]
@@ -188,6 +192,8 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         Assert.Equal(AnswerOutcome.Delivered, (await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen))).Outcome);
     }
 
+    // #995: the person is told the fact in fixed words; why the ledger could not be written goes
+    // to the host's log only (#802).
     [Fact]
     public async Task An_attempt_that_cannot_be_recorded_types_nothing()
     {
@@ -195,9 +201,22 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
 
         var result = await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
 
-        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
-        Assert.Contains("could not record the attempt", result.Reason);
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "the machine couldn't deliver it"), result);
+        Assert.Contains(logged, l => l.Contains("could not be recorded", StringComparison.Ordinal));
         Assert.Empty(injector.Plans);
+    }
+
+    // #995, #802: an exception's words never reach the person. The injector failing as it types is
+    // "the machine couldn't deliver it", and what it said is in the host's log.
+    [Fact]
+    public async Task An_injector_that_throws_while_typing_an_answer_says_only_that_the_machine_couldnt_deliver_it_and_logs_why()
+    {
+        injector.OnInject = _ => throw new IOException("pipe 0xC0FFEE to the worker broke");
+
+        var result = await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Unconfirmed, "the machine couldn't deliver it"), result);
+        Assert.Contains(logged, l => l.Contains("pipe 0xC0FFEE to the worker broke", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -229,6 +248,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, approved.Outcome);
         Assert.Contains("typed approve", approved.Reason);
+        Assert.DoesNotContain("at the machine", approved.Reason);
         var (pid, plan) = Assert.Single(injector.Plans);
         Assert.Equal((400, "y", true), (pid, plan.Sends[0].Text, plan.Sends[0].Enter));
         // The marker is agent-ha-bridge's: read, never written.
@@ -463,7 +483,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
 
         var result = await Answerer().AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" }));
 
-        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "an answer was already typed into this prompt once, and is never typed again; check at the machine"), result);
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "an answer was already typed into this prompt once, and is never typed again"), result);
         Assert.Single(injector.Plans);
     }
 

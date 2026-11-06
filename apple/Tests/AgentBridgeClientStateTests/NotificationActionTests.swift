@@ -224,3 +224,24 @@ private actor NoticeHost {
     #expect(host.replyDrafts["s"] == "Continue with tests")
     #expect(await fixture.operations.last?.data["text"] == .string("Continue"))
 }
+
+// #995: an unconfirmed answer or reply from a notification says #967's words, pointing at the
+// conversation and never at the machine (#696).
+@MainActor @Test func notificationAnswerNotConfirmedSaysCheckTheConversation() async throws {
+    let fixture = NoticeHost(outcome: "unconfirmed")
+    let host = HostStore(id: "m", name: "Mac", isLocal: false) { await fixture.connection() }
+    defer { host.stop() }; host.start()
+    try await awaitNotice { host.isLive }
+    let result = try await BridgeNotificationDelivery.perform(actionRequest(actionNotice()), host: host, scope: "account-one") { true }
+    #expect(result == "Sent, but not confirmed. Check the conversation.")
+}
+
+@MainActor @Test func notificationReplyNotConfirmedSaysCheckTheConversationBeforeSendingItAgain() async throws {
+    let session = actionSession(questionID: nil)
+    let fixture = NoticeHost(fresh: session, initial: session, outcome: "unconfirmed")
+    let host = HostStore(id: "m", name: "Mac", isLocal: false) { await fixture.connection() }
+    defer { host.stop() }; host.start()
+    try await awaitNotice { host.isLive }
+    let result = try await BridgeNotificationDelivery.perform(actionRequest(actionNotice(session), text: "Continue"), host: host, scope: "account-one") { true }
+    #expect(result == "Sent, but not confirmed. Check the conversation before sending it again.")
+}

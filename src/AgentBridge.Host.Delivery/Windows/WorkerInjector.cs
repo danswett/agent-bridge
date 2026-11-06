@@ -21,9 +21,15 @@ public sealed class WorkerInjector : IConsoleInjector
     static readonly SemaphoreSlim One = new(1, 1);
 
     readonly string path;
+    readonly Action<string> log;
 
-    public WorkerInjector(string? path = null) =>
+    // log: the host's log, which alone is told why the worker could not start (#995): the
+    // result's detail reaches a person's receipt, and an exception's text must not (#802).
+    public WorkerInjector(string? path = null, Action<string>? log = null)
+    {
         this.path = path ?? Path.Combine(AppContext.BaseDirectory, FileName);
+        this.log = log ?? (_ => { });
+    }
 
     public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
     {
@@ -62,7 +68,7 @@ public sealed class WorkerInjector : IConsoleInjector
         start.ArgumentList.Add("--screen");
         Process? process;
         try { process = ProcessLaunch.Start(start); }
-        catch (Exception e) { return new ConsoleScreen(null, $"the injector could not start: {e.Message}"); }
+        catch (Exception e) { return new ConsoleScreen(null, NotStarted(processId, e)); }
         if (process is null) { return new ConsoleScreen(null, "the injector could not start"); }
         using (process)
         {
@@ -116,7 +122,7 @@ public sealed class WorkerInjector : IConsoleInjector
         start.ArgumentList.Add(processId.ToString(CultureInfo.InvariantCulture));
         Process? process;
         try { process = ProcessLaunch.Start(start); }
-        catch (Exception e) { return Nothing($"the injector could not start: {e.Message}"); }
+        catch (Exception e) { return Nothing(NotStarted(processId, e)); }
         if (process is null) { return Nothing("the injector could not start"); }
 
         using (process)
@@ -195,6 +201,12 @@ public sealed class WorkerInjector : IConsoleInjector
         ("screen", _) => $"the host could not read the session's screen (error {code}); answer at the machine",
         _ => $"the injector could not type ({stage} error {code}); answer at the machine",
     };
+
+    string NotStarted(int processId, Exception e)
+    {
+        log($"the injector could not start for pid {processId}: {e.GetType().Name}: {e.Message}");
+        return DeliveryReasons.CouldNotDeliver;
+    }
 
     static InjectionResult Nothing(string detail) => new(InjectionStatus.NothingTyped, detail);
     static InjectionResult Interrupted(string detail) => new(InjectionStatus.Interrupted, detail);

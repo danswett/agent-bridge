@@ -642,11 +642,13 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var (outcome, reason) = await ReplyAsync(ch, "carry on");
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("a different message", reason);
+        Assert.DoesNotContain("at the machine", reason);
 
         injector.OnInject = null;
         (outcome, reason) = await ReplyAsync(ch, "carry on");
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("did not record the reply", reason);
+        Assert.DoesNotContain("at the machine", reason);
 
         // A scheduled prompt or a subagent's of the same words was not typed by anybody.
         injector.OnInject = plan => Fixture.Append(events,
@@ -885,6 +887,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var (outcome, reason) = await ReplyAsync(ch, "hello");
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("console closed", reason);
+        Assert.DoesNotContain("at the machine", reason);
 
         injector.Result = new InjectionResult(InjectionStatus.NothingTyped, "the session runs as administrator");
         Assert.Equal(("refused", "the session runs as administrator"), await ReplyAsync(ch, "hello again"));
@@ -1008,6 +1011,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("did not attach every file", reason);
+        Assert.DoesNotContain("at the machine", reason);
         Assert.StartsWith("@", Assert.Single(injector.Plans).Plan.Sends[0].Text);
     }
 
@@ -1243,7 +1247,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var (outcome, reason) = await ReplyAsync(ch, "go on");
 
         Assert.Equal("unconfirmed", outcome);
-        Assert.Equal("the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent; the words are left in the box at the machine, to send or clear there", reason);
+        Assert.Equal("the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent and its words are still in the box", reason);
         Assert.Single(injector.Plans);
         Assert.Empty(injector.Refused);
     }

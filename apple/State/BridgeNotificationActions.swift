@@ -134,12 +134,16 @@ enum BridgeNotificationDelivery {
             await host.perform(operation, slot: slot)
             guard isCurrentContext(), let attempt = host.attempts[slot], attempt.operation.requestID == operation.requestID else { return notSent }
             guard let outcome = attempt.result?["outcome"]?.string else { return "Delivery was not confirmed. Check the session before trying again." }
+            // #967's words (#995): the conversation shows whether it went, never the machine (#696).
+            let unconfirmed = operation.op == "session.reply"
+                ? "Sent, but not confirmed. Check the conversation before sending it again."
+                : "Sent, but not confirmed. Check the conversation."
             switch outcome {
             case "delivered": return "Delivered."
-            case "unconfirmed": return "Delivery was not confirmed. Check the session at the machine."
+            case "unconfirmed": return unconfirmed
             case "stale": return "Not sent. The question changed. Review the session."
             case "busy", "refused": return "Not sent. The machine did not accept this action. Review the session."
-            default: return "Delivery was not confirmed. Check the session at the machine."
+            default: return unconfirmed
             }
         } catch { return notSent }
     }

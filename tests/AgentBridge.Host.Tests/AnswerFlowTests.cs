@@ -181,6 +181,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("error", reason);
+        Assert.DoesNotContain("at the machine", reason);
     }
 
     [Fact]
@@ -192,6 +193,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("different answer", reason);
+        Assert.DoesNotContain("at the machine", reason);
 
         // A fresh question, which the session never answers.
         Fixture.Append(events, Ask("q2", second++));
@@ -200,6 +202,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         (outcome, reason) = await AnswerAsync(ch, new { pick = "a" }, question: "q2");
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("did not record an answer", reason);
+        Assert.DoesNotContain("at the machine", reason);
         Assert.Equal(2, injector.Plans.Count);
     }
 
@@ -470,6 +473,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("console closed", reason);
+        Assert.DoesNotContain("at the machine", reason);
 
         // A different question, so the first attempt's outcome is not what comes back.
         Fixture.Append(events, Ask("q2", second++));
