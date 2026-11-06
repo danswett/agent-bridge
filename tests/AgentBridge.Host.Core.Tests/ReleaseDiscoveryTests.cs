@@ -16,6 +16,11 @@ public sealed class ReleaseDiscoveryTests : IDisposable
     readonly FakeTimeProvider time = new(Now);
     readonly FakeGitHub github = new();
 
+    // The machine's own zone, whatever the runner's: one with a half-hour offset, an hour ahead of
+    // UTC's date at Now, so the words can only come from it.
+    public ReleaseDiscoveryTests() =>
+        time.SetLocalTimeZone(TimeZoneInfo.CreateCustomTimeZone("Test+05:30", new TimeSpan(5, 30, 0), "Test", "Test"));
+
     public void Dispose()
     {
         if (Directory.Exists(folder)) { Directory.Delete(folder, true); }
@@ -68,7 +73,7 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         var limited = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
         Assert.True(limited.Limited);
         Assert.Equal(reset, limited.RetryAt);
-        Assert.Equal($"GitHub is limiting how often this network can check for updates. {Product.Name} will check again after 12:20 PT.", limited.Message);
+        Assert.Equal($"GitHub is limiting how often this network can check for updates. {Product.Name} will check again after 01:50 UTC+5:30.", limited.Message);
 
         // Clicks before the reset are answered at once, with the same words, and ask nothing.
         time.Advance(TimeSpan.FromMinutes(19));
@@ -94,8 +99,8 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         var limited = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
         Assert.True(limited.Limited);
         Assert.Equal(time.GetUtcNow() + TimeSpan.FromMinutes(5), limited.RetryAt);
-        // Pacific, named, whatever the machine's zone: 20:00 UTC on 4 November 2026 is 12:00 PST.
-        Assert.EndsWith("The last successful check was at 12:00 PT.", limited.Message);
+        // The machine's zone, with its offset: 20:00 UTC on 4 November 2026 is 01:30 on the 5th there.
+        Assert.EndsWith("The last successful check was at 01:30 UTC+5:30.", limited.Message);
 
         time.Advance(TimeSpan.FromMinutes(4));
         await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));

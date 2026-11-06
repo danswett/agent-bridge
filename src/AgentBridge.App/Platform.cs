@@ -108,8 +108,9 @@ sealed class DiscoveredGithubSource(string repository, bool prereleases, Release
 {
     protected override async Task<GithubRelease[]> GetReleases(bool includePrereleases)
     {
-        var json = await discovery.ReleasesAsync(ReleaseDiscovery.ReleasesUrl(RepoUri.ToString()), CancellationToken.None);
-        var releases = System.Text.Json.JsonSerializer.Deserialize<GithubRelease?[]>(json) ?? [];
+        // Read through discovery, so a list this can't read is its failure, backed off, never kept.
+        var releases = await discovery.ReleasesAsync(ReleaseDiscovery.ReleasesUrl(RepoUri.ToString()),
+            json => System.Text.Json.JsonSerializer.Deserialize<GithubRelease?[]>(json) ?? [], CancellationToken.None);
         // As GithubSource orders and filters its own.
         return [.. releases.OfType<GithubRelease>().OrderByDescending(r => r.PublishedAt).Where(r => includePrereleases || !r.Prerelease)];
     }

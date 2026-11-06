@@ -178,6 +178,32 @@ public sealed class HostUpdatesTests : IDisposable
         Assert.Equal(1, github.Requests);
     }
 
+    // A list whose releases have a field of the wrong type is GitHub's answer that couldn't be
+    // read, backed off and never kept, rather than a JsonException from the cache at every check.
+    [Theory]
+    [InlineData("""[{"name":"Agent Bridge 0.1.601","prerelease":{},"assets":[]}]""")]
+    [InlineData("""[{"name":"Agent Bridge 0.1.601","prerelease":true,"published_at":"soon","assets":[]}]""")]
+    [InlineData("""[{"name":"Agent Bridge 0.1.601","prerelease":true,"assets":{"name":"releases.win.json"}}]""")]
+    public async Task A_release_list_with_a_field_the_updater_cannot_read_is_a_failure_backed_off_not_kept(string list)
+    {
+        var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
+        var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.600", packages, null, null, null, "win");
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 4, 20, 0, 0, TimeSpan.Zero));
+        var github = new FakeGitHub { Answer = () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(list) } };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), github, time, random: () => 0);
+        var updates = new VelopackHostUpdates(root, "default", () => { }, _ => { }, copy, discovery);
+
+        var failed = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => updates.CheckAsync(CancellationToken.None));
+        Assert.StartsWith("GitHub's answer to the update check could not be read.", failed.Message);
+        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => updates.CheckAsync(CancellationToken.None));
+        Assert.Equal(1, github.Requests);
+
+        time.Advance(ReleaseDiscovery.FirstBackoff);
+        github.Answer = () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("[]") };
+        Assert.Null(await updates.CheckAsync(CancellationToken.None));
+        Assert.Equal(2, github.Requests);
+    }
+
     sealed class FakeDownloads(Dictionary<string, string> files) : IFileDownloader
     {
         public Task<byte[]> DownloadBytes(string url, IDictionary<string, string>? headers = null, double timeout = 30) =>

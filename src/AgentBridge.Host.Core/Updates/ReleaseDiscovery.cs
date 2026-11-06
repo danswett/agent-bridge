@@ -94,7 +94,13 @@ public sealed class ReleaseDiscovery : IDisposable
     // The release list's JSON: GitHub's, or the last one it gave while that is fresh. When there
     // is neither, throws a ReleaseDiscoveryException (or, cancelled, OperationCanceledException),
     // never anything else.
-    public async Task<string> ReleasesAsync(string url, CancellationToken cancellationToken)
+    public Task<string> ReleasesAsync(string url, CancellationToken cancellationToken) =>
+        ReleasesAsync(url, body => body, cancellationToken);
+
+    // The release list as read: a list that read throws JsonException for (a field of the wrong
+    // type, `[{"prerelease":{}}]`) is an answer that couldn't be read, so it is neither kept nor
+    // served from the file, and is backed off like any other failure, never a raw JsonException.
+    public async Task<T> ReleasesAsync<T>(string url, Func<string, T> read, CancellationToken cancellationToken)
     {
         await turn.WaitAsync(cancellationToken);
         try
@@ -103,15 +109,16 @@ public sealed class ReleaseDiscovery : IDisposable
             // Read under the lock: another process may have just asked.
             var state = Sane(Read(), time.GetUtcNow());
             var now = time.GetUtcNow();
-            var cached = state.Url == url && state.Body is not null;
+            T releases = default!;
+            var cached = state.Url == url && state.Body is not null && Readable(state.Body, read, out releases);
             // A backoff first: a clock put back can make an older answer's FreshUntil future again,
             // and serving it then would say a check succeeded that GitHub has just refused.
             if (state.NotBefore is { } wait && now < wait) { throw Held(state); }
-            if (cached && now < state.FreshUntil) { return state.Body!; }
+            if (cached && now < state.FreshUntil) { return releases; }
             var answer = await AskAsync(url, cached ? state.ETag : null, cancellationToken);
             now = time.GetUtcNow();
             var unchanged = answer.Status == HttpStatusCode.NotModified && cached;
-            if (unchanged || answer.Status == HttpStatusCode.OK && answer.Body is not null)
+            if (unchanged || answer.Status == HttpStatusCode.OK && answer.Body is not null && Readable(answer.Body, read, out releases))
             {
                 state = state with
                 {
@@ -125,7 +132,7 @@ public sealed class ReleaseDiscovery : IDisposable
                     Problem = null,
                 };
                 Write(state);
-                return state.Body!;
+                return releases;
             }
             var failures = state.Failures + 1;
             var backoff = TimeSpan.FromTicks(Math.Min(LongestBackoff.Ticks, FirstBackoff.Ticks << Math.Min(failures - 1, 16)));
@@ -143,6 +150,12 @@ public sealed class ReleaseDiscovery : IDisposable
     }
 
     static TimeSpan Clamp(TimeSpan wait) => wait < FirstBackoff ? FirstBackoff : wait > LongestWait ? LongestWait : wait;
+
+    static bool Readable<T>(string body, Func<string, T> read, out T releases)
+    {
+        try { releases = read(body); return true; }
+        catch (JsonException) { releases = default!; return false; }
+    }
 
     // Times further off than anything here sets were written under a clock since put back (a VM
     // restored from a snapshot): believed, they would hold every check for the whole difference.
@@ -234,25 +247,19 @@ public sealed class ReleaseDiscovery : IDisposable
         return new ReleaseDiscoveryException($"{what} {Product.Name} will check again after {When(at)}.{last}", at, state.Problem == Problems.Limited);
     }
 
-    // In Pacific, as everything this project shows, and named so: the words also reach the
-    // account's other devices and Home Assistant, which may be in another zone.
+    // In this machine's own zone, as the product shows times to the person at it (docs/status.md,
+    // 11-04), with the zone's offset from UTC: the words also reach the account's other devices and
+    // Home Assistant as text (UpdateState's reason), which may be in another zone. The offset, as
+    // .NET has no portable zone abbreviation (Windows names only "Pacific Standard Time").
     string When(DateTimeOffset at)
     {
-        var pacific = TimeZoneInfo.ConvertTime(at, Pacific);
-        var today = TimeZoneInfo.ConvertTime(time.GetUtcNow(), Pacific).Date;
-        return pacific.ToString(pacific.Date == today ? "HH:mm" : "MMM d HH:mm", CultureInfo.InvariantCulture) + " PT";
-    }
-
-    static readonly TimeZoneInfo Pacific = FindPacific();
-
-    static TimeZoneInfo FindPacific()
-    {
-        foreach (var id in new[] { "America/Los_Angeles", "Pacific Standard Time" })
-        {
-            try { return TimeZoneInfo.FindSystemTimeZoneById(id); }
-            catch (Exception e) when (e is TimeZoneNotFoundException or InvalidTimeZoneException) { }
-        }
-        return TimeZoneInfo.CreateCustomTimeZone("PT", TimeSpan.FromHours(-8), "Pacific", "Pacific");
+        var zone = time.LocalTimeZone;
+        var local = TimeZoneInfo.ConvertTime(at, zone);
+        var today = TimeZoneInfo.ConvertTime(time.GetUtcNow(), zone).Date;
+        var offset = local.Offset;
+        var utc = offset == TimeSpan.Zero ? "UTC"
+            : $"UTC{(offset < TimeSpan.Zero ? "-" : "+")}{Math.Abs(offset.Hours)}{(offset.Minutes != 0 ? $":{Math.Abs(offset.Minutes):00}" : "")}";
+        return local.ToString(local.Date == today ? "HH:mm" : "MMM d HH:mm", CultureInfo.InvariantCulture) + " " + utc;
     }
 
     // The processes take turns through a file none of them shares while it holds it. A folder
