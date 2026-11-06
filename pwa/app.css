@@ -1170,7 +1170,7 @@ summary {
 .opt .mark { color: var(--ab-text2); }
 .opt.chosen .mark { color: var(--ab-bridge); }
 .opt .label { flex: 1; overflow-wrap: anywhere; }
-.badge { font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--ab-bridge); border: 1px solid currentColor; border-radius: 999px; padding: 0 6px; }
+.badge { font-size: max(11px, .72rem); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--ab-bridge); border: 1px solid currentColor; border-radius: 999px; padding: 0 6px; }
 .badge.req { color: var(--ab-needs-text); }
 .answer-box { margin-top: 6px; min-height: var(--tap); padding: 10px; border: 1px solid var(--ab-stroke2); border-radius: 8px; background: var(--ab-card); overflow-wrap: anywhere; }
 .answer-box.empty { color: var(--ab-text2); font-style: italic; }

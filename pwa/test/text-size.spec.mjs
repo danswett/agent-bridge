@@ -86,6 +86,26 @@ test('no role goes under 11 px at Smaller', async ({ page }) => {
     expect(scale, r).toBe('0.9');
     expect(px, r).toBeGreaterThanOrEqual(11);
   }
+  // Rules sized in rem scale with the root too, so they keep the floor themselves (.badge, #1040).
+  const under = await page.evaluate(() => {
+    const out = [];
+    const walk = (rules) => {
+      for (const rule of rules) {
+        if (rule.cssRules) walk(rule.cssRules);
+        const size = rule.style?.fontSize;
+        if (!size || !size.includes('rem')) continue;
+        const probe = document.createElement('span');
+        probe.style.fontSize = size;
+        document.body.append(probe);
+        const px = parseFloat(getComputedStyle(probe).fontSize);
+        probe.remove();
+        if (px < 11) out.push(`${rule.selectorText}: ${size} = ${px}px`);
+      }
+    };
+    for (const sheet of document.styleSheets) walk(sheet.cssRules);
+    return out;
+  });
+  expect(under).toEqual([]);
 });
 
 test.describe('a narrow phone', () => {
