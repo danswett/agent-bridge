@@ -16,8 +16,10 @@ public sealed partial class QuestionViewModel : Observable
 {
     static readonly Dictionary<string, Func<string, string>> OutcomeText = new()
     {
-        ["delivered"] = _ => "Delivered. The session has your answer.",
-        ["unconfirmed"] = at => $"Sent, but not confirmed. Check at the machine{at}.",
+        // Said as "You answered · value" with the check badge (Describe).
+        ["delivered"] = _ => "You answered",
+        // Describe names the machine itself (ui.md §6.5: "Check at machine before sending it again").
+        ["unconfirmed"] = _ => ReceiptWords.AnswerUnconfirmed,
         ["stale"] = _ => "Already answered or gone: the session is no longer asking this.",
         ["busy"] = _ => "Another answer to this session is being delivered. Try again in a moment.",
         ["refused"] = _ => "The machine refused this answer.",
@@ -28,13 +30,17 @@ public sealed partial class QuestionViewModel : Observable
     readonly Deliveries deliveries;
     readonly string sessionId;
     readonly string at;
+    readonly string? machine;
     readonly Func<bool> current;
     string freeText = "";
     bool otherOpen;
     string? error;
     string statusText = "";
     Tone statusTone;
+    ReceiptMark statusMark;
     bool pausedAfterBusy;
+    // Times the status line's words, as the receipt of the answer (Receipt, #600, #617).
+    readonly Receipt receipt;
 
     // current: whether the machine's rows are its host's word now (Machine.Current, #269). While
     // not, the question is shown but can't be answered: it may have ended meanwhile.
@@ -45,21 +51,70 @@ public sealed partial class QuestionViewModel : Observable
         this.deliveries = deliveries;
         this.current = current ?? (() => true);
         at = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
+        machine = machineName;
         (Answerable, Why) = Answerability(question, capabilities, agent);
         Fields = [.. question.Fields.Select(f => new FieldViewModel(f, question.Kind == QuestionKind.Approval))];
         Tap = question.Fields.Count == 1 && question.Fields[0].Type == FieldType.Choice;
         otherOpen = Tap && Fields[0].OtherChosen;
+        StatusRoom = Room(machineName);
+        receipt = new Receipt(deliveries.Time, deliveries.Ui, (e, stalled) => Describe(e, machineName, stalled), Shown, Said);
         deliveries.Changed += OnDelivery;
         Refresh();
     }
 
+    void Shown(ReceiptLine line)
+    {
+        StatusMark = line.Mark;
+        (StatusText, StatusTone) = (line.Whole, line.Tone);
+        Unsay();
+    }
+
+    // The words changed: the line is named by them again until their own announcement, so a reader
+    // moving to it never hears what an earlier state said.
+    void Unsay()
+    {
+        if (Announcement.Length == 0) { return; }
+        Announcement = "";
+        Raise(nameof(Announcement));
+    }
+
+    // Cleared first, so the same words said again (the next reply delivered) are a change too.
+    void Said(string speech, bool urgent)
+    {
+        AnnouncementUrgent = urgent;
+        Raise(nameof(AnnouncementUrgent));
+        Announcement = "";
+        Raise(nameof(Announcement));
+        Announcement = speech;
+        Raise(nameof(Announcement));
+    }
+
     void OnDelivery(Delivery d) { if (d.Key == Key) { Refresh(); } }
+
+    // The answer this view model saw on its way, whose delivery its button acknowledges with the
+    // check for about a second (ui.md §6.5); not one already delivered when it was made.
+    string? watched;
+    bool sendCheck;
+    ITimer? checkTimer;
+
+    // The button that sent the answer shows its check, not its ring or label's rest, for
+    // ReceiptTiming.SendCheckHold.
+    public bool SendCheck => sendCheck;
+
+    void SetCheck(bool on)
+    {
+        if (sendCheck == on) { return; }
+        sendCheck = on;
+        Raise(nameof(SendCheck));
+    }
 
     // The card let go of this question: it no longer follows the delivery, and answers nothing.
     // Whatever still holds it (a view mid-click) must not answer a question that went (#269).
     public void Detach()
     {
         deliveries.Changed -= OnDelivery;
+        receipt.Dispose();
+        checkTimer?.Dispose();
         detached = true;
         RaiseControls();
     }
@@ -105,6 +160,16 @@ public sealed partial class QuestionViewModel : Observable
 
     public string StatusText { get => statusText; private set => Set(ref statusText, value); }
     public Tone StatusTone { get => statusTone; private set => Set(ref statusTone, value); }
+    // The ring, a still ring or the check badge beside the words (ui.md §6.5).
+    public ReceiptMark StatusMark { get => statusMark; private set => Set(ref statusMark, value); }
+    // What a screen reader is to hear of the status line now: raised once for each, at most one a
+    // second (Receipt); the view raises LiveRegionChanged with it.
+    public string Announcement { get; private set; } = "";
+    // Whether that is a failure or a refusal, which a screen reader hears at once (assertively);
+    // set before Announcement is raised, so the view reads it with the words.
+    public bool AnnouncementUrgent { get; private set; }
+    // The longest outcome's words, which the view keeps room for (Room).
+    public string StatusRoom { get; }
 
     // Whether the person may answer (again): nothing sent yet, or what was sent was not typed.
     public bool CanAnswer
@@ -198,7 +263,11 @@ public sealed partial class QuestionViewModel : Observable
         }
         if (problem is not null) { Fail(problem, field); return; }
         Error = null;
-        deliveries.Submit(Key, Ops.SessionAnswer, request => answer with { Request = request }, outcome => outcome is not ("busy" or "refused"), payload: answer);
+        // The words chosen, as this question shows them now (Delivery.Chosen).
+        var entry = deliveries.Submit(Key, Ops.SessionAnswer, request => answer with { Request = request }, outcome => outcome is not ("busy" or "refused"), payload: answer, chosen: ReceiptWords.AnsweredValue(Question, answer));
+        // Watched from here, not only from a change seen on its way: a fast delivery can be done
+        // before the first change is posted, and its button still owes it the check.
+        if (entry.State is DeliveryState.Sending or DeliveryState.Waiting) { watched = entry.Request; }
     }
 
     public void Resend()
@@ -256,10 +325,20 @@ public sealed partial class QuestionViewModel : Observable
     public void Refresh()
     {
         var e = deliveries.Get(Key);
-        (StatusText, StatusTone) = !current() && (Unsent(e) || e!.State == DeliveryState.Failed) ? ($"Waiting for the {Product.HostName}{at}. Answer once it is back.", Tone.Progress)
-            : e is null ? ("", Tone.None)
-            : e.State == DeliveryState.Failed && e.Request == earlier ? ($"{Describe(e, at).Text} The question changed since, so answer it again.", Tone.Bad)
-            : Describe(e, at);
+        if (e?.State is DeliveryState.Sending or DeliveryState.Waiting) { watched = e.Request; }
+        else if (e is { State: DeliveryState.Done, Outcome: "delivered" } && e.Request == watched)
+        {
+            watched = null;
+            checkTimer?.Dispose();
+            SetCheck(true);
+            checkTimer = deliveries.Time.CreateTimer(_ => deliveries.Ui.Post(() => SetCheck(false)), null, ReceiptTiming.SendCheckHold, Timeout.InfiniteTimeSpan);
+        }
+        receipt.Show(e, !current() && (Unsent(e) || e!.State == DeliveryState.Failed)
+            ? new ReceiptLine("offline", $"Waiting for the {Product.HostName}{at}. Answer once it is back.", null, Tone.Progress, ReceiptMark.None, null)
+            // An answer to what the question said before (Reworded) is not sent again: a fresh one is asked for.
+            : e is { State: DeliveryState.Failed } && e.Request == earlier
+            ? Changed(Describe(e, machine))
+            : null);
         if (e is { State: DeliveryState.Done, Outcome: "busy" } && !pausedAfterBusy)
         {
             pausedAfterBusy = true;
@@ -276,21 +355,50 @@ public sealed partial class QuestionViewModel : Observable
         Raise(nameof(InFlight));
     }
 
-    public static (string Text, Tone Tone) Describe(Delivery e, string at) => e.State switch
+    // What an answer's progress or outcome says, on the card, in the Needs you lane and in the
+    // card's receipt once the question has gone: the receipt's words (Receipt; ui.md §6.4, decided
+    // on #617, "quiet unless something's wrong"). On its way: nothing on the line but a stall or a
+    // wait (the button's ring says it goes), never Up next. Confirmed: "You answered · value" in
+    // text2, the value as it was chosen (Delivery.Chosen), never from the question as it is now.
+    // Any other outcome keeps its words. stalled: whether the state it is in has stalled (Receipt).
+    public static ReceiptLine Describe(Delivery e, string? machineName, bool stalled = false)
     {
-        DeliveryState.Sending => (e.Attempts > 1 ? "Sending again…" : "Sending…", Tone.Progress),
-        DeliveryState.Waiting => (e.Reason == "still being delivered" ? "The machine is still delivering it…" : $"Waiting for the {Product.HostName}{at}. Your answer goes as soon as it is back.", Tone.Progress),
-        DeliveryState.Failed => ($"Couldn't send it: {e.Reason ?? "the machine said no"}.", Tone.Bad),
-        _ => Outcome(e, at),
-    };
+        var at = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
+        return e.State switch
+        {
+            DeliveryState.Sending or DeliveryState.Waiting => ReceiptWords.InFlight(answer: true, e, machineName, stalled),
+            DeliveryState.Failed => Said("failed", $"Couldn't send it: {e.Reason ?? "the machine said no"}.", Tone.Bad),
+            _ => Outcome(e, machineName, at),
+        };
+    }
 
-    static (string, Tone) Outcome(Delivery e, string at)
+    // The room an answer's receipt keeps (ui.md §6.5; ReceiptWords.Room): the longest of the
+    // outcomes it usually ends in. Its unconfirmed sentence is shorter than a reply's, which it
+    // used to keep room for; busy is now the longest. A longer refusal may still grow it.
+    public static string Room(string? machineName)
+    {
+        var at = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
+        return new[] { "unconfirmed", "stale", "busy", "refused" }.Select(o => OutcomeText[o](at)).MaxBy(t => t.Length)!;
+    }
+
+    static ReceiptLine Changed(ReceiptLine failed) =>
+        new("changed", $"{failed.Text} The question changed since, so answer it again.", null, Tone.Bad, ReceiptMark.None, $"Answer: {failed.Text} The question changed since, so answer it again.");
+
+    static ReceiptLine Said(string key, string text, Tone tone) => new(key, text, null, tone, ReceiptMark.None, $"Answer: {text}");
+
+    static ReceiptLine Outcome(Delivery e, string? machineName, string at)
     {
         var outcome = e.Outcome is { } o && OutcomeText.ContainsKey(o) ? o : "unconfirmed";
+        if (outcome == "delivered")
+        {
+            var value = e.Chosen;
+            // In text2, with no badge: the answer's button says it was delivered, with its check.
+            return new("delivered", "You answered", value is null ? null : ReceiptWords.Isolated(value), Tone.Progress, ReceiptMark.Check, value is null ? "Answer delivered. You answered" : $"Answer delivered. You answered {value}");
+        }
         var text = OutcomeText[outcome](at);
         if (outcome == "refused" && e.Reason is { } r) { text = $"The machine refused this answer: {r}."; }
         if (outcome == "unconfirmed" && e.Reason is { } u) { text += $" ({u})"; }
-        return (text, outcome == "delivered" ? Tone.Ok : outcome == "refused" ? Tone.Bad : Tone.Warn);
+        return Said(outcome, text, outcome == "refused" ? Tone.Bad : Tone.Warn);
     }
 
     // Whether a question still says what it said, as controls were built for: its words, kind, flags

@@ -53,6 +53,10 @@ public sealed partial class SessionCardViewModel : Observable
     string? orphanText;
     string? orphanNote;
     string? receiptKey;
+    // Times the receipt's words as the question's own did, on the same request's history: an
+    // answer left at Passed to the agent still stalls here, a handoff inside the quiet window or a
+    // dwell still waits it out, and nothing is said twice or more than once a second.
+    Receipt? receipt;
     string? lastHistoryAt;
     bool historyLoading;
     string historyNote = "";
@@ -234,7 +238,14 @@ public sealed partial class SessionCardViewModel : Observable
     // What became of an answer whose question has gone from the card.
     public string ReceiptText { get; private set; } = "";
     public Tone ReceiptTone { get; private set; }
-    public bool HasReceipt => ReceiptText.Length > 0;
+    public ReceiptMark ReceiptMark { get; private set; }
+    public bool HasReceipt => receipt is not null;
+    // What a screen reader is to hear of the receipt now (Receipt); the view raises it.
+    public string ReceiptAnnouncement { get; private set; } = "";
+    // Whether that is a failure or a refusal, said assertively; set before ReceiptAnnouncement.
+    public bool ReceiptAnnouncementUrgent { get; private set; }
+    // The longest outcome's words, which the view keeps room for (ReceiptWords.Room).
+    public string ReceiptRoom => $"Your answer: {QuestionViewModel.Room(ctx.MachineName())}";
 
     // Why nothing on this card can be answered, replied to or ended from here, if so.
     public string? ReadOnlyWhy => ctx.ReadOnlyWhy();
@@ -395,15 +406,46 @@ public sealed partial class SessionCardViewModel : Observable
     void UpdateReceipt()
     {
         var e = receiptKey is null ? null : ctx.Deliveries.Get(receiptKey);
-        if (e is null) { (ReceiptText, ReceiptTone) = ("", Tone.None); }
-        else
+        if (e is null)
         {
-            var (text, tone) = QuestionViewModel.Describe(e, ctx.MachineName() is { Length: > 0 } m ? $" on {m}" : "");
-            (ReceiptText, ReceiptTone) = ($"Your answer: {text}", tone);
+            receipt?.Dispose();
+            receipt = null;
+            DrawReceipt(ReceiptLine.None);
+            return;
         }
+        if (receipt is null)
+        {
+            receipt = new Receipt(ctx.Deliveries.Time, ctx.Deliveries.Ui, (d, stalled) => QuestionViewModel.Describe(d, ctx.MachineName(), stalled), DrawReceipt, SayReceipt);
+            Raise(nameof(HasReceipt));
+        }
+        receipt.Show(e);
+    }
+
+    void DrawReceipt(ReceiptLine line)
+    {
+        // "You answered · value" says whose answer it is; anything else says it is about the answer.
+        (ReceiptText, ReceiptTone, ReceiptMark) = (line.Text.Length == 0 || line.Key == "delivered" ? line.Whole : $"Your answer: {line.Whole}", line.Tone, line.Mark);
         Raise(nameof(ReceiptText));
         Raise(nameof(ReceiptTone));
+        Raise(nameof(ReceiptMark));
         Raise(nameof(HasReceipt));
+        // Named by its words again until their own announcement (ReplyViewModel.Unsay).
+        if (ReceiptAnnouncement.Length > 0)
+        {
+            ReceiptAnnouncement = "";
+            Raise(nameof(ReceiptAnnouncement));
+        }
+    }
+
+    // Cleared first, so the same words said again are a change too.
+    void SayReceipt(string speech, bool urgent)
+    {
+        ReceiptAnnouncementUrgent = urgent;
+        Raise(nameof(ReceiptAnnouncementUrgent));
+        ReceiptAnnouncement = "";
+        Raise(nameof(ReceiptAnnouncement));
+        ReceiptAnnouncement = speech;
+        Raise(nameof(ReceiptAnnouncement));
     }
 
     void OnDelivery(Delivery e)
@@ -471,5 +513,6 @@ public sealed partial class SessionCardViewModel : Observable
         question?.Detach();
         reply?.Detach();
         end?.Dispose();
+        receipt?.Dispose();
     }
 }

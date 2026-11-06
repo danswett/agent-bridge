@@ -11,7 +11,8 @@ public sealed record CopilotCallState(
     bool IsMainAgent,
     CopilotAnswerRecord? Answer,
     bool SessionEnded,
-    long ScannedTo);
+    long ScannedTo,
+    bool Resumed = false);
 
 // HumanContent is response.content of human_response.recorded; otherwise the call's
 // tool.execution_complete, with its result text or its failure. At is that record's own
@@ -54,6 +55,7 @@ public static class CopilotTranscript
         DateTimeOffset? humanAt = null;
         CopilotAnswerRecord? completed = null;
         var ended = false;
+        var resumed = false;
         var started = !requireStart;
 
         // A window starting inside a line skips that partial line; Since starts on a boundary.
@@ -64,12 +66,13 @@ public static class CopilotTranscript
             return new CopilotCallState(null, true, null, false, from);
         }
         var answer = human is { } h ? new CopilotAnswerRecord(h, completed is not null, completed?.Succeeded ?? true, completed?.ResultText, humanAt) : completed;
-        return new CopilotCallState(arguments, main, started ? answer : null, started && ended, scannedTo);
+        return new CopilotCallState(arguments, main, started ? answer : null, started && ended, scannedTo, started && ended && resumed);
 
         void Line(ReadOnlySpan<byte> bytes, long start)
         {
             var named = bytes.IndexOf(id) >= 0;
-            var ending = !named && (bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0);
+            var ending = !named && (bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0
+                || bytes.IndexOf("\"type\":\"session.resume\""u8) >= 0);
             if (!named && !ending) { return; }
             JsonDocument doc;
             try { doc = JsonDocument.Parse(bytes.ToArray()); }
@@ -83,8 +86,15 @@ public static class CopilotTranscript
                 var sub = Str(e, "agentId") is { Length: > 0 };
                 if (ending)
                 {
-                    // The session's own abort or shutdown ends its question; a subagent's does not.
-                    if (started && !sub) { ended = true; }
+                    // The session's own abort, shutdown or resume in a new CLI ends its question; a
+                    // subagent's does not. After a resume the killed CLI's question may still be on
+                    // the screen, or not, and keys typed for it would go to whatever the new CLI
+                    // shows: never answered, as CopilotInput holds replies on it (stale).
+                    if (started && !sub && type is "abort" or "session.shutdown" or "session.resume")
+                    {
+                        ended = true;
+                        resumed = type == "session.resume";
+                    }
                     return;
                 }
                 if (data.ValueKind != JsonValueKind.Object || Str(data, "toolCallId") != toolCallId) { return; }
@@ -99,6 +109,9 @@ public static class CopilotTranscript
                             main = !sub;
                             started = true;
                         }
+                        // Asked again since a resume, by the new CLI: open again, as CopilotInput
+                        // reads a question asked after the resume.
+                        else if (ended && resumed) { (ended, resumed) = (false, false); }
                         break;
                     case "human_response.recorded" when started && human is null:
                         human = data.TryGetProperty("response", out var r) && r.ValueKind == JsonValueKind.Object && r.TryGetProperty("content", out var c)

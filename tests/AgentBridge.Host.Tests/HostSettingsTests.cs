@@ -101,6 +101,9 @@ public sealed class HostSettingsTests : IDisposable
 
         Assert.Equal(on, settings.RestoreOnStart);
         if (problem is null) { Assert.Null(said); } else { Assert.Contains(problem, said); }
+        // Off because the file has a problem starts nothing, but keeps what a reboot took to offer;
+        // off because the person said so keeps nothing (sec-813).
+        Assert.Equal(problem is not null, settings.RestoreKept);
     }
 
     [Fact]

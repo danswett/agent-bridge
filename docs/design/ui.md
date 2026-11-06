@@ -474,7 +474,7 @@ easing in, its duration out, and how far it travels.
 | Activity dot | A row's trailing edge (§6.1) | The session updates while its row isn't open; the row is opened | The 6 px dot fades in, and later fades out. It never pulses, grows or repeats. The title's weight changes at once | `activityDot`: standard, decelerate; fast out | The same on every platform | Instant |
 | Selection | The list's 3×16 Bridge pill; the rail's pill | Choosing a row or a destination | The pill slides from the old row to the new one when both are on screen, and fades in when the old one isn't. The row's fill changes at once | `selection`: standard, standard | Windows: `NavigationView`'s own pill on the rail, and the same motion on the list. Apple: the system's selection | Instant |
 | Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
-| Send and Answer | The reply box; a question card | Send, Send answer, Approve once, Deny | Your message shows at once as your bubble, rising 12 as it fades in. An answer's outcome fades in on the card. While the request is in flight, the button that sent it (never an option, #773) shows the platform's progress ring, which stops with the request. Nothing waits for the motion to finish | `acknowledge`: standard, decelerate; small | Windows: `ProgressRing`. PWA: the answer's ring. Apple: `ProgressView`. Android: `CircularProgressIndicator` | Cross-fade; the ring is still |
+| Send and Answer | The reply box; a question card | Send, Send answer, Approve once, Deny | Your message shows at once as your bubble, rising 12 as it fades in. An answer's outcome fades in on the card. While the request is in flight, the button that sent it (Send or Send answer, never an option, #773) shows the platform's progress ring, which stops with the request. Decided, not yet built (#600; builds in #616, #625): the ring is the only in-flight signal (§6.5), turning while the request is open and still while this device waits for a machine that isn't connected. Delivered, the ring cross-fades to the `check` icon, which holds about 1 s and cross-fades back to the button's rest glyph; the button never changes size or fill. An exception's line (§6.5) fades in place in the room reserved for it under the box, or on the question card, and fades out in place when it goes; nothing pops and nothing below it moves. Today both clients show Sending…, Sending again… and "Delivered. The session has your reply." for a reply, and "Delivered. The session has your answer." for a question card's answer. Nothing waits for the motion to finish | `acknowledge`: standard, decelerate; small | Windows: `ProgressRing`. PWA: the answer's ring. Apple: `ProgressView`. Android: `CircularProgressIndicator` | Cross-fade; the ring is still |
 | Toast and banner | In-app toasts; banners such as a host going offline | The event it reports | It slides 12 in from its edge and fades in, then leaves the same way, quicker | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens. PWA: the tokens on the banner coming in; a leaving one's space closes at once, and a copy of it, which nothing can find or tap, goes back the way it came. System notifications are each OS's own | Cross-fade |
 | Sheet | The delegate sheet on iOS (§6.3), and any phone sheet | Opening a delegate; dragging between detents; dismissing | The sheet rises from the bottom edge and the scrim fades in. While dragged it follows the finger with no easing, and on release it settles at the nearest detent | `sheet`: emphasis, decelerate; standard out | iOS: `.sheet` with `.presentationDetents([.medium, .large])` and the system's spring. Android: `ModalBottomSheet`. PWA: the tokens on transform | Cross-fade at the detent. A drag still follows the finger |
 | Menu and flyout | The row menu, Sort, the overflow menu, flyouts | A click, a long press, Shift+F10 or the menu key | It fades in and settles 4 from its anchor. Choosing an item acts at once, and the menu fades out | `menu`: fast, decelerate; fast out; nudge | Windows: `MenuFlyout`'s own. PWA: the tokens, on a popover where supported. Apple and Android: the system menus | Instant |
@@ -1043,7 +1043,15 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       and stale keep them read-only, with no Send answer. Failed keeps them read-only, with
       Try again, which resends the same request, so the same answer, never a new one.
       Focus is never dropped as these change (A4). Send answer keeps focus through its ring
-      and check. If focus is on Send answer when it changes: when Try again takes its place,
+      and check. On the normal path the card's status line stays empty; it speaks only for an
+      exception (Still sending…, a stall, Waiting for *machine*, or an outcome other than
+      Delivered), never says Up next, since a question holds the session, and never says
+      "answered" before the host confirms. Confirmed, Send answer shows the check for about 1 s
+      and the card resolves to "You answered · *value*" (§6.5), with no badge; a Needs you
+      entry, where a client still draws one, says the same. Not confirmed says "Sent, but not
+      confirmed. Check the conversation.": the answer is final and is never resent, and
+      nothing offers a second one. It points at the conversation, never at the machine (#696
+      rule 5: no remote desktop); #467's remote check later confirms it in place. Decided, not yet built (#600; builds in #616, #625). Today both clients show Sending…, Sending again… and "Delivered. The session has your answer." If focus is on Send answer when it changes: when Try again takes its place,
       focus moves to Try again, and when it goes with nothing in its place (not confirmed,
       stale), focus moves to the card's heading, whose description is the outcome line. If
       focus is anywhere else, it stays there, so an outcome arriving later never takes it.
@@ -1111,8 +1119,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **Resolved:** the card quietens, with no Needs you fill, and reads "Main agent asked"
     (or "Delegate *name* asked") over the question as it was shown. Below that:
     - with this device's answer record for the question, the record's progress and outcome as
-      the card shows them: "You answered *value*" once confirmed; "Sent, but not confirmed.
-      Check at the machine" for `unconfirmed`; refused, failed and stale as they are;
+      the card shows them: "You answered · *value*" once confirmed; "Sent, but not confirmed.
+            Check the conversation." for `unconfirmed`; refused, failed and stale as they are;
     - with no record (answered elsewhere, or the call ended without an answer), "No longer
       waiting", since the protocol doesn't say what was answered elsewhere.
   - **History:** a resolved question stays as a read-only item where it was asked, across later
@@ -1264,10 +1272,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Send answer shares Send's edge and receipt** (#773): a question card's Send answer, and an
   approval's Approve once, end at the same right edge as Send, and show the same in-flight and
   outcome states as Send: its ring, its check and the exception-only line, with the same quiet
-  window and announcements (the owner's #600 decision). The states #600 gave a tapped option
-  (its ring on the option, the option kept pressed, "one attempt per prompt") belong to Send
-  answer instead, as §6.4's "While an answer goes" says: the ring is on Send answer, and the
-  chosen value stays selected and read-only. No client draws a ring on an option.
+  window and announcements (the owner's #600 decision, below). As §6.4's "While an answer
+  goes" says, the ring is on Send answer, and the chosen value stays selected and read-only.
+  No client draws a ring on an option.
 - **Phone: one line at rest (#935, the owner, 2026-11-05).** Below 760 the box starts at one
   line, 52 tall, with Attach before the text and Send after it, as the native composers do. It
   grows a line at a time to six lines of text, then scrolls inside.
@@ -1294,6 +1301,89 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     app makes keeps it as it was, unless it lands at the end, where it shows in full. On a
     screen shorter than twice the header it folds with the header.
   - **Reduced motion:** a cross-fade, as the header's. From 760 it never collapses.
+- **The receipt** (#600; decided by the owner 2026-11-04 and revised the same day to "quiet
+  unless something's wrong", #617; the boards are the Proposal #600 set, §10) says where a
+  reply or an answer has got only when something needs saying. This section is the spec; the
+  proposal page ([proposals/600-reply-progress.md](proposals/600-reply-progress.md)) keeps the
+  reasoning. **Decided, not yet built (#600; builds in #616, #625).** Today both clients show Sending…, Sending again… and "Delivered. The session has your reply." for a reply, and "Delivered. The session has your answer." for a question card's answer.
+  - **The normal path is quiet.** While a reply or an answer is on its way, Send's progress
+    ring (an answer's: Send answer's) is the only thing that shows it; nothing appears under
+    the box or on the card's status line, whatever stage the host reports. When it is
+    delivered, Send cross-fades from the ring to the `check` icon, holds it about 1 s
+    (`sendCheckHold`), and cross-fades back to rest. Send answer does the same, and
+    the card then resolves to "You answered · *value*" (below). There is no badge and no
+    "Delivered" line.
+  - **The line is for exceptions only.** A line under the box, and on a question card its
+    status line, appears only in the states marked *line* below, and fades in place
+    (`acknowledge`); it goes when the next stage or the outcome makes it untrue, fading out
+    in place. It is words only, with no ring or badge: Send's ring already says the request
+    is open.
+  - **Its room is reserved.** From Send the line keeps the room the longest outcome needs
+    ("Sent, but not confirmed. Check the conversation before sending it again."), two lines at
+    phone width (a narrow pane included) and one on a wide window, empty unless it has
+    something to say, so neither an exception nor the outcome moves the box or the card's
+    controls. The room stays until the box is next typed in or the session is left, so the
+    check and its return to rest move nothing either. On a question card the line is there,
+    empty, from Send answer. A refusal whose reason is longer still may grow, as today's does.
+  - **Timing.** Nothing is shown or spoken for the first 400 ms after Send. A spoken stage
+    is the furthest reached, so a backlog is never played, at most one a second, and an
+    outcome is spoken at once, skipping any stage not yet spoken.
+  - **The states,** for a reply. An answer has the same rows, but never Up next (a question
+    holds the session), ends in "You answered" (below), and has "Answer" for "Reply" in what
+    is spoken.     An answer that is not confirmed says "Sent, but not confirmed. Check the
+        conversation.": it is final and never resent, so nothing invites a second answer. For a
+        reply or an answer, the sentence points at the conversation, never at the machine (#696
+        rule 5: no remote desktop); #467's remote check later confirms it in place:
+
+    | State | When | Seen | Colour | Spoken (polite, at most one a second; a failure assertive, §9.1 A6) |
+    |---|---|---|---|---|
+    | Quiet | 0–400 ms after Send | Send's ring | – | nothing; Send is busy |
+    | Uploading | attachments, before the request | *line*: today's ("Uploading 2 attachments… 40%") | text2 | as today |
+    | Sending | from 400 ms until the machine has it | Send's ring | – | nothing; Send's busy state says it once (A6) |
+    | Sent | progress `received` | Send's ring | – | "Reply sent" |
+    | Passed to the agent | progress `typed` | Send's ring | – | "Reply passed to the agent" |
+    | Up next | `typed` with `working: true` (replies only) | Send's ring | – | "Reply up next, after the agent's current step" |
+    | Delivered | result `delivered` | Send's check for about 1 s, then rest (an answer: the card resolves to You answered · *value*) | the check in Send's own ink | "Reply delivered"; "Answer delivered. You answered *value*" |
+    | Still sending | nothing from the machine 3 s after Send; any other wait while connected; a retry | *line*: Still sending… | text2 | "Reply still sending" |
+    | Sent, stalled | `received`, then nothing for 5 s | *line*: Sent · still waiting on *machine* | text2 | "Reply sent, still waiting on *machine*" |
+    | Passed, stalled | `typed` on an idle session, then nothing for 10 s | *line*: Passed to the agent · not picked up yet | text2 | "Reply passed to the agent, not picked up yet" |
+    | Still being delivered | a resend met the first copy in flight | *line*: the stage reached · still being delivered | text2 | "Reply still being delivered" |
+    | Waiting for the machine | held on this device while the machine isn't connected | *line*: Waiting for *machine* · it goes when *machine* is back; Send's ring stands still | text2 | "Reply waiting for *machine*" |
+    | Not confirmed | result `unconfirmed` (host: a reply 60 s, an answer 15 s), or the client's 9 min | *line*: Sent, but not confirmed. Check the conversation before sending it again. (an answer: Sent, but not confirmed. Check the conversation.) | Needs you's text colour | the sentence |
+    | Busy, stale | result `busy` or `stale` | *line*: today's ("Not sent: …") | Needs you's text colour | the words |
+    | Refused, failed | result `refused`; the request failed | *line*: today's ("The machine refused this reply: …", "Couldn't send it: …") | Danger | the words |
+
+    An in-flight line's secondary words (after "·") are text2 too; an outcome's guidance or
+    reason keeps its outcome's colour. "Up next" has no stall: the agent is busy, and that is
+    expected. A stall's line goes when the next stage or the outcome arrives; resends are
+    unchanged, and today's "Sending again…" is retired. With an outcome other than Delivered
+    Send returns to rest at once, with no check. The receipt never drives the header: the
+    header keeps its own state from presence and the link (§2.2), so "Offline" once the
+    machine has left, or "Reconnecting…" while its channel comes back, and a question's row
+    says Waiting on you until the host clears it.
+  - **Send's check** is the `check` icon (`design/icons/check.svg`; `icon-check` in the
+    PWA sprite, `AbIconCheck` on Windows), stroked like Send's own arrow and drawn at its
+    size in its place, in Send's ink on its Bridge fill. Windows draws it as a Path with the
+    same geometry, never Segoe's CheckMark. Send stays the same size and colour throughout:
+    only its glyph cross-fades (§5.3). In forced colours it takes Send's own system colours,
+    as the arrow does (the glyph is drawn in the button's current colour; §9.1 A9).
+  - **You answered · *value*:** a confirmed answer's words on the resolved card, the same on
+    the card and in a Needs you entry, in text2 with no badge. The value is:
+    - a choice: the label of the option chosen;
+    - free text: its first line, with runs of white space as one space, cut at the last
+      word break within 40 characters (or at 40, with no break after the 20th) and ended
+      with "…" when longer. It is drawn as plain text, isolated in its own direction;
+    - a form of several fields: nothing, so the line reads "You answered".
+
+    A screen reader hears "Answer delivered. You answered *value*", with the same value.
+  - **Older hosts** (no `sessions.progress`) report no stage, so nothing says Sent, Passed to
+    the agent or Up next for them, not even to a screen reader: the client never invents a
+    stage nobody reported. Everything else is the same: Send's ring, Still sending… at 3 s,
+    the waiting words, and Send's check at Delivered (or You answered).
+  - **Timings** from the host (#598) are never shown; they stay in the client's local
+    marks and logs.
+  - The quiet window, the one-a-second announcement limit, `sendCheckHold` and the stall
+    thresholds are named constants in one place per platform.
 
 ### 6.6 Machines
 
@@ -2060,6 +2150,18 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   exactly so, beside the block they describe. An approval's card has no Copy. Hidden includes
   what draws blank but runs as part of a word (U+00A0 and the other spaces but U+0020, U+2800;
   #546), which the Needs you lane refuses as it refuses a bidi control.
+- **Receipt words** (§6.5, #600; Decided, not yet built (#600; builds in #616, #625): today both clients show Sending…, Sending again… and "Delivered. The session has your reply." for a reply, and "Delivered. The session has your answer." for a question card's answer). On screen, only for an exception: Still sending… · Sent ·
+  still waiting on *machine* · Passed to the agent · not picked up yet · still being
+  delivered · Waiting for *machine* · it goes when *machine* is back; outcomes other than
+  Delivered keep today's words, except that not confirmed points at the conversation, never
+  the machine: "Sent, but not confirmed. Check the conversation before sending it again." (an
+  answer: "… Check the conversation.", never inviting a second answer). On a resolved card: You answered · *value* (the option's
+  label, free text's first line cut to about 40 characters, nothing for a form). Spoken
+  only, never shown on the normal path: Reply sent · Reply passed to the
+  agent · Reply up next, after the agent's current step · Reply delivered (and "Answer" for
+  an answer). Delivered is Send's check, never a line or a badge. Older hosts use the same
+  words, less the stages they don't report. Never "typed", "queued", "injected", "in the
+  terminal" or "Sending again…". Never "answered" before the host confirms.
 
 ## 9. Accessibility
 
@@ -2080,7 +2182,7 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
 | A2 | **Repeated controls have their own keys.** On Windows, every control a person can act on and every status that changes, when repeated on each row, has an AutomationId unique in its window, built from the row's stable key, never from its position. Only a part nobody acts on (a template's text) may share an id. In the PWA an `id` is never repeated, and repeated controls are told apart by their names (A1). | Manual | #678, #699 |
 | A3 | **Focus order is the visual order** (WCAG 2.4.3). Tab and Shift+Tab walk the regions and their controls in the order they are laid out at the current width; arrows move within a list or a group of tabs (§9.2). On a desktop the list head's Sort sits on its first line, before New, so the page's one order (Sort, then New) is the drawn order at both widths. The list pane is at most 320 px, too narrow for the title, Sort and New on one line, so until it can widen the desktop head is always two lines: the title and Sort, then the count and New. | PWA: `a11y-pwa`'s keyboard.spec, "Tab walks … in the order they are laid out" on a desktop and on a phone, and "the list head draws Sort on its first line, before New". Windows: manual | #371 |
 | A4 | **Focus stays where the person is.** A control whose request is in flight keeps keyboard focus: it stays focusable, says it's busy, and ignores further presses until the outcome (in the PWA `aria-disabled="true"`, never `disabled`, as Forget on Machines does). A re-render keeps focus on the same control, found by its key. When a control goes, focus moves to a target its surface's section names, never to the page or the window; when Launch starts a session, that target is the new session's reply box. A pop returns focus to the row that pushed the screen; a closed menu, sheet or dialog returns it to the control that opened it. | PWA: `a11y-pwa`'s keyboard.spec (the reply, End session and Launch walks; Back on a phone; the overflow menu). Focus kept in flight and focus on the reply box after Launch are not yet enforced, tracked in #369. Windows: manual | #369, #600 |
-| A5 | **Escape and back go back one step.** Esc closes the innermost menu, sheet, popup or dialog first (a dialog's Esc is its Cancel). With none open, Esc, the browser's back and the system back gesture pop one pushed screen (§5.3, §7's back stack), and the header's Back goes where §7 says (on a phone, always the list), with focus as A4. | PWA: `a11y-pwa`'s keyboard.spec, "Escape closes it with focus back on More"; Esc on a pushed session is manual (#370). Windows: manual | #370 |
+| A5 | **Escape and back go back one step.** Esc closes the innermost menu, sheet, popup or dialog first (a dialog's Esc is its Cancel). With none open, Esc, the browser's back and the system back gesture pop one pushed screen (§5.3, §7's back stack), and the header's Back goes where §7 says (on a phone, always the list), with focus as A4. In a text field Esc is the field's, never a pop: search clears and closes, the reply box keeps its words and its focus, and an input method's composition ends; Tab or Shift+Tab out of it first. | PWA: `a11y-pwa`'s keyboard.spec, "Escape closes it with focus back on More", and on a phone Escape from a pushed session, from a delegate, and past the overflow menu, the reply box, search and a composition (#370). Windows: manual | |
 | A6 | **Announcements are polite, and said once.** A status that changes on its own is a polite live region (PWA `role=status`; Windows `AutomationProperties.LiveSetting` Polite with a LiveRegionChanged event), on the page and empty before its first words (§7). Assertive (`role=alert`; LiveSetting Assertive) is only for a problem that stops what the person is doing and needs them to act, for example Launch's problem line, a reply or answer that failed, and §7's "This app is open in another window or tab". Progress, success and revocation are never assertive. A change is said once: a focus move, a name and a live region never say the same thing twice, and a control's state is said by its role (pressed, expanded, busy), not repeated in its name (§6.4). Each surface sets its own rate limit: Needs you at most every 5 s (§9.2); the reply receipt says nothing in its first 400 ms, then at most one stage a second (only the later of two is spoken), and always its outcome (the owner's #600 decision, whose text reaches §6.5 with #617). | Manual (`a11y-screen-reader` is planned) | #600, #678, #699 |
 | A7 | **One verb per state.** An action button says, with one verb, what it does in the current state, and its words change when the state does (for example "Set up" when missing and "Repair" when broken, #678). A row in a state with nothing to do shows no button rather than a disabled one, as §6.7's collaborators are absent, not disabled; §6.1's controls disabled while a machine is away stay as they are. A toggle keeps its words; its pressed or checked state says the rest. | Manual; no button instead of a disabled one is not yet enforced, tracked in #678 | #678, #699 |
 | A8 | **Contrast:** text 4.5:1, and glyphs and the non-text parts that show state or focus 3:1, against what they sit on, in light, dark and high contrast (§3's Contrast). Words that would be Bridge on light's `selected` tint take `text` instead, and every foreground and background pair a client draws is listed in `tokens.json` `color.contrast`, so `a11y-contrast` checks it. | Tokens: `a11y-contrast` (`tokens.json` `color.contrast`). PWA: axe `color-contrast` in light, dark and forced colours in `a11y-pwa`, and on a selected machine's words in light. Not every drawn pair is listed yet: `danger.text` on light's selected tint over the shell is 4.18:1, drawn by a selected machine's refused update (`.machine-error`), and isn't listed, tracked in #858. Non-text 3:1 is manual. Windows: manual | #366 |
@@ -2112,6 +2214,21 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   `CanvasText` hairline. The reply area's compact bar (§6.5, #935) is the same: its copy of the
   draft is drawn only, focus anywhere in the reply area brings the box back in full, it never
   expands over the focused control, and focus never lands on a hidden control.
+- **The reply and answer receipt (#600; Decided, not yet built (#600; builds in #616, #625): today both clients show Sending…, Sending again… and "Delivered. The session has your reply." for a reply, and "Delivered. The session has your answer." for a question card's answer)** is a polite live region (`role=status` on the PWA;
+  `AutomationProperties.LiveSetting` Polite with a LiveRegionChanged event on Windows),
+  present and empty from Send. The normal path shows nothing, but its stages are still
+  announced: Sent, Passed to the agent, Up next and Delivered, prefixed "Reply" or
+  "Answer" (Sending is not: Send's busy state already says it, once, A6), nothing in the first 400 ms, at most one a second (only the later of two is
+  spoken), and the outcome always. An exception's line is announced as it appears; a reply
+  or answer that failed (Refused, failed) is said assertively, as A6 says. Send's
+  check is not announced on its own: "Reply delivered" says it, and Send's accessible name
+  stays "Send" (Send answer's, "Send answer"). In forced colours Send's ring and check take Send's own system colours, as
+  its arrow does (A9), at full opacity, including the still ring of "Waiting for *machine*":
+  on Send's Highlight fill GrayText would fall below A8's 3:1, so stillness and the waiting words
+  say the request is held, never a dimmed ring. Every word on the line is CanvasText, so
+  every failure says itself in words. Under reduced motion the ring is still, the ring, the
+  check and the rest glyph swap over `crossFade`, and a line fades in over `crossFade`
+  instead of rising; the quiet window and the announcement limit still apply.
 - **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
   menu key opens a row's menu, and Ctrl/⌘+K focuses search. The shortcut is named where
   search is (the Windows search box's tooltip, on hover or when Tab reaches it) and nowhere
@@ -2202,3 +2319,9 @@ reference ([proposals/253-attention/](proposals/253-attention/)).
 The delegate events (#661) and the history (#292) are drawn on the Proposal #661
 boards: before and after, the run fold and Earlier expanded, and history scrolled up, on a phone
 and the desktop, dark and light ([proposals/661-delegate-events.md](proposals/661-delegate-events.md)).
+
+The reply and answer receipt (#600, §6.5) is drawn on the Proposal #600 boards, decided by
+the owner 2026-11-04 ([proposals/600-reply-progress/](proposals/600-reply-progress/)),
+and revised the same day to "quiet unless something's wrong": Send's ring and check on the
+normal path, the exception lines, "You answered · *value*" and older hosts, each in dark,
+light, contrast and reduced motion.

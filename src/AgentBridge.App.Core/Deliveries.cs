@@ -20,7 +20,17 @@ public sealed record Delivery
     public int Attempts { get; init; }
     // What the op has done so far: bytes of a reply's files sent, of all of them.
     public (long Sent, long Total)? Progress { get; init; }
+    // How far the host has got with an answer or a reply on its way, where it says
+    // (sessions.progress, #600): received (it has it), typed (the keys have gone) or queued
+    // (typed into a working session, which takes it at its next step). It only moves forward,
+    // across resends of the same request. Null from a host that doesn't say.
+    public string? Stage { get; init; }
     public object? Payload { get; init; }
+    // What an answer chose, in the words the person saw as it went (an option's label, free text's
+    // first line; ReceiptWords.AnsweredValue), for its receipt. Taken once, as it is sent, and never
+    // looked up again: the same question can come back with an option relabelled, and "You
+    // answered · Keep files" must not turn into "Delete files" (#625 cr2-625; Daily 6676016464).
+    public string? Chosen { get; init; }
     // Whether a copy whose outcome was lost may go again to a host that has since restarted.
     // The host remembers request ids only in memory, so only ops it guards across restarts
     // otherwise (answers: its attempt ledger; End session: its two-press rule) may.
@@ -51,20 +61,38 @@ public sealed record Delivery
 // forgotten the request: answers and stops go again (the host guards those across restarts),
 // a reply does not. One per key at a time; a busy that answers a resend of our own request is
 // waited out, not shown.
+// A host that offers sessions.progress is asked for it on every answer and reply, and says how
+// far each has got before its outcome (Delivery.Stage). Each answer and reply also keeps timing
+// marks on this device (#600): the tap, each send, each stage and the outcome, in ms from the
+// tap, written to the app's log as one line with the host's own timings beside them, so where
+// the time went can be read without a debugger. Nothing of it is sent anywhere.
 public sealed class Deliveries
 {
     const string NoOutcome = "no outcome came back from the machine in time";
     const string TooOld = "too long has passed since it was first sent for the machine to still recognise it; check at the machine";
     const string Restarted = $"the {Product.HostName} restarted before saying whether it went";
     const int MaxBusyResends = 5;
+    // Deliveries whose timing marks are kept until their outcome: one that never has one (the app
+    // closing mid-send aside, a key replaced) must not keep its marks for ever.
+    const int MaxMarked = 50;
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(90);
+    // Delivery.Stage for typed into a working session.
+    public const string Queued = "queued";
+    // Why a delivery waits (its Reason), where the receipt says something of its own (Receipt):
+    // no connection to the host to send on, or a resend that met the first copy in flight.
+    public const string NotConnected = "not connected";
+    public const string StillBeingDelivered = "still being delivered";
 
     readonly HostConnection host;
     readonly IUiDispatcher ui;
     readonly TimeProvider time;
     readonly Func<string> uuid;
     readonly Dictionary<string, Delivery> entries = new(StringComparer.Ordinal);
+    // The timing marks of each answer and reply on its way, by request.
+    readonly Dictionary<string, Marks> marks = new(StringComparer.Ordinal);
     readonly object gate = new();
+
+    sealed record Marks(string Kind, long Start, List<(string What, long Ms)> At);
 
     public Deliveries(HostConnection host, IUiDispatcher ui, TimeProvider? time = null, Func<string>? uuid = null)
     {
@@ -100,7 +128,7 @@ public sealed class Deliveries
     // stands, so doing it again sends nothing. before: work on the connection ahead of the op
     // (a reply's files), given a progress callback.
     public Delivery Submit(string key, string op, Func<string, object> data, Func<string, bool> final, object? payload = null,
-        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true, TimeSpan? timeout = null, bool resendOnBusy = true, TimeSpan? giveUp = null)
+        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true, TimeSpan? timeout = null, bool resendOnBusy = true, TimeSpan? giveUp = null, string? chosen = null)
     {
         Delivery entry;
         var held = Hold?.Invoke(op);
@@ -111,8 +139,13 @@ public sealed class Deliveries
             {
                 return existing;
             }
-            if (held is not null) { return new Delivery { Key = key, Request = "", State = DeliveryState.Done, Outcome = Held, Reason = held, Payload = payload }; }
-            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout, ResendOnBusy = resendOnBusy, GiveUp = giveUp };
+            if (held is not null) { return new Delivery { Key = key, Request = "", State = DeliveryState.Done, Outcome = Held, Reason = held, Payload = payload, Chosen = chosen }; }
+            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, Chosen = chosen, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout, ResendOnBusy = resendOnBusy, GiveUp = giveUp };
+            if (KindOf(op) is { } kind)
+            {
+                if (marks.Count >= MaxMarked) { marks.Remove(marks.MinBy(m => m.Value.Start).Key); }
+                marks[entry.Request] = new Marks(kind, time.GetTimestamp(), []);
+            }
         }
         Publish(entry);
         _ = RunAsync(entry, op, data, before, resend: false);
@@ -144,6 +177,7 @@ public sealed class Deliveries
         TimeSpan? WindowLeft() => limited && firstSent is { } f ? giveUp - time.GetElapsedTime(f) : null;
         TimeSpan Left() => WindowLeft() is { } w && w < RunLeft() ? w : RunLeft();
         string Late() => WindowLeft() is { } w && w <= RunLeft() ? TooOld : NoOutcome;
+        var kind = KindOf(op);
         var busy = 0;
         var attempts = entry.Attempts;
         // The host the op itself last went to, if it went: files sent ahead are not the op. Carried
@@ -181,8 +215,20 @@ public sealed class Deliveries
                 }
                 // Which host it went to is read with the connection it goes on. An op never replayed
                 // after a restart waits until that host is known, and goes again only to the same one.
-                var call = host.CallAsync(op, data(entry.Request), entry.Timeout, knownHost: !entry.ReplayAfterRestart,
-                    onlyTo: entry.ReplayAfterRestart ? null : sentTo, out var to, bound?.Token ?? default);
+                // An answer or a reply asks a host offering it for its progress; an older one is asked
+                // nothing new.
+                var request = data(entry.Request);
+                if (kind is not null && host.Can(Capabilities.SessionsProgress)) { request = AskProgress(request); }
+                var attempt = attempts;
+                Action<JsonElement>? heard = kind is null ? null : p => Heard(entry.Key, entry.Request, attempt, p);
+                var call = host.CallAsync(op, request, entry.Timeout, knownHost: !entry.ReplayAfterRestart,
+                    onlyTo: entry.ReplayAfterRestart ? null : sentTo, out var to, bound?.Token ?? default, heard);
+                // Marked once handed to the channel: a call refused before that (not connected, still
+                // connecting) is no send, and while the host is away it is refused every couple of
+                // seconds. The channel may still be writing it behind another message (its send lock,
+                // the relay's pacing): it has no hook for the moment the bytes go, so time queued on
+                // this device counts in sent → received, not before sent.
+                Mark(entry.Request, "sent");
                 if (to != sentTo) { sentTo = to; Update(entry.Key, e => e with { SentTo = to }); }
                 if (to is not null && firstSent is null)
                 {
@@ -214,7 +260,11 @@ public sealed class Deliveries
             {
                 // No outcome: the host went (or was never there). It may have acted, so the
                 // same request goes again once it is back.
-                Update(entry.Key, x => x with { State = DeliveryState.Waiting, Reason = e is HostNotRunningException ? "not connected" : e.Message });
+                // A channel that closed under the request is the machine gone too, not a slow answer
+                // (Waiting for machine, its ring still); the next try, on no channel, says so if this
+                // one is seen before the link notices. A failure while connected keeps its words.
+                var down = e is HostNotRunningException || (e is IOException && !host.WhenConnectedAsync().IsCompleted);
+                Update(entry.Key, x => x with { State = DeliveryState.Waiting, Reason = down ? NotConnected : e.Message });
                 // Waited on only for what is left of the limits, so a Try again pressed late does not hold
                 // the page past them while the machine is away.
                 if (Left() is var left && left > TimeSpan.Zero)
@@ -243,7 +293,7 @@ public sealed class Deliveries
                     Update(entry.Key, x => x with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = reason ?? NoOutcome });
                     return;
                 }
-                Update(entry.Key, x => x with { State = DeliveryState.Waiting, Reason = "still being delivered" });
+                Update(entry.Key, x => x with { State = DeliveryState.Waiting, Reason = StillBeingDelivered });
                 await Task.Delay(RetryDelay);
                 continue;
             }
@@ -256,12 +306,122 @@ public sealed class Deliveries
     void Update(string key, Func<Delivery, Delivery> change)
     {
         Delivery next;
+        bool done, failed;
         lock (gate)
         {
             if (!entries.TryGetValue(key, out var e)) { return; }
-            entries[key] = next = change(e);
+            next = change(e);
+            // Nothing changed (a stage behind one reached): nothing to tell.
+            if (ReferenceEquals(next, e)) { return; }
+            entries[key] = next;
+            done = next.State == DeliveryState.Done && e.State != DeliveryState.Done;
+            failed = next.State == DeliveryState.Failed && e.State != DeliveryState.Failed;
         }
+        // Shown first: the log line is a diagnostic, and nothing it does may hold up the page.
         Publish(next);
+        if (done) { Finished(next); }
+        // A failure is logged too, or one never sent again left no line at all (#625, Copilot
+        // 4487937060). Its marks stay: Send again is the same request, timed from the same tap.
+        else if (failed) { Finished(next, keep: true); }
+    }
+
+    static string? KindOf(string op) => op == Ops.SessionReply ? "reply" : op == Ops.SessionAnswer ? "answer" : null;
+
+    // The host measures an answer, flag and all, against its 16 KiB (Answers.Check), and no message
+    // may be over the protocol's 48 KiB (ProtocolJson.MaxMessageBytes), which ReplyViewModel.Send
+    // checked without the flag: a request that fits only without "progress": true goes without
+    // it, and shows Sending until its outcome, rather than be refused, or overrun the budget, for
+    // asking how it went. As the PWA's #withProgress does.
+    static object AskProgress(object data) => data switch
+    {
+        AnswerRequest a when JsonSerializer.SerializeToUtf8Bytes(a with { Progress = true }, ProtocolJson.Options).Length <= Limits.AnswerRequest => a with { Progress = true },
+        ReplyRequest r when Envelope(Ops.SessionReply, r with { Progress = true }) <= ProtocolJson.MaxMessageBytes => r with { Progress = true },
+        _ => data,
+    };
+
+    // A request as the channel sends it, escaped as it is sent, with room for any request id it
+    // could be given.
+    static int Envelope(string op, object data) =>
+        JsonSerializer.SerializeToUtf8Bytes(new { id = long.MaxValue, op, data }, ProtocolJson.Options).Length;
+
+    static int Rank(string? stage) => stage switch
+    {
+        DeliveryProgress.Received => 1,
+        DeliveryProgress.Typed or Queued => 2,
+        _ => 0,
+    };
+
+    // A progress frame for the attempt numbered attempt. One from an attempt given up on, a stage
+    // this app doesn't know (from a newer host), or one behind the stage reached changes nothing:
+    // a resend's repeat replays the stages so far, and what was typed stays typed.
+    void Heard(string key, string request, int attempt, JsonElement progress)
+    {
+        if (progress.ValueKind != JsonValueKind.Object || !progress.TryGetProperty("stage", out var s) || s.ValueKind != JsonValueKind.String) { return; }
+        var stage = s.GetString() switch
+        {
+            DeliveryProgress.Received => DeliveryProgress.Received,
+            DeliveryProgress.Typed => progress.TryGetProperty("working", out var w) && w.ValueKind == JsonValueKind.True ? Queued : DeliveryProgress.Typed,
+            _ => null,
+        };
+        if (stage is null) { return; }
+        bool Current(Delivery e) => e.Request == request && e.State == DeliveryState.Sending && e.Attempts == attempt;
+        var moved = false;
+        Update(key, e =>
+        {
+            // Only forward: typed and queued share a rank, so frames alternating between them move nothing.
+            if (!Current(e) || Rank(stage) <= Rank(e.Stage)) { return e; }
+            moved = true;
+            return e with { Stage = stage };
+        });
+        // Marked only when the stage moves on: a repeat replaying the stages so far, or a host
+        // saying the same again, adds nothing to the timing line.
+        if (moved) { Mark(request, stage); }
+    }
+
+    // A timing mark for an answer or a reply on its way, in ms since the tap. A second of the same
+    // (a resend's send, a repeat's stages) is numbered: "sent 2".
+    void Mark(string request, string what)
+    {
+        lock (gate)
+        {
+            if (!marks.TryGetValue(request, out var run)) { return; }
+            var again = run.At.Count(m => m.What == what || m.What.StartsWith(what + " ", StringComparison.Ordinal));
+            run.At.Add((again == 0 ? what : $"{what} {again + 1}", (long)time.GetElapsedTime(run.Start).TotalMilliseconds));
+        }
+    }
+
+    // What the log line may say a host sent: the outcomes and timings the protocol names. Anything
+    // else is the host's own text, and a host's text in a log line could carry a line break and
+    // forge a line of its own ("typed\nFORGED"), so it is never written as it came.
+    static readonly HashSet<string> LoggedOutcomes = [.. Enum.GetNames<AnswerOutcome>().Select(n => n.ToLowerInvariant())];
+    static readonly string[] LoggedTimings = ["typed", "recorded", "confirmed"];
+
+    // An answer's or a reply's outcome: its marks and the host's timings (the result's, ms since the
+    // host received it), as one line in the app's log, named by the request's first 8 hex digits
+    // as the host's own log names it.
+    void Finished(Delivery done, bool keep = false)
+    {
+        Marks run;
+        List<(string What, long Ms)> marked;
+        lock (gate)
+        {
+            if (!marks.TryGetValue(done.Request, out var found)) { return; }
+            if (!keep) { marks.Remove(done.Request); }
+            run = found;
+            // A copy: a resend adds to the same list.
+            marked = [.. run.At];
+        }
+        var at = marked.Select(m => $"{m.What} {m.Ms} ms").Append($"result {(long)time.GetElapsedTime(run.Start).TotalMilliseconds} ms");
+        var outcome = done.Outcome is { } o && LoggedOutcomes.Contains(o) ? o : "other";
+        var line = $"{run.Kind} {done.Request[..Math.Min(8, done.Request.Length)]} {outcome}: {string.Join(", ", at)}";
+        if (done.Result.ValueKind == JsonValueKind.Object && done.Result.TryGetProperty("timings", out var timings) && timings.ValueKind == JsonValueKind.Object)
+        {
+            var stages = LoggedTimings
+                .Where(n => timings.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var ms) && ms >= 0)
+                .Select(n => $"{n} {timings.GetProperty(n).GetInt64()} ms").ToList();
+            if (stages.Count > 0) { line += $"; host: {string.Join(", ", stages)}"; }
+        }
+        host.Log(line);
     }
 
     void Publish(Delivery entry) => ui.Post(() => Changed?.Invoke(entry));

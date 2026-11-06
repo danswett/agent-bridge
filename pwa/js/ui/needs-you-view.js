@@ -9,6 +9,7 @@ import { tapState, prepareAnswer } from '../answers.js';
 import { BUSY_PAUSE_MS, answerControls, answerState, describeAnswer } from './question-view.js';
 import { ReceiptClock, ReceiptTiming, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
 import { duration, localTime } from './time.js';
+import { whileVisible } from './ticker.js';
 import { renderMarkdown } from '../markdown.js';
 
 // An entry whose question the machine cleared while its answer was still on its way (typed, before
@@ -35,7 +36,7 @@ export class NeedsYouLane {
     this.head = container.querySelector('.needs-you-head');
     this.list = container.querySelector('.needs-you-list');
     sessions.onChange(() => this.schedule());
-    this.ticker = setInterval(() => this.refreshTimes(), 15000);
+    this.ticker = whileVisible(() => this.refreshTimes(), 15000);
     this.render();
   }
 
@@ -93,7 +94,12 @@ export class NeedsYouLane {
     while (prev ? prev.nextSibling : this.list.firstChild) { (prev ? prev.nextSibling : this.list.firstChild).remove(); }
     this.head.textContent = `Needs you \u00b7 ${lane.length}`;
     this.container.hidden = lane.length === 0 && lingering.length === 0;
-    this.badge.set(lane.length);
+    // The badge also counts what a machine stale only from a rest (#610) last asked: the app rests
+    // while out of sight, which is when the badge is all there is to see, and nothing is known to
+    // have changed. Those questions are neither listed nor answerable meanwhile; a real drop
+    // still takes them out of the count.
+    const rested = this.sessions.list().some(({ hostId }) => this.answering(hostId)?.stale?.rested === true);
+    this.badge.set(rested ? needsYou(this.sessions.list(), { current: (hostId) => { const stale = this.answering(hostId)?.stale; return !stale || stale.rested === true; } }).length : lane.length);
     this.onRender?.(lane.length);
   }
 

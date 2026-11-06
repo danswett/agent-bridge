@@ -16,6 +16,11 @@ public sealed partial class InFlightRing : UserControl
     public static readonly DependencyProperty ActiveProperty = DependencyProperty.Register(
         nameof(Active), typeof(bool), typeof(InFlightRing), new PropertyMetadata(false, (d, _) => ((InFlightRing)d).Apply()));
 
+    // Still: a request held on this device for a machine that isn't connected (Send's ring while its
+    // receipt says "Waiting for the machine", ui.md §6.5): nothing is moving, so the arc stays still, in text3.
+    public static readonly DependencyProperty StillProperty = DependencyProperty.Register(
+        nameof(Still), typeof(bool), typeof(InFlightRing), new PropertyMetadata(false, (d, _) => ((InFlightRing)d).Apply()));
+
     readonly ProgressRing ring = new() { Width = 16, Height = 16, IsActive = false };
     readonly Windows.UI.ViewManagement.UISettings settings = new();
     bool listening;
@@ -32,6 +37,9 @@ public sealed partial class InFlightRing : UserControl
         AutomationProperties.SetAccessibilityView(ring, AccessibilityView.Raw);
         Loaded += (_, _) => { Listen(); Apply(); };
         Unloaded += (_, _) => { if (!IsLoaded) { Unlisten(); } };
+        // A held ring's colour follows a theme or contrast switch made while it is shown: read once,
+        // it kept the last palette's text3 or GrayText (#625, Copilot 4485379205).
+        ActualThemeChanged += (_, _) => Apply();
         Apply();
     }
 
@@ -41,11 +49,20 @@ public sealed partial class InFlightRing : UserControl
         set => SetValue(ActiveProperty, value);
     }
 
+    public bool Still
+    {
+        get => (bool)GetValue(StillProperty);
+        set => SetValue(StillProperty, value);
+    }
+
     void Apply()
     {
         Visibility = Ui.Show(Active);
-        ring.IsIndeterminate = Active && MotionCatalogue.Loops(settings.AnimationsEnabled);
+        ring.IsIndeterminate = Active && !Still && MotionCatalogue.Loops(settings.AnimationsEnabled);
         ring.IsActive = Active;
+        // In a contrast theme, GrayText (ui.md §9): a held request never looks active.
+        if (Still) { ring.Foreground = new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast ? new Microsoft.UI.Xaml.Media.SolidColorBrush(SystemColours.Of(Windows.UI.ViewManagement.UIElementType.GrayText)) : Ui.Brush("AbText3"); }
+        else { ring.ClearValue(Control.ForegroundProperty); }
     }
 
     void Listen()
@@ -53,6 +70,7 @@ public sealed partial class InFlightRing : UserControl
         if (listening) { return; }
         listening = true;
         settings.AnimationsEnabledChanged += OnAnimationsChanged;
+        SystemColours.Changed += OnColoursChanged;
     }
 
     void Unlisten()
@@ -60,9 +78,14 @@ public sealed partial class InFlightRing : UserControl
         if (!listening) { return; }
         listening = false;
         settings.AnimationsEnabledChanged -= OnAnimationsChanged;
+        SystemColours.Changed -= OnColoursChanged;
     }
 
     // Raised off the UI thread.
     void OnAnimationsChanged(Windows.UI.ViewManagement.UISettings sender, Windows.UI.ViewManagement.UISettingsAnimationsEnabledChangedEventArgs args) =>
         DispatcherQueue.TryEnqueue(() => { if (IsLoaded) { Apply(); } });
+
+    // Raised off the UI thread too; applied after XAML's own handling of the change.
+    void OnColoursChanged() =>
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { if (IsLoaded) { Apply(); } });
 }
