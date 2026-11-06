@@ -66,6 +66,27 @@ public class AttentionTests
         Assert.Null(source.Get(Id)!.Attention);
     }
 
+    // #634 review, H2: a pass that finds the session unchanged commits nothing again, and each step
+    // of a sign-in recovery must still reach it, with the same session and a clock that never moved.
+    [Fact]
+    public async Task Each_sign_in_recovery_step_is_shown_though_neither_the_session_nor_the_clock_moved()
+    {
+        await using var s = new Session_();
+        await s.After(Error(SignedOut, 2));
+        var source = s.Source;
+        var failure = source.Get(Id)!.Attention!.Since;
+        var builds = source.Builds;
+
+        await source.SetSignInRecoveryAsync(Id, failure, "flow", RecoveryState.Checking, true);
+        Assert.Equal(RecoveryState.Checking, source.Get(Id)!.Attention!.Recovery);
+        await source.SetSignInRecoveryAsync(Id, failure, "flow", RecoveryState.Pending);
+        Assert.Equal(RecoveryState.Pending, source.Get(Id)!.Attention!.Recovery);
+        await source.RefreshAsync();
+
+        Assert.Equal(RecoveryState.Pending, source.Get(Id)!.Attention!.Recovery);
+        Assert.Equal(builds, source.Builds);
+    }
+
     [Fact]
     public async Task A_turn_that_ended_on_copilots_authorization_error_leaves_the_session_idle_and_needing_sign_in()
     {
@@ -542,6 +563,26 @@ public class AttentionTests
         Assert.Equal(new Attention { Kind = AttentionKind.NotResponding, Since = at, Agent = AgentKind.Copilot, Message = "Copilot isn't responding.", LastEventAt = at }, stalled.Attention);
         // A model call changes nothing a client shows, and is still the CLI at work.
         Assert.Null((await Read(w, TimeSpan.Zero, Copilot.Event("model.model_call_started", new { kind = "model_call_started" }, Now + 601))).Attention);
+    }
+
+    // #634 review, H1: a hung session's transcript stops changing, which is what lets a pass skip
+    // building it. The watchdog's deadline passing builds it once; before and after, nothing does.
+    [Fact]
+    public async Task A_silent_working_session_is_built_again_only_when_it_comes_to_read_not_responding()
+    {
+        var w = await Watched();
+        using var __ = w.F;
+        await using var _ = w.Source;
+        await Read(w, TimeSpan.Zero, Copilot.User("Carry on", Now), Copilot.TurnStart(Now));
+        var builds = w.Source.Builds;
+
+        Assert.Null((await Read(w, TimeSpan.FromMinutes(10) - TimeSpan.FromSeconds(1))).Attention);
+        Assert.Equal(builds, w.Source.Builds);
+        Assert.Equal(AttentionKind.NotResponding, (await Read(w, TimeSpan.FromSeconds(1))).Attention?.Kind);
+        Assert.Equal(builds + 1, w.Source.Builds);
+        Assert.Equal(AttentionKind.NotResponding, (await Read(w, TimeSpan.FromMinutes(5))).Attention?.Kind);
+
+        Assert.Equal(builds + 1, w.Source.Builds);
     }
 
     [Fact]
