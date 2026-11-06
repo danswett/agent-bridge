@@ -67,6 +67,15 @@ public sealed class HostSettingsTests : IDisposable
         Assert.True(settings.RemoteApproval);
     }
 
+    [Fact]
+    public void Remote_management_is_on_by_default_and_off_when_the_owner_or_a_spoiled_file_says_so()
+    {
+        Assert.True(With(null).Settings.RemoteManage);
+        Assert.False(With("{ \"permissions\": { \"remoteManage\": false } }").Settings.RemoteManage);
+        Assert.False(With("{ \"permissions\": { \"remoteApproval\": false, \"remoteManage\": false } }").Settings.RemoteManage);
+        Assert.False(With("{ \"permissions\": { \"remoteManage\": \"no\" } }").Settings.RemoteManage);
+    }
+
     [Theory]
     [InlineData("{ \"permissions\": { \"remoteApproval\": \"no\" } }")]
     [InlineData("{ \"permissions\": false }")]

@@ -167,7 +167,7 @@ public sealed class SettingsViewModel : Observable
     public string AgentInstallStatus { get => agentInstallStatus; private set => Set(ref agentInstallStatus, value); }
     public bool AgentInstallInProgress => agentInstallInProgress || Status?.AgentInstallation?.InProgress == true;
     public bool CanCheckAgents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && !Busy;
-    public string AgentsState => !HostRunning ? "Connect to this machine's host to check its agents."
+    public string AgentsState => !HostRunning ? "Connect to this machine's bridge to check its agents."
         : !host.Can(HostOps.AgentReadinessCapability) ? "This host does not report agent readiness. Update the app and restart the host."
         : Status?.Agents is not { } report ? "Checking installed agents..."
         : $"Checked at {report.CheckedAt.ToLocalTime():g}. Detection alone does not verify sign-in, hook trust or a new session."

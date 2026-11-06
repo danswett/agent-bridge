@@ -1819,12 +1819,12 @@ verbs). Every state is words on the row, with at most one verb:
 - **Set up, not yet tested:** an agent whose hooks are set up but that no new session has
   tested yet reads "Not tested yet" (#705), never Ready.
 - **A host the app can't act on:** "Read-only · *reason*" when the host reports `blocked`
-  (for example "Read-only · this machine's host is older", in the one word every row uses for
-  it, #959); "Hook ownership couldn't be checked · *reason*" (or "Hook intake couldn't be
+  (for example "Read-only · this machine's bridge is older": a person never sees "host", #959,
+    #1022);  "Hook ownership couldn't be checked · *reason*" (or "Hook intake couldn't be
   checked · *reason*") when the hooks have
   failed and their `hookSetup` is `unknown`, the reason being one of access denied, file in use
   or couldn't read ("Can't check" alone when the host gives neither); and "Can't check · this
-  machine's host is older" only when `hookSetup` is `unknown` and the hooks are neither blocked
+  machine's bridge is older" only when `hookSetup` is `unknown` and the hooks are neither blocked
   nor failed, since a current host sends `unknown` only with those. All three are `text2`, with
   no status colour and no verb, and never fall back to Ready, Not set up or Needs repair.
 
@@ -2245,6 +2245,12 @@ that survives a failed turn never hides the error behind "Delegating".
   "Needs sign-in" with no button and no instruction, never phone sign-in and never "at the
   machine".
 - Not dismissible while it lasts: it goes by itself once every affected session is recovered.
+- **Opened from a sign-in push** (`?host=<id>&signin=<agent>`, #969): the PWA shows that machine's
+  sessions list (from another page, or in place of a session open over the list on a phone), and
+  once its list is whole puts focus on that agent's banner's action (Sign in, or its line when
+  there is nothing to press there). If no session for that agent still needs sign-in, the machine
+  shows as it is, with nothing said; an agent the client doesn't know is ignored. The link picks a
+  banner and nothing more.
 - States (each client's adapter maps them from the sessions' `attention` and `recovery`, and
   the sign-in request it started):
 
@@ -2283,7 +2289,8 @@ count, and its row to "Needs sign-in". Sessions that confirm leave the count one
   - "Expires *time*", in the device's own time zone and time format, as every time in the app.
   - Buttons: **Copy** is the one primary, on every client: copying the code is the step that
     moves a phone's sign-in forward, and Open follows it. Open and Cancel are secondary. Focus
-    starts on Cancel, and Escape is Cancel. Nothing is copied or opened without a press.
+    starts on Cancel, and Escape is Cancel. In the app, Copy is also the sheet's default: Enter
+    copies the code (but on Open or Cancel, whose own Enter presses them). Nothing is copied or opened without a press.
 - **A URL not on the allowlist, or a malformed code:** the sheet shows "This sign-in code
   couldn't be shown." with **Try again** (a new request) and Cancel. No link and no raw text,
   and it doesn't send the person to the machine: that's only for the host's `signIn: machine`.
@@ -2502,6 +2509,11 @@ they are un-parked.
   agent or machine has it. Rows don't move while it narrows the list.
 - **A folder-trust question** waiting on a machine that takes no launches puts a Needs you dot on
   the way to Launch (the rail's Launch, the phone's New).
+- **A launch not confirmed whose session registers late** (#891, #896) says "Session started." in
+  its status, on Launch for that machine only. The PWA follows one such launch per machine, and the
+  app follows one launch in all. A launch whose outcome names no session (a Codex's) is not
+  followed until the host names it (#983), and a start whose session isn't known (no card to open)
+  says "Session started. Open it from the list."
 - **Under the sessions,** one line of each agent's fullest usage leads to Usage.
 - **Usage names the account** (#225), on every group and every figure ("GitHub Copilot ·
   danswett 12%"), in full: two of one agent's accounts differ by nothing else. Short of room the
@@ -2597,7 +2609,7 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   - Agent rows today (#784, #705): "Not installed"; "Not installed · install it on this
     machine"; "Installing…"; "Install failed · *reason*"; "Read-only · *reason*"; "Hook
     ownership couldn't be checked · *reason*"; "Hook intake couldn't be checked · *reason*";
-    "Can't check · this machine's host is older"; "Not tested yet". Actions: Install CLI, Cancel
+    "Can't check · this machine's bridge is older"; "Not tested yet". Actions: Install CLI, Cancel
     (named "Cancel CLI installation"); the consent dialog's Install CLI and runtimes.
   - Version lines (#231): "We couldn't read *Agent*'s version. Setup may not work; we'll
     check it afterwards."; "Update *Agent* to set it up".

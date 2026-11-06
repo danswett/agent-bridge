@@ -1,7 +1,10 @@
 namespace AgentBridge.Host;
 
 public enum DeparturePurpose { Update, RemoteRestart, RemoteStop, WatchdogRecovery, Sleep, Shutdown, Reboot, SignOut }
-public enum DepartureBlocker { DeliveryInFlight, Typing, AnnounceUnacked, JournalUncertain, AppRunning, OtherHostRunning, ChannelChanged, TransferInFlight, ConditionFault }
+// LeaseExpired and Ineligible are appended so existing values keep their numbers. LeaseExpired is the
+// coordinator's own outcome (the provisional lease outlived its lifetime before commit), never a
+// condition's kind; Ineligible is a purpose's own eligibility (#801's remote restart).
+public enum DepartureBlocker { DeliveryInFlight, Typing, AnnounceUnacked, JournalUncertain, AppRunning, OtherHostRunning, ChannelChanged, TransferInFlight, ConditionFault, LeaseExpired, Ineligible }
 
 public interface IDepartureCondition
 {
@@ -26,6 +29,8 @@ public sealed class DepartureConditions
             ArgumentNullException.ThrowIfNull(condition);
             var kind = condition.Kind;
             if (!Enum.IsDefined(kind)) { throw new ArgumentOutOfRangeException(nameof(registered), "unknown departure blocker"); }
+            // A condition reporting expiry would make a real fault read as "changed, retry".
+            if (kind == DepartureBlocker.LeaseExpired) { throw new ArgumentOutOfRangeException(nameof(registered), "lease expiry is not a condition"); }
             return (kind, condition);
         }).ToArray();
         if (!conditions.TryAdd(purpose, snapshot)) { throw new InvalidOperationException("this purpose was already registered"); }

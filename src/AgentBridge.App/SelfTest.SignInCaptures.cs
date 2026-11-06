@@ -15,7 +15,7 @@ namespace AgentBridge.App;
 // high contrast on CI (CheckHighContrast). They are the banner as it first comes (its sessions links
 // in its line, #963), a Needs sign-in
 // row, a signIn this app doesn't know (no claim, nothing to press), a sign-in under way from another
-// device (Show code), the sheet with its code and the banner behind it, Failed, an expired code,
+// device (Show code), the sheet with its code (Copy its one primary) and the banner behind it, Failed, an expired code,
 // and signed in waiting for the sessions to confirm. The behaviour is CheckSignIn's to prove; these
 // are the pictures, each with a check that it is what it says. One scenario for all of them, as the
 // self-test's time is counted (build/app-self-test.ps1). The scenario's sessions go again after.
@@ -120,6 +120,11 @@ static partial class SelfTest
             check(opened, $"captures the sheet with the code, and the banner while it is shown{where} ({Line()})");
             if (opened)
             {
+                // Copy the one primary (accent), Cancel secondary (Creative 6675007095).
+                var accent = (Style)Application.Current.Resources["AccentButtonStyle"];
+                var copy = Sheet() is { } shown ? Find<Button>(shown).FirstOrDefault(b => AutomationProperties.GetAutomationId(b) == "SignInCopy") : null;
+                var cancel = Sheet() is { } open ? Find<Button>(open).FirstOrDefault(b => b.Name == "CloseButton") : null;
+                check(ReferenceEquals(copy?.Style, accent) && cancel is not null && !ReferenceEquals(cancel.Style, accent), $"captures the sheet with Copy its one primary button{where}");
                 await Looks(async look =>
                 {
                     if (Sheet() is { } sheet) { await Picture(sheet, File("sheet", look)); }

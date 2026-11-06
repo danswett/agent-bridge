@@ -341,7 +341,7 @@ export class DemoHost {
       this.attachments.set(data.attachment, { name: data.name, type: data.type, size: data.size, sha256: data.sha256, parts: [], received: 0, complete: false, used: false });
       return { received: 0, complete: false };
     }
-    if (!f || f.used) { throw new Error(`attachment ${String(data?.attachment).slice(0, 8)} is not on the host (it expired, was removed, or never arrived); attach it again`); }
+    if (!f || f.used) { throw new Error(`attachment ${String(data?.attachment).slice(0, 8)} is not on the machine (it expired, was removed, or never arrived); attach it again`); }
     if (this.attachmentDelayMs) { await new Promise((r) => setTimeout(r, this.attachmentDelayMs)); }
     // failNextChunk: the next chunk is turned down with this reason, as a host would on a fault.
     if (this.failNextChunk) { const reason = this.failNextChunk; this.failNextChunk = null; throw new Error(reason); }
@@ -369,7 +369,7 @@ export class DemoHost {
   // background from blobStore (a DemoBlobStore), opened, checked against its sha256, then deleted
   // from the store; attachment.start again reports how far it has got, or why it failed.
   #blobAttachment(data) {
-    if (!this.capabilities.includes('sessions.attach.blob')) { throw new Error('this host cannot fetch from the blob store now: it is not connected to a relay that has one'); }
+    if (!this.capabilities.includes('sessions.attach.blob')) { throw new Error('this machine cannot fetch from the blob store now: it is not connected to a relay that has one'); }
     if (!(data.size > 0 && data.size <= BLOB_FILE_MAX)) { throw new Error(data.size > 0 ? 'the attachment is larger than 100 MiB' : 'the attachment is empty'); }
     const f = this.attachments.get(data.attachment);
     if (f) {
@@ -385,7 +385,7 @@ export class DemoHost {
   async #fetchBlob(entry, blob) {
     if (this.attachmentDelayMs) { await new Promise((r) => setTimeout(r, this.attachmentDelayMs)); }
     const stored = this.blobStore?.read(blob.id);
-    if (!stored) { entry.failed = 'the host could not fetch the attachment from the blob store (the relay refused the blob request: not-found); send it again'; return; }
+    if (!stored) { entry.failed = 'the machine could not fetch the attachment from the blob store (the relay refused the blob request: not-found); send it again'; return; }
     let bytes;
     try { bytes = await openBlob(stored, entry.size, fromBase64url(blob.key), blobIdOf(blob.id)); } catch (e) {
       entry.failed = `the attachment in the blob store is not what was sent (${e.message}), so it was dropped; send it again`;
@@ -495,11 +495,11 @@ export class DemoHost {
     if (scripted && scripted.outcome !== 'started') {
       const reasons = {
         busy: "a session this machine launched is waiting at its folder trust prompt; answer it at the machine",
-        refused: 'agent-ha-bridge is running for this user, so this host leaves launching to it',
+        refused: 'agent-ha-bridge is running for this user, so this bridge leaves launching to it',
         unconfirmed: "the session started, but it is asking whether to trust its folder; answer that at the machine",
         failed: 'the agent could not be started (The system cannot find the file specified.)',
       };
-      return { outcome: scripted.outcome, reason: scripted.reason ?? reasons[scripted.outcome] ?? 'from a newer host', ...(scripted.trust ? { trust: this.askTrust(scripted.trust) } : {}) };
+      return { outcome: scripted.outcome, reason: scripted.reason ?? reasons[scripted.outcome] ?? 'from a newer host', ...(scripted.session ? { session: scripted.session } : {}), ...(scripted.trust ? { trust: this.askTrust(scripted.trust) } : {}), ...(scripted.outcome === 'unconfirmed' ? this.#launchedFor(data) : {}) };
     }
     const problem = checkLaunch(data);
     if (problem) { return { outcome: 'refused', reason: problem }; }
@@ -527,7 +527,18 @@ export class DemoHost {
     });
     if (resume) { this.launchOptions = { ...o, resumable: o.resumable.filter((r) => r.id !== resume.id) }; }
     const permissions = data.permissions ?? o.defaults.permissions;
-    return { outcome: 'started', session: id, launched: { agent: agent.id, ...(resume ? { resume: resume.id } : { workspace: workspace.label }), cwd, worktree: !!workspace?.isolate, permissions } };
+    return { outcome: 'started', ...(scripted?.session === null ? {} : { session: id }), launched: { agent: agent.id, ...(resume ? { resume: resume.id } : { workspace: workspace.label }), cwd, worktree: !!workspace?.isolate, permissions } };
+  }
+
+  // What an unconfirmed launch says it started, as a host's does (docs/protocol/v1-launch.md):
+  // the agent, the folder and whether it is a new worktree.
+  #launchedFor(data) {
+    const o = this.launchOptions;
+    const resume = data.resume ? o.resumable.find((r) => r.id === data.resume) : null;
+    const agent = o.agents.find((a) => a.id === (data.agent ?? resume?.launcher ?? o.defaults.agent));
+    const workspace = resume ? null : o.workspaces.find((w) => w.label === (data.workspace ?? o.defaults.workspace));
+    if (!agent || (!resume && !workspace)) { return {}; }
+    return { launched: { agent: agent.id, ...(resume ? { resume: resume.id } : { workspace: workspace.label }), cwd: resume?.cwd ?? workspace.path, worktree: !!workspace?.isolate, permissions: data.permissions ?? o.defaults.permissions } };
   }
 
   // As the target and the machine the session is on decide between them: the command must be for
@@ -582,9 +593,9 @@ export class DemoHost {
     if (scripted && scripted.outcome !== 'ended') {
       const reasons = {
         busy: 'an answer or reply to this session is being delivered, or it is already being ended',
-        refused: 'the session runs as administrator, and the host does not end elevated sessions; end it at the machine',
+        refused: 'the session runs as administrator, and the machine does not end elevated sessions; end it at the machine',
         stale: 'the session has ended',
-        failed: "the host could not terminate the session's process (Access is denied.)",
+        failed: "the machine could not terminate the session's process (Access is denied.)",
       };
       return { outcome: scripted.outcome, reason: scripted.reason ?? reasons[scripted.outcome] ?? 'from a newer host' };
     }
@@ -705,7 +716,7 @@ export class DemoHost {
     const files = [];
     for (const { id } of data.attachments ?? []) {
       const f = this.attachments.get(id);
-      if (!f) { return { outcome: 'refused', reason: `attachment ${id.slice(0, 8)} is not on the host (it expired, was removed, or never arrived); attach it again` }; }
+      if (!f) { return { outcome: 'refused', reason: `attachment ${id.slice(0, 8)} is not on the machine (it expired, was removed, or never arrived); attach it again` }; }
       if (f.used) { return { outcome: 'refused', reason: `attachment ${id.slice(0, 8)} went with an earlier reply; attach it again` }; }
       if (!f.complete) { return { outcome: 'refused', reason: `attachment ${id.slice(0, 8)} has not finished arriving; send it again` }; }
       files.push(f);

@@ -60,7 +60,7 @@ test.beforeAll(async ({}, info) => {
   stack.stdout.on('data', (d) => stackOut.push(d.toString()));
   stack.stderr.on('data', (d) => stackOut.push(d.toString()));
   await expect.poll(() => stackOut.join(''), { timeout: 60000 }).toContain('ready ');
-  host = await startFixtureHost({ base: relay, name: 'fixture-host', sessions: structuredClone(fixture.sessions) });
+  host = await startFixtureHost({ base: relay, name: 'fixture-host', sessions: structuredClone(fixture.sessions), signingIn: true });
 });
 
 test.afterAll(async () => {
@@ -73,7 +73,8 @@ test.afterAll(async () => {
 async function signIn(page) {
   await page.goto(appUrl);
   await page.click('#signin-button');
-  await expect(page.locator('#avatar')).toBeVisible({ timeout: 30000 });
+  // Not shown on a phone, whose bar has no avatar: what unhides it is the sign-in.
+  await expect(page.locator('#avatar')).not.toHaveAttribute('hidden', '', { timeout: 30000 });
   await expect(page.locator('#conn')).toHaveText('Connected', { timeout: 20000 });
   // Every machine is shown at first: settled once each has said what it is, so a tap on the
   // list that follows lands on the list it was aimed at.
@@ -400,6 +401,106 @@ test.describe('notifications', () => {
     await expect(page.locator('#search')).toHaveValue('');
     // Though keys were pressed (the search), what the tap brought draws no ring.
     await expectNoRing(card(page, 'linked-2'));
+  });
+
+  // A sign-in push links to ?host=&signin=<agent> and nothing more (v1-sessions.md Push signIn, #969).
+  test('a sign-in notification\'s link opens its machine\'s banner for that agent with Sign in focused, and a stale one or an unknown agent only shows the machine', async ({ page, browserName }, testInfo) => {
+    const t = new Date().toISOString();
+    const needing = { id: 'signin-link', agent: 'copilot', title: 'Fix the relay', status: 'idle', statusSince: t, updatedAt: t, activity: {},
+      attention: { kind: 'signInNeeded', since: t, agent: 'copilot', provider: 'github', signIn: 'phone' } };
+    await host.upsert(needing);
+    try {
+      await signIn(page);
+      const banner = page.locator('#sign-in-banners .sign-in-banner[data-agent="copilot"]');
+      const signInButton = banner.getByRole('button', { name: 'Sign in to Copilot on fixture-host' });
+      await page.goto(`${appUrl}?host=${host.deviceId}&signin=copilot`);
+      await expect(signInButton).toBeFocused({ timeout: 30000 });
+      await expect(banner.locator('.sign-in-line')).toHaveText('1 session affected: Fix the relay');
+      expect(new URL(page.url()).search).toBe('');
+      // For Creative (#969): the banner as the link leaves it, Sign in focused with no ring (A12: a
+      // tap on a notification draws none), then with its ring once a key is pressed, each in light,
+      // dark and forced colours; kept by CI as pwa-captures-e2e. In Chromium: WebKit draws a
+      // screenshot with a style the CSP refuses.
+      if (browserName === 'chromium') {
+        for (const [name, key] of [['signin-link-focus', null], ['signin-link-focus-key', 'Shift']]) {
+          if (key) { await page.keyboard.press(key); }
+          for (const [suffix, media] of [['', { colorScheme: 'light', forcedColors: 'none' }], ['.dark', { colorScheme: 'dark', forcedColors: 'none' }], ['.forced-colors', { colorScheme: 'light', forcedColors: 'active' }]]) {
+            await page.emulateMedia(media);
+            await expect(signInButton).toBeFocused();
+            const path = testInfo.outputPath(`${name}${suffix}.png`);
+            await banner.screenshot({ path });
+            await testInfo.attach(`${name}${suffix}.png`, { path, contentType: 'image/png' });
+          }
+        }
+        await page.emulateMedia({ colorScheme: 'light', forcedColors: 'none' });
+      }
+
+      // An agent no push names: the link only shows its machine, and moves no focus.
+      await page.goto(`${appUrl}?host=${host.deviceId}&signin=gemini`);
+      await expect(signInButton).toBeVisible({ timeout: 30000 });
+      await expect(page.locator('.session[data-id="signin-link"]')).toBeVisible();
+      await expect(signInButton).not.toBeFocused();
+      expect(new URL(page.url()).search).toBe('');
+
+      // Signed in since the push: the machine as it is, with no banner, no error and focus left alone.
+      await host.upsert({ ...needing, attention: undefined, updatedAt: new Date().toISOString() });
+      await page.goto(`${appUrl}?host=${host.deviceId}&signin=copilot`);
+      await expect(page.locator('.session[data-id="signin-link"] .row-status')).toHaveText('Idle', { timeout: 30000 });
+      await expect(page.locator('#sign-in-banners .sign-in-banner')).toHaveCount(0);
+      expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+
+      // A tap while the app is open: needed again, and the worker's link focuses Sign in.
+      await host.upsert({ ...needing, updatedAt: new Date().toISOString() });
+      await expect(signInButton).toBeVisible({ timeout: 30000 });
+      await page.evaluate((url) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
+        `${appUrl}?host=${host.deviceId}&signin=copilot`);
+      await expect(signInButton).toBeFocused();
+    } finally {
+      await host.remove('signin-link');
+    }
+  });
+
+  // Tapped while the list isn't on screen (6692135282): Settings shows no banner, nor does a phone
+  // with a session over the list, and focus() on a hidden banner does nothing. The link shows the
+  // list first, then focuses the banner.
+  test.describe('on a phone', () => {
+    test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
+
+    // A phone signed in, with a session that needs sign-in, and the tap that a push's link makes.
+    const away = async (page, body) => {
+      const t = new Date().toISOString();
+      await host.upsert({ id: 'signin-away', agent: 'copilot', title: 'Fix the relay', status: 'idle', statusSince: t, updatedAt: t, activity: {},
+        attention: { kind: 'signInNeeded', since: t, agent: 'copilot', provider: 'github', signIn: 'phone' } });
+      try {
+        await signIn(page);
+        const signInButton = page.locator('#sign-in-banners .sign-in-banner[data-agent="copilot"]').getByRole('button', { name: 'Sign in to Copilot on fixture-host' });
+        await expect(signInButton).toBeVisible({ timeout: 30000 });
+        const tap = () => page.evaluate((url) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
+          `${appUrl}?host=${host.deviceId}&signin=copilot`);
+        await body(signInButton, tap);
+        await expect(signInButton).toBeVisible();
+        await expect(signInButton).toBeFocused();
+      } finally {
+        await host.remove('signin-away');
+      }
+    };
+
+    test('a sign-in notification tapped from Settings shows the list with Sign in focused', async ({ page }) => {
+      await away(page, async (signInButton, tap) => {
+        await go(page, 'settings');
+        await expect(signInButton).toBeHidden();
+        await tap();
+      });
+    });
+
+    test('a sign-in notification tapped from a session open over the list shows the list with Sign in focused', async ({ page }) => {
+      await away(page, async (signInButton, tap) => {
+        await open(page, 'signin-away');
+        await expect(signInButton).toBeHidden();
+        await tap();
+        await expect(view(page, 'signin-away')).toBeHidden();
+      });
+    });
   });
 
   // A notification's session, opened while its machine's list is not yet whole (#269).
