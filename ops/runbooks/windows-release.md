@@ -33,8 +33,9 @@ build is stopped by not promoting it past Dev, and machines on Beta never see it
    run only:** a fresh push to `main` (the next merge, through Quality, who owns recovery and
    admission), whose run uses the current workflow and recomputes its plan, from the last green
    `main` run, and every gate. A run by hand (`workflow_dispatch`) refuses `main` and never
-   publishes. **Never re-run the failed jobs (`gh run rerun --failed`) of a `main` run started
-   before #938 queued publishes (`queue: max`):** a re-run keeps the workflow its run started
+   publishes. **Never re-run a `main` run started before #938 queued publishes (`queue: max`),
+   neither all of it (`gh run rerun`) nor its failed jobs (`gh run rerun --failed`):** a re-run
+   keeps the workflow its run started
    with, so its publish waits under the old concurrency, where the next to arrive replaces the
    one waiting, and can evict a newer run's waiting publish (docs/app-windows.md).
 3. **Machines that installed it.** Installs never downgrade (owner's rule, #451), so the fix

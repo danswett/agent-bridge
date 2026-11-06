@@ -473,7 +473,9 @@ connector's Install button on a machine the dashboard drives.
   commit, so an app change whose own run was replaced while waiting is built by the next run.
   It runs for pushes to `danswett/agent-bridge`'s `main` only: never a pull
   request or a fork. It
-  is the only job with `contents: write`, and runs one at a time (concurrency group
+  is the only job with `contents: write` (CI's other writes are `attest`'s `attestations: write`
+  and `id-token: write`, and main's `relay-image-sarif` job's `security-events: write`, which
+  uploads the relay image's scan to code scanning), and runs one at a time (concurrency group
   `publish-prerelease`), and publishes each version once, never one older than any already
   out and never from a commit that doesn't hold the latest release's commit, so release order
   doesn't rest on the order main's CI runs go in (first attempts share

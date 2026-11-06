@@ -253,6 +253,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    Transport.Tests -> Transport, Relay, RelaySmoke
    App.Tests     -> App.Core, Transport.Tests      Host.Tests -> Host, Transport.Tests
    ```
+
+   Folders, references and `triggers`/`global_triggers` match in any case, as the Windows
+   build does: it compiles `src/agentbridge.host/X.cs` into `AgentBridge.Host`, which an exact
+   match left to `app-package`'s `src/**` trigger alone, without Host's tests. `no_test_paths`
+   stay exact, since they take tests away: a path spelled otherwise is selected like any other.
 3. **Everything else:** each suite's `triggers` globs in the catalog (`pwa/**`, `apple/**`,
    `infra/**`, `build/**` and so on).
 4. **Always:** the sentinels (`select: always` at that ring). Everything runs on
@@ -323,7 +328,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, each pinned to the one
    job it follows), and its `if:` is
    `always()`; `publish-gate` needs `quality-gate` and requires its success as a top-level
-   condition, and `publish` needs `publish-gate` with no status function, its concurrency exactly
+   condition, and `publish` needs `publish-gate` with exactly the condition
+   `!cancelled() && needs.publish-gate.result == 'success'`, its concurrency exactly
    group `publish-prerelease`, `cancel-in-progress: false` and `queue: max` (item 7), and no
    other concurrency setting `queue`; the plan's suites and
    whole-ring reach steps only as `SUITES` and `WHOLE_RING`; and each step that reads the plan's
