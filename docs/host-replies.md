@@ -71,8 +71,10 @@ command", or as the footer's "Shell" label or "esc exit shell mode" hint. The re
   An empty box must also show "/ commands" in the footer, which the CLI draws only while
   the box is empty. While a turn runs, the footer's place holds the turn's own row (spinner,
   "esc interrupt" or another Esc hint, "ctrl+q enqueue"; `LMe`'s activity layout) instead,
-  never with "/ commands": that row is taken for the footer when it carries Esc's or the
-  enqueue hint, the box's own rows decide whether it is empty, and its vim and shell labels
+  never with "/ commands". CLI 1.0.106 uses "ctrl+c interrupt" or "ctrl+c stop agents"
+  when the box is empty (captured live and checked against its rendering code); the Esc
+  hints remain supported. That row is taken for the footer when it carries one of those
+  interrupt hints or the enqueue hint, the box's own rows decide whether it is empty, and its vim and shell labels
   are read as in the idle footer, so a reply can still steer a working session. In a
   window under 80 columns (measured by the box's own bottom edge, which spans the frame) the
   turn's row leaves those labels out, and a box holding only spaces in shell mode draws as
@@ -101,7 +103,7 @@ with only those rows held, a real box holding a draft, or a permission dialog, d
 them afterwards passed. The box's rows alone cannot say so: '!' then a space enters
 shell mode with only a space in the box, which draws as an empty box, and Esc into vim's
 normal mode changes only the footer. In a window under 80 columns (the box's bottom edge)
-the footer must also not have become a running turn's row (Esc's hint, the enqueue hint):
+the footer must also not have become a running turn's row (Esc's or Ctrl+C's hint, the enqueue hint):
 there that row leaves out the mode labels, so a turn starting after the read would hide
 them, and it is refused as one running at the read is. Anything else in the footer (its
 spinner, its hints) may change. If a check fails, nothing is typed and the reply is `refused` ("input box
@@ -254,12 +256,22 @@ In order, for every reply:
 4. No question or permission prompt in the session as reported (`refused`: "answer that
    first", or, for one marked `answerAtMachine`, "answer it there first"). Its attachments
    are held, complete, for this device (`refused` otherwise), and are reserved for this
-   reply. The process is the live agent process, and not elevated. The attachments are
-   staged (below).
+   reply. The process is the live agent process, and not elevated. A session this host
+   launched, resumed or restored whose window has not been seen ready is `refused`: it may
+   still show a startup question, folder trust above all, that Enter would answer, and a resume's
+   transcript already exists, so the check below never catches it (`LaunchService.HeldForReply`,
+   #780). Once following has ended unready, it stays so while that agent runs (the launcher, or the
+   process it handed the session to), until a prompt of the person's is in its transcript after the
+   launch (Copilot; a turn count would not do: it leaves out the turn that prompt starts, and a new
+   CLI's `session.resume` ending a killed turn counts one with nobody having typed) or, for an agent
+   that registers only once ready, it registers. The attachments are staged (below).
 5. The single typing turn is taken, then, immediately before typing: agent-ha-bridge again,
    the session again, and its transcript: no `ask_user` from any agent without its
    completion or `human_response.recorded`, and no `permission.requested` without its
-   `permission.completed`, since the last abort or shutdown. The whole transcript counts,
+   `permission.completed`, since the last abort or shutdown. One left open when a new CLI
+   resumed the session (`session.resume`, with no end written for it) still counts, since the
+   new CLI may show it again without writing it again: until it completes, an abort or shutdown,
+   a question the session itself asks since (a subagent's is its own, #855), or a prompt typed at the machine (`refused`, saying it was resumed). The whole transcript counts,
    since a subagent's question stops only that subagent and other work can write any
    amount after it (and the session source does not report a subagent's question): it is
    read from the start once per session, in the background as soon as the session is found
@@ -295,6 +307,18 @@ transcript; the reply is added to them, and the prompt recorded differs, so the 
 `unconfirmed`. agent-ha-bridge has the same exposure. A question the agent opens in the
 moments between the transcript check and the keys landing would take the words; the window
 is the worker's start-up, about the same as for an answer.
+
+**What a reason says.** An `unconfirmed` reply's or answer's `reason` states only what
+happened, as a lowercase clause with no full stop, naming the agent's session: never where to
+look, which the client's receipt already says ("Check the conversation…", #967), and never
+"check at the machine" (#995). A refusal is different: nothing was typed, so its reason still
+says where the person's next move is ("answer at the machine", "reply at the machine"; Creative,
+6680283740 on #995). Where the host itself failed (an exception reading the screen, typing, or
+checking the transcript, or the attempt ledger unreadable), the reason is "the machine
+couldn't deliver it", and the exception's text goes to the host's log only (#802). Launch and
+End session reasons follow the same rule (#1021): fixed words ("the machine couldn't start the
+session", "the machine couldn't end the session"), with their "check at the machine" tails
+where they had them (#467), and the exception's text in the host's log only.
 
 ## Progress and timings
 
@@ -336,3 +360,29 @@ reply 0b7e3c1d timings (ms after 2026-11-04T06:56:28.441Z): checked 2, turn 3, i
 A stage not reached is left out: a reply refused at step 1 logs only `settled` and `sent`. The
 receipt time is UTC, unlike the log's own local-time prefix, so a line is matched to the lines
 around it by its request id, and its times to an agent's transcript as they are, without an offset.
+
+### Confirmation, measured (#1025)
+
+Replies go unconfirmed more often than they fail to arrive, so each reply whose keys went and
+whose confirmation ran logs one more line, to measure how long each agent takes to record one:
+
+```
+reply 0b7e3c1d to 99999999 confirm: copilot, working, typed 25, recorded never, timeout 60 s, unconfirmed
+reply 0b7e3c1d late: recorded 93120
+```
+
+The agent; whether the session was `working` or `idle` when the keys went; `typed`, when the
+last key had gone; `recorded`, the agent's own time on the prompt that is the reply (`~` and the
+host's time where its record has none, `never` if it was not found by the timeout); the timeout
+in force; and the outcome. Times are in ms after receipt, as in the timings line. Never the
+reply's words.
+
+A reply that timed out with its prompt not found (not recorded, or another message recorded)
+keeps its outcome, and the host keeps looking for its prompt, without taking it, for five minutes
+more (`ReplyOptions.LateWatch`, every 5 s), and logs a `late:` line: when it was recorded after
+all, or `not recorded within 300 s more`. `ops/tools/reply-confirm-delays.ps1` reads these lines
+from the host's log, read-only, into the delay from `typed` to `recorded` per agent and state. It
+counts a reply as never recorded only once its late watch is known to be over (its `not recorded`
+line, or a log line 300 s after it with no host `stopped` or start line in between); the rest, still
+watched or not observable (transcript unreadable, host stopped or started within the watch), are
+reported apart.

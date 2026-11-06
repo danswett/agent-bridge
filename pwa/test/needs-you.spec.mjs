@@ -134,20 +134,104 @@ test.describe('on a phone', () => {
     await expect(e.getByRole('button').and(page.locator('button:not(.md-copy)'))).toHaveText([/./, 'Approve once', 'Deny']);
     await hold(page);
     await e.getByRole('button', { name: /^Approve once/ }).tap();
-    // On its way, in the lane and on the card alike: one answer, one service entry.
-    await expect(e.locator('.needs-status')).toHaveText('Sending…');
+    // On its way, in the lane and on the card alike: one answer, one service entry, Approve once's
+    // ring, and nothing on either line (ui.md §6.5).
+    // Said once, wherever it is heard: the lane's line or the card's.
+    await expect(page.locator('.receipt-live').filter({ hasText: 'Sending answer' })).toHaveCount(1);
+    await expect(e.locator('.needs-status')).toHaveText('');
+    expect(await e.getByRole('button', { name: /^Approve once/ }).evaluate((b) => getComputedStyle(b, '::after').content)).not.toBe('none');
     await expect(e.getByRole('button', { name: /^Deny/ })).toBeDisabled();
     await expect(e.getByRole('button', { name: /^Approve once/ })).toHaveAttribute('aria-pressed', 'true');
     const q = card(page, LAND).locator('.question');
-    await expect(q.locator('.answer-status')).toHaveText('Sending…');
+    await expect(q.locator('.answer-status')).toHaveText('');
     await expect(q.locator('.choice[data-value="deny"]')).toBeDisabled();
     await release(page);
     await expect(entryFor(page, LAND)).toHaveCount(0);
-    await expect(card(page, LAND).locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.');
+    await expect(card(page, LAND).locator('.answer-receipt')).toHaveText('You answered · Approve once');
     const sent = await log(page);
-    expect(sent).toEqual([{ id: LAND, question: 'r1#0123456789abcdef', request: expect.stringMatching(UUID), fields: { decision: 'approve' } }]);
+    expect(sent).toEqual([{ id: LAND, question: 'r1#0123456789abcdef', request: expect.stringMatching(UUID), fields: { decision: 'approve' }, progress: true }]);
   });
 
+  test('an entry whose question the machine clears before confirming its answer stays, ring on, until the outcome and its check have shown', async ({ page }) => {
+    await openDemo(page);
+    const e = await ask(page, LAND, permission());
+    await page.evaluate(() => window.agentBridgeDemo.host.holdBefore('result'));
+    const approve = e.getByRole('button', { name: /^Approve once/ });
+    await approve.tap();
+    // Typed: the machine's upsert takes the question away before its result comes back.
+    await expect.poll(() => page.evaluate((id) => window.agentBridgeDemo.host.get(id).question, LAND)).toBeNull();
+    await expect(e).toHaveAttribute('data-lingering', 'true');
+    await expect(e).toHaveAttribute('data-answer', 'sending');
+    expect(await approve.evaluate((b) => getComputedStyle(b, '::after').content)).not.toBe('none');
+    await expect(e.getByRole('button', { name: /^Deny/ })).toBeDisabled();
+
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseBefore('result'));
+    await expect(approve).toHaveClass(/\bchecked\b/);
+    await expect(entryFor(page, LAND)).toHaveCount(0);
+  });
+
+  // The machine's result can reach the phone before its update taking the question away: the entry
+  // ends as it does the other way round. The demo host's question-clearing upsert is held back here
+  // until the result is in.
+  const resultFirst = (page) => page.evaluate(() => {
+    const h = window.agentBridgeDemo.host;
+    const upsert = h.upsert.bind(h);
+    const held = [];
+    h.upsert = (s) => { if (s.question === null) { held.push(s); } else { upsert(s); } };
+    window.__questionGoes = () => { h.upsert = upsert; for (const s of held) { upsert(s); } };
+  });
+
+  test('a delivered result before its question goes keeps the entry for the rest of its check', async ({ page }) => {
+    await openDemo(page);
+    const e = await ask(page, LAND, permission());
+    await resultFirst(page);
+    // When the check went on, and when the entry went: a second apart, as when the question goes
+    // first. The question goes the moment the check is on, however slowly the test runs.
+    await e.evaluate((el) => {
+      const approve = el.querySelector('.needs-approve');
+      const at = window.__entry = {};
+      new MutationObserver(() => {
+        if (at.checked === undefined && approve.classList.contains('checked')) { at.checked = performance.now(); setTimeout(() => window.__questionGoes()); }
+        if (at.gone === undefined && !el.isConnected) { at.gone = performance.now(); }
+      }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
+    });
+    await e.getByRole('button', { name: /^Approve once/ }).tap();
+    await expect(entryFor(page, LAND)).toHaveCount(0);
+    const at = await page.evaluate(() => window.__entry);
+    expect(at.gone - at.checked).toBeGreaterThanOrEqual(900);
+  });
+
+  test('an unconfirmed result before its question goes keeps the entry, saying why, long enough to read', async ({ page }) => {
+    await openDemo(page);
+    await script(page, 'unconfirmed');
+    const e = await ask(page, LAND, permission());
+    await resultFirst(page);
+    await e.getByRole('button', { name: /^Approve once/ }).tap();
+    await expect(e).toHaveAttribute('data-answer', 'unconfirmed');
+    await page.evaluate(() => window.__questionGoes());
+    await expect(e).toHaveAttribute('data-lingering', 'true');
+    // Past any check's hold: still there, its warning on its line, nothing in it to press.
+    await page.waitForTimeout(1500);
+    await expect(entryFor(page, LAND)).toHaveCount(1);
+    await expect(e.locator('.needs-status')).toContainText('not confirmed');
+    await expect(e.getByRole('button', { name: /^Approve once/ })).toBeDisabled();
+    await expect(entryFor(page, LAND)).toHaveCount(0, { timeout: 10000 });
+  });
+
+  test('the lane\'s line keeps its room whatever it says: an entry is as tall on its way as with a busy outcome\'s words', async ({ page }) => {
+    await openDemo(page);
+    await script(page, 'busy');
+    const e = await ask(page, LAND, permission());
+    await hold(page);
+    await e.getByRole('button', { name: /^Approve once/ }).tap();
+    const status = e.locator('.needs-status');
+    await expect(status).toHaveText('');
+    const height = () => e.evaluate((el) => el.getBoundingClientRect().height);
+    const onItsWay = await height();
+    await release(page);
+    await expect(status).not.toHaveText('');
+    expect(await height()).toBe(onItsWay);
+  });
   test('Deny in the lane is the card\'s Deny', async ({ page }) => {
     await openDemo(page);
     const e = await ask(page, LAND, permission());
@@ -536,6 +620,23 @@ test.describe('the badge', () => {
     await expect.poll(() => page.evaluate(() => window.__badge.at(-1))).toBe(1);
     await page.evaluate((id) => { const d = window.agentBridgeDemo; d.upsert({ ...d.host.get(id), status: 'idle', question: null, updatedAt: new Date().toISOString() }); }, COPILOT);
     await expect(lane(page)).toBeHidden();
+    await expect.poll(() => page.evaluate(() => window.__badge.at(-1))).toBe(0);
+  });
+
+  test('a rest leaves the app badge and the rows as they were, and a dropped relay still clears the badge', async ({ page }) => {
+    await openDemo(page);
+    const demoRows = page.locator('#session-list > .session[data-host-id="demo"]');
+    await expect(lane(page).locator('.needs-you-head')).toHaveText('Needs you · 1');
+    await expect.poll(() => page.evaluate(() => window.__badge.at(-1))).toBe(1);
+    // Out of sight for 15 s, the relay connection rests (#610) and says so as it closes.
+    await page.evaluate(() => window.agentBridgeDemo.connection.emit('lost', { code: 1000, reason: 'resting', resting: true }));
+    await expect(demoRows.first()).toHaveAttribute('data-stale', 'confirming');
+    await expect(lane(page)).toBeHidden();
+    await expect(demoRows.filter({ hasText: 'Reconnecting' })).toHaveCount(0);
+    await expect(demoRows.locator('use[href*="#glyph-failed"]')).toHaveCount(0);
+    expect(await page.evaluate(() => window.__badge.at(-1))).toBe(1);
+    await page.evaluate(() => window.agentBridgeDemo.connection.emit('lost', { code: 1006, reason: '' }));
+    await expect(demoRows.first()).toHaveAttribute('data-stale', 'reconnecting');
     await expect.poll(() => page.evaluate(() => window.__badge.at(-1))).toBe(0);
   });
 });

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readUsage, mergeUsage, severity, until, ago, elapsed, pace, showsError, machineStatus, machineFacts, isStale, amount, readOn, UsageBook } from '../../js/usage.js';
+import { readUsage, mergeUsage, latestUsage, usageKey, severity, until, ago, elapsed, pace, showsError, machineStatus, machineFacts, isStale, amount, readOn, UsageBook } from '../../js/usage.js';
 
 const NOW = Date.parse('2026-10-28T20:00:00.000Z');
 const iso = (ms) => new Date(NOW + ms).toISOString();
@@ -43,6 +43,55 @@ test('two accounts no vendor names are kept apart by a few characters of their k
   assert.deepEqual(rows.map((r) => r.account), ['#cccc', '#aaaa']);
   // A lone row needs no name it was never given.
   assert.equal(mergeUsage([readUsage({ agents: [claude('aaaa1111bbbb', 10)] })])[0].account, null);
+});
+
+test('two keyless Codex readings from different machines stay two rows, and a keyed one still merges across machines', () => {
+  const codex = (machine, percent, extra = {}) => ({ agent: 'codex', label: 'Codex', source: 'transcript', measuredAt: iso(-percent * 1000), windows: [{ key: 'primary', label: '5h limit', percent }], readBy: { id: machine, name: machine }, ...extra });
+  const apart = mergeUsage([{ agents: [codex('vm', 10)] }, { agents: [codex('laptop', 20)] }].map(readUsage));
+  assert.deepEqual(apart.map((r) => r.readBy.name), ['laptop', 'vm']);
+  const keyed = { accountKey: 'c0dec0dec0de', source: 'api' };
+  const together = mergeUsage([{ agents: [codex('vm', 10, keyed)] }, { agents: [codex('laptop', 20, keyed)] }].map(readUsage));
+  assert.deepEqual(together.map((r) => r.readBy.name), ['vm']);
+  // One machine going from a probe's keyed reading to its transcripts' keyless one shows one row,
+  // whichever it took last.
+  const probe = codex('vm', 30, keyed);
+  const transcript = codex('vm', 5);
+  assert.deepEqual(mergeUsage([{ agents: [probe] }, { agents: [transcript] }].map(readUsage)).map((r) => r.source), ['transcript']);
+  assert.deepEqual(mergeUsage([{ agents: [codex('vm', 40)] }, { agents: [codex('vm', 5, keyed)] }].map(readUsage)).map((r) => r.source), ['api']);
+});
+
+test('a machines older keyless sign-out is dropped once it gives a newer keyed reading, and a newer one still stands', () => {
+  const vm = { id: 'vm', name: 'vm' };
+  const signedOut = (ago) => ({ agent: 'codex', label: 'Codex', error: 'Codex needs signing in again on this machine', measuredAt: iso(-ago), windows: [], readBy: vm });
+  const probe = { agent: 'codex', label: 'Codex', accountKey: 'c0dec0dec0de', source: 'api', measuredAt: iso(-60_000), windows: [{ key: 'primary', label: '5h limit', percent: 10 }], readBy: vm };
+  const merged = mergeUsage([{ agents: [signedOut(600_000)] }, { agents: [probe] }].map(readUsage));
+  assert.deepEqual(merged.map((r) => [r.source, r.error ?? null]), [['api', null]]);
+  assert.equal(latestUsage([{ agents: [signedOut(600_000), probe] }].map(readUsage)).length, 1);
+  const later = mergeUsage([{ agents: [signedOut(1_000)] }, { agents: [probe] }].map(readUsage));
+  assert.ok(later.some((r) => r.error === 'Codex needs signing in again on this machine'));
+});
+
+test('of one machines keyed and keyless failures with no reading newer than either, only the later stands', () => {
+  const vm = { id: 'vm', name: 'vm' };
+  const keyless = { agent: 'codex', label: 'Codex', error: 'Codex needs signing in again on this machine', measuredAt: iso(-600_000), windows: [], readBy: vm };
+  const keyed = { ...keyless, accountKey: 'c0dec0dec0de', measuredAt: iso(-60_000) };
+  assert.deepEqual(mergeUsage([{ agents: [keyless] }, { agents: [keyed] }].map(readUsage)).map((r) => r.accountKey ?? null), ['c0dec0dec0de']);
+  assert.deepEqual(latestUsage([{ agents: [keyed, { ...keyless, measuredAt: iso(0) }] }].map(readUsage)).map((r) => r.accountKey ?? null), [null]);
+});
+
+test('keyless readings that name no machine are never merged with each other, each keyed the same every time', () => {
+  const codex = (percent) => ({ agent: 'codex', label: 'Codex', source: 'transcript', measuredAt: iso(-percent * 1000), windows: [{ key: 'primary', label: '5h limit', percent }] });
+  assert.deepEqual(mergeUsage([{ agents: [codex(10)] }, { agents: [codex(20)] }].map(readUsage)).map((r) => r.windows[0].percent).sort(), [10, 20]);
+  assert.equal(usageKey(codex(10)), usageKey(codex(10)));
+});
+
+test('one machines keyed and keyless readings taken at the same moment are one row, the first reported', () => {
+  const vm = { id: 'vm', name: 'vm' };
+  const transcript = { agent: 'codex', label: 'Codex', source: 'transcript', measuredAt: iso(-60_000), windows: [{ key: 'primary', label: '5h limit', percent: 10 }], readBy: vm };
+  const probe = { ...transcript, accountKey: 'c0dec0dec0de', source: 'api' };
+  assert.deepEqual(mergeUsage([{ agents: [transcript] }, { agents: [probe] }].map(readUsage)).map((r) => r.source), ['transcript']);
+  assert.deepEqual(mergeUsage([{ agents: [probe] }, { agents: [transcript] }].map(readUsage)).map((r) => r.source), ['api']);
+  assert.equal(latestUsage([{ agents: [probe, transcript] }].map(readUsage)).length, 1);
 });
 
 test('a further Copilot account is a row of its own under its login, and one machine reading it as its own account is the same row', () => {
@@ -168,6 +217,14 @@ test('a kept reading is not shown once it is two weeks old, though nothing has b
   now += 2 * 24 * H;
   assert.deepEqual(book.entries(), []);
   assert.equal(book.empty, true);
+});
+
+test('a kept reading that names no machine is dropped when the cache loads, and what is kept is saved', () => {
+  let kept = null;
+  const book = new UsageBook({ now: () => NOW });
+  book.useCache({ entries: [claude({ accountKey: null }), claude({ readBy: { id: 'vm-id', name: 'Rehearsal VM' } })], save: (e) => { kept = e; } });
+  assert.deepEqual(book.entries().map(readOn), ['read on Rehearsal VM']);
+  assert.deepEqual(kept.map((e) => e.readBy.id), ['vm-id']);
 });
 
 test('a forgotten machine takes what it read with it, even where another host passes it on, and signing out keeps nothing', () => {

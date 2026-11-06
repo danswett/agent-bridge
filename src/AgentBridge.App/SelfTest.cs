@@ -93,9 +93,14 @@ static partial class SelfTest
             await CheckInlineMono(window, Check);
             await CheckCodeBlocks(window, Check, outFile);
             await CheckUnparsableMarkdown(window, Check);
+            // Written down first: without its fix, the next check ends the process (0xC000027B).
+            await Write(outFile, result, checks, failures, "a word too long for WinUI's text layout");
+            await CheckLongWords(window, Check);
+            await Write(outFile, result, checks, failures, null);
             await CheckShell(window, main, Check);
             await CheckStatusLines(window, main, Check);
             await CheckCurrentTools(window, main, Check);
+            await CheckUpdateBanner(window, main, Check, outFile);
 
             // Needs you (#165): every question on both machines, its count the one the tray shows,
             // and Approve once and Deny right there for the permission prompt.
@@ -216,7 +221,7 @@ static partial class SelfTest
             if (choice?.Card is { } choiceCard && ById<Button>(choice, "Option:pg") is { } pg)
             {
                 ((IInvokeProvider)new ButtonAutomationPeer(pg).GetPattern(PatternInterface.Invoke)).Invoke();
-                var answered = await Until(() => choiceCard.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
+                var answered = await Until(() => choiceCard.ReceiptText.StartsWith("You answered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
                 result["receipt"] = choiceCard.ReceiptText;
                 Check(answered, "answers a question from its session and shows it was delivered");
                 // The receipt is laid out a pass after its text changes (#247): waited for, then the
@@ -235,7 +240,7 @@ static partial class SelfTest
             if (remoteChoice?.Card is { } remoteCard && ById<Button>(remoteChoice, "Option:device") is { } device)
             {
                 ((IInvokeProvider)new ButtonAutomationPeer(device).GetPattern(PatternInterface.Invoke)).Invoke();
-                var answered = await Until(() => remoteCard.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
+                var answered = await Until(() => remoteCard.ReceiptText.StartsWith("You answered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
                 result["remoteReceipt"] = remoteCard.ReceiptText;
                 Check(answered, "answers a question on another machine from its session and shows it was delivered");
             }
@@ -303,6 +308,7 @@ static partial class SelfTest
             else { Check(false, "finds the Launch button"); }
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".launched.png"));
             await CheckYourMessages(window, main, Check, outFile, launchedPrompt);
+            await CheckPrompts(window, main, demo, Check, outFile);
             Resize(window, 1000, 900);
 
             // Codex on the other machine starts only on a first message: nothing is sent without one.
@@ -324,6 +330,7 @@ static partial class SelfTest
             await Task.Delay(500);
             Check(Fits(window, "SettingsPane"), "fits the Settings page's column in a wide window");
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".settings.png"));
+            await CheckAgentRows(window, main, demo, Check, outFile, result);
 
             // Approve once from Needs you, as a person would: the card's own answer goes, and the
             // entry leaves with its question.
@@ -336,7 +343,7 @@ static partial class SelfTest
             {
                 ((IInvokeProvider)new ButtonAutomationPeer(approveButton).GetPattern(PatternInterface.Invoke)).Invoke();
                 var approvalCard = main.AllCards.First(c => c.Id == "demo-approval");
-                var gone = await Until(() => approvalCard.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal) && main.NeedsYou.All(e => e.Card.Id != "demo-approval") && main.Waiting == waiting - 1, TimeSpan.FromSeconds(20));
+                var gone = await Until(() => approvalCard.ReceiptText.StartsWith("You answered", StringComparison.Ordinal) && main.NeedsYou.All(e => e.Card.Id != "demo-approval") && main.Waiting == waiting - 1, TimeSpan.FromSeconds(20));
                 result["laneReceipt"] = approvalCard.ReceiptText;
                 Check(gone, "approves a permission prompt from Needs you: the card shows it delivered, and the entry and the tray count go down");
             }
@@ -366,10 +373,18 @@ static partial class SelfTest
             AppLog.Write("self-test: sign-in");
             await CheckSignIn(window, main, remote, Check, outFile);
             await CaptureSignIn(window, main, remote, Check, outFile);
+            AppLog.Write("self-test: update captures");
+            await CaptureUpdate(window, main, Check, outFile);
+            // The receipt's states (ui.md §6.5) in each theme and at the narrowest width; high
+            // contrast's pass draws them too.
+            await ProgressPasses(window, main, demo, Check, outFile, result);
+            // The gallery's sessions are gone, and the one open with them: high contrast's pass
+            // draws the Sessions page as the theme passes did, a delegate in its strip and inspector.
+            await ShowADelegate(window, main, Check);
             // What was seen so far, written down first: a failure in high contrast that ends the
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
             await Write(outFile, result, checks, failures, "high contrast");
-            await CheckHighContrast(window, main, remote, Check, outFile, result);
+            await CheckHighContrast(window, main, demo, remote, Check, outFile, result);
             // Last, as it adds sessions every check above counts without (#765).
             await Write(outFile, result, checks, failures, "live resize");
             await MeasureResize(window, main, demo, Check, outFile, result);
@@ -953,6 +968,7 @@ static partial class SelfTest
                 await Task.Delay(300);
                 var broken = await DrawPages(window, theme.ToString(), outFile, check);
                 check(broken.Count == 0 && root.ActualTheme == theme, $"draws every page with its title in {theme}{(broken.Count > 0 ? $": not {string.Join(", ", broken)}" : "")}");
+                await CheckEscapedSheet(window, check, outFile, theme.ToString().ToLowerInvariant(), notSent: true);
             }
             root.RequestedTheme = ElementTheme.Default;
         }
@@ -962,13 +978,19 @@ static partial class SelfTest
     // setting is changed off the UI thread: SystemParametersInfo sends WM_SETTINGCHANGE to every
     // window, this app's included, and from the UI thread that message would re-enter XAML in the
     // middle of this method.
-    static async Task CheckHighContrast(MainWindow window, MainViewModel main, DemoHost remote, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
+    static async Task CheckHighContrast(MainWindow window, MainViewModel main, DemoHost demo, DemoHost remote, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
     {
+        // A receipt line already on screen as the switch is made, and not bound again after it: it
+        // follows the switch by itself (#625, Copilot 4485379205). The passes below draw anew.
+        var line = ById<TextBlock>(window.Sessions.SessionPaneView, "ReplyStatus") is { IsLoaded: true } l ? l : null;
+        var inkBefore = (line?.Foreground as SolidColorBrush)?.Color.ToString();
+        var failedRow = await ShowFailedAgentRow(window, main);
         var contrast = await HighContrastPass.BeginAsync();
         result["highContrast"] = contrast.How;
         AppLog.Write($"self-test: high contrast {contrast.How}");
         if (!contrast.On)
         {
+            if (main.Settings is { } settings) { await settings.CheckAgentsAsync(); }
             // Skipped only off CI, where a developer's own setting is never changed.
             if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true") { check(false, $"turns Windows' high contrast on for the pass ({contrast.How})"); }
             return;
@@ -978,9 +1000,25 @@ static partial class SelfTest
             var on = await Until(() => new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast, TimeSpan.FromSeconds(15));
             await Task.Delay(1500);
             check(on, "sees Windows' high contrast turned on");
+            // Only a pass that turned it on is a transition: on already, the line was drawn in it.
+            if (contrast.TurnedOn) { await CheckAgentRowRepainted(window, main, failedRow, check); }
+            else if (main.Settings is { } drawn) { await drawn.CheckAgentsAsync(); }
+            if (line is { IsLoaded: true })
+            {
+                var windowText = Application.Current.Resources.TryGetValue("SystemColorWindowTextColor", out var w) && w is Windows.UI.Color text ? text.ToString() : null;
+                var followed = await Until(() => (line.Foreground as SolidColorBrush)?.Color.ToString() == windowText, TimeSpan.FromSeconds(5));
+                var inkAfter = (line.Foreground as SolidColorBrush)?.Color.ToString();
+                result["receiptInkAcrossContrast"] = $"{inkBefore} -> {inkAfter}";
+                check(followed, $"repaints a receipt line on screen in the window's text as high contrast turns on ({inkBefore} -> {inkAfter}, wanted {windowText})");
+            }
+            else { result["receiptInkAcrossContrast"] = "no receipt line on screen"; }
             var hcBroken = await DrawPages(window, "HighContrast", outFile, check);
             check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
             await PictureYoursInHighContrast(window, check, outFile);
+            await PictureAgentRows(window, main, outFile, "highcontrast");
+            await PictureRowsTheAppCantActOn(window, main, demo, outFile, [ElementTheme.Default]);
+            await ProgressGallery(window, main, demo, check, outFile, result, "highcontrast");
+            await CheckEscapedSheet(window, check, outFile, "high-contrast", notSent: true);
             var system = new[] { "SystemColorHighlightColor", "SystemColorHighlightTextColor", "SystemColorWindowTextColor", "SystemColorWindowColor", "SystemColorGrayTextColor", "SystemColorButtonFaceColor", "SystemColorButtonTextColor", "SystemColorHotlightColor" }
                 .Select(k => Application.Current.Resources.TryGetValue(k, out var c) && c is Windows.UI.Color colour ? colour.ToString() : null).OfType<string>().ToHashSet();
             var own = Design.DesignKeys.Brushes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var b) && b is SolidColorBrush s && system.Contains(s.Color.ToString()))).ToList();
@@ -989,6 +1027,8 @@ static partial class SelfTest
             check(systemCaptions, $"leaves the caption buttons in the system's colours in high contrast ({window.AppWindow.TitleBar.ButtonForegroundColor?.ToString() ?? "system"})");
             // The sign-in banner and sheet in high contrast (#800, Creative 6655285995).
             await CaptureSignIn(window, main, remote, check, outFile, contrast: true);
+            // The update bar and Settings' update row in high contrast (#719, Creative 6643004091).
+            await CaptureUpdate(window, main, check, outFile, contrast: true);
             window.ShowPage("sessions");
         }
         finally

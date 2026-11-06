@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #600: a strip of receipt frames</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<!-- Decided by the owner 2026-11-04, revised the same day to "quiet unless something's wrong"; docs/design/ui.md §6.5 is the spec, and docs/design/proposals/600-reply-progress.md the reasoning. Each frame is a Proposal-600-Frame. -->
+<div style="width: {{bw}}px; height: {{bh}}px; box-sizing: border-box; padding: 32px; background: {{t.bg}}; color: {{t.text}}; font-family: 'Segoe UI Variable Text', system-ui, -apple-system, Roboto, sans-serif; overflow: hidden">
+  <div style="display: flex; align-items: center; gap: 12px">
+    <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.bridge}}; background: {{t.tag}}">Proposal #600 · Decided (owner, 2026-11-04)</span>
+    <span style="font-size: 12px; color: {{t.text2}}">{{t.name}}</span>
+  </div>
+  <h1 style="margin: 10px 0 2px; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 22px; line-height: 28px; font-weight: 600">{{b.title}}</h1>
+  <p style="margin: 0 0 24px; font-size: 13px; line-height: 18px; color: {{t.text2}}; max-width: 1200px">{{b.sub}}</p>
+  <div style="display: flex; gap: 28px; align-items: flex-start">
+    <sc-for list="{{b.frames}}" as="fr">
+      <dc-import name="Proposal-600-Frame" theme="{{theme}}" f="{{fr}}" hint-size="300px,800px"></dc-import>
+    </sc-for>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"board":{"editor":"enum","options":["phone","windows","answer","paths","access","decided","older"],"default":"phone"},"mode":{"editor":"enum","options":["","hc","rm"],"default":""},"$preview":{"width":1692,"height":900}}'>
+// The board's own surface in a contrast theme.
+const CONTRAST = {
+  dark: { bg: '#000000', name: 'Contrast · Night sky (forced colours)' },
+  light: { bg: '#FFFAEF', name: 'Contrast · Desert (forced colours)' },
+};
+const THEMES = {
+  dark: { bg: '#1B1E21', text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', bridge: '#2DD4BF', tag: 'rgba(45,212,191,.14)', name: 'Dark' },
+  light: { bg: '#E6E9EC', text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', bridge: '#0B7A6E', tag: 'rgba(11,122,110,.12)', name: 'Light' },
+};
+// "Quiet unless something's wrong" (owner, 2026-11-04, #617). A frame's Send is sending (ring),
+// still (ring standing still), done (the check) or at rest. r is the line: { text, sub, tone:
+// quiet | warn | bad }, empty on the normal path.
+const QUIET = {};
+const STILL_SENDING = { text: 'Still sending…' };
+const ANSWERED = (value) => ({ text: 'You answered', sub: value });
+const BOARDS = {
+  decided: {
+    title: '“You answered · value”: Send answer checks, then the card says what went',
+    sub: 'Decided by the owner (2026-11-04, about 09:10 PT), and kept in the quiet revision. The value is the chosen option’s label for a choice, the first line of free text cut to about 40 characters with an ellipsis, and nothing for a form. It is in text2 with no badge, and the same in the card and in Needs you.',
+    w: 2132, h: 960,
+    frames: [
+      { w: 288, at: '1.2 s', label: 'Send answer’s check', session: 'needs', q: 'open', done: true, r: QUIET,
+        notes: ['Confirmed: Send answer cross-fades from its ring to the check for about 1 s. Nothing was said on the status line on the way.'], sr: '“Answer delivered. You answered Fixes first”' },
+      { at: 'choice', label: 'A choice: the option’s label', session: 'working', q: 'answered', r: ANSWERED('Fixes first'),
+        notes: ['The label of the option chosen and sent, exactly as the card showed it.'] },
+      { at: 'free text', label: 'Free text: the first line, cut', session: 'working', q: 'answered', qtext: 'What should the 1.33 notes lead with?', r: ANSWERED('Breaking changes first, then the fixes…'),
+        notes: ['Typed: “Breaking changes first, then the fixes, and keep it short.” Its first line, cut at the last word break within 40 characters, with “…”. Drawn as plain text, isolated in its own direction.'], sr: '“Answer delivered. You answered Breaking changes first, then the fixes…”' },
+      { at: 'form', label: 'A form: just “You answered”', session: 'working', q: 'answered', qtext: 'Release details: version, date and channel', r: { text: 'You answered' },
+        notes: ['Several fields have no one value to show, so the line stops at the words. What was sent stays in the conversation, as today.'], sr: '“Answer delivered. You answered”' },
+      { at: 'Needs you', label: 'Needs you: the same words', session: 'needs', needs: true, r: ANSWERED('Approve once'),
+        notes: ['An approval answered from Needs you. Its status line says what the card says until the host clears the question and the entry leaves.'] },
+      { kind: 'desktop', at: 'Windows', label: 'Windows: the card’s status line', session: 'working', q: 'answered', qtext: 'What should the 1.33 notes lead with?', r: ANSWERED('Breaking changes first, then the fixes…'),
+        notes: ['QuestionViewModel cuts the value the same way. Words only, in TextFillColorSecondary: no badge.'] },
+    ],
+  },
+  older: {
+    title: 'Older hosts: no stages reported, the same quiet path and exceptions',
+    sub: 'A host without sessions.progress reports only the outcome. Send’s ring is all that shows, then “Still sending…” at 3 s, and Delivered is the same check on Send. Nothing says Sent, Passed to the agent or Up next, since nobody reported them. Older hosts: the outcome, plus Still sending… and the waiting words when they appear, each announced as it appears; no stage announcements.',
+    w: 2284, h: 960,
+    frames: [
+      { at: '0.4 s', label: 'Sending', session: 'working', sending: true, r: QUIET,
+        notes: ['Send’s ring; nothing under the box. The client knows only that the request is open. Nothing is spoken: Send’s busy state says it, once.'] },
+      { at: '3 s', label: 'Still sending…', session: 'working', sending: true, r: STILL_SENDING,
+        notes: ['The 3 s exception, as on a new host: the line fades in, in its reserved room. On a working session it can stay until the agent’s next step; the client can’t tell which.'], sr: '“Reply still sending”' },
+      { at: '38 s', label: 'Delivered', session: 'working', bubble: true, draft: '', done: true, r: QUIET,
+        notes: ['The outcome: the line fades out, and Send shows the check for about 1 s, as for a new host.'], sr: '“Reply delivered”' },
+      { at: 'answer', label: 'An answer: You answered', session: 'working', q: 'answered', r: ANSWERED('Fixes first'),
+        notes: ['Send answer’s ring, “Still sending…” only past 3 s, and at the host’s confirm the same “You answered · value”.'], sr: '“Answer delivered. You answered Fixes first”' },
+      { kind: 'desktop', at: 'Windows · 3 s', label: 'Windows: Still sending…', session: 'working', sending: true, r: STILL_SENDING,
+        notes: ['ReplyViewModel runs the same 3 s timer when the host has no sessions.progress.'] },
+      { kind: 'desktop', at: 'Windows', label: 'Windows: Delivered', session: 'working', bubble: true, draft: '', done: true, r: QUIET,
+        notes: ['Send’s glyph cross-fades to AbIconCheck for about 1 s, then back to its arrow.'] },
+    ],
+  },
+  phone: {
+    title: 'PWA phone: the normal path is quiet',
+    sub: 'A reply to a working session. Send’s ring is the only sign it is on its way: nothing appears under the box, whatever stage the host reports. Delivered, Send cross-fades to a check for about 1 s, then back to rest. A screen reader still hears each stage, politely, at most one a second.',
+    w: 2020, h: 900,
+    frames: [
+      { at: '0 ms', label: 'Send', session: 'working', sending: true, r: QUIET,
+        notes: ['Send shows the platform’s progress ring at once (§5.3 Send and Answer). The words stay in the box until the session has them. The line’s room is reserved, and empty.'] },
+      { at: '0.4 s', label: 'Sent', session: 'working', sending: true, r: QUIET,
+        notes: ['The host said received at 0.3 s. Nothing changes on screen; the stage is only spoken.'], sr: '“Reply sent”' },
+      { at: '0.8 s', label: 'Up next', session: 'working', sending: true, r: QUIET,
+        notes: ['typed with working: true, at 0.8 s. The agent takes it after its current step, which can take a minute. Up next is expected, so it never shows and never stalls. It is spoken at 1.4 s, a second after “Reply sent”: at most one stage a second.'], sr: '1.4 s: “Reply up next, after the agent’s current step”' },
+      { at: '38 s', label: 'Delivered: the check', session: 'working', bubble: true, draft: '', done: true, r: QUIET,
+        notes: ['result: delivered. Send’s ring cross-fades to the ‘check’ icon, in Send’s own ink, for about 1 s. The bubble arrives with the session’s update, and the box empties of what was sent.'], sr: '“Reply delivered”' },
+      { at: '39 s', label: 'At rest', session: 'working', bubble: true, draft: '', r: QUIET,
+        notes: ['Send cross-fades back to its arrow. Nothing else moved: the room under the box stays until it is next typed in.'] },
+    ],
+  },
+  windows: {
+    title: 'Windows app: the same quiet path, in the conversation pane',
+    sub: 'App.Core decides the stage and the words (ReplyViewModel / QuestionViewModel). The view swaps Send’s glyph between ProgressRing, AbIconCheck and the arrow, and shows the line only for an exception. The line keeps its room from Send, so nothing under it moves.',
+    w: 1908, h: 760,
+    frames: [
+      { kind: 'desktop', at: '0.9 s', label: 'On its way', session: 'idle', sending: true, r: QUIET,
+        notes: ['ProgressRing (16 px) in Send. Sent and Passed to the agent are spoken, never drawn.'], sr: 'LiveSetting Polite: “Reply passed to the agent”' },
+      { kind: 'desktop', at: '1.4 s', label: 'Delivered: the check', session: 'working', bubble: true, draft: '', done: true, r: QUIET,
+        notes: ['The session turns Working as it takes the reply; that is the header’s glyph. Send holds the check for about 1 s.'], sr: '“Reply delivered”' },
+      { kind: 'desktop', at: '2.4 s', label: 'At rest', session: 'working', bubble: true, draft: '', r: QUIET,
+        notes: ['Send is its arrow again. No “Delivered” line, and no badge.'] },
+      { kind: 'desktop', at: '12 s', label: 'Passed, but not picked up yet', session: 'idle', sending: true, r: { text: 'Passed to the agent', sub: 'not picked up yet' },
+        notes: ['An exception: typed on an idle session, then nothing for 10 s. The line fades in, in its reserved room; Send’s ring keeps turning, and the host decides the outcome by 60 s.'], sr: '“Reply passed to the agent, not picked up yet”' },
+    ],
+  },
+  answer: {
+    title: 'Answers: Send answer’s ring and check, then “You answered”',
+    sub: 'The same quiet path on a question card. The person chooses first, then presses Send answer (#773); nothing sends on a tap, and no option carries a ring. Send answer carries Send’s ring and check, keeping its size and fill, and what was chosen stays selected and read-only. The status line, left of Send answer, stays empty while the answer goes, unless something’s wrong. “Answered” is said only once the host confirms it.',
+    w: 2350, h: 960,
+    frames: [
+      { at: '0 ms', label: 'Send answer, “Fixes first” chosen', session: 'needs', q: 'open', sending: true, r: QUIET,
+        notes: ['“Fixes first” was chosen first. Send answer shows the ring at once, at Send’s size and stroke, and keeps focus; the choice stays selected and read-only while it is on its way.'] },
+      { at: '0.8 s', label: 'Passed to the agent', session: 'needs', q: 'open', sending: true, r: QUIET,
+        notes: ['typed. The status line stays empty; the row still says Waiting on you, since the host clears the question, not the client.'], sr: '“Answer passed to the agent”' },
+      { at: '1.2 s', label: 'Delivered: the check', session: 'needs', q: 'open', done: true, r: QUIET,
+        notes: ['delivered and confirmed: Send answer cross-fades its ring to the check for about 1 s. An outcome is spoken at once, even within a second of a stage.'], sr: '“Answer delivered. You answered Fixes first”' },
+      { at: '2.2 s', label: 'You answered', session: 'working', q: 'answered', r: ANSWERED('Fixes first'),
+        notes: ['The card quietens to “Main agent asked”, and its line says what went, in text2.'] },
+      { kind: 'desktop', w: 300, h: 560, at: '2.2 s', label: 'Windows: the same card', session: 'working', q: 'answered', r: ANSWERED('Fixes first'),
+        notes: ['QuestionViewModel’s status line, in the resolved card. In a narrow pane it wraps under the question like the phone’s.'] },
+      { at: '15 s', label: 'Not confirmed: final, no second answer', session: 'needs', q: 'open', qheld: true, r: { text: 'Sent, but not confirmed.', sub: 'Check at the machine.', tone: 'warn' },
+        notes: ['Today’s words. Send answer goes and the choice stays selected and read-only: it may already have been typed, and a prompt takes one attempt. The answer is final and is never resent; stale is the same. “Check at the machine” is the no-RDP gap #467, which replaces it with a remote check.'], sr: '“Answer sent, but not confirmed. Check at the machine”' },
+      { at: 'failed', label: 'Failed: Try again', session: 'needs', q: 'open', qheld: true, qretry: true, r: { text: 'Couldn’t send it:', sub: 'the machine returned an error', tone: 'bad' },
+        notes: ['The host answered with an error. The choice stays selected and read-only; Try again takes Send answer’s place and resends the same request, never a new answer. A lost connection is not this: it waits and resends on its own. Busy and refused make the choice editable again, with Send answer back.'], sr: '“Couldn’t send it: the machine returned an error”' },
+    ],
+  },
+  paths: {
+    title: 'Exceptions: the only time a line appears',
+    sub: 'Each fades in place, in the room reserved from Send, and keeps today’s words and colours. While the request is open Send keeps its ring; an outcome other than Delivered returns Send to rest with no check.',
+    w: 2340, h: 900,
+    frames: [
+      { at: '3 s', label: 'Nothing heard yet', session: 'working', sending: true, r: STILL_SENDING,
+        notes: ['No received within 3 s. The resend policy is unchanged (the client resends only after a send fails). “Still sending…” also replaces “Sending again…”.'], sr: '“Reply still sending”' },
+      { at: '5 s', label: 'Sent, then nothing', session: 'idle', sending: true, r: { text: 'Sent', sub: 'still waiting on ULTRA' },
+        notes: ['received, but no typed within 5 s: the machine is checking, or another delivery holds its single typing turn.'], sr: '“Reply sent, still waiting on ULTRA”' },
+      { at: 'busy', label: 'Still being delivered', session: 'idle', sending: true, r: { text: 'Passed to the agent', sub: 'still being delivered' },
+        notes: ['A resend met the first copy still in flight. The line names the furthest stage reached. Today: “The machine is still delivering it…”.'], sr: '“Reply still being delivered”' },
+      { at: 'offline', label: 'Waiting for the connection', session: 'offline', still: true, r: { text: 'Waiting for ULTRA', sub: 'it goes when ULTRA is back' },
+        notes: ['Held on this device while ULTRA is away. Send’s ring stands still, as nothing is moving. The header keeps its own §2.2 state: Offline here.'], sr: '“Reply waiting for ULTRA”' },
+      { at: '60 s', label: 'Not confirmed', session: 'working', r: { text: 'Sent, but not confirmed.', sub: 'Check at ULTRA before sending it again', tone: 'warn' },
+        notes: ['unconfirmed (the host’s 60 s, or the client’s 9 min). Needs you’s text colour; the words stay in the box; Send is at rest, with no check.'], sr: '“Reply sent, but not confirmed. Check at ULTRA before sending it again”' },
+      { at: '0.2 s', label: 'Refused', session: 'idle', r: { text: 'The machine refused this reply:', sub: 'the reason it gave', tone: 'bad' },
+        notes: ['refused, busy and stale keep today’s words and colours (refused in Danger; busy and stale in Needs you). They can arrive after Sent, since received comes before every check.'], sr: '“The machine refused this reply: …”' },
+      { at: 'older host', label: 'No sessions.progress', session: 'working', sending: true, r: STILL_SENDING,
+        notes: ['A host without the capability reports no stage: the same ring, “Still sending…” at 3 s and the waiting words, then the same check on Send. See the older-host board.'], sr: '“Reply still sending”' },
+    ],
+  },
+  access: {
+    title: 'High contrast, reduced motion and the screen reader',
+    sub: 'In a contrast theme Send’s ring and check take Send’s own system colours, as its arrow does, and every word on the line is CanvasText: the words carry the state, never the colour. Under reduced motion the ring is still. Each stage is announced politely, at most one a second, though the normal path shows none of them.',
+    w: 2020, h: 900,
+    frames: [
+      { hc: true, at: 'contrast', label: 'On its way', session: 'working', sending: true, r: QUIET,
+        notes: ['Send’s ring in Send’s own forced colours, with its outline. Nothing under the box.'] },
+      { hc: true, at: 'contrast', label: 'Delivered: the check', session: 'working', bubble: true, draft: '', done: true, r: QUIET,
+        notes: ['The check is a stroke in Send’s current colour, like its arrow, so it holds in Night sky and Desert alike.'] },
+      { hc: true, at: 'contrast', label: 'Not confirmed', session: 'working', r: { text: 'Sent, but not confirmed.', sub: 'Check at ULTRA before sending it again', tone: 'warn' },
+        notes: ['Needs and Danger words both become CanvasText. “Not confirmed” and “Not sent” say it in words, which is why the line never relies on its colour.'] },
+      { rm: true, at: 'reduced', label: 'Reduced motion', session: 'working', sending: true, r: QUIET,
+        notes: ['The ring stops turning (§5.3). Ring, check and arrow swap over crossFade, and an exception’s line fades in without rising.'], sr: 'Announced at most one a second; the outcome always.' },
+      { at: 'reader', label: 'What a screen reader hears', session: 'idle', bubble: true, draft: '', r: QUIET,
+        notes: ['A role=status region (Windows: LiveSetting Polite), present and empty from Send. Prefixed “Reply” or “Answer”. Nothing in the first 400 ms, so a fast delivery is just “Reply delivered”. Sending is not spoken: Send’s busy state says it, once (A6).'], sr: '“Reply sent” … “Reply passed to the agent” … “Reply delivered”' },
+    ],
+  },
+};
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const b0 = BOARDS[this.props.board] || BOARDS.phone;
+    const mode = this.props.mode || '';
+    const MODE_SUB = { hc: ' Forced colours: Send’s ring and check take Send’s own system colours, as its arrow does, and every word on the line is CanvasText.', rm: ' Reduced motion: the ring stands still, the ring, check and arrow swap over crossFade, and a line fades in without rising; the quiet window and the timings are unchanged.' };
+    const b = mode ? { ...b0, sub: b0.sub + MODE_SUB[mode], frames: b0.frames.map((fr) => ({ ...fr, hc: mode === 'hc' || fr.hc, rm: mode === 'rm' || fr.rm })) } : b0;
+    const t = mode === 'hc' ? { ...THEMES[theme], ...CONTRAST[theme] } : mode === 'rm' ? { ...THEMES[theme], name: `${THEMES[theme].name} · reduced motion` } : THEMES[theme];
+    return { t, theme, b, bw: b.w, bh: b.h };
+  }
+}
+</script>
+</body>
+</html>

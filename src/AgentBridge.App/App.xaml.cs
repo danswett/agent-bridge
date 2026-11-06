@@ -85,7 +85,7 @@ public partial class App : Application
         // does is what the account's other devices are told (#51).
         var updater = new ObservedUpdater(new VelopackUpdater(() => prefs.Prereleases, ui, options.Profile));
         IAppAtSignIn atSignIn = installed ? new RunKey(Paths.Exe) : new NoRunKey();
-        var settings = new SettingsViewModel(connection, manager, updater, atSignIn, Prefs, SavePrefs, version, HostDefaults.Relay);
+        var settings = new SettingsViewModel(connection, manager, updater, atSignIn, Prefs, SavePrefs, version, HostDefaults.Relay) { LogTo = AppLog.Write };
 
         if (installed)
         {
@@ -100,7 +100,9 @@ public partial class App : Application
 
         // A machine's cards and toasts, whichever machine it is: everything they do goes to that
         // machine's own host.
-        Machine Build(string key, HostConnection conn, FoldStore folds, Func<string?> readOnlyWhy, IBlobStore? blobs = null)
+        // signer: another machine's fleet link, which signs an escaped approval's confirmation for it
+        // (#803); none for this machine, whose host never takes one through its pipe.
+        Machine Build(string key, HostConnection conn, FoldStore folds, Func<string?> readOnlyWhy, IBlobStore? blobs = null, IFleetLink? signer = null)
         {
             Machine? m = null;
             var cards = new CardContext
@@ -123,6 +125,7 @@ public partial class App : Application
                 },
                 FetchDelegate = (id, agent) => Attribution.FetchDelegateAsync(conn, id, agent),
                 Ui = ui,
+                SignEscaped = signer is null ? null : (session, question, shown, request, pressed) => signer.SignEscapedApproval(conn.PeerKey, key, session, question, shown, request, pressed),
             };
             var planner = new ToastPlanner(sink)
             {
@@ -152,7 +155,7 @@ public partial class App : Application
         // demo's is a second pretend host). Remote folds are not kept across restarts.
         IFleetLink? link = null;
         Machine Remote(FleetHost h) =>
-            Build(h.Id, new HostConnection(ct => link!.OpenAsync(h.Id, ct), ui, AppLog.Write) { RetryDelay = TimeSpan.FromSeconds(options.Demo ? 0.5 : 5), RefusedRetryDelay = Fleet.RefusedRetryDelay }, new FoldStore(null), () => null, link!.Blobs);
+            Build(h.Id, new HostConnection(ct => link!.OpenAsync(h.Id, ct), ui, AppLog.Write) { RetryDelay = TimeSpan.FromSeconds(options.Demo ? 0.5 : 5), RefusedRetryDelay = Fleet.RefusedRetryDelay }, new FoldStore(null), () => null, link!.Blobs, link);
         if (options.Demo)
         {
             remoteDemo = DemoHost.Start(version, remote: true);
@@ -198,7 +201,18 @@ public partial class App : Application
         if (!options.Demo && updater.InstalledVersion is not null)
         {
             AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write);
-            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others);
+            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others, ui: ui);
+            // The banner's Restart to update, and Settings' (#516): the updater's changes come on
+            // whichever thread made them.
+            var appUpdate = AppUpdateViewModel.For(autoUpdater);
+            autoUpdater.StateChanged += () => ui.Post(appUpdate.Changed);
+            updater.Changed += () => ui.Post(settings.UpdatesChanged);
+            main.AppUpdate = appUpdate;
+            // One restart, with one state, whichever control starts it (Creative, 6676653935).
+            settings.ShareRestart(appUpdate);
+            // When an update is ready, changed in Settings, is acted on and said to the devices at once.
+            var updates = autoUpdater;
+            settings.PreferencesChanged += () => _ = updates.TickAsync();
             updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
             updateTimer.Tick += (_, _) => _ = autoUpdater.TickAsync();
             updateTimer.Start();
@@ -286,7 +300,9 @@ public partial class App : Application
             RelayAccount? now = null;
             if (local.Can(HostOps.Capability))
             {
-                try { now = await local.CallAsync<RelayAccount>(HostOps.RelayAccount, ct: ct); }
+                // Says this app's own device id, so its host refuses that key through the relay
+                // (#801): this app manages its own machine from Settings.
+                try { now = await local.CallAsync<RelayAccount>(HostOps.RelayAccount, new RelayAccountRequest(Wire.DeviceId(identity.Key.Public)), ct: ct); }
                 catch (HostErrorException) { }
             }
             Volatile.Write(ref last, now);

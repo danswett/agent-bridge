@@ -256,7 +256,8 @@ public sealed class TrustTests : IAsyncLifetime
         remoteTrust = [];
         ui.Post(card.Trust);
         await Wait.UntilAsync(() => card.State == "started", "started");
-        await Task.Delay(200);
+        // The answer reloads the page in the same turn; what the reload leads to is done once it is.
+        await Wait.UntilAsync(() => page.CanReload, "the reload after the answer");
         Assert.Equal("fix the build", page.Prompt);
     }
 
@@ -292,7 +293,7 @@ public sealed class TrustTests : IAsyncLifetime
         remoteTrust = [b];
         ui.Post(trust ? card.Trust : card.Quit);
         await Wait.UntilAsync(() => card.State == (trust ? "started" : "declined"), "A answered");
-        await Task.Delay(200);
+        await Wait.UntilAsync(() => page.CanReload, "the reload after the answer");
         Assert.Equal("unconfirmed", page.State);
         Assert.Equal("fix the build", page.Prompt);
 

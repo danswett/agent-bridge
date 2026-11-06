@@ -31,7 +31,7 @@ const SHELL = [
   './manifest.webmanifest', './icon.svg', './icons/icon-192.png', './icons/icon-512.png',
   './icons/maskable-192.png', './icons/maskable-512.png', './icons/monochrome-192.png', './icons/monochrome-512.png',
   './icons/apple-touch-icon.png', './icons/badge-96.png',
-  './fixtures/sessions-list.json',
+  './fixtures/sessions-list.json', './text-size-boot.js',
   ...BUNDLE,
 ];
 
@@ -126,7 +126,10 @@ self.addEventListener('fetch', (e) => {
 // running this worker; everywhere else this shows the same fields. Every push must show a
 // notification, even one that cannot be read: iOS revokes notifications from an app whose
 // pushes show nothing.
-const KINDS = ['question', 'finished', 'resolved'];
+// signIn (#800): a machine's sessions need sign-in; it alerts, as a question does.
+const KINDS = ['question', 'finished', 'resolved', 'signIn'];
+const CLASSES = ['needsYou', 'done', 'fyi'];
+const WITHDRAWN_TAG = 'agent-bridge-withdrawn';
 
 // Only ever within this app, whatever a payload says.
 function inApp(url) {
@@ -145,9 +148,23 @@ function notice(message) {
   const text = (v) => (typeof v === 'string' && v ? v : null);
   // A kind from a newer machine reads as a question: shown, and alerting.
   const kind = KINDS.includes(d.kind) ? d.kind : 'question';
+  // The host's notification class (#913); absent, unknown or wrong-typed reads as none, and
+  // the notice is as it was before classes.
+  const cls = CLASSES.includes(d.class) ? d.class : null;
   const tag = text(n.tag);
+  // Shown, then closed (withdrawn): an answered question and an FYI leave nothing behind, but a
+  // push that shows nothing costs the subscription on iOS and a generic notice elsewhere.
+  const withdraw = kind === 'resolved' || cls === 'fyi';
+  // Done is always silent, whatever the push says, and nothing to renotify: the host's word
+  // is the first safeguard, this the second. A silent notice that renotifies is a TypeError.
+  // A push whose kind and class disagree (a finished that needs you; the host never sends one)
+  // takes the quieter reading, so it never alerts as "finished"; a question called done is
+  // already silent above.
+  const disagrees = kind === 'finished' && cls === 'needsYou';
+  const silent = withdraw || cls === 'done' || disagrees || n.silent === true;
   const options = {
-    body: text(n.body) ?? 'A session needs you.',
+    // A withdrawn notice may flash, so what it says must be true: never the question's placeholder.
+    body: text(n.body) ?? (withdraw ? text(n.title) ?? NAME : 'A session needs you.'),
     // A PNG: not every platform's notifications draw an SVG.
     icon: 'icons/icon-192.png',
     // Android draws the badge in the status bar by its alpha alone: the mark, as ic_stat_slipgates.
@@ -156,20 +173,38 @@ function notice(message) {
     data: { url: inApp(text(n.navigate)), kind, machine: text(d.machine), session: text(d.session), question: text(d.question) },
   };
   if (tag) {
-    // Every notice about a session replaces the one before it. A newer question or a
-    // finished turn alerts again; an answered question changes quietly.
+    // Every notice about a session replaces the one before it, never beside it. A newer question
+    // alerts again; a finished turn (without a class, as before) too; a silent one changes quietly.
     options.tag = tag;
-    options.renotify = kind !== 'resolved';
+    options.renotify = !silent;
   }
-  if (kind === 'resolved' || n.silent === true) { options.silent = true; }
-  return { title: text(n.title) ?? NAME, options };
+  if (silent) { options.silent = true; }
+  return { title: text(n.title) ?? NAME, options, withdraw };
+}
+
+// Pushes about one tag run one after another, in the order they came: a withdrawal still between
+// showing and closing would otherwise close a newer question that replaced it under the same tag.
+const queues = new Map();
+function inTurn(tag, job) {
+  if (!tag) { return job(); }
+  const run = (queues.get(tag) ?? Promise.resolve()).then(job);
+  const tail = run.then(() => {}, () => {});
+  queues.set(tag, tail);
+  tail.then(() => { if (queues.get(tag) === tail) { queues.delete(tag); } });
+  return run;
 }
 
 self.addEventListener('push', (e) => {
   let message = null;
   try { message = e.data?.json() ?? null; } catch { /* unreadable: the generic notice */ }
-  const { title, options } = notice(message);
-  e.waitUntil(self.registration.showNotification(title, options));
+  const { title, options, withdraw } = notice(message);
+  // Without a tag of its own, a withdrawn notice is closed by one made for the purpose.
+  if (withdraw && !options.tag) { options.tag = WITHDRAWN_TAG; }
+  e.waitUntil(inTurn(options.tag, async () => {
+    await self.registration.showNotification(title, options);
+    if (!withdraw) { return; }
+    for (const shown of await self.registration.getNotifications({ tag: options.tag })) { shown.close(); }
+  }));
 });
 
 // A tap opens the app at the machine, session and question. An app already open is

@@ -38,6 +38,9 @@ export class Relay {
 
   get open() { return this.#ws?.readyState === OPEN; }
 
+  // Whether a blob or forget request awaits the relay's answer.
+  get busy() { return this.#blobRequests.size > 0 || this.#forgets.size > 0; }
+
   // Resolves once the relay has accepted the proof; rejects if the socket closes first.
   connect(token) {
     return new Promise((resolve, reject) => {

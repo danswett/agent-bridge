@@ -129,6 +129,7 @@ static class DesignKeys
     [
         "AbIconAttach",
         "AbIconBack",
+        "AbIconCheck",
         "AbIconChevron",
         "AbIconClock",
         "AbIconCopy",
@@ -255,6 +256,9 @@ static class DesignKeys
         "AbMotionReorderDuration",
         "AbMotionReorderEase",
         "AbMotionReorderReduced",
+        "AbMotionCollapseDuration",
+        "AbMotionCollapseEase",
+        "AbMotionCollapseReduced",
     ];
 
     // The bundled fonts and their licences, as the app's folder holds them

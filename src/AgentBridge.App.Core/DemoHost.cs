@@ -63,6 +63,27 @@ public sealed partial class DemoHost : IAsyncDisposable
 
     public int Count { get { lock (gate) { return sessions.Count; } } }
 
+    // The self-test's progress gallery (ui.md §6.5): an answer or a reply to a scripted session
+    // gets what the script returns, not the demo's own handling, so each receipt state (held on its
+    // way, unconfirmed, busy, refused, failed) is drawn from a real request on a real channel. A
+    // script that throws fails the request, as a host's error does.
+    readonly Dictionary<string, Func<Task<object?>>> scripted = new(StringComparer.Ordinal);
+
+    public void Script(string sessionId, Func<Task<object?>>? outcome)
+    {
+        lock (gate)
+        {
+            if (outcome is null) { scripted.Remove(sessionId); }
+            else { scripted[sessionId] = outcome; }
+        }
+    }
+
+    Func<Task<object?>>? ScriptFor(string sessionId) { lock (gate) { return scripted.GetValueOrDefault(sessionId); } }
+
+    // A session added or changed, and one removed, as the host would send them (the gallery's).
+    public Task PutAsync(Session s) => Change(s);
+    public Task RemoveSessionAsync(string id) => RemoveAsync(id);
+
     // The protocol's example sessions, and three more: a question answered with one click, a
     // Copilot permission prompt, and a main agent with delegates, so every kind of card is on screen.
     public static IReadOnlyList<Session> Examples()
@@ -188,8 +209,8 @@ public sealed partial class DemoHost : IAsyncDisposable
             case Ops.Hello:
                 {
                     var hello = new HelloResult(1, new MachineInfo(MachineId, MachineName, "windows", version, Dev: true, Sessions: Count), remote
-                        ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, AuthState.Capability]
-                        : [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, HostOps.Capability]);
+                        ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, Capabilities.SessionsProgress, UsageProtocol.Capability, LaunchProtocol.Capability, AuthState.Capability]
+                        : [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, Capabilities.SessionsProgress, UsageProtocol.Capability, LaunchProtocol.Capability, HostOps.Capability, HostOps.AgentReadinessCapability, HostOps.AgentSetupCapability, HostOps.AgentInstallCapability]);
                     // Held for a test: the reply a recovery reads before it subscribes again.
                     if (HoldHello is { } hold) { HoldHello = null; return After(hold.Task, hello); }
                     return Done(hello);
@@ -229,23 +250,39 @@ public sealed partial class DemoHost : IAsyncDisposable
             case Ops.SessionAnswer:
                 {
                     var r = data.Deserialize<AnswerRequest>(ProtocolJson.Options)!;
+                    if (ScriptFor(r.Id) is { } script) { return script(); }
+                    // As a host that offers sessions.progress says how far it has got (#598, #600).
+                    var progress = r.Progress == true ? ServedRequest.Current : null;
+                    progress?.Progress(new DeliveryProgress(DeliveryProgress.Received));
                     Session? s;
                     lock (gate) { s = sessions.GetValueOrDefault(r.Id); }
                     if (s?.Question is not { } q || q.Id != r.Question) { return Done(new AnswerResult(AnswerOutcome.Stale, "the session is no longer asking that question")); }
                     if (Answers.Check(q, r) is { } problem) { return Done(new AnswerResult(AnswerOutcome.Refused, problem)); }
+                    progress?.Progress(new DeliveryProgress(DeliveryProgress.Typed, s.Status == SessionStatus.Working));
                     _ = Change(s with { Question = null, Status = SessionStatus.Working, StatusSince = now, UpdatedAt = now });
                     return Done(new AnswerResult(AnswerOutcome.Delivered));
                 }
             case Ops.SessionReply:
                 {
                     var r = data.Deserialize<ReplyRequest>(ProtocolJson.Options)!;
+                    if (ScriptFor(r.Id) is { } script) { return script(); }
+                    var progress = r.Progress == true ? ServedRequest.Current : null;
+                    progress?.Progress(new DeliveryProgress(DeliveryProgress.Received));
                     if (Replies.Check(r) is { } problem) { return Done(new ReplyResult(AnswerOutcome.Refused, problem)); }
                     Session? s;
                     lock (gate) { s = sessions.GetValueOrDefault(r.Id); }
                     if (s is null) { return Done(new ReplyResult(AnswerOutcome.Stale, "the session has ended")); }
+                    progress?.Progress(new DeliveryProgress(DeliveryProgress.Typed, s.Status == SessionStatus.Working));
                     _ = Change(s with { Status = SessionStatus.Working, StatusSince = now, UpdatedAt = now, Activity = s.Activity with { UserMessage = r.Text } });
                     return Done(new ReplyResult(AnswerOutcome.Delivered));
                 }
+            case HostOps.AgentsRefresh when !remote:
+                return Done(Agents());
+            case HostOps.AgentsSetup when !remote:
+                return SetUpAsync(data.Deserialize<AgentSetupRequest>(ProtocolJson.Options)!);
+            // The demo installs nothing: Install CLI is offered only on the rows of its pictures.
+            case HostOps.AgentsInstall when !remote:
+                return Done(new AgentInstallResult(false, "Windows Package Manager is unavailable. Install or update Microsoft's App Installer, then try again. No CLI was installed."));
             case LaunchProtocol.Options:
                 lock (gate) { return Done(LaunchChoices()); }
             case LaunchProtocol.Launch:
@@ -632,14 +669,25 @@ public sealed partial class DemoHost : IAsyncDisposable
         return result;
     }
 
+    // A session as a host would send it next, for the self-test: a schedule's or an agent's prompt
+    // arriving (#489), which nothing in the demo sends on its own.
+    public Task Upsert(Session next) => Change(next);
+
+    // The pauses a change and a removal take, as a host's would; a test holds them to order a
+    // removal against a turn finishing.
+    internal Func<TimeSpan, Task> Pause { get; set; } = d => Task.Delay(d);
+
     // finishes: a turn started here ends a moment later, as an agent's would; not a session that has
-    // stopped answering (#800).
-    async Task Change(Session next, bool finishes = true)
+    // stopped answering (#800). onlyIfPresent: the finishing update, which must not bring back a
+    // session removed while it waited to be written (#625, Copilot 4485774643): the gallery's, removed
+    // in its own 400 ms pause, came back and was sent again as an upsert.
+    async Task Change(Session next, bool finishes = true, bool onlyIfPresent = false)
     {
-        await Task.Delay(400);
+        await Pause(TimeSpan.FromMilliseconds(400));
         IProtocolChannel[] to;
         lock (gate)
         {
+            if (onlyIfPresent && !sessions.ContainsKey(next.Id)) { return; }
             sessions[next.Id] = next;
             revision++;
             to = [.. subscribers.Where(s => s.IsOpen)];
@@ -648,17 +696,19 @@ public sealed partial class DemoHost : IAsyncDisposable
         // The agent takes the answer or reply and finishes its turn a little later.
         if (finishes && next.Status == SessionStatus.Working)
         {
-            await Task.Delay(3000);
+            await Pause(TimeSpan.FromMilliseconds(3000));
+            // Removed meanwhile (the self-test's gallery cleans up after itself): it stays gone.
+            lock (gate) { if (!sessions.ContainsKey(next.Id)) { return; } }
             var done = DateTimeOffset.UtcNow;
             // The main agent wrote last: the top-level text is its own again. A few short blocks, so a
             // conversation's pictures show the space between them (#765).
-            await Change(next with { Status = SessionStatus.Idle, StatusSince = done, UpdatedAt = done, Activity = next.Activity with { Response = "Done: that's taken care of.\n\nThe branch is pushed.\n\n- the suite passes\n- nothing else is open", TurnCount = (next.Activity.TurnCount ?? 0) + 1, Reasoning = null, Source = null, Own = null } });
+            await Change(next with { Status = SessionStatus.Idle, StatusSince = done, UpdatedAt = done, Activity = next.Activity with { Response = "Done: that's taken care of.\n\nThe branch is pushed.\n\n- the suite passes\n- nothing else is open", TurnCount = (next.Activity.TurnCount ?? 0) + 1, Reasoning = null, Source = null, Own = null } }, onlyIfPresent: true);
         }
     }
 
     async Task RemoveAsync(string id)
     {
-        await Task.Delay(400);
+        await Pause(TimeSpan.FromMilliseconds(400));
         IProtocolChannel[] to;
         lock (gate)
         {
@@ -703,6 +753,78 @@ public sealed partial class DemoHost : IAsyncDisposable
         Relay = new RelayStatus(RelayState.SignedOut),
         SignIn = new SignInStatus(SignInState.Idle),
         Settings = new HostSettingsView(true, "Demo machine"),
+        Agents = Agents(),
+        AgentInstallation = CantActOn ? new AgentInstallProgress("claude", false, FailedInstall) : null,
+    };
+
+    // Settings › Agents on this machine (#678): one agent per hook state, so the page shows each
+    // verb: Copilot CLI to set up, Claude Code to repair, and Codex set up but not tested yet, as a
+    // healthy agent reads on a real host (Unknown, its setup completed), with none. Each carries its
+    // `hookSetup` as a current host sends it. The demo writes no files, but its readiness moves as a
+    // real host's does after a setup (#705 review): one that completes leaves the setup completed
+    // with intake on, so the row offers no Set up beside "Hooks registered…"; a removal leaves
+    // intake on without it. Claude Code's setup didn't finish, the Failed a host can repair; its
+    // repair fails.
+    readonly Dictionary<string, (ReadinessCheck Check, HookSetupState Setup)> hooks = new(StringComparer.Ordinal)
+    {
+        ["copilot"] = (new(ReadinessState.NeedsAction, "Hook intake is off for this profile. Explicit setup or migration is required."), HookSetupState.NotSetUp),
+        ["claude"] = (new(ReadinessState.Failed, "Hook setup for this profile did not complete; its registrations may be partial. Repair setup."), HookSetupState.Incomplete),
+        ["codex"] = (new(ReadinessState.Unknown, SetUpHooks), HookSetupState.Completed),
+    };
+    const string SetUpHooks = "An owned setup record exists and setup completed; registration and activation still need verification.";
+    const string RemovedHooks = "Intake is enabled; this agent's registration and ownership have not been verified.";
+    bool cantActOn;
+
+    // For the self-test's pictures of the rows the app can't act on (Creative's ruling on #705): Copilot
+    // CLI not installed beside agent-ha-bridge (Read-only, no Install), Claude Code's installation
+    // failed and its hook ownership unreadable, and Codex on a host from before `hookSetup` (Can't
+    // check). The host's raw words are in them, as a real host sends them, for the rows to word.
+    public void ShowAgentsTheAppCantActOn(bool on) { lock (gate) { cantActOn = on; } }
+    bool CantActOn { get { lock (gate) { return cantActOn; } } }
+    const string FailedInstall = "Windows Package Manager exited with code 0x8A15000F. Check network access, package policy and required runtime approvals, then check agents again. Partial installations were not removed.";
+
+    AgentReadinessReport Agents()
+    {
+        static AgentReadiness Agent(string id, string label, string version, (ReadinessCheck Check, HookSetupState Setup) hooks, bool installed = true) => new(id, label, $"C:\\Users\\demo\\.{id}",
+            installed ? $"C:\\Program Files\\{label}\\{id}.exe" : null, installed ? version : null,
+            installed ? new(ReadinessState.Working, "Executable found using the launch configuration.") : new(ReadinessState.Missing, "Not installed. Install this CLI, then check again."),
+            installed ? new(ReadinessState.Working, $"Version {version}") : new(ReadinessState.Unknown, "Version not checked."),
+            hooks.Check,
+            new(ReadinessState.Unknown, "CLI sign-in and entitlement have not been verified."),
+            new(ReadinessState.Unknown, "Folder trust, hook activation and a new session have not been verified."),
+            HookSetup: hooks.Setup);
+        lock (gate)
+        {
+            return new(DateTimeOffset.UtcNow, cantActOn
+            ? [
+                Agent("copilot", "Copilot CLI", "1.0.105", (new(ReadinessState.Blocked, "Hook setup is unavailable while this host is read-only: agent-ha-bridge is running for this user; answer at the machine"), HookSetupState.Unknown), installed: false),
+                Agent("claude", "Claude Code", "2.1.4", (new(ReadinessState.Failed, "Hook ownership could not be checked: Access to the path 'C:\\Users\\demo\\.claude\\agent-bridge-owner.json' is denied."), HookSetupState.Unknown), installed: false),
+                Agent("codex", "Codex", "0.48.0", (new(ReadinessState.Unknown, "An owned setup record exists; registration and activation still need verification."), HookSetupState.Unknown)),
+            ]
+            : [
+                Agent("copilot", "Copilot CLI", "1.0.105", hooks["copilot"]),
+                Agent("claude", "Claude Code", "2.1.4", hooks["claude"]),
+                Agent("codex", "Codex", "0.48.0", hooks["codex"]),
+            ]);
+        }
+    }
+
+    // As long as a real setup takes to write, so its row says "Setting up…" before its result.
+    async Task<object?> SetUpAsync(AgentSetupRequest r)
+    {
+        await Task.Delay(TimeSpan.FromMilliseconds(600));
+        var result = SetUp(r);
+        if (result.Completed)
+        {
+            lock (gate) { hooks[r.Agent] = r.Action == "remove" ? (new(ReadinessState.Unknown, RemovedHooks), HookSetupState.NotSetUp) : (new(ReadinessState.Unknown, SetUpHooks), HookSetupState.Completed); }
+        }
+        return result;
+    }
+    static AgentSetupResult SetUp(AgentSetupRequest r) => r switch
+    {
+        { Action: "remove" } => new(true, "Removed this installation's hooks. Existing sessions keep theirs until they end.", true),
+        { Agent: "claude" } => new(false, "Repair incomplete: the demo cannot write Claude Code's settings.", false),
+        _ => new(true, "Hooks registered. Restart the host, then start a new session to check them.", true),
     };
 
     // Another machine's sessions: a Claude question and a Codex turn under way, so the demo

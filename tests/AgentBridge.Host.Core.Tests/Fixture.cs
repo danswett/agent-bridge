@@ -28,8 +28,11 @@ internal sealed class Fixture : IDisposable
     public string ClaudeRegistrations => Path.Combine(Runtime, "agent-bridge-claude");
     public string CodexRegistrations => Path.Combine(Runtime, "agent-bridge-codex");
 
+    // stalledAfter: the Not responding watchdog, off unless a test sets it. Every transcript here is
+    // dated about T0 while the clock reads an hour later, so each working session would read as
+    // stalled.
     public SessionSourceOptions Options(long tailBytes = 4 * 1024 * 1024, bool watch = false, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true,
-        Action<string>? log = null, Action<string>? afterRegistrationRead = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null) => new()
+        Action<string>? log = null, Action<string>? afterRegistrationRead = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null, TimeSpan? stalledAfter = null, IReadOnlyList<string>? probeRoots = null) => new()
     {
         CopilotHome = CopilotHome,
         ClaudeHome = ClaudeHome,
@@ -44,11 +47,14 @@ internal sealed class Fixture : IDisposable
         Log = log,
         AfterRegistrationRead = afterRegistrationRead,
         StateFile = stateFile,
+        NotRespondingAfter = stalledAfter ?? TimeSpan.MaxValue,
+        NotRespondingBusyAfter = stalledAfter is { } after ? after * 3 : TimeSpan.MaxValue,
+        UsageProbeRoots = probeRoots ?? [],
     };
 
     public SessionSource Source(long tailBytes = 4 * 1024 * 1024, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true,
-        Action<string>? log = null, Action<string>? afterRegistrationRead = null, SessionDrivers? drivers = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null) =>
-        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval, log: log, afterRegistrationRead: afterRegistrationRead, stateFile: stateFile, codexRoots: codexRoots), Processes, Time, drivers);
+        Action<string>? log = null, Action<string>? afterRegistrationRead = null, SessionDrivers? drivers = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null, TimeSpan? stalledAfter = null, IReadOnlyList<string>? probeRoots = null) =>
+        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval, log: log, afterRegistrationRead: afterRegistrationRead, stateFile: stateFile, codexRoots: codexRoots, stalledAfter: stalledAfter, probeRoots: probeRoots), Processes, Time, drivers);
 
     // session-state/<id>/ with workspace.yaml and, optionally, inuse.<pid>.lock. Returns
     // the events.jsonl path (not created).
@@ -296,6 +302,11 @@ internal sealed class FakeProcesses : IProcessInspector
             Launchers = launchers,
         };
     }
+
+    // The processes this host started itself (its `claude auth status`), by pid.
+    public HashSet<int> Own { get; } = [];
+
+    public bool IsOwnChild(AgentProcess process) => Own.Contains(process.Id);
 }
 
 // Line builders, one per agent, reproducing each transcript's shape.

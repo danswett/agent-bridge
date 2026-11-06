@@ -341,15 +341,147 @@
                         </StackPanel>
                     </InfoBar>
 
-                    <TextBlock
-                        x:Name="Receipt"
-                        Style="{StaticResource AbTypeRow}"
-                        TextWrapping="Wrap"
-                        IsTextSelectionEnabled="True"
-                        AutomationProperties.AutomationId="Receipt"
-                        Text="{x:Bind Card.ReceiptText, Mode=OneWay}"
-                        Foreground="{x:Bind local:Ui.ToneBrush(Card.ReceiptTone), Mode=OneWay}"
-                        Visibility="{x:Bind local:Ui.Show(Card.HasReceipt), Mode=OneWay}" />
+                    <!-- Words only (ui.md §6.5, "quiet unless something's wrong"): no ring or badge beside them. -->
+                    <Grid Visibility="{x:Bind local:Ui.Show(Card.HasReceipt), Mode=OneWay}">
+                        <!-- The room the longest outcome needs, drawn clear and unheard (QuestionViewModel.Room). -->
+                        <TextBlock
+                            Style="{StaticResource AbTypeRow}"
+                            TextWrapping="Wrap"
+                            Opacity="0"
+                            IsHitTestVisible="False"
+                            AutomationProperties.AccessibilityView="Raw"
+                            Text="{x:Bind Card.ReceiptRoom, Mode=OneWay}" />
+                        <TextBlock
+                            x:Name="Receipt"
+                            Style="{StaticResource AbTypeRow}"
+                            TextWrapping="Wrap"
+                            IsTextSelectionEnabled="True"
+                            AutomationProperties.AutomationId="Receipt"
+                            AutomationProperties.LiveSetting="Polite"
+                            local:ReceiptMarkView.Urgent="{x:Bind Card.ReceiptAnnouncementUrgent, Mode=OneWay}"
+                            local:ReceiptMarkView.Announcement="{x:Bind Card.ReceiptAnnouncement, Mode=OneWay}"
+                            Text="{x:Bind Card.ReceiptText, Mode=OneWay}"
+                            local:ReceiptMarkView.Tone="{x:Bind Card.ReceiptTone, Mode=OneWay}"
+                            Visibility="{x:Bind local:Ui.Show(Card.HasReceipt), Mode=OneWay}" />
+                    </Grid>
+
+                    <!-- A prompt you didn't type (#489, §6.4): never a bubble, and never at the right, which is
+                         yours. At the column's start: a label line in agent colour (a clock for a schedule,
+                         the driven diamond for an agent), read before the prompt; two lines of it, and Show
+                         prompt, a compact disclosure (its Disclosure motion), opening on all of it inside a thin
+                         agent rule on the leading edge, not a filled card. -->
+                    <StackPanel
+                        x:Name="PromptLine"
+                        Spacing="4"
+                        AutomationProperties.AutomationId="Prompt"
+                        Visibility="{x:Bind local:Ui.Show(Card.HasPrompt), Mode=OneWay}">
+                        <local:FlowPanel Spacing="8" LineSpacing="0" AutomationProperties.AutomationId="PromptLabel">
+                            <Grid Width="16" Height="16" VerticalAlignment="Center">
+                                <ContentControl
+                                    Style="{StaticResource AbIconClock}"
+                                    Width="16"
+                                    Height="16"
+                                    Foreground="{ThemeResource AbAgent}"
+                                    AutomationProperties.AutomationId="PromptClock"
+                                    AutomationProperties.AccessibilityView="Raw"
+                                    Visibility="{x:Bind local:Ui.Show(Card.PromptIsSchedule), Mode=OneWay}" />
+                                <!-- The driven-badge glyph's diamond on its own: its 16 grid scaled about the
+                                     diamond and moved to the middle, as the PWA crops it. -->
+                                <ContentControl
+                                    Style="{StaticResource AbGlyphDrivenBadge}"
+                                    Width="16"
+                                    Height="16"
+                                    Foreground="{ThemeResource AbAgent}"
+                                    Background="Transparent"
+                                    AutomationProperties.AutomationId="PromptDiamond"
+                                    AutomationProperties.AccessibilityView="Raw"
+                                    Visibility="{x:Bind local:Ui.Show(Card.PromptIsDriven), Mode=OneWay}">
+                                    <ContentControl.RenderTransform>
+                                        <CompositeTransform CenterX="13.3" CenterY="13.3" ScaleX="1.7" ScaleY="1.7" TranslateX="-5.3" TranslateY="-5.3" />
+                                    </ContentControl.RenderTransform>
+                                </ContentControl>
+                            </Grid>
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                Style="{StaticResource AbTypeMeta}"
+                                Foreground="{ThemeResource AbAgentText}"
+                                TextWrapping="Wrap"
+                                AutomationProperties.AutomationId="PromptLabelText"
+                                Text="{x:Bind Card.PromptLabel, Mode=OneWay}" />
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                Style="{StaticResource AbTypeMeta}"
+                                Foreground="{ThemeResource AbText2}"
+                                TextWrapping="Wrap"
+                                AutomationProperties.AutomationId="PromptBy"
+                                Text="{x:Bind Card.PromptBy, Mode=OneWay}"
+                                Visibility="{x:Bind local:Ui.Show(Card.HasPromptBy), Mode=OneWay}" />
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                Style="{StaticResource AbTypeMeta}"
+                                Foreground="{ThemeResource AbText2}"
+                                AutomationProperties.AutomationId="PromptAge"
+                                Text="{x:Bind Card.PromptAgeText, Mode=OneWay}"
+                                Visibility="{x:Bind local:Ui.Show(Card.HasPromptAge), Mode=OneWay}" />
+                        </local:FlowPanel>
+                        <TextBlock
+                            Style="{StaticResource AbTypeRow}"
+                            Foreground="{ThemeResource AbText2}"
+                            TextWrapping="Wrap"
+                            MaxLines="2"
+                            TextTrimming="CharacterEllipsis"
+                            AutomationProperties.AutomationId="PromptPreview"
+                            Text="{x:Bind Card.PromptPreview, Mode=OneWay}"
+                            Visibility="{x:Bind local:Ui.Show(Card.HasPromptPreview), Mode=OneWay}" />
+                        <!-- Show prompt: a compact disclosure, as the PWA's and as wide as its words; its chevron
+                             leads them, pointing right shut and down open (Motion.Turn), and the words are at the
+                             label's size. Open, all of it settles in (Disclosure) inside the agent rule. -->
+                        <local:DisclosureButton
+                            x:Name="PromptToggle"
+                            HorizontalAlignment="Left"
+                            MinHeight="32"
+                            Margin="-4,0,0,0"
+                            Padding="4,4"
+                            BorderThickness="0"
+                            Background="{ThemeResource SubtleFillColorTransparentBrush}"
+                            Foreground="{ThemeResource AbText}"
+                            CornerRadius="{StaticResource AbRadiusControl}"
+                            AutomationProperties.AutomationId="ShowPrompt"
+                            AutomationProperties.Name="{x:Bind Card.PromptToggleName, Mode=OneWay}"
+                            IsExpanded="{x:Bind Card.PromptOpen, Mode=TwoWay}">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <ContentControl
+                                    x:Name="PromptChevron"
+                                    Style="{StaticResource AbIconChevron}"
+                                    Width="16"
+                                    Height="16"
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource AbText2}"
+                                    AutomationProperties.AutomationId="PromptChevron"
+                                    AutomationProperties.AccessibilityView="Raw" />
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    Style="{StaticResource AbTypeMeta}"
+                                    AutomationProperties.AutomationId="PromptToggleText"
+                                    Text="{x:Bind Card.PromptToggleText, Mode=OneWay}" />
+                            </StackPanel>
+                        </local:DisclosureButton>
+                        <Border
+                            x:Name="PromptRule"
+                            Margin="0,4,0,0"
+                            Padding="12,0,0,0"
+                            BorderBrush="{ThemeResource AbAgent}"
+                            BorderThickness="2,0,0,0"
+                            AutomationProperties.AutomationId="PromptRule"
+                            Visibility="{x:Bind local:Ui.Show(Card.PromptOpen), Mode=OneWay}">
+                            <TextBlock
+                                Style="{StaticResource AbTypeReading}"
+                                TextWrapping="Wrap"
+                                IsTextSelectionEnabled="True"
+                                AutomationProperties.AutomationId="PromptText"
+                                Text="{x:Bind Card.PromptText, Mode=OneWay}" />
+                        </Border>
+                    </StackPanel>
 
                     <!-- Your message: a bubble at the column's right, at most 85% of it, as in the PWA. -->
                     <Grid Visibility="{x:Bind local:Ui.Show(Card.HasUserMessage), Mode=OneWay}">
@@ -627,13 +759,20 @@
                                 AutomationProperties.AutomationId="SendReply"
                                 AutomationProperties.Name="Send"
                                 ToolTipService.ToolTip="Send (Ctrl+Enter)"
-                                IsEnabled="{x:Bind Card.Reply.CanSend, Mode=OneWay, FallbackValue=False}"
+                                IsEnabled="{x:Bind Card.Reply.SendEnabled, Mode=OneWay, FallbackValue=False}"
                                 Click="OnSendReply">
-                                <!-- The platform's ring in place of the icon while the reply is on its way (ui.md §5.3,
-                                     Send and Answer); still with Windows' animation effects off. -->
+                                <!-- Send says how its reply goes (ui.md §5.3, §6.5): the platform's ring in place of
+                                     the arrow while it is on its way (standing still while it waits for the machine),
+                                     then the check for about a second once delivered, then the arrow again. Only the
+                                     glyph cross-fades; the button keeps its size and colour. -->
                                 <Grid>
-                                    <ContentControl Style="{StaticResource AbIconSend}" Width="16" Height="16" Visibility="{x:Bind local:Ui.Hide(Card.Reply.Pending), Mode=OneWay, FallbackValue=Visible}" />
-                                    <local:InFlightRing AutomationProperties.AutomationId="SendRing" Active="{x:Bind Card.Reply.Pending, Mode=OneWay, FallbackValue=False}" />
+                                    <ContentControl Style="{StaticResource AbIconSend}" Width="16" Height="16" Opacity="{x:Bind local:Ui.Fade(Card.Reply.SendRest), Mode=OneWay, FallbackValue=1}">
+                                        <ContentControl.OpacityTransition><ScalarTransition Duration="0:0:0.15" /></ContentControl.OpacityTransition>
+                                    </ContentControl>
+                                    <local:InFlightRing AutomationProperties.AutomationId="SendRing" Active="{x:Bind Card.Reply.Pending, Mode=OneWay, FallbackValue=False}" Still="{x:Bind Card.Reply.SendStill, Mode=OneWay, FallbackValue=False}" />
+                                    <local:CheckGlyph AutomationProperties.AutomationId="SendCheck" Opacity="{x:Bind local:Ui.Fade(Card.Reply.SendCheck), Mode=OneWay, FallbackValue=0}">
+                                        <local:CheckGlyph.OpacityTransition><ScalarTransition Duration="0:0:0.15" /></local:CheckGlyph.OpacityTransition>
+                                    </local:CheckGlyph>
                                 </Grid>
                             </Button>
                         </Grid>
@@ -651,14 +790,29 @@
                     Foreground="{ThemeResource AbDangerText}"
                     Text="{x:Bind Card.Reply.Error, Mode=OneWay}"
                     Visibility="{x:Bind local:Ui.Show(Card.Reply.HasError), Mode=OneWay, FallbackValue=Collapsed}" />
-                <TextBlock
-                    Style="{StaticResource AbTypeMeta}"
-                    TextWrapping="Wrap"
-                    IsTextSelectionEnabled="True"
-                    AutomationProperties.AutomationId="ReplyStatus"
-                    Text="{x:Bind Card.Reply.StatusText, Mode=OneWay}"
-                    Foreground="{x:Bind local:Ui.ToneBrush(Card.Reply.StatusTone), Mode=OneWay}"
-                    Visibility="{x:Bind local:Ui.Some(Card.Reply.StatusText), Mode=OneWay, FallbackValue=Collapsed}" />
+                <!-- The receipt (ui.md §6.5, #600, #617): words only, and only for an exception (a stall,
+                     a wait, an outcome other than Delivered), in room kept from Send until the box is
+                     next typed in; a polite live region, which hears every stage. -->
+                <Grid Visibility="{x:Bind local:Ui.Show(Card.Reply.ShowStatus), Mode=OneWay, FallbackValue=Collapsed}">
+                    <!-- The room the longest outcome needs, drawn clear and unheard (ReceiptWords.Room). -->
+                    <TextBlock
+                        Style="{StaticResource AbTypeMeta}"
+                        TextWrapping="Wrap"
+                        Opacity="0"
+                        IsHitTestVisible="False"
+                        AutomationProperties.AccessibilityView="Raw"
+                        Text="{x:Bind Card.Reply.StatusRoom, Mode=OneWay}" />
+                    <TextBlock
+                        Style="{StaticResource AbTypeMeta}"
+                        TextWrapping="Wrap"
+                        IsTextSelectionEnabled="True"
+                        AutomationProperties.AutomationId="ReplyStatus"
+                        AutomationProperties.LiveSetting="Polite"
+                        local:ReceiptMarkView.Urgent="{x:Bind Card.Reply.AnnouncementUrgent, Mode=OneWay}"
+                        local:ReceiptMarkView.Announcement="{x:Bind Card.Reply.Announcement, Mode=OneWay}"
+                        Text="{x:Bind Card.Reply.StatusText, Mode=OneWay}"
+                        local:ReceiptMarkView.Tone="{x:Bind Card.Reply.StatusTone, Mode=OneWay}" />
+                </Grid>
             </local:ReadingColumn>
         </ScrollViewer>
     </Grid>

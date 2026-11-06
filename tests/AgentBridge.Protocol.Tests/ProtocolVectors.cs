@@ -50,6 +50,7 @@ public static class ProtocolVectors
         Launch(catalog.File("launch.json", "v1-launch.md", "Launching and resuming sessions, and answering a launched agent's folder-trust question."));
         Transfer(catalog.File("transfer.json", "v1-transfer.md", "Bringing a session from another machine, and the signed command that asks for it."));
         Update(catalog.File("update.json", "v1-update.md", "A machine's updates, seen and asked for from another device."));
+        Manage(catalog.File("manage.json", "v1-sessions.md", "Restarting a machine and repairing its hooks from a person's other device (#801)."));
         Usage(catalog.File("usage.json", "v1-usage.md", "How much of each agent's allowance is gone."));
         foreach (var d in KnownDifferences.All) { catalog.Differs(d); }
         return catalog.Build();
@@ -58,6 +59,9 @@ public static class ProtocolVectors
     // ---- sessions ----
 
     static readonly MachineInfo Machine = new(MachineId, "DEV-VM1", "windows", "0.1.200", Dev: true, Sessions: 3, ReadOnly: "agent-ha-bridge is running for this user", Instance: "9a8b7c6d5e4f30211203f4e5d6c7b8a9");
+
+    static readonly RestoreSession RestoredMidTurn = new() { Id = SessionId, Agent = AgentKind.Copilot, Title = "Fix the login page", MidTurn = true };
+    static readonly RestoreSession RestoredAsking = new() { Id = "7a21c3d4-5e6f-4a1b-9c2d-3e4f5a6b7c8d", Agent = AgentKind.Claude, QuestionLost = true };
 
     static readonly ToolCall Running = new() { Id = "call_7", Name = "powershell", Summary = "Run the protocol tests", Status = ToolStatus.Running, StartedAt = T1 };
     static readonly ToolCall Finished = new() { Id = "call_6", Name = "edit", Summary = "src/AgentBridge.Protocol/Sessions.cs", Status = ToolStatus.Done, StartedAt = T0, EndedAt = T0.AddSeconds(2) };
@@ -89,6 +93,15 @@ public static class ProtocolVectors
     {
         Id = "req-41#3f9a", Kind = QuestionKind.Approval, Message = "Run `git push`?", AskedAt = T0,
         Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new("approve", "Approve once"), new("deny", "Deny")] }],
+    };
+    // A Codex approval as a host lists it: its id is the hook marker's DecisionId and a digest
+    // of what is shown (#958; the host's MappingTests pin this one). Opaque to a client.
+    static readonly Question CodexApproval = Approval with { Id = "019a2f4e-7c1b-7d20-9e3a-5b6c7d8e9f01#e2c96713aea78522", Message = "Allow **Bash**?\n\n```\ngit push\n```" };
+    // An approval the host escaped anything in (#803): a right-to-left override, as the host shows it.
+    static readonly (string Shown, IReadOnlyList<(int Start, int Length)> Marks) EscapedCommand = ShownText.RevealMarked("Allow **shell**?\n\n```\necho done #\u202E ;hs | p/x//:sptth lruc\n```");
+    static readonly Question EscapedApprovalQuestion = Approval with
+    {
+        Id = "req-42#9b1c", Message = EscapedCommand.Shown, Escaped = EscapedApproval.For(EscapedCommand.Shown, EscapedCommand.Marks, EscapedApproval.Confirm),
     };
     static readonly Question ManyTexts = new()
     {
@@ -204,13 +217,27 @@ public static class ProtocolVectors
             .Valid("form", Form)
             .Valid("plain", Plain)
             .Valid("approval", Approval)
+            .Valid("a-codex-approval", CodexApproval)
             .Valid("truncated", Plain with { Truncated = true, Fields = [] })
             .Valid("a-delegates-question-answered-at-the-machine", Plain with { AnswerAtMachine = true, Agent = "agent-1" })
+            .Valid("an-escaped-approval", EscapedApprovalQuestion)
+            .Valid("an-escaped-approval-held-at-the-machine", EscapedApprovalQuestion with { Escaped = EscapedApprovalQuestion.Escaped! with { Approve = EscapedApproval.Machine } })
+            // More escapes than marks carry: whole, so Deny goes, and Approve is the machine's (#836 review).
+            .Valid("an-escaped-approval-with-too-many-escapes-to-mark", EscapedApprovalQuestion with { Escaped = EscapedApprovalQuestion.Escaped! with { Approve = EscapedApproval.TooMany } })
             .Reads("an-unknown-kind-reads-as-a-form", """{"id":"q","kind":"wizard","message":"m","fields":[],"askedAt":"2026-10-28T04:22:43.182Z"}""")
             // Never shown with a choice left out, or a choice without the words it was asked with.
             .Refused("a-choice-that-cannot-be-read", Broken(Approval, j => j["fields"]![0]!["options"]!.AsArray().Add(null)))
             .Refused("a-choice-label-that-is-not-text", Broken(Approval, j => j["fields"]![0]!["options"]![0]!["label"] = true))
-            .Refused("a-delegate-that-is-not-an-id", Broken(Plain with { Agent = "agent-1" }, j => j["agent"] = 1));
+            .Refused("a-delegate-that-is-not-an-id", Broken(Plain with { Agent = "agent-1" }, j => j["agent"] = 1))
+            // Read past, it would offer the one-tap Approve the confirmation replaced.
+            .Refused("escaped-text-that-cannot-be-read", Broken(EscapedApprovalQuestion, j => j["escaped"]!["marks"] = "all"));
+        f.Record<EscapedText>(Host)
+            .Valid("confirm", EscapedApprovalQuestion.Escaped!)
+            .Valid("at-the-machine", EscapedApprovalQuestion.Escaped! with { Approve = EscapedApproval.Machine })
+            // A mark is two whole numbers as sent: [s, null, l] read past as [s, l] would offer the
+            // confirmation for a mark the host never sent (#836 review).
+            .Refused("a-mark-holding-a-null", j => j["marks"]![0]!.AsArray().Insert(1, null))
+            .Refused("a-mark-holding-text", j => j["marks"]![0]![1] = "6");
         f.Record<Background>(Host)
             .Valid("agents-and-shells", new Background { Agents = 2, Shells = 1 })
             .Valid("shells-only", new Background { Agents = 0, Shells = 3 });
@@ -268,6 +295,16 @@ public static class ProtocolVectors
         f.Record<DiscoveryChanged>(Host)
             .Valid("held", new DiscoveryChanged(Held))
             .Valid("released", new DiscoveryChanged());
+        // What a reboot or a crash took (#780; v1-sessions.md, What went).
+        f.Record<RestoreSession>(Host)
+            .Valid("mid-turn", RestoredMidTurn)
+            .Valid("a-question-lost", RestoredAsking);
+        f.Record<RestoreNotice>(Host)
+            .Valid("after-a-reboot", new RestoreNotice { At = T1, Cause = RestoreCause.Reboot, Since = T0, Why = RestoreWhy.Pending, Offered = [RestoredMidTurn, RestoredAsking] })
+            .Valid("still-judging-on-a-read-only-machine", new RestoreNotice { At = T1, Cause = RestoreCause.Crash, Waiting = 2, Why = RestoreWhy.ReadOnly, Offered = [RestoredAsking], OfferedMore = 3 });
+        f.Record<SessionRestored>(Host)
+            .Valid("after-a-crash", new SessionRestored { At = T1, Cause = RestoreCause.Crash })
+            .Valid("mid-turn-with-a-question-lost", new SessionRestored { At = T1, Cause = RestoreCause.Reboot, MidTurn = true, QuestionLost = true });
         f.Record<ListRequest>(Client)
             .Valid("first-page", new ListRequest())
             .Valid("next-page", new ListRequest("c2Vzc2lvbnM6Mg"));
@@ -527,6 +564,9 @@ public static class ProtocolVectors
         f.Record<PushNoticeData>(Host)
             .Valid("question", data)
             .Valid("finished", data with { Kind = NoticeKind.Finished, Question = null })
+            .Valid("sign-in", SignInData)
+            .Valid("a-reminder", data with { Reminder = true })
+            .Valid("group", GroupData)
             .Reads("an-unknown-kind-reads-as-a-question", $$"""{"v":1,"kind":"celebrate","machine":"{{MachineId}}","session":"{{SessionId}}","at":"2026-10-28T04:22:43.182Z"}""");
         var notification = new PushNotification
         {
@@ -535,9 +575,24 @@ public static class ProtocolVectors
         };
         f.Record<PushNotification>(Host)
             .Valid("question", notification)
-            .Valid("resolved", notification with { Silent = true, Body = "Answered", Data = data with { Kind = NoticeKind.Resolved } });
+            .Valid("resolved", notification with { Silent = true, Body = "Answered", Data = data with { Kind = NoticeKind.Resolved } })
+            .Valid("sign-in", new PushNotification
+            {
+                Title = "Copilot on DEV-VM1 needs sign-in", Body = "3 sessions affected", Tag = PushNotice.Tag(MachineId, PushNotice.SignInKey(AgentKind.Copilot, null)), Data = SignInData,
+                Navigate = PushNotice.SignInNavigate("https://danswett.github.io/agent-bridge/", MachineId, AgentKind.Copilot),
+            })
+            .Valid("group", new PushNotification
+            {
+                Title = "Needs you", Body = "DEV-VM1 · 3 sessions waiting on you", Tag = PushNotice.Tag(MachineId, "~needsyou"), Data = GroupData,
+                Navigate = PushNotice.NavigateNeedsYou("https://danswett.github.io/agent-bridge/", MachineId),
+            });
         f.Record<PushMessage>(Host).Valid("question", new PushMessage { Notification = notification });
     }
+
+    static PushNoticeData SignInData => new() { Kind = NoticeKind.SignIn, Machine = MachineId, Agent = AgentKind.Copilot, Sessions = 3, At = T0 };
+
+    // #913 rule 3: three questions of the machine's sessions within 30 s, as one notice.
+    static PushNoticeData GroupData => new() { Kind = NoticeKind.Group, Machine = MachineId, Session = "", Sessions = 3, Class = NotificationClass.NeedsYou, At = T0 };
 
     // ---- launching ----
 
@@ -708,6 +763,32 @@ public static class ProtocolVectors
             .Valid("accepted", new UpdateCommandResult(UpdateAck.Accepted) { State = state with { Phase = UpdatePhase.Checking, Progress = null } })
             .Valid("refused", new UpdateCommandResult(UpdateAck.Refused, "the machine is read-only"))
             .Reads("an-unknown-outcome-reads-as-refused", """{"outcome":"maybe"}""");
+    }
+
+    // ---- management (#801) ----
+
+    static void Manage(VectorFileBuilder f)
+    {
+        f.Record<ManageCommand>(Client).Valid("a-press", new ManageCommand { Command = Signed });
+        f.Record<ManageRepairArgs>(Client).Valid("copilot", new ManageRepairArgs("copilot"));
+        f.Record<ManageConfigArgs>(Client).Valid("held-until-the-roster", new ManageConfigArgs("push.enabled", JsonSerializer.SerializeToElement(false), JsonSerializer.SerializeToElement(true), "r-1"));
+        f.Record<ManageHaTokenRequest>(Client).Valid("held-until-the-roster", new ManageHaTokenRequest { Command = Signed, Secret = "not-a-token" });
+        var restarts = new ManageRestarts(1, T0.AddHours(6));
+        f.Record<ManageRestarts>(Host).Valid("one-left", restarts).Valid("none-used", new ManageRestarts(2));
+        var pending = new ManagePending(Request, "restart", "pwa 8e7d6c5b", T0, "4f3e2d1c0b0a99887766554433221100");
+        f.Record<ManagePending>(Host).Valid("a-restart", pending);
+        var last = new ManageLast(Request, "restart", ManageOutcome.Done, "pwa 8e7d6c5b", T0, TookSeconds: 41);
+        f.Record<ManageLast>(Host).Valid("restarted", last).Valid("refused", last with { Outcome = ManageOutcome.Refused, Reason = ManageReason.NotQuiet, TookSeconds = null });
+        var state = new ManageState { Phase = ManagePhase.Restarting, Pending = pending, Restarts = restarts, Last = last };
+        f.Record<ManageState>(Host)
+            .Valid("restarting", state)
+            .Valid("idle", new ManageState { Restarts = new ManageRestarts(2) })
+            .Reads("an-unknown-phase-reads-as-idle", """{"phase":"rebooting","restarts":{"left":2}}""");
+        f.Record<ManageResult>(Host)
+            .Valid("accepted", new ManageResult { Request = Request, Outcome = ManageOutcome.Accepted, Transition = pending.Transition, State = state })
+            .Valid("repaired", new ManageResult { Request = Request, Outcome = ManageOutcome.Done, Detail = "Copilot's hooks are set up", RestartRequired = false })
+            .Valid("held-until-the-roster", new ManageResult { Outcome = ManageOutcome.Refused, Reason = ManageReason.NeedsRoster })
+            .Reads("an-unknown-outcome-reads-as-failed", """{"outcome":"rolledBack"}""");
     }
 
     // ---- usage ----

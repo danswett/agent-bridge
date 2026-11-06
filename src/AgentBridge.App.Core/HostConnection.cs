@@ -160,14 +160,41 @@ public sealed class HostConnection : IAsyncDisposable
     // goes on. knownHost: send nothing until that process is known, for an op that must never
     // reach a restarted host a second time. onlyTo: send only to that process, else throw
     // HostRestartedException, checked against the very connection the call would go on.
-    public Task<JsonElement> CallAsync(string op, object? data, TimeSpan? timeout, bool knownHost, string? onlyTo, out string? instance, CancellationToken ct = default)
+    // progress: hears the host's progress frames for it (IClientChannel.RequestAsync), on the
+    // receive path.
+    public Task<JsonElement> CallAsync(string op, object? data, TimeSpan? timeout, bool knownHost, string? onlyTo, out string? instance, CancellationToken ct = default, Action<JsonElement>? progress = null)
     {
         var now = Volatile.Read(ref current);
         if (now is null || !now.Channel.IsOpen) { throw new HostNotRunningException($"not connected to the {Product.HostName}"); }
         if (knownHost && now.Instance is null) { throw new HostNotRunningException($"still connecting to the {Product.HostName}"); }
         if (onlyTo is not null && now.Instance != onlyTo) { throw new HostRestartedException(); }
         instance = now.Instance;
-        return now.Channel.CallAsync(op, data, timeout, ct);
+        return now.Channel.CallAsync(op, data, timeout, ct, progress);
+    }
+
+    // A line for the app's log (the one this connection was given), for what the app measures of
+    // its own deliveries (Deliveries' timing marks, #600). Queued, and written in order by one task
+    // of its own: a delivery finishes on the UI thread, and the app's log opens, appends to and
+    // locks a file there, which held up input and painting whenever the disk was slow (#625,
+    // Copilot 4478421982). What is still queued is written when the connection is let go.
+    internal void Log(string line)
+    {
+        if (!logged.Writer.TryWrite(line)) { return; }
+        lock (logGate) { logging ??= Task.Run(WriteLogAsync); }
+    }
+
+    readonly System.Threading.Channels.Channel<string> logged =
+        System.Threading.Channels.Channel.CreateUnbounded<string>(new System.Threading.Channels.UnboundedChannelOptions { SingleReader = true });
+    readonly object logGate = new();
+    Task? logging;
+
+    async Task WriteLogAsync()
+    {
+        await foreach (var line in logged.Reader.ReadAllAsync().ConfigureAwait(false))
+        {
+            try { log(line); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ObjectDisposedException) { }
+        }
     }
 
     public async Task<T> CallAsync<T>(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
@@ -580,7 +607,7 @@ public sealed class HostConnection : IAsyncDisposable
     {
         Session s;
         bool exact;
-        try { s = Received.Read<Session>(data, out exact); }
+        try { s = ReceivedLimits.Fit(Received.Read<Session>(data, out exact)); }
         catch (JsonException)
         {
             // A session the app could not read may be the busy one: the list is not
@@ -736,6 +763,10 @@ public sealed class HostConnection : IAsyncDisposable
     {
         stop.Cancel();
         try { await loop; } catch (Exception) { }
+        logged.Writer.TryComplete();
+        Task? writing;
+        lock (logGate) { writing = logging; }
+        if (writing is not null) { try { await writing; } catch (Exception) { } }
     }
 }
 

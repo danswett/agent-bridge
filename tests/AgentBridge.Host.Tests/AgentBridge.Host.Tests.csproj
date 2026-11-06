@@ -24,11 +24,14 @@
     <Compile Include="..\AgentBridge.Host.Core.Tests\Fixture.cs" Link="Fixture.cs" />
     <!-- The shared protocol vectors' files (docs/protocol/vectors): this project writes the signed-command ones. -->
     <Compile Include="..\AgentBridge.Protocol.Tests\VectorFiles.cs" Link="VectorFiles.cs" />
+    <!-- How the app downloads its updates, tried here against Velopack (the app itself builds only on Windows). -->
+    <Compile Include="..\..\src\AgentBridge.App\AppPackages.cs" Link="AppPackages.cs" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- Copilot CLI screens built from captured screens and its rendering code (#825). -->
     <None Include="..\fixtures\screens\*" Link="fixtures\screens\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\fixtures\copilot\signin-401.jsonl" Link="fixtures\copilot\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

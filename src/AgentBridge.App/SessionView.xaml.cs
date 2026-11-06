@@ -144,6 +144,21 @@ public sealed partial class SessionView : UserControl
         Motion.Settle(Receipt);
         shownMessage = Card?.UserMessage ?? "";
         shownReceipt = Card?.ReceiptText ?? "";
+        promptShownOpen = Card?.PromptOpen == true;
+        Motion.Settle(PromptRule);
+        Motion.Turn(PromptChevron, "Disclosure", promptShownOpen, instant: true);
+    }
+
+    // Show prompt (§5.3, Disclosure): the chevron turns, and what opens settles 4 down into a space
+    // opened at once; closing is at once but for the chevron turning back.
+    bool promptShownOpen;
+    void Disclose()
+    {
+        if (Card is not { } c || c.PromptOpen == promptShownOpen) { return; }
+        promptShownOpen = c.PromptOpen;
+        Motion.Turn(PromptChevron, "Disclosure", promptShownOpen);
+        if (promptShownOpen) { Motion.Enter(PromptRule, "Disclosure", new System.Numerics.Vector2(0, -1)); }
+        else { Motion.Settle(PromptRule); }
     }
 
     // Your message rises 12 as it fades in; an answer's outcome fades in where it is.
@@ -158,7 +173,9 @@ public sealed partial class SessionView : UserControl
         if (c.ReceiptText != shownReceipt)
         {
             shownReceipt = c.ReceiptText;
-            if (c.HasReceipt) { Motion.Enter(Receipt, "Acknowledge"); }
+            // What a screen reader hears of it is the view model's ReceiptAnnouncement, once a
+            // change and at most one a second (Receipt), bound on the line.
+            if (c.ReceiptText.Length > 0) { Motion.Enter(Receipt, "Acknowledge"); }
         }
     }
 
@@ -210,7 +227,7 @@ public sealed partial class SessionView : UserControl
         // Another session's answers: measured from where they are drawn, held as they appear.
         answers.Forget();
         SyncQuestion();
-        Bindings.Update();
+        ReceiptMarkView.Hushed(Bindings.Update);
         Settle();
         // Another session: nothing the last one was doing (a push, a tab's fade) carries over.
         Motion.Settle(ViewRoot);
@@ -229,7 +246,7 @@ public sealed partial class SessionView : UserControl
         if (Card is { } c) { c.PropertyChanged += OnCardChanged; c.Delegates.ReplyWanted += OnReplyWanted; }
         answers.Start();
         SyncQuestion();
-        Bindings.Update();
+        ReceiptMarkView.Hushed(Bindings.Update);
         ShowResponse(reset: false);
         Settle();
         words = null;
@@ -267,6 +284,7 @@ public sealed partial class SessionView : UserControl
         }
         if (all || e.PropertyName is nameof(SessionCardViewModel.UserMessage) or nameof(SessionCardViewModel.ReceiptText)) { Acknowledge(); }
         if (all || e.PropertyName is nameof(SessionCardViewModel.Response) or nameof(SessionCardViewModel.HasVoice)) { ShowResponse(reset: false); }
+        if (all || e.PropertyName == nameof(SessionCardViewModel.PromptOpen)) { Disclose(); }
         if ((all || e.PropertyName == nameof(SessionCardViewModel.AsksText)) && questionView is not null && Card is { } c && questionView.Heading != c.AsksText)
         {
             // Who asks, drawn by the app in the question: not the person's typing laid out.
@@ -312,7 +330,7 @@ public sealed partial class SessionView : UserControl
             // it moves nowhere, and the heading with focus stays out of sight (#893 review, Copilot
             // 4481392664, the PWA's revealQuestion).
             var inQuestion = Motion.Within(target, QuestionCard);
-            var tall = ConversationScroll.ViewportHeight > 0 && QuestionCard.ActualHeight > ConversationScroll.ViewportHeight;
+            var tall = ConversationScroll is { ViewportHeight: > 0 } scroll && QuestionCard.ActualHeight > scroll.ViewportHeight;
             (inQuestion && !(tall && target == heading) ? (UIElement)QuestionCard : target).StartBringIntoView(new BringIntoViewOptions { AnimationDesired = Ready && Motion.Scrolls });
             if (inQuestion) { GuardAnswer(); }
             questionScrolled |= inQuestion;

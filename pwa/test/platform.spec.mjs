@@ -237,7 +237,7 @@ test.describe('the system\'s Back on a phone', () => {
     await summary.click();
     await paneShows(page, 'Run full test suite');
     await stepTaken(page);
-    await v.locator('.session-header .back').click();
+    await v.locator('.session-bar .back').click();
     await expect(v).toBeHidden();
     await expect(page.locator('#list-pane')).toBeVisible();
     await page.goBack();
@@ -246,7 +246,7 @@ test.describe('the system\'s Back on a phone', () => {
 
   test('the header\'s Back over a delegate closes it, so Forward to its session shows it closed and Back from there is the list', async ({ page }) => {
     const v = await openDelegate(page, AS.androidInstalled);
-    await v.locator('.session-header .back').click();
+    await v.locator('.session-bar .back').click();
     await expect(page.locator('#list-pane')).toBeVisible();
     await page.goForward();
     await expect(v).toBeVisible();
@@ -323,22 +323,6 @@ test.describe('the system\'s Back on a phone', () => {
     await expect(page.locator('#list-pane')).toBeVisible();
   });
 
-  test('a delegate opened from the phone\'s chip row is a step, and its chip pressed again takes it back', async ({ page }) => {
-    await page.goto('icon.svg');
-    await on(page, AS.androidInstalled, '&delegates=1');
-    const v = await open(page, DELEGATING);
-    const chip = v.locator('.delegate-strip .strip-item[data-id="demo-agent-suite"]');
-    await chip.click();
-    await paneShows(page, 'Run full test suite');
-    await stepTaken(page);
-    await chip.click();
-    await expect(pane(page)).toHaveCount(0);
-    await expect.poll(() => step(page)).toBeNull();
-    await page.goBack();
-    await expect(v).toBeHidden();
-    await expect(page.locator('#list-pane')).toBeVisible();
-  });
-
   test('Back from a delegate opened from its row puts focus back on that row, not on the page', async ({ page }) => {
     await page.goto('icon.svg');
     await on(page, AS.androidInstalled, '&delegates=1');
@@ -356,17 +340,13 @@ test.describe('the system\'s Back on a phone', () => {
 
   test('opening another delegate over one replaces it and its step, so Back from there is its session', async ({ page }) => {
     const v = await openDelegate(page, AS.androidInstalled);
-    // From the conversation's events, the witness opens in the suite's place.
+    // From the conversation's events, another opens in the suite's place: one step still, now its.
     await v.getByRole('tab', { name: 'Conversation' }).click();
     await expect.poll(() => step(page)).toBeNull();
-    await v.locator('.delegate-events .delegate-link').first().click();
-    const opened = await pane(page).locator('.delegate-title').textContent();
-    await expect.poll(() => step(page)).not.toBeNull();
-    // Then another from the strip: one step still, now the second's.
-    const other = v.locator('.delegate-strip .strip-item:not(.strip-fold):not([aria-pressed="true"])').first();
+    const other = v.locator('.delegate-events .delegate-link').first();
     const otherId = await other.getAttribute('data-id');
     await other.click();
-    await expect(pane(page).locator('.delegate-title')).not.toHaveText(opened);
+    await expect(pane(page).locator('.delegate-title')).not.toHaveText('Run full test suite');
     await stepTaken(page, otherId);
     await page.goBack();
     await expect(pane(page)).toHaveCount(0);

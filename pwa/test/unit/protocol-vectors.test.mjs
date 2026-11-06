@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import {
-  readActivity, readAnswerResult, readAttachmentState, readBackground, readDiscoveryHeld, readHello, readOwn,
+  readActivity, readAnswerResult, readAttachmentState, readBackground, readDiscoveryHeld, readHello, readOwn, readProgress,
   readQuestion, readSession, readSource, readStopResult, readSubagent, readTool,
 } from '../../js/protocol.js';
 import { checkAnswer } from '../../js/answers.js';
@@ -82,7 +82,7 @@ async function shown(message) {
   const handlers = {};
   const list = [];
   const self = {
-    registration: { scope: SCOPE, showNotification: async (title, options) => { list.push({ title, ...options }); } },
+    registration: { scope: SCOPE, showNotification: async (title, options) => { list.push({ title, ...options }); }, getNotifications: async () => [] },
     clients: { matchAll: async () => [], openWindow: async () => {}, claim() {} },
     addEventListener: (type, fn) => { handlers[type] = fn; },
     skipWaiting() {},
@@ -137,6 +137,7 @@ function holds(read, wire, unread = [], at = '') {
 // it drops the record. unread: the parts it has no use for. refuses: false, with why, when it
 // cannot drop one it fails to read.
 const SESSION_ID = '4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b';
+const ESCAPED_MESSAGE = () => records.get('Question').valid.find((v) => v.name === 'an-escaped-approval').json.message;
 const READS = {
   MachineInfo: { read: (j) => readHello({ protocol: 1, machine: j, capabilities: [] }).machine },
   HelloResult: { read: readHello },
@@ -145,6 +146,9 @@ const READS = {
   Field: { read: (j) => readQuestion({ fields: [j] }).fields[0] ?? null },
   FieldConstraints: { read: (j) => readQuestion({ fields: [{ name: 'f', type: 'number', constraints: j }] }).fields[0].constraints },
   Question: { read: readQuestion },
+  // One the PWA cannot read is dropped for a hold at the machine that keeps nothing of it (no shown).
+  // Its marks are checked against the message they are of: the escaped approval's own.
+  EscapedText: { read: (j) => { const e = readQuestion({ kind: 'approval', message: ESCAPED_MESSAGE(), escaped: j }).escaped; return e?.shown === null ? null : e; } },
   Background: { read: readBackground },
   ActivitySource: { read: readSource },
   OwnActivity: { read: readOwn },
@@ -202,6 +206,10 @@ const READS = {
   SessionPatch: { read: readPatch },
   SubagentsPatch: { read: (j) => readPatch({ id: SESSION_ID, subagents: j })?.subagents ?? null },
   AnswerResult: { read: readAnswerResult },
+  // An answer's or a reply's progress frame and its result's timings, which only a host asked
+  // for progress sends (#600): read as the service gets them.
+  DeliveryProgress: { read: readProgress },
+  DeliveryTimings: { read: (j) => readAnswerResult({ outcome: 'delivered', timings: j }).timings ?? {} },
   ReplyResult: { read: readAnswerResult },
   StopResult: { read: readStopResult },
   AttachmentState: { read: readAttachmentState },
@@ -233,9 +241,10 @@ const READS = {
   UsageReader: { read: (j) => readUsage({ agents: [{ agent: 'copilot', label: 'Copilot', readBy: j }] }).agents[0].readBy },
   // Every push must show something, or iOS revokes the app's notifications (sw.js): the worker
   // shows a generic notice for whatever it cannot read, and never drops one.
-  PushMessage: { read: shown, unread: ['web_push', 'notification.data.v', 'notification.data.at'], refuses: 'a push is always shown' },
-  PushNotification: { read: async (j) => (await shown({ notification: j })).notification, unread: ['data.v', 'data.at'], refuses: 'a push is always shown' },
-  PushNoticeData: { read: async (j) => (await shown({ notification: { data: j } })).notification.data, unread: ['v', 'at'], refuses: 'a push is always shown' },
+  // agent and sessions: a signIn notice's (#800), which the worker shows only as its title and body.
+  PushMessage: { read: shown, unread: ['web_push', 'notification.data.v', 'notification.data.at', 'notification.data.agent', 'notification.data.sessions'], refuses: 'a push is always shown' },
+  PushNotification: { read: async (j) => (await shown({ notification: j })).notification, unread: ['data.v', 'data.at', 'data.agent', 'data.sessions'], refuses: 'a push is always shown' },
+  PushNoticeData: { read: async (j) => (await shown({ notification: { data: j } })).notification.data, unread: ['v', 'at', 'agent', 'sessions'], refuses: 'a push is always shown' },
 };
 
 // Records the PWA sends that it checks first, mirroring the host's check word for word.
@@ -386,10 +395,22 @@ const NOT_REPLAYED = {
   TransferRequest: 'host to host: no client sends it',
   TransferResult: 'host to host: no client reads it',
   UpdateCommand: 'built inside UpdateControl from a fresh request, with nothing else in it',
-  // The PWA asks for progress from #600; until then a host sends neither to it.
-  DeliveryProgress: 'progress frames come only to a client that sends progress: true, which the PWA does not yet',
-  DeliveryTimings: 'timings come only to a client that sends progress: true, which the PWA does not yet',
+  // #801 slice A is the host's half; the PWA's controls wait for ui.md's spec.
+  ManageCommand: 'the PWA does not manage machines yet (#801)',
+  ManageRepairArgs: 'the PWA does not manage machines yet (#801)',
+  ManageConfigArgs: 'held until the signed roster (#55)',
+  ManageHaTokenRequest: 'held until the signed roster (#55)',
+  ManageRestarts: 'the PWA does not manage machines yet (#801)',
+  ManagePending: 'the PWA does not manage machines yet (#801)',
+  ManageLast: 'the PWA does not manage machines yet (#801)',
+  ManageState: 'the PWA does not manage machines yet (#801)',
+  ManageResult: 'the PWA does not manage machines yet (#801)',
   Attention: 'read within Session once the PWA shows attention (#800); until then Session leaves it unread',
+  // The PWA shows what a reboot took once Design's spec lands (#780, client slice); until then
+  // it ignores machine.restore and reads a restored push as a question (title and body only).
+  RestoreNotice: 'the PWA does not read machine.restore yet (#780)',
+  RestoreSession: 'the PWA does not read machine.restore yet (#780)',
+  SessionRestored: 'no host sends a session\'s restored yet, and the PWA does not read it (#780)',
 };
 
 // ---- the replay ----
@@ -528,7 +549,8 @@ for (const v of signed.valid) {
     const [signer, machine] = await Promise.all([pair(signed.keys.signer), pair(signed.keys.machine)]);
     const command = await signCommand({
       key: signer, deviceId: signed.keys.signer.device, machinePublic: machine.public,
-      action: v.body.action, session: v.body.target.session, to: v.body.to, now: v.body.issuedAt * 1000, request: v.body.request,
+      action: v.body.action, session: v.body.target.session, question: v.body.target.question, shown: v.body.target.shown,
+      args: v.body.args, to: v.body.to, now: v.body.issuedAt * 1000, request: v.body.request,
     });
     assert.deepEqual(JSON.parse(fromUtf8.decode(fromBase64url(command.body))), v.body);
     assert.deepEqual(command, v.command);

@@ -38,20 +38,28 @@ export async function macOf(keyBytes, bodyBytes) {
 }
 
 // A signed command for the machine with machinePublic: { body, by, mac }, each base64url. to is
-// the machine that acts on it; omitted, the machine it is signed for.
-export async function signCommand({ key, deviceId, machinePublic, action, session, to, now = Date.now(), request = globalThis.crypto.randomUUID() }) {
+// the machine that acts on it; omitted, the machine it is signed for. question and shown: an
+// escaped approval's confirmation names the question and what was read (#803), in the order the
+// host's CommandTarget writes them, and nothing else does. args: a management command's arguments
+// (#801), signed after expiresAt as the host's CommandBody writes them; absent for everything else.
+export async function signCommand({ key, deviceId, machinePublic, action, session, to, question, shown, args, now = Date.now(), request = globalThis.crypto.randomUUID() }) {
   const machine = await deviceIdOf(machinePublic);
   const issuedAt = Math.floor(now / 1000);
-  const body = utf8.encode(JSON.stringify({
+  const target = { machine, session };
+  if (question !== undefined) { target.question = question; }
+  if (shown !== undefined) { target.shown = shown; }
+  const fields = {
     v: 1,
     action,
     request,
     principal: { kind: 'user', device: deviceId },
-    target: { machine, session },
+    target,
     to: to ?? machine,
     issuedAt,
     expiresAt: issuedAt + COMMAND_LIFETIME_S,
-  }));
+  };
+  if (args !== undefined) { fields.args = args; }
+  const body = utf8.encode(JSON.stringify(fields));
   const mac = await macOf(await commandKey(key, machinePublic, deviceId, machine), body);
   return { body: toBase64url(body), by: toBase64url(key.public), mac: toBase64url(mac) };
 }
@@ -67,11 +75,30 @@ export function signTrust({ question, choice, ...rest }) {
   return signCommand({ ...rest, action: trustAction(choice), session: question });
 }
 
+// The confirmation of an approval with escaped characters (#803, docs/protocol/v1-sessions.md,
+// "Escaped approvals"): signed when its button is pressed, for this session, this question and the
+// digest of the message as this device has it, with the answer's own request.
+export const ESCAPED_ACTION = 'session.approve:escaped';
+export function signEscapedApproval({ session, question, shown, request, ...rest }) {
+  return signCommand({ ...rest, action: ESCAPED_ACTION, session, question, shown, request });
+}
+
 // The sessions the account's other machines offer for a transfer to target, each with its
 // machine's static key, which the command is signed for: [{ hostId, machineName, key,
 // resumable }]. One machine at a time, each over a short channel, as fleet.js looks at them; a
 // machine that does not answer, or does not hand its sessions on, contributes nothing.
-export async function collectRemote({ connection, targetId, me, makeClient, timeoutMs = 10000 }) {
+// Lookups under way, from the first channel's opening to the last one closed: the connection
+// doesn't rest under one (main.js busy), or Launch would show a list cut short that nothing asks
+// again for.
+let collecting = 0;
+export const collectingRemote = () => collecting > 0;
+
+export async function collectRemote(args) {
+  collecting += 1;
+  try { return await collectEach(args); } finally { collecting -= 1; }
+}
+
+async function collectEach({ connection, targetId, me, makeClient, timeoutMs = 10000 }) {
   const out = [];
   for (const d of connection.presence ?? []) {
     if (d.kind !== 'host' || d.id === me || d.id === targetId) { continue; }

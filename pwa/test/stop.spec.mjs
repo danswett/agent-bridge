@@ -21,7 +21,7 @@ const log = (page) => page.evaluate(() => window.agentBridgeDemo.host.stopLog);
 async function showEnd(page, id) {
   const v = await open(page, id);
   if (await end(page, id).isVisible()) { return; }
-  const more = v.locator('.session-header .more');
+  const more = v.locator('.session-bar .more');
   if (await more.isVisible()) {
     await more.click();
     await v.getByRole('menuitem', { name: 'Details' }).click();
@@ -45,7 +45,8 @@ async function recordCard(page, id) {
       const now = {
         status: c.dataset.status,
         text: c.querySelector('.status-text')?.textContent ?? null,
-        endDisabled: c.querySelector('.end-session .end-button')?.disabled ?? null,
+        // aria-disabled, not disabled: a disabled button would lose its focus (#369).
+        endDisabled: c.querySelector('.end-session .end-button')?.getAttribute('aria-disabled') === 'true',
       };
       const last = drawn.at(-1);
       if (!last || last.status !== now.status || last.text !== now.text || last.endDisabled !== now.endDisabled) { drawn.push(now); }
@@ -140,10 +141,10 @@ test.describe('outcomes', () => {
     await script(page, 'refused', 'failed');
     await showEnd(page, CODEX);
     await end(page, CODEX).click();
-    await expect(footer(page, CODEX).locator('.stop-status')).toHaveText('The machine refused to end this session: the session runs as administrator, and the host does not end elevated sessions; end it at the machine.');
+    await expect(footer(page, CODEX).locator('.stop-status')).toHaveText('The machine refused to end this session: the session runs as administrator, and the machine does not end elevated sessions; end it at the machine.');
     await expect(footer(page, CODEX).locator('.stop-status')).toHaveClass(/\bbad\b/);
     await end(page, CODEX).click();
-    await expect(footer(page, CODEX).locator('.stop-status')).toHaveText("Couldn't end the session: the host could not terminate the session's process (Access is denied.).");
+    await expect(footer(page, CODEX).locator('.stop-status')).toHaveText("Couldn't end the session: the machine could not terminate the session's process (Access is denied.).");
     await expect(card(page, CODEX)).toHaveAttribute('data-status', 'idle');
   });
 

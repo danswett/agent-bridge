@@ -219,7 +219,9 @@ public sealed class LaunchTests : IAsyncLifetime
     {
         var asked = optionsAsked;
         var unseen = new LaunchViewModel(main, ui);
-        await Task.Delay(500);
+        // A fetch would have been written as it was made: once the host has everything sent
+        // before this, none was.
+        await connection.CallAsync(FakeHost.Barrier);
         Assert.Equal(asked, optionsAsked);
 
         unseen.Opened();
@@ -354,10 +356,12 @@ public sealed class LaunchTests : IAsyncLifetime
         var raised = 0;
         launch.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(LaunchViewModel.StatusText)) { Interlocked.Increment(ref raised); } };
 
-        // Choices read again, and the machine's status updated: nothing new to say.
+        // Choices read again, and the machine's status updated: nothing new to say. Once the
+        // connection holds the status sent and no reload is on its way, all it led to is done.
         await launch.RefreshAsync();
+        var before = TestUi.Read(() => connection.Status);
         await host.SendAsync(HostOps.StatusEvent, FakeHost.StatusOf());
-        await Task.Delay(200);
+        await Wait.UntilAsync(() => !ReferenceEquals(connection.Status, before) && launch.CanReload, "the status taken in");
 
         Assert.Equal(0, Volatile.Read(ref raised));
     }
@@ -471,7 +475,8 @@ public sealed class LaunchTests : IAsyncLifetime
 
         await Wait.UntilAsync(() => launch.State == "started", "started");
         Assert.Equal("", launch.Prompt);
-        await Task.Delay(200);
+        // A card asked to open before it arrived opens as it arrives: once it is here, it would have.
+        await Wait.UntilAsync(() => main.AllCards.Any(c => c.Id == "new-1"), "its card");
         Assert.Empty(opened);
     }
 
@@ -509,7 +514,9 @@ public sealed class LaunchTests : IAsyncLifetime
         clock.Advance(TimeSpan.FromSeconds(6));
         await Wait.UntilAsync(() => Volatile.Read(ref optionsAsked) == asked + 1 && launch.CanReload, "listed again once soon");
         clock.Advance(TimeSpan.FromSeconds(60));
-        await Task.Delay(200);
+        // The fake clock runs a timer that is due inside Advance, and a listing it started was
+        // written then: once the host has everything sent before this, none was.
+        await connection.CallAsync(FakeHost.Barrier);
         Assert.Equal(asked + 1, Volatile.Read(ref optionsAsked));
 
         clock.Advance(TimeSpan.FromSeconds(62));
@@ -842,7 +849,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         link.Switch();
 
         await Wait.UntilAsync(() => launch.State == "unconfirmed", "the launch to be unconfirmed");
-        Assert.Equal("Not confirmed: the relay connection to this machine's host changed before it said whether the launch started. Check at this machine before launching again.", launch.StatusText);
+        Assert.Equal("Not confirmed: the relay connection to this machine's bridge changed before it said whether the launch started. Check at this machine before launching again.", launch.StatusText);
         Assert.True(launch.CanLaunch);
         gate.SetResult();
     }

@@ -12,12 +12,14 @@
 // never logged, announced, stored or put in a notification.
 import { h } from './dom.js';
 import { glyph } from './glyph.js';
-import { AGENT_NAME, RESOLVED_SHOWN_MS, SIGN_IN, clockTime, confirming, flowExpired, needsSignIn, readCode, readDone, readStartResult, spelled } from '../auth-state.js';
+import { AGENT_NAME, RESOLVED_SHOWN_MS, SIGN_IN, clockTime, confirming, flowExpired, needsSignIn, plainText, readCode, readDone, readStartResult, spelled } from '../auth-state.js';
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const uuid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 // How long a signin.code or signin.done is held for a start whose result hasn't come yet.
 const EARLY_MS = 10_000;
+// The most of a session's title the banner shows (the app's SignInBanners.TitleMax).
+const TITLE_MAX = 120;
 // A banner's drawing: rebuilt when this changes, so a needed banner's button never lingers.
 const viewState = (b) => (b.state === 'needed' ? 'needed' : b.state === 'confirming' ? 'confirming' : 'resolved');
 const keyOf = (hostId, agent, account) => `${hostId}\n${agent}\n${account ?? ''}`;
@@ -83,7 +85,9 @@ export function signInBanners(links, { flows = new Map(), resolved = new Map(), 
         machine: name || 'this machine',
         account: g.account,
         state: waiting ? 'confirming' : 'needed',
-        sessions: shown.map((s) => ({ id: s.id, title: s.title || 'Untitled session' })),
+        // An agent's title, revealed and at most a line long (as a host's sentence): a hidden or bidi
+        // character can't reorder the banner, nor a long one stretch it (#979). Each opens by its id.
+        sessions: shown.map((s) => ({ id: s.id, title: plainText(s.title, TITLE_MAX) ?? 'Untitled session' })),
         // Only a provider the host says has no device flow is signed in at the machine. A value this
         // client doesn't know, or none, is not that (the no-RDP rule, #696).
         atMachine: g.signIn === 'machine',
@@ -103,7 +107,7 @@ export function signInBanners(links, { flows = new Map(), resolved = new Map(), 
 }
 
 // What a banner says, and what is read aloud when it comes or changes (ui.md §6.13): "Copilot on
-// DEV-VM1 needs sign-in · @octocat" over "4 sessions affected".
+// DEV-VM1 needs sign-in · @octocat" over "2 sessions affected: Fix the relay, Draft the notes".
 export function bannerWords(b) {
   const who = `${b.agentName} on ${b.machine}`;
   const acct = b.account ? ` \u00b7 @${b.account}` : '';
@@ -116,17 +120,29 @@ export function bannerWords(b) {
     const line = `Signed in \u00b7 waiting for ${plural(b.sessions.length, 'session', 'sessions')} to confirm`;
     return { head: `${who}${acct}`, line, said: `${who}: ${line}` };
   }
-  const f = b.flow;
-  let line = `${plural(b.sessions.length, 'session', 'sessions')} affected`;
-  if (b.atMachine) { line = 'Sign in at the machine'; }
-  else if (f?.outcome === 'failed') { line = f.reason ? `Sign-in failed \u00b7 ${f.reason}` : 'Sign-in failed'; }
-  else if (f?.outcome === 'refused') { line = f.reason ? `Sign-in refused \u00b7 ${f.reason}` : 'Sign-in refused'; }
-  else if (f?.expired) { line = 'Code expired'; }
-  else if (f?.code && !f.code.refused) { line = `Waiting for sign-in \u00b7 code expires ${clockTime(f.code.expiresAt)}`; }
-  else if (b.recovery === 'checking') { line = 'Checking for a sign-in that still works\u2026'; }
-  else if (b.recovery === 'signingIn' && !f) { line = 'Waiting for sign-in'; }
+  const line = stateLine(b) ?? `${affected(b)}${b.sessions.map((s) => s.title).join(', ')}`;
   return { head: `${who} needs sign-in${acct}`, line, said: `${who} needs sign-in` };
 }
+
+// What a needed banner says instead of its sessions, or null when it has nothing else to say.
+function stateLine(b) {
+  const f = b.flow;
+  if (b.atMachine) { return 'Sign in at the machine'; }
+  if (f?.outcome === 'failed') { return f.reason ? `Sign-in failed \u00b7 ${f.reason}` : 'Sign-in failed'; }
+  if (f?.outcome === 'refused') { return f.reason ? `Sign-in refused \u00b7 ${f.reason}` : 'Sign-in refused'; }
+  if (f?.expired) { return 'Code expired'; }
+  if (f?.code && !f.code.refused) { return `Waiting for sign-in \u00b7 code expires ${clockTime(f.code.expiresAt)}`; }
+  if (b.recovery === 'checking') { return 'Checking for a sign-in that still works\u2026'; }
+  if (b.recovery === 'signingIn' && !f) { return 'Waiting for sign-in'; }
+  return null;
+}
+
+// "2 sessions affected: " before the sessions' titles, each a link to its session (ui.md §6.13,
+// owner decision 6675817525), with no line of titles of its own; without a session, the count alone.
+const affected = (b) => `${plural(b.sessions.length, 'session', 'sessions')} affected${b.sessions.length ? ': ' : ''}`;
+
+// Whether the banner's line names its sessions: a needed banner with nothing else to say.
+const listsSessions = (b) => b.state === 'needed' && b.sessions.length > 0 && stateLine(b) === null;
 
 // What is said aloud as a banner changes, once each (§9.1 A6): every way an attempt can end, as the
 // banner or the sheet shows it, so none passes unsaid. Never the machine's own words, nor the code.
@@ -387,8 +403,8 @@ export class SignInBanners {
     const els = view.els;
     els.head = h('p', { class: 'sign-in-head' });
     // Focusable from script only (never a Tab stop): where focus goes once the button has gone.
+    // While the banner names its sessions, each title in it is a button that opens that session.
     els.line = h('p', { class: 'sign-in-line', tabindex: '-1' });
-    els.sessions = h('ul', { class: 'sign-in-sessions' });
     // Not a live region: it is in the list pane, which a phone hides, and drawn on every render. A
     // failed start is said politely through the sign-in live region instead (#start).
     els.problem = h('p', { class: 'sign-in-problem' });
@@ -396,7 +412,7 @@ export class SignInBanners {
     els.verb = h('button', { type: 'button', class: 'button sign-in-start', onclick: (e) => this.#start(view, e.detail > 0) });
     view.el = h('section', { class: 'banner sign-in-banner', tabindex: '-1', dataset: { key: b.key, hostId: b.hostId, agent: b.agent } },
       h('span', { class: 'sign-in-mark' }, glyph(view.state === 'needed' ? 'needs' : 'idle', { size: 16 })),
-      h('div', { class: 'sign-in-body' }, els.head, els.line, els.sessions, els.problem, els.actions));
+      h('div', { class: 'sign-in-body' }, els.head, els.line, els.problem, els.actions));
     return view;
   }
 
@@ -408,17 +424,33 @@ export class SignInBanners {
     view.el.dataset.state = b.state === 'needed' ? (b.flow?.code ? 'pending' : b.flow?.outcome ?? (b.flow?.expired ? 'expired' : b.recovery ?? 'needed')) : b.state;
     view.el.setAttribute('aria-label', words.head);
     els.head.textContent = words.head;
-    els.line.textContent = words.line;
-    els.line.hidden = !words.line;
-    const ids = b.sessions.map((s) => `${s.id}\n${s.title}`).join('\n\n');
-    if (view.ids !== ids) {
-      view.ids = ids;
-      // Each button keeps only where it goes, never the banner, whose flow may hold a code.
-      const { hostId } = b;
-      els.sessions.replaceChildren(...b.sessions.map(({ id, title }) => h('li', null,
-        h('button', { type: 'button', class: 'sign-in-session', onclick: () => this.open(hostId, id) }, title))));
+    // Drawn again only when its words change, so a session's button with focus keeps it.
+    const lists = listsSessions(b);
+    const drawn = `${lists}\n${words.line}\n${b.sessions.map((s) => s.id).join('\n')}`;
+    if (view.drawn !== drawn) {
+      view.drawn = drawn;
+      if (lists) {
+        // Each button keeps only where it goes, never the banner, whose flow may hold a code.
+        const { hostId } = b;
+        // Each title keeps its comma (a line breaks only after the comma and its space), inside its
+        // button, so it follows a long title's last line rather than its first. The link's name is
+        // the title alone, and only the title is underlined.
+        const last = b.sessions.length - 1;
+        const parts = [affected(b)];
+        b.sessions.forEach(({ id, title }, i) => {
+          if (i > 0) { parts.push(' '); }
+          parts.push(h('span', { class: 'sign-in-item' },
+            h('button', { type: 'button', class: 'sign-in-session', onclick: () => this.open(hostId, id) },
+              h('span', { class: 'sign-in-title' }, title),
+              i < last ? h('span', { 'aria-hidden': 'true' }, ',') : null)));
+        });
+        els.line.replaceChildren(...parts);
+      } else {
+        els.line.textContent = words.line;
+      }
+      els.line.classList.toggle('sign-in-links', lists);
     }
-    els.sessions.hidden = !b.sessions.length;
+    els.line.hidden = !words.line;
     const problem = this.#flows.get(b.key)?.problem ?? '';
     if (els.problem.textContent !== problem) { els.problem.textContent = problem; }
     els.problem.hidden = !problem;
@@ -760,6 +792,24 @@ export class SignInBanners {
     } catch {
       if (said) { said.textContent = 'Couldn\u2019t copy. Select the code to copy it.'; }
     }
+  }
+
+  // A sign-in push's link (?host=&signin=, #969): that machine's banner for that agent, with focus on
+  // its action (Sign in, or its line when there is nothing to press here). The link picks a banner
+  // and nothing more. With no banner for it now (signed in since, or recovered), nothing is said and
+  // focus stays where it is: the machine is shown as it is. Says 'gone' (no banner for it),
+  // 'hidden' (one, not on screen yet: focus() on it would do nothing, so it is left to the next
+  // draw), or 'shown' (on screen, and focus moved to it).
+  reveal(hostId, agent) {
+    this.render();
+    const b = [...this.#views.values()].map((v) => v.entry).find((e) => e.hostId === hostId && e.agent === agent && e.state === 'needed');
+    const view = b && this.#views.get(b.key);
+    if (!view) { return 'gone'; }
+    const target = view.els.actions.contains(view.els.verb) ? view.els.verb : view.els.line;
+    if (!target.getClientRects().length) { return 'hidden'; }
+    target.focus({ preventScroll: true });
+    target.scrollIntoView?.({ block: 'nearest' });
+    return 'shown';
   }
 
   // With the account: nothing of its machines stays on the page.

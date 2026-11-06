@@ -106,12 +106,24 @@ internal sealed class DeliveryTimeline
     // The agent's own time for the prompt or answer it recorded, where its record has one.
     public void Recorded(DateTimeOffset? at)
     {
-        if (at is not { } when) { return; }
-        var ms = (long)(when - startUtc).TotalMilliseconds;
-        // An agent's clock reads to the millisecond and is the same machine's: earlier than the
-        // request means the record is not this one's, or the clock moved, and says nothing.
-        if (ms < 0) { return; }
+        if (After(at) is not { } ms) { return; }
         lock (gate) { recorded ??= ms; }
+    }
+
+    // An agent's time in ms after the request was received, or null. An agent's clock reads to
+    // the millisecond and is the same machine's: earlier than the request means the record is not
+    // this one's, or the clock moved, and says nothing.
+    public long? After(DateTimeOffset? at) =>
+        at is { } when && (long)(when - startUtc).TotalMilliseconds is var ms && ms >= 0 ? ms : null;
+
+    // Now, in ms after the request was received.
+    public long Elapsed() => Now();
+
+    // For a reply's confirmation line (#1025): when every key had gone, whether the session was
+    // working then, and the agent's time on its record, each in ms after receipt.
+    public (long? Typed, bool Working, long? Recorded) Stages()
+    {
+        lock (gate) { return (typed, working ?? false, recorded); }
     }
 
     public void Confirmed() { lock (gate) { confirmed ??= Now(); } }

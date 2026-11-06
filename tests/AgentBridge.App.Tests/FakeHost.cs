@@ -61,10 +61,21 @@ sealed class FakeHost : IAsyncDisposable
         On(HostOps.Status, _ => Status);
         On(UsageProtocol.Subscribe, _ => UsageReport.Empty);
         On(UsageProtocol.Get, _ => UsageReport.Empty);
+        On(Barrier, _ => new { });
     }
+
+    // A request answered by nothing but its answer, for a test to send after what it watches.
+    // A channel serves its requests in the order they come (LocalChannel's read loop starts each
+    // handler as it reads it), so once this one is answered, every request the app wrote before
+    // it has reached the host: a test can say "nothing was asked" without sleeping first.
+    public const string Barrier = "test.barrier";
 
     public string Folder => folder;
     public LocalEndpoint Endpoint => LocalEndpoint.For(folder);
+
+    // Each status a run of its own, as each read of the wall clock was, but the same in every run
+    // of the tests: Make.T0 and a second more for each status made.
+    static long runs;
 
     public static HostStatus StatusOf(RelayState relay = RelayState.SignedOut, string? agentHaBridge = null) => new()
     {
@@ -72,7 +83,7 @@ sealed class FakeHost : IAsyncDisposable
         Profile = "test",
         Folder = "x",
         ProcessId = 4242,
-        StartedAt = DateTimeOffset.UtcNow,
+        StartedAt = Make.T0.AddSeconds(Interlocked.Increment(ref runs)),
         Machine = new MachineInfo("host-id", "Test PC", "windows", "0.1.0"),
         Relay = new RelayStatus(relay),
         SignIn = new SignInStatus(SignInState.Idle),
@@ -81,6 +92,14 @@ sealed class FakeHost : IAsyncDisposable
     };
 
     public void On(string op, Func<JsonElement, object?> answer) => ops[op] = d => Task.FromResult(answer(d));
+
+    // Asked to stop, it stops once its answer has gone, as the real host does (HostControl), rather
+    // than a guessed 50 ms after it.
+    public void StopsWhenAsked() => On(HostOps.Stop, data => new ChannelReply(new { stopping = true }, ch =>
+    {
+        _ = Task.Run(StopAsync);
+        return Task.CompletedTask;
+    }));
 
     // A request the host takes its time over, held by awaiting. Held by blocking (.Wait, .Result,
     // SpinWait) each one kept a pool thread for up to Patience, and the tests side by side then
@@ -303,6 +322,9 @@ sealed class FakeProcesses : IProcesses
     public int Start(string path, IReadOnlyList<string> arguments) { Started.Add((path, arguments)); OnStart?.Invoke(); return 99; }
     public bool IsRunning(int pid) => Alive.Contains(pid);
     public void Kill(int pid) => Killed.Add(pid);
+    // When each started, where the test says.
+    public Dictionary<int, DateTimeOffset> StartTimes { get; } = [];
+    public DateTimeOffset? StartedAt(int pid) => StartTimes.TryGetValue(pid, out var at) ? at : null;
 }
 
 // The test's UI thread, as a dispatcher: actions run one at a time on it.
@@ -447,33 +469,72 @@ sealed class HoldingDispatcher : IUiDispatcher
     });
 }
 
+static class Barriers
+{
+    // FakeHost.Barrier on any host: one that doesn't know it (DemoHost) refuses it, and the
+    // refusal comes back in the same order an answer would.
+    public static async Task HostHasAllAsync(this HostConnection connection)
+    {
+        try { await connection.CallAsync(FakeHost.Barrier); }
+        catch (HostErrorException) { }
+    }
+}
+
 static class Wait
 {
+    // How often the condition is looked at.
+    public static readonly TimeSpan Look = TimeSpan.FromMilliseconds(20);
+    // The wall clock's only part: a watchdog this many patiences long, so a wait whose every look
+    // is starved still ends, and loudly, well before --blame-hang's 5 min ends the whole run.
+    public const int Watchdog = 6;
+
     // The condition is read under the UI gate, so it never sees a posted action part-way through.
     // why: what was seen instead, said when it times out.
-    public static async Task UntilAsync(Func<bool> done, string what, TimeSpan? patience = null, Func<string>? why = null)
+    public static Task UntilAsync(Func<bool> done, string what, TimeSpan? patience = null, Func<string>? why = null) =>
+        UntilAsync(done, what, patience, why, TimeProvider.System, () => Task.Delay(Look));
+
+    // Patience is counted in pauses between looks (patience / Look of them), not read off the wall
+    // clock. On a starved runner the process can go unscheduled for seconds: a 7.4 s gap between
+    // two looks took most of a 10 s deadline, and the connection the test waited for, held up by the
+    // same stall, came after it (#909). On Windows CI several tests have timed out within the same
+    // few milliseconds (#465). A gap like that says the test could not run, not that what it waited
+    // for never came, so it now costs one pause. The first look is free; each pause after it takes
+    // at least Look and is followed by a look, and only a look after the last pause that still fails
+    // gives up, so no wait gives up sooner than its patience.
+    // clock and nextLook: a test of this helper stands in for the wall clock and the pause.
+    internal static async Task UntilAsync(Func<bool> done, string what, TimeSpan? patience, Func<string>? why, TimeProvider clock, Func<Task> nextLook)
     {
-        var deadline = DateTime.UtcNow + (patience ?? FakeHost.Patience);
-        var last = DateTime.UtcNow;
+        var limit = patience ?? FakeHost.Patience;
+        var allowed = (int)Math.Ceiling(limit / Look);
+        var began = clock.GetTimestamp();
+        var last = began;
         var longest = TimeSpan.Zero;
-        while (!TestUi.Read(done))
+        var pauses = 0;
+        var checks = 0;
+        while (true)
         {
-            var now = DateTime.UtcNow;
-            if (now - last > longest) { longest = now - last; }
+            checks++;
+            if (TestUi.Read(done)) { return; }
+            var now = clock.GetTimestamp();
+            var gap = clock.GetElapsedTime(last, now);
+            if (gap > longest) { longest = gap; }
             last = now;
-            // On Windows CI several tests have timed out within the same few milliseconds (#465):
-            // a gap of seconds between two looks says the test itself could not run (the pool or
-            // its UI thread held), not that what it waited for never came.
-            if (now > deadline)
+            var elapsed = clock.GetElapsedTime(began, now);
+            var watchdog = elapsed > limit * Watchdog;
+            if (pauses >= allowed || watchdog)
             {
-                throw TimedOut(what, longest, why is null ? null : TestUi.Read(why));
+                var bound = watchdog
+                    ? $"the watchdog's {(limit * Watchdog).TotalSeconds:F0} s of wall time ran out after {pauses} of {allowed} pauses, {checks} checks"
+                    : $"{pauses} of {allowed} pauses, {checks} checks, {elapsed.TotalSeconds:F1} s";
+                throw TimedOut(what, longest, why is null ? null : TestUi.Read(why), bound);
             }
-            await Task.Delay(20);
+            await nextLook();
+            pauses++;
         }
     }
 
-    internal static TimeoutException TimedOut(string what, TimeSpan longest, string? details) =>
-        new($"timed out waiting for {what} (longest gap between looks {longest.TotalMilliseconds:F0} ms; "
+    internal static TimeoutException TimedOut(string what, TimeSpan longest, string? details, string? bound = null) =>
+        new($"timed out waiting for {what} ({(bound is null ? "" : bound + "; ")}longest gap between looks {longest.TotalMilliseconds:F0} ms; "
             + $"pool threads {ThreadPool.ThreadCount}, queued {ThreadPool.PendingWorkItemCount}){(details is null ? "" : $": {details}")}");
 }
 

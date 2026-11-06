@@ -7,6 +7,7 @@
 // values read as the C# reader's [UnknownAs] value.
 
 import { readAttention, readMachineSignIn } from './auth-state.js';
+import { marksExact } from './escaped.js';
 
 export const PROTOCOL_VERSION = 1;
 
@@ -32,9 +33,10 @@ export const Events = Object.freeze({
   sessionRemove: 'session.remove',
   sessionsSynced: 'sessions.synced',
   discoveryChanged: 'discovery.changed',
+  helloChanged: 'hello.changed',
 });
 
-export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', push: 'push' });
+export const Capabilities = Object.freeze({ helloChanged: 'hello.changed', sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', sessionsProgress: 'sessions.progress', push: 'push' });
 
 export const Outcomes = Object.freeze(['delivered', 'unconfirmed', 'stale', 'busy', 'refused']);
 
@@ -124,7 +126,28 @@ export function readQuestion(raw) {
     answerAtMachine: q.answerAtMachine === true,
     // The sub-agent that asked, when it is not the session's own question.
     agent: str(q.agent),
+    // What the host escaped in an approval (#803): null when it escaped nothing. Marks that do not
+    // each cover exactly one escape in this message are not read as the host's (marksExact).
+    escaped: exactMarks(readEscaped(q.escaped), str(q.message) ?? ''),
   };
+}
+
+const HELD = Object.freeze({ shown: null, marks: [], approve: 'machine' });
+const exactMarks = (e, message) => (e && e.shown && !marksExact(message, e.marks) ? { ...HELD, marks: [] } : e);
+
+// An approval's escaped text: { shown, marks: [[start, length], ...], approve: 'confirm' | 'machine' | 'tooMany' }.
+// One that cannot be read is held at the machine for Approve, never read as nothing escaped, which
+// would offer the one-tap Approve it replaces; Deny goes as for any approval.
+export function readEscaped(raw) {
+  if (raw === undefined || raw === null) { return null; }
+  const e = obj(raw);
+  const marks = Array.isArray(e?.marks) ? e.marks : null;
+  const whole = (n) => Number.isInteger(n) && n >= 0;
+  const readable = e && typeof e.shown === 'string' && /^[0-9a-f]{64}$/.test(e.shown) && marks
+    && marks.every((m) => Array.isArray(m) && m.length === 2 && whole(m[0]) && whole(m[1]) && m[1] > 0)
+    && (e.approve === 'confirm' || e.approve === 'machine' || e.approve === 'tooMany');
+  if (!readable) { return { shown: null, marks: [], approve: 'machine' }; }
+  return { shown: e.shown, marks: marks.map(([start, length]) => [start, length]), approve: e.approve };
 }
 
 // One sub-agent the session started: who it is, where it sits, whether it runs, and its latest
@@ -267,11 +290,30 @@ export function readHello(raw) {
   };
 }
 
-// session.answer's and session.reply's result: { outcome, reason }. Anything unreadable is
-// unconfirmed, since the host may have typed it.
+// session.answer's and session.reply's result: { outcome, reason }, and timings where the host
+// sent them (sessions.progress): each stage it reached, in ms since it received the request
+// ({ typed, recorded, confirmed }). Only for this device's own timing marks, so a stage that
+// isn't a whole number of ms is left out, as is one the protocol doesn't name: its name would
+// be the host's own text in the console line (timing.js). Anything unreadable is unconfirmed,
+// since the host may have typed it.
+export const TimingStages = Object.freeze(['typed', 'recorded', 'confirmed']);
 export function readAnswerResult(raw) {
   const r = obj(raw) ?? {};
-  return { outcome: readOutcome(r.outcome), reason: str(r.reason) };
+  const timings = Object.entries(obj(r.timings) ?? {}).filter(([what, ms]) => TimingStages.includes(what) && Number.isFinite(ms) && ms >= 0);
+  return { outcome: readOutcome(r.outcome), reason: str(r.reason), ...(timings.length ? { timings: Object.fromEntries(timings) } : {}) };
+}
+
+// An interim frame's progress for a session.reply or session.answer that asked for it
+// (sessions.progress): { stage, working }, stage received (the host has it) or typed (the keys
+// have gone; working: the session was working, and takes it at its next step). Read as the C#
+// reader reads it, a stage that isn't a string as '': a stage this app doesn't know (from a newer
+// host) is the service's to pass over, as it says nothing the person can act on. Null for a frame
+// that isn't an object.
+export const ProgressStages = Object.freeze(['received', 'typed']);
+export function readProgress(raw) {
+  const p = obj(raw);
+  if (!p) { return null; }
+  return { stage: str(p.stage) ?? '', working: p.working === true };
 }
 
 // attachment.start's and attachment.chunk's result: { received, complete }. A count that is

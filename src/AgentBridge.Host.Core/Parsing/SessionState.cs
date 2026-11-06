@@ -38,8 +38,13 @@ internal sealed class SessionState
     // The newest entry that is the session's own work (a prompt, a reply, a tool result),
     // so a hook's status can be told apart from the transcript tail it came after.
     public DateTimeOffset? LastActivityAt;
+    // The newest event of any kind, however little it changes (a model call, a hook, a delegate's
+    // tool): a session still writing these is busy, not stalled (the Not responding watchdog).
+    public DateTimeOffset? LastEventAt;
     // Prompts the user sent; turnCount is these less the one still in progress.
     public int Prompts;
+    // When the newest of them was sent, by its own record: a restore tells a prompt after it by this.
+    public DateTimeOffset? LastPromptAt;
     // The turn in progress is not a prompt's (Claude's turn for a delegate's notice), so no
     // prompt is still in progress.
     public bool UncountedTurn;
@@ -54,11 +59,60 @@ internal sealed class SessionState
     public readonly BackgroundWork Background = new();
     // Questions the agent is waiting on, oldest first; the newest is the one shown.
     public readonly List<Question> Pending = [];
+    // A restored session's boundary (#780): a question the interrupted run left went with it, so it
+    // neither shows nor makes the session waiting. Set by the session source; not the transcript's,
+    // so a reset keeps it. Which questions are the interrupted run's is told by transcript position,
+    // not by time: those pending when the boundary is set, or read in the pass that first reads with
+    // it, and asked before it. One read after that is new whatever its time: compared on the clock,
+    // a new question after the clock was set back was dated before the restore and never shown
+    // (Copilot on #837).
+    public DateTimeOffset? AskedFrom
+    {
+        get => askedFrom;
+        set
+        {
+            if (value == askedFrom) { return; }
+            askedFrom = value;
+            interrupted.Clear();
+            knownSeen.Clear();
+            if (value is { } from)
+            {
+                foreach (var q in Pending.Where(q => known is { } k ? k.Contains(q.Id) : q.AskedAt < from)) { interrupted.Add(q.Id); knownSeen.Add(q.Id); }
+            }
+            backlog = value is not null;
+        }
+    }
+    DateTimeOffset? askedFrom;
+    // The interrupted run's questions as an earlier host run found them (RestoreEntry.Interrupted),
+    // set with the boundary after a host restart: told by identity, not by time, so a new question a
+    // clock set back dated before the restore is not set aside again (Engineering, cr2-837g). Of
+    // each, only its first ask in the transcript is the interrupted run's; asked again, it is the new
+    // run's. Null when not known: told by time in the read that first reads with the boundary.
+    public IReadOnlySet<string>? Known
+    {
+        get => known;
+        set => known = value;
+    }
+    IReadOnlySet<string>? known;
+    readonly HashSet<string> knownSeen = new(StringComparer.Ordinal);
+
+    // The interrupted run's questions set aside now, by id.
+    public IReadOnlySet<string> Interrupted => interrupted;
+    // The interrupted run's questions, by id, and whether the pass that first reads with the
+    // boundary is still reading (what it reads may be from before the restore).
+    readonly HashSet<string> interrupted = new(StringComparer.Ordinal);
+    bool backlog;
+
+    // The first read with the boundary is done: a question read from now on is new.
+    public void EndBacklog() => backlog = false;
+
+    // What is asking now: Pending, less what the interrupted run left.
+    public List<Question> Asking => interrupted.Count > 0 ? Pending.Where(q => !interrupted.Contains(q.Id)).ToList() : Pending;
     // session.attention (#800): what went wrong that the status cannot say. An error lasts until
     // the next turn, a sign-in until the model is seen answering (CopilotParser.Answered).
     public Attention? Attention;
 
-    public SessionStatus Effective => Pending.Count > 0 ? SessionStatus.Waiting : Status;
+    public SessionStatus Effective => (interrupted.Count > 0 ? Pending.Any(q => !interrupted.Contains(q.Id)) : Pending.Count > 0) ? SessionStatus.Waiting : Status;
     public DateTimeOffset? EffectiveSince;
 
     public void Reset()
@@ -66,13 +120,17 @@ internal sealed class SessionState
         FirstUserMessage = null;
         AgentTitle = null; UserMessage = null; UserMessageFrom = null; UserMessageLabel = null; UserMessageKey = null; Response = null; Reasoning = null; Model = null;
         ResponseBy = null; ReasoningBy = null; OwnResponse = null; OwnResponseCut = false; OwnReasoning = null; OwnAt = null;
-        Cwd = null; Branch = null; Repository = null; StartedAt = null; UpdatedAt = null; LastActivityAt = null;
-        Prompts = 0; Compactions = 0; Seen = false; UncountedTurn = false;
+        Cwd = null; Branch = null; Repository = null; StartedAt = null; UpdatedAt = null; LastActivityAt = null; LastEventAt = null;
+        Prompts = 0; LastPromptAt = null; Compactions = 0; Seen = false; UncountedTurn = false;
         Status = SessionStatus.Idle; StatusSince = null; EffectiveSince = null;
         Tools.Clear();
         Background.Clear();
         Pending.Clear();
         Attention = null;
+        // Read again from the start: what it asked is told apart as on the first read.
+        interrupted.Clear();
+        knownSeen.Clear();
+        backlog = askedFrom is not null;
     }
 
     // Called after every event, with its time, so StatusSince is when the change happened
@@ -80,6 +138,7 @@ internal sealed class SessionState
     public void Observe(DateTimeOffset? at, SessionStatus before, bool visible)
     {
         Seen = true;
+        if (at is { } heard && (LastEventAt is null || heard > LastEventAt)) { LastEventAt = heard; }
         if (!visible) { return; }
         if (at is { } t && (UpdatedAt is null || t > UpdatedAt)) { UpdatedAt = t; }
         if (Effective != before || EffectiveSince is null) { EffectiveSince = at ?? EffectiveSince; }
@@ -96,6 +155,12 @@ internal sealed class SessionState
     {
         Pending.RemoveAll(q => q.Id == question.Id);
         Pending.Add(question);
+        if (askedFrom is not { } from) { return; }
+        // Asked again by the new run, in the first read too, it is the new run's: kept apart, it
+        // was hidden though the agent was asking it (Copilot on #837).
+        var interruptedAsk = backlog && (known is { } k ? k.Contains(question.Id) && knownSeen.Add(question.Id) : question.AskedAt < from);
+        if (interruptedAsk) { interrupted.Add(question.Id); }
+        else { interrupted.Remove(question.Id); }
     }
 
     public bool Answer(string? id) => id is not null && Pending.RemoveAll(q => q.Id == id) > 0;
@@ -121,6 +186,12 @@ internal sealed class SessionState
         Reasoning = null;
         ReasoningBy = null;
         OwnReasoning = null;
+    }
+
+    public void Prompt(DateTimeOffset? at)
+    {
+        Prompts++;
+        if (at is { } t && !(LastPromptAt >= t)) { LastPromptAt = t; }
     }
 
     // The turn ended without finishing (the user interrupted, or the agent shut down):

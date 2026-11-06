@@ -161,7 +161,7 @@ test('on a phone a session\'s content slides in from the trailing side, and the 
   await openDemo(page, { width: 390, height: 844 });
   const t = await tokens(page);
   await open(page, CLAUDE);
-  await view(page, CLAUDE).locator('.session-header .back').click();
+  await view(page, CLAUDE).locator('.session-bar .back').click();
   await expect(row(page, CLAUDE)).toBeVisible();
   const push = (await motions(page)).filter((m) => m.id === 'ab-motion-push');
   expect(push[0].from).toBe('translate(24px, 0px)');
@@ -174,7 +174,7 @@ test('an approval\'s command never moves: a session asking a question fades in w
   await openDemo(page, { width: 390, height: 844 });
   await expect(page.locator('#needs-you')).toBeVisible();
   await open(page, COPILOT);
-  await view(page, COPILOT).locator('.session-header .back').click();
+  await view(page, COPILOT).locator('.session-bar .back').click();
   await expect(row(page, COPILOT)).toBeVisible();
   const push = (await motions(page)).filter((m) => m.id === 'ab-motion-push');
   expect(push[0]).toMatchObject({ travels: false });
@@ -202,7 +202,7 @@ test('on a phone, Back to the list shows Needs you as it was: no mark fades in a
   await expect(page.locator(`#needs-you .needs-entry[data-id="${CLAUDE}"]`)).toBeVisible();
   const before = (await motions(page)).filter((m) => m.inLane).length;
   await open(page, CODEX);
-  await view(page, CODEX).locator('.session-header .back').click();
+  await view(page, CODEX).locator('.session-bar .back').click();
   await expect(page.locator(`#needs-you .needs-entry[data-id="${CLAUDE}"]`)).toBeVisible();
   await page.waitForTimeout(300);
   expect((await motions(page)).filter((m) => m.inLane)).toHaveLength(before);
@@ -216,7 +216,7 @@ test('with reduced motion nothing travels: the only motions are fades no longer 
   await page.waitForTimeout(400);
   expect(await cssMotions(page)).toEqual([]);
   await open(page, COPILOT);
-  await view(page, COPILOT).locator('.session-header .back').click();
+  await view(page, COPILOT).locator('.session-bar .back').click();
   await expect(row(page, COPILOT)).toBeVisible();
   await page.setViewportSize({ width: 1440, height: 900 });
   await desktopTour(page);
@@ -237,7 +237,7 @@ test('a tap during a push lands: Back works while the session is still sliding i
   // Long enough to be sure the tap comes mid-motion.
   await page.evaluate(() => document.documentElement.style.setProperty('--ab-motion-push-duration', '5000ms'));
   await row(page, CLAUDE).locator('.row-main').click();
-  const back = view(page, CLAUDE).locator('.session-header .back');
+  const back = view(page, CLAUDE).locator('.session-bar .back');
   await expect(back).toBeAttached();
   expect(await page.evaluate(() => document.getAnimations().some((a) => a.id === 'ab-motion-push' && a.playState === 'running'))).toBe(true);
   const b = await back.boundingBox();
@@ -713,8 +713,15 @@ test('the same question redrawn while its wait runs says so on the new drawing, 
     d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: new Date(Date.now() + 60_000 + message.length).toISOString(), question });
   }, message);
   const marked = () => v.locator('.question-slot .question').evaluate((q) => q.hasAttribute('data-arriving'));
+  // The fake clock drives timers and animation frames, not native ResizeObserver delivery.
+  // Let watchMoves read each drawing before running the clock beyond its arrival wait.
+  const laidOut = () => v.locator('.question-slot .question').evaluate((q) => new Promise((resolve) => {
+    const observer = new ResizeObserver(() => { observer.disconnect(); resolve(); });
+    observer.observe(q);
+  }));
   await draw('Which?');
   await page.clock.runFor(20);
+  await laidOut();
   expect(await marked()).toBe(true);
   const first = await v.locator('.question-slot .question').elementHandle();
   const top = await v.locator('.question-slot .choice').first().evaluate((c) => c.getBoundingClientRect().top);
@@ -723,6 +730,7 @@ test('the same question redrawn while its wait runs says so on the new drawing, 
   await page.clock.runFor(280);
   await draw('Which?');
   await page.clock.runFor(20);
+  await laidOut();
   expect(await first.evaluate((q) => q.isConnected)).toBe(false);
   expect(await v.locator('.question-slot .choice').first().evaluate((c) => c.getBoundingClientRect().top)).toBe(top);
   expect(await marked()).toBe(true);
@@ -890,7 +898,10 @@ test('the same question drawn again, longer, as the person types in it still tak
 });
 
 test('a receipt above a question whose words grow as the person types below it still holds the question\'s click', async ({ page }) => {
-  await openDemo(page, { width: 390, height: 844 });
+  // A machine from before progress: the receipt's next words are its outcome (stale, as the
+  // question has changed since), which take more lines than "Sending…". With progress the next
+  // would be the shorter "Sent".
+  await openDemo(page, { width: 390, height: 844, hash: '&progress=0' });
   await askCodex(page, choices('q-answered'));
   const v = await open(page, CODEX);
   await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
@@ -1487,7 +1498,7 @@ test('a question already there takes no click for a moment when its session is o
   expect(await tapThrough('.session[data-id="019a1b2c-codex-example"] .row-main')).toBe(true);
   await page.waitForTimeout(100);
   expect(await answers()).toBe(before);
-  await view(page, CODEX).locator('.session-header .back').click();
+  await view(page, CODEX).locator('.session-bar .back').click();
   await expect(row(page, CODEX)).toBeVisible();
   expect(await tapThrough('#needs-you .needs-entry[data-id="019a1b2c-codex-example"] .needs-title')).toBe(true);
   await page.waitForTimeout(100);

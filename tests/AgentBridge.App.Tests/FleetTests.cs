@@ -220,7 +220,7 @@ public sealed class FleetTests : IAsyncLifetime
 
         ui.Post(() => q.Choose(q.Fields[0].Options.Single(o => o.Value == "sqlite")));
 
-        await Wait.UntilAsync(() => q.StatusText == "Delivered. The session has your answer.", "delivered");
+        await Wait.UntilAsync(() => q.StatusText == "You answered · \u2068sqlite\u2069", "delivered");
         Assert.Equal("there", Assert.Single(remoteHost.Sent(Ops.SessionAnswer)).GetProperty("id").GetString());
         Assert.Empty(localHost.Sent(Ops.SessionAnswer));
     }
@@ -278,9 +278,9 @@ public sealed class FleetTests : IAsyncLifetime
         await BothMachinesAsync();
         ui.Post(() => main.SelectedMachine = main.Machines.Single(m => m.Key == "remote-id"));
 
-        // The relay connection itself went: nothing says the machine has.
+        // The relay connection itself went: nothing says the machine has. The fleet reads the link
+        // on its Changed, posted to this test's UI turn and run there, so it is done when Set returns.
         link.Set(FleetState.Connecting);
-        await Task.Delay(200);
         Assert.NotNull(Card("there"));
 
         link.Set(FleetState.Connected, ("host-id", "Test PC"));
@@ -437,7 +437,7 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Contains(main.Ended, e => e.Title == "A session");
 
         ui.Post(() => question.Choose(question.Fields[0].Options.Single(o => o.Value == "sqlite")));
-        await Wait.UntilAsync(() => question.StatusText == "Delivered. The session has your answer.", "delivered");
+        await Wait.UntilAsync(() => question.StatusText == "You answered · \u2068sqlite\u2069", "delivered");
         Assert.Single(remoteHost.Sent(Ops.SessionAnswer));
     }
 
@@ -495,7 +495,9 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.False(TestUi.Read(() => question.CanAnswer));
         ui.Post(() => question.Choose(question.Fields[0].Options.Single(o => o.Value == "sqlite")));
         Assert.Equal(0, TestUi.Read(() => main.Waiting));
-        await Task.Delay(200);
+        // An answer sent would have been written as it was chosen: once the other machine's host has
+        // everything sent before this, none was.
+        await Remote().Host.CallAsync(FakeHost.Barrier);
         Assert.Empty(remoteHost.Sent(Ops.SessionAnswer));
     }
 
@@ -1161,6 +1163,76 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal("rate limited", Assert.Single(UsageMerge.Merge([new UsageReport([failure])]).Agents).Error);
     }
 
+    [Fact]
+    public void Two_keyless_Codex_readings_from_different_machines_stay_two_rows_a_keyed_one_still_merges_and_one_machine_shows_the_kind_it_took_last()
+    {
+        var vm = new UsageReader(new string('a', 32), "VM");
+        var laptop = new UsageReader(new string('b', 32), "Laptop");
+        var keyless = new AgentUsage { Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.Transcript, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "primary", Label = "5h limit", Percent = 10 }] };
+
+        var apart = UsageMerge.Merge([new UsageReport([keyless with { ReadBy = vm }]), new UsageReport([keyless with { ReadBy = laptop, MeasuredAt = Make.T0.AddMinutes(5) }])]).Agents;
+
+        Assert.Equal(["VM", "Laptop"], apart.Select(a => a.ReadBy!.Name));
+
+        var keyed = keyless with { AccountKey = "c0dec0dec0de", Source = UsageSource.Api };
+        var together = UsageMerge.Merge([new UsageReport([keyed with { ReadBy = vm }]), new UsageReport([keyed with { ReadBy = laptop, MeasuredAt = Make.T0.AddMinutes(5) }])]).Agents;
+        Assert.Equal("Laptop", Assert.Single(together).ReadBy!.Name);
+
+        // One machine going from a probe's keyed reading to its transcripts' keyless one and back
+        // shows one row, whichever it took last; another machine's keyed reading still has its own.
+        var probe = keyed with { ReadBy = vm, MeasuredAt = Make.T0.AddMinutes(10) };
+        var transcript = keyless with { ReadBy = vm, MeasuredAt = Make.T0.AddMinutes(20), Windows = [new UsageWindow { Key = "primary", Label = "5h limit", Percent = 30 }] };
+        Assert.Equal(30, Assert.Single(UsageMerge.Merge([new UsageReport([probe]), new UsageReport([transcript])]).Agents).Windows[0].Percent);
+        Assert.Equal(UsageSource.Api, Assert.Single(UsageMerge.Merge([new UsageReport([transcript]), new UsageReport([probe with { MeasuredAt = Make.T0.AddMinutes(30) }])]).Agents).Source);
+        Assert.Equal(2, UsageMerge.Latest([new UsageReport([probe, transcript, keyed with { ReadBy = laptop }])]).Count);
+    }
+
+    [Fact]
+    public void A_machines_older_keyless_sign_out_is_dropped_once_it_gives_a_newer_keyed_reading_and_a_newer_one_still_stands()
+    {
+        var vm = new UsageReader(new string('a', 32), "VM");
+        var signedOut = new AgentUsage { Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.None, Error = "Codex needs signing in again on this machine", MeasuredAt = Make.T0, ReadBy = vm };
+        var probe = new AgentUsage
+        {
+            Agent = AgentKind.Codex, Label = "Codex", AccountKey = "c0dec0dec0de", Source = UsageSource.Api, MeasuredAt = Make.T0.AddMinutes(10), ReadBy = vm,
+            Windows = [new UsageWindow { Key = "primary", Label = "5h limit", Percent = 10 }],
+        };
+
+        var row = Assert.Single(UsageMerge.Merge([new UsageReport([signedOut]), new UsageReport([probe])]).Agents);
+        Assert.Equal((UsageSource.Api, null), (row.Source, row.Error));
+        Assert.Single(UsageMerge.Latest([new UsageReport([signedOut, probe])]));
+
+        var later = signedOut with { MeasuredAt = Make.T0.AddMinutes(20) };
+        Assert.Contains(UsageMerge.Merge([new UsageReport([later]), new UsageReport([probe])]).Agents, a => a.Error == later.Error);
+    }
+
+    [Fact]
+    public void Of_one_machines_keyed_and_keyless_failures_with_no_reading_newer_than_either_only_the_later_stands()
+    {
+        var vm = new UsageReader(new string('a', 32), "VM");
+        var keyless = new AgentUsage { Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.None, Error = "Codex needs signing in again on this machine", MeasuredAt = Make.T0, ReadBy = vm };
+        var keyed = keyless with { AccountKey = "c0dec0dec0de", MeasuredAt = Make.T0.AddMinutes(10) };
+
+        Assert.Equal("c0dec0dec0de", Assert.Single(UsageMerge.Merge([new UsageReport([keyless]), new UsageReport([keyed])]).Agents).AccountKey);
+        Assert.Null(Assert.Single(UsageMerge.Latest([new UsageReport([keyed, keyless with { MeasuredAt = Make.T0.AddMinutes(20) }])])).AccountKey);
+    }
+
+    [Fact]
+    public void One_machines_keyed_and_keyless_readings_taken_at_the_same_moment_are_one_row_the_first_reported()
+    {
+        var vm = new UsageReader(new string('a', 32), "VM");
+        var transcript = new AgentUsage
+        {
+            Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.Transcript, MeasuredAt = Make.T0, ReadBy = vm,
+            Windows = [new UsageWindow { Key = "primary", Label = "5h limit", Percent = 10 }],
+        };
+        var probe = transcript with { AccountKey = "c0dec0dec0de", Source = UsageSource.Api };
+
+        Assert.Equal(UsageSource.Transcript, Assert.Single(UsageMerge.Merge([new UsageReport([transcript]), new UsageReport([probe])]).Agents).Source);
+        Assert.Equal(UsageSource.Api, Assert.Single(UsageMerge.Merge([new UsageReport([probe]), new UsageReport([transcript])]).Agents).Source);
+        Assert.Single(UsageMerge.Latest([new UsageReport([probe, transcript])]));
+    }
+
     OfflineMachineViewModel[] Offline()
     {
         OfflineMachineViewModel[] now = [];
@@ -1427,8 +1499,8 @@ public sealed class FleetTests : IAsyncLifetime
         link.Raise();
         await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
 
+        // The fleet reads the link on its Changed, run on this test's UI turn: done when Set returns.
         link.Set(FleetState.Connecting);
-        await Task.Delay(200);
         Assert.Single(Offline());
 
         // A drop between reading the state and reading the list is the same.
@@ -1436,7 +1508,6 @@ public sealed class FleetTests : IAsyncLifetime
         await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
         link.BeforeOfflineRead = () => link.Quietly(FleetState.Connecting, ("host-id", "Test PC"), ("remote-id", "Build server"));
         link.Raise();
-        await Task.Delay(200);
         Assert.Single(Offline());
 
         // An older relay keeps no roster: nothing listed, and nothing to forget.

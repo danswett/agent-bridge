@@ -15,6 +15,8 @@ public static class KnownDifferences
         "TrustQuestion/missing-agent", "TrustQuestion/missing-answerable", "TrustQuestion/missing-kind",
         "Question/a-choice-that-cannot-be-read", "Question/a-choice-label-that-is-not-text", "Question/a-delegate-that-is-not-an-id",
         "DiscoveryChanged/wrong-type-discoveryHeld",
+        // The PWA reads escaped text it cannot read as held at the machine: Deny, never a one-tap Approve.
+        "Question/escaped-text-that-cannot-be-read",
     ];
 
     // #446: a required field missing, or one of the wrong type, that both read past. C# reads it as
@@ -61,5 +63,14 @@ public static class KnownDifferences
         .. Constraints.Select(v => new KnownDifference($"AnswerRequest/{v}", 766, "pwa", "check",
             "Answers.Check refuses it: outside the field's constraints",
             "checkAnswer takes it: it does not check constraints yet")),
+        // #913 host slice 2: the clients' half (CX) is to come. Until then the PWA shows a grouped
+        // notice as a question naming no session, which opens the machine, and a reminder as the
+        // question's own notice.
+        .. new[] { "PushNoticeData/group", "PushNotification/group" }.Select(v => new KnownDifference(v, 913, "pwa", "read",
+            "reads kind group: questions of several sessions as one notice, opening Needs you",
+            "reads it as a question, an unknown kind, naming no session: it opens the machine")),
+        new("PushNoticeData/a-reminder", 913, "pwa", "read",
+            "reads reminder: true",
+            "does not read reminder: it shows the question's notice as it is"),
     ];
 }

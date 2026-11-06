@@ -138,7 +138,14 @@ test('inline mono leaves the type ramp\'s lines alone: the tool line and Tools k
   await openDemo(page);
   const v = await open(page, CLAUDE);
   await expect(v.locator('.tools-panel li.tool').first()).toBeVisible();
-  const meta = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--type-meta-line').trim());
+  // The ramp's line heights are calc()s of the text size (§4.4), so resolve the variable on a probe.
+  const meta = await page.evaluate(() => {
+    const probe = document.body.appendChild(document.createElement('div'));
+    probe.style.lineHeight = 'var(--type-meta-line)';
+    const value = getComputedStyle(probe).lineHeight;
+    probe.remove();
+    return value;
+  });
   const line = (el) => getComputedStyle(el).lineHeight;
   expect(await v.locator('.tool-line').evaluate(line)).toBe(meta);
   expect(await v.locator('.tools-panel li.tool').first().evaluate(line)).toBe(meta);

@@ -28,6 +28,7 @@ import { SignInBanners } from './sign-in-view.js';
 import { AppBadge } from '../needs-you.js';
 import { enter, scrollBehavior, watchLane } from './motion.js';
 import { QUESTION_ARRIVAL_GUARD_MS, watchMoves } from './session-card.js';
+import { stopReceipts } from './receipt.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -143,6 +144,12 @@ const overDelegate = (id) => Object.freeze({ overList: true, delegate: id });
 // place (ui.md §6.3), and not behind another tab.
 const shownDelegate = (card) => (card?.openDelegateId && card.view.dataset.tab === 'delegates' ? card.openDelegateId : null);
 
+// Where Escape is the field's (search clears and closes on it, a text box ends a composition or
+// its own popup), never a step back.
+const TEXT_FIELD = 'textarea, select, input:not([type="button"], [type="checkbox"], [type="radio"], [type="submit"], [type="reset"], [type="range"], [type="color"], [type="file"], [type="image"])';
+// Open over the screen, each Escape's to close first (ui.md §9.1 A5).
+const POPUP = '[role="menu"], [role="dialog"], [role="alertdialog"], dialog[open], [aria-modal="true"], [aria-haspopup][aria-expanded="true"]';
+
 export class SessionsPage {
   #shownCaps = new Map();
   // The session the address names (#/sessions/<machine>/<session>), until it has arrived.
@@ -170,6 +177,8 @@ export class SessionsPage {
   // While a popstate brings the delegates in line with the entry gone to: their own open and close
   // would otherwise step the history from inside the browser's own step.
   #syncing = false;
+  // From Escape's pop until its popstate lands: a second press then would pop past the list.
+  #escaping = false;
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
   // blobs(): the relay's blob store, or null; relayMax(): the largest blob it takes.
@@ -179,8 +188,8 @@ export class SessionsPage {
   // updates: an UpdateControl for the machines that offer updates (#51), or null.
   // shell: the pages and app bar (./shell.js), or null: where a session shown goes, and where
   // machines online and a waiting folder-trust question are said.
-  constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, status = () => '', facts = null, forget = null, updates = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {} }) {
-    Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, status, facts, forget, updates, storage, onRendered });
+  constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, confirm = () => null, status = () => '', facts = null, forget = null, updates = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {} }) {
+    Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, confirm, status, facts, forget, updates, storage, onRendered });
     const current = (hostId) => hosts.route(hostId);
     const timing = retryMs ? { retryMs } : {};
     // One gate for every send (#269): nothing new is given for a machine with no route now (its
@@ -188,7 +197,7 @@ export class SessionsPage {
     // holds even if one is pressed anyway. What was sent before stays to be resent: the machine
     // checks it against the live question or session.
     const accepts = (hostId) => !!hosts.route(hostId);
-    this.answers = new AnswerService({ current, accepts, ...timing });
+    this.answers = new AnswerService({ current, accepts, ...timing, marks: 'answer' });
     this.replies = new ReplyService({ current, accepts, ...timing, blobs });
     this.stops = new StopService({ current, accepts, ...timing });
     this.launches = new LaunchService({ current, accepts, ...timing });
@@ -201,6 +210,8 @@ export class SessionsPage {
       // take the picker from a machine picked since.
       launched: (hostId) => this.#rememberLaunch(hostId),
       waiting: (on) => this.shell?.setAttention('launch', on),
+      sessions: (hostId) => hosts.sessions.list().filter((e) => e.hostId === hostId).map((e) => e.session.id),
+      session: (hostId, id) => hosts.sessions.get(hostId, id),
     });
     this.order = new SessionOrder({ storage });
     const media = (q) => globalThis.matchMedia?.(q) ?? { matches: false, addEventListener() {} };
@@ -229,6 +240,7 @@ export class SessionsPage {
       shows: (hostId) => hosts.shows(hostId),
       settled: (hostId) => hosts.link(hostId)?.client?.synced !== false,
       stale: (hostId) => hosts.staleOf(hostId),
+      heading: () => $('sessions-h'),
     });
     this.view.onRender = (n) => { this.#drawCount(n); this.#settleSelection(); this.#delegateStep(); };
     this.view.onSelect = (card) => this.#choose(card);
@@ -259,7 +271,13 @@ export class SessionsPage {
     let news = false;
     let listed = new Set();
     let returned = new Set();
-    const unwatchSessions = hosts.sessions.onChange(() => { news = this.view.drawn; returned = new Set(); });
+    const unwatchSessions = hosts.sessions.onChange((c) => {
+      news = this.view.drawn;
+      returned = new Set();
+      // A session registered may be the one a launch's machine was busy with, or the one a launch
+      // reported unconfirmed started (#896).
+      if (c?.type === 'upsert') { this.launchPanel.sessionSeen(c.hostId, hosts.sessions.get(c.hostId, c.id)); }
+    });
     const unwatchHosts = hosts.onChange(() => {
       const now = new Set((hosts.shownIds?.() ?? []).filter((id) => !hosts.staleOf?.(id)));
       returned = new Set([...returned, ...[...now].filter((id) => !listed.has(id))]);
@@ -302,6 +320,8 @@ export class SessionsPage {
           // click may already be headed, the same wait as a question arriving; so is the lane.
           // Not a move within Sessions (a row chosen), which brings its own wait where it does.
           if (back) {
+            // The session it shows is shown again: its header whole, as a row chosen brings it.
+            this.view.selected?.collapse?.shown();
             this.view.selected?.reshow();
             this.#laneGuard?.arm();
           }
@@ -323,6 +343,8 @@ export class SessionsPage {
         globalThis.addEventListener?.('pageshow', (e) => { if (e.persisted) { back(); } }, { signal: this.#shown.signal });
         // The window's own focus only (an element's doesn't reach a listener here that isn't capturing).
         globalThis.addEventListener?.('focus', back, { signal: this.#shown.signal });
+        // Bubbling, so a menu, search or drag that takes Escape has it first (ui.md §9.1 A5).
+        doc.addEventListener('keydown', (e) => this.#escape(e), { signal: this.#shown.signal });
       }
       this.launchPanel.setOpen(shell.route === 'launch');
       if (shell.route === 'sessions') { this.#route(shell.rest); }
@@ -406,6 +428,34 @@ export class SessionsPage {
 
   #delegateLevel() { return typeof globalThis.history?.state?.delegate === 'string'; }
 
+  // Escape pops one pushed screen on a phone, as the system's Back does (ui.md §5.3, §9.1 A5): a
+  // delegate back to its session, a session back to the list, with focus on the row that pushed
+  // it. Only when nothing nearer takes it: a menu, a popup or a dialog, a drag, search or a text
+  // field (where Escape is the field's, or ends a composition); and only once a pop already on its
+  // way has landed, so a key held down or pressed twice never goes past the list and out of the app.
+  #escape(e) {
+    if (e.key !== 'Escape' || e.defaultPrevented || e.repeat || e.isComposing || e.keyCode === 229) { return; }
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) { return; }
+    if (!this.phone.matches || !this.#open || this.shell?.route !== 'sessions' || this.#escaping || this.#stepping) { return; }
+    const doc = globalThis.document;
+    const at = e.target instanceof Element ? e.target : doc.activeElement;
+    if (at?.closest?.(TEXT_FIELD) || at?.isContentEditable) { return; }
+    if ([...doc.querySelectorAll(POPUP)].some((el) => el.getClientRects().length > 0)) { return; }
+    const card = this.view.selected;
+    if (!card) { return; }
+    e.preventDefault();
+    if (shownDelegate(card)) {
+      // As the delegate's own Back: its row has focus, and its step in the history goes with it.
+      card.closeDelegate({ focus: true });
+      return;
+    }
+    if (this.#overList() && globalThis.history?.length > 1) {
+      this.#escaping = true;
+      globalThis.addEventListener('popstate', () => { this.#escaping = false; }, { once: true });
+    }
+    this.#back();
+  }
+
   // Back one step from a delegate's entry, once: both width queries report one resize, and a
   // second back before the first lands would go past the session to the list.
   #stepBack() {
@@ -428,6 +478,8 @@ export class SessionsPage {
       capabilities: link.capabilities, readOnly: link.machine?.readOnly ?? null,
       stale: this.hosts.staleOf(hostId),
       largeAttachments: () => largeLimit(link.capabilities, this.relayMax()),
+      // Signs an escaped approval's confirmation for this machine (#803), or null.
+      confirm: this.confirm(hostId),
     };
   }
 
@@ -533,10 +585,12 @@ export class SessionsPage {
       // On a phone the view that had focus went: focus goes back where it came from in the list,
       // or to the list's heading.
       // Only focus the session took with it: focus already in a field (search, typed into on the
-      // way here) or in the list stays. (WebKit gives a pressed button's focus to the nearest
-      // focusable ancestor, the Sessions section, so that counts as lost too.)
+      // way here) or in the list stays; a field in the session going (a question's choice, left
+      // with Escape) goes with it, so counts as lost. (WebKit gives a pressed button's focus to the
+      // nearest focusable ancestor, the Sessions section, so that counts as lost too.)
       const active = globalThis.document?.activeElement;
-      const lost = !(active?.matches?.('input, textarea, select') || this.$('list-pane')?.contains(active));
+      const field = active?.matches?.('input, textarea, select') && !this.$('session-views')?.contains(active);
+      const lost = !(field || this.$('list-pane')?.contains(active));
       if (was && this.phone.matches && lost) {
         const back = this.#returnTo?.isConnected && this.#returnTo.getClientRects().length ? this.#returnTo : this.$('sessions-h');
         if (back && !back.matches('button, a, [tabindex]')) { back.tabIndex = -1; }
@@ -702,9 +756,11 @@ export class SessionsPage {
     this.replies.clear();
     this.stops.clear();
     this.launches.clear();
+    stopReceipts();
     this.order.clearEnded();
     this.launchPanel.setMachines(null);
     this.launchPanel.setTarget(null);
+    this.launchPanel.clear();
   }
 
   // Your order, Most recent or Machine. Where the order can't be kept on this device, the list
@@ -918,6 +974,14 @@ export class SessionsPage {
 
   // A session route's machine, for startup: shown on its own when it isn't the one remembered.
   get routedHost() { return this.shell?.route === 'sessions' && this.shell.rest.length >= 2 ? this.shell.rest[0] || null : null; }
+
+  // The list on screen, for a sign-in push's banner, which is on it (#969): the sessions page from
+  // any other, and on a phone the list rather than a session over it. A new entry, so back returns
+  // to where the person was. A desktop shows the list beside a session.
+  showList() {
+    if (!this.shell || (this.shell.route === 'sessions' && !(this.phone.matches && this.shell.rest.length))) { return; }
+    this.shell.go('sessions');
+  }
 
   #rememberLaunch(hostId) {
     this.#launchHost = hostId;

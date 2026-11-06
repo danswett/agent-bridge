@@ -33,7 +33,9 @@ public sealed class MalformedRecordException(string path, string why)
 //   - any other field of the wrong type, or null, reads as absent, and a required one missing
 //     takes its type's default ("", 0, false, [], the enum's [UnknownAs] value, an empty record);
 //   - an entry of a list or map that cannot be read is left out, unless the list is [Strict],
-//     when the record holding it is dropped;
+//     when the record holding it is dropped; and so for a list or map within it, at any depth: an
+//     escaped approval's mark [5, null, 6] read as [5, 6] would offer the confirmation for a mark
+//     the host never sent (#836 review);
 //   - a record a field of another holds that cannot be read is absent, as that field would be.
 // Only a top-level record that cannot be read is refused, as a MalformedRecordException.
 public static class Received
@@ -178,7 +180,7 @@ public static class Received
         foreach (var x in e.EnumerateArray())
         {
             var at = $"{path}[{i++}]";
-            try { a.Add(x.ValueKind == JsonValueKind.Null ? throw Bad(at, "null") : Clean(x, item, at, strict: false)); }
+            try { a.Add(x.ValueKind == JsonValueKind.Null ? throw Bad(at, "null") : Clean(x, item, at, strict)); }
             catch (MalformedRecordException) when (!strict) { lossy = true; }
         }
         return a;
@@ -195,7 +197,7 @@ public static class Received
                 // A map's keys are the host's data, so they stay out of the path, which is logged.
                 var at = $"{path}.*";
                 var key = Name(p) ?? throw Bad(at, "a key that is not text");
-                o[key] = p.Value.ValueKind == JsonValueKind.Null ? throw Bad(at, "null") : Clean(p.Value, value, at, strict: false);
+                o[key] = p.Value.ValueKind == JsonValueKind.Null ? throw Bad(at, "null") : Clean(p.Value, value, at, strict);
             }
             catch (MalformedRecordException) when (!strict) { lossy = true; }
         }

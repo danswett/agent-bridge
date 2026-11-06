@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AnswerService } from '../../js/answer-service.js';
 import { HostClient, HostError } from '../../js/host-client.js';
+import { finished, recentTimings, tapped } from '../../js/timing.js';
+import { readAnswerResult } from '../../js/protocol.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
 const ANSWER = { fields: { answer: 'a' } };
@@ -225,4 +227,133 @@ test('HostClient.answer sends session.answer and reads an unknown outcome as unc
   assert.deepEqual(sent[0], { id: 1, op: 'session.answer', data: { id: 's1', question: 'q1', request: 'r1', text: 'hi' } });
   t.onmessage({ re: 1, ok: true, result: { outcome: 'typed-later', reason: 'newer host' } });
   assert.deepEqual(await p, { outcome: 'unconfirmed', reason: 'newer host' });
+});
+
+// ---- progress (sessions.progress, #600) ----
+
+// fakeClient's, with what the machine says of its progress played through the onProgress the
+// service passed, and the request taken by its transport at once (onSent).
+function progressClient() {
+  const c = fakeClient();
+  c.answer = (data, { onProgress, onSent } = {}) => new Promise((resolve, reject) => { c.calls.push({ data, resolve, reject, progress: onProgress }); onSent?.(); });
+  return c;
+}
+
+test("an answer's stages from the machine are shown in order: Sent, then Typed, then its outcome", async () => {
+  const { conn, service, seen, submit } = setup();
+  conn.client = progressClient();
+  const stages = [];
+  service.watch('h1', 's1', 'q1', (e) => stages.push(e.stage));
+  submit();
+  const call = conn.client.last();
+  call.progress({ stage: 'received', working: false });
+  call.progress({ stage: 'typed', working: false });
+  call.resolve({ outcome: 'delivered', reason: null, timings: { typed: 40, confirmed: 90 } });
+  await flush();
+  assert.deepEqual(stages, [null, 'received', 'typed', 'typed']);
+  assert.deepEqual(seen, ['sending', 'sending', 'sending', 'done:delivered']);
+  assert.deepEqual(service.get('h1', 's1', 'q1').detail.timings, { typed: 40, confirmed: 90 });
+});
+
+test('typed into a working session is Queued, and a stage behind one already reached, or unknown, changes nothing', async () => {
+  const { conn, service, submit } = setup();
+  conn.client = progressClient();
+  submit();
+  const call = conn.client.last();
+  call.progress({ stage: 'typed', working: true });
+  assert.equal(service.get('h1', 's1', 'q1').stage, 'queued');
+  // A resend's repeat replays the stages reached, received first: what was typed stays typed.
+  call.progress({ stage: 'received', working: false });
+  assert.equal(service.get('h1', 's1', 'q1').stage, 'queued');
+  // Nor does a stage this app doesn't know, from a newer host.
+  call.progress({ stage: 'pondering', working: false });
+  assert.equal(service.get('h1', 's1', 'q1').stage, 'queued');
+});
+
+test('a stage from an attempt given up on is not shown on the next', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { conn, service, submit } = setup();
+  conn.client = progressClient();
+  submit();
+  const first = conn.client.last();
+  first.reject(new HostError('session.answer', 'timed out'));
+  await flush();
+  t.mock.timers.tick(5);
+  await flush();
+  assert.equal(conn.client.calls.length, 2);
+  first.progress({ stage: 'typed', working: false });
+  assert.equal(service.get('h1', 's1', 'q1').stage, null);
+});
+
+test("a stage replayed behind one reached adds nothing to the answer's timing marks", async () => {
+  const { conn, submit } = setup({ marks: 'answer' });
+  conn.client = progressClient();
+  submit();
+  const call = conn.client.last();
+  call.progress({ stage: 'typed', working: true });
+  call.progress({ stage: 'received', working: false });
+  call.progress({ stage: 'typed', working: true });
+  call.resolve({ outcome: 'delivered', reason: null, timings: { typed: 40 } });
+  await flush();
+  const record = recentTimings().at(-1);
+  assert.deepEqual(record.client.map(([mark]) => mark), ['sent', 'queued', 'result']);
+  assert.deepEqual(record.host, { typed: 40 });
+});
+
+test('frames alternating between typed and up next add one timing mark, not one each', async () => {
+  const { conn, service, submit } = setup({ marks: 'answer' });
+  conn.client = progressClient();
+  submit();
+  const call = conn.client.last();
+  for (const working of [false, true, false, true]) { call.progress({ stage: 'typed', working }); }
+  assert.equal(service.get('h1', 's1', 'q1').stage, 'typed');
+  call.resolve({ outcome: 'delivered', reason: null });
+  await flush();
+  assert.deepEqual(recentTimings().at(-1).client.map(([mark]) => mark), ['sent', 'typed', 'result']);
+});
+
+test("a host's outcome or timing name with a line break cannot forge a line on the console", (t) => {
+  const lines = [];
+  t.mock.method(console, 'debug', (line) => lines.push(line));
+  const result = readAnswerResult({ outcome: 'delivered\nFORGED', timings: { 'typed\nFORGED': 5, typed: 7, bogus: 9 } });
+  assert.deepEqual(result.timings, { typed: 7 });
+  tapped('reply', 'forge-1');
+  finished('forge-1', 'delivered\nFORGED', result.timings);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /^agent-bridge reply forge-1 other: result \d+ ms; host: typed 7 ms$/);
+});
+
+test('an answer whose request its client never sent is not marked sent', async () => {
+  const { conn, submit } = setup({ marks: 'answer' });
+  // A client that takes the call but whose transport never sends it (no onSent).
+  conn.client = fakeClient();
+  submit();
+  conn.client.last().resolve({ outcome: 'unconfirmed', reason: null });
+  await flush();
+  assert.deepEqual(recentTimings().at(-1).client.map(([mark]) => mark), ['result']);
+});
+
+// The relay connection rests while the app is out of sight, but never with an answer on its
+// way (connection.js, #610): busy says so, between resends too.
+test('an answer is on its way while it is sent and while a resend waits, and not once it has an outcome or waits for a channel', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { conn, service, submit } = setup();
+  assert.equal(service.busy, false);
+  submit();
+  assert.equal(service.busy, true);
+  conn.client.last().reject(new HostError('session.answer', 'timed out'));
+  await flush();
+  assert.equal(service.get('h1', 's1', 'q1').state, 'waiting');
+  assert.equal(service.busy, true, 'a resend is due on its own');
+  t.mock.timers.tick(5);
+  await flush();
+  conn.client.last().resolve({ outcome: 'delivered', reason: null });
+  await flush();
+  assert.equal(service.busy, false);
+
+  // One given with no channel up waits for one, as well at rest as awake.
+  conn.client = null;
+  service.submit({ hostId: 'h1', sessionId: 's1', questionId: 'q2', answer: ANSWER });
+  assert.equal(service.get('h1', 's1', 'q2').state, 'waiting');
+  assert.equal(service.busy, false);
 });

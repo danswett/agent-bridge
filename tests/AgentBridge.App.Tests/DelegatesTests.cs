@@ -227,7 +227,9 @@ public sealed class DelegatesTests : IAsyncLifetime
         Assert.False(TestUi.Read(() => card.Delegates.DetailOpen));
         clock.Advance(TimeSpan.FromSeconds(30));
         ui.Post(card.RefreshTimes);
-        await Task.Delay(200);
+        // A fetch would have been written as the tick made it: once the host has everything sent
+        // before this, none was.
+        await connection.CallAsync(FakeHost.Barrier);
         Assert.Equal(2, Gets().Count);
     }
 
@@ -549,7 +551,9 @@ public sealed class DelegatesTests : IAsyncLifetime
 
         Assert.Equal("Thanks. Please stop your delegate witness.", TestUi.Read(() => card.Reply!.Text));
         Assert.Equal(1, focused);
-        await Task.Delay(300);
+        // A reply sent would have been written as it was submitted: once the host has everything
+        // sent before this, none was.
+        await connection.CallAsync(FakeHost.Barrier);
         Assert.Empty(host.Sent(Ops.SessionReply));
 
         ui.Post(card.Reply!.Send);

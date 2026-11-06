@@ -35,8 +35,15 @@ public sealed record PushListResult(IReadOnlyList<PushDevice> Devices);
 
 public sealed record PushDevice(string Device, string Name, string Service, DateTimeOffset Since, bool Current);
 
+// SignIn (#800): one per machine, agent and account while sessions need sign-in; never per session.
+// Restored: one per machine, when its host started after sessions went with a reboot or a crash
+// (#780). An older client reads it as a question: shown and alerting, with its own title and body,
+// opening the machine (no session or question is named), so nothing invites an answer.
+// Group (#913 rule 3): two or more questions of this machine's sessions within 30 s, as one notice
+// that opens Needs you. It names no session or question, so an older client, which reads it as a
+// question, shows its words and opens the machine, with nothing to answer.
 [UnknownAs(Question)]
-public enum NoticeKind { Question, Finished, Resolved }
+public enum NoticeKind { Question, Finished, Resolved, SignIn, Restored, Group }
 
 // The plaintext of one push, before RFC 8291 encryption. It is a Declarative Web Push
 // message (web_push: 8030), which Safari 18.4+ shows without running the service worker,
@@ -58,7 +65,9 @@ public sealed record PushNotification
     // the one before it on the device.
     public required string Tag { get; init; }
     public string Lang { get; init; } = "en";
-    // Resolved notices replace a question quietly.
+    // Resolved notices replace a question quietly, and finished (Done) ones never alert (#913):
+    // silent everywhere, older clients and Home Assistant included, not only where a client
+    // reads data.class.
     public bool? Silent { get; init; }
     public required PushNoticeData Data { get; init; }
 }
@@ -69,8 +78,23 @@ public sealed record PushNoticeData
     public int V { get; init; } = 1;
     public required NoticeKind Kind { get; init; }
     public required string Machine { get; init; }
-    public required string Session { get; init; }
+    // Absent for SignIn, which is about a machine, never a session (#800 6646515428): an older
+    // client then opens the machine rather than a session view.
+    public string? Session { get; init; }
     public string? Question { get; init; }
+    // SignIn: whose sign-in it is, and how many sessions it stops. Never the account.
+    // Group: how many sessions it stands for.
+    public AgentKind? Agent { get; init; }
+    public int? Sessions { get; init; }
+    // The notice's tier (#913), as session.class: NeedsYou for a question, a sign-in and a crash's
+    // restored notice, Done for finished (never NeedsYou). Absent on resolved, which withdraws a
+    // notice rather than being one, on a reboot's restored, and from an older host. An unknown one
+    // reads as absent, as session.class does.
+    [JsonConverter(typeof(UnknownAsAbsentConverter<NotificationClass>))]
+    public NotificationClass? Class { get; init; }
+    // #913 rule 5: true on the one reminder of a question still unanswered 15 minutes after it was
+    // notified, which is otherwise the question's own notice again. Absent on everything else.
+    public bool? Reminder { get; init; }
     public required DateTimeOffset At { get; init; }
 }
 
@@ -99,13 +123,54 @@ public static class PushNotice
         return Convert.ToBase64String(hash, 0, 24).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 
-    public static string Navigate(string app, string machine, string session, string? question)
+    // A sign-in notice's own key in place of a session id, for its tag and topic: one per machine,
+    // agent and account. The account goes in only as the first 8 hex of its SHA-256, so neither
+    // the tag nor anything derived from it names it.
+    public static string SignInKey(AgentKind agent, string? account) =>
+        $"signin:{agent.ToString().ToLowerInvariant()}:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(account ?? "")))[..8].ToLowerInvariant()}";
+
+    // Opens the machine, never a session or a question (#800 6646515428): an older client, which
+    // reads the kind as a question, then shows no question view or answer controls.
+    public static string SignInNavigate(string app, string machine, AgentKind agent) =>
+        Link(app, $"host={Uri.EscapeDataString(machine)}&signin={agent.ToString().ToLowerInvariant()}");
+
+    // A grouped notice (#913 rule 3) opens Needs you: the machine, as NavigateMachine opens it, with
+    // needsyou=1. An older client opens the machine.
+    public static string NavigateNeedsYou(string app, string machine) => NavigateMachine(app, machine) + "&needsyou=1";
+
+    public static string Navigate(string app, string machine, string session, string? question) =>
+        Link(app, $"host={Uri.EscapeDataString(machine)}&session={Uri.EscapeDataString(session)}" +
+            (question is null ? "" : $"&question={Uri.EscapeDataString(question)}"));
+
+    static string Link(string app, string q)
     {
-        var q = $"host={Uri.EscapeDataString(machine)}&session={Uri.EscapeDataString(session)}" +
-            (question is null ? "" : $"&question={Uri.EscapeDataString(question)}");
         var hash = app.IndexOf('#');
         if (hash >= 0) { app = app[..hash]; }
         return app + (app.Contains('?') ? "&" : "?") + q;
+    }
+
+    // To a machine and no session (the restore notice, #780). The subscribed URL may already route
+    // somewhere (installed from a session's page): its host, session and question are replaced, never
+    // appended to, which left a second host and a session or question the notice never meant.
+    // Anything else in the query stays.
+    public static string NavigateMachine(string app, string machine)
+    {
+        var hash = app.IndexOf('#');
+        if (hash >= 0) { app = app[..hash]; }
+        var mark = app.IndexOf('?');
+        var kept = new List<string>();
+        if (mark >= 0)
+        {
+            foreach (var part in app[(mark + 1)..].Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var eq = part.IndexOf('=');
+                var key = Uri.UnescapeDataString(eq >= 0 ? part[..eq] : part);
+                if (key is not ("host" or "session" or "question")) { kept.Add(part); }
+            }
+            app = app[..mark];
+        }
+        kept.Add($"host={Uri.EscapeDataString(machine)}");
+        return app + "?" + string.Join('&', kept);
     }
 
     // Whitespace runs collapse to one space: a lock screen shows a few lines, and newlines

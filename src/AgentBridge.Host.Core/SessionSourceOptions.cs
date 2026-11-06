@@ -23,6 +23,11 @@ public sealed class SessionSourceOptions
     // The same for Codex, which also keeps <id>.approval.json markers there.
     public IReadOnlyList<string> CodexRegistrationRoots { get; init; } = [];
 
+    // The folders profile folders live in (Identity.DefaultRoot, and a serving host's own parent):
+    // a host's usage probe runs in <root>/<profile>/usage-probe, which is how one is told from a
+    // session where ps has flattened its command line (#200). None: only its exact options tell.
+    public IReadOnlyList<string> UsageProbeRoots { get; init; } = [];
+
     // The polling fallback. FileSystemWatcher only shortens the wait; every change is
     // still found by polling, because watchers drop events (buffer overflow, network
     // drives, inotify limits) without saying so.
@@ -32,6 +37,12 @@ public sealed class SessionSourceOptions
     public TimeSpan CoalesceInterval { get; init; } = TimeSpan.FromMilliseconds(250);
 
     public bool UseFileSystemWatcher { get; init; } = true;
+
+    // The Not responding watchdog (#800, 6646501884 §1): a session still working whose transcript
+    // has had no event of any kind for this long, or for NotRespondingBusyAfter while a tool, a
+    // delegate or a background shell is running (a build or a CI watch can be quiet that long).
+    public TimeSpan NotRespondingAfter { get; init; } = TimeSpan.FromMinutes(10);
+    public TimeSpan NotRespondingBusyAfter { get; init; } = TimeSpan.FromMinutes(30);
 
     // Where discovery says what holds it and what it carried on without. Null: nowhere.
     public Action<string>? Log { get; init; }
@@ -48,6 +59,10 @@ public sealed class SessionSourceOptions
     // The host's permissions.remoteApproval: whether Copilot's permission prompts are offered
     // to other devices to approve or deny. Off, they show as answered only at the machine.
     public bool CopilotRemoteApproval { get; init; } = true;
+
+    // The host's permissions.escapedApproval (#803): how Approve is given for an approval the host
+    // escaped anything in, EscapedApproval.Confirm or .Machine, said on each as EscapedText.Approve.
+    public string EscapedApproval { get; init; } = AgentBridge.Protocol.EscapedApproval.Confirm;
 
     // On first sight only this much of the end of a transcript is parsed. The rest is
     // skimmed for counts and the first user message, never parsed as JSON wholesale:

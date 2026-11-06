@@ -66,6 +66,27 @@ public class AttentionTests
         Assert.Null(source.Get(Id)!.Attention);
     }
 
+    // #634 review, H2: a pass that finds the session unchanged commits nothing again, and each step
+    // of a sign-in recovery must still reach it, with the same session and a clock that never moved.
+    [Fact]
+    public async Task Each_sign_in_recovery_step_is_shown_though_neither_the_session_nor_the_clock_moved()
+    {
+        await using var s = new Session_();
+        await s.After(Error(SignedOut, 2));
+        var source = s.Source;
+        var failure = source.Get(Id)!.Attention!.Since;
+        var builds = source.Builds;
+
+        await source.SetSignInRecoveryAsync(Id, failure, "flow", RecoveryState.Checking, true);
+        Assert.Equal(RecoveryState.Checking, source.Get(Id)!.Attention!.Recovery);
+        await source.SetSignInRecoveryAsync(Id, failure, "flow", RecoveryState.Pending);
+        Assert.Equal(RecoveryState.Pending, source.Get(Id)!.Attention!.Recovery);
+        await source.RefreshAsync();
+
+        Assert.Equal(RecoveryState.Pending, source.Get(Id)!.Attention!.Recovery);
+        Assert.Equal(builds, source.Builds);
+    }
+
     [Fact]
     public async Task A_turn_that_ended_on_copilots_authorization_error_leaves_the_session_idle_and_needing_sign_in()
     {
@@ -391,6 +412,12 @@ public class AttentionTests
         Assert.Equal(SessionStatus.Working, session.Status);
     }
 
+    [Theory]
+    [InlineData(AgentKind.Claude, "Claude needs you to sign in again (401).")]
+    [InlineData(AgentKind.Codex, "Codex needs you to sign in again (401).")]
+    public void The_hosts_sentence_names_the_agent_as_every_title_does_Claude_never_Claude_Code(AgentKind agent, string message) =>
+        Assert.Equal(message, AgentErrors.Template(AttentionKind.SignInNeeded, null, 401, agent));
+
     // #841: attention carries no agent text at all, only the host's sentence for the fields: a
     // redaction blocklist missed a new shape every round (camelCase keys the last).
     const string Secrets = "Authorization: Bearer Bearer abc123 db_password=hunter2x GITHUB_TOKEN=ghx1 {\"dbPassword\":\"camel secret\"} authToken=camel2 userPassword: p4ss mona@example.com C:\\Users\\mona\\notes.txt";
@@ -502,5 +529,143 @@ public class AttentionTests
             Copilot.Event("assistant.message", new { messageId = "m12", content = "\u26A0\uFE0F Turn error: something else" }, 12));
 
         Assert.Equal("\u26A0\uFE0F Turn error: Copilot stopped with an error.", session.Activity.Response);
+    }
+
+    // C (#800, 6646501884 §1): the Not responding watchdog. The fixture's clock reads an hour after
+    // T0, so these transcripts are written at that hour.
+    const int Now = 3600;
+
+    static async Task<(Fixture F, string Events, AgentBridge.Host.Core.SessionSource Source)> Watched()
+    {
+        var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        var source = f.Source(stalledAfter: TimeSpan.FromMinutes(10));
+        await source.RefreshAsync();
+        return (f, events, source);
+    }
+
+    static async Task<Session> Read((Fixture F, string Events, AgentBridge.Host.Core.SessionSource Source) w, TimeSpan after, params string[] lines)
+    {
+        w.F.Time.Advance(after);
+        Fixture.Append(w.Events, lines);
+        await w.Source.RefreshAsync();
+        return w.Source.Get(Id)!;
+    }
+
+    [Fact]
+    public async Task A_working_session_silent_for_ten_minutes_reads_not_responding_until_it_writes_anything_again()
+    {
+        var w = await Watched();
+        using var __ = w.F;
+        await using var _ = w.Source;
+        Assert.Null((await Read(w, TimeSpan.Zero, Copilot.User("Carry on", Now), Copilot.TurnStart(Now))).Attention);
+        Assert.Null((await Read(w, TimeSpan.FromMinutes(10) - TimeSpan.FromSeconds(1))).Attention);
+
+        var stalled = await Read(w, TimeSpan.FromSeconds(1));
+
+        Assert.Equal(SessionStatus.Working, stalled.Status);
+        var at = Fixture.T0.AddSeconds(Now);
+        Assert.Equal(new Attention { Kind = AttentionKind.NotResponding, Since = at, Agent = AgentKind.Copilot, Message = "Copilot isn't responding.", LastEventAt = at }, stalled.Attention);
+        // A model call changes nothing a client shows, and is still the CLI at work.
+        Assert.Null((await Read(w, TimeSpan.Zero, Copilot.Event("model.model_call_started", new { kind = "model_call_started" }, Now + 601))).Attention);
+    }
+
+    // #634 review, H1: a hung session's transcript stops changing, which is what lets a pass skip
+    // building it. The watchdog's deadline passing builds it once; before and after, nothing does.
+    [Fact]
+    public async Task A_silent_working_session_is_built_again_only_when_it_comes_to_read_not_responding()
+    {
+        var w = await Watched();
+        using var __ = w.F;
+        await using var _ = w.Source;
+        await Read(w, TimeSpan.Zero, Copilot.User("Carry on", Now), Copilot.TurnStart(Now));
+        var builds = w.Source.Builds;
+
+        Assert.Null((await Read(w, TimeSpan.FromMinutes(10) - TimeSpan.FromSeconds(1))).Attention);
+        Assert.Equal(builds, w.Source.Builds);
+        Assert.Equal(AttentionKind.NotResponding, (await Read(w, TimeSpan.FromSeconds(1))).Attention?.Kind);
+        Assert.Equal(builds + 1, w.Source.Builds);
+        Assert.Equal(AttentionKind.NotResponding, (await Read(w, TimeSpan.FromMinutes(5))).Attention?.Kind);
+
+        Assert.Equal(builds + 1, w.Source.Builds);
+    }
+
+    [Fact]
+    public async Task A_session_running_a_tool_reads_not_responding_only_after_thirty_minutes_and_an_idle_one_never()
+    {
+        var w = await Watched();
+        using var __ = w.F;
+        await using var _ = w.Source;
+        await Read(w, TimeSpan.Zero, Copilot.User("Run the build", Now), Copilot.TurnStart(Now), Copilot.ToolStart("c1", "powershell", new { command = "dotnet build" }, Now));
+        Assert.Null((await Read(w, TimeSpan.FromMinutes(30) - TimeSpan.FromSeconds(1))).Attention);
+        Assert.Equal(AttentionKind.NotResponding, (await Read(w, TimeSpan.FromSeconds(1))).Attention?.Kind);
+
+        var idle = await Read(w, TimeSpan.Zero, Copilot.ToolDone("c1", Now + 1800), Copilot.Assistant("Built.", Now + 1800), Copilot.TurnEnd(Now + 1800));
+        Assert.Equal((SessionStatus.Idle, (AttentionKind?)null), (idle.Status, idle.Attention?.Kind));
+        Assert.Null((await Read(w, TimeSpan.FromHours(2))).Attention);
+    }
+
+    // A delegate that writes only its own transcript leaves the session's quiet while it works. Its
+    // last event is read from that transcript, never the file's write time, which Windows leaves
+    // stale while the writer holds it open (here: an hour old throughout).
+    [Fact]
+    public async Task A_Claude_session_whose_background_delegate_wrote_recently_is_not_called_not_responding_however_stale_its_file_time()
+    {
+        using var f = new Fixture();
+        await using var source = f.Source(stalledAfter: TimeSpan.FromMinutes(10));
+        const string claude = "c1a0de00-0000-4000-8000-000000000001";
+        var transcript = f.ClaudeTranscript(claude);
+        var launched = System.Text.Json.Nodes.JsonNode.Parse(Claude.ToolResult("toolu_1", Now))!;
+        launched["toolUseResult"] = new System.Text.Json.Nodes.JsonObject { ["status"] = "async_launched", ["agentId"] = "a1b2c3", ["description"] = "review" };
+        Fixture.Append(transcript, Claude.User("Review the PR", Now),
+            Claude.Assistant(Now, "tool_use", Claude.ToolUse("toolu_1", "Task", new System.Text.Json.Nodes.JsonObject { ["description"] = "review" })),
+            launched.ToJsonString());
+        f.ClaudeSessionFile(700, claude);
+        f.Processes.Run(AgentKind.Claude, 700);
+        var delegates = Path.Combine(Path.GetDirectoryName(transcript)!, claude, "subagents");
+        Directory.CreateDirectory(delegates);
+        var own = Path.Combine(delegates, "agent-a1b2c3.jsonl");
+        File.WriteAllText(own, $$$"""{"type":"assistant","timestamp":"{{{Copilot.At(Now + 1800)}}}","message":{}}""" + "\n");
+        File.SetLastWriteTimeUtc(own, Fixture.T0.UtcDateTime);
+
+        f.Time.Advance(TimeSpan.FromMinutes(31));
+        await source.RefreshAsync();
+        var session = source.Get(claude)!;
+        Assert.Equal((SessionStatus.Working, SubagentStatus.Working), (session.Status, session.Subagents?.Single().Status));
+        Assert.Null(session.Attention);
+
+        f.Time.Advance(TimeSpan.FromMinutes(30));
+        await source.RefreshAsync();
+        Assert.Equal(AttentionKind.NotResponding, source.Get(claude)!.Attention?.Kind);
+    }
+
+    // A Codex sub-agent is a thread with a rollout of its own: the session's waits quietly on it.
+    [Fact]
+    public async Task A_Codex_session_is_not_called_not_responding_while_its_sub_agents_last_event_is_recent_however_stale_its_file_time()
+    {
+        await using var r = new CodexSubagentTests.Replay(stalledAfter: TimeSpan.FromMinutes(10));
+        var s = await r.Through(15);
+        Assert.Equal((SessionStatus.Working, SubagentStatus.Working), (s.Status, Assert.Single(s.Subagents!).Status));
+        // The fixture's clock reads an hour after T0: the session's and the sub-agent's last events
+        // are that old.
+        Assert.Equal(AttentionKind.NotResponding, (await r.Append()).Attention?.Kind);
+
+        File.AppendAllText(r.ThreadRollout, $$$"""{"timestamp":"{{{Copilot.At(3540)}}}","type":"event_msg","payload":{"type":"agent_reasoning"}}""" + "\n");
+        File.SetLastWriteTimeUtc(r.ThreadRollout, Fixture.T0.UtcDateTime);
+        Assert.Null((await r.Append()).Attention);
+    }
+
+    // Erring toward not flagging: a working sub-agent whose own transcript cannot be found or read
+    // might be the one still writing.
+    [Fact]
+    public async Task A_session_whose_working_sub_agent_cannot_be_checked_is_never_called_not_responding()
+    {
+        await using var r = new CodexSubagentTests.Replay(stalledAfter: TimeSpan.FromMinutes(10));
+        await r.Through(15);
+        Assert.Equal(AttentionKind.NotResponding, (await r.Append()).Attention?.Kind);
+
+        File.Move(r.ThreadRollout, r.ThreadRollout + ".moved");
+        Assert.Null((await r.Append()).Attention);
     }
 }
