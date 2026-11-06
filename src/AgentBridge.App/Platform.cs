@@ -19,6 +19,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     UpdateManager? manager;
     UpdateInfo? pending;
     string? source;
+    readonly DownloadMark mark = new(Path.Combine(Paths.AppData, "update-downloaded.txt"));
 
     public static string FeedFile => Path.Combine(Paths.AppData, "feed.txt");
 
@@ -30,9 +31,15 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         get
         {
             try { var m = Manager(); return m.IsInstalled ? m.CurrentVersion?.ToString() : null; }
-            catch (Exception e) when (e is IOException or InvalidOperationException or NotSupportedException) { return null; }
+            catch (Exception e) when (Unreadable(e)) { return null; }
         }
     }
+
+    // feed.txt, or the source it names, that can't be read just now: read by the banner and Settings
+    // as they redraw (InstalledVersion, Ready), where an exception would end the app, so nothing
+    // installed or ready rather than a throw.
+    static bool Unreadable(Exception e) =>
+        e is IOException or UnauthorizedAccessException or InvalidOperationException or NotSupportedException or UriFormatException or ArgumentException;
 
     UpdateManager Manager()
     {
@@ -49,7 +56,26 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         downloaded = null;
         // No channel named: the installed package's own decides, `win` for x64 and `win-arm64` for
         // Arm64 (build/app-channels.ps1), so a copy is only ever offered its own architecture.
-        return manager = new UpdateManager(from);
+        var first = manager is null;
+        manager = new UpdateManager(from);
+        // Only for the source this start began with: a change of feed or of "Include pre-releases"
+        // drops what was downloaded, which must not come back as ready from the packages folder,
+        // now or at a later start (the mark says which source the package came from).
+        local = first && Local(manager) is { } kept && mark.Vouches(kept.Version.ToString(), key) ? kept : null;
+        return manager;
+    }
+
+    // A release an earlier run downloaded and nobody has restarted into yet (#516): ready from this
+    // start on, before any check, so the app offers Restart to update offline, or while the feed
+    // refuses (#530), as it did when that run ended. Velopack keeps the package in its packages
+    // folder; it no longer applies it by itself at startup (Program). The first check on this
+    // source decides from then on.
+    VelopackAsset? local;
+
+    static VelopackAsset? Local(UpdateManager m)
+    {
+        try { return m.IsInstalled ? m.UpdatePendingRestart : null; }
+        catch (Exception e) when (e is IOException or InvalidOperationException or NotSupportedException or UnauthorizedAccessException) { return null; }
     }
 
     public async Task<string?> CheckAsync()
@@ -62,9 +88,21 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         // automatic, may overlap): its answer is the old source's, and must not undo the change by
         // becoming pending again. What the current source has found stands.
         if (!ReferenceEquals(from, Manager())) { return pending?.TargetFullRelease.Version.ToString(); }
+        local = null;
         // The same release found again stays the one downloaded.
         if (found?.TargetFullRelease.Version.ToString() != pending?.TargetFullRelease.Version.ToString()) { pending = found; downloaded = null; }
         return pending?.TargetFullRelease.Version.ToString();
+    }
+
+    // The feed and Include pre-releases now: Manager reads both, and drops what the old ones found.
+    public string Source
+    {
+        get
+        {
+            try { Manager(); }
+            catch (Exception e) when (Unreadable(e)) { }
+            return source ?? "";
+        }
     }
 
     public string? PendingNotes => pending?.TargetFullRelease.NotesMarkdown is { Length: > 0 } notes ? notes : null;
@@ -77,8 +115,13 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     {
         get
         {
-            Manager();
-            return pending is not null && ReferenceEquals(downloaded, pending) ? pending.TargetFullRelease.Version.ToString() : null;
+            // Read by the banner and Settings as they redraw, and on every change the updater says:
+            // a feed.txt that cannot be read just now is nothing ready, never an exception there,
+            // where it would end the app.
+            try { Manager(); }
+            catch (Exception e) when (Unreadable(e)) { return null; }
+            if (pending is null) { return local?.Version.ToString(); }
+            return ReferenceEquals(downloaded, pending) ? pending.TargetFullRelease.Version.ToString() : null;
         }
     }
 
@@ -87,7 +130,11 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         var from = Manager();
         if (pending is not { } release) { return; }
         await from.DownloadUpdatesAsync(release, p => ui.Post(() => progress(p)));
-        if (ReferenceEquals(from, Manager()) && ReferenceEquals(pending, release)) { downloaded = release; }
+        if (ReferenceEquals(from, Manager()) && ReferenceEquals(pending, release))
+        {
+            downloaded = release;
+            mark.Save(release.TargetFullRelease.Version.ToString(), source!);
+        }
     }
 
     // Back in the background for this app's profile, as the host's own updates restart it
@@ -95,8 +142,9 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     // Only a release downloaded here: anything else throws, before anything is replaced.
     public void ApplyAndRestart()
     {
-        if (Ready is null || pending is null) { throw new InvalidOperationException("no downloaded update to install; check for updates again"); }
-        Manager().ApplyUpdatesAndRestart(pending.TargetFullRelease, ["--background", "--profile", profile]);
+        if (Ready is null) { throw new InvalidOperationException("no downloaded update to install; check for updates again"); }
+        var release = pending?.TargetFullRelease ?? local ?? throw new InvalidOperationException("no downloaded update to install; check for updates again");
+        Manager().ApplyUpdatesAndRestart(release, ["--background", "--profile", profile]);
     }
 }
 

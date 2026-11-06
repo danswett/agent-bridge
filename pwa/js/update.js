@@ -68,6 +68,12 @@ const line = (s) => { const t = sentence(s); return t ? t[0].toUpperCase() + t.s
 export function updateLine(s, now = Date.now()) {
   if (!s) { return ''; }
   if (!s.installer) { return line(s.unavailable ?? 'its app is not running, so it cannot update now'); }
+  // "Needs you" (#800) is the host's own line, in whatever phase: an update waited past six hours
+  // is never left to the log alone.
+  if (s.waiting?.startsWith('Needs you')) { return sentence(s.waiting); }
+  // So is the line of an update held back for a question waiting (Creative on #719, 6674096426):
+  // its exact words.
+  if (s.waiting?.startsWith('Update ready \u00b7 ')) { return s.waiting; }
   const next = s.available ?? 'the update';
   switch (s.phase) {
     case 'checking': return 'Checking for updates\u2026';

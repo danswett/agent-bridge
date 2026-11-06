@@ -202,6 +202,16 @@ public partial class App : Application
         {
             AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write);
             autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others);
+            // The banner's Restart to update, and Settings' (#516): the updater's changes come on
+            // whichever thread made them.
+            var appUpdate = AppUpdateViewModel.For(autoUpdater);
+            autoUpdater.StateChanged += () => ui.Post(appUpdate.Changed);
+            updater.Changed += () => ui.Post(settings.UpdatesChanged);
+            main.AppUpdate = appUpdate;
+            settings.RestartDownloaded = autoUpdater.RestartToUpdateAsync;
+            // When an update is ready, changed in Settings, is acted on and said to the devices at once.
+            var updates = autoUpdater;
+            settings.PreferencesChanged += () => _ = updates.TickAsync();
             updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
             updateTimer.Tick += (_, _) => _ = autoUpdater.TickAsync();
             updateTimer.Start();

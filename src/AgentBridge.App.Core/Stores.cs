@@ -77,6 +77,13 @@ public sealed class FoldStore
     }
 }
 
+// When an update is ready on this machine (owner decision on #689, 6674007815; Product's names,
+// 6674016765). Restart to update, for a machine a person uses: it waits for their press (#516).
+// Install between turns, for a machine agents use: it installs by itself at the first moment no
+// session there has a turn running or a question waiting (AutoUpdater).
+[UnknownAs(RestartToUpdate)]
+public enum UpdateWhenReady { RestartToUpdate, InstallBetweenTurns }
+
 // The app's own preferences, beside the host's data: what the app shows and does, never what
 // the host may do (that is the host's config.json, changed through host.settings).
 public sealed record AppPreferences
@@ -87,8 +94,15 @@ public sealed record AppPreferences
     public bool FinishedToasts { get; init; } = true;
     // Include pre-releases when checking for updates.
     public bool Prereleases { get; init; } = true;
-    // Install updates without being asked (AutoUpdater).
+    // Check for and download updates in the background (AutoUpdater).
     public bool AutoUpdate { get; init; } = true;
+    // When an update is ready, for this machine and profile, as the person set it; unset, it is
+    // DefaultWhenReady, so a later default (Product's, for agent machines) reaches every machine
+    // nobody set.
+    public UpdateWhenReady? WhenUpdateReady { get; init; }
+    public static UpdateWhenReady DefaultWhenReady => UpdateWhenReady.RestartToUpdate;
+    [JsonIgnore]
+    public UpdateWhenReady WhenReady => WhenUpdateReady ?? DefaultWhenReady;
     // Set just before an update is applied, and cleared by the new version's first start, which
     // announces it: the version updated from, and the new one's release notes.
     public string? UpdatedFrom { get; init; }

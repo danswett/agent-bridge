@@ -66,3 +66,37 @@ public static class Ui
 
     public static Brush WordsBrush(StatusTone tone) => Brush(WordsKey(tone));
 }
+
+// Restart to update, from the banner or Settings (#516): when a session here is waiting on the
+// person, or has a turn running, they are told what a restart now would interrupt and choose;
+// Not now is the default, so Enter or Escape restarts nothing.
+public static class RestartDialog
+{
+    // The confirmation Restart to update asks for, just before the host stops (AutoUpdater). A
+    // dialog that cannot open (another already is) is Not now: nothing restarts unconfirmed.
+    public static Func<string, Task<bool>> For(XamlRoot root) => async warning =>
+    {
+        try { return await ConfirmAsync(root, warning); }
+        catch (Exception e) when (e is System.Runtime.InteropServices.COMException or InvalidOperationException)
+        {
+            AppLog.Write($"update: Restart to update: {e.Message}");
+            return false;
+        }
+    };
+
+    public static async Task<bool> ConfirmAsync(XamlRoot root, string? warning)
+    {
+        if (warning is null) { return true; }
+        var dialog = new Microsoft.UI.Xaml.Controls.ContentDialog
+        {
+            XamlRoot = root,
+            Title = "Restart to update now?",
+            Content = warning,
+            PrimaryButtonText = "Restart to update",
+            CloseButtonText = "Not now",
+            DefaultButton = Microsoft.UI.Xaml.Controls.ContentDialogButton.Close,
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(dialog, "RestartToUpdateWarning");
+        return await dialog.ShowAsync() == Microsoft.UI.Xaml.Controls.ContentDialogResult.Primary;
+    }
+}

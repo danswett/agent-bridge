@@ -1466,8 +1466,26 @@ machine, online ones first, then the account's offline machines (#213):
   where there are two. No device id on the row.
 - **Inside the row, under its two lines, in its text column:** the machine's updates (what its
   app found, how the last update ended, Check and Install) and, for an offline machine, Forget.
+  Its update line shows a "Needs you" line from the host (#800) in any phase, in the host's words.
+  While the six-hour backstop skips for a question waiting (below), it reads exactly
+  "Update ready · waiting for a question to be answered", never "answer at the machine".
   Every action is the same small secondary button. Check for updates, for every machine at once,
   sits under the rows in the same column.
+- **When an update is ready** (owner decision on #689, 6674007815; Product, 6674016765; Creative,
+  6674096426): a per-machine setting, a two-choice picker, never a toggle. Each choice carries its
+  note.
+  - **Restart to update**, *For a machine you use*: the default, for a new install and any machine
+    not set. A release downloads in the background and waits for the person's Restart to update
+    (#516); after six hours it says "Needs you", at most daily.
+  - **Install between turns**, *For a machine agents use*: the owner sets it on dev boxes and VMs
+    until #384's machine role exists. The update installs by itself at the first moment no session
+    on the machine has a turn running or a question waiting, once its sessions are read (a few
+    seconds), with no two-minute wait. The six-hour backstop installs on a machine that never goes
+    quiet, over a turn running, but an update never strands a waiting question: while one waits, or
+    whether one does can't be told, the backstop skips, and the machine says so ("Update ready ·
+    waiting for a question to be answered", and "Needs you" in its log, at most daily).
+  - Set in the Windows app's Settings for now. On the phone it is a row in that machine's Settings,
+    the current choice in text2; tapping it opens the same two choices with their notes (#801).
 - **A machine away (§6.1):** listed once, as offline ("Offline", and "Last seen 2m ago" on line
   2), with Forget, both while its rows are kept and after they have gone. A client whose relay
   keeps no roster lists it so only while its rows are kept.

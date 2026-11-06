@@ -8,8 +8,12 @@
 ## How releases reach machines today
 
 Every merge to `main` whose CI builds the app publishes a GitHub **pre-release** (`v0.1.<run>`), with x64 (`win`) and
-Arm64 (`win-arm64`) channels. Installed apps and hosts check every 30 minutes and install when
-the host is idle, or after 6 hours regardless (AutoUpdater.cs). They read releases
+Arm64 (`win-arm64`) channels. Installed apps check every 30 minutes and download a release they
+find in the background, then wait: nothing installs until a person presses **Restart to update**
+at the machine, or **Install** on another device (which then waits until no session there has been
+busy for two minutes, however long that takes; #516, AutoUpdater.cs). An app from before #516
+still installs by itself once the host is idle, or after 6 hours regardless. Hosts check too,
+for Home Assistant's update entity, and install only when its Install is pressed. They read releases
 **anonymously** from the GitHub API (`GithubSource` with no token: src/AgentBridge.App/Platform.cs,
 src/AgentBridge.Host/HostUpdates.cs), so they never see draft releases. Until the Dev and Beta
 channels (#451) and the halt list (REL-2) exist, that's the only lever. Once they do, a bad
@@ -24,7 +28,8 @@ build is stopped by not promoting it past Dev, and machines on Beta never see it
    gh release edit v0.1.<run> -R danswett/agent-bridge --draft=true
    ```
    Machines that already **downloaded** it (downloads start as soon as a release is seen;
-   only the install waits for idle) may still install it. Treat them as affected.
+   the install waits for the person's Restart to update, #516) may still install it. Treat
+   them as affected.
 2. **Stop the next merge shipping the same bug.** Revert the PR on `main` (through a PR, with
    Quality as merge coordinator, AGENTS.md), or land the fix. Every green `main` run publishes
    a new release, which supersedes the draft.
@@ -42,12 +47,16 @@ build is stopped by not promoting it past Dev, and machines on Beta never see it
    is a newer build. **Owner, at the machine** (guard #67: host management isn't done from
    agent sessions):
    - if the host still runs and reaches the relay, wait for the reverted release (step 2):
-     it's a higher version, and installs normally;
+     it's a higher version. The app downloads it, then waits for **Restart to update** at the
+     machine, or **Install** pressed from another device; it doesn't install by itself;
    - if it doesn't, wait for step 2's release (the revert or fix, a **higher** version), then
      install that release by hand from its GitHub release page (`Setup.exe` for the machine's
      architecture). Don't install an older release: that's a downgrade.
-4. **Machines not yet updated:** to hold one back, turn off **Install updates automatically**
-   in the app's Settings.
+4. **Machines not yet updated:** on a current app, nothing installs until someone presses
+   **Restart to update** (or Install on another device); to stop one even downloading it, turn
+   off **Download updates automatically** in the app's Settings. An app from before #516 still
+   installs by itself once the host is idle, or after 6 hours, including a bad release it has
+   already downloaded: on those, turn off **Install updates automatically** in Settings.
 
 ## Confirm
 

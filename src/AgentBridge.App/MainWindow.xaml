@@ -157,6 +157,26 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <!-- This machine's update, downloaded and waiting for the person (#516): no dismiss, so the
+                         action stays while the release waits, and nothing restarts until it is pressed. -->
+                    <InfoBar
+                        x:Name="UpdateReady"
+                        Margin="24,12,24,0"
+                        AutomationProperties.AutomationId="UpdateReady"
+                        AutomationProperties.LiveSetting="Polite"
+                        IsClosable="False"
+                        Severity="Informational"
+                        IsOpen="{x:Bind ViewModel.AppUpdate.Shown, Mode=OneWay}"
+                        Message="{x:Bind ViewModel.AppUpdate.Message, Mode=OneWay}">
+                        <InfoBar.ActionButton>
+                            <Button
+                                Content="Restart to update"
+                                Style="{StaticResource AccentButtonStyle}"
+                                AutomationProperties.AutomationId="RestartToUpdate"
+                                Visibility="{x:Bind local:Ui.Show(ViewModel.AppUpdate.Offered), Mode=OneWay}"
+                                Click="OnRestartToUpdate" />
+                        </InfoBar.ActionButton>
+                    </InfoBar>
                 </StackPanel>
 
                 <!-- Sessions (ui.md §5.2, §6): the list, the session and its inspector, by the window's width. -->
