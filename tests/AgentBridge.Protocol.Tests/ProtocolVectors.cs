@@ -50,6 +50,7 @@ public static class ProtocolVectors
         Launch(catalog.File("launch.json", "v1-launch.md", "Launching and resuming sessions, and answering a launched agent's folder-trust question."));
         Transfer(catalog.File("transfer.json", "v1-transfer.md", "Bringing a session from another machine, and the signed command that asks for it."));
         Update(catalog.File("update.json", "v1-update.md", "A machine's updates, seen and asked for from another device."));
+        Manage(catalog.File("manage.json", "v1-sessions.md", "Restarting a machine and repairing its hooks from a person's other device (#801)."));
         Usage(catalog.File("usage.json", "v1-usage.md", "How much of each agent's allowance is gone."));
         foreach (var d in KnownDifferences.All) { catalog.Differs(d); }
         return catalog.Build();
@@ -762,6 +763,32 @@ public static class ProtocolVectors
             .Valid("accepted", new UpdateCommandResult(UpdateAck.Accepted) { State = state with { Phase = UpdatePhase.Checking, Progress = null } })
             .Valid("refused", new UpdateCommandResult(UpdateAck.Refused, "the machine is read-only"))
             .Reads("an-unknown-outcome-reads-as-refused", """{"outcome":"maybe"}""");
+    }
+
+    // ---- management (#801) ----
+
+    static void Manage(VectorFileBuilder f)
+    {
+        f.Record<ManageCommand>(Client).Valid("a-press", new ManageCommand { Command = Signed });
+        f.Record<ManageRepairArgs>(Client).Valid("copilot", new ManageRepairArgs("copilot"));
+        f.Record<ManageConfigArgs>(Client).Valid("held-until-the-roster", new ManageConfigArgs("push.enabled", JsonSerializer.SerializeToElement(false), JsonSerializer.SerializeToElement(true), "r-1"));
+        f.Record<ManageHaTokenRequest>(Client).Valid("held-until-the-roster", new ManageHaTokenRequest { Command = Signed, Secret = "not-a-token" });
+        var restarts = new ManageRestarts(1, T0.AddHours(6));
+        f.Record<ManageRestarts>(Host).Valid("one-left", restarts).Valid("none-used", new ManageRestarts(2));
+        var pending = new ManagePending(Request, "restart", "pwa 8e7d6c5b", T0, "4f3e2d1c0b0a99887766554433221100");
+        f.Record<ManagePending>(Host).Valid("a-restart", pending);
+        var last = new ManageLast(Request, "restart", ManageOutcome.Done, "pwa 8e7d6c5b", T0, TookSeconds: 41);
+        f.Record<ManageLast>(Host).Valid("restarted", last).Valid("refused", last with { Outcome = ManageOutcome.Refused, Reason = ManageReason.NotQuiet, TookSeconds = null });
+        var state = new ManageState { Phase = ManagePhase.Restarting, Pending = pending, Restarts = restarts, Last = last };
+        f.Record<ManageState>(Host)
+            .Valid("restarting", state)
+            .Valid("idle", new ManageState { Restarts = new ManageRestarts(2) })
+            .Reads("an-unknown-phase-reads-as-idle", """{"phase":"rebooting","restarts":{"left":2}}""");
+        f.Record<ManageResult>(Host)
+            .Valid("accepted", new ManageResult { Request = Request, Outcome = ManageOutcome.Accepted, Transition = pending.Transition, State = state })
+            .Valid("repaired", new ManageResult { Request = Request, Outcome = ManageOutcome.Done, Detail = "Copilot's hooks are set up", RestartRequired = false })
+            .Valid("held-until-the-roster", new ManageResult { Outcome = ManageOutcome.Refused, Reason = ManageReason.NeedsRoster })
+            .Reads("an-unknown-outcome-reads-as-failed", """{"outcome":"rolledBack"}""");
     }
 
     // ---- usage ----

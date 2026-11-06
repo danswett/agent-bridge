@@ -102,7 +102,7 @@ public sealed record PushOptions
 // latest one per session. Notices are kept per device and session until sent: a newer
 // one replaces an older one still waiting, and one that failed because the relay
 // connection dropped is sent on the next (spike S5 finding 5).
-public sealed class PushNotifier : IAsyncDisposable
+public sealed class PushNotifier : IAsyncDisposable, IManageNotices
 {
     readonly ISessionSource source;
     readonly MachineInfo machine;
@@ -202,6 +202,8 @@ public sealed class PushNotifier : IAsyncDisposable
         // A question's reminder, and the episode it reminds of: checked again as it goes.
         public bool Reminder;
         public int Episode;
+        // A machine notice's: set once it has been sent, or never will be (NotifyMachine).
+        public TaskCompletionSource? Settled;
     }
 
     // Whether a device has the app on screen now, subscribed to this host (SessionService.Watching).
@@ -291,6 +293,67 @@ public sealed class PushNotifier : IAsyncDisposable
     public void Replied(string device, string session)
     {
         lock (gate) { finishedSent.Remove((device, session)); }
+    }
+
+    // A quiet notice about the machine itself (manage.*, docs/protocol/v1-sessions.md, "Managing a
+    // machine", Q-O3): a person restarted it or repaired its hooks from one of their devices, so their
+    // other devices hear of it, silently, naming the machine and who, never a value. It is a record to
+    // keep, so it goes as a finished notice of class done: silent everywhere, and kept in the tray.
+    // As resolved it was withdrawn the moment the PWA's worker showed it (Codex on #886). It names no
+    // session, so a tap opens the machine only. The task ends once each device has been sent it, or
+    // will not be.
+    public const string MachineNotice = "~manage";
+
+    Task IManageNotices.Notify(string exceptDevice, string machineName, string body) => NotifyMachine(exceptDevice, machineName, body);
+
+    public Task NotifyMachine(string exceptDevice, string title, string body)
+    {
+        var sent = new List<Task>();
+        lock (gate)
+        {
+            var now = time.GetUtcNow();
+            foreach (var sub in store.All)
+            {
+                if (sub.Device == exceptDevice || !MayNotify(sub)) { continue; }
+                var app = sub.App;
+                var hash = app.IndexOf('#');
+                if (hash >= 0) { app = app[..hash]; }
+                var message = PushNotice.Fit(new PushMessage
+                {
+                    Notification = new PushNotification
+                    {
+                        Title = title,
+                        Body = body,
+                        Navigate = app + (app.Contains('?') ? "&" : "?") + $"host={Uri.EscapeDataString(machine.Id)}",
+                        Tag = PushNotice.Tag(machine.Id, MachineNotice),
+                        Silent = true,
+                        Data = new PushNoticeData { Kind = NoticeKind.Finished, Class = NotificationClass.Done, Machine = machine.Id, Session = "", At = now },
+                    },
+                });
+                foreach (var replaced in outbox.Where(o => o.Device == sub.Device && o.Session == MachineNotice)) { replaced.Settled?.TrySetResult(); }
+                outbox.RemoveAll(o => o.Device == sub.Device && o.Session == MachineNotice);
+                var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                sent.Add(settled.Task);
+                outbox.Add(new Outgoing
+                {
+                    Device = sub.Device,
+                    Session = MachineNotice,
+                    // Resolved here, in the outbox, so none of the finished turn's rules (a device
+                    // on screen, a failed turn, the collapse) hold it back.
+                    Kind = NoticeKind.Resolved,
+                    Plain = PushNotice.Serialize(message),
+                    Ttl = (int)options.FinishedTtl.TotalSeconds,
+                    Urgency = "normal",
+                    Topic = PushNotice.Topic(machine.Id, MachineNotice),
+                    Created = now,
+                    NotBefore = now,
+                    Grant = sub.Grant,
+                    Settled = settled,
+                });
+            }
+        }
+        Signal();
+        return Task.WhenAll(sent);
     }
 
     // A client answered a question (session.answer delivered or typed): its device is where
@@ -589,7 +652,7 @@ public sealed class PushNotifier : IAsyncDisposable
                 while (recent.Count > 0 && now - recent.Peek() >= TimeSpan.FromMinutes(1)) { recent.Dequeue(); }
                 if (recent.Count >= options.MaxPerMinute) { return NextWake(now); }
                 outbox.Remove(ready);
-                if (store.Get(ready.Device) is not { } found) { continue; }
+                if (store.Get(ready.Device) is not { } found) { ready.Settled?.TrySetResult(); continue; }
                 if (ready.Reminder && !StillReminds(ready)) { continue; }
                 // A finished notice that waited (the relay down, the rate limit, a retry, or
                 // collapsed) is not sent to a device now on screen; a collapsed one only while
@@ -604,7 +667,7 @@ public sealed class PushNotifier : IAsyncDisposable
                 }
                 if (ready.Kind == NoticeKind.Finished && (Sees(ready.Device, ready.Session)
                     || ready.Collapsed && sessions.GetValueOrDefault(ready.Session) is not { Removed: false, Last: { Status: SessionStatus.Idle, Question: null } })) { continue; }
-                if (!MayNotify(found) || ready.Grant != found.Grant) { continue; }
+                if (!MayNotify(found) || ready.Grant != found.Grant) { ready.Settled?.TrySetResult(); continue; }
                 (next, sub, via) = (ready, found, s);
             }
             PushResult result;
@@ -613,7 +676,7 @@ public sealed class PushNotifier : IAsyncDisposable
                 var encrypted = WebPushCrypto.Encrypt(next.Plain, sub.Subscription);
                 lock (gate)
                 {
-                    if (!MayNotify(sub) || store.Get(sub.Device)?.Grant != next.Grant || next.Reminder && !StillReminds(next)) { continue; }
+                    if (!MayNotify(sub) || store.Get(sub.Device)?.Grant != next.Grant || next.Reminder && !StillReminds(next)) { next.Settled?.TrySetResult(); continue; }
                     var now = time.GetUtcNow();
                     while (recent.Count > 0 && now - recent.Peek() >= TimeSpan.FromMinutes(1)) { recent.Dequeue(); }
                     if (recent.Count >= options.MaxPerMinute)
@@ -649,6 +712,7 @@ public sealed class PushNotifier : IAsyncDisposable
             catch (Exception e) when (e is CryptographicException or ArgumentException)
             {
                 log($"push to {sub.Name} could not be encrypted ({e.Message}); dropped");
+                next.Settled?.TrySetResult();
                 continue;
             }
             lock (gate) { Sent(next, sub, result); }
@@ -657,6 +721,9 @@ public sealed class PushNotifier : IAsyncDisposable
 
     void Sent(Outgoing o, PushSubscriber sub, PushResult r)
     {
+        var transient = r.Status is 429 or >= 500 || (r.Status == 0 && r.Error is "rate-limited" or "unreachable");
+        // Settled unless it is tried again below.
+        if (!transient || o.Attempts + 1 >= options.MaxAttempts || !MayNotify(sub) || store.Get(sub.Device)?.Grant != sub.Grant) { o.Settled?.TrySetResult(); }
         if (!MayNotify(sub) || store.Get(sub.Device)?.Grant != sub.Grant) { return; }
         var key = (o.Device, o.Session);
         if (r.Status is >= 200 and < 300)
@@ -692,7 +759,6 @@ public sealed class PushNotifier : IAsyncDisposable
             }
             return;
         }
-        var transient = r.Status is 429 or >= 500 || (r.Status == 0 && r.Error is "rate-limited" or "unreachable");
         if (transient && ++o.Attempts < options.MaxAttempts)
         {
             o.NotBefore = time.GetUtcNow() + options.RetryDelay * Math.Pow(2, o.Attempts - 1);
