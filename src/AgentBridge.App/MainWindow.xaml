@@ -157,6 +157,39 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <!-- This machine's update, downloaded and waiting for the person (#516): no dismiss, so the
+                         action stays while the release waits, and nothing restarts until it is pressed. -->
+                    <InfoBar
+                        x:Name="UpdateReady"
+                        Margin="24,12,24,0"
+                        AutomationProperties.AutomationId="UpdateReady"
+                        AutomationProperties.LiveSetting="Polite"
+                        IsClosable="False"
+                        Severity="{x:Bind local:Ui.UpdateSeverity(ViewModel.AppUpdate.Failed), Mode=OneWay}"
+                        IsOpen="{x:Bind ViewModel.AppUpdate.Shown, Mode=OneWay}"
+                        Message="{x:Bind ViewModel.AppUpdate.Message, Mode=OneWay}">
+                        <!-- Restarting, the button that started it shows its progress ring and says so, ignores
+                             presses (RestartAsync) and keeps focus, never drawn at rest in accent (Creative on
+                             #719, 6675195544; ui.md §5.3, §9.1 A4). Failed, it is Try again. -->
+                        <InfoBar.ActionButton>
+                            <Button
+                                Style="{x:Bind local:Ui.ActionStyle(ViewModel.AppUpdate.Restarting), Mode=OneWay}"
+                                AutomationProperties.AutomationId="RestartToUpdate"
+                                AutomationProperties.Name="{x:Bind ViewModel.AppUpdate.ActionLabel, Mode=OneWay}"
+                                AutomationProperties.ItemStatus="{x:Bind ViewModel.AppUpdate.ActionStatus, Mode=OneWay}"
+                                Visibility="{x:Bind local:Ui.Show(ViewModel.AppUpdate.Offered), Mode=OneWay}"
+                                Click="OnRestartToUpdate">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <ProgressRing
+                                        Width="16"
+                                        Height="16"
+                                        IsActive="{x:Bind ViewModel.AppUpdate.Restarting, Mode=OneWay}"
+                                        Visibility="{x:Bind local:Ui.Show(ViewModel.AppUpdate.Restarting), Mode=OneWay}" />
+                                    <TextBlock Text="{x:Bind ViewModel.AppUpdate.ActionLabel, Mode=OneWay}" />
+                                </StackPanel>
+                            </Button>
+                        </InfoBar.ActionButton>
+                    </InfoBar>
                 </StackPanel>
 
                 <!-- Sessions (ui.md §5.2, §6): the list, the session and its inspector, by the window's width. -->

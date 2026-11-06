@@ -321,7 +321,9 @@ private struct MachineUpdateView: View {
             Button("Install \(install.version)", role: .destructive) { ask("update.install", install: install) }
             Button("Cancel", role: .cancel) { pendingInstall = nil }
         } message: { install in
-            Text("Ask \(host.name) to install \(install.version) when sessions are idle. Its app and host will restart. The host may proceed after six hours even if a session is still busy.")
+            // A Windows app from before #516 still goes ahead six hours after it found the release,
+            // and its update state can't be told apart from a newer one's: the caveat stays.
+            Text("Ask \(host.name) to install \(install.version) when sessions are idle. Its app and host will restart then. A current Windows app waits for as long as a session there is busy; an older one may go ahead after six hours even if a session is still busy.")
         }
     }
 
