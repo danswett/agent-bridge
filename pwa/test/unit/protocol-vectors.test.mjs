@@ -82,7 +82,7 @@ async function shown(message) {
   const handlers = {};
   const list = [];
   const self = {
-    registration: { scope: SCOPE, showNotification: async (title, options) => { list.push({ title, ...options }); } },
+    registration: { scope: SCOPE, showNotification: async (title, options) => { list.push({ title, ...options }); }, getNotifications: async () => [] },
     clients: { matchAll: async () => [], openWindow: async () => {}, claim() {} },
     addEventListener: (type, fn) => { handlers[type] = fn; },
     skipWaiting() {},

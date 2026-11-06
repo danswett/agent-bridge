@@ -23,7 +23,9 @@ public enum ToastKind { Question, Finished, Outcome }
 // v1-sessions.md, Notifications) so the desktop and the phone agree: a question still pending
 // after 2 s, once per question; a turn that went from working to idle with a response, still
 // idle 3 s later, once per turn; a question answered anywhere (or a session gone) withdraws its
-// toast. Nothing while the app's window is in front: the card is already there.
+// toast. Nothing while the app's window is in front: the card is already there. Where the host
+// sends a notification class (#913) it has the last word: fyi never notifies, a question only
+// while the class is needsYou, a finished turn only as done (and quietly); none leaves the rules above.
 public sealed class ToastPlanner
 {
     public static readonly TimeSpan QuestionDelay = TimeSpan.FromSeconds(2);
@@ -100,7 +102,7 @@ public sealed class ToastPlanner
             var was = t.Last;
             t.Last = s;
             Recovered(was, s);
-            if (t.Shown is { } shown && s.Question?.Id != shown)
+            if (t.Shown is { } shown && (s.Question?.Id != shown || !MayAsk(s)))
             {
                 sink.Withdraw(TagOf(s.Id));
                 t.Shown = null;
@@ -151,7 +153,7 @@ public sealed class ToastPlanner
         t.Last = s;
         Recovered(before, s);
         NoteWait(t, before, s);
-        if (t.Shown is { } shown && s.Question?.Id != shown)
+        if (t.Shown is { } shown && (s.Question?.Id != shown || !MayAsk(s)))
         {
             sink.Withdraw(TagOf(s.Id));
             t.Shown = null;
@@ -256,7 +258,7 @@ public sealed class ToastPlanner
             t.Due = null;
             if (due.Kind == ToastKind.Question)
             {
-                if (s.Question is not { } q || q.Id != due.Question) { continue; }
+                if (s.Question is not { } q || q.Id != due.Question || !MayAsk(s)) { continue; }
                 t.Notified.Add(q.Id);
                 var again = t.Again == q.Id;
                 t.Again = null;
@@ -272,11 +274,12 @@ public sealed class ToastPlanner
                 // budget left them out): an empty toast says nothing.
                 if (s.Status != SessionStatus.Idle || t.FinishedKey == key || string.IsNullOrEmpty(MainResponse(s)) || Stopped(s)) { continue; }
                 t.FinishedKey = key;
-                if (!Enabled() || !FinishedEnabled() || WindowActive()) { continue; }
+                if (!MayFinish(s) || !Enabled() || !FinishedEnabled() || WindowActive()) { continue; }
                 finished.Add(id);
                 t.RanSinceFinished = false;
                 t.FinishedTurn = PromptOf(s);
-                sink.Show(new ToastNotice(TagOf(id), ToastXml.Finished(s, MachineName(), MachineKey), Quiet()));
+                // Done never pops up (#913): the host's class, not Windows' state, decides it.
+                sink.Show(new ToastNotice(TagOf(id), ToastXml.Finished(s, MachineName(), MachineKey), Quiet() || s.Class == NotificationClass.Done));
             }
         }
         SignIns(now);
@@ -337,6 +340,12 @@ public sealed class ToastPlanner
             sink.Show(new ToastNotice(Tag(key, MachineKey), ToastXml.SignIn(agent, count, MachineName(), MachineKey), Quiet() || !due));
         }
     }
+
+    // The host's notification class (#913) over the app's own rules, where it sends one: a question
+    // toast only while the session needs the person, a finished one only for Done (fyi never
+    // notifies). A host that sends none, or one this app doesn't know, leaves today's rules.
+    static bool MayAsk(Session s) => s.Class is null or NotificationClass.NeedsYou;
+    static bool MayFinish(Session s) => s.Class is null or NotificationClass.Done;
 
     string TagOf(string sessionId) => Tag(sessionId, MachineKey);
 
