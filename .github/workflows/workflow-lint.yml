@@ -3,7 +3,8 @@ name: Workflow lint
 # The workflows themselves are code that runs with this repository's tokens (quality/README.md,
 # §3.3, "Supply chain"), so a pull request that changes one is linted:
 #  - actionlint (blocking): syntax, expressions, contexts, runner labels and action inputs. It
-#    was clean on main when added, so a finding here is one the pull request made.
+#    was clean on main when added, so a finding here is one the pull request made. One finding
+#    alone is let through, the exception set next to its pin below (#951).
 #  - shellcheck, through actionlint, over the bash in `run:` steps (advisory): main had findings
 #    when this was added (#360), so they are warnings until those are fixed.
 #  - zizmor (advisory): security findings such as unpinned actions, credentials kept by
@@ -17,6 +18,8 @@ on:
     paths:
       - '.github/workflows/**'
       - '.github/actions/**'
+      - build/actionlint-findings.ps1
+      - build/test-actionlint-findings.ps1
 
 permissions: {}
 
@@ -37,6 +40,13 @@ jobs:
       ACTIONLINT_VERSION: 1.7.12
       # From the release's actionlint_1.7.12_checksums.txt, so a replaced asset fails here.
       ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+      # The one actionlint finding let through, and only at ci.yml publish's `queue: max`
+      # (build/actionlint-findings.ps1): GitHub supports concurrency's queue key
+      # (https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
+      # and actionlint 1.7.12 doesn't. The same error anywhere else, any other finding, and this
+      # once actionlint stops reporting it fail the step. Remove it, with that script and its
+      # test, once actionlint knows queue (#951).
+      ACTIONLINT_QUEUE_EXCEPTION: 'unexpected key "queue" for "concurrency" section. expected one of "cancel-in-progress", "group"'
       # Pinned rather than the runner image's copy, so a new image cannot change what the
       # shellcheck step reports. Shellcheck publishes no checksums: this is the hash of the
       # release's shellcheck-v0.11.0.linux.x86_64.tar.gz when it was pinned.
@@ -59,16 +69,21 @@ jobs:
           tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/lint-tools" --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
           echo "$RUNNER_TEMP/lint-tools" >> "$GITHUB_PATH"
       - name: actionlint
-        # Shellcheck is off here and reported by the next step instead. Pyflakes is off in both:
-        # no step uses `shell: python`, and the runner's copy would be unpinned.
-        # A message can quote the pull request's own YAML, so % and line breaks in it, and also
-        # : and , in the file name, are escaped as workflow commands require; otherwise a
-        # crafted value could end the annotation and start a command of its own. actionlint
-        # unescapes the format first, so "\\n" here reaches the template as a newline.
+        # Shellcheck is off here and reported by the shellcheck step instead. Pyflakes is off in
+        # both: no step uses `shell: python`, and the runner's copy would be unpinned.
+        # actionlint-findings.ps1 judges the findings and annotates them. A message can quote the
+        # pull request's own YAML, so it escapes % and line breaks in it, and also : and , in the
+        # file name, as workflow commands require; otherwise a crafted value could end the
+        # annotation and start a command of its own.
         run: |
-          # shellcheck disable=SC2016 # the template is actionlint's to expand, not the shell's
-          actionlint -shellcheck= -pyflakes= \
-            -format '{{range $err := .}}::error file={{replace $err.Filepath "%" "%25" "\\r" "%0D" "\\n" "%0A" ":" "%3A" "," "%2C"}},line={{$err.Line}},col={{$err.Column}},title=actionlint {{$err.Kind}}::{{replace $err.Message "%" "%25" "\\r" "%0D" "\\n" "%0A"}}\n{{end}}'
+          code=0
+          actionlint -shellcheck= -pyflakes= -format '{{json .}}' > "$RUNNER_TEMP/actionlint.json" || code=$?
+          pwsh -NoProfile -File build/actionlint-findings.ps1 -Findings "$RUNNER_TEMP/actionlint.json" -ExitCode "$code" -Allowed "$ACTIONLINT_QUEUE_EXCEPTION"
+      - name: actionlint's exception lets through only its finding
+        # Against made-up findings; actionlint doesn't run.
+        if: success() || failure()
+        shell: pwsh
+        run: pwsh -NoProfile -File build/test-actionlint-findings.ps1
       - name: shellcheck, through actionlint (advisory)
         # Runs after a failed actionlint step too, but not in a cancelled job: there is no one
         # left to read it.

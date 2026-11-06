@@ -33,6 +33,9 @@ The base is strong. CI already tests what ships, not just the code:
   take 2 min 45 s on one machine, build included. The three slowest projects take most of
   that: Host.Delivery (1 min 46 s, with real console injection), HomeAssistant (1 min 9 s)
   and Host (1 min 6 s).
+  App tests keep a UI thread per test, but start only `maxParallelThreads` collections
+  at once (one per core by default). #660 verified that their custom runner bypassed
+  xunit's collection limit; the cause of the simultaneous CI stalls remains unproven.
 - **Binaries as they ship:** the NativeAOT injector types into a real console, and the NativeAOT
   hook is started fresh for each event. The relay container runs read-only, as it ships. The
   packaged WinUI app runs its `--self-test` (UIA, every theme resource), Setup.exe installs
@@ -81,7 +84,7 @@ Each ring runs everything in the rings below it, plus its own suites. The rule i
 |---|---|---|---|---|---|
 | **0 Inner loop** | On demand, and as a pre-push hook | < 60 s typical | The suites a change reaches (§4), unit and component only, on this machine's OS; secret scan of staged files; design check if `design/` changed | Developer machine or agent session | Nothing; it's advice |
 | **1 PR gate** | Every push to a PR that isn't a draft, and marking one ready for review | < 15 min wall | Selected suites on every OS they declare, plus the sentinels (`protocol`, CodeQL, dependency review). Shipped-binary checks (AOT, container, package) when reached. axe for PWA changes. Diff coverage | GitHub-hosted runners | Merge (one required check: `quality-gate`) |
-| **2 Main** | Every merge to `main`, before publish | < 30 min | **Everything** hosted, on every platform: upgrade by delta, WinUI and Apple UI tests, a11y scans, benchmarks recorded, SBOM and attestation, container scan, relay staging smoke | Hosted runners and staging | Publishing to the `dev` channel |
+| **2 Main** | A merge to `main` that changes what decides selection, or whose last passed commit can't be found, before publish; any other merge to `main` runs ring 1 for everything since that commit (§4.7) | < 30 min | **Everything** hosted, on every platform: upgrade by delta, WinUI and Apple UI tests, a11y scans, benchmarks recorded, SBOM and attestation, container scan, relay staging smoke | Hosted runners and staging | Publishing to the `dev` channel |
 | **3 Nightly / candidate** | Nightly on `main`'s head, and on demand for a candidate | < 3 h | Lab VMs: install the dev build on clean Windows x64 and Arm64, Linux and macOS. End to end with simulated agents, then real agents. Agent drift. Perf on quiet machines against baselines. Relay load and DAST on staging. Fuzzing | Lab (§6), staging | Promotion to `beta` |
 | **4 Release** | Before promotion to `stable`, or relay production | Hours to days | Migrate and roll back from the S0 snapshot. Shadow soak gate. Relay production smoke. iPhone PWA and screen-reader checklists. A release-readiness report | Lab, real devices, the owner | Promotion to `stable`; relay production approval |
 
@@ -250,6 +253,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    Transport.Tests -> Transport, Relay, RelaySmoke
    App.Tests     -> App.Core, Transport.Tests      Host.Tests -> Host, Transport.Tests
    ```
+
+   Folders, references and `triggers`/`global_triggers` match in any case, as the Windows
+   build does: it compiles `src/agentbridge.host/X.cs` into `AgentBridge.Host`, which an exact
+   match left to `app-package`'s `src/**` trigger alone, without Host's tests. `no_test_paths`
+   stay exact, since they take tests away: a path spelled otherwise is selected like any other.
 3. **Everything else:** each suite's `triggers` globs in the catalog (`pwa/**`, `apple/**`,
    `infra/**`, `build/**` and so on).
 4. **Always:** the sentinels (`select: always` at that ring). Everything runs on
@@ -263,14 +271,33 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    that pulled it in. The PR summary shows that table, so a reviewer can see what didn't
    run and why.
 7. **GitHub mechanics:** ci.yml's `plan` job checks the catalog, then runs the selector through
-   `quality/plan.ps1`: ring 1 on a pull request, ring 2 on `main`, and on a draft the fast ring
+   `quality/plan.ps1`: ring 1 on a pull request and on `main`, and on a draft the fast ring
    (`-FastRing`: ring 0, Linux only, §2).
 
+   **Main: first attempts coalesce, re-runs run apart.** First attempts of pushes to `main` share
+   the concurrency group `ci-main`, which never cancels a run in progress: at most one of them
+   runs and one waits, and a newer waiting push run cancels the one waiting before it starts. A
+   re-run (attempt 2 on) never joins `ci-main` but gets its own run-id group, like a run by hand,
+   so it runs beside them and can't take a waiting push run's place and leave that push's commit
+   untested (#938's review). GitHub promises no
+   order between push runs, and nothing relies on one: the merge rule passes over a replaced
+   run only when the newest run's commit builds on its commit, and otherwise, or when the newest
+   run itself was replaced, holds main not green until that run is re-run (item 9).
+   So a main run's change is everything since the last commit main's CI
+   passed on: the plan reads `ci.yml`'s passed push runs on `main` (the newest 100, through the
+   `actions: read` token), takes the newest whose commit is an ancestor of this one, fetches
+   the whole history and diffs from there, so the changes of commits whose own run was replaced,
+   or went red, are tested with this one. A base older than needed only tests more; none found,
+   or the runs unreadable, runs the whole ring, never "no change". A docs-only push to `main`
+   runs what docs select (`light`'s link check, say), not the app or the product's builds.
+   Pull requests keep cancelling a superseded run, and a run by hand its own group.
+
    **What decides selection doesn't select for itself (#487).** Before the selector is built,
-   the plan job compares `HEAD^1..HEAD` with a fixed list in ci.yml: `.github/`, `quality/`,
+   the plan job compares the change (`HEAD^1..HEAD` on a pull request; on `main`, since its last
+   passed commit) with a fixed list in ci.yml: `.github/`, `quality/`,
    `tools/AgentBridge.Quality/`, `tests/AgentBridge.Quality.Tests/`, `build/`, and any
    `Directory.*.props` or `.targets`, `*.sln`/`*.slnx`, `global.json` or `nuget.config`. A ready
-   pull request that touches one runs the whole ring: its `whole-ring` output, written by a step
+   pull request or a push to `main` that touches one runs the whole ring: its `whole-ring` output, written by a step
    of its own that nothing from the change runs in, makes every gated job and every
    suite-gated step run, `product` test the whole solution on all three runners, and the plan
    select ring 2 (with ring 1's choice beside it). Otherwise a selector or catalog under change
@@ -295,25 +322,27 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    for reruns with `gh workflow run --ref`, fires only once the file has run or is on `main`), or
    listed in the catalog with `status: planned`. It also checks ci.yml's wiring to the plan, which
    only names hold together: every job whose `if:` reads the plan has exactly the one gate shape
-   (its own output, and it runs on `main` and in the whole ring whatever the plan says); the plan
+   (its own output, and it runs in the whole ring whatever the plan says); the plan
    step's `JOBS`, the jobs gated on the plan and the plan's outputs, bound to the steps that
    compute them, agree; every check job in ci.yml is in `quality-gate`'s needs (all but the
    delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, each pinned to the one
    job it follows), and its `if:` is
    `always()`; `publish-gate` needs `quality-gate` and requires its success as a top-level
-   condition, and `publish` needs `publish-gate` with no status function; the plan's suites and
+   condition, and `publish` needs `publish-gate` with exactly the condition
+   `!cancelled() && needs.publish-gate.result == 'success'`, its concurrency exactly
+   group `publish-prerelease`, `cancel-in-progress: false` and `queue: max` (item 7), and no
+   other concurrency setting `queue`; the plan's suites and
    whole-ring reach steps only as `SUITES` and `WHOLE_RING`; and each step that reads the plan's
    suites names suites the catalog has, whose `where:` names that job explicitly, in the one
-   condition shape that runs on `main` and in the whole ring whatever the plan selected, with an
+   condition shape that runs in the whole ring whatever the plan selected, with an
    OS guard only for an OS its job runs on (`product`'s runners are pinned to all three there).
    The plan writes the "what runs and why" table to the run's summary, and outputs:
    - a true or false per job, from the selected suites' `where:`. So the catalog, not ci.yml,
-     says which suites a job runs, and moving a suite moves its trigger. On a pull request a
-     job runs only when it's true or the whole ring runs; on `main` every job runs whatever the
-     plan says;
+     says which suites a job runs, and moving a suite moves its trigger. On a pull request and
+     on `main` a job runs only when it's true or the whole ring runs;
    - the selected suites, which gate the steps inside `product` (the AOT injector and hook,
-     the build scripts, the relay container) and inside `light`, on a pull request only: on
-     `main`, and when the whole ring runs, every one of those steps runs;
+     the build scripts, the relay container) and inside `light`: when the whole ring runs,
+     every one of those steps runs;
    - `product`'s test projects, tested through a solution filter, still under
      `dotnet-coverage` with TRX and `--blame-hang`. When the whole ring runs, it's
      `AgentBridge.slnx` as before. The whole solution is always built, since projects no
@@ -325,7 +354,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
 
    The jobs, and what each one's for (#459):
    - `light` holds the small Linux checks on one runner: `design-gen`, `a11y-contrast`,
-     `pwa-unit` with its coverage pass, `pwa-site-csp` and `docs-links`. Each step runs when its
+     `pwa-unit` with its coverage pass, `pwa-site-csp`, `playwright-apt` and `docs-links`. Each step runs when its
      suite is selected, and every selected one runs even after another fails. It isn't folded
      into `plan`, since a failure there would skip every job that needs the plan.
    - `pwa-ui` runs Playwright on four runners: Chromium in one, WebKit (about twice as slow) in
@@ -333,7 +362,36 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `pwa-e2e` runs `test/e2e`, in both browsers, in the one job that builds the dev stack. The
      shards set `PWA_SKIP_E2E`, so `test/e2e` is left out of them rather than skipping itself;
      together the five run every spec. The one PWA job these replace took a median of 15
-     minutes.
+     minutes. Every job that runs `playwright install --with-deps` (each `pwa-ui` leg, `pwa-e2e`
+     and `spikes-linux`) first downloads Playwright's system packages through
+     `.github/actions/playwright-system-packages`, and if apt's first mirror hasn't finished in
+     five minutes it fetches the rest from the runner's Canonical fallback,
+     `https://archive.ubuntu.com` (main run 41927187905 lost a WebKit shard to that mirror at
+     100 kB/s, and main run 41952998347 `pwa-e2e`). Each of those jobs gets 35 minutes, so a
+     fallback download still leaves time for the tests; the browsers' own download, on a cache
+     miss, is unchanged. To prove that fallback once without waiting for a slow mirror, once this
+     `workflow_dispatch` trigger is on `main` (until then a branch's run by hand may not
+     start): make a new commit of its own on a throwaway branch from `main` (an empty one,
+     `git commit --allow-empty`, with the usual trailers), push the branch, never open a pull
+     request at that commit, and run
+     `gh workflow run ci.yml --ref <branch> -f force-apt-fallback=true`. The plan job fails any
+     run by hand, before checkout, that doesn't ask for the fallback, runs on `main` or a tag,
+     or runs `main`'s head or any open pull request's: its checks, `quality-gate` among them,
+     land on the commit, and the merge rule reads the latest run per head, so on a pull
+     request's head they would stand in for its own run. One started there by mistake still
+     leaves a failed CI run on that head, and since the merge rule takes the newest run,
+     re-running the pull request's older run doesn't clear it: stop and report it, and recover
+     only as Quality or Engineering authorizes. Each `pwa-ui` leg then takes the Azure mirror
+     off before downloading anything (the action's `force-apt-fallback`; `pwa-e2e` and
+     `spikes-linux` download as before), says in its log that it was forced and not timed out,
+     fails if apt still fetches a package from Azure, and counts the packages that came from
+     `https://archive.ubuntu.com`. The WebKit legs are the proof: one that counts none fails;
+     Chromium's, whose packages the runner may already have, only warns. Read each WebKit leg's
+     count and its `Get:` lines before calling the fallback proven. Those two checks, the Azure
+     fetch and the Canonical count, belong to the forced proof alone: a fallback after a real
+     five-minute timeout, on any run, is the one above, unchanged (#817 first proposed failing
+     that one on an Azure fetch too, and dropped it). A run by hand runs every
+     job (the whole ring), but is never a release and writes no cache.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
@@ -347,20 +405,47 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `languages`, #464): C# for `.cs`, `.csproj`, `Directory.*` and the like; JavaScript for
      scripts, pages, npm manifests and `pwa/`; Actions for `.github/`. `main` and the weekly
      run analyse every language. CodeQL and dependency review skip drafts and run on ready for
-     review; CodeQL, Dependencies and Workflow lint each cancel a superseded run of the same
-     pull request, as ci.yml does.
+     review; CodeQL, Dependencies, Workflow lint and Apple clients each cancel a superseded run
+     of the same pull request, as ci.yml does. Only pull requests: these workflows group each
+     push run on `main` by its own run id, so none is cancelled. ci.yml's push runs on `main`
+     never cancel a run in progress either, but a first attempt still waiting can be replaced in
+     `ci-main` (item 7). That matters beyond publishing: a cancelled push run would be the latest
+     finished one merge-rule's main_green reads, and holds every pull request as if main were red
+     unless it's provably such a replaced waiting run (item 9).
 
    A final `quality-gate` job (`if: always()`) needs all of them. It fails if any failed or was
-   cancelled, and if any job the plan selected didn't succeed: on `main`, and when the whole ring
-   runs, that's every job; on a pull request, every job the plan gave true. A job the plan
+   cancelled, and if any job the plan selected didn't succeed: when the whole ring runs, that's
+   every job; otherwise, on `main` as on a pull request, every job the plan gave true (and a
+   plan that passed must have given each job, and `whole-ring`, exactly true or false). A job the plan
    skipped is fine. It's the required check (on `main` since 2026-11-03, with `merge-rule` beside
    it in main's ruleset, item 9), so skipped jobs never leave a pull request waiting.
    `publish-gate` needs `quality-gate` and its success, rather than a second copy of its list
-   (#512), so on `main` every ci.yml check job must have run and passed before a release
-   publishes, and a selection miss, or any red suite, is caught first. CodeQL, perf and the relay
+   (#512), so on `main` every ci.yml check job the plan selected must have run and passed before
+   a release publishes, and a selection miss, or any red suite, is caught first. It also needs
+   this run to have built the app (`quality-gate`'s `app` output, both pinned by the catalog
+   check): a main run whose change left
+   the app alone publishes nothing. Release order doesn't rest on the order main's runs go in,
+   which GitHub doesn't promise: `publish` runs one at a time, and inside it
+   `publish-prerelease.ps1` publishes each version (the run number) once, never one older
+   than any published, and never from a commit that doesn't hold the latest release's commit
+   (a run number says nothing of commit order; behind it publishes nothing, and diverged or
+   unreadable stops publishing). So a run publishes even after `main` has moved on (an app
+   change followed by a docs-only commit is released by the first's run), unless main's head,
+   read under the lock, has since changed the app by main's own ring-1 selector: then main's
+   later run publishes both, since publishing the older first could leave the newer's lower run
+   number refused (an unreadable or off-main head stops publishing). One reaching
+   `publish` after a newer release publishes nothing. `publish` runs exactly when
+   `publish-gate` succeeded (`!cancelled()`, pinned by the catalog check), since the implicit
+   `success()` would carry a skipped check's skip down to it. `publish-prerelease` keeps every waiting
+   publish (`queue: max`: up to 100, and one arriving to a full queue is cancelled, never one
+   already waiting), since by default the next to arrive replaces the one waiting and a re-run
+   of an old run could leave a newer run's app unpublished; GitHub doesn't promise the order
+   waiting publishes start in, so the checks above keep the order. actionlint doesn't know
+   `queue` yet: workflow-lint.yml lets that one finding through there alone (#951). CodeQL,
+   perf and the relay
    workflow run apart and don't hold a release.
-8. **Keeping the selector honest:** ring 2 runs everything on `main`, and each `main` run's
-   summary also says which jobs ring 1 chose for the same change. For every ring-2
+8. **Keeping the selector honest:** a whole-ring run (ring 2, every gated job) also says in its
+   summary which jobs ring 1 chose for the same change. For every ring-2
    failure, a nightly job asks whether ring 1's selection for that PR would have included
    the failing test. A **selection miss** is a bug in the catalog. It gets an issue, and the
    rate is a tracked metric (target: zero).
@@ -395,12 +480,37 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      landing pull requests on a broken main, which makes the breakage hard to untangle. Each run
      reads main once: `ci.yml`'s push runs on main, newest first, judged by the latest that
      finished, so a newer one still going doesn't free a red main until it passes; a finished run
-     being re-run counts as not green (its last finished attempt was almost always red). While it
+     being re-run counts as not green (its last finished attempt was almost always red). A run
+     cancelled while still pending, replaced in `ci-main` by a newer push before any job of it
+     started (a first attempt with a newer run listed, whose jobs, every one read, have no
+     runner and no steps, and whose commit the newest run's commit builds on, by GitHub's
+     compare), tested nothing, and the newest run tests its change, so it is passed over for the
+     finished run before it, red or green; any other cancelled run (the newest included), or one
+     whose jobs or compare can't be read, still counts as not green: re-run it. A run that passed
+     doesn't vouch for a later commit (by main's compare from it) whose run, older by id since
+     runs aren't promised to be created in push order, hasn't passed, nor for one whose run isn't
+     found: a later commit with no run on the first page of 20 is looked for on up to four more,
+     and one still not found (further back, or never run, as a commit inside a push of several)
+     holds main not green until a run on main's head passes. While it
      isn't green, every pull request fails, its description starting `Main is red (CI <sha>)`;
      main unread, or with no finished run, fails closed. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from the merge coordinator, since labels take triage
      rights: it skips this check and nothing else, the independent review included. CI finishing
      on main starts a run, so verdicts follow main to red and back.
+   - The standing rule (owner decision 2026-11-05, #955): Copilot reviews only the security PRs
+     Quality spends the monthly included requests on. A PR labelled `copilot-waived`
+     (`copilot_waiver.labels`; only the merge coordinator adds it) may merge without a Copilot
+     review if it has a success independent-review receipt on its head from a listed poster. A PR
+     that needs that receipt (a sensitive path, a security mark, or an incomplete file list) also
+     needs a second success receipt, `copilot_waiver.second_review` (`independent-review-2`), from
+     a listed poster on the same head, and the two receipts' descriptions must each name a model
+     whose family the other doesn't share (`claude-opus-5.5` and `gpt-6.1-sol`, say). A sensitive
+     file in `copilot_waiver.one_review_paths` (`docs/status.md`, whose row the receipt checks
+     against its decision) doesn't call for the second. A completed Copilot review on the head is
+     itself the other family, so with one there the label changes nothing. A failed second receipt
+     from a poster blocks like a failed first one, whether or not the label is on. Without what it
+     needs, the label fails and names the missing receipt; it lifts nothing else, and the verdict
+     says `Copilot review waived (label)`.
    - A pull request can't loosen its own gate (#487, Finding 1): every trigger
      (`pull_request_target`, `status`, `workflow_run` of every other workflow, `check_suite`, a
      10-minute `schedule`, `workflow_dispatch`) runs main's copy of the workflow, which checks out
@@ -494,6 +604,11 @@ changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
   summary lists per-project counts and times and the 10 slowest tests. Next, each suite's
   duration is compared with its catalog `baseline`, and one that grows more than 50% slower
   gets flagged in the PR summary.
+  - The CardTests chunked large-file case includes phase evidence in its existing timeout
+    (#513): attachment start, chunk bytes/count and timings, reply receipt, client-observed
+    acknowledgement, and terminal UI state. The last phase distinguishes pipe progress from
+    UI settlement; it does not extend the wait or replace delivered/byte assertions.
+    UI settlement uses the view model's status/tone, independently of the delivery state.
 - **Flakes:** a test that passes and fails on the same code is flaky. It's reported, never
   silently retried to green. The flake record is the `flaky` label and its issues, one per test,
   each with its run links and counts.

@@ -25,6 +25,39 @@ public class AnswerTests
         Fields = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(fieldsJson),
     };
 
+    static Field Number(FieldConstraints limits) => new() { Name = "n", Type = FieldType.Number, Constraints = limits };
+
+    static JsonElement Num(string raw) => JsonDocument.Parse(raw).RootElement.Clone();
+
+    // #766: numbers far apart in size are ordered by their magnitude, never multiplied out, so a
+    // vast exponent is answered at once rather than building a number of a billion digits.
+    [Fact]
+    public void Number_constraints_hold_exactly_for_numbers_of_any_size()
+    {
+        var q = Form(Number(new FieldConstraints { Maximum = Num("10"), MultipleOf = Num("2") }));
+        Assert.Equal("\"n\": must be at most 10", Answers.Check(q, Answer("""{"n":1e999999999}""")));
+        Assert.Equal("\"n\": must be a multiple of 2", Answers.Check(q, Answer("""{"n":1e-999999999}""")));
+        Assert.Null(Answers.Check(q, Answer("""{"n":-2e999999999}""")));
+        // Past any exponent a schema means, it is not compared at all.
+        Assert.Equal("\"n\": its limits cannot be checked here; answer it at the machine", Answers.Check(q, Answer("""{"n":1e99999999999}""")));
+        Assert.Equal("\"n\": must be a multiple of 3", Answers.Check(Form(Number(new FieldConstraints { MultipleOf = Num("3") })), Answer("""{"n":1e999999999}""")));
+        Assert.Null(Answers.Check(Form(Number(new FieldConstraints { MultipleOf = Num("0.001") })), Answer("""{"n":12.345}""")));
+    }
+
+    // A client that was sent a bound it cannot read refuses rather than guessing past it.
+    [Fact]
+    public void A_bound_that_is_not_a_number_is_answered_at_the_machine()
+    {
+        var q = Form(Number(new FieldConstraints { Minimum = JsonDocument.Parse("\"1\"").RootElement.Clone() }));
+        Assert.Equal("\"n\": its limits cannot be checked here; answer it at the machine", Answers.Check(q, Answer("""{"n":5}""")));
+    }
+
+    [Fact]
+    public void A_pattern_that_takes_too_long_is_answered_at_the_machine()
+    {
+        var q = Form(new Field { Name = "t", Type = FieldType.Text, Constraints = new FieldConstraints { Pattern = "^(a+)+$" } });
+        Assert.Equal("\"t\": its limits cannot be checked here; answer it at the machine", Answers.Check(q, Answer($$"""{"t":"{{new string('a', 40)}}!"}""")));
+    }
     [Fact]
     public void A_prompt_marked_for_the_machine_takes_no_answer_however_well_formed()
     {

@@ -181,6 +181,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("error", reason);
+        Assert.DoesNotContain("at the machine", reason);
     }
 
     [Fact]
@@ -192,6 +193,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("different answer", reason);
+        Assert.DoesNotContain("at the machine", reason);
 
         // A fresh question, which the session never answers.
         Fixture.Append(events, Ask("q2", second++));
@@ -200,6 +202,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         (outcome, reason) = await AnswerAsync(ch, new { pick = "a" }, question: "q2");
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("did not record an answer", reason);
+        Assert.DoesNotContain("at the machine", reason);
         Assert.Equal(2, injector.Plans.Count);
     }
 
@@ -215,6 +218,21 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Fixture.Append(events, Recorded("q1", new { pick = "a" }));
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal(("stale", "the question has already been answered"), (outcome, reason));
+        Assert.Empty(injector.Plans);
+    }
+
+    // Copilot on #837: a new CLI resumed the session after it asked. The host's view may still list the
+    // question, but keys typed for it would go to whatever the new CLI shows: refused as stale.
+    [Fact]
+    public async Task An_answer_to_a_question_asked_before_the_session_was_resumed_is_stale_and_types_nothing()
+    {
+        var ch = await OpenAsync();
+        Fixture.Append(events, Copilot.Event("session.resume", new { }, second++));
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal("stale", outcome);
+        Assert.Contains("resumed in a new Copilot CLI", reason);
         Assert.Empty(injector.Plans);
     }
 
@@ -336,6 +354,62 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Single(injector.Plans);
     }
 
+    // ---- a field that opens with its default typed in (#662) ----
+
+    // An option list, then a number the prompt opens with 3 already in it.
+    static string AskDays(string id, int s) => Copilot.ToolStart(id, "ask_user", new
+    {
+        message = "How many?",
+        requestedSchema = new { properties = new { pick = new { type = "string", @enum = new[] { "a", "b", "c" } }, days = new { type = "integer", @default = 3 } }, required = new[] { "pick" } },
+    }, s);
+
+    async Task AskDaysAsync()
+    {
+        Fixture.Append(events, AskDays("q2", second++));
+        await source.RefreshAsync();
+    }
+
+    [Fact]
+    public async Task An_answer_that_would_be_added_to_a_pre_filled_default_is_refused_with_nothing_typed_and_the_question_stays_answerable()
+    {
+        await AskDaysAsync();
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b", days = 33 }, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.EndsWith("answer at the machine (this field has a pre-filled default)", reason);
+        Assert.Empty(injector.Plans);
+        // Nothing typed, so it may still be answered: with the default, left as it is.
+        injector.OnInject = () => Fixture.Append(events, Recorded("q2", new { pick = "b", days = 3 }));
+        Assert.Equal("delivered", (await AnswerAsync(ch, new { pick = "b", days = 3 }, question: "q2")).Outcome);
+        var (_, plan) = Assert.Single(injector.Plans);
+        Assert.Equal(new KeySend("", true, AgentBridge.Host.Delivery.Copilot.CopilotPlanner.FieldEnterDelayMs, AgentBridge.Host.Delivery.Copilot.CopilotPlanner.AfterFieldMs), plan.Sends[^1]);
+        Assert.DoesNotContain(plan.Sends, s => s.Text.Contains('3'));
+    }
+
+    [Fact]
+    public async Task A_pre_filled_default_kept_is_delivered_once_however_often_the_request_is_resent()
+    {
+        await AskDaysAsync();
+        var release = new TaskCompletionSource();
+        injector.Gate = release.Task;
+        injector.OnInject = () => Fixture.Append(events, Recorded("q2", new { pick = "a", days = 3 }));
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+
+        var first = AnswerAsync(ch, new { pick = "a", days = 3 }, request, "q2");
+        await Wait.UntilAsync(() => injector.Plans.Count == 1, "the answer to start typing", Patience);
+        var during = AnswerAsync(ch, new { pick = "a", days = 3 }, request, "q2");
+        release.SetResult();
+        var again = await AnswerAsync(await OpenAsync(), new { pick = "a", days = 3 }, request, "q2");
+
+        Assert.Equal(["delivered", "delivered", "delivered"], [(await first).Outcome, (await during).Outcome, again.Outcome]);
+        Assert.Single(injector.Plans);
+        // Left as it opened: the 3 is never typed, which would make it 33.
+        Assert.DoesNotContain(injector.Plans[0].Plan.Sends, s => s.Text.Contains('3'));
+    }
+
     [Fact]
     public async Task While_agent_ha_bridge_runs_an_answer_is_refused_with_its_reason_and_nothing_is_typed()
     {
@@ -361,6 +435,25 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Empty(injector.Plans);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_yes_or_no_question_whose_default_is_text_is_refused_for_either_answer_and_nothing_is_typed(bool answer)
+    {
+        // Copilot opens it on its Other row with "yes" typed in: walked from there, Yes recorded No
+        // and No reopened Other (#768). The refusal says which field, and why (#812 review).
+        Fixture.Append(events, Recorded("q1", new { pick = "a" }), Copilot.ToolDone("q1", second++),
+            Copilot.ToolStart("q2", "ask_user", new { message = "Go?", requestedSchema = new { properties = new { ok = new { type = "boolean", @default = "yes" } } } }, second++));
+        await source.RefreshAsync();
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { ok = answer }, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Equal("\"ok\" has a default that is not Yes or No (a text default opens it on its Other row); answer it at the machine", reason);
+        Assert.Empty(injector.Plans);
+    }
+
     [Fact]
     public async Task An_invalid_answer_or_a_request_without_a_uuid_is_refused_untyped()
     {
@@ -380,6 +473,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("console closed", reason);
+        Assert.DoesNotContain("at the machine", reason);
 
         // A different question, so the first attempt's outcome is not what comes back.
         Fixture.Append(events, Ask("q2", second++));

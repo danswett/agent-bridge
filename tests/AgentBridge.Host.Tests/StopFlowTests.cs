@@ -26,6 +26,7 @@ public sealed class StopFlowTests : IAsyncLifetime
     readonly FakeProbe probe = new();
     readonly FakeInjector injector = new();
     readonly FakeControl control;
+    readonly System.Collections.Concurrent.ConcurrentQueue<string> logged = new();
     readonly DeliveryGate gate = new();
     readonly FakeTimeProvider clock = new(Fixture.T0.AddHours(2));
     TestRelay relay = null!;
@@ -80,7 +81,7 @@ public sealed class StopFlowTests : IAsyncLifetime
         Grace = TimeSpan.FromMilliseconds(graceMs),
         TerminateWait = TimeSpan.FromMilliseconds(600),
         Time = clock,
-    }, gate: gate);
+    }, log: logged.Enqueue, gate: gate);
 
     ReplyService Replier() => new(source, f.Processes, probe, new NoGuard(), injector, new ReplyOptions
     {
@@ -151,6 +152,23 @@ public sealed class StopFlowTests : IAsyncLifetime
         Assert.Equal("this host does not end sessions; end it at the machine", (await StopAsync(ch)).Reason);
         Assert.Empty(injector.Plans);
         Assert.Empty(control.Terminated);
+    }
+
+    // A session whose launch here has not seen its window ready may be asking whether to trust its
+    // folder, where /exit's Enter would answer "Yes": it is terminated, nothing typed.
+    [Fact]
+    public async Task A_session_whose_launch_has_not_seen_its_window_ready_is_terminated_without_typing_exit()
+    {
+        var stopper = Stopper();
+        stopper.LaunchHeld = id => id == Id ? "Copilot was started here and its window has not been seen ready" : null;
+        Serve(stopper);
+        var ch = await OpenAsync();
+
+        var result = await StopAsync(ch);
+
+        Assert.Equal(("ended", (bool?)true), (result.Outcome_, result.Forced));
+        Assert.Empty(injector.Plans);
+        Assert.Single(control.Terminated);
     }
 
     [Fact]
@@ -358,6 +376,30 @@ public sealed class StopFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_stop_that_fails_before_it_is_tried_says_fixed_words_and_keeps_the_exceptions_text_in_the_log()
+    {
+        control.ThrowOnOpen = (1, new InvalidOperationException("SECRET-C:\\Users\\x\\denied.dll"));
+        var ch = await OpenAsync();
+
+        var result = await StopAsync(ch);
+
+        Assert.Equal(("refused", "the machine couldn't end the session"), (result.Outcome_, result.Reason));
+        Assert.Contains(logged, line => line.Contains("SECRET-C:\\Users\\x\\denied.dll"));
+    }
+
+    [Fact]
+    public async Task A_stop_that_fails_part_way_says_fixed_words_with_check_at_the_machine_and_keeps_the_exceptions_text_in_the_log()
+    {
+        control.ThrowOnOpen = (2, new InvalidOperationException("SECRET-C:\\Users\\x\\denied.dll"));
+        var ch = await OpenAsync();
+
+        var result = await StopAsync(ch);
+
+        Assert.Equal(("failed", "the machine couldn't finish ending the session; check at the machine"), (result.Outcome_, result.Reason));
+        Assert.Contains(logged, line => line.Contains("SECRET-C:\\Users\\x\\denied.dll"));
+    }
+
+    [Fact]
     public async Task A_process_that_will_not_go_fails_and_the_session_shows_its_own_status_again()
     {
         injector.OnInject = null;
@@ -504,6 +546,11 @@ public sealed class StopFlowTests : IAsyncLifetime
             OnInject?.Invoke(processId, plan);
             return new InjectionResult(InjectionStatus.Typed, "ok");
         }
+
+        // Copilot CLI 1.0.105 ready for a prompt, as captured live: a reply to Copilot is typed
+        // only into its empty input box, read from the screen (#825).
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ConsoleScreen(["\u25CF Done.", "", "\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584", "\u2503", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580", " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 tab next tab"], null));
     }
 
     // The agent processes the tests pretend run, and nothing else: Open finds only these.
@@ -515,6 +562,8 @@ public sealed class StopFlowTests : IAsyncLifetime
         public string? Refusal;
         public bool TerminateWorks = true;
         public int Opens;
+        // Open's nth call throws: the first is the press's check, the second the one that ends it.
+        public (int Call, Exception Error)? ThrowOnOpen;
 
         public void Run(AgentKind agent, int pid, DateTimeOffset started)
         {
@@ -533,6 +582,7 @@ public sealed class StopFlowTests : IAsyncLifetime
         public HeldOpen Open(int processId, DateTimeOffset startedAt)
         {
             Interlocked.Increment(ref Opens);
+            if (ThrowOnOpen is { } at && Opens == at.Call) { throw at.Error; }
             if (Refusal is { } refusal) { return HeldOpen.Refused(refusal); }
             lock (gate)
             {

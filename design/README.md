@@ -46,7 +46,7 @@ node tools/design-gen/preview.mjs                # preview.png (needs pwa's npm 
 | Apple | `design/apple/SlipgatesFonts.plist`, `SlipgatesFonts.swift` | Every font file to register (`UIAppFonts`; `ATSApplicationFontsPath` on macOS) and each real face's PostScript name by weight and style, so Apple clients never ask for a bold or italic the family lacks; and `SlipgatesFont.Tracking`, the title's and wordmark's tracking in em |
 | Android | `design/android/font/` | Each font file under its resource name, and `slipgates_sans.xml` and `slipgates_mono.xml`: a font family with a `<font>` for every weight and style, to copy into `res/font`; and `design/android/values/slipgates_type.xml`, the title's and wordmark's `letterSpacing` in em |
 | Design | `design/app-icon/*.svg` | The app icon in each platform's container ([App icon](#app-icon)) |
-| PWA | `pwa/icon.svg`, `pwa/icons/*.png` | The app icon: the favicon and the manifest's `any` icons, its maskable icons, and the `apple-touch-icon` |
+| PWA | `pwa/icon.svg`, `pwa/icons/*.png` | The app icon: the favicon and the manifest's `any` icons, its maskable and monochrome icons, the `apple-touch-icon`, and the notification badge |
 | Windows | `src/AgentBridge.App/Assets/AgentBridge.ico`, `AgentBridge.png` | The app icon: the exe's, the window's, the tray's and the installer's, and the toast logo |
 | Apple | `design/apple/Assets.xcassets`, `Brand.swift` | The app icons, the menu-bar template image, and `Brand.name`, `.shortName` and `.supportEmail`, for #260 to take whole |
 | Android | `design/android/` | The adaptive and themed icon, the notification icon, and `@string/brand_name`, `brand_short_name` and `brand_support_email` |
@@ -89,6 +89,9 @@ hard-coded colour on a part whose class doesn't name the token that replaces it.
   - `ink`: the "!" inside `needs`. It takes the `needs.ink*` token, not the role colour.
   - `knockout`: the stroke around the driven diamond. It takes the surface colour behind
     the glyph.
+- **`check`** is Send's success glyph (ui.md §6.5, #600): stroked like `send`, at the same
+  size and in the same ink, so the cross-fade from the ring to the check and back to Send's
+  arrow changes only the glyph.
 - **Driven by an agent** is `driven-badge.svg` drawn over any glyph, with the glyph's
   active colour switched from `active` to `agent`.
 - **Sizes:**
@@ -166,9 +169,9 @@ hairline inside it, the side of the mark's box (`mark`, centred), and which mark
 | `macos` | 1024 | Apple's grid: plate 824, radius 185, mark 504 | `app-icon/macos.svg`; `apple/Assets.xcassets/AppIcon.appiconset/mac-*.png`, 16 to 512 pt at 1x and 2x |
 | `ios` | 72 | Full bleed and opaque, mark 44; the system masks it | `app-icon/ios.svg`; `AppIcon.appiconset/ios-1024.png`, and the mark alone on transparency as `ios-1024-dark.png` and, in `monochrome`, `ios-1024-tinted.png`; the PWA's `icons/apple-touch-icon.png` (180) |
 | `android` | 108 | Adaptive icon layers: the plate, the mark 40 across, and the mark in `monochrome` | `app-icon/android-background.svg`, `-foreground.svg`, `-monochrome.svg`; `android/drawable/ic_launcher_*.xml`, `values/ic_launcher_background.xml` and `mipmap-anydpi-v26/ic_launcher.xml` |
-| `maskable` | 72 | Full bleed, mark 35, inside the safe zone | `app-icon/maskable.svg`, the PWA's `icons/maskable-192.png`, `maskable-512.png` |
+| `maskable` | 72 | Full bleed, mark 35, inside the safe zone | `app-icon/maskable.svg`, the PWA's `icons/maskable-192.png`, `maskable-512.png`; without the plate, in white, its `monochrome-192.png` and `monochrome-512.png` |
 | `glyph16` | 16 | No plate: the native 16 px cut in black on transparency, Apple's template image | `apple/Assets.xcassets/MenuBarIcon.imageset`, at 16 and 32 |
-| `glyph24` | 24 | No plate: the native 24 px cut in white, Android's notification icon | `android/drawable/ic_stat_slipgates.xml` |
+| `glyph24` | 24 | No plate: the native 24 px cut in white, Android's notification icon | `android/drawable/ic_stat_slipgates.xml`, and the PWA's notification badge `icons/badge-96.png` (at 4x) |
 
 The Windows `.ico` holds 16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96 and 256, every
 size Windows asks an app icon for. The Apple asset catalog and the Android resources are
@@ -208,7 +211,7 @@ glyphs must stay distinguishable in greyscale.
 ### Owner sign-off
 
 A material design change (visual language, interaction or state semantics) needs the owner's
-sign-off before it lands here. The VP of Design posts each proposal's boards and numbered
+sign-off before it lands here. The creative director posts each proposal's boards and numbered
 decisions as a `needs-signoff` issue in the private design studio,
 [danswett/agent-bridge-studio](https://github.com/danswett/agent-bridge-studio/issues?q=is%3Aissue+label%3Aneeds-signoff),
 which is visible to the owner and design collaborators only. The decision is recorded there

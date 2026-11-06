@@ -267,12 +267,41 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
 
         var options = await RequestAsync(ch, LaunchProtocol.Options, new { });
         Assert.False(options.TryGetProperty("trust", out _));
-        Assert.Equal("Busy: Claude in App is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all), so nothing was launched. Try again in a couple of minutes.",
+        // What the machine lists says what it is waiting on; a launch turned away says it was (#122).
+        Assert.Equal("Claude in App is asking whether to allow Bypass Permissions. New launches wait until it's answered.",
             options.GetProperty("busy").GetString());
         var busy = await LaunchTrustAsync(ch, new { workspace = "API" });
         Assert.Equal("busy", busy.GetProperty("outcome").GetString());
+        Assert.Equal("Busy: Claude in App is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all), so nothing was launched. Try again in a couple of minutes.",
+            busy.GetProperty("reason").GetString());
         Assert.False(busy.TryGetProperty("trust", out _));
         Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
+    public async Task Trusting_Claude_from_a_phone_says_its_Bypass_Permissions_warning_is_waiting_next_and_types_nothing_into_it()
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        starter.Registers = false;
+        screens.Rows = ClaudeAsks();
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var q = (await LaunchTrustAsync(ch, new { agent = "claude", workspace = "App", prompt = "go" })).GetProperty("trust");
+
+        // Trusted, and Allow all's warning comes next (#158).
+        screens.OnTyped = plan =>
+        {
+            screens.Rows = !plan.Sends[0].Enter ? ClaudeAsks(onYes: true)
+                : [" WARNING: Claude Code running in Bypass Permissions mode", "", " ❯ 1. No, exit", "   2. Yes, I accept"];
+        };
+        var answer = await AnswerAsync(ch, Answer(ch, q.GetProperty("id").GetString()!, "trust", client.Key));
+
+        Assert.Equal(("unconfirmed", "Not confirmed: the folder was trusted, and Claude is now asking in its window to confirm Bypass Permissions mode (Allow all). Only a person at the machine can answer that; the session appears here once they do.", null), answer);
+        // Only the trust answer's two keys went; nothing into the warning.
+        Assert.Equal(2, screens.Plans.Count);
+        var options = await RequestAsync(ch, LaunchProtocol.Options, new { });
+        Assert.False(options.TryGetProperty("trust", out _));
+        Assert.StartsWith("Claude in App is asking whether to allow Bypass Permissions", options.GetProperty("busy").GetString());
     }
 
     [Fact]
@@ -437,6 +466,22 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
         Assert.Equal("refused", (await AnswerAsync(ch, Answer(ch, id, "trust", client.Key))).Outcome);
         Assert.DoesNotContain(TrustProtocol.Capability, await CapabilitiesAsync(ch));
         Assert.Empty(screens.Typed);
+    }
+
+    // #995, Creative 6680283740: a worker that did not start is not a window that changed. The
+    // refusal says so in fixed words, never the exception's, and the question stays answerable.
+    [Fact]
+    public async Task A_folder_trust_answer_whose_injector_did_not_start_says_the_machine_couldnt_deliver_it()
+    {
+        screens.Rows = CopilotAsks();
+        ServeTrust(Trusting(), trustConfirm: TimeSpan.FromMilliseconds(500));
+        var ch = await OpenAsync();
+        var id = (await LaunchTrustAsync(ch, new { workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
+
+        screens.Fails = new InjectionResult(InjectionStatus.NothingTyped, AgentBridge.Host.Delivery.Windows.WorkerInjector.NotStarted);
+        var refused = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key));
+
+        Assert.Equal(("refused", "the machine couldn't deliver it; answer at the machine"), (refused.Outcome, refused.Reason));
     }
 
     [Fact]
@@ -628,6 +673,28 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
     }
 
     [Fact]
+    public async Task A_trust_answer_that_fails_before_anything_is_typed_is_refused_in_fixed_words_with_the_exception_only_in_the_log()
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        starter.Registers = false;
+        screens.Rows = ClaudeAsks();
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var id = (await LaunchTrustAsync(ch, new { agent = "claude", workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
+        // Only the answer's own look at whether the agent still runs fails; the host's following of it, on other threads, is left alone.
+        starter.Looking = () =>
+        {
+            if (new System.Diagnostics.StackTrace().ToString().Contains("AnswerTrustOnceAsync")) { throw new InvalidOperationException("SECRET-C:\\Users\\someone\\denied.dll"); }
+        };
+
+        var answer = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key));
+
+        Assert.Equal(("refused", "nothing was typed; answer at the machine"), (answer.Outcome, answer.Reason));
+        Assert.Empty(screens.Typed);
+        Assert.Contains(logged, line => line.Contains("before anything was typed") && line.Contains("SECRET-C:\\Users\\someone\\denied.dll"));
+    }
+
+    [Fact]
     public async Task A_highlight_moved_whose_Enter_could_not_go_or_a_worker_that_failed_part_way_is_unconfirmed_never_refused()
     {
         locator.Installed["claude"] = @"C:\fake\claude.exe";
@@ -659,7 +726,9 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
         var request = Guid.NewGuid().ToString();
         var broken = await AnswerAsync(ch, Answer(ch, other, "trust", client.Key, request: request));
         Assert.Equal("unconfirmed", broken.Outcome);
-        Assert.Contains("the worker went away", broken.Reason);
+        Assert.Contains("may not have reached", broken.Reason);
+        Assert.DoesNotContain("the worker went away", broken.Reason);
+        Assert.Contains(logged, line => line.Contains("failed part way") && line.Contains("the worker went away"));
         Assert.Equal(broken, await AnswerAsync(ch, Answer(ch, other, "trust", client.Key, request: request)));
     }
 

@@ -37,8 +37,11 @@ internal sealed record Registration(
 
 // A Codex command waiting for approval (<id>.approval.json): the hook writes it on
 // PermissionRequest and removes it on the next event that proves it was answered.
-// Attempted: agent-ha-bridge has already typed an answer into this generation.
-internal sealed record ApprovalMarker(string DecisionId, string Question, DateTimeOffset? Created, bool Attempted);
+// Attempted: agent-ha-bridge has already typed an answer into this generation. Question is the
+// hook's activity line, the command cut to 300 characters and unfenced; Command is the whole
+// command as this host's hook records it (cut only past CommandMax, saying so in CommandCut),
+// absent from a marker agent-ha-bridge's hook or an older host wrote (#209).
+internal sealed record ApprovalMarker(string DecisionId, string Question, DateTimeOffset? Created, bool Attempted, string? Tool = null, string? Command = null, bool CommandCut = false);
 
 public enum ApprovalMarkerState { Absent, Unreadable, Present }
 
@@ -46,7 +49,8 @@ public enum ApprovalMarkerState { Absent, Unreadable, Present }
 // before typing (Set-CodexApprovalAttempt): the marker names this session, carries a
 // generation (DecisionId), and an attempt it records is a boolean true. Anything else is
 // Unreadable, which a caller must treat as "something may be pending", never as absent.
-public sealed record ApprovalMarkerRead(ApprovalMarkerState State, string? DecisionId = null, string? Question = null, DateTimeOffset? Created = null, bool Attempted = false)
+public sealed record ApprovalMarkerRead(ApprovalMarkerState State, string? DecisionId = null, string? Question = null, DateTimeOffset? Created = null, bool Attempted = false,
+    string? Tool = null, string? Command = null, bool CommandCut = false)
 {
     public static string PathFor(string registrationPath, string sessionId) =>
         Path.Combine(Path.GetDirectoryName(registrationPath)!, RegistrationDiscovery.SafeKey(sessionId) + ".approval.json");
@@ -75,7 +79,8 @@ public sealed record ApprovalMarkerRead(ApprovalMarkerState State, string? Decis
                 if (tried.ValueKind != JsonValueKind.True) { return new(ApprovalMarkerState.Unreadable); }
                 attempted = true;
             }
-            return new(ApprovalMarkerState.Present, decision.GetString(), Json.Str(e, "Question") ?? "", Json.Time(e, "Created"), attempted);
+            return new(ApprovalMarkerState.Present, decision.GetString(), Json.Str(e, "Question") ?? "", Json.Time(e, "Created"), attempted,
+                Json.Str(e, "Tool"), Json.Str(e, "Command"), Json.Bool(e, "CommandCut") == true);
         }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return new(ApprovalMarkerState.Absent); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or ArgumentException) { return new(ApprovalMarkerState.Unreadable); }
@@ -231,12 +236,29 @@ internal static class CopilotDiscovery
     {
         try
         {
-            var attributes = File.GetAttributes(path);
+            // Not File.GetAttributes, which says absence by throwing: an agent never installed was
+            // two exceptions a pass, most of the host's 5 a second (#608).
+            if (Attributes(path) is not { } attributes) { return Folder.Absent; }
             if (attributes.HasFlag(FileAttributes.ReparsePoint)) { return Folder.Link; }
             return attributes.HasFlag(FileAttributes.Directory) ? Folder.Present : Folder.Unreadable;
         }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return Folder.Absent; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return Folder.Unreadable; }
+    }
+
+    // What is at a path, or null when nothing is: the OS saying the file or a folder above it is
+    // not there. Anything else it says (denied, unreadable) still throws.
+    internal static FileAttributes? Attributes(string path)
+    {
+        var attributes = new FileInfo(path).Attributes;
+        if ((int)attributes != -1) { return attributes; }
+        // Windows says -1 for a drive that is not ready (removable media, a locked volume) too,
+        // which is not absence: taken for it, every session there would be retired.
+        if (Path.GetPathRoot(Path.GetFullPath(path)) is { Length: > 0 } root && !Directory.Exists(root))
+        {
+            throw new IOException($"{root} is not ready");
+        }
+        return null;
     }
 
     // The subfolders, each with whether it is a link. The attributes come with the listing.
@@ -279,7 +301,7 @@ internal static class ClaudeSessionDiscovery
     // process of its generation that could not be read is a session discovery cannot see, and
     // one that says it is an SDK or print-mode run accounts for its process as nobody's session.
     public static IReadOnlyList<DiscoveredSession> Find(string claudeHome, IReadOnlyList<AgentProcess> processes, Func<string, string?> findTranscript,
-        ICollection<string>? holds = null, ISet<int>? accounted = null, IReadOnlyList<AgentProcess>? unidentified = null)
+        ICollection<string>? holds = null, ISet<int>? accounted = null, IReadOnlyList<AgentProcess>? unidentified = null, IReadOnlyList<string>? probeRoots = null)
     {
         var root = Path.Combine(claudeHome, "sessions");
         unidentified ??= [];
@@ -299,6 +321,14 @@ internal static class ClaudeSessionDiscovery
             var parsed = Parse(file, out var filePid);
             var holder = running.TryGetValue(filePid, out var p) ? p : unread.TryGetValue(filePid, out var u) ? u : null;
             if (holder is null) { continue; }
+            // The host's own /usage probe, known by its exact options alone, is nobody's session
+            // whatever its file holds: caught mid-write, that file held discovery for a pass
+            // (#238 review). One known only with its folder (flattened) is decided below, from it.
+            if (running.ContainsKey(filePid) && CommandLine.IsClaudeUsageProbe(holder.CommandLine))
+            {
+                accounted?.Add(filePid);
+                continue;
+            }
             if (parsed is null)
             {
                 // Unreadable, or not a whole file of its own process: the file's time is all
@@ -320,10 +350,34 @@ internal static class ClaudeSessionDiscovery
                 continue;
             }
             accounted?.Add(filePid);
-            if (!entry.Interactive) { continue; }
+            if (!entry.Interactive || IsUsageProbe(holder, entry, probeRoots ?? [])) { continue; }
             live.Add(new DiscoveredSession(entry.SessionId, AgentKind.Claude, findTranscript(entry.SessionId), null, entry.Pid, ProcessStartedAt: holder.StartedAt));
         }
         return live;
+    }
+
+    // A host's /usage probe (#200), which Claude Code 2.1.316 records as kind interactive (entrypoint
+    // sdk-cli, which nothing promises), so it was listed as a session for the second or two it ran.
+    // Told by what the host controls instead: the probe's exact options, or, where macOS's ps has
+    // flattened an install path with a space in it, options that end so and a folder only a host
+    // runs it in: <profile>/usage-probe under one of probeRoots (the product's own profile folders).
+    // A folder merely named usage-probe is not enough: a flattened prompt that quotes the probe's
+    // options, in a project of that name, is a real session (#238 review).
+    static bool IsUsageProbe(AgentProcess holder, Entry entry, IReadOnlyList<string> probeRoots) =>
+        CommandLine.IsClaudeUsageProbe(holder.CommandLine)
+        || (CommandLine.MayBeClaudeUsageProbe(holder.CommandLine) && entry.Cwd is { } cwd && IsProbeFolder(cwd, probeRoots));
+
+    internal static bool IsProbeFolder(string cwd, IReadOnlyList<string> probeRoots)
+    {
+        static string Plain(string p) => p.Replace('\\', '/').TrimEnd('/');
+        var folder = Plain(cwd);
+        var cut = folder.LastIndexOf('/');
+        if (cut <= 0 || !folder[(cut + 1)..].Equals(AgentBridge.Host.Core.Usage.UsageProbes.FolderName, StringComparison.OrdinalIgnoreCase)) { return false; }
+        var profile = folder[..cut];
+        var parent = profile.LastIndexOf('/');
+        if (parent <= 0 || profile[(parent + 1)..] is "" or "." or "..") { return false; }
+        var comparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        return probeRoots.Any(r => r.Length > 0 && Plain(r).Equals(profile[..parent], comparison));
     }
 
     static DateTimeOffset? Written(string path)
@@ -332,7 +386,7 @@ internal static class ClaudeSessionDiscovery
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
-    internal sealed record Entry(int Pid, string SessionId, DateTimeOffset? StartedAt, DateTimeOffset? UpdatedAt, bool Interactive = true);
+    internal sealed record Entry(int Pid, string SessionId, DateTimeOffset? StartedAt, DateTimeOffset? UpdatedAt, bool Interactive = true, string? Cwd = null);
 
     internal static Entry? Parse(string path) => Parse(path, out _) is { Interactive: true } entry ? entry : null;
 
@@ -357,7 +411,7 @@ internal static class ClaudeSessionDiscovery
             // Only a CLI at a console can be typed into; an SDK or print-mode run is not
             // a session a person drives.
             var interactive = Json.Str(e, "kind") is not { } kind || kind == "interactive";
-            return new Entry(pid, id, Millis(e, "startedAt"), Millis(e, "updatedAt"), interactive);
+            return new Entry(pid, id, Millis(e, "startedAt"), Millis(e, "updatedAt"), interactive, Json.Str(e, "cwd"));
         }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { pid = 0; return null; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return null; }
@@ -799,7 +853,7 @@ internal static class RegistrationDiscovery
         if (agent == AgentKind.Codex
             && ApprovalMarkerRead.Read(path, id) is { State: ApprovalMarkerState.Present } marker)
         {
-            approval = new ApprovalMarker(marker.DecisionId!, marker.Question ?? "", marker.Created, marker.Attempted);
+            approval = new ApprovalMarker(marker.DecisionId!, marker.Question ?? "", marker.Created, marker.Attempted, marker.Tool, marker.Command, marker.CommandCut);
         }
         return new Registration(
             id,

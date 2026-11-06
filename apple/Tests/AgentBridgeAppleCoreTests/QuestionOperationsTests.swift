@@ -64,3 +64,14 @@ private func questionFixture(_ source: String) throws -> BridgeQuestion {
         }
     }
 }
+
+@Test func everyCodexApprovalIsAnsweredAtTheMachineUntilThisAppChecksItsShape() throws {
+    // An older host's cut preview, with no truncated mark: Approve once would run the whole command.
+    let preview = try questionFixture(#"{"id":"agent_bridge_x1-1","kind":"approval","message":"Allow **shell**?\n\n```\nNeeds approval: git push origin main && rm -rf /tmp/build...\n```","fields":[{"name":"decision","type":"choice","required":true,"options":[{"value":"approve","label":"Approve once"},{"value":"deny","label":"Deny"}]}]}"#)
+    let capabilities: Set = ["sessions.answer", "sessions.approve"]
+    #expect(preview.readOnlyReason(capabilities: capabilities, sessionAgent: "codex") != nil)
+    #expect(throws: BridgeOperationError.self) {
+        try preview.answer(sessionID: "s", currentQuestionID: preview.id, values: ["decision": .string("approve")], capabilities: capabilities, sessionAgent: "codex")
+    }
+    #expect(preview.readOnlyReason(capabilities: capabilities, sessionAgent: "copilot") == nil)
+}

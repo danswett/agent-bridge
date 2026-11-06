@@ -31,7 +31,7 @@ import { BridgeConnection } from './connection.js';
 import { ALL, HostSession } from './host-session.js';
 import { HostClient } from './host-client.js';
 import { TRUST } from './launch.js';
-import { TRANSFER, collectRemote, signTransfer, signTrust } from './transfer.js';
+import { TRANSFER, collectRemote, collectingRemote, signEscapedApproval, signTransfer, signTrust } from './transfer.js';
 import { PushRegistrar, closeMachineNotices, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities } from './protocol.js';
 import { offlineMachines } from './ui/views.js';
@@ -44,12 +44,28 @@ import { UpdateControl } from './update.js';
 import { ReleaseWatch } from './release-watch.js';
 import { UsageView } from './ui/usage-view.js';
 import { conceal, reveal, watchDisclosures, watchPresses } from './ui/motion.js';
+import { cameBack, watchFocusRing } from './ui/focus.js';
+import { whileVisible } from './ui/ticker.js';
 import { RelayBlobs } from './blobs.js';
+import { recentTimings } from './timing.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
+import { applyTextSize, readTextSize, saveTextSize } from './text-size.js';
 
 // Installed on iOS or iPadOS, the edge swipe walks the same back stack as Android's Back.
 if (installedOnApple(markPlatform())) { edgeSwipeBack(document, () => history.back()); }
 const $ = (id) => document.getElementById(id);
+
+// Text size (ui.md §4.4): this device's choice, already on the page from text-size-boot.js.
+{
+  const buttons = [...document.querySelectorAll('#text-size [data-text-size]')];
+  const show = (size) => { for (const b of buttons) { b.setAttribute('aria-pressed', String(b.dataset.textSize === size)); } };
+  const size = readTextSize();
+  applyTextSize(size);
+  show(size);
+  for (const b of buttons) {
+    b.addEventListener('click', () => { applyTextSize(b.dataset.textSize); saveTextSize(b.dataset.textSize); show(b.dataset.textSize); });
+  }
+}
 const params = new URLSearchParams(location.search);
 const BASE = RELAY || location.origin;
 
@@ -84,8 +100,9 @@ function dropKeptUsage() {
 // The sessions on screen and what their cards and the launch panel send, once begun.
 let page = null;
 
-// ---- links: a notification's ?host=&session=&question= ----
-// The session a link asked for, until its card is on screen: { host, session, question }.
+// ---- links: a notification's ?host=&session=&question=, or ?host=&signin= ----
+// The session a link asked for, until its card is on screen: { host, session, question }; or the
+// sign-in banner, until it can be focused or is known gone: { host, signin }.
 let linked = null;
 // Set once signed in: goes to a link's machine.
 let followLink = null;
@@ -120,28 +137,33 @@ function watchFocus(want) {
 
 const ID = /^[0-9a-f]{32}$/;
 const param = (p, name) => { const v = p.get(name); return v && v.length <= 256 ? v : null; };
+// A sign-in push's agent (#969, v1-sessions.md Push signIn): one of these, or none. Any other is
+// ignored, and the link only shows its machine.
+const signInAgent = (p) => { const v = p.get('signin'); return ['copilot', 'claude', 'codex'].includes(v) ? v : null; };
 
-// A link's machine, session and question, taken out of the address so neither a reload nor a
-// later sign-in, possibly as another account, reuses it.
+// A link's machine, session and question, or the agent whose sign-in it is about, taken out of the
+// address so neither a reload nor a later sign-in, possibly as another account, reuses it.
 function takeLink() {
-  const link = { host: param(params, 'host'), session: param(params, 'session'), question: param(params, 'question') };
-  if (!['host', 'session', 'question'].some((k) => params.has(k))) { return null; }
-  for (const k of ['host', 'session', 'question']) { params.delete(k); }
+  const link = { host: param(params, 'host'), session: param(params, 'session'), question: param(params, 'question'), signin: signInAgent(params) };
+  if (!['host', 'session', 'question', 'signin'].some((k) => params.has(k))) { return null; }
+  for (const k of ['host', 'session', 'question', 'signin']) { params.delete(k); }
   const rest = params.toString();
   history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}${location.hash}`);
   return { ...link, host: link.host && ID.test(link.host) ? link.host : null };
 }
 
 // Opens the session a notification was about, with its question ready to answer: on its own
-// machine, shown alone or with every other. Its answers take focus only once that machine
-// takes them (#269: not while its list is still being confirmed), and only while the session
+// machine, shown alone or with every other. Its question takes focus only once that machine
+// takes answers (#269: not while its list is still being confirmed), and only while the session
 // is still the one shown.
-// Focus goes to an answer only for the question the notification was about, and only if the
-// person has not moved focus since: a tap choice sends on Enter or Space, and while the machine
-// was held the question could have been answered at the machine and another asked, which a
-// focus moved later would have them approve unseen (#269 security review).
+// Focus goes to the question's heading, never an answer: a tap choice sends on Enter or Space,
+// so a key pressed as the page came up would answer a question nobody had read (#484). And only
+// for the question the notification was about, and only if the person has not moved focus
+// since: while the machine was held the question could have been answered at the machine and
+// another asked (#269 security review).
 function focusLinked() {
   if (!linked || !page?.hosts.shows(linked.host)) { return; }
+  if (linked.signin) { focusSignIn(); return; }
   const card = page.view.card(linked.host, linked.session);
   if (!card) { return; }
   if (!linked.shown) {
@@ -164,23 +186,47 @@ function focusLinked() {
   const now = document.activeElement;
   if (now && now !== document.body && now !== left) { return; }
   if (!question || card.session?.question?.id !== question) { return; }
-  // The question's answer controls, not a code block's Copy button in its message: Enter on
-  // a notification's question must answer it, not copy the command it shows.
-  const el = card.view;
-  const target = el.querySelector('.question-slot button:not([disabled]):not(.md-copy), .question-slot input:not([disabled]), .question-slot textarea:not([disabled])');
-  target?.focus({ preventScroll: true });
+  // Read first by a screen reader, and Tab from it reaches the answers.
+  const target = card.view.querySelector('.question-slot .question-head');
+  if (!target) { return; }
+  target.tabIndex = -1;
+  target.focus({ preventScroll: true });
   // Brought into sight as Needs you brings a question, so its answers wait before a click counts.
-  if (target) { card.revealQuestion('auto', target); }
+  card.revealQuestion('auto', target);
+}
+
+// A sign-in push's link (#969): its machine's sign-in banner for its agent, with focus on the
+// banner's action, once that machine's list is whole (#269), when the banners say whether any
+// session still needs it; and only if the person has not moved on meanwhile (watchFocus). The
+// banners are on the sessions list, which another page, or a session over the list on a phone,
+// hides, and focus() on a hidden banner does nothing: so the list is shown first, before what has
+// focus is noted, and the link is let go only once its banner is on screen. No banner for it then
+// (signed in since): the machine as it is, and nothing said.
+function focusSignIn() {
+  if (!linked.shown) {
+    page.showList();
+    const want = { ...linked, shown: true, left: document.activeElement };
+    setLinked(want);
+    watchFocus(want);
+  }
+  if (!page.hosts.route(linked.host)) { return; }
+  const { host, signin, left } = linked;
+  const now = document.activeElement;
+  if (now && now !== document.body && now !== left) { setLinked(null); return; }
+  if (page.signIns?.reveal(host, signin) === 'hidden') { return; }
+  setLinked(null);
 }
 
 // A tap on a notification while the app is open: the worker says where to go.
 navigator.serviceWorker?.addEventListener('message', (e) => {
   if (e.data?.type !== 'agent-bridge.open' || typeof e.data.url !== 'string') { return; }
+  // Back from a notification: the focus it moves draws no ring (A12), whatever key came before.
+  cameBack();
   let p;
   try { p = new URL(e.data.url).searchParams; } catch { return; }
   const host = param(p, 'host');
   if (!host || !ID.test(host)) { return; }
-  followLink?.({ host, session: param(p, 'session'), question: param(p, 'question') });
+  followLink?.({ host, session: param(p, 'session'), question: param(p, 'question'), signin: signInAgent(p) });
 });
 navigator.serviceWorker?.startMessages?.();
 
@@ -275,7 +321,7 @@ const demoStorage = {
 
 async function startDemo() {
   // Only the demo loads its pretend hosts: the live app never fetches or parses them (#609).
-  const { DemoBlobStore, DemoConnection, DemoHost, demoDelegating, demoMachines, demoTransfers, demoTrust, runScript } = await import('./demo.js');
+  const { DemoBlobStore, DemoConnection, DemoHost, demoConfirm, demoDelegating, demoMachines, demoSignIn, demoTransfers, demoTrust, runScript } = await import('./demo.js');
   $('demo-banner').hidden = false;
   $('demo-settings').hidden = false;
   shell.setSignedIn(true);
@@ -300,6 +346,8 @@ async function startDemo() {
     large: params.get('blobs') !== '0',
     stopping: params.get('stop') !== '0' && params.get('answer') !== '0' && !ahb,
     approving: params.get('approve') !== '0',
+    // ?confirm=0: a host that does not take an escaped approval's confirmation from this device (#803).
+    confirming: params.get('confirm') !== '0' && params.get('approve') !== '0',
     stopWindowMs,
     usage: params.get('usage') !== '0',
     launching: params.get('launch') !== '0' && params.get('answer') !== '0' && !ahb,
@@ -310,10 +358,22 @@ async function startDemo() {
     // ?updates=1: a host whose app installs updates asked for from here (#51). Never a
     // read-only one, which offers none.
     updating: params.get('updates') === '1' && !ahb,
+    // ?signin=1: a host that runs an agent's own device-code sign-in when asked (#800), with four
+    // sessions waiting on one, a quota error and a session not responding (demoSignIn).
+    signingIn: params.get('signin') === '1',
+    // ?progress=0: a host from before sessions.progress, which says nothing until the outcome.
+    progress: params.get('progress') !== '0',
   });
+  if (params.get('signin') === '1') { demoSignIn(host); }
   host.updateStepMs = Number(params.get('updateStep')) || host.updateStepMs;
+  // ?confirmDelay=: how long after typing an answer or reply the machine confirms it, to see Typed.
+  host.confirmDelayMs = Number(params.get('confirmDelay')) || 0;
   // ?machines=2 or 3: the account's other machines, after this one.
   const machines = [host, ...demoMachines(Number(params.get('machines')) || 1, { answerDelayMs, stopWindowMs })];
+  // With ?signin=1, each other machine that takes answers needs a sign-in too (#800).
+  if (params.get('signin') === '1') {
+    for (const m of machines.slice(1).filter((x) => x.capabilities.includes('sessions.answer'))) { m.capabilities.push('sessions.signin'); demoSignIn(m); }
+  }
   // ?attachDelay= slows each file chunk, so its progress can be watched.
   for (const m of machines) { m.attachmentDelayMs = Number(params.get('attachDelay')) || 0; }
   // The relay's blob store, in the page. ?blobMax= sets the largest blob it takes (stored bytes),
@@ -364,12 +424,15 @@ async function startDemo() {
   for (const m of machines) {
     if (m.capabilities.includes(TRUST.capability)) { trusts.set(m.machine.id, await demoTrust(m, () => hosts.route(m.machine.id)?.client ?? null)); }
   }
+  const confirms = new Map();
+  for (const m of machines) { confirms.set(m.machine.id, await demoConfirm(m)); }
   page = new SessionsPage({
     $, hosts, connection, shell,
     blobs: () => blobStore, relayMax: () => blobStore.max,
     retryMs: Number(params.get('retry')) || 3000,
     transfers: (id) => transfers.get(id) ?? null,
     trust: (id) => trusts.get(id) ?? null,
+    confirm: (id) => confirms.get(id) ?? null,
     status: (id) => fleet.status(id),
     facts: (id) => fleet.facts(id),
     forget: demoForget,
@@ -395,6 +458,8 @@ async function startDemo() {
   const { answers, replies, stops, launches, launchPanel, view } = page;
   window.agentBridgeDemo = {
     host, hosts, connection, store: hosts.sessions, view, answers, replies, stops, launches, launchPanel, book, blobs: blobStore, page,
+    // This device's timing marks for its last answers and replies (timing.js).
+    timings: recentTimings,
     // Each demo machine, by its id: 'demo', 'demo-laptop', 'demo-shadow'.
     machines: Object.fromEntries(machines.map((m) => [m.machine.id, m])),
     get client() { return hosts.link(host.machine.id)?.client ?? null; },
@@ -414,7 +479,9 @@ async function startDemo() {
     // The same, for the next stops; none scripted, the host decides as a real one would.
     scriptStops: (...outcomes) => host.scriptStops(outcomes),
     // The same, for the next launches: 'started' (the default), 'unconfirmed', 'busy', 'refused',
-    // 'failed', an unknown one, or { outcome, reason, drop: true }.
+    // 'failed', an unknown one, or { outcome, reason, drop: true }; an unconfirmed one may name
+    // its session ({ session }), which a host gives when it started one it could not confirm, and
+    // { outcome: 'started', session: null } starts one without naming it.
     scriptLaunches: (...outcomes) => host.scriptLaunches(outcomes),
     // The next update presses' refusals, by reason; none scripted, a press is taken (#51).
     scriptUpdates: (...reasons) => host.scriptUpdates(reasons),
@@ -438,6 +505,23 @@ async function startDemo() {
     scriptTrust: (...outcomes) => host.scriptTrust(outcomes),
     upsert: (s) => host.upsert(s),
     remove: (id) => host.remove(id),
+    // Sign-in (#800): how the person's sign-in at github.com went (signin.done's outcome:
+    // 'signedIn', 'expired', 'failed' or 'refused', with a reason); a stored credential that still
+    // worked (recovered by itself); every start and cancel received; the code the next flow shows;
+    // the next starts' outcomes in place of started ({ outcome: 'machine', reason }), and failures.
+    finishSignIn: (outcome, reason = null) => host.finishSignIn(outcome, reason),
+    recoverSignIn: () => host.recoverSignIn(),
+    confirmSignIn: () => host.confirmSignIn(),
+    failSignInAgain: () => host.failSignInAgain(),
+    needSignInAgain: () => host.needSignInAgain(),
+    get signInLog() { return [...host.signInLog]; },
+    set nextCode(code) { host.nextCode = code; },
+    scriptSignIns: (...outcomes) => host.signInOutcomes.push(...outcomes),
+    failSignIns: (...errors) => host.signInFailures.push(...errors),
+    delaySignIns: (...ms) => host.signInDelays.push(...ms),
+    delayCancels: (...ms) => host.signInCancelDelays.push(...ms),
+    signInElsewhere: () => host.signInElsewhere(),
+    get signInCodesHeld() { return page?.signIns?.codesHeld; },
     hold: (held) => host.hold(held),
     frame: (f) => host.frame(f),
     get calls() { return [...host.calls]; },
@@ -496,12 +580,14 @@ function begin(account) {
   const connection = new BridgeConnection({ base: BASE, key: identity.key, deviceId: identity.deviceId, name: deviceName(), account });
   const hosts = new HostSession({ connection, me: identity.deviceId });
   const link = takeLink();
-  setLinked(link?.host && link.session ? { host: link.host, session: link.session, question: link.question } : null);
+  // A session's link wins over a sign-in's: a push carries one or the other.
+  const wanted = (l) => (l?.host && l.session ? { host: l.host, session: l.session, question: l.question } : l?.host && l.signin ? { host: l.host, signin: l.signin } : null);
+  setLinked(wanted(link));
   // A link's machine is shown: with every other when every machine is, else on its own. A
   // notification is not a choice in the Machines panel, so what is remembered stays.
-  followLink = ({ host, session, question }) => {
-    setLinked(session ? { host, session, question } : null);
-    if (!hosts.all || !hosts.isOnline(host)) { hosts.visit(host); }
+  followLink = (l) => {
+    setLinked(wanted(l));
+    if (!hosts.all || !hosts.isOnline(l.host)) { hosts.visit(l.host); }
     focusLinked();
   };
   const fleet = new FleetStatus({ connection, hosts, book, me: identity.deviceId });
@@ -546,6 +632,13 @@ function begin(account) {
         },
       };
     },
+    // An escaped approval's confirmation (#803), signed for the machine on the other end of its
+    // channel when the sheet's button is pressed, never before.
+    confirm: (targetId) => ({ session, question, shown, request, now }) => {
+      const key = hosts.route(targetId) ? hosts.link(targetId)?.channel?.hs?.remoteStatic : null;
+      if (!key) { return Promise.reject(new Error(`not connected to ${hosts.nameOf(targetId) ?? 'that machine'}`)); }
+      return signEscapedApproval({ key: identity.key, deviceId: identity.deviceId, machinePublic: new Uint8Array(key), session, question, shown, request, now });
+    },
     status: (id) => fleet.status(id),
     facts: (id) => fleet.facts(id),
     forget: forgets,
@@ -553,6 +646,9 @@ function begin(account) {
     onRendered: () => focusLinked(),
   });
   const { answers, replies, stops, launches } = page;
+  // The relay connection rests while the app is out of sight (connection.js), but not with
+  // anything on its way: that finishes first.
+  connection.busy = () => [answers, replies, stops, launches].some((s) => s.busy) || hosts.busy || fleet.busy || collectingRemote() || connection.relay?.busy === true;
 
   // ---- notifications ----
   const worker = () => new Promise((resolve, reject) => {
@@ -651,8 +747,8 @@ function begin(account) {
   fleet.start();
   // "last seen 5m ago" moves on with nothing else to redraw the list: every machine may be offline.
   // So does "checked 5m ago" under a machine's updates.
-  setInterval(() => {
-    if (document.visibilityState !== 'hidden' && (connection.known?.length || connection.presence.some((d) => fleet.update(d.id)))) { page.drawMachines(); }
+  whileVisible(() => {
+    if (connection.known?.length || connection.presence.some((d) => fleet.update(d.id))) { page.drawMachines(); }
   }, 30000);
 
   connection.on('presence', () => {
@@ -677,6 +773,8 @@ function begin(account) {
       // machine's list will be another by the time it is back.
       case 'reconnecting': if (linked?.shown) { setLinked(null); } page.refresh(); return setPill('Reconnecting…', 'warn');
       case 'replaced': if (linked?.shown) { setLinked(null); } return setPill('Paused', 'warn');
+      // Out of sight (connection.js): nobody reads the pill, and coming back connects at once.
+      case 'resting': return undefined;
       case 'signed-out': return undefined;
       default: return setPill(state);
     }
@@ -722,7 +820,7 @@ function begin(account) {
 
   // For the E2E tests and debugging from the console. Holds no secrets beyond what the
   // page already has.
-  window.agentBridge = { connection, hosts, store: hosts.sessions, answers, replies, stops, launches, notices, fleet, book, page };
+  window.agentBridge = { connection, hosts, store: hosts.sessions, answers, replies, stops, launches, notices, fleet, book, page, timings: recentTimings };
   drawNotify();
   connection.start();
 }
@@ -736,6 +834,7 @@ async function startLive() {
 registerServiceWorker();
 watchDisclosures(document);
 watchPresses(document);
+watchFocusRing(document);
 (params.get('demo') === '1' ? startDemo() : startLive()).catch((e) => {
   console.error(e);
   setPill('Error', 'bad');

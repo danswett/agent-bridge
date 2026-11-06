@@ -143,6 +143,15 @@ test('a host that fails the op is reported as failed, and Try again resends the 
   assert.equal(conn.client.last().data.request, 'r1');
 });
 
+test('a reply shows how far the machine has got with it, where the machine says', async () => {
+  const { conn, service, submit } = setup();
+  conn.client.reply = (data, { onProgress } = {}) => new Promise((resolve, reject) => { conn.client.calls.push({ data, resolve, reject, progress: onProgress }); });
+  submit();
+  conn.client.last().progress({ stage: 'received', working: false });
+  assert.equal(service.get('h1', 's1').stage, 'received');
+  conn.client.last().progress({ stage: 'typed', working: true });
+  assert.equal(service.get('h1', 's1').stage, 'queued');
+});
 // ---- HostClient ----
 
 test('the client sends session.reply, waits longer for it than for anything else, and reads an unknown outcome as unconfirmed', async () => {

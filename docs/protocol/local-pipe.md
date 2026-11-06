@@ -164,7 +164,9 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `host.settings` | `{ "remoteApproval"?: bool, "remoteFolderTrust"?: bool, "remoteFolderTrustDevices"?: [device id], "remoteFolderTrustDevicesWas"?: [device id], "devBoxKeepAwake"?: bool, "name"?: string }` (`remoteFolderTrust`, `remoteFolderTrustDevices`, which replaces the whole list, and `devBoxKeepAwake` (`devBox.keepAwake`, on a Dev Box) apply at once; the rest at the next start). A `devBoxKeepAwake` change is refused, leaving the file as it was, when the saved `config.json` would not read back with it (another setting the host rejects reads as keep-awake off). `remoteFolderTrustDevicesWas` is the list the new one was made from. If the saved list differs (as a set), because another app or a person's terminal changed it in the meantime, nothing in the request is changed and `conflict` is true. A device revoked elsewhere is therefore never approved again from a list read before. On a conflict, read the list again and make the change from that | `{ "settings": HostSettingsView, "restartRequired": bool, "conflict"?: bool }`. Written to the profile's `config.json`; read when the host starts. `name: ""` removes the name |
 | `host.restart` | none | `{ "restarting": true }`, then the host stops, and once it has finished (every disposal done, the profile's lock let go, however long that takes) is replaced and exits. Started any earlier, the replacement could give up waiting for the lock and leave no host at all (#239). A host run by the logon task's launcher (`agent-bridge-hostw`) exits with code 75 and the launcher starts the replacement, which it keeps watching for crashes (#106); any other host starts its own replacement |
 | `host.stop` | none | `{ "stopping": true }`, then the host exits |
-| `host.relay.account` | none | `{ "relay", "token", "accountId", "login" }`: the account this host signed in to, and the relay that issued it, so the app can reach the account's other machines through the relay as a device of its own (kind `app`, with its own key) without a second sign-in. `token` is a bearer credential for that relay only. Fails with `this host is not signed in to the relay` before a sign-in, and on a `--local-only` host |
+| `host.probes.hold` | none | `{ "busy": bool, "why"?: string }`. The app is about to stop the host, or replace it with an update (#238): for the next 15 minutes, extended by each call, the host starts no usage probe whose process goes with it (Codex's standalone app-server), and `busy` says whether one is still answering or within its grace after the last answer. The app stops the host only once it is not, so the probe's standard input is never cut mid-refresh; a failed or refused call, or a host still busy after 11 minutes, is not stopped at all. Only `unknown op` (an older host, which runs no such probe) lets the stop go on. Refused to anything but the app |
+| `host.relay.account` | `{ "device"?: device id }`: the app's own relay device id, so the host never accepts a management command from the app beside it (#801); an older app sends nothing | `{ "relay", "token", "accountId", "login" }`: the account this host signed in to, and the relay that issued it, so the app can reach the account's other machines through the relay as a device of its own (kind `app`, with its own key) without a second sign-in. `token` is a bearer credential for that relay only. Fails with `this host is not signed in to the relay` before a sign-in, and on a `--local-only` host |
+| `manage.*` | any | Refused to every caller, the app included: `managing a machine from another device goes through the relay; on this machine, use the app's Settings`. Managing a machine from another device ([v1-sessions.md](v1-sessions.md#managing-a-machine)) is through the relay only, so the #67 guard on `host.restart` and `host.stop` gains no way around it |
 | `host.update.report` | `{ "state": UpdateState, "taken"?: [request] }`: what the app's updater is doing, and the presses in `updateAsks` it has taken on ([v1-update.md](v1-update.md)) | `{ "ok": true }`. The host serves the state to the account's other devices (`update.*`) until the app's connection closes, then says the app is not running, and drops the presses taken from `updateAsks`. Refused to anything but the app: `only the Agent Bridge app beside this host reports its updates, and takes other devices' presses of Install` |
 
 `HostStatus`:
@@ -180,7 +182,7 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `signIn` | `{ state, userCode?, verificationUri?, expiresAt?, error? }`; `state` is `idle`, `pending` or `failed` |
 | `agentHaBridge` | Why answering, replying and stopping are off: agent-ha-bridge runs for this user (design G5). Absent when not |
 | `homeAssistant` | Why the Home Assistant connector is not reaching Home Assistant: it rejected the token, or has banned this machine's address, with what to do and when it is next tried ([ha-connector.md](../ha-connector.md#troubleshooting)). Absent when nothing is refused |
-| `settings` | `{ remoteApproval, name?, remoteFolderTrust, remoteFolderTrustDevices?, devBoxKeepAwake }` as `config.json` says now (`launch.remoteFolderTrust`, the approved device ids, absent when none, and `devBox.keepAwake`) |
+| `settings` | `{ remoteApproval, name?, remoteFolderTrust, remoteFolderTrustDevices?, devBoxKeepAwake, escapedApproval?, escapedApprovalDevices? }` as `config.json` says now (`launch.remoteFolderTrust`, the approved device ids, absent when none, `devBox.keepAwake`, and `permissions.escapedApproval` and `permissions.escapedApprovalDevices`, the latter absent while it inherits the folder-trust devices, which confirm only while folder trust is on; #803). The app's Settings shows which devices may confirm an escaped approval |
 | `restartRequired` | `config.json` differs from what the running host read, or agent setup has been attempted in this host run and may have changed registrations. A partial failure also conservatively requests restart; this is not evidence that setup completed |
 | `log` | Path of the host's log file |
 | `readOnly` | Why the host acts on nothing from other devices now (`delivery.readOnly`, or agent-ha-bridge running, G5); absent when it does. The app carries out no install a device asked for while it is set, and checks it again just before stopping the host |
@@ -196,10 +198,20 @@ the rest of the protocol.
 
 The shared first-run/Settings contract is `{ checkedAt, agents: [...], readOnlyReason? }`.
 Each agent has `id`, `label`, `home`, optional `executable` and `version`, checks named
-`installation`, `versionCheck`, `hooks`, `authentication` and `activation`, and optional
-`lastHookHandledAt`. Each check is `{ state, detail }`; states are `unknown`, `missing`,
+`installation`, `versionCheck`, `hooks`, `authentication` and `activation`, optional
+`lastHookHandledAt`, and `hookSetup`. Each check is `{ state, detail }`; states are `unknown`, `missing`,
 `needsAction`, `working`, `blocked` and `failed`. Unknown future states read as `unknown`.
 There is deliberately no aggregate "ready" bit.
+
+`hookSetup` is this profile's own setup record for the agent home: `notSetUp` (no ownership
+record), `incomplete` (an owned record without completed setup: an interrupted or failed
+setup, repair or removal, or a record from before completion was recorded; offer Repair),
+`completed` (the last setup wrote every registration, Codex's plugin and intake) or
+`unknown` (not determined: older hosts omit the field, a read-only host, unreadable intake
+or ownership records, or another profile's record). Unknown future values read as `unknown`.
+With intake enabled, `incomplete` has `hooks.state` `failed`, and `completed` keeps
+`hooks.state` `unknown`: setup completion is not evidence that hooks run in a new session.
+With intake off, both report `needsAction`. Clients use `hookSetup`, not `detail` text.
 
 The running host scans at startup, every ten minutes and when the app asks. It uses
 Launch's executable locator and running launch configuration, not an app-side PATH probe.

@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text.Json;
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery.Copilot;
@@ -10,13 +12,16 @@ public enum CopilotFieldKind { Choice, Boolean, Multi, Text, Number }
 public sealed record CopilotOption(string Value, JsonElement Raw);
 
 // One field of Copilot's ask_user prompt, as the keys have to drive it. Checked is the rows
-// a multi-select list opens with ticked (its schema default).
+// a multi-select list opens with ticked (its schema default). Prefill is a text or number
+// field's schema default, which the prompt opens with already typed into it (#662).
 public sealed record CopilotField(
     string Name,
     CopilotFieldKind Kind,
     IReadOnlyList<CopilotOption> Options,
     IReadOnlyList<int> Checked,
-    bool AllowsEmpty);
+    bool AllowsEmpty,
+    JsonElement? Prefill = null,
+    FieldConstraints? Constraints = null);
 
 // The ask_user prompt read from the tool call's own arguments, the way agent-ha-bridge
 // reads it (Get-DecisionSchemaFields), rather than from the Question a client saw: the
@@ -53,96 +58,86 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
     static (CopilotForm?, string?) Schema(JsonElement schema)
     {
         if (schema.ValueKind != JsonValueKind.Object) { return (null, "the question's form could not be read"); }
+        if (CopilotFieldConstraints.FormUnchecked(schema) is { } keyword)
+        {
+            return (null, $"the question's form has a limit the host does not check (\"{keyword}\"); answer it at the machine");
+        }
         if (!schema.TryGetProperty("properties", out var properties) || properties.ValueKind != JsonValueKind.Object)
         {
             return (new CopilotForm([]), null);
         }
         var fields = new List<CopilotField>();
+        var patterns = new PatternBudget();
         foreach (var property in properties.EnumerateObject())
         {
             if (property.Value.ValueKind != JsonValueKind.Object) { return (null, $"the question's field \"{property.Name}\" could not be read"); }
-            var (field, problem) = Field(property.Name, property.Value);
+            var (field, problem) = Field(property.Name, property.Value, patterns);
             if (field is null) { return (null, problem); }
             fields.Add(field);
         }
         return (new CopilotForm(fields), null);
     }
 
-    static (CopilotField?, string?) Field(string name, JsonElement p)
+    static (CopilotField?, string?) Field(string name, JsonElement p, PatternBudget patterns)
     {
-        var type = p.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
-        var isArray = type == "array";
-        var options = Choices(p, type);
+        // The input Copilot draws for it, read as the CLI reads it (CopilotFieldSchema): a
+        // field the keys would drive as something it is not is not typed into at all.
+        var (input, choices, problem) = CopilotFieldSchema.Read(p);
+        if (problem is not null) { return (null, $"\"{name}\" {problem}; answer it at the machine"); }
+        // Copilot checks none of the field's constraints itself, so the host checks the answer
+        // against them before a key goes (#766).
+        var (limits, unlimited) = CopilotFieldConstraints.Read(p, patterns);
+        if (unlimited is not null) { return (null, $"\"{name}\" {unlimited}; answer it at the machine"); }
+        var options = choices.Select(c => new CopilotOption(Scalar(c.Value), c.Value)).ToList();
         var hasDefault = p.TryGetProperty("default", out var def);
 
-        if (options.Count == 0)
+        switch (input)
         {
-            if (isArray) { return (null, $"\"{name}\" is a list with no options to choose from"); }
-            var kind = type is "number" or "integer" ? CopilotFieldKind.Number : CopilotFieldKind.Text;
-            return (new CopilotField(name, kind, [], [], false), null);
-        }
-
-        if (isArray)
-        {
-            var ticked = new List<int>();
-            // A null default names nothing; [null] would name an option that is null.
-            if (hasDefault && def.ValueKind != JsonValueKind.Null)
-            {
-                if (def.ValueKind != JsonValueKind.Array) { return (null, $"\"{name}\" has a default that is not a list"); }
-                foreach (var entry in def.EnumerateArray())
+            case CopilotFieldSchema.Input.Text or CopilotFieldSchema.Input.Number:
                 {
-                    var at = IndexOf(options, entry);
-                    if (at < 0 || ticked.Contains(at)) { return (null, $"\"{name}\" has a default that does not name its options"); }
-                    ticked.Add(at);
+                    var kind = input == CopilotFieldSchema.Input.Number ? CopilotFieldKind.Number : CopilotFieldKind.Text;
+                    // Copilot opens such a field with its default already in it, and keys typed
+                    // there are added to it: 90 typed into a field that opened with 90 was
+                    // recorded as 9090 (#662). A text box shows `default ?? ""`, so a null or
+                    // empty default leaves it empty; a number box shows String(default), so only
+                    // an empty one does, and a null one reads "null".
+                    var empty = def.ValueKind == JsonValueKind.String && def.GetString()!.Length == 0;
+                    var prefilled = hasDefault && !empty && (kind == CopilotFieldKind.Number || def.ValueKind != JsonValueKind.Null);
+                    return (new CopilotField(name, kind, [], [], false, prefilled ? def.Clone() : null, limits), null);
                 }
-            }
-            ticked.Sort();
-            return (new CopilotField(name, CopilotFieldKind.Multi, options, ticked, AllowsEmpty(p)), null);
+            case CopilotFieldSchema.Input.Multi:
+                {
+                    if (options.Count == 0) { return (null, $"\"{name}\" is a list with no options to choose from"); }
+                    var ticked = new List<int>();
+                    // A null default names nothing; [null] would name an option that is null.
+                    if (hasDefault && def.ValueKind != JsonValueKind.Null)
+                    {
+                        if (def.ValueKind != JsonValueKind.Array) { return (null, $"\"{name}\" has a default that is not a list"); }
+                        foreach (var entry in def.EnumerateArray())
+                        {
+                            var at = IndexOf(options, entry);
+                            if (at < 0 || ticked.Contains(at)) { return (null, $"\"{name}\" has a default that does not name its options"); }
+                            ticked.Add(at);
+                        }
+                    }
+                    ticked.Sort();
+                    return (new CopilotField(name, CopilotFieldKind.Multi, options, ticked, AllowsEmpty(p), Constraints: limits), null);
+                }
+            default:
+                // The keys never count from the default (they walk from the top row), but a
+                // default that names no option, null included, opens the list on its Other box;
+                // CopilotFieldSchema refuses those, and this stays as a second guard.
+                if (hasDefault && def.ValueKind == JsonValueKind.Null && input == CopilotFieldSchema.Input.Choice)
+                {
+                    return (null, $"\"{name}\" opens on its Other box (its default is null); answer it at the machine");
+                }
+                if (hasDefault && def.ValueKind != JsonValueKind.Null && IndexOf(options, def) < 0)
+                {
+                    return (null, $"\"{name}\" has a default that is not one of its options; answer it at the machine");
+                }
+                return (new CopilotField(name, input == CopilotFieldSchema.Input.Boolean ? CopilotFieldKind.Boolean : CopilotFieldKind.Choice, options, [], false), null);
         }
-
-        // The keys never count from the default (they walk from the top row), but a default
-        // that names no option is a prompt nobody has seen drawn, so it is not typed into.
-        // A null default is the schema not naming one.
-        if (hasDefault && def.ValueKind != JsonValueKind.Null && IndexOf(options, def) < 0)
-        {
-            return (null, $"\"{name}\" has a default that is not one of its options; answer it at the machine");
-        }
-        return (new CopilotField(name, type == "boolean" ? CopilotFieldKind.Boolean : CopilotFieldKind.Choice, options, [], false), null);
     }
-
-    // Read as the host's QuestionMapper reads them, so a client's option values are these:
-    // `enum`, `oneOf` / `anyOf` entries of `{const, title}`, the same inside `items` for a
-    // list, and true / false for a boolean, which the prompt shows as Yes / No.
-    static List<CopilotOption> Choices(JsonElement p, string? type)
-    {
-        var source = type == "array" && p.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Object ? items : p;
-        var list = new List<CopilotOption>();
-        if (source.TryGetProperty("enum", out var values) && values.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var v in values.EnumerateArray()) { list.Add(new CopilotOption(Scalar(v), v.Clone())); }
-            return list;
-        }
-        var entries = source.TryGetProperty("oneOf", out var oneOf) && oneOf.ValueKind == JsonValueKind.Array ? oneOf
-            : source.TryGetProperty("anyOf", out var anyOf) && anyOf.ValueKind == JsonValueKind.Array ? anyOf : default;
-        if (entries.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var entry in entries.EnumerateArray())
-            {
-                if (entry.ValueKind != JsonValueKind.Object) { continue; }
-                if (entry.TryGetProperty("const", out var c) && c.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined)) { list.Add(new CopilotOption(Scalar(c), c.Clone())); }
-                else if (entry.TryGetProperty("title", out var title) && title.ValueKind == JsonValueKind.String) { list.Add(new CopilotOption(title.GetString()!, title.Clone())); }
-            }
-            return list;
-        }
-        if (type == "boolean")
-        {
-            list.Add(new CopilotOption("true", Literal(true)));
-            list.Add(new CopilotOption("false", Literal(false)));
-        }
-        return list;
-    }
-
-    static JsonElement Literal(bool value) => JsonSerializer.SerializeToElement(value);
 
     // `minItems` absent is JSON Schema's 0, and the prompt accepts Enter on an untouched
     // list. Anything that is not plainly a whole number is read as no.
@@ -164,21 +159,44 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
     // As QuestionMapper writes Option.Value: a string as itself, anything else as its JSON.
     internal static string Scalar(JsonElement v) => v.ValueKind == JsonValueKind.String ? v.GetString()! : v.GetRawText();
 
-    // Two JSON scalars are the same value: equal strings, the same literal, or equal numbers.
-    public static bool SameScalar(JsonElement a, JsonElement b)
+    // Whether an answer is what a field that opens with its default records when its Enter keeps
+    // it. Anything that cannot be compared exactly is not, and is refused before a key goes: read
+    // as raw text, a default and an answer both 1e99999999999 passed for the same number though
+    // neither could be compared (#700).
+    public static bool Keeps(CopilotField field, JsonElement value)
     {
-        if (a.ValueKind == JsonValueKind.Number && b.ValueKind == JsonValueKind.Number)
+        if (field.Prefill is not { } prefill) { return false; }
+        if (field.Kind == CopilotFieldKind.Number)
         {
-            return a.TryGetDecimal(out var x) && b.TryGetDecimal(out var y) ? x == y : a.GetRawText() == b.GetRawText();
+            return Recorded(prefill) is { } kept && Recorded(value) is { } given && SameScalar(kept, given);
         }
-        if (a.ValueKind != b.ValueKind) { return false; }
-        return a.ValueKind switch
-        {
-            JsonValueKind.String => a.GetString() == b.GetString(),
-            JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null => true,
-            _ => false,
-        };
+        // A text box records its default as it is; only a string default is the answer's words.
+        return prefill.ValueKind == JsonValueKind.String && value.ValueKind == JsonValueKind.String
+            && prefill.GetString() == value.GetString();
     }
+
+    // The number a number box records for this value, as a JSON number, or null when that is not
+    // certain. Copilot 1.0.105's form (`Uxn`, its accept step) turns a number field's string into
+    // Number(text) when that is finite and keeps it a string otherwise, so a default of "3" is
+    // recorded as 3. Only a string that is plainly a JSON number is read so (Number() also takes
+    // hex, padding and "Infinity"), and only one the CLI holds exactly as written
+    // (CopilotFieldSchema.HeldExactly): "9007199254740993" would be recorded as
+    // 9007199254740992, and "1e-400" as 0, so neither is the answer it reads as.
+    public static JsonElement? Recorded(JsonElement value)
+    {
+        var text = value.ValueKind switch
+        {
+            JsonValueKind.Number => value.GetRawText(),
+            JsonValueKind.String => value.GetString()!,
+            _ => null,
+        };
+        if (text is null || CopilotFieldSchema.HeldExactly(text) is null) { return null; }
+        using var doc = JsonDocument.Parse(text);
+        return doc.RootElement.Clone();
+    }
+
+    // Compared as CopilotFieldSchema compares them, so the list and its default read alike.
+    public static bool SameScalar(JsonElement a, JsonElement b) => CopilotFieldSchema.SameScalar(a, b);
 
     // Whether this is the prompt the client was shown: the same fields, in the same order,
     // of the same kind, with the same options. Two readers of one schema that disagree

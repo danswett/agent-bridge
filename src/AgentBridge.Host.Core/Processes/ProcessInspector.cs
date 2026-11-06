@@ -24,6 +24,11 @@ public interface IProcessInspector
     // The same, and whether the list is known to be complete. Discovery can live with a
     // process it could not identify; deleting a worktree cannot, so the reclaimer asks this.
     AgentProcessObservation Observe(AgentKind agent) => new(GetAgentProcesses(agent), true);
+
+    // Whether this host started the process itself (#200): its `claude auth status`, which is no
+    // session and must not hold discovery or worktree reclaim, where a person's own run of the same
+    // command still does. False wherever the OS will not say (macOS, for now), so that fails safe.
+    bool IsOwnChild(AgentProcess process) => false;
 }
 
 // Known is false when a process that might be this agent could not be identified, or the
@@ -51,11 +56,42 @@ public sealed class SystemProcessInspector : IProcessInspector
     // each answer is kept against pid and start time: a pid alone is reused, and a
     // recycled one would otherwise keep answering with the dead process's session.
     readonly Dictionary<(int, long), string?> _commandLines = [];
+    // When each was last listed, by Environment.TickCount64.
+    readonly Dictionary<(int, long), long> _listed = [];
     readonly Lock _gate = new();
+    // How long a command line is kept once no scan lists its process: any agent's scan, so one
+    // agent's entries outlive another's scans, and a process listed again is read from here.
+    static readonly long ForgetAfter = (long)TimeSpan.FromMinutes(5).TotalMilliseconds;
 
     public IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent) => Scan(agent).Processes;
 
     public AgentProcessObservation Observe(AgentKind agent) => Scan(agent);
+
+    public bool IsOwnChild(AgentProcess process) =>
+        HostStarted.Value is { } started && StartedBy(process, Environment.ProcessId, started, AgentBridge.Hooks.Ancestry.ParentOf);
+
+    static readonly Lazy<DateTimeOffset?> HostStarted = new(() =>
+    {
+        try
+        {
+            using var self = Process.GetCurrentProcess();
+            return new DateTimeOffset(self.StartTime.ToUniversalTime(), TimeSpan.Zero);
+        }
+        catch (Exception e) when (e is InvalidOperationException or Win32Exception or NotSupportedException) { return null; }
+    });
+
+    // A pid is reused only once its process has gone, so a process started no earlier than the
+    // host whose parent has the host's pid was started by the host. Its grandparent too: an npm
+    // install's claude.cmd runs through cmd.exe (ProbeLauncher), so the claude it starts is the
+    // host's grandchild. The cmd.exe between them may have exited and its pid gone to another of
+    // the host's children; that only takes one more process with these exact arguments for the
+    // host's, which costs a moment of hold it would otherwise have had.
+    internal static bool StartedBy(AgentProcess process, int host, DateTimeOffset hostStarted, Func<int, int?> parentOf)
+    {
+        if (process.StartedAt is not { } started || started < hostStarted) { return false; }
+        if (parentOf(process.Id) is not { } parent || parent <= 0 || parent == process.Id) { return false; }
+        return parent == host || parentOf(parent) == host;
+    }
 
     AgentProcessObservation Scan(AgentKind agent)
     {
@@ -99,15 +135,23 @@ public sealed class SystemProcessInspector : IProcessInspector
 
         var (observation, kept) = Classify(agent, name, listing, listed, OperatingSystem.IsWindows(),
             id => OperatingSystem.IsWindows() && ProcessOwnership.AnotherUsers(id));
-        var live = kept.Select(p => (p.Id, p.StartedAt?.UtcTicks ?? 0)).ToHashSet();
+        var now = Environment.TickCount64;
         lock (_gate)
         {
-            // Forget processes that have gone, so a host up for days does not keep one
-            // entry per session it ever saw. Another agent's entries are kept while their
-            // process still runs.
-            foreach (var key in _commandLines.Keys.Where(k => !live.Contains(k) && !IsRunning(k.Item1)).ToList())
+            foreach (var p in kept)
+            {
+                // Only what is cached: a command line that could not be read is not kept, and its
+                // stamp would never be let go.
+                var key = (p.Id, p.StartedAt?.UtcTicks ?? 0);
+                if (_commandLines.ContainsKey(key)) { _listed[key] = now; }
+            }
+            // Forget processes no scan has listed for a while, so a host up for days does not keep
+            // one entry per session it ever saw. Not by asking the OS whether each still runs: a
+            // gone pid answered with an exception, every pass (#608).
+            foreach (var key in _commandLines.Keys.Where(k => !_listed.TryGetValue(k, out var at) || now - at >= ForgetAfter).ToList())
             {
                 _commandLines.Remove(key);
+                _listed.Remove(key);
             }
         }
         return observation;
@@ -270,12 +314,6 @@ public sealed class SystemProcessInspector : IProcessInspector
         var parts = program.Replace('\\', '/').ToLowerInvariant().Split('/');
         if (parts.Length < 3 || parts[^1] is not ("codex" or "codex.exe" or "codex.cmd")) { return false; }
         return parts[^2] == "shims" || (parts[^2] == "bin" && parts[^3] is "volta" or ".volta");
-    }
-
-    static bool IsRunning(int pid)
-    {
-        try { using var p = Process.GetProcessById(pid); return !p.HasExited; }
-        catch (Exception e) when (e is ArgumentException or InvalidOperationException or Win32Exception) { return false; }
     }
 
     // The agent's own executable, and the runtimes a package install runs it under. Not
@@ -554,6 +592,14 @@ public static partial class CommandLine
         return false;
     }
 
+    static bool IsRuntime(string path)
+    {
+        var name = path.Replace('\\', '/');
+        name = name[(name.LastIndexOf('/') + 1)..];
+        if (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) { name = name[..^4]; }
+        return name.Equals("node", StringComparison.OrdinalIgnoreCase) || name.Equals("bun", StringComparison.OrdinalIgnoreCase);
+    }
+
     static bool InDaemonFolder(string path) => path.Replace('\\', '/').Contains("/app-server-daemon/", StringComparison.OrdinalIgnoreCase);
 
     // Codex's program and its own arguments after it. The program itself when it is Codex's
@@ -633,6 +679,73 @@ public static partial class CommandLine
         "-r", "--require", "--import", "--loader", "--experimental-loader", "--preload", "-C", "--conditions",
         "--env-file", "--title", "--input-type", "--cwd",
     };
+
+    // The host's own reading of Claude's allowance (#200): `claude -p /usage --safe-mode
+    // --no-session-persistence --output-format json`, which keeps no session and runs no hook, and
+    // which runs in the host's own empty folder, never a worktree. Recognised only by exactly those
+    // options, so a print-mode run with any other prompt or option, which does work somewhere,
+    // still counts as Claude's.
+    public static bool IsClaudeUsageProbe(string? commandLine)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine)) { return false; }
+        var arguments = Split(commandLine);
+        // The executable, or a runtime and its script, and then the probe's options and nothing
+        // else. Nothing is searched for: macOS's ps flattens quoting, so a real prompt that only
+        // quotes these options would otherwise read as the probe, and a model run lose its hold.
+        var first = -1;
+        for (var i = 0; i < arguments.Count && first < 0; i++)
+        {
+            if (arguments[i].StartsWith('-')) { first = i; }
+        }
+        if (first is < 1 or > 2 || arguments.Count - first != 6) { return false; }
+        // Two words before the options only for a runtime and its script: `claude summarise -p
+        // /usage ...` is a one-word prompt, flattened, ahead of options it quoted.
+        if (first == 2 && !IsRuntime(arguments[0])) { return false; }
+        return ProbeOptions(arguments, first);
+    }
+
+    // Whether a Claude process may be a /usage probe, for not starting another beside it: one that
+    // ends with the probe's options, whatever comes before them. Broader than IsClaudeUsageProbe,
+    // which exempts a process from discovery: macOS's ps flattens an executable path with a space
+    // in it (`/Volumes/Agent Tools/claude`) into two words, and a probe left by a host that has
+    // stopped must still be seen. A real prompt ending so only puts the next probe off.
+    public static bool MayBeClaudeUsageProbe(string? commandLine)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine)) { return false; }
+        var arguments = Split(commandLine);
+        return arguments.Count > 6 && ProbeOptions(arguments, arguments.Count - 6);
+    }
+
+    // The `claude auth status` the host asks at most hourly before a probe (#200): the program, or
+    // a runtime and its script, then `auth status` and nothing else. Only half the test: a person
+    // checking their own sign-in runs exactly this too, and is held for as any Claude process is,
+    // so discovery and reclaim exempt it only when the host started it (IProcessInspector.IsOwnChild).
+    public static bool IsClaudeAuthStatus(string? commandLine)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine)) { return false; }
+        var arguments = Split(commandLine);
+        var at = arguments.Count == 4 && IsRuntime(arguments[0]) ? 2 : arguments.Count == 3 ? 1 : -1;
+        return at > 0 && arguments[at] == "auth" && arguments[at + 1] == "status";
+    }
+
+    // The probe's four options, each once, from first to the end.
+    static bool ProbeOptions(IReadOnlyList<string> arguments, int first)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = first; i < arguments.Count; i++)
+        {
+            var option = arguments[i] == "--print" ? "-p" : arguments[i];
+            var ok = option switch
+            {
+                "-p" => i + 1 < arguments.Count && arguments[++i] == "/usage",
+                "--output-format" => i + 1 < arguments.Count && arguments[++i] == "json",
+                "--safe-mode" or "--no-session-persistence" => true,
+                _ => false,
+            };
+            if (!ok || !seen.Add(option)) { return false; }
+        }
+        return seen.Count == 4;
+    }
 
     // Codex's global options that take the next argument as their value, before any subcommand
     // (codex-rs cli/src/main.rs and tui/src/cli.rs). One list for every reader: one missing from

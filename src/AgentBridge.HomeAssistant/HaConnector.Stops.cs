@@ -115,7 +115,9 @@ public sealed partial class HaConnector
             return;
         }
         var session = source.Get(sessionId);
-        var status = session is null ? "" : HaPayloads.Status(session);
+        // The session's own state, as the host judges it: one idle after a failed turn still ends
+        // at one press, whatever its card says over it (#800).
+        var status = session is null ? "" : HaPayloads.BaseStatus(session);
         // A second press within the window sends the first's token; after it, a press is a first
         // press again.
         var token = p.Stop.Asking(now) ? p.Stop.Token : null;

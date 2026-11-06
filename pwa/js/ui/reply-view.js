@@ -21,31 +21,39 @@ import { ReplyLimits, checkReply, replyRequest } from '../replies.js';
 import { AttachmentLimits, describeSize, prepareAttachment } from '../attachments.js';
 import { CANCELLED } from '../reply-service.js';
 import { isSendKey, shortcutHints } from '../platform.js';
-import { enter } from './motion.js';
+import { ReceiptClock, describeInFlight, drawReceipt, drawn, dropCheck, holdCheck, receiptLive } from './receipt.js';
+import { PHONE } from './collapse-header.js';
 
 let seq = 0;
-const where = (machineName) => (machineName ? ` on ${machineName}` : '');
 const kib = (n) => `${(n / 1024).toFixed(1)} KiB`;
 const capitalise = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 // Images a browser can show as a thumbnail. HEIC only Safari can, and it says so by loading.
 const SHOWN = /^image\/(png|jpeg|gif|webp|heic|heif)$/;
 // Above this a thumbnail is not worth a second copy of the photo in memory.
 const THUMBNAIL_MAX = 16 * 1024 * 1024;
+// A phone's box grows a line at a time to six lines (24 each, and 10 above and below), then
+// scrolls inside (ui.md §6.5, #935).
+const GROW_MAX = 164;
 
 // After busy, Send comes back after this long, as for an answer.
 export const REPLY_BUSY_PAUSE_MS = 2000;
 
 const OUTCOME_TEXT = {
-  delivered: () => 'Delivered. The session has your reply.',
-  unconfirmed: (at) => `Sent, but not confirmed. Check at the machine${at} before sending it again.`,
+  delivered: () => 'Delivered',
+  unconfirmed: () => 'Sent, but not confirmed. Check the conversation before sending it again.',
   stale: () => 'Not sent: the session has ended.',
   busy: () => 'Not sent: an answer or another reply to this session is being delivered. Try again in a moment.',
   refused: () => 'The machine refused this reply.',
 };
 
-// What a reply's progress or outcome says. tone: progress | ok | warn | bad.
-export function describeReply(entry, { machineName, working = false } = {}) {
-  const at = where(machineName);
+// What a reply's progress or outcome says: the receipt under the box (receipt.js; ui.md §6.5,
+// decided on #617). Its files' upload is a line; Sending…, Sent, Passed to the agent or Up next
+// and Delivered are only heard (Send's ring and check show them); a stall, a wait and any other
+// outcome are a line, in today's words. stalled: whether the state it is in has stalled
+// (ReceiptClock). Returns { key, text, more, tone, line, speech }; tone: progress | warn | bad,
+// or room for nothing to show.
+export function describeReply(entry, { machineName, stalled = false } = {}) {
+  const said = (key, text, tone) => ({ key, text, more: null, tone, line: true, speech: `Reply: ${text}` });
   switch (entry.state) {
     case 'sending': {
       const p = entry.progress;
@@ -53,35 +61,34 @@ export function describeReply(entry, { machineName, working = false } = {}) {
         const files = entry.answer?.attachments?.length ?? 0;
         const what = files === 1 ? 'the attachment' : `${files} attachments`;
         const percent = Math.floor((100 * p.sent) / p.total);
-        if (p.phase === 'upload') { return { text: `Uploading ${what}… ${percent}%`, tone: 'progress' }; }
-        if (p.phase === 'fetch') { return { text: `The machine is receiving ${what}… ${percent}%`, tone: 'progress' }; }
-        return { text: `Sending ${what}… ${percent}%`, tone: 'progress' };
+        const doing = p.phase === 'upload' ? `Uploading ${what}…` : p.phase === 'fetch' ? `The machine is receiving ${what}…` : `Sending ${what}…`;
+        // Said once a phase, not at every percent.
+        return { key: 'upload', text: `${doing} ${percent}%`, more: null, tone: 'progress', line: true, speech: `Reply: ${doing}` };
       }
-      const text = entry.attempts > 1 ? 'Sending again…' : 'Sending…';
-      return { text: working ? `${text} The session is working, and takes it at its next step.` : text, tone: 'progress' };
+      return describeInFlight('reply', entry, { machineName, stalled });
     }
     case 'waiting':
-      return {
-        text: entry.reason === 'still being delivered'
-          ? 'The machine is still delivering it…'
-          : `Waiting for the connection to the machine${at}. Your reply goes as soon as it is back.`,
-        tone: 'progress',
-      };
+      return describeInFlight('reply', entry, { machineName, stalled });
     case 'failed':
-      if (entry.reason === CANCELLED) { return { text: 'Cancelled. Nothing was sent to the session.', tone: 'warn' }; }
-      return { text: `Couldn't send it: ${entry.reason ?? 'the machine said no'}.`, tone: 'bad' };
+      if (entry.reason === CANCELLED) { return said('cancelled', 'Cancelled. Nothing was sent to the session.', 'warn'); }
+      return said('failed', `Couldn't send it: ${entry.reason ?? 'the machine said no'}.`, 'bad');
     default: {
       const outcome = OUTCOME_TEXT[entry.outcome] ? entry.outcome : 'unconfirmed';
-      let text = OUTCOME_TEXT[outcome](at);
+      // Send's check says it (holdCheck), and the line keeps its room, empty.
+      if (outcome === 'delivered') { return { key: 'delivered', text: '', more: null, tone: 'room', line: false, speech: 'Reply delivered' }; }
+      let text = OUTCOME_TEXT[outcome]();
       if (outcome === 'refused' && entry.reason) { text = `The machine refused this reply: ${entry.reason}.`; }
       if (outcome === 'unconfirmed' && entry.reason) { text += ` (${entry.reason})`; }
-      return { text, tone: outcome === 'delivered' ? 'ok' : outcome === 'refused' ? 'bad' : 'warn' };
+      return said(outcome, text, outcome === 'refused' ? 'bad' : 'warn');
     }
   }
 }
 
 export class ReplyBox {
   #unwatch = null;
+  #receipt = null;
+  // Whether the line says files are being read, which the receipt doesn't know of.
+  #reading = false;
   #busyTimer = null;
   #sent = null;
   #session = null;
@@ -98,25 +105,95 @@ export class ReplyBox {
   #edited = null;
   // Why nothing can be sent now (its machine offline, #269), or null.
   #offline = null;
+  // Below 760 (a phone): the box is one line at rest and grows with its words.
+  #phone = null;
+  #resize = null;
+  #width = 0;
+  #fitFrame = 0;
+  // Takes the person to the question the reply waits on, and focuses its first choice.
+  #onGoToQuestion = null;
+  // Told whenever the box's words or state are drawn again (a phone's compact copy of them).
+  #onChange = null;
 
   // replying: { service, hostId, sessionId }. attach: whether the machine takes files.
-  // largeMax: the largest it takes through the blob store, 0 for none.
-  constructor({ machineName, replying, attach = false, largeMax = 0, uuid = () => globalThis.crypto.randomUUID() }) {
+  // largeMax: the largest it takes through the blob store, 0 for none. onGoToQuestion: the
+  // phone notice's link, to the question the reply waits on. onChange: told when the words change.
+  constructor({ machineName, replying, attach = false, largeMax = 0, onGoToQuestion = null, onChange = null, uuid = () => globalThis.crypto.randomUUID() }) {
     this.machineName = machineName;
+    this.#onGoToQuestion = onGoToQuestion;
+    this.#onChange = onChange;
     this.replying = replying;
     this.uuid = uuid;
     this.idBase = `r${++seq}`;
     this.#attach = attach;
     this.#largeMax = largeMax;
+    this.#phone = globalThis.matchMedia?.(PHONE) ?? null;
     this.#build();
+    this.#place();
+    this.#phone?.addEventListener('change', this.#onPhone);
+    // The box's width decides where its words wrap, and it has none until it is drawn.
+    if (typeof globalThis.ResizeObserver === 'function') {
+      this.#resize = new ResizeObserver(() => {
+        const w = this.els.form.offsetWidth;
+        if (w === this.#width) { return; }
+        this.#width = w;
+        cancelAnimationFrame(this.#fitFrame);
+        this.#fitFrame = requestAnimationFrame(() => this.fit());
+      });
+      this.#resize.observe(this.els.form);
+    }
+    this.#receipt = new ReceiptClock({
+      describe: (entry, { stalled }) => describeReply(entry, { machineName: this.machineName, stalled }),
+      draw: (d) => drawReceipt(this.els.status, 'answer-status reply-status', d),
+      say: (text) => { this.els.live.textContent = text; },
+      heard: () => drawn(this.els.live),
+      delivered: () => holdCheck(this.els.send),
+      follow: (fn) => replying.service.watch(replying.hostId, replying.sessionId, fn),
+    });
     const { service, hostId, sessionId } = replying;
     this.#unwatch = service.watch(hostId, sessionId, (e) => this.#show(e));
   }
 
   destroy() {
     this.#unwatch?.();
+    this.#receipt.destroy();
     clearTimeout(this.#busyTimer);
+    this.#phone?.removeEventListener('change', this.#onPhone);
+    this.#resize?.disconnect();
+    if (this.#fitFrame) { cancelAnimationFrame(this.#fitFrame); }
     for (const f of this.#files) { if (f.url) { URL.revokeObjectURL(f.url); } }
+  }
+
+  #onPhone = () => { this.#place(); this.#sync(); };
+
+  // A phone draws Attach before the text, so it comes before it in Tab and reading order too
+  // (ui.md §9); from 760 it is with Send again, after the text.
+  #place() {
+    const e = this.els;
+    const phone = !!this.#phone?.matches;
+    if ((e.attach.parentElement === e.box) === phone) { return; }
+    const had = e.attach.ownerDocument?.activeElement === e.attach;
+    if (phone) { e.box.insertBefore(e.attach, e.box.firstElementChild); } else { e.tools.prepend(e.attach); }
+    if (had) { e.attach.focus({ preventScroll: true }); }
+  }
+
+  // A phone's box as tall as its words, from one line to six, then it scrolls inside. From 760 the
+  // box is as the stylesheet draws it.
+  fit() {
+    const t = this.els.input;
+    if (!this.#phone?.matches) {
+      t.style.removeProperty('height');
+      t.style.removeProperty('overflow-y');
+      return;
+    }
+    if (!t.getClientRects().length) { return; }
+    const top = t.scrollTop;
+    // Its least height (the stylesheet's one line) first, so the words alone decide.
+    t.style.height = '0px';
+    const full = t.scrollHeight;
+    t.style.height = `${Math.min(full, GROW_MAX)}px`;
+    t.style.overflowY = full > GROW_MAX ? 'auto' : 'hidden';
+    t.scrollTop = top;
   }
 
   get text() { return this.els.input.value; }
@@ -144,7 +221,12 @@ export class ReplyBox {
     const id = this.idBase;
     const e = this.els = {};
     e.input = h('textarea', { id: `${id}-text`, rows: 2, class: 'text-input reply-input', placeholder: 'Message the main agent', 'aria-describedby': `${id}-hint ${id}-bytes ${id}-held` });
-    e.input.addEventListener('input', () => { this.#clearError(); this.#sync(); });
+    e.input.addEventListener('input', () => {
+      this.#clearError();
+      // The receipt's room is kept from Send until the box is typed in again (ui.md §6.5).
+      if (!e.status.textContent) { e.status.classList.remove('room'); }
+      this.#sync();
+    });
     // Ctrl+Enter or Cmd+Enter sends, as in most chat boxes; Enter alone is a new line.
     e.input.addEventListener('keydown', (ev) => {
       if (isSendKey(ev)) { ev.preventDefault(); this.#send(); }
@@ -159,6 +241,7 @@ export class ReplyBox {
     e.bytes = h('span', { class: 'bytes', id: `${id}-bytes`, 'aria-live': 'polite' });
     e.hint = h('p', { class: 'note reply-hint', id: `${id}-hint`, hidden: true }, 'Line breaks are sent as spaces: the session gets your reply as one line.');
     e.held = h('p', { class: 'note warn reply-held', id: `${id}-held`, hidden: true }, 'The session is waiting for an answer to its question. Answer that first, then reply.');
+    e.toQuestion = h('button', { type: 'button', class: 'reply-question-link', onclick: () => this.#onGoToQuestion?.() }, 'Go to the question');
     e.error = h('p', { class: 'answer-error reply-error', role: 'alert', hidden: true });
     e.files = h('ul', { class: 'attachments', 'aria-label': 'Attachments', hidden: true });
     e.picker = h('input', { type: 'file', multiple: true, class: 'file-picker', hidden: true, tabindex: '-1', 'aria-hidden': 'true' });
@@ -173,18 +256,20 @@ export class ReplyBox {
     e.send = h('button', { type: 'submit', class: 'button send', 'aria-label': 'Send', title: `Send (${shortcutHints().send})` }, designIcon('send', { cls: 'ab-icon-20' }));
     e.resend = h('button', { type: 'button', class: 'button secondary resend', hidden: true, onclick: () => this.#resend() }, 'Try again');
     e.cancel = h('button', { type: 'button', class: 'button secondary cancel', hidden: true, onclick: () => this.#cancel() }, 'Cancel');
-    e.status = h('p', { class: 'answer-status reply-status', role: 'status', 'aria-live': 'polite' });
+    // The receipt's words, and apart from them the line a screen reader hears it on (receipt.js).
+    e.status = h('p', { class: 'answer-status reply-status' });
+    e.live = receiptLive();
     e.form = h('form', { class: 'reply', novalidate: true, 'aria-labelledby': `${id}-label` },
       h('label', { for: `${id}-text`, class: 'text-label sr-only', id: `${id}-label` }, 'Reply'),
       e.held,
-      h('div', { class: 'reply-box' },
+      e.box = h('div', { class: 'reply-box' },
         h('div', { class: 'text-wrap' }, e.input, e.bytes),
         e.files,
-        h('div', { class: 'reply-tools' }, e.attach, e.send)),
+        e.tools = h('div', { class: 'reply-tools' }, e.attach, e.send)),
       e.hint, e.error,
       h('div', { class: 'answer-actions' }, e.resend, e.cancel),
       e.picker,
-      e.status);
+      e.status, e.live);
     e.form.addEventListener('submit', (ev) => { ev.preventDefault(); this.#send(); });
     // Files dropped on the box, from a desktop.
     e.form.addEventListener('dragover', (ev) => { if (this.#attach && ev.dataTransfer?.types?.includes('Files')) { ev.preventDefault(); } });
@@ -223,21 +308,42 @@ export class ReplyBox {
     e.hint.hidden = !/[\r\n\u2028\u2029]/.test(text);
     const held = this.#held();
     const pending = this.#pending();
+    const linked = e.toQuestion === e.toQuestion.ownerDocument.activeElement;
     e.held.hidden = !held;
+    // Each written only when it changes: rewriting the notice on every update would take a focused
+    // "Go to the question" out of the page, and focus with it.
+    const say = (words) => { if (e.held.contains(e.toQuestion) || e.held.textContent !== words) { e.held.textContent = words; } };
     if (this.#offline) {
-      e.held.textContent = this.#offline;
+      say(this.#offline);
+    } else if (held && this.#session.question.answerAtMachine) {
+      say('The session is waiting at the machine for a prompt only it can answer. Answer it there first, then reply.');
+    } else if (held && this.#phone?.matches && this.#onGoToQuestion) {
+      // A phone's notice is one line, and its link takes the person to the question (ui.md §6.5).
+      if (!e.held.contains(e.toQuestion)) {
+        e.held.replaceChildren(h('span', { class: 'reply-notice-text' }, 'Answer its question first.'), ' ', e.toQuestion);
+      }
     } else if (held) {
-      e.held.textContent = this.#session.question.answerAtMachine
-        ? 'The session is waiting at the machine for a prompt only it can answer. Answer it there first, then reply.'
-        : 'The session is waiting for an answer to its question. Answer that first, then reply.';
+      say('The session is waiting for an answer to its question. Answer that first, then reply.');
     }
+    e.held.classList.toggle('reply-notice', e.held.contains(e.toQuestion));
     // Offline, the words can still be written, to go once it is back; a question would take them.
     e.input.disabled = !!this.#session?.question;
+    // The link gone with the question it led to: focus goes to the words, not the top of the page.
+    if (linked && (e.held.hidden || !e.held.contains(e.toQuestion)) && !e.input.disabled) { e.input.focus(); }
     e.attach.hidden = !this.#attach;
     e.attach.disabled = held || pending || this.#files.length + this.#preparing >= AttachmentLimits.perReply;
     for (const b of e.files.querySelectorAll('button.remove')) { b.disabled = pending; }
-    e.send.disabled = held || pending || !!this.#busyTimer || this.#preparing > 0 || (text.trim() === '' && this.#files.length === 0);
+    // Nothing to send, or held: disabled, and focus, if it was here, goes back to the words (a
+    // delivered reply empties the box). On its way, or back after busy: not disabled, which
+    // would drop focus to the top of the page (#369); #send does nothing meanwhile, and the
+    // service sends one request per reply whatever is pressed.
+    const off = held || this.#preparing > 0 || (text.trim() === '' && this.#files.length === 0);
+    if (off && e.send === e.send.ownerDocument.activeElement && !e.input.disabled) { e.input.focus(); }
+    e.send.disabled = off;
+    if (!off && (pending || this.#busyTimer)) { e.send.setAttribute('aria-disabled', 'true'); } else { e.send.removeAttribute('aria-disabled'); }
     e.resend.disabled = !!this.#offline;
+    this.fit();
+    this.#onChange?.();
   }
 
   #clearError() {
@@ -368,15 +474,26 @@ export class ReplyBox {
       }
       this.#sent = null;
     }
-    const shown = entry ? describeReply(entry, { machineName: this.machineName, working: this.#session?.status === 'working' }) : { text: '', tone: '' };
-    if (this.#preparing > 0 && !this.#pending(entry)) { shown.text = 'Reading the attachment…'; shown.tone = 'progress'; }
     e.form.dataset.reply = entry ? (entry.state === 'done' ? (OUTCOME_TEXT[entry.outcome] ? entry.outcome : 'unconfirmed') : entry.state) : 'none';
-    const was = e.status.className;
-    e.status.textContent = shown.text;
-    e.status.className = `answer-status reply-status${shown.tone ? ` ${shown.tone}` : ''}`;
-    // Send acknowledged (ui.md §5.3): each new state of the reply rises into place.
-    if (shown.text && e.status.className !== was) { enter(e.status, 'acknowledge', { dy: 1 }); }
-    e.form.setAttribute('aria-busy', shown.tone === 'progress' ? 'true' : 'false');
+    // Send acknowledged (ui.md §5.3): each new state of the reply rises into place (receipt.js).
+    // Files still being read, with nothing on its way, say so instead.
+    const reading = this.#preparing > 0 && !this.#pending(entry);
+    this.#receipt.show(reading ? null : entry);
+    if (reading) {
+      drawReceipt(e.status, 'answer-status reply-status', { key: 'reading', text: 'Reading the attachment…', more: null, tone: 'progress', line: true });
+      // Its words are drawn, not said (the line isn't live): the live line says it once, as it starts.
+      if (!this.#reading) { e.live.textContent = 'Reading the attachment'; }
+    } else if (this.#reading && !entry) {
+      drawReceipt(e.status, 'answer-status reply-status', null);
+    }
+    this.#reading = reading;
+    // Send is busy (ui.md §9), not the form: the receipt's live region is in it, and a reader may
+    // hold back what a busy region says until it is done.
+    e.send.setAttribute('aria-busy', reading || this.#pending(entry) ? 'true' : 'false');
+    // A reply sent during the last one's check: the check goes at once, so the new one never looks delivered.
+    if (reading || this.#pending(entry)) { dropCheck(e.send); }
+    // Held on this device for a machine that isn't connected: Send's ring stands still.
+    e.send.classList.toggle('still', entry?.state === 'waiting' && entry.reason === 'not connected');
     e.resend.hidden = entry?.state !== 'failed' || entry.request === this.#edited || entry.reason === CANCELLED;
     const { service, hostId, sessionId } = this.replying;
     e.cancel.hidden = !(entry?.state === 'sending' && service.cancellable?.(hostId, sessionId));

@@ -46,6 +46,48 @@ public class TailTests
     }
 
     [Fact]
+    public void A_transcript_unchanged_since_well_before_it_was_last_read_is_not_opened_again()
+    {
+        using var f = new Fixture();
+        var path = Path.Combine(f.Root, "t.jsonl");
+        File.WriteAllText(path, "one\n");
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(-5));
+        var tail = Tail(f, path);
+        var sink = new Recorder();
+        tail.Read(sink);
+
+        Assert.Equal(TailOutcome.Unchanged, tail.Read(sink));
+        Assert.Equal(1, tail.Opens);
+
+        Fixture.Append(path, "two");
+        Assert.Equal(TailOutcome.Appended, tail.Read(sink));
+        Assert.Equal(2, tail.Opens);
+        Assert.Equal(["one", "two"], sink.Parsed);
+    }
+
+    [Fact]
+    public void A_same_size_rewrite_soon_after_a_read_is_found_even_when_the_file_time_did_not_move()
+    {
+        using var f = new Fixture();
+        var path = Path.Combine(f.Root, "t.jsonl");
+        File.WriteAllText(path, "one\n");
+        var tail = Tail(f, path);
+        var written = File.GetLastWriteTimeUtc(path);
+        // Looked at as soon as it was written, however long the runner took to get here: the real
+        // clock let a runner stalled past the racy window read the rewrite as unchanged (#634 review).
+        tail.UtcNow = () => written;
+        var sink = new Recorder();
+        tail.Read(sink);
+
+        // As a coarse file system clock leaves it.
+        File.WriteAllText(path, "uno\n");
+        File.SetLastWriteTimeUtc(path, written);
+
+        Assert.Equal(TailOutcome.Restarted, tail.Read(sink));
+        Assert.Equal(["uno"], sink.Parsed);
+    }
+
+    [Fact]
     public void A_partial_last_line_waits_until_it_is_finished_and_is_read_once_whole()
     {
         using var f = new Fixture();

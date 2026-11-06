@@ -1,6 +1,8 @@
 using AgentBridge.App.Core;
+using AgentBridge.Host.Core.Updates;
 using Microsoft.Win32;
 using Velopack;
+using Velopack.Locators;
 using Velopack.Sources;
 using Windows.Graphics.Imaging;
 using Windows.Storage.Streams;
@@ -13,20 +15,32 @@ namespace AgentBridge.App;
 sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string profile) : IUpdater
 {
     public const string Repository = "https://github.com/danswett/agent-bridge";
+    // Shared with every profile's app and host through the app's folder (#530).
+    readonly ReleaseDiscovery discovery = new(Paths.AppData);
     UpdateManager? manager;
     UpdateInfo? pending;
     string? source;
+    readonly DownloadMark mark = new(Path.Combine(Paths.AppData, "update-downloaded.txt"));
 
     public static string FeedFile => Path.Combine(Paths.AppData, "feed.txt");
+
+    // A feed.txt source is read whole at every check; only GitHub's list is shared and may be older.
+    public DateTimeOffset? DiscoveredAt => source is { } key && key.StartsWith('|') ? discovery.FetchedAt : null;
 
     public string? InstalledVersion
     {
         get
         {
             try { var m = Manager(); return m.IsInstalled ? m.CurrentVersion?.ToString() : null; }
-            catch (Exception e) when (e is IOException or InvalidOperationException or NotSupportedException) { return null; }
+            catch (Exception e) when (Unreadable(e)) { return null; }
         }
     }
+
+    // feed.txt, or the source it names, that can't be read just now: read by the banner and Settings
+    // as they redraw (InstalledVersion, Ready), where an exception would end the app, so nothing
+    // installed or ready rather than a throw.
+    static bool Unreadable(Exception e) =>
+        e is IOException or UnauthorizedAccessException or InvalidOperationException or NotSupportedException or UriFormatException or ArgumentException;
 
     UpdateManager Manager()
     {
@@ -34,7 +48,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         var key = $"{feed}|{prereleases()}";
         if (manager is not null && source == key) { return manager; }
         IUpdateSource from = feed.Length == 0
-            ? new GithubSource(Repository, null, prereleases(), null)
+            ? new DiscoveredGithubSource(Repository, prereleases(), discovery)
             : Uri.TryCreate(feed, UriKind.Absolute, out var u) && u.Scheme is "http" or "https"
                 ? new SimpleWebSource(feed)
                 : new SimpleFileSource(new DirectoryInfo(feed));
@@ -43,20 +57,66 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         downloaded = null;
         // No channel named: the installed package's own decides, `win` for x64 and `win-arm64` for
         // Arm64 (build/app-channels.ps1), so a copy is only ever offered its own architecture.
-        return manager = new UpdateManager(from);
+        var first = manager is null;
+        manager = new UpdateManager(from, AppPackages.Options);
+        // Only for the source this start began with: a change of feed or of "Include pre-releases"
+        // drops what was downloaded, which must not come back as ready from the packages folder,
+        // now or at a later start (the mark says which source the package came from, and the
+        // checksum its bytes were verified against, which they must still match).
+        local = first && Local(manager) is { } kept && PackageFile(kept) is { } file && mark.Vouches(file, kept.Version.ToString(), key) ? kept : null;
+        return manager;
+    }
+
+    // Where Velopack keeps a release's package: its folder (the process's locator, which
+    // UpdateManager uses too), under the release's file name. Null when that can't be told.
+    static string? PackageFile(VelopackAsset release) =>
+        VelopackLocator.IsCurrentSet && VelopackLocator.Current.PackagesDir is { Length: > 0 } folder && release.FileName is { Length: > 0 } name
+            ? Path.Combine(folder, name)
+            : null;
+
+    // The package held for the installer (DownloadMark.Hold): open, read-only to everyone else,
+    // until this process ends. Update.exe opens it by its path only after that (Velopack's
+    // UpdateExe.Apply), so the hold does not reach into the installer (6677353697).
+    static FileStream? handedOver;
+
+    // A release an earlier run downloaded and nobody has restarted into yet (#516): ready from this
+    // start on, before any check, so the app offers Restart to update offline, or while the feed
+    // refuses (#530), as it did when that run ended. Velopack keeps the package in its packages
+    // folder; it no longer applies it by itself at startup (Program). The first check on this
+    // source decides from then on.
+    VelopackAsset? local;
+
+    static VelopackAsset? Local(UpdateManager m)
+    {
+        try { return m.IsInstalled ? m.UpdatePendingRestart : null; }
+        catch (Exception e) when (e is IOException or InvalidOperationException or NotSupportedException or UnauthorizedAccessException) { return null; }
     }
 
     public async Task<string?> CheckAsync()
     {
         var from = Manager();
+        // GitHub's limit (#800) comes as ReleaseDiscovery's Limited, with the reset GitHub sent:
+        // AutoUpdater holds its checks off until then.
         var found = await from.CheckForUpdatesAsync();
         // The feed or the pre-release choice changed while this check ran (one by Settings, one
         // automatic, may overlap): its answer is the old source's, and must not undo the change by
         // becoming pending again. What the current source has found stands.
         if (!ReferenceEquals(from, Manager())) { return pending?.TargetFullRelease.Version.ToString(); }
+        local = null;
         // The same release found again stays the one downloaded.
         if (found?.TargetFullRelease.Version.ToString() != pending?.TargetFullRelease.Version.ToString()) { pending = found; downloaded = null; }
         return pending?.TargetFullRelease.Version.ToString();
+    }
+
+    // The feed and Include pre-releases now: Manager reads both, and drops what the old ones found.
+    public string Source
+    {
+        get
+        {
+            try { Manager(); }
+            catch (Exception e) when (Unreadable(e)) { }
+            return source ?? "";
+        }
     }
 
     public string? PendingNotes => pending?.TargetFullRelease.NotesMarkdown is { Length: > 0 } notes ? notes : null;
@@ -69,8 +129,13 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     {
         get
         {
-            Manager();
-            return pending is not null && ReferenceEquals(downloaded, pending) ? pending.TargetFullRelease.Version.ToString() : null;
+            // Read by the banner and Settings as they redraw, and on every change the updater says:
+            // a feed.txt that cannot be read just now is nothing ready, never an exception there,
+            // where it would end the app.
+            try { Manager(); }
+            catch (Exception e) when (Unreadable(e)) { return null; }
+            if (pending is null) { return local?.Version.ToString(); }
+            return ReferenceEquals(downloaded, pending) ? pending.TargetFullRelease.Version.ToString() : null;
         }
     }
 
@@ -78,17 +143,64 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     {
         var from = Manager();
         if (pending is not { } release) { return; }
+        // Velopack takes a package already in its folder under this name for the release without
+        // checking its bytes (one from another feed may be there): checked against the chosen
+        // release's checksum from its feed before and after, and marked only when it matches
+        // (Engineering's second-family review of #719, 6676612221).
+        var target = release.TargetFullRelease;
+        var expected = PackageDigest.Of(target.SHA256, target.SHA1)
+            ?? throw new PackageMismatchException($"the release feed gives no checksum for {target.Version}, so its package cannot be verified");
+        var file = PackageFile(target) ?? throw new PackageMismatchException("the folder Velopack keeps packages in can't be told, so the package can't be verified");
+        DownloadMark.DropMismatch(file, expected);
         await from.DownloadUpdatesAsync(release, p => ui.Post(() => progress(p)));
-        if (ReferenceEquals(from, Manager()) && ReferenceEquals(pending, release)) { downloaded = release; }
+        if (ReferenceEquals(from, Manager()) && ReferenceEquals(pending, release))
+        {
+            mark.Accept(file, target.Version.ToString(), source!, expected);
+            downloaded = release;
+        }
     }
 
     // Back in the background for this app's profile, as the host's own updates restart it
     // (HostUpdates.RestartArguments): without --profile it would come back as the default one.
-    // Only a release downloaded here: anything else throws, before anything is replaced.
-    public void ApplyAndRestart()
+    // Only the release named, downloaded here from the source selected now (Ready, which the mark
+    // vouches for): anything else throws, before anything is replaced. A check or a download from
+    // Settings may have replaced the one the person chose while the host stopped (r4487830884).
+    public void ApplyAndRestart(string version)
     {
-        if (Ready is null || pending is null) { throw new InvalidOperationException("no downloaded update to install; check for updates again"); }
-        Manager().ApplyUpdatesAndRestart(pending.TargetFullRelease, ["--background", "--profile", profile]);
+        if (Ready is not { } ready) { throw new InvalidOperationException("no downloaded update to install; check for updates again"); }
+        if (ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded ({ready} is); nothing was installed"); }
+        var release = pending?.TargetFullRelease ?? local ?? throw new InvalidOperationException("no downloaded update to install; check for updates again");
+        if (release.Version.ToString() != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded; nothing was installed"); }
+        // The bytes verified and marked, still, held open and unchangeable until this process
+        // ends: Velopack finds the package by its name, so the file is checked from the handle that
+        // keeps it.
+        var from = Manager();
+        handedOver?.Dispose();
+        handedOver = (PackageFile(release) is { } file ? mark.Hold(file, version, source!) : null)
+            ?? throw new PackageMismatchException($"the package downloaded for {version} is no longer the bytes verified for it; nothing was installed, so check for updates again");
+        try { from.ApplyUpdatesAndRestart(release, ["--background", "--profile", profile]); }
+        catch
+        {
+            handedOver.Dispose();
+            handedOver = null;
+            throw;
+        }
+    }
+}
+
+// Velopack's GithubSource with its release list from the machine's shared ReleaseDiscovery
+// (#530), as the host's (DiscoveredGithubSource in AgentBridge.Host's HostUpdates.cs): one request
+// to the API per interval for every app and host here, rather than one per check. Each release's
+// feed and the packages come from their browser download URLs, which the API's limit does not count.
+sealed class DiscoveredGithubSource(string repository, bool prereleases, ReleaseDiscovery discovery) : GithubSource(repository, null, prereleases)
+{
+    protected override async Task<GithubRelease[]> GetReleases(bool includePrereleases)
+    {
+        // Read through discovery, so a list this can't read is its failure, backed off, never kept.
+        var releases = await discovery.ReleasesAsync(ReleaseDiscovery.ReleasesUrl(RepoUri.ToString()),
+            json => System.Text.Json.JsonSerializer.Deserialize<GithubRelease?[]>(json) ?? [], CancellationToken.None);
+        // As GithubSource orders and filters its own.
+        return [.. releases.OfType<GithubRelease>().OrderByDescending(r => r.PublishedAt).Where(r => includePrereleases || !r.Prerelease)];
     }
 }
 

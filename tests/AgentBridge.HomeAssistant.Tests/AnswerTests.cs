@@ -334,7 +334,7 @@ public sealed class AnswerTests : IDisposable
             Agent = AgentKind.Codex,
             Question = new Question
             {
-                Id = "a1", Kind = QuestionKind.Approval, Message = "Codex wants to run git push", AskedAt = FakeSessions.T0,
+                Id = "a1", Kind = QuestionKind.Approval, Message = "Allow **Bash**?\n\n```\ngit push\n```", AskedAt = FakeSessions.T0,
                 Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
             },
         });
@@ -554,7 +554,7 @@ public sealed class AnswerTests : IDisposable
             Agent = AgentKind.Codex,
             Question = new Question
             {
-                Id = "a1", Kind = QuestionKind.Approval, Message = "Codex wants to run git push", AskedAt = FakeSessions.T0,
+                Id = "a1", Kind = QuestionKind.Approval, Message = "Allow **Bash**?\n\n```\ngit push\n```", AskedAt = FakeSessions.T0,
                 Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
             },
         });
@@ -588,7 +588,7 @@ public sealed class AnswerTests : IDisposable
             Agent = AgentKind.Codex,
             Question = new Question
             {
-                Id = "a1", Kind = QuestionKind.Approval, Message = "Codex wants to run git push", AskedAt = FakeSessions.T0,
+                Id = "a1", Kind = QuestionKind.Approval, Message = "Allow **Bash**?\n\n```\ngit push\n```", AskedAt = FakeSessions.T0,
                 Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
             },
         });
@@ -612,7 +612,7 @@ public sealed class AnswerTests : IDisposable
             Agent = AgentKind.Codex,
             Question = new Question
             {
-                Id = id, Kind = QuestionKind.Approval, Message = "Codex wants to run git push", AskedAt = FakeSessions.T0,
+                Id = id, Kind = QuestionKind.Approval, Message = "Allow **Bash**?\n\n```\ngit push\n```", AskedAt = FakeSessions.T0,
                 Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
             },
         };
@@ -860,7 +860,7 @@ public sealed class AnswerTests : IDisposable
             Agent = AgentKind.Codex,
             Question = new Question
             {
-                Id = id, Kind = QuestionKind.Approval, Message = $"Codex wants to run step {id}", AskedAt = FakeSessions.T0,
+                Id = id, Kind = QuestionKind.Approval, Message = $"Allow **Bash**?\n\n```\nstep {id}\n```", AskedAt = FakeSessions.T0,
                 Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
             },
         };
@@ -901,7 +901,7 @@ public sealed class AnswerTests : IDisposable
             Agent = AgentKind.Codex,
             Question = new Question
             {
-                Id = "a1", Kind = QuestionKind.Approval, Message = "Codex wants to run git push", AskedAt = FakeSessions.T0,
+                Id = "a1", Kind = QuestionKind.Approval, Message = "Allow **Bash**?\n\n```\ngit push\n```", AskedAt = FakeSessions.T0,
                 Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
             },
         });
@@ -1072,6 +1072,7 @@ public sealed class AnswerTests : IDisposable
         Assert.Empty(answered);
         Assert.Equal("Reply NOT sent", Activity);
         Assert.Equal("reply at the machine", Detail.GetProperty("hint").GetString());
+        Assert.Equal("this machine's bridge doesn't take replies from the dashboard yet", Detail.GetProperty("error").GetString());
         Assert.False(Detail.TryGetProperty("answer_consumed_at", out _));
     }
 

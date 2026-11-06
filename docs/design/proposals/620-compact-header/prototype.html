@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Proposal #620 · collapsing session header · prototype</title>
+<!--
+  Proposal #620 · Decided (owner, 2026-11-04); ui.md §6.2 is the spec. docs/design/proposals/620-compact-header.md.
+  A self-contained sketch of the PWA's phone session header collapsing on scroll: no dependencies,
+  no network. Open it on a phone, or in a desktop browser (a 390 × 844 frame). Demo names only.
+-->
+<style>
+  :root {
+    --shell: #EEF0F2; --card: #FFFFFF; --stroke: rgba(0,0,0,.12); --text: #1A1A1A; --text2: rgba(0,0,0,.62); --text3: rgba(0,0,0,.58);
+    --bridge: #0B7A6E; --on-bridge: #FFFFFF; --active: #0B63E5; --danger: #C9302C;
+    --needs-text: #7A4600; --needs-head: #8F5300; --needs-fill: #FFF2D6; --needs-edge: #E8C27A; --needs-ink: #14100A; --focus: #1A1A1A;
+    --bar: 48px; --full: 257px; --ty: 0px; --foot: 160px; --fy: 0px;
+    --dur: 167ms; --ease: cubic-bezier(.33, 0, .67, 1); --xfade: 83ms;
+    --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, system-ui, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --shell: #202225; --card: #2F3338; --stroke: rgba(255,255,255,.12); --text: #FFFFFF; --text2: rgba(255,255,255,.72); --text3: rgba(255,255,255,.54);
+      --bridge: #2DD4BF; --on-bridge: #062621; --active: #4C9AFF; --danger: #FF6B6B;
+      --needs-text: #FFD27A; --needs-head: #FFB224; --needs-fill: rgba(255,178,36,.10); --needs-edge: rgba(255,178,36,.75); --focus: #FFFFFF;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--shell); color: var(--text); }
+  body { overflow: hidden; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+
+  /* The device: the whole viewport on a phone, a 390 × 844 frame on a wider screen. */
+  .phone { position: fixed; inset: 0; overflow: hidden; background: var(--shell); }
+  @media (min-width: 560px) and (min-height: 700px) {
+    body { display: grid; place-items: center; background: #8A9096; }
+    .phone { position: relative; width: 390px; height: min(844px, 100vh - 32px); border-radius: 28px; box-shadow: 0 0 0 6px #3A3F45; }
+  }
+  .screen { position: absolute; left: 0; right: 0; top: var(--safe-top); bottom: 0; display: flex; flex-direction: column; }
+  .stage { position: relative; flex: 1; min-height: 0; overflow: hidden; overflow: clip; }
+
+  /* The conversation scrolls under the header, which floats over its top: collapsing never moves it. */
+  .scroller { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: var(--full) 16px 16px; scroll-padding-top: calc(var(--covered, var(--full)) + 8px); }
+  .head { position: absolute; left: 0; right: 0; top: 0; z-index: 2; pointer-events: none; }
+  /* touch-action: a vertical swipe on the header scrolls the conversation (script below). */
+  /* max-height: on a screen shorter than the header (a landscape phone) it scrolls within itself, so focus in it can always be shown. */
+  .full { pointer-events: auto; touch-action: pan-x; max-height: var(--stage-h, none); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; background: var(--shell); border-bottom: 1px solid var(--stroke); transform: translateY(var(--ty)); will-change: transform; }
+  .animating .full { transition: transform var(--dur) var(--ease); }
+  .bar { position: absolute; left: 0; right: 0; top: 0; z-index: 3; height: var(--bar); display: flex; align-items: center; gap: 6px; padding: 0 4px; pointer-events: none; }
+  .bar::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--shell); border-bottom: 1px solid var(--stroke); opacity: 0; transition: opacity var(--xfade) linear; }
+  .ib { pointer-events: auto; flex: none; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 8px; }
+  .bt { pointer-events: auto; flex: 1; min-width: 0; height: 44px; display: flex; align-items: center; gap: 8px; text-align: left; font-size: 17px; line-height: 22px; font-weight: 600; opacity: 0; visibility: hidden; transition: opacity var(--xfade) linear, visibility 0s linear var(--xfade); }
+  .bt span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  [data-solid] .bar::before { opacity: 1; }
+  [data-titled] .bt { opacity: 1; visibility: visible; transition: opacity var(--xfade) linear; }
+
+  /* The at-rest header (owner, 2026-11-05): a title of at most two lines, one meta line, and the tabs'
+     own row. There is no delegate strip on a phone: the Delegates tab carries its count and needs. */
+  .top { display: grid; grid-template-columns: 1fr; padding: 8px 52px 8px; border-bottom: 1px solid var(--stroke); }
+  h2 { margin: 0; font-size: 24px; line-height: 32px; font-weight: 700; letter-spacing: -.01em;
+       display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+  .meta { display: flex; gap: 6px; margin-top: 4px; font-size: 13px; line-height: 18px; color: var(--text2); white-space: nowrap; min-width: 0; }
+  .meta > span { display: flex; min-width: 0; }
+  .meta .mach { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .meta b { color: var(--needs-text); font-weight: 600; }
+  .meta i { font-style: normal; color: var(--text); }
+  .tabs { display: flex; gap: 24px; height: 48px; align-items: center; padding: 0 16px; }
+  .tab { position: relative; display: flex; align-items: center; gap: 6px; height: 44px; font-size: 14px; color: var(--text2); white-space: nowrap; }
+  .tab .n { color: var(--text2); font-weight: 400; }
+  .tab .n:empty, .tab .glyph[hidden] { display: none; }
+  .tab[aria-selected="true"] { color: var(--text); font-weight: 600; }
+  .tab[aria-selected="true"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; border-radius: 2px; background: var(--bridge); }
+  .glyph { flex: none; }
+  .needs { color: var(--needs-head); }
+
+  /* The conversation. */
+  .conv { font-size: 16px; line-height: 24px; display: grid; gap: 12px; padding-top: 12px; }
+  .conv p { margin: 0; }
+  .you { justify-self: end; max-width: 84%; padding: 10px 14px; border-radius: 12px; background: var(--card); border: 1px solid var(--stroke); }
+  .who, .ev { font-size: 13px; line-height: 18px; color: var(--text2); }
+  .who b { color: var(--text); }
+  .ev u { color: var(--bridge); }
+  code { font-size: 14px; }
+  .q { display: grid; gap: 10px; padding: 14px 16px; border-radius: 10px; background: var(--needs-fill); border: 1px solid var(--needs-edge); }
+  .q h3 { margin: 0; font-size: 14px; color: var(--needs-head); }
+  .opt { text-align: left; height: 44px; padding: 0 14px; border-radius: 8px; background: var(--card); border: 1px solid var(--stroke); }
+
+  /* The reply area at rest is today's. It floats over the conversation's foot as the header floats over its
+     top (#935, D7), and mirrors it: it rides down with the conversation near the end, and is compact past
+     that, behind a pinned 48 bar whose one-line copy of the box (the draft's first line, or the placeholder)
+     brings it back on a tap. */
+  .scroller { padding-bottom: calc(var(--foot) + 16px); scroll-padding-bottom: calc(var(--fcovered, var(--foot)) + 8px); }
+  .foot { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; pointer-events: none; }
+  .slot { pointer-events: auto; padding: 8px 16px calc(12px + var(--safe-bottom)); border-top: 1px solid var(--stroke); background: var(--shell); transform: translateY(var(--fy)); will-change: transform; }
+  .fanimating .slot { transition: transform var(--dur) var(--ease); }
+  .fbar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: calc(var(--bar) + var(--safe-bottom)); padding: 4px 16px calc(4px + var(--safe-bottom)); display: flex; align-items: center; pointer-events: none; }
+  .fbar::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--shell); border-top: 1px solid var(--stroke); opacity: 0; transition: opacity var(--xfade) linear; }
+  .pill { pointer-events: auto; flex: 1; min-width: 0; height: 40px; display: flex; align-items: center; padding: 0 16px; border-radius: 6px; background: var(--card); border: 1px solid var(--stroke); border-bottom: 2px solid var(--bridge); font-size: 16px; line-height: 24px; color: var(--text3); text-align: left; opacity: 0; visibility: hidden; transition: opacity var(--xfade) linear, visibility 0s linear var(--xfade); }
+  .pill span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .pill.draft { color: var(--text); }
+  [data-fsolid] .fbar::before { opacity: 1; }
+  [data-fsolid] .pill { opacity: 1; visibility: visible; transition: opacity var(--xfade) linear; }
+  /* D6 · 2: one line, with a link to the question. */
+  .held { margin: 0 0 6px; font-size: 13px; line-height: 18px; color: var(--needs-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .held a { color: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+  /* D5 · 2: one line, Attach and Send beside the text, 52 tall; it grows a line at a time to six, then scrolls inside. */
+  .box { display: flex; align-items: flex-end; gap: 4px; box-sizing: border-box; min-height: 52px; padding: 5px 6px 5px 4px; border-radius: 6px; background: var(--card); border: 1px solid var(--stroke); border-bottom: 2px solid var(--bridge); }
+  .attach { flex: none; width: 36px; height: 36px; display: grid; place-items: center; color: var(--text2); }
+  textarea { flex: 1; min-width: 0; resize: none; border: 0; background: none; color: var(--text); font: inherit; font-size: 16px; line-height: 24px; padding: 6px 0; box-sizing: border-box; height: 36px; max-height: 156px; overflow-y: hidden; }
+  textarea::placeholder { color: var(--text3); }
+  textarea:focus { outline: none; }
+  .box:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
+  /* A11: a 44 × 44 touch target around the 32 px button that is drawn; the negative margin keeps the box's 36 px footprint, so nothing moves. */
+  .send { flex: none; position: relative; margin: -4px; width: 44px; height: 44px; display: grid; place-items: center; color: var(--on-bridge); opacity: .55; }
+  .send::before { content: ''; position: absolute; inset: 6px; border-radius: 6px; background: var(--bridge); }
+  .send svg { position: relative; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  /* Reduced motion: nothing travels; the header cross-fades in and out. */
+  @media (prefers-reduced-motion: reduce) {
+    .animating .full { transition: none; animation: xfade var(--xfade) linear; }
+    @keyframes xfade { from { opacity: 0; } to { opacity: 1; } }
+    .fading .full { transition: opacity var(--xfade) linear; opacity: 0; }
+    .fanimating .slot { transition: none; animation: xfade var(--xfade) linear; }
+    .ffading .slot { transition: opacity var(--xfade) linear; opacity: 0; }
+  }
+  @media (forced-colors: active) {
+    .full, .bar::before, .slot, .fbar::before { background: Canvas; border-color: CanvasText; }
+    .pill { border-color: CanvasText; }
+    .top { border-color: CanvasText; }
+    .bar::before { border-bottom: 1px solid CanvasText; }
+    .tab[aria-selected="true"]::after { background: Highlight; }
+    .q, .you, .opt, .box { border-color: CanvasText; }
+    .glyph.needs { forced-color-adjust: none; color: Highlight; --needs-ink: HighlightText; }   /* keeps the S on its disc, as tokens.css maps needs */
+  }
+</style>
+</head>
+<body>
+<div class="phone" id="phone">
+  <div class="screen">
+    <div class="stage" id="stage">
+      <div class="head" id="head">
+        <div class="bar" id="bar">
+          <button class="ib" type="button" aria-label="Back to sessions"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="bt" id="bt" type="button" tabindex="-1" aria-hidden="true">
+            <svg class="glyph needs" viewBox="0 0 48 48" width="18" height="18"><circle cx="24" cy="24" r="23" fill="currentColor"/><path fill="var(--needs-ink)" d="M37.965 12.623C38.409 12.623 38.562 12.834 38.425 13.256L37.695 15.504C37.558 15.926 37.267 16.138 36.823 16.138L25.48 16.138C23.2 16.138 20.898 16.795 19.161 18.317C17.69 19.606 16.812 21.369 16.773 23.334C16.785 23.778 16.569 24 16.125 24L13.936 24C13.492 24 13.265 23.778 13.257 23.334C13.296 20.367 14.601 17.652 16.819 15.696C19.206 13.592 22.328 12.623 25.48 12.623L37.965 12.623ZM10.035 35.378C9.591 35.378 9.438 35.166 9.575 34.744L10.305 32.496C10.442 32.074 10.733 31.863 11.177 31.863L22.52 31.863C24.8 31.863 27.102 31.205 28.839 29.683C30.31 28.394 31.188 26.631 31.227 24.666C31.215 24.222 31.431 24 31.875 24L34.064 24C34.508 24 34.735 24.222 34.743 24.666C34.704 27.633 33.399 30.348 31.181 32.304C28.794 34.408 25.672 35.378 22.52 35.378L10.035 35.378Z"/></svg>
+            <span>Fix the witness timer after a resume</span>
+          </button>
+          <button class="ib" type="button" aria-label="More" style="margin-left: auto"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg></button>
+        </div>
+        <header class="full" id="full">
+          <div class="top">
+            <h2 id="title">Fix the witness timer after a resume</h2>
+            <div class="meta">
+              <svg class="glyph needs" viewBox="0 0 48 48" width="16" height="16" aria-hidden="true" style="margin-top: 1px"><circle cx="24" cy="24" r="23" fill="currentColor"/><path fill="var(--needs-ink)" d="M37.965 12.623C38.409 12.623 38.562 12.834 38.425 13.256L37.695 15.504C37.558 15.926 37.267 16.138 36.823 16.138L25.48 16.138C23.2 16.138 20.898 16.795 19.161 18.317C17.69 19.606 16.812 21.369 16.773 23.334C16.785 23.778 16.569 24 16.125 24L13.936 24C13.492 24 13.265 23.778 13.257 23.334C13.296 20.367 14.601 17.652 16.819 15.696C19.206 13.592 22.328 12.623 25.48 12.623L37.965 12.623ZM10.035 35.378C9.591 35.378 9.438 35.166 9.575 34.744L10.305 32.496C10.442 32.074 10.733 31.863 11.177 31.863L22.52 31.863C24.8 31.863 27.102 31.205 28.839 29.683C30.31 28.394 31.188 26.631 31.227 24.666C31.215 24.222 31.431 24 31.875 24L34.064 24C34.508 24 34.735 24.222 34.743 24.666C34.704 27.633 33.399 30.348 31.181 32.304C28.794 34.408 25.672 35.378 22.52 35.378L10.035 35.378Z"/></svg>
+              <span id="meta"><b>Waiting on you</b>&nbsp;·&nbsp;<span class="mach">Demo machine</span></span>
+            </div>
+          </div>
+          <div class="tabs" role="tablist" aria-label="Session">
+            <button class="tab" role="tab" type="button" aria-selected="true">Conversation</button>
+            <button class="tab" role="tab" type="button" aria-selected="false" tabindex="-1" id="dtab" aria-label="Delegates, 2 running"><svg class="glyph needs" viewBox="0 0 48 48" width="16" height="16" aria-hidden="true" id="dneeds" hidden><circle cx="24" cy="24" r="23" fill="currentColor"/><path fill="var(--needs-ink)" d="M37.965 12.623C38.409 12.623 38.562 12.834 38.425 13.256L37.695 15.504C37.558 15.926 37.267 16.138 36.823 16.138L25.48 16.138C23.2 16.138 20.898 16.795 19.161 18.317C17.69 19.606 16.812 21.369 16.773 23.334C16.785 23.778 16.569 24 16.125 24L13.936 24C13.492 24 13.265 23.778 13.257 23.334C13.296 20.367 14.601 17.652 16.819 15.696C19.206 13.592 22.328 12.623 25.48 12.623L37.965 12.623ZM10.035 35.378C9.591 35.378 9.438 35.166 9.575 34.744L10.305 32.496C10.442 32.074 10.733 31.863 11.177 31.863L22.52 31.863C24.8 31.863 27.102 31.205 28.839 29.683C30.31 28.394 31.188 26.631 31.227 24.666C31.215 24.222 31.431 24 31.875 24L34.064 24C34.508 24 34.735 24.222 34.743 24.666C34.704 27.633 33.399 30.348 31.181 32.304C28.794 34.408 25.672 35.378 22.52 35.378L10.035 35.378Z"/></svg>Delegates<span class="n" id="dn">2</span></button>
+            <button class="tab" role="tab" type="button" aria-selected="false" tabindex="-1">Tools</button>
+          </div>
+        </header>
+      </div>
+      <div class="scroller" id="scroller" tabindex="-1">
+        <div class="conv" id="conv"></div>
+      </div>
+      <div class="foot" id="foot">
+        <div class="slot" id="slot">
+          <p class="held">Answer its question first. <a href="#question" id="toq">Go to the question</a></p>
+          <div class="box">
+            <span class="attach"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M16.5 6.5l-8 8a2.5 2.5 0 003.5 3.5l8.5-8.5a4.5 4.5 0 00-6.4-6.4L5.6 11.6a6.5 6.5 0 009.2 9.2l6.7-6.7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+            <label class="sr" for="reply">Message the main agent</label>
+            <textarea id="reply" rows="1" placeholder="Message the main agent"></textarea>
+            <button class="send" type="button" aria-label="Send" aria-disabled="true"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          </div>
+        </div>
+        <div class="fbar" id="fbar">
+          <button class="pill" id="pill" type="button" tabindex="-1" aria-hidden="true"><span id="pilltext">Message the main agent</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(() => {
+  'use strict';
+  // The proposal's numbers (pt): fold away after 32 down, come back after 64 up, both counted in one direction.
+  const BAR = 48, DOWN = 32, UP = 64, TITLE_IN = 40;
+  const $ = (id) => document.getElementById(id);
+  const phone = $('phone'), scroller = $('scroller'), full = $('full'), conv = $('conv'), bt = $('bt');
+  const slot = $('slot'), fbar = $('fbar'), reply = $('reply'), pill = $('pill'), pilltext = $('pilltext');
+  // The Delegates tab carries what the phone strip used to: ?d=ask has one delegate asking, ?d=0 none running.
+  const dq = new URLSearchParams(location.search).get('d');
+  if (dq === 'ask') { $('dneeds').removeAttribute('hidden'); $('dtab').setAttribute('aria-label', 'Delegates, 2 running, 1 asking'); }
+  if (dq === '0') { $('dn').textContent = ''; $('dtab').setAttribute('aria-label', 'Delegates'); }
+
+  // Tabs (APG, automatic activation): one tab stop; Left/Right wrap, Home/End jump, click selects.
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  const select = (i) => tabs.forEach((t, j) => { t.setAttribute('aria-selected', String(j === i)); t.tabIndex = j === i ? 0 : -1; if (j === i) t.focus(); });
+  tabs.forEach((t, i) => {
+    t.addEventListener('click', () => select(i));
+    t.addEventListener('keydown', (e) => {
+      if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      const n = tabs.length, k = { ArrowRight: (i + 1) % n, ArrowLeft: (i - 1 + n) % n, Home: 0, End: n - 1 }[e.key];
+      if (k === undefined) return;
+      e.preventDefault(); select(k);
+    });
+  });
+
+  const turns = [
+    ['you', 'Can you find out why the witness timer restarts after a resume? It happened twice this morning.'],
+    ['who', 'Main agent', '41m ago'],
+    ['p', 'Looking at it. The timer is armed by the witness when a reply arrives, and a resume replays the turn’s replies in order.'],
+    ['p', 'The witness keeps the first reply it sees for each turn. After a resume that is an old one, so the timer is measured from the wrong moment and fires early.'],
+    ['ev', 'Read <code>witness.js</code> and <code>resume.js</code> · 38m'],
+    ['p', 'I can confirm it with a test that resumes a session mid-turn and checks which reply the witness holds.'],
+    ['you', 'Run the suite and check the witness logic, both in the background.'],
+    ['who', 'Main agent', '17m ago'],
+    ['p', 'Started 2 background agents: one runs the full suite, one reads the witness logic. I’ll report back when both are done.'],
+    ['ev', '◎ Started 3 delegates · 17m'],
+    ['ev', '⊗ Delegate <u>Lint the PWA</u> failed · 14m'],
+    ['p', 'The suite came back: 412 passed and 1 failed, <code>FollowsLatestReply</code>. The witness keeps the first reply of a turn, so a resume restarts the timer from the wrong one.'],
+    ['p', 'The lint delegate failed on an unrelated rule in a file nobody touched today; I left it alone.'],
+    ['p', 'I’ve a fix that reads the latest reply instead. It passes locally, with the new test, and the full suite is green again.'],
+    ['p', 'The change is eleven lines in the witness and a forty-line test. Nothing else reads the field, so nothing else should notice.'],
+    ['q'],
+  ];
+  conv.innerHTML = turns.map(([k, a, b]) => {
+    if (k === 'you') return `<p class="you">${a}</p>`;
+    if (k === 'who') return `<p class="who"><b>${a}</b>&nbsp;&nbsp;${b}</p>`;
+    if (k === 'ev') return `<p class="ev">${a}</p>`;
+    if (k === 'q') return '<section class="q" id="question" aria-labelledby="qh"><h3 id="qh">Main agent asks</h3><p>Push the fix to the <b>witness</b> branch now?</p><button class="opt" type="button">Yes, push</button><button class="opt" type="button">Not yet</button></section>';
+    return `<p>${a}</p>`;
+  }).join('');
+
+  let fullH = 257, room = fullH - BAR;      // room: how far the header can slide before only the bar is left
+  let last = 0, dir = 0, run = 0, returned = false, focusInside = false, programmatic = false, animTimer = 0, fadeTimer = 0;
+  let fading = false, held = null, ty = 0;   // held: how far an app-made scroll left the header slid, kept until the reader scrolls it on
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+  // The foot mirrors the header (#935): froom is how far the reply area can slide before only its bar is left,
+  // counted from the end of the conversation. It keeps its own run, so one edge's threshold never resets the other's.
+  // A session opens with the reply area in full, as it opens with the header in full.
+  let footH = 160, froom = footH - BAR, fbarH = BAR, frun = 0, freturned = true, ffocus = false, fheld = null, fy = 0, ffading = false, ffadeTimer = 0, fanimTimer = 0;
+  const endDist = (s = last) => Math.max(0, scroller.scrollHeight - scroller.clientHeight - s);
+
+  const measure = () => {
+    phone.style.setProperty('--stage-h', `${$('stage').clientHeight}px`);
+    fullH = full.offsetHeight;
+    room = Math.max(0, fullH - BAR);
+    phone.style.setProperty('--full', `${fullH}px`);
+    footH = slot.offsetHeight;
+    fbarH = fbar.offsetHeight;
+    froom = Math.max(0, footH - fbarH);
+    phone.style.setProperty('--foot', `${footH}px`);
+    render();
+  };
+
+  const animate = () => {
+    phone.classList.add('animating');
+    clearTimeout(animTimer);
+    animTimer = setTimeout(() => phone.classList.remove('animating'), 260);
+  };
+
+  // instant: focus arriving in the header shows it at once; a slide would leave the focused control under the bar.
+  const setReturned = (v, instant = false) => {
+    if (!v && fading) return;   // let a fade under way finish; restarting it every 32 pt kept the compact title away
+    clearTimeout(fadeTimer);
+    fading = false;
+    phone.classList.remove('fading');
+    if (instant) { clearTimeout(animTimer); phone.classList.remove('animating'); }
+    if (returned === v) { render(); return; }
+    run = 0;
+    held = null;
+    if (!v && reduced.matches && last > room) {
+      // Reduced motion: past the top range the header fades out where it is, then goes under the bar without travelling.
+      fading = true;
+      phone.classList.add('fading');
+      fadeTimer = setTimeout(() => { fading = false; returned = false; render(); phone.classList.remove('fading'); }, 83);
+      return;
+    }
+    returned = v;
+    if (!v && last <= room) { clearTimeout(animTimer); phone.classList.remove('animating'); }   // near the top it follows the finger at once
+    else if (!instant) animate();
+    render();
+  };
+
+  const fanimate = () => {
+    phone.classList.add('fanimating');
+    clearTimeout(fanimTimer);
+    fanimTimer = setTimeout(() => phone.classList.remove('fanimating'), 260);
+  };
+  // The foot's setReturned: the same rules, mirrored.
+  const setFoot = (v, instant = false) => {
+    if (!v && ffading) return;
+    clearTimeout(ffadeTimer);
+    ffading = false;
+    phone.classList.remove('ffading');
+    if (instant) { clearTimeout(fanimTimer); phone.classList.remove('fanimating'); }
+    if (freturned === v) { render(); return; }
+    frun = 0;
+    fheld = null;
+    if (!v && reduced.matches && endDist() > froom) {
+      ffading = true;
+      phone.classList.add('ffading');
+      ffadeTimer = setTimeout(() => { ffading = false; freturned = false; render(); phone.classList.remove('ffading'); }, 83);
+      return;
+    }
+    freturned = v;
+    if (!v && endDist() <= froom) { clearTimeout(fanimTimer); phone.classList.remove('fanimating'); }
+    else if (!instant) fanimate();
+    render();
+  };
+
+  // Near the top the header rides up with the conversation (iOS's large title); past that it is compact,
+  // and comes back over the conversation on 64 pt up (Material's enterAlways), going again on 32 pt down.
+  function render() {
+    const s = last;
+    ty = returned || focusInside ? 0 : held !== null ? -held : -Math.min(s, room);   // focus in the header holds it open
+    phone.style.setProperty('--ty', `${ty}px`);
+    phone.style.setProperty('--covered', `${Math.max(BAR, fullH + ty)}px`);
+    const hidden = -ty;
+    phone.toggleAttribute('data-solid', hidden >= TITLE_IN);   // the fill, hairline and title come in together
+    phone.toggleAttribute('data-titled', hidden >= TITLE_IN);
+    phone.dataset.state = hidden === 0 ? (s > 0 ? 'returned' : 'rest') : hidden >= room ? 'compact' : 'riding';
+    // The foot: near the end it rides down with the conversation; past that it is compact unless brought back.
+    const e = endDist(s);
+    fy = freturned || ffocus ? 0 : fheld !== null ? fheld : Math.min(e, froom);
+    phone.style.setProperty('--fy', `${fy}px`);
+    phone.style.setProperty('--fcovered', `${Math.max(fbarH, footH - fy)}px`);
+    phone.toggleAttribute('data-fsolid', fy >= TITLE_IN);
+    phone.dataset.foot = fy === 0 ? (e > 0 ? 'returned' : 'rest') : fy >= froom ? 'compact' : 'riding';
+  }
+
+  // The header never expands over the focused control: on a short screen it waits, still counting, until that control would stay in view.
+  const coversFocus = () => {
+    const el = document.activeElement;
+    if (!el || el === scroller || !scroller.contains(el)) return false;
+    return el.getBoundingClientRect().top < $('stage').getBoundingClientRect().top + fullH;
+  };
+
+  // The reply area mirrors it at the bottom edge: it never expands over the focused control in the conversation.
+  const footCoversFocus = () => {
+    const el = document.activeElement;
+    if (!el || el === scroller || !scroller.contains(el)) return false;
+    return el.getBoundingClientRect().bottom > $('stage').getBoundingClientRect().bottom - footH;
+  };
+
+  function onScroll() {
+    const max = scroller.scrollHeight - scroller.clientHeight;
+    const s = Math.min(Math.max(scroller.scrollTop, 0), Math.max(max, 0)); // ignore rubber-band overscroll
+    const d = s - last;
+    const from = last;
+    last = s;
+    if (programmatic || d === 0) { render(); return; }
+    const nd = d > 0 ? 1 : -1;
+    if (nd !== dir) { dir = nd; run = 0; frun = 0; }
+    run += Math.abs(d);
+    frun += Math.abs(d);
+    if (held !== null && d > 0) { held = Math.min(room, held + d); if (held >= room) held = null; }   // the reader carries on from where the app left it
+    if (held !== null && d < 0 && s <= held) held = null;   // going up, it rides with the conversation again from where they meet: no snap at the top
+    // Coming down into the top range the header follows the finger, so a slide still running from a threshold above stops.
+    if (from > room && s <= room && (!returned || fading)) {   // a header sliding back in finishes its slide
+      clearTimeout(animTimer); phone.classList.remove('animating');
+      if (fading) { clearTimeout(fadeTimer); fading = false; returned = false; phone.classList.remove('fading'); }   // a header fading out is gone at once
+    }
+    if (s <= 0) { returned = false; run = 0; held = null; }
+    else if (focusInside && !returned) returned = true;   // focus taken at the top: the header stays as it is
+    else if (returned && dir > 0 && run >= DOWN && !focusInside) setReturned(false);
+    else if ((!returned || fading) && dir < 0 && run >= UP && s > room && !coversFocus()) setReturned(true);   // 64 up also cancels a fade under way
+    // The foot, mirrored: away from the end is up. 32 up sends it, 64 down brings it back, and the end shows it in full.
+    const e = endDist(s), fromE = endDist(from);
+    if (fheld !== null && d < 0) { fheld = Math.min(froom, fheld - d); if (fheld >= froom) fheld = null; }
+    if (fheld !== null && d > 0 && e <= fheld) fheld = null;
+    if (fromE > froom && e <= froom && (!freturned || ffading)) {
+      clearTimeout(fanimTimer); phone.classList.remove('fanimating');
+      if (ffading) { clearTimeout(ffadeTimer); ffading = false; freturned = false; phone.classList.remove('ffading'); }
+    }
+    if (e <= 0) { freturned = false; frun = 0; fheld = null; }
+    else if (ffocus && !freturned) freturned = true;
+    else if (freturned && dir < 0 && frun >= DOWN && !ffocus) setFoot(false);
+    else if ((!freturned || ffading) && dir > 0 && frun >= UP && e > froom && !footCoversFocus()) setFoot(true);
+    render();
+  }
+
+  scroller.addEventListener('scroll', onScroll, { passive: true });
+  bt.addEventListener('click', () => setReturned(true));
+  // One tap on the bar's copy brings the reply area back, focused. Focus anywhere in it brings it back at once and
+  // holds it, so focus never lands on a hidden control. The copy is drawn, not read, and never focused.
+  pill.addEventListener('click', () => reply.focus());
+  slot.addEventListener('focusin', () => { ffocus = true; if (endDist() > 0) setFoot(true, true); else render(); });
+  slot.addEventListener('focusout', (e) => { if (!slot.contains(e.relatedTarget)) { ffocus = false; render(); } });
+  // A draft is never hidden: the compact bar shows its first line.
+  const syncPill = () => {
+    const line = reply.value.split('\n').find((l) => l.trim()) || '';
+    pilltext.textContent = line || reply.placeholder;
+    pill.classList.toggle('draft', !!line);
+  };
+  reply.addEventListener('input', syncPill);
+  // The box grows a line at a time to six lines, then scrolls inside.
+  const grow = () => { reply.style.height = 'auto'; const h = Math.min(reply.scrollHeight, 156); reply.style.height = h + 'px'; reply.style.overflowY = reply.scrollHeight > 156 ? 'auto' : 'hidden'; };
+  reply.addEventListener('input', grow);
+  // The notice's link: an app-made scroll to the question, then focus on its first choice.
+  $('toq').addEventListener('click', (e) => { e.preventDefault(); window.proto620.scrollToQuestion(); setTimeout(() => document.querySelector('#question .opt')?.focus({ preventScroll: true }), 0); });
+  // A vertical swipe or wheel on the foot (not in the text) scrolls the conversation, as on the header.
+  const foot = $('foot');
+  foot.addEventListener('wheel', (e) => {
+    if (e.target === reply || e.ctrlKey || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    e.preventDefault();
+    scroller.scrollTop += e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? scroller.clientHeight : 1);
+  }, { passive: false });
+  let ftouch = null;
+  foot.addEventListener('touchstart', (e) => { ftouch = e.touches.length === 1 && e.target !== reply ? { x: e.touches[0].clientX, y: e.touches[0].clientY, axis: null } : null; }, { passive: true });
+  foot.addEventListener('touchmove', (e) => {
+    if (!ftouch || e.touches.length !== 1) return;
+    const p = e.touches[0], dx = ftouch.x - p.clientX, dy = ftouch.y - p.clientY;
+    if (!ftouch.axis) { if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return; ftouch.axis = Math.abs(dy) > Math.abs(dx) ? 'y' : 'x'; }
+    if (ftouch.axis !== 'y') return;
+    e.preventDefault();
+    scroller.scrollTop += dy;
+    ftouch.x = p.clientX; ftouch.y = p.clientY;
+  }, { passive: false });
+  foot.addEventListener('touchend', () => { ftouch = null; });
+  foot.addEventListener('touchcancel', () => { ftouch = null; });
+  // Focus is never hidden: reaching anything in the header brings the header back first, and holds it.
+  full.addEventListener('focusin', () => { focusInside = true; if (last > 0) setReturned(true, true); });
+  full.addEventListener('focusout', (e) => { if (!full.contains(e.relatedTarget)) { focusInside = false; full.scrollTop = 0; } });
+// The header floats over the conversation, so a vertical swipe or wheel that starts on it scrolls the
+// conversation, as the app's would. On a landscape phone the header can cover the whole conversation.
+// A header taller than the stage (capped, so it scrolls within itself) takes the movement first, as nested scrolling does.
+const pan = (dy) => {
+  const before = full.scrollTop, max = Math.max(0, full.scrollHeight - full.clientHeight);
+  full.scrollTop = Math.min(Math.max(before + dy, 0), max);
+  scroller.scrollTop += dy - (full.scrollTop - before);
+};
+full.addEventListener('wheel', (e) => {
+  if (e.ctrlKey || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+  e.preventDefault();
+  pan(e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? scroller.clientHeight : 1));
+}, { passive: false });
+let touch = null;
+full.addEventListener('touchstart', (e) => {
+  touch = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY, axis: null } : null;
+}, { passive: true });
+full.addEventListener('touchmove', (e) => {
+  if (!touch || e.touches.length !== 1) return;
+  const p = e.touches[0], dx = touch.x - p.clientX, dy = touch.y - p.clientY;
+  if (!touch.axis) {
+    if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+    touch.axis = Math.abs(dy) > Math.abs(dx) ? 'y' : 'x';
+  }
+  if (touch.axis !== 'y') return;
+  e.preventDefault();
+  pan(dy);
+  touch.x = p.clientX; touch.y = p.clientY;
+}, { passive: false });
+const endTouch = () => { touch = null; };
+full.addEventListener('touchend', endTouch);
+full.addEventListener('touchcancel', endTouch);
+  // Focus is never hidden in the conversation either: on a short (landscape) screen the full header can cover all of it,
+  // so if the browser's own focus scroll leaves the control under the header or out of view, the header folds and the control comes out below the bar.
+  scroller.addEventListener('focusin', (e) => {
+    const el = e.target;
+    if (el === scroller) return;
+    requestAnimationFrame(() => {
+      if (document.activeElement !== el || focusInside) return;
+      const sr = $('stage').getBoundingClientRect(), r = el.getBoundingClientRect();
+      if (r.top >= sr.top + Math.max(BAR, fullH + ty) && r.bottom <= sr.bottom - Math.max(fbarH, footH - fy)) return;
+      clearTimeout(fadeTimer); clearTimeout(animTimer);
+      fading = false; phone.classList.remove('fading', 'animating');
+      // The reply area folds to its bar too, as on a short screen's scroll to a question: a landscape phone's reply area can cover the control as well.
+      clearTimeout(ffadeTimer); clearTimeout(fanimTimer);
+      ffading = false; phone.classList.remove('ffading', 'fanimating');
+      freturned = false; fheld = froom; frun = 0;
+      programmatic = true; returned = false; held = null; run = 0; dir = 0;
+      const y = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      scroller.scrollTop = Math.max(y - BAR - 8, room);
+      last = Math.max(0, scroller.scrollTop); render();
+      requestAnimationFrame(() => requestAnimationFrame(() => { last = Math.max(0, scroller.scrollTop); programmatic = false; render(); }));
+    });
+  });
+  if ('ResizeObserver' in window) { const ro = new ResizeObserver(measure); ro.observe(full); ro.observe(slot); ro.observe($('stage')); } else addEventListener('resize', measure);
+
+  // A scroll the app makes (to an arriving question, a restored position) never folds or brings back the header.
+  const scrollProgrammatically = (target) => {
+    // On every screen, a reduced-motion fade under way would land after the scroll and fold what the scroll keeps.
+    clearTimeout(fadeTimer); fading = false; phone.classList.remove('fading');
+    clearTimeout(ffadeTimer); ffading = false; phone.classList.remove('ffading');
+    let hidden = -ty;
+    // The one exception to keeping the header as it was: on a screen shorter than twice the header the kept header
+    // would cover what the app scrolls to, so it folds to the bar first.
+    // Judged on the full header, not on where it is now: an already compact header still folds a full reply area.
+    const stageH = $('stage').clientHeight;
+    if (stageH < 2 * fullH) {
+      if (hidden < room) { clearTimeout(animTimer); phone.classList.remove('animating'); hidden = room; }
+      clearTimeout(fanimTimer); phone.classList.remove('fanimating');
+      fy = froom;   // the foot folds to its bar with it
+    }
+    const wasFull = hidden === 0;
+    // The foot is kept as it was too.
+    const fWasFull = fy === 0;
+    freturned = fWasFull;
+    fheld = !fWasFull ? fy : null;
+    programmatic = true;
+    // Hold the header exactly as it was, part-way slid included, while the scroll happens: no flash, no fold.
+    returned = wasFull;
+    held = !wasFull ? hidden : null;
+    const top = target(Math.max(BAR, fullH - hidden));
+    scroller.scrollTop = top;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      last = Math.max(0, scroller.scrollTop);
+      returned = wasFull && last > 0;
+      freturned = fWasFull && endDist() > 0;
+      // Landing at the end overrides the hold: the end always shows the reply area in full.
+      if (endDist() <= 0 && fheld !== null) { fheld = null; if (!reduced.matches) fanimate(); }
+      dir = 0; run = 0; frun = 0; programmatic = false;
+      render();
+    }));
+  };
+  window.proto620 = {
+    state: () => phone.dataset.state,
+    foot: () => phone.dataset.foot,
+    get footRoom() { return froom; },
+    get footHeight() { return footH; },
+    get footDrawn() { return fy; },
+    get room() { return room; },
+    get fullHeight() { return fullH; },
+    scrollToQuestion: () => scrollProgrammatically((covered) => $('question').offsetTop - covered - 8),
+  };
+  measure();
+})();
+</script>
+</body>
+</html>

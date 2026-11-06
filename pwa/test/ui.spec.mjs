@@ -277,6 +277,34 @@ test('every glyph is named with its state, as a row reads: title, status, machin
   await expect(card(page, CLAUDE).locator('.tool-line .glyph')).toHaveAccessibleName('running');
 });
 
+// ui.md §9.1 A1 (#365): the words a row draws, in the order drawn and joined with commas (its
+// title, its second line's facts, its age or the new activity dot in its place), then what else
+// its glyph's name says.
+test('a session row is named for the words it draws, in the order drawn, then for what else its glyph says', async ({ page }) => {
+  await openDemo(page);
+  const named = (id) => row(page, id).locator('.row-main');
+  await expect(named(COPILOT)).toHaveAccessibleName(/^Plan Migration to Windows App, Waiting on you, danswett\/agent-ha-bridge, \d+d ago, Demo machine$/);
+  await expect(named(DELEGATING)).toHaveAccessibleName(/^Land the P1 slices, Delegating to 2 agents, danswett\/agent-bridge, \d+d ago, details not reported, Demo machine$/);
+  // Driven: "Driven by an agent" in the status's place; and, updated while not open, the dot in the age's.
+  await upsert(page, CODEX, { driver: 'agent', updatedAt: later() });
+  await expect(named(CODEX)).toHaveAccessibleName('Fix flaky test, Driven by an agent, New activity, idle, Demo machine');
+  // With every machine shown, the row draws its machine where the workspace was.
+  await openDemo(page, '&machines=3');
+  await expect(named(COPILOT)).toHaveAccessibleName(/^Plan Migration to Windows App, Waiting on you, Demo machine, \d+d ago$/);
+});
+
+// Rules 10-12 over rule 7 (#800): the row draws what is wrong, not "Driven by an agent", so its
+// name starts with that too, and says it is driven only after its age (A1).
+test('a driven session that needs sign-in or is not responding is named for the status its row draws, with its driver after its age', async ({ page }) => {
+  await openDemo(page, '&signin=1');
+  const named = (id) => row(page, id).locator('.row-main');
+  await upsert(page, 'signin-1', { driver: 'agent', driverPrincipal: 'homeassistant:demo' });
+  await expect(row(page, 'signin-1').locator('.row-status')).toHaveText('Needs sign-in');
+  await expect(named('signin-1')).toHaveAccessibleName(/^Coordinate the Shiproom, Needs sign-in, danswett\/agent-bridge, [^,]+, Copilot · @demo-user, driven by an agent, Demo machine$/);
+  await expect(row(page, 'stalled').locator('.row-status')).toHaveText('Not responding');
+  await expect(named('stalled')).toHaveAccessibleName(/^Re-run the flaky suite, Not responding, [^,]+, since [^,]+, driven by an agent, Demo machine$/);
+});
+
 test('the latest response is rendered as Markdown', async ({ page }) => {
   await openDemo(page);
   const response = card(page, COPILOT).locator('.response');
@@ -565,4 +593,54 @@ test('a long unbroken path never makes a row or a session wider than a phone scr
   widths = await rows();
   expect(widths.page).toBeLessThanOrEqual(widths.view);
   for (const right of widths.cards) expect(right).toBeLessThanOrEqual(widths.view);
+});
+
+// A13 (#373): chrome's words aren't selected by a press, a long press or a double tap, and
+// everything a person may want to copy still is. Whether a part is selectable is the first
+// user-select set on it or around it, as the browser uses it.
+test('chrome\'s words are not selectable, and the conversation, code, a question and every field are', async ({ page }) => {
+  await openDemo(page);
+  await open(page, CODEX);
+  await upsert(page, CODEX, { updatedAt: later(), activity: { response: 'Run this once:\n\n```\nnpm run build\n```' } });
+  const v = card(page, CODEX);
+  await expect(v.locator('.response pre code')).toHaveText('npm run build');
+  const select = (locator) => locator.first().evaluate((el) => {
+    for (let e = el; e; e = e.parentElement) {
+      const s = getComputedStyle(e);
+      const used = s.userSelect || s.webkitUserSelect;
+      if (used && used !== 'auto') { return used; }
+    }
+    return 'auto';
+  });
+  const chrome = {
+    'a row\'s title': row(page, CODEX).locator('.row-title'),
+    'a row\'s facts': row(page, CODEX).locator('.row-facts'),
+    'the session\'s title': v.locator('.session-title'),
+    'the session\'s status line': v.locator('.status-line'),
+    'a tab': v.locator('.view-tab'),
+    'a button\'s words': v.locator('.end-session button'),
+    'the page\'s title': page.locator('#sessions-h'),
+    'the app bar\'s title': page.locator('.brand-name'),
+    'the navigation': page.locator('.nav-item .nav-label'),
+    'a banner\'s words': page.locator('#demo-banner span'),
+  };
+  for (const [name, locator] of Object.entries(chrome)) { expect(await select(locator), name).toBe('none'); }
+  const content = {
+    'the response': v.locator('.response p'),
+    'code': v.locator('.response pre code'),
+    'a question': card(page, COPILOT).locator('.question-message'),
+    'the reply box': v.getByRole('textbox', { name: 'Reply' }),
+    'search': page.locator('#search'),
+  };
+  for (const [name, locator] of Object.entries(content)) { expect(await select(locator), name).not.toBe('none'); }
+  // As a double tap or a double click finds them: the title's words aren't taken, the response's
+  // are. Each on its first word: a block's middle may be past its words.
+  const picked = async (locator) => {
+    await page.evaluate(() => getSelection().removeAllRanges());
+    const box = await locator.first().boundingBox();
+    await locator.first().dblclick({ position: { x: 8, y: box.height / 2 } });
+    return page.evaluate(() => getSelection().toString().trim());
+  };
+  expect(await picked(v.locator('.session-title'))).toBe('');
+  expect(await picked(v.locator('.response p'))).not.toBe('');
 });

@@ -30,8 +30,13 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         return CloseAllAsync();
     }
 
-    // The roster read an account's stored list late (MachineRoster.Changed): tell its devices.
-    public Task RosterChangedAsync(string accountId) => BroadcastPresenceAsync(accountId);
+    // Confirm removals from storage, explicit forgets, or admission's roster cap. Existing
+    // hosts need two messages too, not only a new host's first complete roster (#206).
+    public async Task RosterChangedAsync(string accountId)
+    {
+        await BroadcastPresenceAsync(accountId);
+        await BroadcastPresenceAsync(accountId);
+    }
 
     // On shutdown, tell every device to reconnect now. A rolling deploy otherwise leaves old
     // sockets on the draining replica for up to its drain timeout (about 90 s observed on
@@ -66,8 +71,9 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         // last word: a machine forgotten a moment earlier listed again (#151), or a device that
         // left listed as here. One older than what was sent is dropped instead.
         long presenceSent;
+        bool rosterConfirmed;
 
-        public async Task SendPresenceAsync(byte[] data, long version)
+        public async Task SendPresenceAsync(byte[] data, long version, bool hasRoster)
         {
             await sendLock.WaitAsync();
             try
@@ -75,6 +81,14 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                 if (version <= presenceSent) { return; }
                 presenceSent = version;
                 await SendLockedAsync(data, WebSocketMessageType.Text);
+                // A returning host may have missed a forget while offline. Confirm its first
+                // complete roster, including one loaded late, without weakening its two-frame guard.
+                if (!hasRoster) { rosterConfirmed = false; }
+                else if (Kind == "host" && !rosterConfirmed)
+                {
+                    await SendLockedAsync(data, WebSocketMessageType.Text);
+                    rosterConfirmed = true;
+                }
             }
             finally { sendLock.Release(); }
         }
@@ -138,7 +152,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         metrics.Connected(conn.Kind);
         log.LogInformation("connect {Conn} {Kind}; {Count} online in account", conn.Tag, conn.Kind, devices.Count);
         // Announce before "ready", so peers learn of a device before it can send them anything.
-        await BroadcastPresenceAsync(conn.Account.Id);
+        await RosterChangedAsync(conn.Account.Id);
         // blobs: present only with a blob store, so a device knows whether files over 256 KiB can go.
         await conn.SendJsonAsync(new { t = "ready", device = conn.DeviceId, account = conn.Account.Id, login = conn.Account.Login, blobs = blobs.Advertised });
 
@@ -147,9 +161,13 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         catch (Exception e) when (e is WebSocketException or OperationCanceledException) { end = "dropped"; }
         finally
         {
+            // Update roster bookkeeping before removing the slot, under the broadcast lock.
             // Only remove this connection: a replacement may already hold the slot.
-            lock (devices) { ((ICollection<KeyValuePair<string, Connection>>)devices).Remove(new(conn.DeviceId, conn)); }
-            roster.Disconnected(conn.Account.Id, conn.DeviceId, conn.Kind);
+            lock (devices)
+            {
+                roster.Disconnected(conn.Account.Id, conn.DeviceId, conn.Kind);
+                ((ICollection<KeyValuePair<string, Connection>>)devices).Remove(new(conn.DeviceId, conn));
+            }
             await conn.CloseAsync((int)WebSocketCloseStatus.NormalClosure, "");
             metrics.Disconnected(end);
             log.LogInformation("disconnect {Conn} ({End}) after {Seconds:F0}s; frames in {In} out {Out}, bytes in {BytesIn} out {BytesOut}",
@@ -284,10 +302,13 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             metrics.Roster("forget", "not-allowed");
             error = "not-allowed";
         }
-        else { error = roster.Forget(conn.Account.Id, machine, devices.ContainsKey); }
+        else
+        {
+            lock (devices) { error = roster.Forget(conn.Account.Id, machine, devices.ContainsKey); }
+        }
         log.LogInformation("forget {Conn} {Kind}: {Outcome}", conn.Tag, conn.Kind, error ?? "ok");
         await conn.SendJsonAsync(new { t = "forget-result", id, machine = Wire.IsDeviceId(machine) ? machine!.ToLowerInvariant() : null, error });
-        if (error is null) { await BroadcastPresenceAsync(conn.Account.Id); }
+        if (error is null) { await RosterChangedAsync(conn.Account.Id); }
     }
 
     bool WithinRate(Connection c)
@@ -320,6 +341,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         if (!accounts.TryGetValue(accountId, out var devices)) { return; }
         byte[] message;
         long version;
+        bool hasRoster;
         Connection[] to;
         // Taken and numbered under the lock admission and removal hold, so a higher number is
         // always a later view of the account (Connection.SendPresenceAsync).
@@ -330,12 +352,14 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             var list = to.Select(c => new { id = c.DeviceId, name = c.Name, kind = c.Kind, since = c.Since }).ToArray();
             // known: the account's machines that are not here, with when each was last seen. Only
             // with a roster; older clients read devices alone and ignore it.
-            object snapshot = roster.Known(accountId, devices.ContainsKey) is { } known
+            var known = roster.Known(accountId, devices.ContainsKey);
+            hasRoster = known is not null;
+            object snapshot = known is not null
                 ? new { t = "presence", devices = list, known = known.Select(k => new { id = k.Id, name = k.Name, kind = k.Kind, lastSeen = k.LastSeen }).ToArray() }
                 : new { t = "presence", devices = list };
             message = JsonSerializer.SerializeToUtf8Bytes(snapshot);
         }
-        await Task.WhenAll(to.Select(c => c.SendPresenceAsync(message, version)));
+        await Task.WhenAll(to.Select(c => c.SendPresenceAsync(message, version, hasRoster)));
     }
 
     static string Clean(string? name)

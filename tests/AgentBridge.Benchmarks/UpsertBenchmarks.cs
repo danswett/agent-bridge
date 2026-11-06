@@ -30,8 +30,9 @@ public class UpsertBuildBenchmarks
 }
 
 // One session's share of a discovery pass when its transcript has not changed, which is most
-// passes for most sessions (one a second each): the tail finds nothing new, and the session is
-// built from what was parsed and compared with the last one sent (SessionTracker.Update).
+// passes for most sessions (one a second each): the tail finds the file's size and time as they
+// were, and the session built last is handed back (SessionTracker.Update). Until #608 it was
+// built again and serialised to find it the same.
 public class SessionTrackerBenchmarks
 {
     string _dir = null!;

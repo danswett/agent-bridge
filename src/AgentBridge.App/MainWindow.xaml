@@ -34,9 +34,9 @@
             AutomationProperties.AutomationId="TitleBar">
             <TitleBar.LeftHeader>
                 <ContentControl
-                    Style="{StaticResource AbIconMark}"
-                    Width="16"
-                    Height="16"
+                    Style="{StaticResource AbIconMark20}"
+                    Width="20"
+                    Height="20"
                     Margin="16,0,0,0"
                     VerticalAlignment="Center"
                     Foreground="{ThemeResource AbBridge}"
@@ -126,6 +126,7 @@
                 </Grid.RowDefinitions>
                 <!-- What stops the app doing its job, over every page. -->
                 <StackPanel Grid.Row="0">
+                    <!-- Never closable (#293): it says what keeps the app from its job, and goes once that is put right. -->
                     <InfoBar
                         x:Name="Banner"
                         Margin="24,12,24,0"
@@ -134,14 +135,61 @@
                         Severity="Warning"
                         IsOpen="{x:Bind ViewModel.HasBanner, Mode=OneWay}"
                         Message="{x:Bind ViewModel.Banner, Mode=OneWay}" />
-                    <InfoBar
-                        x:Name="DiscoveryHeld"
-                        Margin="24,12,24,0"
+                    <!-- Each machine's discovery hold, one banner each, closable (#293; ui.md §7, Windows). -->
+                    <ItemsControl
+                        x:Name="HeldList"
                         AutomationProperties.AutomationId="DiscoveryHeld"
+                        IsTabStop="False"
+                        ItemsSource="{x:Bind ViewModel.HeldNotices}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="core:HeldNotice">
+                                <InfoBar
+                                    Margin="24,12,24,0"
+                                    Tag="{x:Bind}"
+                                    AutomationProperties.AutomationId="{x:Bind AutomationId}"
+                                    IsClosable="True"
+                                    IsOpen="True"
+                                    Severity="Informational"
+                                    Message="{x:Bind Text, Mode=OneWay}"
+                                    Loaded="OnHeldLoaded"
+                                    Closing="OnHeldClosing"
+                                    Closed="OnHeldClosed" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <!-- This machine's update, downloaded and waiting for the person (#516): no dismiss, so the
+                         action stays while the release waits, and nothing restarts until it is pressed. -->
+                    <InfoBar
+                        x:Name="UpdateReady"
+                        Margin="24,12,24,0"
+                        AutomationProperties.AutomationId="UpdateReady"
+                        AutomationProperties.LiveSetting="Polite"
                         IsClosable="False"
-                        Severity="Informational"
-                        IsOpen="{x:Bind ViewModel.IsHeld, Mode=OneWay}"
-                        Message="{x:Bind ViewModel.HeldWhy, Mode=OneWay}" />
+                        Severity="{x:Bind local:Ui.UpdateSeverity(ViewModel.AppUpdate.Failed), Mode=OneWay}"
+                        IsOpen="{x:Bind ViewModel.AppUpdate.Shown, Mode=OneWay}"
+                        Message="{x:Bind ViewModel.AppUpdate.Message, Mode=OneWay}">
+                        <!-- Restarting, the button that started it shows its progress ring and says so, ignores
+                             presses (RestartAsync) and keeps focus, never drawn at rest in accent (Creative on
+                             #719, 6675195544; ui.md §5.3, §9.1 A4). Failed, it is Try again. -->
+                        <InfoBar.ActionButton>
+                            <Button
+                                Style="{x:Bind local:Ui.ActionStyle(ViewModel.AppUpdate.Restarting), Mode=OneWay}"
+                                AutomationProperties.AutomationId="RestartToUpdate"
+                                AutomationProperties.Name="{x:Bind ViewModel.AppUpdate.ActionLabel, Mode=OneWay}"
+                                AutomationProperties.ItemStatus="{x:Bind ViewModel.AppUpdate.ActionStatus, Mode=OneWay}"
+                                Visibility="{x:Bind local:Ui.Show(ViewModel.AppUpdate.Offered), Mode=OneWay}"
+                                Click="OnRestartToUpdate">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <ProgressRing
+                                        Width="16"
+                                        Height="16"
+                                        IsActive="{x:Bind ViewModel.AppUpdate.Restarting, Mode=OneWay}"
+                                        Visibility="{x:Bind local:Ui.Show(ViewModel.AppUpdate.Restarting), Mode=OneWay}" />
+                                    <TextBlock Text="{x:Bind ViewModel.AppUpdate.ActionLabel, Mode=OneWay}" />
+                                </StackPanel>
+                            </Button>
+                        </InfoBar.ActionButton>
+                    </InfoBar>
                 </StackPanel>
 
                 <!-- Sessions (ui.md §5.2, §6): the list, the session and its inspector, by the window's width. -->
@@ -205,14 +253,15 @@
                                                         <TextBlock Style="{StaticResource AbTypeRow}" TextTrimming="CharacterEllipsis" AutomationProperties.AutomationId="MachineName" Text="{x:Bind Name, Mode=OneWay}" />
                                                         <TextBlock Grid.Column="1" Style="{StaticResource AbTypeRow}" Foreground="{ThemeResource AbText2}" AutomationProperties.AutomationId="MachineStatus" Text="{x:Bind Status, Mode=OneWay}" />
                                                     </Grid>
-                                                    <!-- At most two facts. A read-only host's reason is a sentence: its tooltip, not the row. -->
+                                                    <!-- At most two facts. A read-only or held host's reason is a sentence: its tooltip and
+                                                         accessible description, not the row (ui.md §6.6). Its name is the words shown (§9.1 A1). -->
                                                     <TextBlock
                                                         Style="{StaticResource AbTypeMeta}"
                                                         Foreground="{ThemeResource AbText2}"
                                                         TextTrimming="CharacterEllipsis"
                                                         AutomationProperties.AutomationId="MachineFacts"
-                                                        AutomationProperties.HelpText="{x:Bind ViewOnlyWhy, Mode=OneWay}"
-                                                        ToolTipService.ToolTip="{x:Bind ViewOnlyWhy, Mode=OneWay}"
+                                                        AutomationProperties.HelpText="{x:Bind FactsWhy, Mode=OneWay}"
+                                                        ToolTipService.ToolTip="{x:Bind FactsWhy, Mode=OneWay}"
                                                         Text="{x:Bind Facts, Mode=OneWay}"
                                                         Visibility="{x:Bind local:Ui.Some(Facts), Mode=OneWay}" />
                                                     <TextBlock

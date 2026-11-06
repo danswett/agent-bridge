@@ -190,6 +190,8 @@ public sealed class TrustTests : IAsyncLifetime
         ui.Post(page.TrustQuestions[0].Trust);
         await Wait.UntilAsync(() => page.TrustQuestions.Count == 0 || page.TrustQuestions[0].State == "started", "started");
         await Wait.UntilAsync(() => page.Prompt == "", "the prompt cleared");
+        // The launch's own status too, though Codex's session had no id to follow (#122).
+        Assert.Equal(("started", "Session started."), (page.State, page.StatusText));
 
         // A question asked at the machine, answered here: what is being written stays.
         remoteTrust = [Question() with { Id = "q-2" }];
@@ -254,8 +256,101 @@ public sealed class TrustTests : IAsyncLifetime
         remoteTrust = [];
         ui.Post(card.Trust);
         await Wait.UntilAsync(() => card.State == "started", "started");
-        await Task.Delay(200);
+        // The answer reloads the page in the same turn; what the reload leads to is done once it is.
+        await Wait.UntilAsync(() => page.CanReload, "the reload after the answer");
         Assert.Equal("fix the build", page.Prompt);
+    }
+
+    // Engineering's review of #891: launch A's question stays listed after its busy ends, and
+    // launch B into the same folder asks one of its own. Answering A says nothing about B: B is
+    // still not confirmed, and still followed until its own session registers.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Answering_another_launchs_question_about_the_same_folder_leaves_this_launch_followed(bool trust)
+    {
+        var a = Question();
+        var b = Question() with { Id = "q-2", AskedAt = Make.T0.AddMinutes(3) };
+        remoteTrust = [a];
+        remoteHost.On(LaunchProtocol.Launch, _ =>
+        {
+            remoteTrust = [a, b];
+            return new LaunchResult(LaunchOutcome.Unconfirmed, "Codex started, and is asking whether to trust there") { Session = "b-1", Trust = b };
+        });
+        answer = _ => trust
+            ? new TrustAnswerResult(TrustAnswerOutcome.Started) { Session = "a-1" }
+            : new TrustAnswerResult(TrustAnswerOutcome.Declined, "Codex was not trusted with there, and closed; nothing was launched");
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var page = LaunchPage.Open(main, ui);
+        await Wait.UntilAsync(() => page.Machines.Count == 2, "both machines");
+        ui.Post(() => page.SelectedMachine = page.Machines.Single(m => m.Value == "remote-id"));
+        await Wait.UntilAsync(() => page.CanLaunch, "the form");
+        ui.Post(() => page.Prompt = "fix the build");
+        ui.Post(page.Launch);
+        await Wait.UntilAsync(() => page.State == "unconfirmed" && page.TrustQuestions.Count == 2 && page.TrustQuestions.All(q => q.CanAnswer), "both questions");
+
+        var card = page.TrustQuestions.Single(q => q.Id == "q-1");
+        remoteTrust = [b];
+        ui.Post(trust ? card.Trust : card.Quit);
+        await Wait.UntilAsync(() => card.State == (trust ? "started" : "declined"), "A answered");
+        await Wait.UntilAsync(() => page.CanReload, "the reload after the answer");
+        Assert.Equal("unconfirmed", page.State);
+        Assert.Equal("fix the build", page.Prompt);
+
+        await remoteHost.SendAsync(Events.SessionUpsert, Make.Session("b-1") with { Agent = AgentKind.Codex });
+        await Wait.UntilAsync(() => page.State == "started", "B started once its own session registered");
+        Assert.Equal("", page.Prompt);
+    }
+
+    // #901: the machine asks the launch's question again under a new id between the launch's
+    // outcome and the Trust pressed here. The answer is still that launch's, so its prompt goes:
+    // left in the box, it invited a second press and a second session.
+    [Fact]
+    public async Task Trusting_a_followed_launchs_question_asked_again_under_a_new_id_clears_its_prompt()
+    {
+        var page = await LaunchAskedAgainAsync(session: "s-1");
+        Assert.Equal("unconfirmed", page.State);
+        answer = _ => new TrustAnswerResult(TrustAnswerOutcome.Started) { Session = "s-1" };
+
+        var card = page.TrustQuestions.Single();
+        remoteTrust = [];
+        ui.Post(card.Trust);
+        await Wait.UntilAsync(() => card.State == "started", "started");
+        await Wait.UntilAsync(() => page.State == "started", "the launch started");
+        Assert.Equal(("Session started.", ""), (page.StatusText, page.Prompt));
+    }
+
+    [Fact]
+    public async Task Trusting_an_unfollowed_launchs_question_asked_again_under_a_new_id_clears_its_prompt()
+    {
+        var page = await LaunchAskedAgainAsync(session: null);
+        var card = page.TrustQuestions.Single();
+        remoteTrust = [];
+        ui.Post(card.Trust);
+        await Wait.UntilAsync(() => card.State == "started", "started");
+        await Wait.UntilAsync(() => page.State == "started", "the launch started");
+        Assert.Equal(("Session started.", ""), (page.StatusText, page.Prompt));
+    }
+
+    // A launch whose outcome names q-1, by the time the machine is listed again asked as q-1b:
+    // the same folder, agent and time asked.
+    async Task<LaunchViewModel> LaunchAskedAgainAsync(string? session)
+    {
+        remoteTrust = [];
+        remoteHost.On(LaunchProtocol.Launch, _ =>
+        {
+            remoteTrust = [Question() with { Id = "q-1b" }];
+            return new LaunchResult(LaunchOutcome.Unconfirmed, "Codex started, and is asking whether to trust there") { Session = session, Trust = Question() };
+        });
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var page = LaunchPage.Open(main, ui);
+        await Wait.UntilAsync(() => page.Machines.Count == 2, "both machines");
+        ui.Post(() => page.SelectedMachine = page.Machines.Single(m => m.Value == "remote-id"));
+        await Wait.UntilAsync(() => page.CanLaunch, "the form");
+        ui.Post(() => page.Prompt = "fix the build");
+        ui.Post(page.Launch);
+        await Wait.UntilAsync(() => page.TrustQuestions is [{ Id: "q-1b", CanAnswer: true }], "the question asked again");
+        return page;
     }
 
     [Fact]

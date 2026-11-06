@@ -38,6 +38,20 @@ public sealed class MarkdownView : StackPanel
         }
     }
 
+    // One block of a response, drawn alone: an item of the conversation's list, which realises only
+    // the blocks near the viewport (#765). Set instead of Markdown.
+    public MdBlock? Block
+    {
+        get => block;
+        set
+        {
+            if (ReferenceEquals(value, block)) { return; }
+            block = value;
+            Render();
+        }
+    }
+    MdBlock? block;
+
     // The reading role's size and line height, taken from its generated style.
     static T ReadingType<T>(DependencyProperty property) =>
         (T)((Style)Application.Current.Resources["AbTypeReading"]).Setters.OfType<Setter>().First(s => s.Property == property).Value;
@@ -97,16 +111,17 @@ public sealed class MarkdownView : StackPanel
     void Render()
     {
         Children.Clear();
-        if (markdown is null) { return; }
-        foreach (var b in Approval ? MarkdownModel.Approval(markdown) : MarkdownModel.Parse(markdown))
+        if (block is null && markdown is null) { return; }
+        IReadOnlyList<MdBlock> blocks = block is not null ? [block] : Approval ? MarkdownModel.Approval(markdown) : MarkdownModel.Parse(markdown);
+        foreach (var b in blocks)
         {
-            var element = Block(b);
+            var element = Draw(b);
             if (Reading) { Read(element); }
             Children.Add(element);
         }
     }
 
-    UIElement Block(MdBlock block) => block switch
+    UIElement Draw(MdBlock block) => block switch
     {
         MdParagraph p => Text(p.Inlines),
         MdHeading h => Heading(h),
@@ -124,30 +139,55 @@ public sealed class MarkdownView : StackPanel
         if (size is { } s) { rich.FontSize = s; }
         if (bold) { rich.FontWeight = FontWeights.SemiBold; }
         var para = new Paragraph();
-        foreach (var i in inlines) { para.Inlines.Add(Inline(i)); }
+        var pieces = LongWords.Pieces([.. inlines.Select(i => i switch { MdText t => t.Text, MdLink l => l.Text, MdBreak => "\n", _ => "" })]);
+        for (var k = 0; k < inlines.Count; k++) { Inlines(inlines[k], pieces[k], para.Inlines); }
         rich.Blocks.Add(para);
         FitInlineMono(rich);
         return rich;
     }
 
-    static Inline Inline(MdInline inline)
+    // Each inline in its pieces (LongWords), cut where the paragraph needs a break, so a long word
+    // never fails WinUI's text layout (#493). Selecting and copying gives the text as written: the
+    // break is an empty element, never a character.
+    static void Inlines(MdInline inline, IReadOnlyList<string> pieces, InlineCollection into)
     {
         switch (inline)
         {
             case MdBreak:
-                return new LineBreak();
+                into.Add(new LineBreak());
+                break;
             case MdLink link:
+                for (var k = 0; k < pieces.Count; k++)
                 {
+                    if (k > 0) { into.Add(Break()); }
+                    if (pieces[k].Length == 0) { continue; }
+                    // A hyperlink holds only text, so a long one is drawn as several to the same place.
                     var h = new Hyperlink { NavigateUri = Uri.TryCreate(link.Url, UriKind.Absolute, out var u) ? u : null };
                     ToolTipService.SetToolTip(h, link.Url);
-                    h.Inlines.Add(Styled(new Run { Text = link.Text }, link.Style));
-                    return h;
+                    h.Inlines.Add(Styled(new Run { Text = pieces[k] }, link.Style));
+                    into.Add(h);
                 }
+                break;
             case MdText t:
-                return Styled(new Run { Text = t.Text }, t.Style);
+                for (var k = 0; k < pieces.Count; k++)
+                {
+                    if (k > 0) { into.Add(Break()); }
+                    into.Add(Styled(new Run { Text = pieces[k] }, t.Style));
+                }
+                break;
             default:
-                return new Run();
+                into.Add(new Run());
+                break;
         }
+    }
+
+    // A break opportunity of no width: an empty element a line may end at, which a selection
+    // copies as nothing. A zero-width space would be copied with the text.
+    static InlineUIContainer Break()
+    {
+        var empty = new Border { Width = 0, Height = 0 };
+        AutomationProperties.SetAccessibilityView(empty, AccessibilityView.Raw);
+        return new InlineUIContainer { Child = empty };
     }
 
     static Run Styled(Run run, MdStyle style)
@@ -288,7 +328,7 @@ public sealed class MarkdownView : StackPanel
     UIElement Quote(MdQuote q)
     {
         var inner = new StackPanel { Spacing = 6 };
-        foreach (var b in q.Blocks) { inner.Children.Add(Block(b)); }
+        foreach (var b in q.Blocks) { inner.Children.Add(Draw(b)); }
         return new Border
         {
             BorderBrush = Ui.Brush("AbStroke2"),
@@ -309,7 +349,7 @@ public sealed class MarkdownView : StackPanel
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             row.Children.Add(new TextBlock { Text = l.Ordered ? $"{n++}." : "•", HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 0, 6, 0) });
             var body = new StackPanel { Spacing = 4 };
-            foreach (var b in item) { body.Children.Add(Block(b)); }
+            foreach (var b in item) { body.Children.Add(Draw(b)); }
             Grid.SetColumn(body, 1);
             row.Children.Add(body);
             panel.Children.Add(row);

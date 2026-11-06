@@ -38,7 +38,8 @@ test('a changed plate colour makes every app icon stale but the plateless layers
   const unchanged = ['design/app-icon/android-foreground.svg', 'design/app-icon/android-monochrome.svg',
     `${cat}/Contents.json`, `${cat}/AppIcon.appiconset/Contents.json`, `${cat}/AppIcon.appiconset/ios-1024-dark.png`, `${cat}/AppIcon.appiconset/ios-1024-tinted.png`,
     `${cat}/MenuBarIcon.imageset/Contents.json`, `${cat}/MenuBarIcon.imageset/menubar.png`, `${cat}/MenuBarIcon.imageset/menubar@2x.png`,
-    'design/android/drawable/ic_launcher_foreground.xml', 'design/android/drawable/ic_launcher_monochrome.xml', 'design/android/drawable/ic_stat_slipgates.xml', 'design/android/mipmap-anydpi-v26/ic_launcher.xml'];
+    'design/android/drawable/ic_launcher_foreground.xml', 'design/android/drawable/ic_launcher_monochrome.xml', 'design/android/drawable/ic_stat_slipgates.xml', 'design/android/mipmap-anydpi-v26/ic_launcher.xml',
+    'pwa/icons/monochrome-192.png', 'pwa/icons/monochrome-512.png', 'pwa/icons/badge-96.png'];
   assert.deepEqual(staleAppIcons(root), Object.keys(appIconTargets(appIconSpec(path.join(root, 'design')))).filter((f) => !unchanged.includes(f)));
   writeAppIcons(root);
   assert.deepEqual(staleAppIcons(root), []);

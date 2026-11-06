@@ -185,6 +185,8 @@ them breaks installs, peers or saved data:
   - the worktree marker.
 - **Wire and storage:**
   - the crypto domain-separation labels and protocol vectors;
+  - "Bridge Protocol v1" (the protocol's name and its versioned profiles), kept until #541:
+    docs only, never person-facing;
   - the PWA's IndexedDB and localStorage keys;
   - the service worker's cache prefix and message names;
   - the JS globals `window.agentBridge*`.

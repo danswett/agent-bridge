@@ -49,6 +49,10 @@ public sealed class SessionService
     // may have arrived takes the session back from an agent at once, as one typed at the machine.
     public SessionDrivers? Drivers { get; init; }
     public TimeProvider Time { get; init; } = TimeProvider.System;
+
+    // hello's machine.restore (#780): what went with the machine or the host when it last stopped, or
+    // null. Set, it offers sessions.restore.
+    public Func<RestoreNotice?>? Restore { get; init; }
     // What each answer or reply request may take back, fixed when the request is first seen: the
     // session it named and the driver's generation then. Keyed by the request as the deliveries
     // remember it (its UUID, however it is spelt), so a resend, which they answer from the first
@@ -87,8 +91,31 @@ public sealed class SessionService
     // launch.trust.answer, through the relay only (FolderTrustAnswers).
     public FolderTrustAnswers? TrustAnswers { get; init; }
 
+    // Approve on an approval the host escaped anything in, confirmed from a person's device through
+    // the relay only (EscapedApprovals, #803).
+    public EscapedApprovals? EscapedApprovals { get; init; }
+
     // update.*, through the relay only, and never on a read-only machine (UpdateService).
     public UpdateService? Updates { get; init; }
+
+    // manage.*, through the relay only, from a person's device (ManageService, #801). Given one,
+    // this binds its restart's eligibility to the #800 sign-in below: a restart would cancel a
+    // pending sign-in (Connection, Q-C8 on #886), so none commits while that entrypoint is on.
+    public ManageService? Manage
+    {
+        get => manage;
+        init
+        {
+            manage = value;
+            value?.Eligibility?.BindSignIn(() => SignIn is not null && SignInEntrypointApproved);
+        }
+    }
+    readonly ManageService? manage;
+
+    // Framework only: no production auth factory/entrypoint is registered. Both gates
+    // remain off until Engineering approves the agent-owned private login path.
+    internal SignIn.AgentSignInService? SignIn { get; init; }
+    internal bool SignInEntrypointApproved { get; init; } = AgentSignIn.EnabledByDefault;
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
@@ -149,6 +176,12 @@ public sealed class SessionService
                 return Attach(channel, op, data);
             case Ops.SessionStop:
                 return await StopAsync(data);
+            case AgentSignIn.Start:
+                return SignInEntrypointApproved && SignIn is not null ? SignIn.Start(channel, data)
+                    : new { outcome = "refused", reason = "agent sign-in is not enabled" };
+            case AgentSignIn.Cancel:
+                return SignInEntrypointApproved && SignIn is not null ? await SignIn.CancelAsync(channel, data)
+                    : new { outcome = "refused", reason = "agent sign-in is not enabled" };
             case Ops.PushSubscribe or Ops.PushUnsubscribe or Ops.PushList when push is not null:
                 return await push.HandleAsync(channel, op, data);
             // Notifications turned off on this machine (push.enabled), or never set up: a device
@@ -179,6 +212,8 @@ public sealed class SessionService
                 return await usage.HandleAsync(channel, op, data);
             case UpdateProtocol.Get or UpdateProtocol.Subscribe or UpdateProtocol.Check or UpdateProtocol.Install when Updates is not null:
                 return await Updates.HandleAsync(channel, op, data);
+            case var manage when ManageProtocol.Ops.Contains(manage) && Manage is not null:
+                return await Manage.HandleAsync(channel, op, data);
             case Ops.SessionsList:
                 return source.List(String(data, "cursor"));
             case Ops.SessionGet:
@@ -325,7 +360,10 @@ public sealed class SessionService
         var (watch, progress) = Watch(request.Progress);
         if (answers is null) { return new AnswerResult(AnswerOutcome.Refused, "this host does not take answers; answer at the machine"); }
         var takeBack = BeginTakeBack(request.Id, request.Request);
-        var result = await answers.AnswerAsync(request, watch: watch);
+        // A confirmation is checked as coming from the device on the other end of a channel through
+        // the relay, and from nowhere else: on this machine's pipe it is none, and refused as such.
+        var confirmed = channel is SecureChannel secure && EscapedApprovals is { } escaped ? escaped.For(secure.PeerId, request) : null;
+        var result = await answers.AnswerAsync(request, watch: watch, confirmed: confirmed);
         // Typed from this device: it needs no notification that the question was answered.
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
         {
@@ -356,7 +394,7 @@ public sealed class SessionService
     {
         using (G5?.Hold())
         {
-            return new(1, machine with { Sessions = source.Snapshot().Count, ReadOnly = ReadOnly?.Invoke() }, Offered(channel));
+            return new(1, machine with { Sessions = source.Snapshot().Count, ReadOnly = ReadOnly?.Invoke(), Restore = Restore?.Invoke() }, Offered(channel));
         }
     }
 
@@ -383,7 +421,14 @@ public sealed class SessionService
     }
 
     // Only what a client acts on; machine.sessions changes all the time and is not a change here.
-    static string Said(string? readOnly, IEnumerable<string> offered) => (readOnly ?? "") + "\n" + string.Join("\n", offered);
+    // machine.restore is: a session judged after its agent's discovery was held is offered later.
+    static string Said(string? readOnly, RestoreNotice? restore, IEnumerable<string> offered) =>
+        (readOnly ?? "") + "\n" + Said(restore) + "\n" + string.Join("\n", offered);
+
+    // The whole notice as shaped for the channel: its cause, its time and what each offer says change
+    // too, with the counts the same (an uncertain session found live, the rest rebuilt; Copilot on
+    // #813).
+    static string Said(RestoreNotice? n) => n is null ? "" : JsonSerializer.Serialize(n, ProtocolJson.Options);
 
     void WatchHello(IProtocolChannel channel, HelloResult hello, Func<HelloResult, HelloResult>? shape)
     {
@@ -394,7 +439,7 @@ public sealed class SessionService
         });
         lock (watch)
         {
-            watch.Said = Said(hello.Machine.ReadOnly, hello.Capabilities);
+            watch.Said = Said(hello.Machine.ReadOnly, hello.Machine.Restore, hello.Capabilities);
             watch.Shape = shape;
         }
         lock (helloGate) { helloTimer ??= Time.CreateTimer(_ => CheckHellos(), null, HelloCheck, HelloCheck); }
@@ -424,13 +469,14 @@ public sealed class SessionService
                 Func<HelloResult, HelloResult>? shape;
                 lock (watch) { shape = watch.Shape; }
                 var readOnly = ReadOnly?.Invoke();
+                var restore = Restore?.Invoke();
                 var offered = Offered(channel);
                 string said;
-                if (shape is null) { said = Said(readOnly, offered); }
+                if (shape is null) { said = Said(readOnly, restore, offered); }
                 else
                 {
-                    var shaped = shape(new HelloResult(1, machine with { ReadOnly = readOnly }, offered));
-                    said = Said(shaped.Machine.ReadOnly, shaped.Capabilities);
+                    var shaped = shape(new HelloResult(1, machine with { ReadOnly = readOnly, Restore = restore }, offered));
+                    said = Said(shaped.Machine.ReadOnly, shaped.Machine.Restore, shaped.Capabilities);
                 }
                 lock (watch)
                 {
@@ -465,6 +511,7 @@ public sealed class SessionService
     List<string> Offered(IProtocolChannel channel)
     {
         List<string> offered = [Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus];
+        if (SignInEntrypointApproved && SignIn?.Offered(channel) == true) { offered.Add(AgentSignIn.Capability); }
         if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }
         if (answers?.ApprovesPermissions == true) { offered.Add(Capabilities.SessionsApprove); }
         if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }
@@ -481,7 +528,10 @@ public sealed class SessionService
         if (usage?.Shares == true) { offered.Add(UsageProtocol.SharedCapability); }
         if (launcher?.Available == true) { offered.Add(LaunchProtocol.Capability); }
         if (TrustAnswers?.Available == true && channel is SecureChannel) { offered.Add(TrustProtocol.Capability); }
+        if (answers?.Available == true && channel is SecureChannel peer && EscapedApprovals?.Offers(peer.PeerId) == true) { offered.Add(EscapedApproval.Capability); }
         if (Updates?.Offered(channel) == true) { offered.Add(UpdateProtocol.Capability); }
+        if (Restore is not null) { offered.Add(RestoreProtocol.Capability); }
+        if (Manage is not null) { offered.AddRange(Manage.Offered(channel)); }
         // Transfers are signed by a device through the relay, and go through its blob store.
         if (transfers is not null && channel is SecureChannel)
         {
