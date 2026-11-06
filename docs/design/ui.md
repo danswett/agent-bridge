@@ -738,8 +738,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     place among the tabs shown, the last of the others giving way to it.
   - **A long name** is cut short with "…" at `layout.windows.machineTab` (128 px). A tab's tooltip and
     accessible name are the whole name and the machine's state: "Build server · 3 sessions", with
-    "· View only" for a read-only machine (§6.6), "connecting…" while it connects, and "offline"
-    while it is away ("A machine away").
+    "· View only" for a read-only machine (§6.6), "connecting…" while it connects, "offline"
+    while it is away ("A machine away"), and "bridge isn't running" once its host is gone (§6.14).
   - **Keyboard:** the arrows move through the tabs shown, Tab goes on to More, and Enter or Space
     opens its menu. Touch and the mouse reach More as any button.
   - It holds at the narrowest list (264, §5.2) and in one column. The PWA's tabs still scroll
@@ -1575,6 +1575,8 @@ machine, online ones first, then the account's offline machines (#213):
 - **A machine away (§6.1):** listed once, as offline ("Offline", and "Last seen 2m ago" on line
   2), with Forget, both while its rows are kept and after they have gone. A client whose relay
   keeps no roster lists it so only while its rows are kept.
+- **A machine whose bridge isn't running (§6.14, proposed):** still "Offline" on line 1, and
+  line 2 says "Bridge isn't running · since *time*" in place of "Last seen…".
 
 ### 6.7 Collaborators (#519)
 
@@ -2019,7 +2021,7 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
 - **Where:** text on the row's line 2 (§6.1), as one of its two facts. The other fact is the
   usual one, so it follows the facts-on-a-line rules (#214).
 - **Text:** "Restored after a reboot · 03:12" when `cause` is `reboot`, and "Restored after the
-  host restarted · 03:12" when it is `crash`. The time is `restored.at` in the client's time
+  bridge restarted · 03:12" when it is `crash`. The time is `restored.at` in the client's time
   format, as every time on the row is.
 - **Form:** the row's existing secondary text tokens. No new glyph, no colour, no badge. The
   status glyph still says what the session is doing (§2.2), which is idle.
@@ -2040,7 +2042,7 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
   phone); past that, the area scrolls inside itself. Every notice's full text and buttons stay
   reachable by keyboard and screen reader, and the page under the banners is never pushed out of
   view.
-  - Title: "*machine* restarted after a reboot at 03:12" (`cause: reboot`) or "*machine*'s host
+  - Title: "*machine* restarted after a reboot at 03:12" (`cause: reboot`) or "*machine*'s bridge
     restarted at 03:12" (`cause: crash`), from `at`. With `signedInAt`, the reboot title ends
     "… · restored when you signed in at 08:40".
   - "Restored *n* sessions" (`restored`).
@@ -2099,12 +2101,19 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
 
 - One per machine per start, and only if something died. The host decides; a client never adds
   one per session.
-- **Text:** title "*machine* restarted", body "Restored *n* sessions · *m* need you" when there
+- **Text:** title "*machine* restarted" after a reboot, "*machine* · the bridge stopped" after a
+  crash ("bridge", never "host", Creative #1022), body "Restored *n* sessions · *m* need you" when there
   are lost questions or failures, else "Restored *n* sessions". When offered only: "*n* sessions
   can be restored at the machine".
 - **Sound:** none. Decision #764 keeps sound for pending questions and approvals only, so this
   notice is silent on every platform. The push payload sets `notification.silent: true`, so an
-  older service worker that shows kind `restored` as a `question` stays silent too.
+  older service worker that shows kind `restored` as a `question` stays silent too. **Except
+  (#970, proposed):** a restore notice that replaces a "bridge isn't running" alert, on that
+  alert's tag, alerts as Needs you does, with the question sound, never silently: the person
+  still has something to answer (§6.14).
+- **Withdrawal:** #780 withdraws no restore push today. If it ever does, it withdraws on
+  whichever tag the notice went on, and once withdrawn nothing about a replaced gone alert comes
+  back (§6.14).
 - **Opening it** opens the machine's session list, with the notice over it.
 - An older service worker shows kind `restored` as a `question`; that is accepted.
 
@@ -2126,7 +2135,7 @@ arrives, as a `question`.
 
 | | Reboot (`cause: reboot`) | Host crash (`cause: crash`) |
 |---|---|---|
-| Restored, idle | Mark "Restored after a reboot · 03:12"; counted in the notice | Mark "Restored after the host restarted · 03:12"; counted |
+| Restored, idle | Mark "Restored after a reboot · 03:12"; counted in the notice | Mark "Restored after the bridge restarted · 03:12"; counted |
 | Restored mid-turn (`midTurn`) | Mark; Continue above the reply box; "mid-turn" line | Same |
 | Offered only (G5 or setting off; `offered`) | No mark (nothing started); notice "*n* sessions can be restored at the machine" | Same |
 | Failed (`failed`) | No mark; notice "Couldn't be restored: *title* (*reason*)" | Same |
@@ -2147,8 +2156,8 @@ arrives, as a `question`.
 
 | Use | Text |
 |---|---|
-| Row mark | "Restored after a reboot · *time*" / "Restored after the host restarted · *time*" |
-| Notice title | "*machine* restarted after a reboot at *time*" / "*machine*'s host restarted at *time*" |
+| Row mark | "Restored after a reboot · *time*" / "Restored after the bridge restarted · *time*" |
+| Notice title | "*machine* restarted after a reboot at *time*" / "*machine*'s bridge restarted at *time*" |
 | Signed in | "restored when you signed in at *time*" |
 | Restored | "Restored *n* sessions"; "Can continue: *title*, *title*"; "*n* were mid-turn" |
 | Offered | "*n* sessions can be restored at the machine" |
@@ -2157,7 +2166,7 @@ arrives, as a `question`.
 | Loop | "*n* sessions weren't restored again because they died within 10 minutes" |
 | Close | "Dismiss restore notice on *machine*" |
 | Button | "Continue" (name "Continue *title*") |
-| Push | "*machine* restarted" / "Restored *n* sessions · *m* need you" |
+| Push | "*machine* restarted" (reboot) / "*machine* · the bridge stopped" (crash); "Restored *n* sessions · *m* need you" |
 | Toggle | "Restore sessions after a reboot or crash" |
 
 **Platforms**
@@ -2366,6 +2375,127 @@ never adds a count to it; the count, and for Home Assistant the sessions' names,
   "Not responding", "Not authorised", "Rate limited", "Agent error"). Its sign-in notice follows
   the pattern above: the plain title, and "*n* sessions: *A*, *B*" as its message. Never the code
   or URL, and no Sign in.
+
+### 6.14 A machine whose bridge isn't running (#970)
+
+**Proposed; not built.** The words are Creative's and the design is confirmed by Product, on #1022 (6691202710, 6691211514). When a machine's host
+has stopped, nothing on it can tell the person: pushes, toasts and Home Assistant notices all
+come from the host. The relay outlives it, so the relay decides when a host is gone, and both
+clients say so from the relay's presence (`presence.known[].offline.gone`,
+[host-gone.md](../protocol/host-gone.md)). The design is Product's
+([#800 6676984805](https://github.com/danswett/agent-bridge/issues/800#issuecomment-6676984805)).
+
+**When it shows.** Only once the relay sets `gone`: the host went without announcing it, with
+evidence that the bridge stopped while the machine is up, and it hasn't come back within
+5 minutes, which leaves time for #805 to restart it first. So:
+
+| The machine | What the clients show |
+|---|---|
+| Its host went less than 5 minutes ago | What §6.1's "A machine away" shows now: "Reconnecting…", then "Offline · last seen…" |
+| Its host announced the departure: an update, a restart, a stop, sleep, shut down, a reboot, sign-out (#805) | #805's planned state, never this |
+| It went silent (switched off, asleep, off the network) and nothing shows the bridge stopped | "Offline", as now, and no push or toast, even with work in flight (Product, #1022: we can't truthfully say the bridge stopped) |
+| Its host is gone | This section |
+
+It goes as soon as the host is listed online again, and when the machine is forgotten or the
+account changes.
+
+**On the Machines page (§6.6).** The machine's row stays an offline row, with line 2 saying why:
+
+- Line 1: the machine icon, the name, and "Offline", as any offline row.
+- Line 2: "Bridge isn't running · since *time*", in place of "Last seen…". The since time is
+  `gone.since`, when the host first went in this episode, which is earlier than "last seen"
+  when it came back briefly in between. The name isn't repeated: it is on line 1 (every element
+  has a purpose).
+- Inside the row: Forget, as for any offline machine, and nothing else yet. When #801's remote
+  restart exists it adds its one action here and on the banner, in #801's words. Never an
+  instruction to go to the machine, now or later.
+
+**On the machine tab (§6.1).** A banner at the top of the session list, above Needs you, in the
+place and style of §6.13's machine banner: "*machine*'s bridge isn't running · since *time*".
+One per machine; it shows with that machine's tab chosen and with All. Not dismissible while it
+lasts; it goes by itself when the host is back. No button until #801's. The tab's tooltip and
+accessible name, and its entry in the "N more" menu, read "*machine* · bridge isn't running".
+The machine's rows keep §2.2's away treatment ("Offline · last seen…") until §6.1's 15 minutes
+take them; the banner says why, so the rows don't repeat it.
+
+**Never claim an agent state we can't see.** Nothing in the line, the row or the banner says
+what the sessions are doing: the host was the only thing that could see them, and it's gone.
+The agents may well still be running at the machine. Nor does any of it say why the host
+stopped ("crashed", "killed"): the relay can't know.
+
+**Time.** "since *time*" is when the relay saw the host go (`gone.since`), in the viewer's local
+time zone and time format, as every time in the app (§6.4): "since 8:31 AM" today; "since
+yesterday, 11:02 PM"; "since Tue, 11:02 PM" within the last week; "since Nov 3, 11:02 PM"
+before that. No zone is added: it is one instant shown in the viewer's own zone, not another
+machine's clock. The tooltip and accessible name give the full date and time ("since Friday,
+November 6, 8:31 AM").
+
+**Tone.** Plain and calm, a fact rather than an alarm: the machine is named, the state is said,
+and there is no exclamation, no "error" and no blame. The banner is informational, never the
+`failed` colour (§3): nothing went wrong with what the person did.
+
+**The push and the toast.** One notice, only if any agent there, a delegate included, was
+working or waiting when the host went (the host arms it in advance; the relay sends it, v1-sessions.md
+[Host gone](../protocol/v1-sessions.md#host-gone-970)). A machine that's simply off, with nothing
+in flight, notifies nothing.
+
+| | Title | Body |
+|---|---|---|
+| Push (PWA), toast (Windows app) | "*machine*'s bridge isn't running" | "It stopped while sessions there were working or waiting on you." |
+| When the host is back with nothing to restore (push only, silent, replacing the one above) | "*machine*'s bridge is running again" | "You can reach its sessions again." |
+
+- **One notice on return, never two** (Creative, #1022). If the bridge's return brings §6.12's
+  restore notice (sessions went with it, whatever the cause), that notice replaces the alert in
+  place, on the same tag, and "…is running again" is never sent: it would say the sessions can
+  be reached when some were lost. "…is running again" goes only when there is nothing to
+  restore: once the bridge has been back 2 minutes and its restore check has found nothing. A
+  device the alert didn't reach gets the restore notice as today. The Windows app toasts once
+  per episode, even if the bridge flaps, and removes its gone toast once the bridge has been back
+  2 minutes, or replaces it with the restore toast, so that is the only one left. The mechanism is
+  in host-gone.md ("When the host comes back").
+  - The restore notice that replaces the alert **alerts** as Needs you does today, with the
+    question sound, never silently: the person still has something to answer.
+  - Once §6.12's withdrawal takes the restore notice away, nothing about the alert comes back:
+    the alert was replaced, not stacked.
+
+- **Tier:** Needs you: it interrupts, with the question sound, sent once per episode (#913).
+  It doesn't count in Needs you's N, its filter or the app badge: N counts questions and
+  approvals only (owner decision, 2026-11-05), and nothing on a session row fixes this. #805's
+  rule for a machine offline unexpectedly still governs every machine that isn't gone
+  ([v1-sessions.md](../protocol/v1-sessions.md#notification-class-913), "What a host classes
+  today"); this section governs one that is.
+- **Once.** One per machine per episode, at most one an hour per machine and three a day per
+  account, shared with #805's no-return notice. A device on screen gets it too: the banner is
+  easy to miss on another tab.
+- **The body** is sealed by the host before it went, so it never carries the time, a count or
+  a session's name (any of them could be stale). The notification's own time says when it came.
+- **Opening it** opens the client on that machine's tab, with the banner.
+- **The Windows app** gets no Web Push: it raises the same toast once from the relay's presence
+  (`gone.alert`), which the relay sets whenever work was in flight, whether or not any browser
+  was subscribed. The app on the machine whose host died alerts the same way, as any other
+  client.
+- **Home Assistant:** nothing new. Its connector runs inside the host, so it can't say this.
+
+**Accessibility (§9.1).** The banner is a polite live region, announced once per machine and
+episode (A6). The row's accessible name reads "*machine*, offline, bridge isn't running since
+*full time*". Every state is told by its words, not its colour.
+
+**Copy**
+
+| Use | Text |
+|---|---|
+| Machines row, line 2 | "Bridge isn't running · since *time*" |
+| Banner | "*machine*'s bridge isn't running · since *time*" |
+| Machine tab tooltip and "N more" entry | "*machine* · bridge isn't running" |
+| Push and toast title | "*machine*'s bridge isn't running" |
+| Push and toast body | "It stopped while sessions there were working or waiting on you." |
+| Push when back with nothing to restore (silent) | "*machine*'s bridge is running again"; "You can reach its sessions again." |
+
+**Platforms**
+
+- **Windows app and PWA:** the row on the Machines page, and the banner at the top of the
+  session list (in the list's header in the app), as §6.13's.
+- **Apple (#260):** note only. The same fields; the native form is that track's decision.
 
 ## 7. Platform shells
 

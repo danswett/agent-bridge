@@ -49,6 +49,11 @@ are **not** connected now, most recently seen first.
 | `kind` | Always `host` |
 | `lastSeen` | When it was last connected (ISO 8601, UTC) |
 
+Proposed, not implemented: #805's draft ([#815](https://github.com/danswett/agent-bridge/pull/815))
+adds an optional `offline` object saying how and why the machine went, and #970 adds `gone`
+inside it once the relay judges that the machine's host has stopped ([host-gone.md](host-gone.md)).
+A client that doesn't know them ignores them.
+
 A relay without a roster (an older one, or one configured with `Relay:Roster:Backend` `off`)
 sends no `known`, and a client then lists only what is online and offers no Forget. Nor does a
 relay that has not yet read the account's stored roster (the store was down when the device
