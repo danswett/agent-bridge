@@ -2184,8 +2184,8 @@ host's side is [restore-run.md](../protocol/restore-run.md) (`restore.run`, capa
 `sessions.restore.run`). Nothing here changes the notice above until it is accepted. Folder trust
 stays a person's at the machine (#947).
 
-- **When the notice offers it:** the notice names sessions in `offered`; its `why` is `off` (and
-  `pending`, if Product says so: restore-run.md P2); the machine's hello offers
+- **When the notice offers it:** the notice names sessions in `offered`; its `why` is `off` or
+  `pending` (decided, Product P2 on #1033); the machine's hello offers
   `sessions.restore.run`; and the machine is not read-only. Otherwise the Offered line stays
   "*n* sessions can be restored at the machine", with no button: under G5, on a host or a channel
   that can't act (an older host, a device the host doesn't take as a person's), in Home Assistant,

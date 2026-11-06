@@ -56,19 +56,20 @@ Request `data`:
 | `sessions` | The ids the confirmation listed, 1 to 20, in the offer's order, no repeats. Each must be in `machine.restore.offered` now; one that is not (resumed from Launch meanwhile, restored from another device, seen live again or let go) is answered `refused`, "no longer offered", and the rest go on |
 | `progress` | Optional. `true` from a client that wants a frame as each session is tried (below) |
 
-**Which sessions (recommended: all that are named, in one press).** A client sends every id the
-notice names, which the confirmation lists; it has no per-session checkboxes. One decision, one
-button and one confirmation keep a phone short; choosing among them is what Launch's resume list
-is for, and every offered session is there too. The op takes a list rather than "all" so the host
-restores exactly what the person saw, never one judged or added after they looked. Sessions the
-notice counts but does not name (`offeredMore`) are not restored from here: the confirmation says
-to resume them from Launch (open question P3).
+**Which sessions (decided, Product P1 and P3, 6692164742): all that are named, in one press.** A
+client sends every id the notice names, which the confirmation lists; it has no per-session
+checkboxes. One decision, one button and one confirmation keep a phone short; choosing among them
+stays with Launch's resume list, where every offered session is too. The op takes a list rather
+than "all" so the host restores exactly what the person saw, never one judged or added after they
+looked. Sessions the notice counts but does not name (`offeredMore`) are not restored from here:
+the confirmation says to resume them from Launch.
 
-**Which offers.** Those whose notice `why` is `off` (the setting is off) or `pending` (kept for a
-person: a restore that was refused or failed, or died again too soon). Not `readOnly`: the
-capability is not offered then, and the op is refused. A `why` a host does not know is not one it
-sends. Whether a client shows the button for `pending` as well as `off` is open question P2; the
-host takes both.
+**Which offers (decided, Product P2).** Those whose notice `why` is `off` (the setting is off) or
+`pending` (kept for a person: a restore that was refused or failed, or died again too soon), and
+a client shows the button for both. A **loop** (`offered[].loop`, below) is not left out: the
+confirmation marks it (Product's example: "ended within 10 minutes twice"; the words are
+Creative's) and the person decides. A choice is never hidden. Not `readOnly`: the capability is
+not offered then, and the op is refused. A `why` a host does not know is not one it sends.
 
 ### What the host does
 
@@ -98,15 +99,17 @@ host takes both.
    - the Stop marker looked at again with the pipe open before any agent is resumed (#988);
    - no prompt: the session opens **idle** and nothing is typed. Replies to it are refused while
      its window has not been seen ready (`LaunchHeld`), and it is marked `restored`, with
-     Continue when it went mid-turn, only once it has been (#855);
+     Continue when it went mid-turn, and counted in `machine.restore.restored`, only once it has
+     been (#855): an attempt answered `unconfirmed` is kept apart, as `RestoreAsync` keeps it, and
+     counted then only if its window is seen ready later (`SeenReadyLate`);
    - its settings are what this host launched it with, each kept only while `launch.options`
      still offers it, and one started by hand asks permission, never Allow all.
-3. **A `busy` stops the run.** The first session answered `busy` (a folder-trust question waiting,
-   discovery held) ends it: every one after it is answered `busy` too, "not tried: *reason*", and
-   stays offered. Launches would be `busy` for the same reason, and a press is never queued to run
-   later on its own. `unconfirmed` (started, but its session had not registered, or a question
-   waits in its window) does not stop the run unless it leaves launches `busy`, as a folder-trust
-   question does for two minutes.
+3. **A `busy` stops the run (decided, Product P5).** The first session answered `busy` (a
+   folder-trust question waiting, discovery held) ends it: every one after it is answered `busy`
+   too, "not tried: *reason*", and stays offered. Launches would be `busy` for the same reason,
+   and a press is never queued, or tried again, to run later on its own. `unconfirmed` (started,
+   but its session had not registered, or a question waits in its window) does not stop the run
+   unless it leaves launches `busy`, as a folder-trust question does for two minutes.
 4. **Progress.** With `"progress": true` the host sends one frame as each session's attempt ends,
    before the response, as [Progress](v1-sessions.md#progress) frames are: `re`, a `progress`
    object and no `ok`. A run takes up to about a minute a session (a resume waits 60 s for its
@@ -125,43 +128,61 @@ host takes both.
 `{ "outcome", "reason", "sessions": [{ "id", "outcome", "reason" }] }`.
 
 Per session, `outcome` is `session.launch`'s ([v1-launch.md](v1-launch.md#sessionlaunch)), with its
-meaning: `started` (registered and seen ready: it is restored), `unconfirmed` (started; check at the
-machine; never retried), `failed` (tried, and the agent did not run), `busy` (nothing started; it
-stays offered) or `refused` (nothing started; it stays offered, or was no longer offered). `reason`
-is present for anything but `started`, in words a client shows as sent.
+meaning: `started` (registered and seen ready: it is restored), `unconfirmed` (its agent was
+started, but its session had not registered or a question waits in its window; check at the
+machine; never retried, and not restored unless it is seen ready later), `failed` (tried, and the
+agent did not run), `busy` (nothing started; it stays offered) or `refused` (nothing started; it
+stays offered, or was no longer offered). `reason` is present for anything but `started`, in words
+a client shows as sent. A session's outcome in the result is what its attempt ended as: one
+`unconfirmed` that is seen ready later is counted restored in the notice then, and the result is
+not sent again.
 
-Overall `outcome`:
+Overall `outcome`, from the per-session outcomes of a run that was tried (*S* `started`, *U*
+`unconfirmed`, *X* `failed`, `busy` or `refused`, of *N* listed), first row that holds:
 
-| `outcome` | When |
-|---|---|
-| `restored` | Every listed session `started` |
-| `partial` | At least one `started` or `unconfirmed`, and at least one did not start |
-| `none` | Each was tried, or answered, and none started |
-| `busy` | Nothing tried: another run is under way, or the record cannot take a stamp. `reason` says which |
-| `refused` | Nothing tried: the whole request was refused. `reason` says why |
+| `outcome` | When | For example |
+|---|---|---|
+| `refused` | Nothing tried: the whole request was refused. `reason` says why | Read-only, an offer from an earlier run |
+| `busy` | Nothing tried: another run is under way, or the record cannot take a stamp. `reason` says which | Another device's run |
+| `restored` | *S* = *N*: every listed session `started` | 3 `started` |
+| `partial` | Otherwise, *S* + *U* ≥ 1: something started, and at least one session is `unconfirmed` or did not start | 1 `unconfirmed` alone; 2 `started` and 1 `unconfirmed`; 1 `unconfirmed` and 1 `refused`; 1 `started` and 2 `busy` |
+| `none` | Otherwise (*S* + *U* = 0): each was tried or answered, and no agent was started | 2 `refused`; 1 `failed` and 2 `busy` |
 
-A client reads an overall `outcome` it does not know as `partial`, and a session's as
-`unconfirmed`: something may have started.
+So `restored` is said only when every session is restored, any `unconfirmed` makes a run
+`partial`, and a run's outcome is always exactly one of these. A client reads an overall `outcome`
+it does not know as `partial`, and a session's as `unconfirmed`: something may have started.
 
 ## What changes in the record
 
-- **A session restored from a client is consumed from the offer,** as a resume from Launch
-  consumes it today ("unless it is resumed or seen live again"): once its restore starts, it leaves
-  `offered`, `restored` counts it, and `hello.changed` tells every channel, so another device's
-  notice and confirmation shrink with it. One that dies again within 10 minutes is a loop, as any
-  restore's: offered again, counted in `loops`, and not restored by the host again.
-- **One that does not start stays offered** with the time it was first offered: a press neither
-  renews nor shortens the 7 days an owed offer is kept (`OwedFor`), and the notice still goes 24
-  hours after the host started, or with this run. A person can restore from a client only what the
-  current notice offers; an owed offer still kept after the notice has gone is resumed from Launch,
-  as today.
-- **With `sessions.restoreOnStart` off,** what died is still not kept owed, and a later start still
-  offers none of it: that is what off means. What changes is this run only: for as long as the
-  notice offers them (this run, 24 hours at most), the host keeps the sessions it **said** (their
-  entries and launch settings, from the record it read at start) so that `restore.run` can resume
-  them with the settings they had, and keeps their folders from the worktree reclaimer for that
-  time, as an owed offer's. Restored, one is stamped in `stamps` as a restore on request is, and
-  leaves the offer.
+Two things are kept apart: **leaving the offer** (so no second press starts the same session
+again) and **being counted restored** (`machine.restore.restored`: sessions seen ready, as today).
+
+- **A session leaves the offer once its agent is started** (`started` or `unconfirmed`), as a
+  resume from Launch takes a session off `resumable` while its launch's agent runs, and as a
+  resume consumes an owed offer today ("unless it is resumed or seen live again"). `hello.changed`
+  tells every channel, so another device's notice and confirmation shrink with it, and an id sent
+  again meanwhile is `refused`, "no longer offered". One whose agent ends before its session
+  registers is offered again, with the time it was first offered; one that dies within 10 minutes
+  of being seen ready is a loop, as any restore's: offered again, counted in `loops`, and not
+  restored by the host again.
+- **A session is counted restored only once it is seen ready:** `started`, or `unconfirmed` and
+  seen ready later (`SeenReadyLate`), exactly as a start-up restore is. Until then it is in neither
+  `offered` nor `restored`, and its stamp holds (crash-loop protection and its worktree), as an
+  unconfirmed start-up restore's does. (A start-up restore answered `unconfirmed` stays in
+  `offered` until it registers, [host-launch.md](../host-launch.md#restoring-after-a-reboot-or-a-crash);
+  whether it should leave the offer too is open question E3.)
+- **One that does not start** (`failed`, `busy`, `refused`) **stays offered** with the time it was
+  first offered: a press neither renews nor shortens the 7 days an owed offer is kept (`OwedFor`),
+  and the notice still goes 24 hours after the host started, or with this run. A person can restore
+  from a client only what the current notice offers; an owed offer still kept after the notice has
+  gone is resumed from Launch, as today.
+- **With `sessions.restoreOnStart` off (decided, Product P4),** what died is still not kept owed,
+  and a later start still offers none of it: that is what off means. What changes is this run only:
+  for as long as the notice offers them (this run, 24 hours at most; a host restart forgets them),
+  the host keeps the sessions it **said** (their entries and launch settings, from the record it
+  read at start) so that `restore.run` can resume them with the settings they had, and keeps their
+  folders from the worktree reclaimer for that time, as an owed offer's. Restored, one is stamped in
+  `stamps` as a restore on request is, and leaves the offer as above.
 - **With the setting off because `config.json` could not be read** (`RestoreKept`), what died is
   kept owed, as when it is on, and `restore.run` takes it as a `pending` offer.
 
@@ -201,10 +222,19 @@ Host (`AgentBridge.Host.Core.Tests`, `AgentBridge.Host.Tests`):
 - a second run from another device while one is under way is busy
 - an offer from an earlier run of the host is refused whole
 - an id no longer offered is refused and the others are restored
-- a restored session leaves the offer and every channel is told with hello.changed
+- a session whose agent is started leaves the offer and every channel is told with hello.changed
+- a session answered unconfirmed leaves the offer but is not counted restored
+- an unconfirmed session seen ready later is counted restored then, and the run's result is not sent
+  again
+- an unconfirmed session whose agent ends before it registers is offered again
+- a run whose only session is unconfirmed is partial
+- a run of started and unconfirmed sessions is partial
+- a run in which every session started is restored
+- a run in which no agent was started is none
 - a session that does not start keeps its place and its seven days in the offer
 - with restoreOnStart off a run restores what this run said, with the settings it was launched with
-- with restoreOnStart off what a run did not restore is not offered by the next start
+- with restoreOnStart off what a run did not restore is not offered by the next start, nor after a
+  host restart
 - with restoreOnStart off the folders of what was said are kept from the reclaimer while the notice
   offers them
 - a session restored from a client that dies within ten minutes is offered again as a loop and is
@@ -216,8 +246,10 @@ Protocol and PWA (`AgentBridge.Protocol.Tests`, `pwa/test/unit`, `pwa/test/*.spe
 
 - a restore.run result whose session entry cannot be read is refused whole
 - an unknown overall outcome reads as partial and an unknown session outcome as unconfirmed
-- the notice offers Restore only with sessions.restore.run, an offer whose why is off, and a machine
-  that is not read-only
+- the notice offers Restore only with sessions.restore.run, an offer whose why is off or pending,
+  and a machine that is not read-only
+- the confirmation marks a session that ended within ten minutes of its last restore, and still
+  lists it
 - under agent-ha-bridge the notice says the sessions can be restored at the machine and offers no
   button
 - the confirmation lists the offered titles cleaned and capped, and says how many more it leaves to
@@ -236,27 +268,24 @@ Cancel, and the pipe run as the app.
 - `offered[].loop: true` on a session that is offered because it died again within 10 minutes of
   a restore (one of those `loops` counts), so a confirmation can say so before a person restores it
   once more. Absent otherwise; a client that does not know it ignores it.
-- `restored` counts the sessions restored this run, at start or from a client.
+- `restored` counts the sessions restored this run and seen ready, at start or from a client, as
+  it does today. A session that has left the offer and is not yet seen ready (`unconfirmed`) is in
+  neither `offered` nor `restored`.
 
 Nothing else in the notice changes, and nothing is added to the `restored` push.
 
+## Decided
+
+Product, [6692164742](https://github.com/danswett/agent-bridge/pull/1033#issuecomment-6692164742):
+
+- **P1:** all the notice names, in one press; a subset stays with Launch's resume list.
+- **P2:** the button for `pending` too, not only `off`. A loop is marked in the confirmation (for
+  example "ended within 10 minutes twice") and the person decides; a choice is never hidden.
+- **P3:** `offeredMore` goes to Launch.
+- **P4:** with the setting off, this run only, 24 hours at most, forgotten on a host restart.
+- **P5:** a run stops at the first `busy`, with no automatic retry.
+
 ## Open questions
-
-**Product**
-
-1. P1, all named or a chosen subset? Recommended: all the notice names, in one press; picking is
-   Launch's.
-2. P2, the button for `why: pending` too (a restore that was refused or failed, or a loop), or only
-   for `off` as #790 decided? The host takes both; recommended: both, with loops marked in the
-   confirmation.
-3. P3, `offeredMore` (past 20, or left out for size) is not restored from here; the confirmation
-   says to resume them from Launch. Acceptable?
-4. P4, with the setting off, an offer lasts this run and 24 hours at most, and a host restart
-   forgets it (off keeps nothing across starts). Acceptable, or should off keep the offer owed for
-   7 days like `pending`?
-5. P5, a run ends at the first `busy` rather than waiting and trying again on its own. Acceptable?
-
-**Creative**
 
 1. C1, the words in ui.md §6.12's proposed Copy rows: the button, the confirmation's title, body,
    list lines and buttons, the running line and the outcome lines.
@@ -281,6 +310,10 @@ Nothing else in the notice changes, and nothing is added to the `restored` push.
 1. E1, slices: (1) host and protocol: the op, the capability, the record changes, vectors; (2) PWA;
    (3) Windows app. Each after this spec is accepted.
 2. E2, the long run: progress frames and a 90-second resend rather than a new event.
+3. E3, a start-up restore answered `unconfirmed` stays in `offered` until its session registers
+   (host-launch.md), while one from a client leaves the offer once its agent is started, so no
+   second press starts it again. Should the start-up queue's take it off the offer too, so the two
+   read alike?
 
 ## Not in this
 
