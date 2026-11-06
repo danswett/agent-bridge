@@ -64,8 +64,11 @@ test.describe('on a phone', () => {
 
     await hold(page);
     await q.locator('.choice[data-value="sqlite"]').tap();
-    // While it is on its way: progress, and nothing can be tapped again.
-    await expect(q.locator('.answer-status')).toHaveText('Sending…');
+    // While it is on its way: the ring on the option tapped, heard and not seen (ui.md §6.5), and
+    // nothing can be tapped again.
+    await expect(q.locator('.receipt-live')).toHaveText('Sending answer');
+    await expect(q.locator('.answer-status')).toHaveText('');
+    expect(await q.locator('.choice[data-value="sqlite"]').evaluate((b) => getComputedStyle(b, '::after').content)).not.toBe('none');
     await expect(q.locator('.answer')).toHaveAttribute('aria-busy', 'true');
     await expect(q.locator('.choice[data-value="pg"]')).toBeDisabled();
     await expect(q.locator('.choice[data-value="sqlite"]')).toHaveAttribute('aria-pressed', 'true');
@@ -74,12 +77,73 @@ test.describe('on a phone', () => {
     // Delivered: the host's upsert takes the question away, and the card says what happened.
     await expect(q).toHaveCount(0);
     const receipt = card(page, CODEX).locator('.answer-receipt');
-    await expect(receipt).toHaveText('Your answer: Delivered. The session has your answer.');
+    await expect(receipt).toHaveText('You answered · SQLite');
     await expect(receipt).toHaveAttribute('data-answer', 'delivered');
     const [sent] = await log(page);
-    expect(sent).toEqual({ id: CODEX, question: 'q-choice', request: expect.stringMatching(UUID), fields: { answer: 'sqlite' } });
+    expect(sent).toEqual({ id: CODEX, question: 'q-choice', request: expect.stringMatching(UUID), fields: { answer: 'sqlite' }, progress: true });
     expect(await typed(page)).toHaveLength(1);
     await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
+  });
+
+  test('an option\'s ring has a slot of its own at its end, clear of its words and its badge, so the option never resizes as it comes', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, choice({ default: 'pg' }));
+    const pg = q.locator('.choice[data-value="pg"]');
+    const before = await pg.boundingBox();
+    await hold(page);
+    await pg.tap();
+    await expect(q.locator('.answer')).toHaveAttribute('aria-busy', 'true');
+    const fit = await pg.evaluate((b) => {
+      const ring = getComputedStyle(b, '::after');
+      const px = (v) => parseFloat(v) || 0;
+      const reach = px(ring.right) + px(ring.width) + (ring.boxSizing === 'border-box' ? 0 : px(ring.borderLeftWidth) + px(ring.borderRightWidth));
+      const end = Math.max(...[...b.querySelectorAll('*')].map((c) => c.getBoundingClientRect().right));
+      return { reach, room: b.getBoundingClientRect().right - end, badges: b.querySelectorAll('.badge').length };
+    });
+    expect(fit.badges).toBeGreaterThan(0);
+    expect(fit.room).toBeGreaterThanOrEqual(fit.reach);
+    expect(await pg.boundingBox()).toEqual(before);
+    await release(page);
+  });
+  test('an answer is heard as sent, keeps its ring on the option tapped once the host takes the question away, shows the check, then resolves to You answered with its value, with no badge (#600)', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, choice());
+    await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.holdBefore('typing'); h.holdBefore('result'); });
+    await q.locator('.choice[data-value="pg"]').tap();
+    await expect(q.locator('.receipt-live')).toHaveText('Answer sent');
+    await expect(q.locator('.answer-status')).toHaveText('');
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseBefore('typing'));
+    // Typed: the host's upsert takes the question away, but not the answer's ring (ui.md §6.5, tap to
+    // answer): the panel stays while the answer is open, the option tapped pressed and nothing to tap.
+    await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
+    const pg = q.locator('.choice[data-value="pg"]');
+    await expect(pg).toHaveAttribute('aria-pressed', 'true');
+    await expect(q.locator('.choice[data-value="sqlite"]')).toBeDisabled();
+    expect(await pg.evaluate((b) => getComputedStyle(b, '::after').content)).not.toBe('none');
+    await expect(q.locator('.answer-status')).toHaveText('');
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseBefore('result'));
+    // Delivered: the check on the option, then the card resolves to what was answered.
+    await expect(pg).toHaveClass(/\bchecked\b/);
+    await expect(q).toHaveCount(0);
+    const receipt = card(page, CODEX).locator('.answer-receipt');
+    await expect(receipt).toHaveText('You answered · PostgreSQL (Recommended)');
+    await expect(receipt.locator('svg')).toHaveCount(0);
+    const [timing] = await page.evaluate(() => window.agentBridgeDemo.timings());
+    expect(timing).toMatchObject({ kind: 'answer', outcome: 'delivered', host: { typed: expect.any(Number) } });
+    expect(timing.client.map(([mark]) => mark)).toEqual(['sent', 'received', 'typed', 'result']);
+  });
+  test('with Other… open, an option tapped instead has the ring and Send answer has none', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, choice({ allowOther: true }));
+    await q.locator('.other-toggle').tap();
+    await expect(q.locator('button.send')).toBeVisible();
+    await hold(page);
+    await q.locator('.choice[data-value="sqlite"]').tap();
+    await expect(q.locator('.answer')).toHaveAttribute('aria-busy', 'true');
+
+    expect(await q.locator('.choice[data-value="sqlite"]').evaluate((b) => getComputedStyle(b, '::after').content)).not.toBe('none');
+    expect(await q.locator('button.send').evaluate((b) => getComputedStyle(b, '::after').content)).toBe('none');
+    await release(page);
   });
 
   test('Other… opens a box for an answer of your own, which must say something', async ({ page }) => {
@@ -208,7 +272,8 @@ test.describe('on a phone', () => {
     await expect(q.locator('.field[data-field="urgent"] .toggle[aria-pressed="true"]')).toHaveText('No');
     await expect(q.locator('.field')).toHaveCount(5);
     await q.getByRole('button', { name: 'Send answer' }).tap();
-    await expect(card(page, COPILOT).locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.');
+    // A form of several fields has no one value to say.
+    await expect(card(page, COPILOT).locator('.answer-receipt')).toHaveText('You answered');
     expect((await log(page))[0].fields).toEqual({ plan: 'go', urgent: false });
   });
 
@@ -221,7 +286,7 @@ test.describe('on a phone', () => {
     await q.getByRole('button', { name: 'Send answer' }).tap();
     await expect(q).toHaveCount(0);
     const [sent] = await log(page);
-    expect(sent).toEqual({ id: CODEX, question: 'q-plain', request: expect.stringMatching(UUID), text: 'The phone can answer now.' });
+    expect(sent).toEqual({ id: CODEX, question: 'q-plain', request: expect.stringMatching(UUID), text: 'The phone can answer now.', progress: true });
     expect(sent.fields).toBeUndefined();
   });
 
@@ -265,7 +330,7 @@ test.describe('on a phone', () => {
 
     await q.getByRole('button', { name: 'Approve once' }).tap();
     await expect(q).toHaveCount(0);
-    expect((await log(page))[0]).toEqual({ id: COPILOT, question: 'r1#0123456789abcdef', request: expect.stringMatching(UUID), fields: { decision: 'approve' } });
+    expect((await log(page))[0]).toEqual({ id: COPILOT, question: 'r1#0123456789abcdef', request: expect.stringMatching(UUID), fields: { decision: 'approve' }, progress: true });
   });
 
   test('a Copilot permission prompt at a machine with approving turned off says so and offers nothing', async ({ page }) => {
@@ -297,15 +362,71 @@ test.describe('on a phone', () => {
 test.describe('outcomes', () => {
   test.use({ viewport: { width: 390, height: 664 } });
 
-  test('unconfirmed says to check at the machine, and nothing offers to send it again', async ({ page }) => {
+  // The machine's result can reach the phone before its update taking the question away: the card
+  // ends as it does the other way round. The demo host's question-clearing upsert is held back here
+  // until the result is in.
+  const resultFirst = (page) => page.evaluate(() => {
+    const h = window.agentBridgeDemo.host;
+    const upsert = h.upsert.bind(h);
+    const held = [];
+    h.upsert = (s) => { if (s.question === null) { held.push(s); } else { upsert(s); } };
+    window.__questionGoes = () => { h.upsert = upsert; for (const s of held) { upsert(s); } };
+  });
+
+  test('a delivered result before its question goes keeps the panel for the rest of its check, then resolves to You answered', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, choice());
+    await resultFirst(page);
+    // When the check went on, and when the panel went: a second apart, as when the question goes first.
+    await q.evaluate((el) => {
+      const option = el.querySelector('.choice[data-value="sqlite"]');
+      const at = window.__panel = {};
+      new MutationObserver(() => {
+        if (at.checked === undefined && option.classList.contains('checked')) { at.checked = performance.now(); }
+        if (at.gone === undefined && !el.isConnected) { at.gone = performance.now(); }
+      }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
+    });
+    const sqlite = q.locator('.choice[data-value="sqlite"]');
+    await sqlite.click();
+    await expect(sqlite).toHaveClass(/\bchecked\b/);
+    await page.evaluate(() => window.__questionGoes());
+    await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
+    await expect(q).toHaveCount(0);
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('You answered · SQLite');
+    const at = await page.evaluate(() => window.__panel);
+    expect(at.gone - at.checked).toBeGreaterThanOrEqual(900);
+  });
+
+  test('an unconfirmed result before its question goes keeps the panel as the usual order does: the option pressed, the rest disabled, saying why', async ({ page }) => {
+    await openDemo(page);
+    await script(page, 'unconfirmed');
+    const q = await ask(page, choice());
+    await resultFirst(page);
+    await q.locator('.choice[data-value="pg"]').click();
+    await expect(q).toHaveAttribute('data-answer', 'unconfirmed');
+    await page.evaluate(() => window.__questionGoes());
+    await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
+    // Past any check's hold: the panel is there to stay, not on its way out.
+    await page.waitForTimeout(1500);
+    await expect(q).toHaveCount(1);
+    await expect(q.locator('.answer-status')).toHaveText('Sent, but not confirmed. Check at the machine on Demo machine. (the session stopped answering)');
+    await expect(q.locator('.choice[data-value="pg"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(q.locator('.choice[data-value="sqlite"]')).toBeDisabled();
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveCount(0);
+  });
+
+  test('unconfirmed says to check at the machine, keeps the option that went pressed and the rest disabled, and nothing offers to send it again', async ({ page }) => {
     await openDemo(page);
     await script(page, 'unconfirmed');
     const q = await ask(page, choice());
     await q.locator('.choice[data-value="pg"]').click();
-    const receipt = card(page, CODEX).locator('.answer-receipt');
-    // The host typed it, so the question goes; the receipt carries the outcome.
-    await expect(receipt).toHaveText('Your answer: Sent, but not confirmed. Check at the machine on Demo machine. (the session stopped answering)');
-    await expect(receipt).toHaveAttribute('data-answer', 'unconfirmed');
+    // The host typed it and took the question away, but it may not have gone in: one attempt per
+    // prompt (ui.md §6.5), so the question stays as it went, saying so.
+    await expect(q.locator('.answer-status')).toHaveText('Sent, but not confirmed. Check at the machine on Demo machine. (the session stopped answering)');
+    await expect(q).toHaveAttribute('data-answer', 'unconfirmed');
+    await expect(q.locator('.choice[data-value="pg"]')).toHaveAttribute('aria-pressed', 'true');
+    expect(await q.locator('.choice[data-value="pg"]').evaluate((b) => getComputedStyle(b).opacity)).toBe('1');
+    await expect(q.locator('.choice[data-value="sqlite"]')).toBeDisabled();
     await page.waitForTimeout(500);
     expect(await log(page)).toHaveLength(1);
     await expect(card(page, CODEX).getByRole('button', { name: 'Try again' })).toHaveCount(0);
@@ -316,7 +437,7 @@ test.describe('outcomes', () => {
     await script(page, { outcome: 'queued', reason: 'a newer host' });
     const q = await ask(page, choice());
     await q.locator('.choice[data-value="pg"]').click();
-    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('Your answer: Sent, but not confirmed. Check at the machine on Demo machine. (a newer host)');
+    await expect(q.locator('.answer-status')).toHaveText('Sent, but not confirmed. Check at the machine on Demo machine. (a newer host)');
   });
 
   test('stale says it was already answered or is gone, and holds the form', async ({ page }) => {
@@ -368,8 +489,8 @@ test.describe('outcomes', () => {
     await script(page, { outcome: 'delivered', drop: true });
     const q = await ask(page, choice());
     await q.locator('.choice[data-value="pg"]').click();
-    await expect(q.locator('.answer-status')).toHaveText(/Sending|Waiting for the connection/);
-    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.', { timeout: 10000 });
+    await expect(q).toHaveAttribute('data-answer', /^(sending|waiting)$/);
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('You answered · PostgreSQL (Recommended)', { timeout: 10000 });
     const sent = await log(page);
     expect(sent.length).toBeGreaterThanOrEqual(2);
     expect(new Set(sent.map((r) => r.request)).size).toBe(1);

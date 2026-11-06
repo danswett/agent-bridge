@@ -53,15 +53,17 @@ test.describe('on a phone', () => {
     await expect(reply.locator('.reply-hint')).toHaveText('Line breaks are sent as spaces: the session gets your reply as one line.');
     await hold(page);
     await reply.getByRole('button', { name: 'Send' }).tap();
-    await expect(reply.locator('.reply-status')).toHaveText('Sending…');
-    await expect(reply).toHaveAttribute('aria-busy', 'true');
+    // On its way: heard, and Send's ring; nothing on the line (ui.md §6.5).
+    await expect(reply.locator('.receipt-live')).toHaveText('Sending reply');
+    await expect(reply.locator('.reply-status')).toHaveText('');
+    await expect(reply.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-busy', 'true');
     await expect(reply.getByRole('button', { name: 'Send' })).toBeDisabled();
     await release(page);
 
-    await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.');
+    await expect(reply.locator('.receipt-live')).toHaveText('Reply delivered');
     await expect(reply).toHaveAttribute('data-reply', 'delivered');
     await expect(input).toHaveValue('');
-    expect(await log(page)).toEqual([{ id: IDLE, request: expect.stringMatching(UUID), text: 'Looks good.\nNow open the PR – please 🚀' }]);
+    expect(await log(page)).toEqual([{ id: IDLE, request: expect.stringMatching(UUID), text: 'Looks good.\nNow open the PR – please 🚀', progress: true }]);
     expect((await typed(page)).map((t) => t.said)).toEqual(['Looks good. Now open the PR – please 🚀']);
     // The host's upsert: the session is working on it, and it is your latest message.
     await expect(card(page, IDLE)).toHaveAttribute('data-status', 'working');
@@ -75,12 +77,12 @@ test.describe('on a phone', () => {
     await input.fill('first');
     await hold(page);
     await reply.getByRole('button', { name: 'Send' }).tap();
-    await expect(reply.locator('.reply-status')).toHaveText(/^Sending…/);
+    await expect(reply.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-busy', 'true');
     // The caret to the end by hand: WebKit on Windows emptied the box on End.
     await input.evaluate((el) => el.setSelectionRange(el.value.length, el.value.length));
     await input.pressSequentially(' and then');
     await release(page);
-    await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.');
+    await expect(reply).toHaveAttribute('data-reply', 'delivered');
     await expect(input).toHaveValue('and then');
     expect((await log(page)).map((r) => r.text)).toEqual(['first']);
   });
@@ -93,6 +95,11 @@ test.describe('on a phone', () => {
     await reply.getByRole('button', { name: 'Send' }).tap();
     await expect(reply.locator('.reply-status')).toHaveText('The machine refused this reply: replying is not supported for codex yet; reply at the machine.');
     await expect(reply).toHaveAttribute('data-reply', 'refused');
+    // A failure stops what the person is doing: said assertively, on the page's alert line, and only
+    // there (ui.md §9.1 A6).
+    await expect(page.locator('.receipt-alert')).toHaveText('Reply: The machine refused this reply: replying is not supported for codex yet; reply at the machine.');
+    await expect(page.locator('.receipt-alert')).toHaveAttribute('role', 'alert');
+    await expect(reply.locator('.receipt-live')).not.toHaveText(/refused/);
     await expect(reply.getByRole('textbox', { name: 'Reply' })).toHaveValue('please rerun');
     await expect(reply.getByRole('button', { name: 'Send' })).toBeEnabled();
     expect(await typed(page)).toEqual([]);
@@ -202,11 +209,176 @@ test.describe('outcomes', () => {
     const reply = box(page, IDLE);
     await reply.getByRole('textbox', { name: 'Reply' }).fill('only once');
     await reply.getByRole('button', { name: 'Send' }).click();
-    await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.', { timeout: 10000 });
+    await expect(reply).toHaveAttribute('data-reply', 'delivered', { timeout: 10000 });
     const sent = await log(page);
     expect(sent.length).toBeGreaterThanOrEqual(2);
     expect(new Set(sent.map((r) => r.request)).size).toBe(1);
     expect(await typed(page)).toHaveLength(1);
+  });
+});
+
+// Where the machine says how far a reply has got (sessions.progress, #600; ui.md §6.5 as decided on
+// #617: quiet unless something's wrong): Sent once it has it, Passed to the agent once the keys
+// have gone, Up next when they went into a working session, all heard and none on the line; Send's
+// ring says it is on its way, and its check that it got there. The demo host holds before typing
+// and before its outcome, so each stage stays to be heard.
+test.describe('progress', () => {
+  test.use({ viewport: { width: 390, height: 664 } });
+  const holdBefore = (page, step) => page.evaluate((s) => window.agentBridgeDemo.host.holdBefore(s), step);
+  const releaseBefore = (page, step) => page.evaluate((s) => window.agentBridgeDemo.host.releaseBefore(s), step);
+
+  test('a reply\'s stages are heard and not seen, Delivered turns Send\'s ring to its check for a moment, and the timing marks stay on this device', async ({ page }) => {
+    await openDemo(page);
+    const reply = box(page, IDLE);
+    const status = reply.locator('.reply-status');
+    const live = reply.locator('.receipt-live');
+    const send = reply.getByRole('button', { name: 'Send' });
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('carry on');
+    await holdBefore(page, 'typing');
+    await holdBefore(page, 'result');
+    await send.click();
+    await expect(live).toHaveText('Reply sent');
+    await expect(send).toHaveAttribute('aria-busy', 'true');
+    // Disabled while it is on its way, but never dimmed: the ring keeps its contrast.
+    await expect(send).toBeDisabled();
+    expect(await send.evaluate((b) => getComputedStyle(b).opacity)).toBe('1');
+    await expect(status).toHaveText('');
+    await releaseBefore(page, 'typing');
+    await expect(live).toHaveText('Reply passed to the agent');
+    await expect(status).toHaveText('');
+    await releaseBefore(page, 'result');
+    await expect(live).toHaveText('Reply delivered');
+    await expect(send).toHaveClass(/\bchecked\b/);
+    await expect(send.locator('.send-check use')).toHaveAttribute('href', 'design/sprite.svg#icon-check');
+    // Its box emptied, Send is disabled under its check, which is not dimmed either.
+    await expect(send).toBeDisabled();
+    expect(await send.evaluate((b) => getComputedStyle(b).opacity)).toBe('1');
+    // Its name stays its own: the receipt says it was delivered.
+    await expect(send).toHaveAccessibleName('Send');
+    await expect(status).toHaveText('');
+    // Then Send's own glyph again.
+    await expect(send).not.toHaveClass(/\bchecked\b/);
+    expect((await log(page))[0].progress).toBe(true);
+    // Tap to outcome, each stage between, and the machine's own timings beside them.
+    const [timing] = await page.evaluate(() => window.agentBridgeDemo.timings());
+    expect(timing).toMatchObject({ kind: 'reply', outcome: 'delivered', host: { typed: expect.any(Number), confirmed: expect.any(Number) } });
+    expect(timing.client.map(([mark]) => mark)).toEqual(['sent', 'received', 'typed', 'result']);
+  });
+
+  test('Send shows its own ring from the tap, and the receipt keeps its room from Send until the box is typed in again', async ({ page }) => {
+    await openDemo(page);
+    const reply = box(page, IDLE);
+    const status = reply.locator('.reply-status');
+    const send = reply.getByRole('button', { name: 'Send' });
+    const input = reply.getByRole('textbox', { name: 'Reply' });
+    await input.fill('carry on');
+    await hold(page);
+    // Inside the first 400 ms: nothing on the line, which already has its room, and Send's ring.
+    const early = await reply.evaluate(async (form) => {
+      const button = form.querySelector('.button.send');
+      button.click();
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const line = form.querySelector('.reply-status');
+      return { ring: getComputedStyle(button, '::after').content !== 'none', words: line.textContent, height: line.getBoundingClientRect().height };
+    });
+    expect(early).toMatchObject({ ring: true, words: '' });
+    expect(early.height).toBeGreaterThan(0);
+    await release(page);
+    await expect(reply).toHaveAttribute('data-reply', 'delivered');
+    await expect(status).toHaveText('');
+    expect((await status.boundingBox()).height).toBeCloseTo(early.height, 0);
+    expect(await send.evaluate((b) => getComputedStyle(b, '::after').content)).toBe('none');
+    await input.fill('next');
+    await expect(status).toBeHidden();
+  });
+
+  test('a stall puts its words on the line, and the line goes once the outcome comes', async ({ page }) => {
+    await openDemo(page);
+    const reply = box(page, IDLE);
+    const status = reply.locator('.reply-status');
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('carry on');
+    await hold(page);
+    await reply.getByRole('button', { name: 'Send' }).click();
+    await expect(status).toHaveText('Still sending…');
+    await expect(reply.locator('.receipt-live')).toHaveText('Reply still sending');
+    await release(page);
+    await expect(reply).toHaveAttribute('data-reply', 'delivered');
+    await expect(status).toHaveText('');
+  });
+
+  test('a reply typed into a working session is heard as up next: the agent takes it after its current step', async ({ page }) => {
+    await openDemo(page);
+    await page.evaluate(({ id, t }) => {
+      const d = window.agentBridgeDemo;
+      d.upsert({ ...d.host.get(id), status: 'working', statusSince: t, updatedAt: t });
+    }, { id: IDLE, t: later() });
+    await expect(card(page, IDLE)).toHaveAttribute('data-status', 'working');
+    const reply = box(page, IDLE);
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('and add a test');
+    await holdBefore(page, 'result');
+    await reply.getByRole('button', { name: 'Send' }).click();
+    await expect(reply.locator('.receipt-live')).toHaveText("Reply up next, after the agent's current step");
+    await expect(reply.locator('.reply-status')).toHaveText('');
+    await releaseBefore(page, 'result');
+    await expect(reply.locator('.receipt-live')).toHaveText('Reply delivered');
+  });
+
+  test('in forced colours Send\'s ring and check take Send\'s own colours, and the line\'s words are CanvasText', async ({ page, browserName }) => {
+    test.skip(browserName !== 'chromium', 'forced colours are emulated in Chromium only');
+    await page.emulateMedia({ forcedColors: 'active' });
+    await openDemo(page);
+    const reply = box(page, IDLE);
+    const status = reply.locator('.reply-status');
+    const send = reply.getByRole('button', { name: 'Send' });
+    const canvasText = await page.evaluate(() => {
+      const i = document.createElement('i');
+      i.style.forcedColorAdjust = 'none';
+      i.style.color = 'CanvasText';
+      document.body.append(i);
+      const c = getComputedStyle(i).color;
+      i.remove();
+      return c;
+    });
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('carry on');
+    await hold(page);
+    await send.click();
+    await expect(status).toHaveText('Still sending…');
+    expect(await send.evaluate((el) => getComputedStyle(el, '::after').borderTopColor === getComputedStyle(el).color)).toBe(true);
+    expect(await status.evaluate((el) => getComputedStyle(el).color)).toBe(canvasText);
+    await release(page);
+    await expect(send).toHaveClass(/\bchecked\b/);
+    expect(await send.evaluate((el) => getComputedStyle(el.querySelector('.send-check')).color === getComputedStyle(el).color)).toBe(true);
+  });
+
+  test('a machine from before progress is asked for none: the reply is heard as sending until its outcome, and never as sent', async ({ page }) => {
+    await openDemo(page, '&progress=0');
+    const reply = box(page, IDLE);
+    const live = reply.locator('.receipt-live');
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('carry on');
+    await holdBefore(page, 'typing');
+    await reply.getByRole('button', { name: 'Send' }).click();
+    await expect(live).toHaveText('Sending reply');
+    await releaseBefore(page, 'typing');
+    await expect(live).toHaveText('Reply delivered');
+    await expect(reply.getByRole('button', { name: 'Send' })).toHaveClass(/\bchecked\b/);
+    expect(await log(page)).toEqual([{ id: IDLE, request: expect.stringMatching(UUID), text: 'carry on' }]);
+    const [timing] = await page.evaluate(() => window.agentBridgeDemo.timings());
+    expect(timing).toMatchObject({ kind: 'reply', outcome: 'delivered', host: null });
+    expect(timing.client.map(([mark]) => mark)).toEqual(['sent', 'result']);
+  });
+  test('a reply sent during the last one\'s check shows its own ring at once, never the last one\'s check', async ({ page }) => {
+    await openDemo(page);
+    const reply = box(page, IDLE);
+    const send = reply.getByRole('button', { name: 'Send' });
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('first');
+    await send.click();
+    await expect(send).toHaveClass(/\bchecked\b/);
+    await hold(page);
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('second');
+    await send.click();
+    await expect(send).toHaveAttribute('aria-busy', 'true');
+    await expect(send).not.toHaveClass(/\bchecked\b/);
+    await release(page);
   });
 });
 

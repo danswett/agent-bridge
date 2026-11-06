@@ -1200,27 +1200,94 @@ summary {
 .choices.approval .choice[aria-pressed="true"].tone-deny { background: var(--ab-danger); color: var(--ab-shell); }
 .toggle:disabled, .choice:disabled, .answer input:disabled, .text-input:disabled, .number-input:disabled { cursor: default; opacity: .6; }
 .choice[aria-pressed="true"]:disabled { opacity: 1; }
+/* Tap to answer (ui.md §6.5): the option or the Needs you button that sent stays pressed, at full
+   opacity, while the rest are disabled: an answer not confirmed or stale reads as the one that went. */
+.needs-actions .button[aria-pressed="true"]:disabled { opacity: 1; }
 
 .answer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .answer-actions .button { min-width: 8em; }
 .answer-actions:not(:has(.button:not([hidden]))) { display: none; }
 .answer-error { color: var(--ab-danger-text); font-weight: 600; font-size: .92rem; margin: 8px 0 0; }
-.answer-status, .answer-receipt { margin: 8px 0 0; font-size: .92rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.answer-status, .answer-receipt { margin: 8px 0 0; font-size: .92rem; font-weight: 600; line-height: 1.4; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .answer-status:empty { display: none; }
-.answer-status.progress::before, .answer-receipt.progress::before {
-  content: ""; width: 12px; height: 12px; flex: none; border-radius: 50%;
-  border: 2px solid var(--ab-bridge); border-right-color: transparent; animation: spin 1s linear infinite;
-}
-.answer-status.progress, .answer-receipt.progress { color: var(--ab-bridge); }
-.answer-status.ok, .answer-receipt.ok { color: var(--ab-bridge); }
+/* The receipt (ui.md §6.5, #600, #617): quiet unless something's wrong. Its line is words only,
+   for an exception (in-flight words text2, an outcome's in its own colour), or "You answered ·
+   value" in text2 once an answer is confirmed. From Send it keeps the room the longest outcome
+   needs ("Sent, but not confirmed. Check at machine before sending it again."), empty unless it
+   has something to say: two lines in a narrow box (a phone, or a pane narrowed by the inspector),
+   one in a wide one, so neither an exception nor the outcome moves the box or the card's
+   controls. A reply's room stays until the box is typed in again. A longer refusal may grow. */
+form.reply, form.answer { container: receipt / inline-size; }
+.answer-status { min-height: 1.4em; }
+@container receipt (max-width: 639px) { .answer-status { min-height: 2.8em; } }
+.answer-status.room:empty { display: block; visibility: hidden; }
+.answer-status.progress, .answer-receipt.progress, .answer-status.done, .answer-receipt.done { color: var(--ab-text2); }
 .answer-status.warn, .answer-receipt.warn { color: var(--ab-needs-text); }
 .answer-status.bad, .answer-receipt.bad { color: var(--ab-danger-text); }
 .answer-receipt { padding: 8px 0; }
+.answer-receipt:empty { padding: 0; }
+:is(.answer-status, .answer-receipt) .receipt-more { color: var(--ab-text2); }
+/* Send's own ring and check (ui.md §5.3, Send and Answer): on the control that sent (Send, the
+   option tapped, or Approve once or Deny in Needs you), the ring while the request is in flight
+   (still while this device waits for a machine that isn't connected), then the check for about a
+   second once it is delivered (holdCheck), cross-fading back to the button's own glyph. The
+   button never changes size or fill: on an icon button they take the glyph's place, and on a
+   button of words they sit at its inline end, in a slot kept for them at rest, so they never cover a
+   label or a badge, and the button never resizes as they come. */
+.reply .button.send, .answer .button.send, .choice, .needs-actions .button { position: relative; }
+.choice { padding-inline-end: 30px; }
+.choices.approval .choice, .answer .button.send, .needs-actions .button { padding-inline: 30px; }
+/* Its words keep their width beside the slots: Send answer is otherwise a fixed width (.button.send). */
+.answer .button.send { width: auto; }
+.reply .button.send > svg { transition: opacity var(--ab-motion-acknowledge-duration) var(--ab-motion-acknowledge-ease); }
+.reply .button.send:is([aria-busy="true"], .checked) > svg:not(.send-check) { opacity: 0; }
+.send-check { position: absolute; inset-block: 0; inset-inline-end: 8px; margin-block: auto; width: 16px; height: 16px; opacity: 0; pointer-events: none;
+  transition: opacity var(--ab-motion-acknowledge-duration) var(--ab-motion-acknowledge-ease); }
+.reply .button.send > .send-check { inset: 0; margin: auto; width: 20px; height: 20px; }
+.checked > .send-check { opacity: 1; }
+/* With Other… open, Send answer still shows when an option is tapped instead: the ring is on the
+   option alone, the control that sent, never on both (#616 review). */
+.reply .button.send[aria-busy="true"]::after,
+.answer[aria-busy="true"]:not(:has(.choice[aria-pressed="true"])) .button.send:not([hidden])::after,
+.answer[aria-busy="true"] .choice[aria-pressed="true"]::after,
+.needs-entry:is([data-answer="sending"], [data-answer="waiting"]) .button[aria-pressed="true"]::after {
+  content: ""; position: absolute; inset-block: 0; inset-inline-end: 10px; margin-block: auto; width: 12px; height: 12px;
+  border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin 1s linear infinite;
+}
+.reply .button.send[aria-busy="true"]::after { inset: 0; margin: auto; }
+/* Send, disabled while its request is in flight and, its box emptied, while its check shows, keeps
+   full opacity, as the option pressed does: dimmed by .button:disabled, its ring and check lost the
+   contrast they are drawn for, in forced colours too (#616 review). */
+:is(.reply .button.send:is([aria-busy="true"], .checked), .answer[aria-busy="true"] .button.send, .answer .button.send.checked):is(:disabled, [aria-disabled="true"]) { opacity: 1; }
+/* Held for a machine that isn't connected, the ring stands still, in Send's ink at full opacity
+   (#617): a paler ring fell under 3:1, and in forced colours GrayText on Highlight did too. */
+:is(.reply .button.send.still, .answer.still :is(.button, .choice), .needs-entry.still .button)::after { animation: none; }
+/* Send answer's ring is drawn by a more specific rule than the one above, so it stands still on one
+   of its own specificity: it kept turning. */
+.answer.still[aria-busy="true"]:not(:has(.choice[aria-pressed="true"])) .button.send:not([hidden])::after { animation: none; }
+/* The line's room keeps the Needs you entry from growing or shrinking as words come and go, whatever
+   the state: two lines in a phone's lane, where a wait or a busy outcome wraps. Its words stay in the
+   text colour (.needs-status): the role colours are checked against the card, not the Needs you fill. */
+.needs-status { min-height: 1lh; }
+@media (max-width: 759px) { .needs-status { min-height: 2lh; } }
+.needs-status.room { visibility: hidden; }
+@media (forced-colors: active) {
+  /* Every word is CanvasText, so every failure says itself in words. Send's ring and check take
+     Send's own colours (currentColor, as its arrow does), a still ring too: it stands still. */
+  :is(.answer-status, .answer-receipt, .needs-status):is(.progress, .done, .warn, .bad), :is(.answer-status, .answer-receipt, .needs-status) .receipt-more { color: CanvasText; }
+  .reply .button.send[aria-busy="true"]::after,
+  .answer[aria-busy="true"]:not(:has(.choice[aria-pressed="true"])) .button.send:not([hidden])::after,
+  .answer[aria-busy="true"] .choice[aria-pressed="true"]::after,
+  .needs-entry:is([data-answer="sending"], [data-answer="waiting"]) .button[aria-pressed="true"]::after { forced-color-adjust: none; border-color: currentColor; border-right-color: transparent; }
+}
 .question-changed { margin: 8px 0; padding: 4px 12px 10px; border: 1px dashed var(--ab-needs); border-radius: 10px; }
 .question-changed .button { margin-top: 8px; }
 @media (prefers-reduced-motion: reduce) {
-  .answer-status.progress::before, .answer-receipt.progress::before { animation: none; }
+  .reply .button.send[aria-busy="true"]::after,
+  .answer[aria-busy="true"]:not(:has(.choice[aria-pressed="true"])) .button.send:not([hidden])::after,
+  .answer[aria-busy="true"] .choice[aria-pressed="true"]::after,
+  .needs-entry:is([data-answer="sending"], [data-answer="waiting"]) .button[aria-pressed="true"]::after { animation: none; }
 }
 
 /* ---- ending a session ---- */

@@ -329,6 +329,7 @@ static partial class SelfTest
             await Task.Delay(500);
             Check(Fits(window, "SettingsPane"), "fits the Settings page's column in a wide window");
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".settings.png"));
+            await CheckAgentRows(window, main, demo, Check, outFile, result);
 
             // Approve once from Needs you, as a person would: the card's own answer goes, and the
             // entry leaves with its question.
@@ -374,7 +375,7 @@ static partial class SelfTest
             // What was seen so far, written down first: a failure in high contrast that ends the
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
             await Write(outFile, result, checks, failures, "high contrast");
-            await CheckHighContrast(window, main, remote, Check, outFile, result);
+            await CheckHighContrast(window, main, demo, remote, Check, outFile, result);
             // Last, as it adds sessions every check above counts without (#765).
             await Write(outFile, result, checks, failures, "live resize");
             await MeasureResize(window, main, demo, Check, outFile, result);
@@ -967,13 +968,15 @@ static partial class SelfTest
     // setting is changed off the UI thread: SystemParametersInfo sends WM_SETTINGCHANGE to every
     // window, this app's included, and from the UI thread that message would re-enter XAML in the
     // middle of this method.
-    static async Task CheckHighContrast(MainWindow window, MainViewModel main, DemoHost remote, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
+    static async Task CheckHighContrast(MainWindow window, MainViewModel main, DemoHost demo, DemoHost remote, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
     {
+        var failedRow = await ShowFailedAgentRow(window, main);
         var contrast = await HighContrastPass.BeginAsync();
         result["highContrast"] = contrast.How;
         AppLog.Write($"self-test: high contrast {contrast.How}");
         if (!contrast.On)
         {
+            if (main.Settings is { } settings) { await settings.CheckAgentsAsync(); }
             // Skipped only off CI, where a developer's own setting is never changed.
             if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true") { check(false, $"turns Windows' high contrast on for the pass ({contrast.How})"); }
             return;
@@ -983,9 +986,14 @@ static partial class SelfTest
             var on = await Until(() => new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast, TimeSpan.FromSeconds(15));
             await Task.Delay(1500);
             check(on, "sees Windows' high contrast turned on");
+            // Only a pass that turned it on is a transition: on already, the line was drawn in it.
+            if (contrast.TurnedOn) { await CheckAgentRowRepainted(window, main, failedRow, check); }
+            else if (main.Settings is { } drawn) { await drawn.CheckAgentsAsync(); }
             var hcBroken = await DrawPages(window, "HighContrast", outFile, check);
             check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
             await PictureYoursInHighContrast(window, check, outFile);
+            await PictureAgentRows(window, main, outFile, "highcontrast");
+            await PictureRowsTheAppCantActOn(window, main, demo, outFile, [ElementTheme.Default]);
             var system = new[] { "SystemColorHighlightColor", "SystemColorHighlightTextColor", "SystemColorWindowTextColor", "SystemColorWindowColor", "SystemColorGrayTextColor", "SystemColorButtonFaceColor", "SystemColorButtonTextColor", "SystemColorHotlightColor" }
                 .Select(k => Application.Current.Resources.TryGetValue(k, out var c) && c is Windows.UI.Color colour ? colour.ToString() : null).OfType<string>().ToHashSet();
             var own = Design.DesignKeys.Brushes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var b) && b is SolidColorBrush s && system.Contains(s.Color.ToString()))).ToList();

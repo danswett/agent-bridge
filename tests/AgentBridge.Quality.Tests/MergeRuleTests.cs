@@ -26,6 +26,8 @@ public class MergeRuleTests
         main_green:
           workflow: ci.yml
           exempt_labels: [fixes-main]
+        copilot_waiver:
+          labels: [copilot-waived]
         sensitive_paths:
           - .github/**
           - src/AgentBridge.Transport/**
@@ -153,6 +155,66 @@ public class MergeRuleTests
         var verdict = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], reviews: [Copilot with { Body = BillingError }]))!;
 
         Assert.Equal(["Copilot's review of abcdef0 didn't complete (it reported an error): request another", "needs an independent review of abcdef0: it touches .github/workflows/ci.yml"], verdict.Reasons);
+    }
+
+    // What every Copilot review ended with from 2026-11-05 18:02 PT (#955).
+    const string QuotaError = "Copilot was unable to review this pull request because the user who requested the review has insufficient remaining quota.";
+
+    [Fact]
+    public void A_quota_failed_Copilot_review_is_waived_by_the_label_with_a_posters_success_receipt()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = QuotaError }], labels: ["Copilot-Waived"], statuses: [Receipt("success")]))!;
+        var noReview = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], labels: ["copilot-waived"], statuses: [Receipt("success")]))!;
+
+        Assert.Equal(("success", "Copilot review waived (label); independent review on file; every check passed"), (verdict.State, verdict.Description));
+        Assert.Equal("success", noReview.State);
+    }
+
+    [Fact]
+    public void The_waiver_label_without_a_receipt_fails_and_says_the_receipt_is_missing()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = QuotaError }], labels: ["copilot-waived"]))!;
+
+        Assert.Equal(["Copilot review waived by the label 'copilot-waived', but the waiver needs an independent review's receipt on abcdef0 in its place"], verdict.Reasons);
+        Assert.Equal("failure", verdict.State);
+    }
+
+    [Fact]
+    public void The_waiver_label_with_a_receipt_from_someone_not_a_poster_fails()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], labels: ["copilot-waived"], statuses: [Receipt("success", creator: "github-actions")]))!;
+
+        Assert.Equal(["Copilot review waived by the label 'copilot-waived', but the waiver needs an independent review's receipt on abcdef0 in its place"], verdict.Reasons);
+    }
+
+    [Fact]
+    public void A_quota_failed_review_without_the_label_still_fails_even_with_a_receipt()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = QuotaError }], statuses: [Receipt("success")]))!;
+
+        Assert.Equal(("failure", "Copilot's review of abcdef0 didn't complete (its outcome isn't recognized): request another"), (verdict.State, verdict.Description));
+    }
+
+    [Fact]
+    public void The_waiver_doesnt_lift_a_red_main_a_hold_a_draft_or_a_failed_receipt()
+    {
+        var red = new MainFact("failure", "main is red (CI c500000): waiting for main to be fixed");
+        ReviewFact[] quota = [Copilot with { Body = QuotaError }];
+        StatusFact[] clean = [Receipt("success")];
+
+        var onRedMain = MergeRule.Evaluate(Config, red, Pr(reviews: quota, labels: ["copilot-waived"], statuses: clean))!;
+        var held = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: quota, labels: ["copilot-waived", "hold"], statuses: clean))!;
+        var draft = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: quota, labels: ["copilot-waived"], statuses: clean, draft: true))!;
+        var failed = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: quota, labels: ["copilot-waived"], statuses: [Receipt("success", minute: 0), Receipt("failure", minute: 5)]))!;
+
+        Assert.Equal(["main is red (CI c500000): waiting for main to be fixed"], onRedMain.Reasons);
+        Assert.Equal(["held by the label 'hold'"], held.Reasons);
+        Assert.Equal(["draft: mark it ready for review"], draft.Reasons);
+        Assert.All(new[] { onRedMain, held, draft, failed }, v => Assert.Equal("failure", v.State));
+        Assert.Equal(
+            ["Copilot review waived by the label 'copilot-waived', but the waiver needs an independent review's receipt on abcdef0 in its place",
+             "the independent review of abcdef0 failed: sec-42 failure"],
+            failed.Reasons);
     }
 
     [Fact]

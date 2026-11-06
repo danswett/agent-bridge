@@ -436,6 +436,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      label (`main_green.exempt_labels`) from the merge coordinator, since labels take triage
      rights: it skips this check and nothing else, the independent review included. CI finishing
      on main starts a run, so verdicts follow main to red and back.
+   - Temporarily (from 2026-11-05, Copilot review quota exhausted), a PR labelled `copilot-waived`
+     by the merge coordinator may merge without a Copilot review if it has an independent-review
+     receipt on its head; this is removed when quota returns (#955). The label
+     (`copilot_waiver.labels`) without a success receipt from a listed poster fails, naming the
+     missing receipt; it lifts nothing else, and the verdict says `Copilot review waived (label)`.
    - A pull request can't loosen its own gate (#487, Finding 1): every trigger
      (`pull_request_target`, `status`, `workflow_run` of every other workflow, `check_suite`, a
      10-minute `schedule`, `workflow_dispatch`) runs main's copy of the workflow, which checks out
