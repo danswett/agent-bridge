@@ -1,4 +1,6 @@
 .site/
 test-results/
+test-results-renders/
 playwright-report/
 node_modules/
+/renders/
