@@ -2077,7 +2077,10 @@ that survives a failed turn never hides the error behind "Delegating".
 - Title: "*Agent* on *machine* needs sign-in" plus "· @*account*" when known. Line 2: "*n*
   sessions affected: *A*, *B*" ("1 session affected: *A*" for one). Each title is a link that
   opens that session; there is no separate line of titles. The titles come from the client's own
-  records (never from text in the record).
+  records (never from text in the record), each drawn as a host's sentence is: revealed (a hidden
+  or right-to-left character as its escape) and at most 120 characters. A link keeps its comma,
+  so no line starts with one, and each is a target at least 32px tall with a pointer and 44px on
+  touch, the height of its line box (§9.1 A11).
 - One button, **Sign in**, only with the capability and `signIn: phone`. Without the capability
   there is no button and no instruction: a missing capability doesn't prove the agent can't sign
   in from a device.

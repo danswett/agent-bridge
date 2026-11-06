@@ -41,7 +41,7 @@ test('sessions that need sign-in say so on their rows, rolled up into one banner
   await expect(banner(page).locator('.sign-in-head')).toHaveText('Copilot on DEV-VM1 needs sign-in \u00b7 @demo-user');
   await expect(banner(page).locator('.sign-in-line')).toHaveText(AFFECTED);
   // Each title in that line is a link to its session, with no line of titles of its own.
-  await expect(banner(page).locator('.sign-in-line .sign-in-session')).toHaveText(['Coordinate the Shiproom', 'Fix the relay reconnect', 'Review the usage panel', 'Draft the release notes']);
+  await expect(banner(page).locator('.sign-in-line .sign-in-session .sign-in-title')).toHaveText(['Coordinate the Shiproom', 'Fix the relay reconnect', 'Review the usage panel', 'Draft the release notes']);
   await expect(banner(page).locator('.sign-in-session')).toHaveCount(4);
   for (const id of SESSIONS) {
     await expect(row(page, id).locator('.row-status')).toHaveText('Needs sign-in');
@@ -888,12 +888,14 @@ test('the banner\'s and the sheet\'s names are the words shown, and a tap draws 
 
 // The captures owed before sessions.signin is turned on (#800, Creative 6655285995, and #895
 // 6660406957), the app's beside them in its self-test: every state of the banner and the sheet, in
-// Light, Dark and forced colours. They are the banner as it first comes, a Needs sign-in row, a
-// signIn this client doesn't know (no claim, nothing to press), a sign-in under way from another
+// Light, Dark and forced colours. They are the banner as it first comes (and with a title focused),
+// a Needs sign-in row, a signIn this client doesn't know (no claim, nothing to press; and with a
+// title focused), a sign-in under way from another
 // device (Show code, the sheet closed), the sheet with its code and the banner behind it, Failed,
 // an expired code, and signed in waiting for the sessions to confirm. Each is checked to be what it
-// says before it is taken, and attached to the test's results. In Chromium: WebKit draws a
-// screenshot with a style the CSP refuses, and the states are proven in every browser above.
+// says before it is taken, and attached to the test's results (CI keeps them as pwa-captures). In
+// Chromium: WebKit draws a screenshot with a style the CSP refuses, and the states are proven in
+// every browser above.
 async function capture(locator, name, testInfo) {
   const path = testInfo.outputPath(name);
   await locator.screenshot({ path });
@@ -909,6 +911,13 @@ async function captureUnderSheet(page, name, testInfo) {
   await sheet(page).evaluate((d) => { d.style.visibility = ''; d.close(); d.showModal(); });
   await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
   expect(await page.evaluate(() => window.agentBridgeDemo.signInLog.filter((l) => l.op === 'signin.cancel'))).toEqual([]);
+}
+
+// A title focused from the keyboard, so its ring shows (:focus-visible) as a person tabbing sees it.
+async function focusTitle(page) {
+  await banner(page).locator('.sign-in-session').first().focus();
+  await page.keyboard.press('Tab');
+  await expect(banner(page).locator('.sign-in-session').nth(1)).toBeFocused();
 }
 
 async function setAttention(page, change) {
@@ -935,6 +944,9 @@ for (const look of [
     await openDemo(page);
     await expect(signIn(page)).toBeVisible();
     await capture(banner(page), name('banner'), testInfo);
+    await focusTitle(page);
+    await capture(banner(page), name('banner-focus'), testInfo);
+    await banner(page).locator('.sign-in-session').nth(1).blur();
     await expect(row(page, 'signin-1').locator('.row-status')).toHaveText('Needs sign-in');
     await capture(row(page, 'signin-1'), name('row'), testInfo);
 
@@ -944,6 +956,8 @@ for (const look of [
     await expect(banner(page).locator('.sign-in-line')).toHaveText(AFFECTED);
     await expect(banner(page)).not.toContainText('at the machine');
     await capture(banner(page), name('no-claim'), testInfo);
+    await focusTitle(page);
+    await capture(banner(page), name('no-claim-focus'), testInfo);
     await setAttention(page, { signIn: 'phone' });
 
     // A sign-in another device runs: Show code, the sheet closed here.
@@ -985,3 +999,83 @@ for (const look of [
     await capture(banner(page), name('confirming'), testInfo);
   });
 }
+
+// The names as links (Creative 6678354001, A11): with a pointer, each title is a 32px target.
+test('with a pointer, every title in the banner is a target at least 32px tall, none overlapping another (A11)', async ({ page }) => {
+  await openDemo(page);
+  const line = banner(page).locator('.sign-in-line');
+  await expect(line).toHaveText(AFFECTED);
+  const boxes = await line.evaluate((p) => [...p.querySelectorAll('.sign-in-session')].map((b) => b.getBoundingClientRect().toJSON()));
+  expect(boxes).toHaveLength(4);
+  for (const box of boxes) { expect(box.height).toBeGreaterThanOrEqual(32); }
+  for (const [i, a] of boxes.entries()) {
+    for (const b of boxes.slice(i + 1)) { expect(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top).toBe(true); }
+  }
+});
+
+// On a phone, a line breaks only after a title's comma, never before it, and with a touch pointer
+// each title is a 44px target in a 44px line box.
+test.describe('the banner\'s titles on a phone with touch', () => {
+  test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
+
+  test('no line of the titles starts with a comma, even after a title that wraps, and every title is at least 44px tall', async ({ page }) => {
+    await openDemo(page);
+    const line = banner(page).locator('.sign-in-line');
+    await expect(line).toHaveText(AFFECTED);
+    const measure = () => line.evaluate((p) => {
+      const chars = [];
+      const walk = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+      for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+        for (let i = 0; i < n.data.length; i++) {
+          const r = document.createRange();
+          r.setStart(n, i);
+          r.setEnd(n, i + 1);
+          const box = r.getClientRects()[0];
+          if (box) { chars.push({ c: n.data[i], top: box.top, bottom: box.bottom, right: box.right }); }
+        }
+      }
+      // A comma is on the line of the letter before it (their boxes overlap top to bottom), and in the line.
+      const edge = p.getBoundingClientRect().right + 1;
+      const commas = chars.flatMap((ch, i) => (ch.c === ',' ? [ch.top < chars[i - 1].bottom && chars[i - 1].top < ch.bottom && ch.right <= edge] : []));
+      const lines = new Set(chars.map((ch) => Math.round(ch.top))).size;
+      const titles = [...p.querySelectorAll('.sign-in-session')].map((b) => b.getBoundingClientRect());
+      return { commas, lines, heights: titles.map((r) => r.height), fit: titles.every((r) => r.right <= edge) };
+    });
+    const first = await measure();
+    expect(first.lines).toBeGreaterThan(1);
+    expect(first.commas).toEqual([true, true, true]);
+    expect(first.heights).toHaveLength(4);
+    for (const height of first.heights) { expect(height).toBeGreaterThanOrEqual(44); }
+
+    // A title longer than the line wraps inside itself, and its comma follows its last word.
+    await page.evaluate(() => {
+      const d = window.agentBridgeDemo;
+      const s = d.host.get('signin-2');
+      d.upsert({ ...s, title: 'Fix the relay reconnect when the phone wakes from sleep on a slow network and the machine is busy' });
+    });
+    await expect(line).toContainText('slow network');
+    const wrapped = await measure();
+    expect(wrapped.commas).toEqual([true, true, true]);
+    expect(wrapped.fit).toBe(true);
+  });
+  for (const look of [
+    { name: 'light', suffix: '', media: { colorScheme: 'light' } },
+    { name: 'dark', suffix: '.dark', media: { colorScheme: 'dark' } },
+    { name: 'forced colours', suffix: '.forced-colors', media: { colorScheme: 'light', forcedColors: 'active' } },
+  ]) {
+    test(`captures the banner, and one with no claim, at 390 with touch, a title focused, in ${look.name}`, async ({ page, browserName }, testInfo) => {
+      test.skip(browserName !== 'chromium', 'captured in Chromium: WebKit draws a screenshot with a style the CSP refuses');
+      await page.emulateMedia(look.media);
+      await openDemo(page);
+      await expect(banner(page).locator('.sign-in-line')).toHaveText(AFFECTED);
+      await capture(banner(page), `signin-banner.phone${look.suffix}.png`, testInfo);
+      await focusTitle(page);
+      await capture(banner(page), `signin-banner-focus.phone${look.suffix}.png`, testInfo);
+      await setAttention(page, { signIn: 'rdp' });
+      await expect(banner(page).locator('.sign-in-start')).toHaveCount(0);
+      await expect(banner(page).locator('.sign-in-line')).toHaveText(AFFECTED);
+      await focusTitle(page);
+      await capture(banner(page), `signin-no-claim-focus.phone${look.suffix}.png`, testInfo);
+    });
+  }
+});

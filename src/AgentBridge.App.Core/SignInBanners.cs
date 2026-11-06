@@ -16,6 +16,9 @@ namespace AgentBridge.App.Core;
 // never logged, announced, kept past its sheet or put in a toast.
 public static class SignInBanners
 {
+    // The most of a session's title the banner shows (the PWA's TITLE_MAX).
+    public const int TitleMax = 120;
+
     // One machine's part: its sessions, and whether a person can sign its agents in from here.
     public sealed record Source(string MachineKey, string Name, IReadOnlyList<Session> Sessions, bool CanSignIn);
 
@@ -95,7 +98,9 @@ public static class SignInBanners
                 var shown = g.Needed.Count > 0 ? g.Needed : g.Confirming;
                 banners.Add(new Banner(
                     key, m.MachineKey, g.Agent, string.IsNullOrEmpty(m.Name) ? "this machine" : m.Name, g.Account, waiting ? "confirming" : "needed",
-                    [.. shown.Select(s => (s.Id, string.IsNullOrEmpty(s.Title) ? "Untitled session" : s.Title!))],
+                    // An agent's title, revealed and at most a line long (as a host's sentence): a hidden or
+                    // bidi character can't reorder the banner, nor a long one stretch it (#979). Each opens by its id.
+                    [.. shown.Select(s => (s.Id, AuthState.PlainText(s.Title, TitleMax) ?? "Untitled session"))],
                     atMachine, g.Recovery,
                     // Sign in only where the host says a person's device can (signIn phone): a value this
                     // app doesn't know, or none, makes no claim, so no button either (6648000166). Only a

@@ -14,8 +14,8 @@ public sealed class SignInTests
 
     static Session WithAttention(Session s, string? attention) => AuthState.Attach(s, Json(attention is null ? "{}" : $$"""{"attention":{{attention}}}"""));
 
-    static Session Needing(string id, string account = "octocat", AgentKind agent = AgentKind.Copilot, string? signIn = "phone", string? recovery = null) =>
-        WithAttention(Make.Session(id: id, title: $"Session {id}") with { Agent = agent },
+    static Session Needing(string id, string account = "octocat", AgentKind agent = AgentKind.Copilot, string? signIn = "phone", string? recovery = null, string? title = null) =>
+        WithAttention(Make.Session(id: id, title: title ?? $"Session {id}") with { Agent = agent },
             $$"""{"kind":"signInNeeded","since":"2026-11-05T00:40:00Z","agent":"{{AuthState.WireName(agent)}}","account":"{{account}}"{{(signIn is null ? "" : $",\"signIn\":\"{signIn}\"")}}{{(recovery is null ? "" : $",\"recovery\":\"{recovery}\"")}}}""");
 
     static string Code(string userCode = "WDJB-MJHT", string uri = "https://github.com/login/device") =>
@@ -231,6 +231,19 @@ public sealed class SignInTests
         Assert.False(SignInBanners.ListsSessions(Banners([Needing("a", signIn: "machine")]).Single()));
         Assert.False(SignInBanners.ListsSessions(Banners([Needing("a", recovery: "checking")]).Single()));
         Assert.False(SignInBanners.ListsSessions(Banners([Needing("a", recovery: "pending")]).Single()));
+    }
+
+    [Fact]
+    public void A_banner_shows_a_long_title_with_bidi_characters_bounded_and_revealed_and_opens_it_by_its_id()
+    {
+        var title = "Fix \u202Etxt.exe\u202C the relay " + new string('x', 10_000);
+        var b = Banners([Needing("a", title: title)]).Single();
+        var (id, shown) = b.Sessions.Single();
+        Assert.Equal("a", id);
+        Assert.Equal(120, shown.Length);
+        Assert.StartsWith("Fix \\u202Etxt.exe\\u202C the relay x", shown, StringComparison.Ordinal);
+        Assert.EndsWith("…", shown, StringComparison.Ordinal);
+        Assert.DoesNotContain('\u202E', SignInBanners.Words(b).Line);
     }
 
     [Fact]

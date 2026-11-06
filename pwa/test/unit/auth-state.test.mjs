@@ -193,6 +193,16 @@ test('one banner per machine, agent and account rolls up every session it holds 
   assert.deepEqual(two.map((x) => [x.agent, x.sessions.length]).sort(), [['claude', 1], ['copilot', 2]]);
 });
 
+test('a banner shows a long title with bidi characters bounded and revealed, and opens it by its id (#979)', () => {
+  const title = `Fix \u202Etxt.exe\u202C the relay ${'x'.repeat(10_000)}`;
+  const [b] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: [readSession({ id: 's1', agent: 'copilot', title, status: 'idle', attention: signInAttention() })], canSignIn: true }]);
+  assert.equal(b.sessions[0].id, 's1');
+  assert.equal(b.sessions[0].title.length, 120);
+  assert.ok(b.sessions[0].title.startsWith('Fix \\u202Etxt.exe\\u202C the relay x'));
+  assert.ok(b.sessions[0].title.endsWith('\u2026'));
+  assert.doesNotMatch(bannerWords(b).line, /[\u202A-\u202E]/);
+});
+
 test('only a provider the host says has no device flow is "at the machine"; without the capability there is no button, and no such claim', () => {
   const [machine] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: sessions(1, signInAttention({ signIn: 'machine' })), canSignIn: true }]);
   assert.equal(bannerWords(machine).line, 'Sign in at the machine');

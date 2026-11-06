@@ -12,12 +12,14 @@
 // never logged, announced, stored or put in a notification.
 import { h } from './dom.js';
 import { glyph } from './glyph.js';
-import { AGENT_NAME, RESOLVED_SHOWN_MS, SIGN_IN, clockTime, confirming, flowExpired, needsSignIn, readCode, readDone, readStartResult, spelled } from '../auth-state.js';
+import { AGENT_NAME, RESOLVED_SHOWN_MS, SIGN_IN, clockTime, confirming, flowExpired, needsSignIn, plainText, readCode, readDone, readStartResult, spelled } from '../auth-state.js';
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const uuid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 // How long a signin.code or signin.done is held for a start whose result hasn't come yet.
 const EARLY_MS = 10_000;
+// The most of a session's title the banner shows (the app's SignInBanners.TitleMax).
+const TITLE_MAX = 120;
 // A banner's drawing: rebuilt when this changes, so a needed banner's button never lingers.
 const viewState = (b) => (b.state === 'needed' ? 'needed' : b.state === 'confirming' ? 'confirming' : 'resolved');
 const keyOf = (hostId, agent, account) => `${hostId}\n${agent}\n${account ?? ''}`;
@@ -83,7 +85,9 @@ export function signInBanners(links, { flows = new Map(), resolved = new Map(), 
         machine: name || 'this machine',
         account: g.account,
         state: waiting ? 'confirming' : 'needed',
-        sessions: shown.map((s) => ({ id: s.id, title: s.title || 'Untitled session' })),
+        // An agent's title, revealed and at most a line long (as a host's sentence): a hidden or bidi
+        // character can't reorder the banner, nor a long one stretch it (#979). Each opens by its id.
+        sessions: shown.map((s) => ({ id: s.id, title: plainText(s.title, TITLE_MAX) ?? 'Untitled session' })),
         // Only a provider the host says has no device flow is signed in at the machine. A value this
         // client doesn't know, or none, is not that (the no-RDP rule, #696).
         atMachine: g.signIn === 'machine',
@@ -428,15 +432,23 @@ export class SignInBanners {
       if (lists) {
         // Each button keeps only where it goes, never the banner, whose flow may hold a code.
         const { hostId } = b;
+        // Each title keeps its comma (a line breaks only after the comma and its space), inside its
+        // button, so it follows a long title's last line rather than its first. The link's name is
+        // the title alone, and only the title is underlined.
+        const last = b.sessions.length - 1;
         const parts = [affected(b)];
         b.sessions.forEach(({ id, title }, i) => {
-          if (i > 0) { parts.push(', '); }
-          parts.push(h('button', { type: 'button', class: 'sign-in-session', onclick: () => this.open(hostId, id) }, title));
+          if (i > 0) { parts.push(' '); }
+          parts.push(h('span', { class: 'sign-in-item' },
+            h('button', { type: 'button', class: 'sign-in-session', onclick: () => this.open(hostId, id) },
+              h('span', { class: 'sign-in-title' }, title),
+              i < last ? h('span', { 'aria-hidden': 'true' }, ',') : null)));
         });
         els.line.replaceChildren(...parts);
       } else {
         els.line.textContent = words.line;
       }
+      els.line.classList.toggle('sign-in-links', lists);
     }
     els.line.hidden = !words.line;
     const problem = this.#flows.get(b.key)?.problem ?? '';
