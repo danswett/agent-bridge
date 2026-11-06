@@ -70,9 +70,10 @@ coordinator owns a lane, and you reach it by putting its tag in a GitHub comment
   pwsh tools/agents/wake-watch.ps1 -Team apple -Prs 406,405
   ```
   `-IgnoreIds` skips comments that someone edits in place, such as rolling digests.
-- **Restart with `-Since`.** `-Since` defaults to the moment the watcher starts, so a comment posted while it was down (after a wake, while you handled it) would be missed. Restart with `-Since` set to the previous start time, or the wake's timestamp, in UTC; the watcher prints the effective value on start:
+- **Restart with `-Since`.** `-Since` defaults to the moment the watcher starts, so a comment posted while it was down (after a wake, while you handled it) would be missed. GitHub's `since` is inclusive and matches a comment's `updated_at`, so the comment that caused the wake would wake you again. Restart with `-Since` set to that comment's `updated_at` (printed in the WAKE line) plus 1 second, in UTC, and/or pass the ids of comments you've already handled in `-IgnoreIds`; the watcher prints the effective value on start. If a wake came from several comments, use the latest `updated_at` plus 1 second, or the earlier start time with every handled id in `-IgnoreIds`:
   ```
-  pwsh tools/agents/wake-watch.ps1 -Team apple -Prs 406,405 -Since 2026-11-06T22:10:00Z
+  pwsh tools/agents/wake-watch.ps1 -Team apple -Prs 406,405 -Since 2026-11-06T22:10:01Z
+  pwsh tools/agents/wake-watch.ps1 -Team apple -Prs 406,405 -Since 2026-11-06T22:05:00Z -IgnoreIds 4231234567,4231234999
   ```
 - **Use REST for anything that polls.** Every session shares one GitHub account's GraphQL budget, about 5,000 points an hour. `gh pr view`, `gh pr checks`, `gh pr comment` and `gh issue comment` all spend it, and one afternoon it ran out and nothing could post for minutes. Read with `gh api repos/danswett/agent-bridge/pulls/<n>` and `.../commits/<sha>/check-runs`, and post with `gh api repos/danswett/agent-bridge/issues/<n>/comments -F body=@file`.
 - **Check-ins** go on #689: 8 lines or fewer, saying what landed, what's in review, what's blocking you and who you need. Edit a comment in place rather than posting a correction.
