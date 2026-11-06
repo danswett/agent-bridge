@@ -1035,6 +1035,8 @@ public sealed class AutoUpdater
         }
     }
 
+    sealed class PackageReplacedException() : Exception("the package ready changed while the host stopped");
+
     // The person, warned what a restart would interrupt, chose not to: nothing to report.
     public const string NotNow = "not now";
     int claimed;
@@ -1044,6 +1046,7 @@ public sealed class AutoUpdater
     async Task<string?> InstallAsync(string because)
     {
         var to = Pending!;
+        var source = updater.Source;
         var request = Asked(UpdateAskKind.Install);
         log($"auto-update: installing {to}, as {because}");
         installing = true;
@@ -1051,8 +1054,29 @@ public sealed class AutoUpdater
         // The host comes back from a failed install, or from the app quitting mid-way (HostManager).
         try
         {
-            await manager.StopAndApplyAsync(() => Record(prefs, save, updater, request), updater.ApplyAndRestart);
+            await manager.StopAndApplyAsync(() => Record(prefs, save, updater, request), () =>
+            {
+                // Settings' checks and downloads do not wait for this one: one may have replaced the
+                // package while the host stopped, and Velopack applies whatever is ready. Only the
+                // release chosen, from the source it was chosen on, is applied (Copilot, r4487830884).
+                if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException(); }
+                updater.ApplyAndRestart(to);
+            });
             return null;
+        }
+        // Replaced while the host stopped: nothing failed, and the host is back (HostManager). What
+        // is ready now is offered instead, with its own notes when it is installed.
+        catch (PackageReplacedException)
+        {
+            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null });
+            installing = false;
+            Pending = null;
+            checkedAt = null;
+            if (seenSource == updater.Source && updater.Ready is { } now) { Downloaded(now); }
+            log($"auto-update: not installing {to}: the package ready changed while the host stopped; {(Pending is { } next ? $"{next} is offered instead" : "checking again")}");
+            Changed();
+            return $"the update downloaded changed while the host stopped ({to} is no longer the one ready): "
+                + (Pending is { } offered ? $"{offered} is ready now, so choose Restart to update again" : "it is being checked for again");
         }
         // Another install got there first (Settings' Restart to update, or this one's other path):
         // that one is installing, and recorded it.

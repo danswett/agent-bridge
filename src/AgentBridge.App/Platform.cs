@@ -139,11 +139,15 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
 
     // Back in the background for this app's profile, as the host's own updates restart it
     // (HostUpdates.RestartArguments): without --profile it would come back as the default one.
-    // Only a release downloaded here: anything else throws, before anything is replaced.
-    public void ApplyAndRestart()
+    // Only the release named, downloaded here from the source selected now (Ready, which the mark
+    // vouches for): anything else throws, before anything is replaced. A check or a download from
+    // Settings may have replaced the one the person chose while the host stopped (r4487830884).
+    public void ApplyAndRestart(string version)
     {
-        if (Ready is null) { throw new InvalidOperationException("no downloaded update to install; check for updates again"); }
+        if (Ready is not { } ready) { throw new InvalidOperationException("no downloaded update to install; check for updates again"); }
+        if (ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded ({ready} is); nothing was installed"); }
         var release = pending?.TargetFullRelease ?? local ?? throw new InvalidOperationException("no downloaded update to install; check for updates again");
+        if (release.Version.ToString() != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded; nothing was installed"); }
         Manager().ApplyUpdatesAndRestart(release, ["--background", "--profile", profile]);
     }
 }

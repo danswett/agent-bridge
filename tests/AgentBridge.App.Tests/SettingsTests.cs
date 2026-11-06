@@ -43,7 +43,13 @@ public sealed class SettingsTests : IAsyncLifetime
             Ready = "0.2.0";
             return Task.CompletedTask;
         }
-        public void ApplyAndRestart() { OnApply?.Invoke(); if (ApplyFails is { } e) { throw e; } Applied = true; }
+        public void ApplyAndRestart(string version)
+        {
+            OnApply?.Invoke();
+            if (ApplyFails is { } e) { throw e; }
+            if (Ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded"); }
+            Applied = true;
+        }
     }
 
     sealed class AtSignIn : IAppAtSignIn

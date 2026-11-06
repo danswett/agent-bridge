@@ -85,7 +85,15 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Ready = Found;
             return Task.CompletedTask;
         }
-        public void ApplyAndRestart() { OnApply?.Invoke(); if (ApplyFails is { } e) { throw e; } Applied = true; }
+        public string? AppliedVersion;
+        // As VelopackUpdater: only the release named, while it is the one ready.
+        public void ApplyAndRestart(string version)
+        {
+            OnApply?.Invoke();
+            if (ApplyFails is { } e) { throw e; }
+            if (Ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded"); }
+            (Applied, AppliedVersion) = (true, version);
+        }
     }
 
     sealed class Toasts : IToastSink
@@ -597,6 +605,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.StartsWith("1 session here is waiting on you, and 1 has a turn running.", warned);
         Assert.False(stoppedBeforeAsking);
         Assert.True(updater.Applied);
+        // The release the person confirmed, by name (r4487830884).
+        Assert.Equal("0.2.0", updater.AppliedVersion);
         Assert.True(stoppedFirst);
         Assert.True(marked);
         Assert.Equal(("0.1.0", "What 0.2.0 changes", (string?)null), (prefs.UpdatedFrom, prefs.UpdateNotes, prefs.UpdateRequest));
@@ -1882,6 +1892,37 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal("0.1.0", prefs.UpdatedFrom);
     }
 
+    // Copilot on 569b7e40 (r4487830884): Settings' checks and downloads do not wait for Restart to
+    // update, so one could replace the package while the host stopped for it, and Velopack applied
+    // the replacement, not the release the person chose, with the chosen one's notes recorded.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_package_replaced_while_the_host_stops_for_Restart_to_update_is_not_applied_and_the_banner_offers_the_new_one()
+    {
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        var (stopAsked, letGo) = HeldStop();
+        await auto.TickAsync();
+        var banner = AppUpdateViewModel.For(auto);
+        Assert.Equal("0.2.0", banner.Version);
+
+        var press = Task.Run(() => banner.RestartAsync(_ => Task.FromResult(true)));
+        await stopAsked;
+        // Settings' check finds 0.3.0 and downloads it, meanwhile.
+        updater.Found = "0.3.0";
+        updater.Ready = "0.3.0";
+        letGo();
+        await press;
+
+        Assert.False(updater.Applied);
+        Assert.Single(processes.Started);
+        Assert.Equal(((string?)null, (string?)null), (prefs.UpdatedFrom, prefs.UpdateNotes));
+        Assert.Null(prefs.LastUpdate);
+        banner.Changed();
+        Assert.Equal(("0.3.0", true), (banner.Version, banner.CanRestart));
+        Assert.Equal(AppUpdateViewModel.DidNotInstall("the update downloaded changed while the host stopped (0.2.0 is no longer the one ready): 0.3.0 is ready now, so choose Restart to update again", again: true), banner.Message);
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the host back");
+    }
     [Fact]
     [Trait("Category", "Network")]
     public async Task Quitting_after_the_host_stopped_for_an_update_but_before_it_was_applied_starts_the_host_again()
@@ -2575,7 +2616,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             }
             finally { running = false; }
         }
-        public void ApplyAndRestart() { }
+        public void ApplyAndRestart(string version) { }
     }
 
     [Fact]

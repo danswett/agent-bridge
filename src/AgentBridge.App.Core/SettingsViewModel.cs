@@ -21,8 +21,10 @@ public interface IUpdater
     // The release downloaded and ready to apply: the one the last check found, once downloaded.
     // Null when a later check (or a change of feed) has found another since, or none.
     string? Ready { get; }
-    // Exits the app, replaces it, and starts the new version.
-    void ApplyAndRestart();
+    // Exits the app, replaces it, and starts the new version: only the release named, the one the
+    // person or the updater chose, and only while it is the one ready. Anything else throws before
+    // anything is replaced (a check or download meanwhile may have replaced it; r4487830884).
+    void ApplyAndRestart(string version);
     // Where releases come from now (the feed, and Include pre-releases): what a check found, or a
     // download fetched, belongs to it.
     string Source => "";
@@ -879,7 +881,7 @@ public sealed class SettingsViewModel : Observable
             await manager.StopAndApplyAsync(() => AutoUpdater.Record(prefs, savePrefs, updater), () =>
             {
                 UpdateStatus = "Restarting…";
-                updater.ApplyAndRestart();
+                updater.ApplyAndRestart(updateVersion!);
             });
         }
         // The automatic update got there first, and is installing (and recorded) it.

@@ -20,7 +20,7 @@ static partial class SelfTest
         public string Source => "self-test";
         public Task<string?> CheckAsync() => Task.FromResult<string?>("0.1.999");
         public Task DownloadAsync(Action<int> progress) => Task.CompletedTask;
-        public void ApplyAndRestart() => throw new InvalidOperationException("the self-test never updates");
+        public void ApplyAndRestart(string version) => throw new InvalidOperationException("the self-test never updates");
     }
 
     static async Task CaptureUpdate(MainWindow window, MainViewModel main, Action<bool, string> check, string outFile, bool contrast = false)
