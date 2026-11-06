@@ -45,11 +45,14 @@
 #    blank lines may follow it); `NOT CLEAN` and `NOT_CLEAN` appear nowhere in the message, in any
 #    case; and no other line has the marker `VERDICT:` in any case, whatever markdown is around
 #    it. Prose that only mentions the verdict, without that marker, is fine.
-#  - The pull request: open, its head still -Head when the checks, threads and reviews are read,
-#    and every review thread resolved.
-#  Before it posts the comment, and again before the status, it reads the head again; if the head
-#  moved after the comment was posted it posts no status, exits nonzero and names the comment, so
-#  a half-done receipt is never taken for a whole one.
+#  - The pull request: open, into the branch main's quality/merge-rule.yml names as its `base:`
+#    (the only branch the merge rule judges, so a receipt for a pull request into any other can't
+#    be carried to one into it), its head still -Head and its base still that branch when the
+#    checks, threads and reviews are read, and every review thread resolved.
+#  Before it posts the comment, and again before the status, it reads the pull request again; if
+#  the head moved or the base changed after the comment was posted it posts no status, exits
+#  nonzero and names the comment, so a half-done receipt is never taken for a whole one. The
+#  comment and the status both name the base.
 #
 # The read ledger is replayed from the log, not supplied: every successful `view` tool call of the
 # reviewer whose path is under -Root. A read counts for a changed file when the content it
@@ -63,7 +66,8 @@
 # Each read is listed in the receipt with its path, lines, time and toolCallId.
 #
 # Scopes (Quality's coverage rule, #689): the diff and each file it leaves (not deleted) read whole.
-#  ENTIRE and FULL  the pull request's files; the diff is `git diff <merge base> <head>`.
+#  ENTIRE and FULL  the files GitHub's compare of the merge-rule base (above) with the head lists,
+#                   never the pull request's own base; the diff is `git diff <their merge base> <head>`.
 #  DELTA            the files changed since -Since, whose latest independent-review status must
 #                   be a success posted by an account in independent_review.posters as main's
 #                   quality/merge-rule.yml has it (any case); the diff is `git diff <since> <head>`.
@@ -198,15 +202,17 @@ function Get-RepoPath($path) {
 }
 
 function Get-PullRequest {
-    $pull = ConvertFrom-GhJson (Invoke-Gh api "repos/$Repository/pulls/$Pr" --jq '{sha: .head.sha, state: .state, base: .base.sha}') "pull request #$Pr"
+    $pull = ConvertFrom-GhJson (Invoke-Gh api "repos/$Repository/pulls/$Pr" --jq '{sha: .head.sha, state: .state, base: .base.ref}') "pull request #$Pr"
     [pscustomobject]@{ Sha = [string](Get-Field $pull 'sha'); State = [string](Get-Field $pull 'state'); Base = [string](Get-Field $pull 'base') }
 }
 
+# Every read of the pull request, the last ones before each post included: open, on -Head, and
+# into $targetBase, so a retarget is refused as a moved head is.
 function Assert-Head([string] $when) {
     $pull = Get-PullRequest
     if ($pull.State -cne 'open') { Stop-Receipt "pull request #$Pr is $($pull.State), not open ($when)" }
     if ($pull.Sha -cne $Head) { Stop-Receipt "the head moved: #$Pr is at $($pull.Sha), not $Head ($when)" }
-    $pull
+    if ($pull.Base -cne $targetBase) { Stop-Receipt "pull request #$Pr targets '$($pull.Base)', not $targetBase, the base main's quality/merge-rule.yml names ($when)" }
 }
 
 function Format-Cell([string] $text) { ($text -replace '\|', '\|' -replace "`r?`n", ' ').Trim() }
@@ -235,14 +241,29 @@ function Get-GreenCi($checks, [string] $what) {
     [pscustomobject]@{ Considered = $counted; GreenAt = $greenAt }
 }
 
-# Who may post the receipt: independent_review.posters in quality/merge-rule.yml as main has it,
-# never the pull request's own copy, which the change under review could rewrite; the merge rule
-# (tools/AgentBridge.Quality/MergeRule.cs) takes a receipt only from them, matching logins in any
-# case. Only the form main writes is read, one `independent_review:` block with its `context:` and
-# a `posters: [a, b]` list; anything else is refused rather than guessed at.
-function Get-ReceiptPosters {
+# quality/merge-rule.yml as main has it, never the pull request's own copy, which the change under
+# review could rewrite. Read once; both readers below take only the form main writes and refuse
+# anything else rather than guess at it.
+function Read-MainPolicy {
     $policy = @(Invoke-Gh api -H 'Accept: application/vnd.github.raw+json' "repos/$Repository/contents/quality/merge-rule.yml?ref=main") -join "`n"
-    $policyLines = (Get-Normalized $policy).Split("`n")
+    , [string[]](Get-Normalized $policy).Split("`n")
+}
+
+# The branch the merge rule judges pull requests into: the one top-level `base:` (MergeRule.cs's
+# Config.Base, which it requires). A receipt is only for a pull request into it.
+function Get-TargetBase([string[]] $policyLines) {
+    $bases = @($policyLines | Where-Object { $_ -cmatch '^base:' })
+    if ($bases.Count -ne 1) { Stop-Receipt "main's quality/merge-rule.yml has $($bases.Count) top-level base lines; exactly one is needed" }
+    $value = [regex]::Match($bases[0], '^base:[ \t]*([''"]?)([A-Za-z0-9][A-Za-z0-9._/-]*)\1[ \t]*(#.*)?$')
+    if (-not $value.Success -or $value.Groups[2].Value.Contains('..')) { Stop-Receipt "main's quality/merge-rule.yml names no base this understands" }
+    $value.Groups[2].Value
+}
+
+# Who may post the receipt: independent_review.posters in main's policy; the merge rule
+# (tools/AgentBridge.Quality/MergeRule.cs) takes a receipt only from them, matching logins in any
+# case. Only one `independent_review:` block with its `context:` and a `posters: [a, b]` list is
+# read.
+function Get-ReceiptPosters([string[]] $policyLines) {
     $blocks = @(for ($i = 0; $i -lt $policyLines.Count; $i++) { if ($policyLines[$i] -cmatch '^independent_review:[ \t]*(#.*)?$') { $i } })
     if ($blocks.Count -ne 1) { Stop-Receipt "main's quality/merge-rule.yml has $($blocks.Count) independent_review blocks; exactly one is needed" }
     $contexts = [Collections.Generic.List[string]]::new()
@@ -477,7 +498,9 @@ if ($early) { Stop-Receipt "the reviewer's event at line $($early[0].Line) is at
 # --- GitHub, on the head.
 # gh writes UTF-8; read as anything else, a file's non-ASCII lines would never match the reads.
 try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false) } catch { Write-Host "Couldn't set the console to UTF-8: a file with non-ASCII text may not match its reads." }
-$pull = Assert-Head 'before reading GitHub'
+$policyLines = Read-MainPolicy
+$targetBase = Get-TargetBase $policyLines
+Assert-Head 'before reading GitHub'
 
 $commits = @(Invoke-Gh api "repos/$Repository/pulls/$Pr/commits?per_page=100" --paginate --jq '.[] | {sha, message: .commit.message}' |
         Where-Object { $_ } | ForEach-Object { ConvertFrom-GhJson $_ 'a commit' })
@@ -510,7 +533,7 @@ if ($Scope -eq 'DELTA') {
     # -Since must carry a CLEAN receipt: its latest independent-review status a success, posted by
     # an account main's merge rule lets post one. The latest alone is judged; an older status never
     # stands in for it.
-    $posters = @(Get-ReceiptPosters)
+    $posters = @(Get-ReceiptPosters $policyLines)
     $sinceStatuses = @(Invoke-Gh api "repos/$Repository/commits/$Since/statuses?per_page=100" --paginate --jq ".[] | select(.context == `"$receiptContext`") | {state, creator: .creator.login, created_at}" |
             Where-Object { $_ } | ForEach-Object { ConvertFrom-GhJson $_ "a $receiptContext status on $Since" })
     if ($sinceStatuses.Count -eq 0) { Stop-Receipt "$Since has no $receiptContext status to be a delta from" }
@@ -528,19 +551,25 @@ if ($Scope -eq 'DELTA') {
         Stop-Receipt "the latest $receiptContext status on $Since was posted by $sinceCreator, who isn't in independent_review.posters on main"
     }
     if ((Get-Field $latest[0] 'state') -cne 'success') { Stop-Receipt "the latest $receiptContext status on $Since is $(Get-Field $latest[0] 'state'), not success: no CLEAN receipt to be a delta from" }
-    $compare = ConvertFrom-GhJson (Invoke-Gh api "repos/$Repository/compare/$Since...$Head" --jq '{status, files: [.files[] | {filename, status}]}') "$Since...$Head"
-    if ((Get-Field $compare 'status') -cne 'ahead') { Stop-Receipt "$Head isn't ahead of $Since ($(Get-Field $compare 'status')): no delta to read" }
-    $files = Get-Field $compare 'files'
-    $files = @($files)
-    # The compare API stops at 300 files.
-    if ($files.Count -ge 300) { Stop-Receipt "$Since...$Head changes $($files.Count) files or more, more than GitHub lists" }
+    $compareFrom = $Since
+} else {
+    # Against the base branch main's merge rule names, never the pull request's own base: what
+    # lands is what that branch doesn't have yet.
+    $compareFrom = $targetBase
+}
+$compare = ConvertFrom-GhJson (Invoke-Gh api "repos/$Repository/compare/$compareFrom...$Head" --jq '{status, merge_base: .merge_base_commit.sha, files: [.files[] | {filename, status}]}') "$compareFrom...$Head"
+$compareStatus = Get-Field $compare 'status'
+$files = Get-Field $compare 'files'
+$files = @($files)
+# The compare API stops at 300 files.
+if ($files.Count -ge 300) { Stop-Receipt "$compareFrom...$Head changes $($files.Count) files or more, more than GitHub lists" }
+if ($Scope -eq 'DELTA') {
+    if ($compareStatus -cne 'ahead') { Stop-Receipt "$Head isn't ahead of $Since ($compareStatus): no delta to read" }
     $diffBase = $Since
 } else {
-    $files = @(Invoke-Gh api "repos/$Repository/pulls/$Pr/files?per_page=100" --paginate --jq '.[] | {filename, status}' |
-            Where-Object { $_ } | ForEach-Object { ConvertFrom-GhJson $_ 'a changed file' })
-    if ($files.Count -ge 3000) { Stop-Receipt "#$Pr changes $($files.Count) files, more than GitHub lists" }
-    $diffBase = [string](Invoke-Gh api "repos/$Repository/compare/$($pull.Base)...$Head" --jq '.merge_base_commit.sha')
-    if ($diffBase -notmatch '^[0-9a-f]{40}$') { Stop-Receipt "no merge base for $($pull.Base)...$Head" }
+    if ($compareStatus -cne 'ahead' -and $compareStatus -cne 'diverged') { Stop-Receipt "$Head isn't ahead of $compareFrom ($compareStatus): nothing to land" }
+    $diffBase = [string](Get-Field $compare 'merge_base')
+    if ($diffBase -cnotmatch '^[0-9a-f]{40}$') { Stop-Receipt "no merge base for $compareFrom...$Head" }
 }
 $files = @($files | Where-Object { $null -ne $_ })
 if ($files.Count -eq 0) { Stop-Receipt 'GitHub lists no changed file' }
@@ -635,7 +664,7 @@ if (-not $diffRead) { Stop-Receipt "the reviewer ran no successful git diff $dif
 
 # --- Threads and reviews on the head, every page.
 function Get-PullRequestNodes([string] $connection, [string] $fields) {
-    $query = 'query($owner: String!, $name: String!, $number: Int!, $cursor: String) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { headRefOid ' +
+    $query = 'query($owner: String!, $name: String!, $number: Int!, $cursor: String) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { headRefOid baseRefName ' +
         $connection + '(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { ' + $fields + ' } } } } }'
     $nodes = [Collections.Generic.List[object]]::new()
     $cursor = $null
@@ -647,6 +676,7 @@ function Get-PullRequestNodes([string] $connection, [string] $fields) {
         $pullNode = Get-Field $answer 'data', 'repository', 'pullRequest'
         if ($null -eq $pullNode) { Stop-Receipt "GitHub returned no pull request #$Pr" }
         if ((Get-Field $pullNode 'headRefOid') -cne $Head) { Stop-Receipt "the head moved to $(Get-Field $pullNode 'headRefOid') while reading the $connection" }
+        if ((Get-Field $pullNode 'baseRefName') -cne $targetBase) { Stop-Receipt "#$Pr was retargeted to '$(Get-Field $pullNode 'baseRefName')', not $targetBase, while reading the $connection" }
         $connectionNode = Get-Field $pullNode $connection
         $pageNodes = Get-Field $connectionNode 'nodes'
         if ($pageNodes -isnot [System.Collections.IList]) { Stop-Receipt "page $page of the $connection has no nodes" }
@@ -669,8 +699,8 @@ $onHead = @($reviews | Where-Object { (Get-Field $_ 'commit', 'oid') -ceq $Head 
 $passed = @($considered | Where-Object { (Get-Field $_ 'bucket') -ceq 'pass' }).Count
 $skipped = $considered.Count - $passed
 $scopeText = switch ($Scope) {
-    'ENTIRE' { 'ENTIRE: every resulting file read whole, and the diff, after CI was green' }
-    'FULL' { 'FULL: the diff plus every changed file read whole' }
+    'ENTIRE' { "ENTIRE: every resulting file read whole, and the diff from the merge base with $targetBase, after CI was green" }
+    'FULL' { "FULL: the diff from the merge base with $targetBase plus every changed file read whole" }
     'DELTA' { "DELTA: the diff since $Since, plus every file changed since read whole" }
 }
 $body = [Collections.Generic.List[string]]::new()
@@ -681,7 +711,7 @@ $body.Add('Machine-generated by `build/review-receipt.ps1` from the reviewer''s 
 $body.Add('')
 $body.Add('| | |')
 $body.Add('|---|---|')
-$body.Add("| Pull request | #$Pr at ``$Head`` |")
+$body.Add("| Pull request | #$Pr at ``$Head`` into ``$targetBase``, the base main's quality/merge-rule.yml names |")
 $body.Add("| Scope | $scopeText |")
 $body.Add("| Reviewer | a ``$role`` agent, ``$ReviewerAgentId``, started by task call ``$callId`` |")
 $body.Add("| Model | requested ``$(Format-Cell $requested)``, confirmed ``$(Format-Cell $confirmed)`` by subagent.completed and every tool call and message of the reviewer |")
@@ -717,7 +747,7 @@ $body.Add($shownReport.Trim())
 $body.Add('')
 $body.Add('</details>')
 $receipt = $body -join "`n"
-$description = "sec-$Pr CLEAN: $Scope, $role, $confirmed"
+$description = "sec-$Pr CLEAN: $Scope into $targetBase, $role, $confirmed"
 if ($description.Length -gt 140) { $description = $description.Substring(0, 140) }
 
 if (-not $Post) {

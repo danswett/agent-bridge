@@ -11,12 +11,14 @@
 # as read again afterwards; ledger.json is the read ledger the script must replay from that log.
 # Each case changes one thing in memory and expects the script to refuse it, or, for a change it
 # must take (a view the CLI cut short and read on later, blank lines after the verdict, a DELTA
-# from an authorized receipt), still to print the receipt. For DELTA the stand-in also answers for
-# main's quality/merge-rule.yml (synthetic posters) and -Since's statuses.
+# from an authorized receipt), still to print the receipt. The stand-in also answers for main's
+# quality/merge-rule.yml (a synthetic `base: main` and posters), GitHub's compare of main with the
+# head (the files and merge base FULL and ENTIRE need) and, for DELTA, -Since's statuses.
 #
 # What it guards (#929): a receipt only from a complete, identified reviewer run on the confirmed
-# model, every read after the captured green CI, on the exact head, with every changed file read
-# whole; anything less is refused with nothing posted, and a post that half-happens says so.
+# model, every read after the captured green CI, on the exact head of a pull request into main's
+# merge-rule base, with every changed file read whole; anything less is refused with nothing
+# posted, and a post that half-happens says so.
 #Requires -Version 7
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -28,7 +30,6 @@ $log = Join-Path $scratch 'events.jsonl'
 $global:RrRepo = 'danswett/agent-bridge'
 $global:RrHead = 'a929a929a929a929a929a929a929a929a929a929'
 $global:RrMergeBase = 'b929b929b929b929b929b929b929b929b929b929'
-$global:RrBase = 'd929d929d929d929d929d929d929d929d929d929'
 $earlier = 'e929e929e929e929e929e929e929e929e929e929'
 $moved = 'f929f929f929f929f929f929f929f929f929f929'
 $agent = 'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE'
@@ -52,16 +53,16 @@ function global:gh {
     if ($a[0] -eq 'api' -and $a[1] -eq "repos/$repo/pulls/929") {
         $global:RrHeadReads++
         $sha = if ($global:RrHeadReads -gt $global:RrMoveAfter) { $global:RrMovedTo } else { $global:RrHead }
-        @{ sha = $sha; state = 'open'; base = $global:RrBase } | ConvertTo-Json -Compress
+        $base = if ($global:RrHeadReads -gt $global:RrRetargetAfter) { $global:RrRetargetTo } else { $global:RrPullBase }
+        @{ sha = $sha; state = 'open'; base = $base } | ConvertTo-Json -Compress
     } elseif ($a[0] -eq 'api' -and $a[1] -eq "repos/$repo/pulls/929/commits?per_page=100") {
         foreach ($c in $global:RrCommits) { $c | ConvertTo-Json -Compress }
     } elseif ($a[0] -eq 'pr' -and $a[1] -eq 'checks') {
         $global:LASTEXITCODE = $global:RrChecksExit
         $global:RrChecks
-    } elseif ($a[0] -eq 'api' -and $a[1] -eq "repos/$repo/pulls/929/files?per_page=100") {
-        foreach ($f in $global:RrFiles) { $f | ConvertTo-Json -Compress }
-    } elseif ($a[0] -eq 'api' -and $a[1] -eq "repos/$repo/compare/$($global:RrBase)...$($global:RrHead)") {
-        $global:RrMergeBase
+    } elseif ($a[0] -eq 'api' -and $a[1] -eq "repos/$repo/compare/main...$($global:RrHead)") {
+        # main's merge-rule base with the head; the pull request's own base, files and base.sha are never asked for.
+        @{ status = 'diverged'; merge_base = $global:RrMainMergeBase; files = @($global:RrFiles) } | ConvertTo-Json -Depth 5 -Compress
     } elseif ($a[0] -eq 'api' -and $a[1] -eq '-H' -and $a[2] -eq 'Accept: application/vnd.github.raw+json' -and $a[3] -eq "repos/$repo/contents/quality/merge-rule.yml?ref=main") {
         if ($null -eq $global:RrPolicy) { $global:LASTEXITCODE = 1; return }
         $global:RrPolicy -split "`n"
@@ -83,7 +84,7 @@ function global:gh {
         $index = if ($cursor) { [int]$cursor.Substring('cursor=page'.Length) } else { 0 }
         $hasNext = $index + 1 -lt $pages.Count
         $connectionValue = @{ pageInfo = @{ hasNextPage = $hasNext; endCursor = $(if ($hasNext) { "page$($index + 1)" } else { $null }) }; nodes = @($pages[$index]) }
-        @{ data = @{ repository = @{ pullRequest = @{ headRefOid = $global:RrHead; $connection = $connectionValue } } } } | ConvertTo-Json -Depth 10 -Compress
+        @{ data = @{ repository = @{ pullRequest = @{ headRefOid = $global:RrHead; baseRefName = $global:RrGraphBase; $connection = $connectionValue } } } } | ConvertTo-Json -Depth 10 -Compress
     } elseif ($a[0] -eq 'api' -and $a[1] -eq '-X' -and $a[2] -eq 'POST' -and $a[3] -eq "repos/$repo/issues/929/comments" -and $a[4] -eq '--input' -and $a[5] -eq '-') {
         $global:RrComment = ($input | Out-String | ConvertFrom-Json).body
         '{"html_url":"https://github.com/danswett/agent-bridge/pull/929#issuecomment-1001","id":1001}'
@@ -99,6 +100,12 @@ function Reset([string]$text = $events) {
     $global:RrHeadReads = 0
     $global:RrMoveAfter = [int]::MaxValue
     $global:RrMovedTo = $moved
+    # The pull request's base, and a retarget after so many reads of it; the base GraphQL gives.
+    $global:RrPullBase = 'main'
+    $global:RrRetargetAfter = [int]::MaxValue
+    $global:RrRetargetTo = 'stage'
+    $global:RrGraphBase = 'main'
+    $global:RrMainMergeBase = $global:RrMergeBase
     $global:RrChecks = $checks
     $global:RrChecksExit = 0
     $global:RrCommits = @(
@@ -117,9 +124,10 @@ function Reset([string]$text = $events) {
     $global:RrReviewPages = @(, @(@{ author = @{ login = 'a-reviewer' }; state = 'COMMENTED'; submittedAt = '2025-06-01T10:34:00Z'; commit = @{ oid = $global:RrHead } }))
     $global:RrComment = $null
     $global:RrStatus = $null
-    # For DELTA: -Since is the fixture's diff base, and main's merge rule names who may post.
+    # main's merge rule names the base pull requests go into and, for DELTA, who may post; -Since is
+    # the fixture's diff base.
     $global:RrSince = $global:RrMergeBase
-    $global:RrPolicy = "version: 1`n`n# Who may post the receipt.`nindependent_review:`n  context: independent-review`n  # synthetic logins`n  posters: [a-poster, `"another-poster`"]`n`nsecurity_labels: [security]`n"
+    $global:RrPolicy = "version: 1`nbase: main`n`n# Who may post the receipt.`nindependent_review:`n  context: independent-review`n  # synthetic logins`n  posters: [a-poster, `"another-poster`"]`n`nsecurity_labels: [security]`n"
     $global:RrSinceStatuses = @(@{ state = 'success'; creator = 'a-poster'; created_at = '2025-06-01T09:00:00Z' })
     if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
     New-Item -ItemType Directory -Force $scratch | Out-Null
@@ -161,7 +169,7 @@ Check 'A complete review prints a receipt naming the confirmed model, the head, 
     $receipt = Invoke-Receipt
     Assert ($receipt.StartsWith('<!-- agent-bridge review-receipt v1 -->')) "receipt: $receipt"
     Assert ($receipt.Contains("sec-929 CLEAN")) 'no verdict line'
-    Assert ($receipt.Contains("#929 at ``$($global:RrHead)``")) 'the head is not named'
+    Assert ($receipt.Contains("#929 at ``$($global:RrHead)`` into ``main``")) 'the head and the base it goes into are not named'
     Assert ($receipt.Contains("requested ``$model``, confirmed ``$model``")) 'the model is not confirmed'
     Assert ($receipt.Contains("a ``code-review`` agent, ``$agent``")) 'the role is not named'
     Assert ($receipt.Contains("session ``$session``")) 'the session is not named'
@@ -182,11 +190,11 @@ Check 'With -Post it reads the head, posts the comment, reads the head again and
     $url = Invoke-Receipt -Post
     Assert ($url -eq 'https://github.com/danswett/agent-bridge/pull/929#issuecomment-1001') "url: $url"
     Assert ($global:RrComment -like '<!-- agent-bridge review-receipt v1 -->*') 'the comment is not the receipt'
-    Assert ($global:RrStatus -like "*state=success*context=independent-review*description=sec-929 CLEAN: FULL, code-review, $model*target_url=$url*") "status: $($global:RrStatus)"
+    Assert ($global:RrStatus -like "*state=success*context=independent-review*description=sec-929 CLEAN: FULL into main, code-review, $model*target_url=$url*") "status: $($global:RrStatus)"
     $comment = $global:RrCalls.FindIndex({ param($c) $c -like '*issues/929/comments*' })
     $status = $global:RrCalls.FindIndex({ param($c) $c -like '*statuses/*' })
     Assert ($comment -lt $status) 'the status went first'
-    Assert ($global:RrCalls[$status - 1] -eq "gh api repos/$($global:RrRepo)/pulls/929 --jq {sha: .head.sha, state: .state, base: .base.sha}") 'the head was not read just before the status'
+    Assert ($global:RrCalls[$status - 1] -eq "gh api repos/$($global:RrRepo)/pulls/929 --jq {sha: .head.sha, state: .state, base: .base.ref}") 'the head and base were not read just before the status'
 }
 
 # --- The three refusals #929's validation route names.
@@ -306,6 +314,72 @@ Check 'A head that moves after the comment is posted posts no status and says th
     $global:RrMoveAfter = 3
     $refusal = Get-Refusal -Post
     Assert ($refusal -like 'review-receipt PARTIAL: the comment https://github.com/danswett/agent-bridge/pull/929#issuecomment-1001 is posted, but no independent-review status*the head moved*') "refusal: $refusal"
+    Assert ($null -ne $global:RrComment -and $null -eq $global:RrStatus) 'the status was posted, or the comment was not'
+}
+
+# --- The base: only a pull request into the branch main's merge rule names, rechecked before each post.
+Check 'A pull request into any branch but main''s merge-rule base is refused for FULL, ENTIRE and DELTA before anything else is read or posted' {
+    foreach ($scope in 'FULL', 'ENTIRE', 'DELTA') {
+        Reset
+        $global:RrPullBase = 'stage'
+        $since = if ($scope -eq 'DELTA') { $global:RrSince } else { '' }
+        Assert-Refused (Get-Refusal -Post -Scope $scope -Since $since) "*pull request #929 targets 'stage', not main, the base main's quality/merge-rule.yml names (before reading GitHub)*"
+        Assert (-not ($global:RrCalls | Where-Object { $_ -like '*compare/*' -or $_ -like '*statuses*' -or $_ -like 'gh pr checks*' -or $_ -like '*graphql*' })) "$scope read on: $($global:RrCalls)"
+    }
+}
+
+Check 'A pull request with no base, or main''s merge rule with no top-level base or one it doesn''t understand, is refused' {
+    Reset
+    $global:RrPullBase = $null
+    Assert-Refused (Get-Refusal -Post) "*pull request #929 targets '', not main*"
+    foreach ($policyBase in @("", "  base: main`n", "base: main`nbase: stage`n")) {
+        Reset
+        $global:RrPolicy = $global:RrPolicy.Replace("base: main`n", $policyBase)
+        Assert-Refused (Get-Refusal -Post) '*main''s quality/merge-rule.yml has * top-level base lines; exactly one is needed*'
+        Assert (-not ($global:RrCalls | Where-Object { $_ -like '*pulls/929*' })) "the pull request was read: $($global:RrCalls)"
+    }
+    foreach ($policyBase in @("base:`n", "base: [main]`n", "base: main..stage`n")) {
+        Reset
+        $global:RrPolicy = $global:RrPolicy.Replace("base: main`n", $policyBase)
+        Assert-Refused (Get-Refusal -Post) '*main''s quality/merge-rule.yml names no base this understands*'
+    }
+}
+
+Check 'FULL and ENTIRE take their files and diff from main''s compare with the head, never the pull request''s own files or base' {
+    $compareMain = "gh api repos/$($global:RrRepo)/compare/main...$($global:RrHead) --jq {status, merge_base: .merge_base_commit.sha, files: [.files[] | {filename, status}]}"
+    foreach ($scope in 'FULL', 'ENTIRE') {
+        Reset
+        $receipt = Invoke-Receipt -Scope $scope
+        Assert ($receipt.StartsWith('<!-- agent-bridge review-receipt v1 -->')) "$scope receipt: $receipt"
+        Assert ($receipt.Contains("the diff from the merge base with main")) "$scope doesn't say its diff is from main's merge base"
+        Assert ($global:RrCalls -contains $compareMain) "$scope didn't compare main with the head: $($global:RrCalls)"
+        Assert (-not ($global:RrCalls | Where-Object { $_ -like '*pulls/929/files*' -or $_ -like '*.base.sha*' })) "$scope read the pull request's own files or base: $($global:RrCalls)"
+    }
+    # A file main's compare lists, as a pull request into another branch wouldn't: it must be read.
+    Reset
+    $global:RrFiles += , @{ filename = 'src/Staged.cs'; status = 'modified' }
+    $global:RrContents['src/Staged.cs'] = "class Staged { }`n"
+    Assert-Refused (Get-Refusal) '*the reviewer didn''t read src/Staged.cs*'
+    # The diff the reviewer ran is from another base than main's merge base with the head.
+    Reset
+    $global:RrMainMergeBase = 'c929c929c929c929c929c929c929c929c929c929'
+    Assert-Refused (Get-Refusal) "*ran no successful git diff c929c929c929c929c929c929c929c929c929c929 $($global:RrHead)*"
+}
+
+Check 'A retarget while reading GitHub, or before either post, is refused; after the comment it posts no status and says the receipt is partial' {
+    Reset
+    $global:RrRetargetAfter = 1
+    Assert-Refused (Get-Refusal -Post) "*targets 'stage', not main*(after reading the checks)*"
+    Reset
+    $global:RrGraphBase = 'stage'
+    Assert-Refused (Get-Refusal -Post) "*#929 was retargeted to 'stage', not main, while reading the reviewThreads*"
+    Reset
+    $global:RrRetargetAfter = 2
+    Assert-Refused (Get-Refusal -Post) "*targets 'stage', not main*(just before posting the comment)*"
+    Reset
+    $global:RrRetargetAfter = 3
+    $refusal = Get-Refusal -Post
+    Assert ($refusal -like "review-receipt PARTIAL: the comment https://github.com/danswett/agent-bridge/pull/929#issuecomment-1001 is posted, but no independent-review status*targets 'stage', not main*(just before posting the status)*") "refusal: $refusal"
     Assert ($null -ne $global:RrComment -and $null -eq $global:RrStatus) 'the status was posted, or the comment was not'
 }
 
