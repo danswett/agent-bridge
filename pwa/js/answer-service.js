@@ -111,7 +111,9 @@ export class AnswerService {
 
   // Sends an answer: { fields } or { text }. While one is on its way it is returned as is:
   // a second tap never sends twice. Null, with nothing sent, for a host that takes nothing now.
-  submit({ hostId, sessionId, questionId, answer }) {
+  // request: the UUID it goes as, when something was already signed for it (an escaped approval's
+  // confirmation names its answer's request, #803); otherwise a fresh one.
+  submit({ hostId, sessionId, questionId, answer, request = null }) {
     const key = AnswerService.key(hostId, sessionId, questionId);
     const existing = this.#entries.get(key);
     if (existing && (existing.state === 'sending' || existing.state === 'waiting')) { return this.#snapshot(existing); }
@@ -119,7 +121,7 @@ export class AnswerService {
     if (!this.accepts(hostId)) { return null; }
     const entry = {
       key, hostId, sessionId, questionId, answer,
-      request: this.uuid(), state: 'sending', outcome: null, reason: null, progress: null, stage: null,
+      request: request ?? this.uuid(), state: 'sending', outcome: null, reason: null, progress: null, stage: null,
       firstSentAt: null, attempts: 0, busyResends: 0, timer: null, token: 0,
     };
     this.#entries.set(key, entry);

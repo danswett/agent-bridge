@@ -31,7 +31,7 @@ import { BridgeConnection } from './connection.js';
 import { ALL, HostSession } from './host-session.js';
 import { HostClient } from './host-client.js';
 import { TRUST } from './launch.js';
-import { TRANSFER, collectRemote, collectingRemote, signTransfer, signTrust } from './transfer.js';
+import { TRANSFER, collectRemote, collectingRemote, signEscapedApproval, signTransfer, signTrust } from './transfer.js';
 import { PushRegistrar, closeMachineNotices, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities } from './protocol.js';
 import { offlineMachines } from './ui/views.js';
@@ -281,7 +281,7 @@ const demoStorage = {
 
 async function startDemo() {
   // Only the demo loads its pretend hosts: the live app never fetches or parses them (#609).
-  const { DemoBlobStore, DemoConnection, DemoHost, demoDelegating, demoMachines, demoSignIn, demoTransfers, demoTrust, runScript } = await import('./demo.js');
+  const { DemoBlobStore, DemoConnection, DemoHost, demoConfirm, demoDelegating, demoMachines, demoSignIn, demoTransfers, demoTrust, runScript } = await import('./demo.js');
   $('demo-banner').hidden = false;
   $('demo-settings').hidden = false;
   shell.setSignedIn(true);
@@ -306,6 +306,8 @@ async function startDemo() {
     large: params.get('blobs') !== '0',
     stopping: params.get('stop') !== '0' && params.get('answer') !== '0' && !ahb,
     approving: params.get('approve') !== '0',
+    // ?confirm=0: a host that does not take an escaped approval's confirmation from this device (#803).
+    confirming: params.get('confirm') !== '0' && params.get('approve') !== '0',
     stopWindowMs,
     usage: params.get('usage') !== '0',
     launching: params.get('launch') !== '0' && params.get('answer') !== '0' && !ahb,
@@ -382,12 +384,15 @@ async function startDemo() {
   for (const m of machines) {
     if (m.capabilities.includes(TRUST.capability)) { trusts.set(m.machine.id, await demoTrust(m, () => hosts.route(m.machine.id)?.client ?? null)); }
   }
+  const confirms = new Map();
+  for (const m of machines) { confirms.set(m.machine.id, await demoConfirm(m)); }
   page = new SessionsPage({
     $, hosts, connection, shell,
     blobs: () => blobStore, relayMax: () => blobStore.max,
     retryMs: Number(params.get('retry')) || 3000,
     transfers: (id) => transfers.get(id) ?? null,
     trust: (id) => trusts.get(id) ?? null,
+    confirm: (id) => confirms.get(id) ?? null,
     status: (id) => fleet.status(id),
     facts: (id) => fleet.facts(id),
     forget: demoForget,
@@ -582,6 +587,13 @@ function begin(account) {
           return client ? client.answerTrust(data) : Promise.reject(new Error(`not connected to ${name()}`));
         },
       };
+    },
+    // An escaped approval's confirmation (#803), signed for the machine on the other end of its
+    // channel when the sheet's button is pressed, never before.
+    confirm: (targetId) => ({ session, question, shown, request, now }) => {
+      const key = hosts.route(targetId) ? hosts.link(targetId)?.channel?.hs?.remoteStatic : null;
+      if (!key) { return Promise.reject(new Error(`not connected to ${hosts.nameOf(targetId) ?? 'that machine'}`)); }
+      return signEscapedApproval({ key: identity.key, deviceId: identity.deviceId, machinePublic: new Uint8Array(key), session, question, shown, request, now });
     },
     status: (id) => fleet.status(id),
     facts: (id) => fleet.facts(id),

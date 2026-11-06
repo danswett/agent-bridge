@@ -72,15 +72,20 @@ public sealed record SignInStatus(SignInState State, string? UserCode = null, st
 // RemoteFolderTrustDevices: launch.remoteFolderTrustDevices, the devices (by id) approved to answer
 // them; null when none is.
 // DevBoxKeepAwake: devBox.keepAwake, keeping this Dev Box from hibernating on disconnect.
+// EscapedApproval: permissions.escapedApproval, confirm or machine (#803); null from a host before it.
+// EscapedApprovalDevices: permissions.escapedApprovalDevices, the devices that may confirm one; null
+// while absent, when the folder-trust devices may, and only while folder trust is on.
 public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, bool RemoteFolderTrust = false, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
-    bool DevBoxKeepAwake = false)
+    bool DevBoxKeepAwake = false, string? EscapedApproval = null, IReadOnlyList<string>? EscapedApprovalDevices = null)
 {
     // By the devices in it, not the list object, so a restart is not asked for because two reads
     // of the same file made two lists.
     public bool Equals(HostSettingsView? other) =>
         other is not null && RemoteApproval == other.RemoteApproval && Name == other.Name && RemoteFolderTrust == other.RemoteFolderTrust
         && (RemoteFolderTrustDevices ?? []).SequenceEqual(other.RemoteFolderTrustDevices ?? [], StringComparer.Ordinal)
-        && DevBoxKeepAwake == other.DevBoxKeepAwake;
+        && DevBoxKeepAwake == other.DevBoxKeepAwake && EscapedApproval == other.EscapedApproval
+        && (EscapedApprovalDevices is null) == (other.EscapedApprovalDevices is null)
+        && (EscapedApprovalDevices ?? []).SequenceEqual(other.EscapedApprovalDevices ?? [], StringComparer.Ordinal);
 
     public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0, DevBoxKeepAwake);
 }

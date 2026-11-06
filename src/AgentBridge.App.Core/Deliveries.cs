@@ -52,6 +52,16 @@ public sealed record Delivery
     // How long it goes on being sent, when not the Deliveries' own GiveUp: a session transfer
     // waits longer for its outcome, and is remembered longer by the host (v1-transfer.md).
     public TimeSpan? GiveUp { get; init; }
+    // An op good only until a moment (an escaped approval's confirmation, MaxLifetime from its
+    // press): while it has never gone, it is waited for no longer than that, then fails with Reason,
+    // so what was never sent says so and can be done again. Waited out to the give-up, it read
+    // unconfirmed with nothing offered, though nothing had gone (#850).
+    public (DateTimeOffset At, string Reason)? Lapse { get; init; }
+    // Whether the op may have reached a host: set once a call for it was made at all, which writes
+    // it to the channel unless the call threw at once. FirstSent is set only once the host's process
+    // is known, which a connection learns a moment after it is up, so a copy written in that moment
+    // left it null (Trust's review of 7bd29fcf).
+    public bool MayHaveGone { get; init; }
 }
 
 // Sends answers, replies and stops (session.answer, session.reply, session.stop), each to
@@ -111,7 +121,8 @@ public sealed class Deliveries
     // answer, reply and End session passes here, a toast's answer and Needs you's included, so none
     // can act on a session kept from before its machine went away. What is already on its way goes
     // on: it went while the session was current, and its request id lets the host act on it once.
-    internal Func<string, string?>? Hold { get; set; }
+    // Public for the app's self-test, which draws the escaped-approval sheet's "Not sent" with it.
+    public Func<string, string?>? Hold { get; set; }
 
     // Whether Hold would refuse the op now.
     public bool Holds(string op) => Hold?.Invoke(op) is not null;
@@ -128,7 +139,8 @@ public sealed class Deliveries
     // stands, so doing it again sends nothing. before: work on the connection ahead of the op
     // (a reply's files), given a progress callback.
     public Delivery Submit(string key, string op, Func<string, object> data, Func<string, bool> final, object? payload = null,
-        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true, TimeSpan? timeout = null, bool resendOnBusy = true, TimeSpan? giveUp = null, string? chosen = null)
+        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true, TimeSpan? timeout = null, bool resendOnBusy = true, TimeSpan? giveUp = null, string? chosen = null,
+        (DateTimeOffset At, string Reason)? lapse = null)
     {
         Delivery entry;
         var held = Hold?.Invoke(op);
@@ -140,7 +152,7 @@ public sealed class Deliveries
                 return existing;
             }
             if (held is not null) { return new Delivery { Key = key, Request = "", State = DeliveryState.Done, Outcome = Held, Reason = held, Payload = payload, Chosen = chosen }; }
-            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, Chosen = chosen, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout, ResendOnBusy = resendOnBusy, GiveUp = giveUp };
+            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, Chosen = chosen, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout, ResendOnBusy = resendOnBusy, GiveUp = giveUp, Lapse = lapse };
             if (KindOf(op) is { } kind)
             {
                 if (marks.Count >= MaxMarked) { marks.Remove(marks.MinBy(m => m.Value.Start).Key); }
@@ -178,6 +190,9 @@ public sealed class Deliveries
         TimeSpan Left() => WindowLeft() is { } w && w < RunLeft() ? w : RunLeft();
         string Late() => WindowLeft() is { } w && w <= RunLeft() ? TooOld : NoOutcome;
         var kind = KindOf(op);
+        // Only while it has never gone: once it may have, what became of it is the host's to say.
+        var mayHaveGone = entry.MayHaveGone;
+        TimeSpan? LapseLeft() => entry.Lapse is { } l && !mayHaveGone ? l.At - time.GetUtcNow() : null;
         var busy = 0;
         var attempts = entry.Attempts;
         // The host the op itself last went to, if it went: files sent ahead are not the op. Carried
@@ -185,6 +200,11 @@ public sealed class Deliveries
         var sentTo = entry.SentTo;
         while (true)
         {
+            if (LapseLeft() <= TimeSpan.Zero)
+            {
+                Update(entry.Key, e => e with { State = DeliveryState.Failed, Reason = entry.Lapse!.Value.Reason, Progress = null });
+                return;
+            }
             if (Left() <= TimeSpan.Zero)
             {
                 var late = Late();
@@ -229,6 +249,7 @@ public sealed class Deliveries
                 // the relay's pacing): it has no hook for the moment the bytes go, so time queued on
                 // this device counts in sent → received, not before sent.
                 Mark(entry.Request, "sent");
+                if (!mayHaveGone) { mayHaveGone = true; Update(entry.Key, e => e with { MayHaveGone = true }); }
                 if (to != sentTo) { sentTo = to; Update(entry.Key, e => e with { SentTo = to }); }
                 if (to is not null && firstSent is null)
                 {
@@ -267,7 +288,7 @@ public sealed class Deliveries
                 Update(entry.Key, x => x with { State = DeliveryState.Waiting, Reason = down ? NotConnected : e.Message });
                 // Waited on only for what is left of the limits, so a Try again pressed late does not hold
                 // the page past them while the machine is away.
-                if (Left() is var left && left > TimeSpan.Zero)
+                if ((LapseLeft() is { } lapseLeft && lapseLeft < Left() ? lapseLeft : Left()) is var left && left > TimeSpan.Zero)
                 {
                     try { await host.WhenConnectedAsync().WaitAsync(left, time); }
                     catch (TimeoutException) { }

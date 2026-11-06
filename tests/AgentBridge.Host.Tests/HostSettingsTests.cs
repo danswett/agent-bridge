@@ -39,6 +39,34 @@ public sealed class HostSettingsTests : IDisposable
         Assert.Equal((new HostSettings(false), (string?)null), With("{ // mine\n \"permissions\": { \"remoteApproval\": false, } }"));
     }
 
+    [Fact]
+    public void Escaped_approvals_are_confirmed_from_the_folder_trust_devices_until_a_list_of_their_own_replaces_them()
+    {
+        var unset = With("{ \"permissions\": {} }").Settings;
+        Assert.Equal((EscapedApproval.Confirm, (IReadOnlyList<string>?)null), (unset.EscapedApproval, unset.EscapedApprovalDevices));
+        var device = new string('a', 32);
+        var listed = With($"{{ \"permissions\": {{ \"escapedApproval\": \"machine\", \"escapedApprovalDevices\": [\"{device}\"] }} }}").Settings;
+        Assert.Equal(EscapedApproval.Machine, listed.EscapedApproval);
+        Assert.Equal([device], listed.EscapedApprovalDevices);
+        // An empty list is a list: no device, not the folder-trust ones.
+        Assert.Equal([], With("{ \"permissions\": { \"escapedApprovalDevices\": [] } }").Settings.EscapedApprovalDevices!);
+    }
+
+    [Theory]
+    [InlineData("{ \"permissions\": { \"escapedApproval\": \"always\" } }", "permissions.escapedApproval")]
+    [InlineData("{ \"permissions\": { \"escapedApproval\": true } }", "permissions.escapedApproval")]
+    [InlineData("{ \"permissions\": { \"escapedApprovalDevices\": \"all\" } }", "permissions.escapedApprovalDevices")]
+    [InlineData("{ \"permissions\": { \"escapedApprovalDevices\": [\"not-a-device\"] } }", "not a device id")]
+    public void An_escaped_approval_setting_that_cannot_be_read_approves_less_and_says_so(string text, string said)
+    {
+        var settings = With(text).Settings;
+
+        Assert.Contains(settings.PermissionProblems, p => p.Contains(said));
+        // Either it is approved only at the machine, or no device is listed for it.
+        Assert.True(settings.EscapedApproval == EscapedApproval.Machine || settings.EscapedApprovalDevices is { Count: 0 });
+        Assert.True(settings.RemoteApproval);
+    }
+
     [Theory]
     [InlineData("{ \"permissions\": { \"remoteApproval\": \"no\" } }")]
     [InlineData("{ \"permissions\": false }")]
@@ -51,6 +79,7 @@ public sealed class HostSettingsTests : IDisposable
 
         Assert.False(settings.RemoteApproval);
         Assert.Contains("remote approval of permission prompts, launching, notifications and agent usage are off", problem);
+        Assert.Equal((EscapedApproval.Machine, 0), (settings.EscapedApproval, settings.EscapedApprovalDevices!.Count));
         Assert.False(settings.Launch.Enabled);
         Assert.False(settings.Push);
         Assert.True(settings.ReadOnly);

@@ -96,6 +96,34 @@
         "by": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
         "mac": "VOHrkQCTeKeX-FSTEHcKrhq2_OkuiIU1z73Irnim1Mw"
       }
+    },
+    {
+      "name": "an-escaped-approval-confirmed",
+      "action": "session.approve:escaped",
+      "now": 1793300060,
+      "body": {
+        "v": 1,
+        "action": "session.approve:escaped",
+        "request": "7d0f3a2e-1c4b-4d5e-8f60-112233445566",
+        "principal": {
+          "kind": "user",
+          "device": "8f6549035c05abc0d83d83be0eb9bce6"
+        },
+        "target": {
+          "machine": "31031edf3b6085d01d1c4ba3b34c1274",
+          "session": "0f3c4d5e-6a7b-4c8d-9e0f-a1b2c3d4e5f6",
+          "question": "req-42#9b1c",
+          "shown": "ec302ba27c10097e70ea452e0f58956cff167d6f8b7079ddbbbce789595d1923"
+        },
+        "to": "31031edf3b6085d01d1c4ba3b34c1274",
+        "issuedAt": 1793300000,
+        "expiresAt": 1793300300
+      },
+      "command": {
+        "body": "eyJ2IjoxLCJhY3Rpb24iOiJzZXNzaW9uLmFwcHJvdmU6ZXNjYXBlZCIsInJlcXVlc3QiOiI3ZDBmM2EyZS0xYzRiLTRkNWUtOGY2MC0xMTIyMzM0NDU1NjYiLCJwcmluY2lwYWwiOnsia2luZCI6InVzZXIiLCJkZXZpY2UiOiI4ZjY1NDkwMzVjMDVhYmMwZDgzZDgzYmUwZWI5YmNlNiJ9LCJ0YXJnZXQiOnsibWFjaGluZSI6IjMxMDMxZWRmM2I2MDg1ZDAxZDFjNGJhM2IzNGMxMjc0Iiwic2Vzc2lvbiI6IjBmM2M0ZDVlLTZhN2ItNGM4ZC05ZTBmLWExYjJjM2Q0ZTVmNiIsInF1ZXN0aW9uIjoicmVxLTQyIzliMWMiLCJzaG93biI6ImVjMzAyYmEyN2MxMDA5N2U3MGVhNDUyZTBmNTg5NTZjZmYxNjdkNmY4YjcwNzlkZGJiYmNlNzg5NTk1ZDE5MjMifSwidG8iOiIzMTAzMWVkZjNiNjA4NWQwMWQxYzRiYTNiMzRjMTI3NCIsImlzc3VlZEF0IjoxNzkzMzAwMDAwLCJleHBpcmVzQXQiOjE3OTMzMDAzMDB9",
+        "by": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
+        "mac": "sYGDrFXpM-GeTaua26Rz1qZGCEYxRkDL9scaBxC-PU4"
+      }
     }
   ],
   "refused": [

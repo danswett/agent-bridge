@@ -1292,6 +1292,33 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Settings_says_which_devices_may_approve_one_with_hidden_characters_and_why_whether_folder_trust_is_on_or_off()
+    {
+        const string phone = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+        var inherited = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [phone], EscapedApproval: EscapedApproval.Confirm);
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = inherited });
+        await Wait.UntilAsync(() => settings.EscapedApprovalText.Contains("approved above for folder-trust questions"), "inherited while folder trust is on");
+
+        // Folder trust off, the phone still listed and its row hidden: Approve is the machine's only.
+        async Task Now(HostSettingsView view)
+        {
+            host.Status = FakeHost.StatusOf() with { Settings = view };
+            await host.SendAsync(HostOps.StatusEvent, host.Status);
+            await Wait.UntilAsync(() => Equals(connection.Status?.Settings, view), "the host's status");
+            settings.Refresh();
+        }
+        await Now(inherited with { RemoteFolderTrust = false });
+        Assert.False(settings.ShowTrustDevices);
+        Assert.Contains("Approve only at this machine while folder-trust questions are answered only here", settings.EscapedApprovalText);
+
+        // A list of config.json's own is shown either way, by short id.
+        await Now(inherited with { RemoteFolderTrust = false, EscapedApprovalDevices = [phone] });
+        Assert.Contains("1 device(s) listed in config.json (permissions.escapedApprovalDevices): a1a1a1a1", settings.EscapedApprovalText);
+        await Now(inherited with { EscapedApproval = EscapedApproval.Machine });
+        Assert.Contains("Approve only at this machine (permissions.escapedApproval)", settings.EscapedApprovalText);
+    }
+
+    [Fact]
     public async Task Two_quick_device_changes_go_one_after_the_other_so_neither_undoes_the_other()
     {
         const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";

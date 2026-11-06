@@ -222,7 +222,10 @@ public static class SessionBudget
         }
         if (!fits(s) && s.Question is { } q1)
         {
-            s = s with { Question = q1 with { Message = Limits.KeepStart(q1.Message, 2 * 1024)!, Truncated = true } };
+            // The escaped text goes with the message it describes: the same marks, those still in it,
+            // and the digest of what is now sent. Cut, it is truncated, which is never confirmed.
+            var kept = Limits.KeepStart(q1.Message, 2 * 1024)!;
+            s = s with { Question = q1 with { Message = kept, Truncated = true, Escaped = q1.Escaped is { } e ? EscapedApproval.Cut(e, kept) : null } };
         }
         if (!fits(s) && s.Question is { } q2)
         {
@@ -579,6 +582,30 @@ public sealed record Question
     // precedence rule 2). Absent for the main agent's.
     [Strict(Strictness.Security)]
     public string? Agent { get; init; }
+    // Set by the host on an approval it showed one or more characters of as escapes (#220): Approve
+    // then takes the escaped-command confirmation, Deny does not (#803, EscapedApproval).
+    [Strict(Strictness.Security)]
+    public EscapedText? Escaped { get; init; }
+}
+
+// What the host escaped in an approval's message, and how Approve is given for it (#803).
+//   Shown: SHA-256, lower-case hex, of the message's UTF-8 exactly as sent. A confirmation names it,
+//     so one given for what a person read approves nothing that reads otherwise.
+//   Marks: the host's own escapes in the message, each [start, length] in UTF-16 code units, in
+//     order, one mark for each escape and nothing else (EscapedApproval.IsEscape). Text an agent wrote itself (six characters "\u202E")
+//     is never in one, which is how a client tells the two apart.
+//   Approve: "confirm" (Approve needs the confirmation, from an approved person's device) or
+//     "machine" (this machine takes Approve for it only at the machine; Deny still goes) or
+//     "tooMany" (more escapes than Marks can carry, EscapedApproval.MaxMarks: Approve only at the
+//     machine whatever its policy; Deny still goes).
+public sealed record EscapedText
+{
+    [Strict(Strictness.Security)]
+    public required string Shown { get; init; }
+    [Strict(Strictness.Security)]
+    public required IReadOnlyList<IReadOnlyList<int>> Marks { get; init; }
+    [Strict(Strictness.Security)]
+    public required string Approve { get; init; }
 }
 
 public sealed record Field
@@ -679,6 +706,9 @@ public sealed record AnswerRequest
     // True from a client that saw sessions.progress: it hears DeliveryProgress frames before the
     // result, and the result carries Timings. Absent, nothing about the exchange changes.
     public bool? Progress { get; init; }
+    // With Approve on a question that has Escaped: the command the person's device signed when they
+    // pressed the confirmation (EscapedApproval). Only a host's relay channel acts on one.
+    public SignedCommand? Confirm { get; init; }
 }
 
 public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null)

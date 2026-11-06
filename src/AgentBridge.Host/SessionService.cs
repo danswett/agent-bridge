@@ -91,6 +91,10 @@ public sealed class SessionService
     // launch.trust.answer, through the relay only (FolderTrustAnswers).
     public FolderTrustAnswers? TrustAnswers { get; init; }
 
+    // Approve on an approval the host escaped anything in, confirmed from a person's device through
+    // the relay only (EscapedApprovals, #803).
+    public EscapedApprovals? EscapedApprovals { get; init; }
+
     // update.*, through the relay only, and never on a read-only machine (UpdateService).
     public UpdateService? Updates { get; init; }
 
@@ -340,7 +344,10 @@ public sealed class SessionService
         var (watch, progress) = Watch(request.Progress);
         if (answers is null) { return new AnswerResult(AnswerOutcome.Refused, "this host does not take answers; answer at the machine"); }
         var takeBack = BeginTakeBack(request.Id, request.Request);
-        var result = await answers.AnswerAsync(request, watch: watch);
+        // A confirmation is checked as coming from the device on the other end of a channel through
+        // the relay, and from nowhere else: on this machine's pipe it is none, and refused as such.
+        var confirmed = channel is SecureChannel secure && EscapedApprovals is { } escaped ? escaped.For(secure.PeerId, request) : null;
+        var result = await answers.AnswerAsync(request, watch: watch, confirmed: confirmed);
         // Typed from this device: it needs no notification that the question was answered.
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
         {
@@ -505,6 +512,7 @@ public sealed class SessionService
         if (usage?.Shares == true) { offered.Add(UsageProtocol.SharedCapability); }
         if (launcher?.Available == true) { offered.Add(LaunchProtocol.Capability); }
         if (TrustAnswers?.Available == true && channel is SecureChannel) { offered.Add(TrustProtocol.Capability); }
+        if (answers?.Available == true && channel is SecureChannel peer && EscapedApprovals?.Offers(peer.PeerId) == true) { offered.Add(EscapedApproval.Capability); }
         if (Updates?.Offered(channel) == true) { offered.Add(UpdateProtocol.Capability); }
         if (Restore is not null) { offered.Add(RestoreProtocol.Capability); }
         // Transfers are signed by a device through the relay, and go through its blob store.

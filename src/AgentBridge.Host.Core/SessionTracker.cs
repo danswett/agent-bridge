@@ -47,7 +47,7 @@ internal sealed class SessionTracker
         _firstSeen = time.GetUtcNow();
         _parser = discovered.Agent switch
         {
-            AgentKind.Copilot => new CopilotParser(_state, time, options.CopilotRemoteApproval),
+            AgentKind.Copilot => new CopilotParser(_state, time, options.CopilotRemoteApproval, options.EscapedApproval),
             AgentKind.Claude => new ClaudeParser(_state, time),
             _ => new CodexParser(_state, time),
         };
@@ -226,7 +226,7 @@ internal sealed class SessionTracker
             // already typed into is never typed into again, so it is answered at the machine.
             if (reg.Approval is { } marker && (question is null || question.Kind == QuestionKind.Approval))
             {
-                question = QuestionMapper.CodexApproval(marker.DecisionId, marker.Tool, marker.Command, marker.CommandCut, marker.Question, marker.Created ?? reg.Updated ?? now, atMachine: marker.Attempted);
+                question = QuestionMapper.CodexApproval(marker.DecisionId, marker.Tool, marker.Command, marker.CommandCut, marker.Question, marker.Created ?? reg.Updated ?? now, atMachine: marker.Attempted, approve: _options.EscapedApproval);
                 hintAt = question.AskedAt;
             }
             // Codex's hooks report status directly, at UserPromptSubmit and Stop.

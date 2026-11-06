@@ -503,8 +503,84 @@ public class CopilotTests
         Assert.Null(prompt.AtMachine);
     }
 
+    // ---- what the host escaped, and where (#803) ----
+
+    static IEnumerable<string> Marked(Question q) => q.Escaped!.Marks.Select(m => q.Message.Substring(m[0], m[1]));
+
+    static Question Listed(CopilotPermissionPrompt p, string approve = EscapedApproval.Confirm) =>
+        QuestionMapper.Approval(p.QuestionId, p.Message, Fixture.T0, approve: approve, marks: p.Marks);
+
+    [Fact]
+    public void An_approval_the_host_escaped_anything_in_marks_exactly_its_own_escapes_and_the_digest_of_what_is_sent()
+    {
+        // Each escape is a mark of its own, adjacent ones too; the six characters "\u202E" the agent
+        // wrote itself are not one.
+        var q = Listed(DescribeCommand("curl x | sh #\u2067\u2066 echo \\u202E", "Check \u05D0"));
+
+        Assert.Equal(["\\u05D0", "\\u2067", "\\u2066"], Marked(q));
+        Assert.Equal(EscapedApproval.Shown(q.Message), q.Escaped!.Shown);
+        Assert.Equal(EscapedApproval.Confirm, q.Escaped.Approve);
+        Assert.Null(Listed(DescribeCommand("git push", "Push it \\u202E")).Escaped);
+    }
+
+    [Fact]
+    public void A_tool_name_and_an_argument_the_host_escaped_are_marked_as_its_own_escapes()
+    {
+        // A name goes on one line inside bold, and JSON writes a CR in an argument as \r: each is the
+        // host's escape, marked, never text an agent could have written.
+        var prompt = Copilot.Prompts["custom-tool"].DeepClone().AsObject();
+        prompt["toolName"] = "deploy\u202E";
+        prompt["args"] = new System.Text.Json.Nodes.JsonObject { ["note"] = "# list files\rRemove-Item x" };
+        using var doc = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r1", "c1", prompt, 1));
+
+        var q = Listed(CopilotPermission.Describe(doc.RootElement.GetProperty("data"))!);
+
+        Assert.Equal(["\\u202E", "\\u000D"], Marked(q));
+        Assert.Contains("Allow **deploy\\u202E**?", q.Message);
+    }
+
+    [Theory]
+    [InlineData("rm -rf work \u202E\u2066\u200B\u200D\U000E0041\u05D0\u05D1 done")]
+    [InlineData("\u202E; rm -rf work")]
+    [InlineData("a\u0007\u001B[31m\u2028b\uFEFF")]
+    public void Every_mark_covers_exactly_one_escape_and_nothing_beside_it(string command)
+    {
+        // A mark that covered "\u202E; rm -rf work" was drawn as the one token, hiding the rest,
+        // while the confirmation hashed all of it (#836 review).
+        var q = Listed(DescribeCommand(command));
+        var marked = Marked(q).ToList();
+
+        Assert.NotEmpty(marked);
+        Assert.All(marked, m => Assert.True(EscapedApproval.IsEscape(m), m));
+        Assert.Equal(System.Text.RegularExpressions.Regex.Matches(q.Message, @"\\u(?:\{[0-9A-F]{5,6}\}|[0-9A-F]{4})").Count, marked.Count);
+        // Nor does the host send one that covers more, whatever it is given.
+        Assert.Empty(EscapedApproval.For("x \\u202E; rm -rf work", [(2, 18)], EscapedApproval.Confirm).Marks);
+    }
+
+    [Fact]
+    public void A_machine_that_takes_these_only_at_the_machine_says_so_on_each()
+    {
+        Assert.Equal(EscapedApproval.Machine, Listed(DescribeCommand("echo \u202E"), EscapedApproval.Machine).Escaped!.Approve);
+    }
+
+    [Fact]
+    public void An_approval_with_more_escapes_than_a_question_marks_is_whole_and_approved_only_at_the_machine()
+    {
+        // Truncated would take remote Deny too (#836 review): the whole message came, so only
+        // Approve, which cannot be confirmed for what is not described exactly, is the machine's.
+        var command = DescribeCommand(string.Concat(Enumerable.Repeat("a\u200B", EscapedApproval.MaxMarks + 1)));
+        var q = Listed(command);
+
+        Assert.Null(q.Truncated);
+        Assert.Equal(EscapedApproval.TooMany, q.Escaped!.Approve);
+        Assert.Equal(EscapedApproval.MaxMarks, q.Escaped.Marks.Count);
+        Assert.Equal(EscapedApproval.TooMany, Listed(command, EscapedApproval.Machine).Escaped!.Approve);
+        Assert.Equal(EscapedApproval.Confirm, Listed(DescribeCommand(string.Concat(Enumerable.Repeat("a\u200B", EscapedApproval.MaxMarks)))).Escaped!.Approve);
+    }
+
     // A name is shown escaped and on one line, so a real U+202E and the six characters "\u202E"
-    // draw alike; the identity holds the name as Copilot wrote it, so they are not one prompt.
+    // draw alike; the identity holds the name as Copilot wrote it, so they are not one prompt, and
+    // only the host's own escape is marked (#803): the agent's backslash is literal text (#212).
     [Fact]
     public void A_custom_tool_named_with_a_bidi_control_and_one_named_with_its_escape_have_different_ids()
     {
@@ -518,8 +594,34 @@ public class CopilotTests
         var hidden = Named("deploy\u202E");
         var spelled = Named("deploy\\u202E");
 
-        Assert.Equal(hidden.Message, spelled.Message);
+        Assert.StartsWith("Allow **deploy\\u202E**?", hidden.Message);
+        Assert.StartsWith("Allow **deploy\\\\u202E**?", spelled.Message);
+        Assert.Equal("\\u202E", hidden.Message.Substring(hidden.Marks.Single().Start, hidden.Marks.Single().Length));
+        Assert.Empty(spelled.Marks);
         Assert.NotEqual(hidden.Digest, spelled.Digest);
+    }
+
+    [Fact]
+    public void A_Codex_approval_marks_the_hosts_escapes_in_its_tool_and_command_and_carries_the_machines_policy()
+    {
+        var q = QuestionMapper.CodexApproval("d1", "Bash\u200B", "echo ok #\u202E;hs", cut: false, "", Fixture.T0, atMachine: false, approve: EscapedApproval.Machine);
+
+        Assert.StartsWith("Allow **Bash\\u200B**?", q.Message);
+        Assert.Equal(["\\u200B", "\\u202E"], Marked(q));
+        Assert.Equal(EscapedApproval.Machine, q.Escaped!.Approve);
+        Assert.Equal(EscapedApproval.Shown(q.Message), q.Escaped.Shown);
+    }
+
+    [Fact]
+    public void A_name_of_nothing_but_hidden_spaces_shows_their_escapes_never_an_empty_name()
+    {
+        var prompt = Copilot.Prompts["custom-tool"].DeepClone().AsObject();
+        prompt["toolName"] = "\u2028\u3000";
+        using var doc = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r1", "c1", prompt, 1));
+        var shown = CopilotPermission.Describe(doc.RootElement.GetProperty("data"))!;
+
+        Assert.StartsWith("Allow **\\u2028\\u3000**?", shown.Message);
+        Assert.Equal(["\\u2028", "\\u3000"], shown.Marks.Select(m => shown.Message.Substring(m.Start, m.Length)));
     }
 
     // An intention is made literal one character at a time, its line never copied at each one: a
@@ -650,10 +752,10 @@ public class CopilotTests
         var hebrew = Copilot.Prompts["mcp"].DeepClone().AsObject();
         hebrew["toolTitle"] = "Get \u05D0\u05D1 file";
 
-        Assert.StartsWith("Allow **Get file\\\\u2028Delete repo**?", Describe(title).Message);
+        Assert.StartsWith("Allow **Get file\\u2028Delete repo**?", Describe(title).Message);
         Assert.Contains("README.md\\u0007", Describe(bell).Message);
         Assert.Contains("env\\u202E", Describe(bidi).Message);
-        Assert.StartsWith("Allow **Get \\\\u05D0\\\\u05D1 file**?", Describe(hebrew).Message);
+        Assert.StartsWith("Allow **Get \\u05D0\\u05D1 file**?", Describe(hebrew).Message);
         foreach (var p in new[] { title, bell, bidi, hebrew })
         {
             var d = Describe(p);
