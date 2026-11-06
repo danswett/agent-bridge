@@ -66,6 +66,9 @@ public sealed class SignedCommandVectorTests
         Valid("a-transfer", Transfer, TransferProtocol.Action);
         Valid("a-folder-trust-answer", Body(TrustProtocol.Action(TrustProtocol.Trust), Question, MachineId), TrustProtocol.Action(TrustProtocol.Trust));
         Valid("a-folder-trust-quit", Body(TrustProtocol.Action(TrustProtocol.Quit), Question, MachineId), TrustProtocol.Action(TrustProtocol.Quit));
+        // Naming the question and exactly what was read, so no other question's Approve rides it (#803).
+        var confirm = Body(EscapedApproval.Action, Session, MachineId);
+        Valid("an-escaped-approval-confirmed", confirm with { Target = confirm.Target with { Question = "req-42#9b1c", Shown = EscapedApproval.Shown("Allow **shell**?") } }, EscapedApproval.Action);
 
         var refused = new JsonArray();
         var signed = SignedCommands.Sign(Phone, Machine.Public, Transfer);

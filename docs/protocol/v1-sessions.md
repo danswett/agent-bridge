@@ -61,7 +61,8 @@ reads every host record (results and event data alike) by these rules (#446):
 3. **A record is refused, never defaulted, when a strict field is missing (where required) or of
    the wrong type.** These are the fields it is filed or acted on under (*identity*), and the
    ones a person decides on or that prove who asked (*security*). A strict list is refused whole
-   if any entry can't be read: a question is never shown with a choice left out.
+   if any entry can't be read, an entry of a list within it included: a question is never shown
+   with a choice left out, and an escaped approval's mark `[5, null, 6]` is never read as `[5, 6]`.
 4. A refused record held by another record's field reads as that field absent: a session whose
    question is refused is kept, without a question. A refused record in a list is left out
    (rule 2). Only a refused **top-level** record refuses its message: the client drops that one
@@ -80,7 +81,8 @@ with the wrong type):
 | `ToolCall` | `id` | |
 | `Activity` | | `source`, `userMessageFrom` |
 | `ActivitySource` | | `response`, `reasoning` |
-| `Question` | | `id`, `kind`, `message`, `fields` (whole), `agent`, `answerAtMachine`, `truncated` |
+| `Question` | | `id`, `kind`, `message`, `fields` (whole), `agent`, `answerAtMachine`, `truncated`, `escaped` |
+| `EscapedText` | | `shown`, `marks` (whole), `approve` |
 | `Field` | `name` | `type`, `title`, `description`, `options` (whole), `allowOther` |
 | `Option` | | `value`, `label` |
 | `DiscoveryHeld` | `reason` | `agents` (whole) |
@@ -279,6 +281,7 @@ once whenever `machine.readOnly`, `machine.restore` or `capabilities` would diff
 | `sessions.attach.direct` | `attachment.chunk` takes files up to 100 MiB, not only 256 KiB. Offered with `sessions.attach` on the local pipe only ([local-pipe.md](local-pipe.md)), where the bytes cost the relay nothing |
 | `sessions.stop` | `session.stop`. Left out on the same terms as `sessions.answer`. A client then offers no End session |
 | `sessions.approve` | Copilot permission prompts are approved or denied with `session.answer` ([Copilot permission prompts](#copilot-permission-prompts)). Offered only with `sessions.answer`, by a host whose `permissions.remoteApproval` is on (the default). Without it, every Copilot permission prompt is `answerAtMachine`, and a client says approving from the phone is turned off on that machine |
+| `sessions.approveEscaped` | Approve on an approval with `escaped` may go from this device, as a two-step confirmation ([Escaped approvals](#escaped-approvals)). Offered with `sessions.answer` on a channel through the relay from a person's device (the PWA or the Windows app) that this machine approved, while its `permissions.escapedApproval` is `confirm`. Advisory: every answer is checked again. Without it, a client offers Deny only for such an approval and says why |
 | `push` | `push.subscribe`, `push.unsubscribe`, `push.list`: Web Push notifications of questions, finished turns and sessions that need sign-in ([Notifications](#notifications)). Left out by a host whose `push.enabled` is off ([host-config.md](../host-config.md)): it then fails `push.subscribe` saying it doesn't send notifications, removes nothing on `push.unsubscribe` and lists no devices |
 | `usage` | `usage.get`, `usage.subscribe`: how much of each agent's allowance is gone ([v1-usage.md](v1-usage.md)) |
 | `usage.shared` | `usage.get` and `usage.subscribe` take `{ "shared": true }` and add the readings this host keeps from the account's other machines, each with `readBy` ([v1-usage.md](v1-usage.md#shared-readings)). Without asking, a client gets the host's own report as before |
@@ -578,6 +581,7 @@ Answers a session's pending question. Request `data`:
 | `fields` | One value per field, by `name` (below). Omit a field to leave it unanswered; `required` fields must be present |
 | `text` | Instead of `fields`, for a question with no fields: the free-text answer |
 | `progress` | Optional, `true` from a client that saw `sessions.progress`: it hears the answer's progress before its result ([Progress](#progress)). Absent, nothing changes |
+| `confirm` | With `{ "decision": "approve" }` on a question with `escaped`, and nowhere else: the command the person's device signed when they pressed the confirmation ([Escaped approvals](#escaped-approvals)) |
 
 A field's value, by type:
 
@@ -716,6 +720,65 @@ only if those rows and the options, and which is highlighted, still read the sam
 moment it is typed.
 `permissions.remoteApproval` in the host's own settings turns this off on a machine
 ([host-answers.md](../host-answers.md)).
+
+#### Escaped approvals
+
+An approval holding a character a host shows as an escape (a bidi control, a zero-width or other
+hidden character, a control but newline and tab, a right-to-left letter; #220) carries
+`escaped`, set by the host from what it actually escaped (#803). Clients never infer it from
+`\u` text, which an agent can write itself.
+
+```json
+"escaped": { "shown": "<64 hex>", "marks": [[12, 6], [40, 6]], "approve": "confirm" }
+```
+
+| Field | Meaning |
+|---|---|
+| `shown` | SHA-256, lower-case hex, of the question's `message` as sent, in UTF-8. The question id binds what the agent asked (a Copilot permission prompt's `<requestId>#<digest>`, a Codex approval's `<DecisionId>#<digest>`); `shown` binds what the person read |
+| `marks` | The host's own escapes in `message`: `[start, length]` in UTF-16 code units, in order, **one mark for each escape** (`\uXXXX` with four upper-case hex digits, or `\u{XXXXX}` past the first plane), adjacent ones too, and nothing else in it. Text an agent wrote itself is never in one. A client checks each mark against that grammar and draws every character of the message; a question whose marks don't check is held at the machine for Approve, as a malformed `escaped` is. At most 512; a question with more carries the first 512 and `approve` `tooMany`, and is not `truncated` for it, so Deny still goes |
+| `approve` | `confirm`: Approve takes the confirmation below. `machine`: this machine's `permissions.escapedApproval` keeps Approve at the machine. `tooMany`: more escapes than `marks` carries, so what a person reads is not described exactly and Approve is taken only at the machine, whatever the policy; Deny goes as for any approval. A client that reads any other value holds Approve at the machine |
+
+**Deny** goes as for any approval, from every surface, Home Assistant included.
+
+**Approve** is `{ "decision": "approve" }` plus `confirm`, a [signed command](v1-transfer.md#the-signed-command)
+the device signs when the person presses the sheet's own button, never before:
+
+```json
+{ "v": 1, "action": "session.approve:escaped", "request": "<the answer's request>",
+  "principal": { "kind": "user", "device": "<signer device id>" },
+  "target": { "machine": "<this machine>", "session": "<session id>",
+              "question": "<question id>", "shown": "<escaped.shown>" },
+  "to": "<this machine>", "issuedAt": 0, "expiresAt": 0 }
+```
+
+A host takes it only:
+* through the relay, on a channel from the device that signed it. Never its pipe, which agents
+  and the MCP server reach, nor its Home Assistant connector, whose users include agents;
+* from a device the relay lists now as a person's (the PWA or the Windows app), not the machine
+  itself, and one this machine approved: `permissions.escapedApprovalDevices`, or while that is
+  absent `launch.remoteFolderTrustDevices` while `launch.remoteFolderTrust` is on ([host-config.md](../host-config.md));
+* with a MAC for this machine, `action` `session.approve:escaped`, `to` and `target.machine` this
+  machine, `target.session` and `target.question` the answer's (the question's `id` as listed: for
+  a Codex approval `<DecisionId>#<digest>`, never the bare `DecisionId`, #958), `request` the answer's own,
+  `target.shown` equal to `escaped.shown` and to the digest of the message the host would send
+  now, computed again, and a lifetime of at most 5 minutes;
+* while `escaped.approve` is `confirm`, and never for a `truncated` question.
+
+It checks all of this when the answer arrives and again once the answer's turn to type has come,
+so a device removed from the list, or a confirmation past its lifetime, meanwhile stops it before
+any key. A command changed meanwhile is another question, with another id: a Codex approval is
+rebuilt from its marker as it reads immediately before typing, never from the session's listing,
+and one that no longer rebuilds to the id answered is `stale` (#958). A `confirm` is good only for
+the escaped message it was signed for: an Approve carrying one is `refused` when the question it
+answers has no `escaped`, as when its digest differs.
+Everything else about the approval is as above. A resend of the same answer carries the same
+command and gets the first outcome; a new press is a new request and a new command. Anything
+missing or wrong is `refused` with the reason, nothing typed: an older client's Approve with no
+`confirm` is refused saying the approval needs the escaped-command confirmation, and Deny still
+goes from it.
+
+A budget that has to cut the message keeps `escaped` with it: the marks still inside, `shown`
+of what is now sent, and the question `truncated`, which is never confirmed.
 
 ### `session.reply`
 
@@ -1633,6 +1696,7 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `askedAt` | time | |
 | `truncated` | bool? | The host had to cut `message` or drop `fields` to fit the budget. A client shows what it has and says to answer at the machine |
 | `answerAtMachine` | bool? | No host can answer this prompt from another device: a Copilot permission request of a kind no host drives (or any, on a host without `sessions.approve`), a Claude permission prompt, a Codex approval seen only in its rollout or already typed into once. It still has its fields, so a client can say what it asks, but a client shows no controls for it, says to answer it at the machine ("Waiting on you · answer at the machine", ui.md §2.2), and a `session.answer` for it is `refused` |
+| `escaped` | object? | An approval the host showed any character of as an escape: `shown`, `marks` and `approve` ([Escaped approvals](#escaped-approvals)). Approve on it takes the escaped-command confirmation; Deny does not. Absent when nothing was escaped |
 | `agent` | string? | The sub-agent that asked, by its `subagents` id, when it is not the session's own question (`waitingOn` names it too). A Copilot permission prompt is the CLI's one dialog whoever asked, and is answered the same way. A sub-agent's `ask_user` is always `answerAtMachine`: delivery types only into the main agent's, so nothing proves where the keys would land. And while a permission prompt or a sub-agent's question waits beside it, the session's own Copilot `ask_user` is `answerAtMachine` too, since the CLI may be showing the other one; a host also checks the transcript for a pending permission prompt just before typing an answer |
 
 ### Field

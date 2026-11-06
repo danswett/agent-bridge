@@ -33,7 +33,10 @@ public static class Transfers
 
     // Any signed command this device makes (v1-transfer.md, "The signed command"): a transfer, or
     // an answer to a folder-trust question (action launch.trust:<choice>, session the question).
-    public static SignedCommand SignCommand(P256KeyPair key, byte[] machinePublic, string action, string session, string to, DateTimeOffset now, string request)
+    // question and shown: an escaped approval's confirmation names the question and what was read
+    // (#803); nothing else does.
+    public static SignedCommand SignCommand(P256KeyPair key, byte[] machinePublic, string action, string session, string to, DateTimeOffset now, string request,
+        string? question = null, string? shown = null)
     {
         var issued = now.ToUnixTimeSeconds();
         var body = JsonSerializer.SerializeToUtf8Bytes(new CommandBody
@@ -42,7 +45,7 @@ public static class Transfers
             Action = action,
             Request = request,
             Principal = new CommandPrincipal { Kind = "user", Device = Wire.DeviceId(key.Public) },
-            Target = new CommandTarget { Machine = Wire.DeviceId(machinePublic), Session = session },
+            Target = new CommandTarget { Machine = Wire.DeviceId(machinePublic), Session = session, Question = question, Shown = shown },
             To = to,
             IssuedAt = issued,
             ExpiresAt = issued + (long)CommandLifetime.TotalSeconds,

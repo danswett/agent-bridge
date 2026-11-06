@@ -40,6 +40,9 @@ public sealed record CopilotPermissionPrompt(string RequestId, string? ToolCallI
 {
     public IReadOnlyList<string> Probes { get; init; } = [];
 
+    // Where Message holds the host's own escapes (ShownText.RevealMarked), for EscapedText.Marks.
+    public IReadOnlyList<(int Start, int Length)> Marks { get; init; } = [];
+
     public string QuestionId => $"{RequestId}#{Digest}";
 
     public static (string RequestId, string Digest)? ParseQuestionId(string id)
@@ -91,7 +94,8 @@ public static partial class CopilotPermission
         // Shown from no more than a question can carry: a transcript line can be 32 MiB, and each
         // escape is six characters or more, so escaping all of it first could make it six times that
         // before the question cut it (QuestionMapper.Approval, which says when it was cut).
-        return new CopilotPermissionPrompt(request, toolCallId, kind, ShownText.RevealWithin(message, Limits.QuestionMessage, rightToLeft: true), Digest(kind, message, p, atMachine is not null), atMachine) { Probes = Probes(kind, p) };
+        var (shown, marks) = ShownText.RevealWithinMarked(message, Limits.QuestionMessage, rightToLeft: true);
+        return new CopilotPermissionPrompt(request, toolCallId, kind, shown, Digest(kind, message, p, atMachine is not null), atMachine) { Probes = Probes(kind, p), Marks = marks };
     }
 
     static List<string> Probes(string kind, JsonElement p)
@@ -180,19 +184,38 @@ public static partial class CopilotPermission
     }
 
     // JSON writes a carriage return, a backspace and a form feed in an argument as \r, \b and \f, which
-    // no reader of escapes takes for the characters they are: the notes and the Needs you lane read
-    // the \u000D a host writes for one (ShownText.Unreveal, hidden-text.js), so a CR in a tool's
-    // argument, which PowerShell ends a `#` comment at, went without a word (#220). Each is written so;
-    // an escaped backslash before an r (\\r) is two characters of text, and stays as it is.
-    static string Controls(string json) => !json.Contains('\\') ? json : JsonEscape().Replace(json, m => m.Value switch
+    // no reader of escapes takes for the characters they are, and may write others (a bidi control,
+    // half a surrogate pair) as \uXXXX: the notes and the Needs you lane read the \u000D a host writes
+    // for one (ShownText.Unreveal, hidden-text.js), so a CR in a tool's argument, which PowerShell ends
+    // a `#` comment at, went without a word (#220). Each such character is put back as itself, so the
+    // message's own escaping shows it as one of the host's escapes, and marks it (EscapedText, #803);
+    // an escaped backslash before an r (\\r) is two characters of text, and stays as it is, as does an
+    // escape of anything the escaping would not show (\u0022).
+    static string Controls(string json) => !json.Contains('\\') ? json : JsonEscape().Replace(json, m =>
     {
-        @"\r" => @"\u000D",
-        @"\b" => @"\u0008",
-        @"\f" => @"\u000C",
-        _ => m.Value,
+        static bool Escaped(string s) => ShownText.HasHidden(s) || ShownText.HasRightToLeft(s);
+        if (m.Groups["high"].Success)
+        {
+            var pair = char.ConvertFromUtf32(char.ConvertToUtf32(
+                (char)int.Parse(m.Groups["high"].Value, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture),
+                (char)int.Parse(m.Groups["low"].Value, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture)));
+            return Escaped(pair) ? pair : m.Value;
+        }
+        if (m.Groups["hex"].Success)
+        {
+            var one = ((char)int.Parse(m.Groups["hex"].Value, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture)).ToString();
+            return Escaped(one) ? one : m.Value;
+        }
+        return m.Value switch
+        {
+            @"\r" => "\r",
+            @"\b" => "\b",
+            @"\f" => "\f",
+            _ => m.Value,
+        };
     });
 
-    [GeneratedRegex(@"\\(?:u[0-9A-Fa-f]{4}|.)", RegexOptions.Singleline)]
+    [GeneratedRegex(@"\\u(?<high>[dD][89abAB][0-9A-Fa-f]{2})\\u(?<low>[dD][c-fC-F][0-9A-Fa-f]{2})|\\u(?<hex>[0-9A-Fa-f]{4})|\\.", RegexOptions.Singleline)]
     private static partial Regex JsonEscape();
 
     static string Join(params string?[] parts) => string.Join("\n\n", parts.Where(s => !string.IsNullOrWhiteSpace(s)));
@@ -212,9 +235,36 @@ public static partial class CopilotPermission
         return $"{fence}{language}\n{text}\n{fence}";
     }
 
-    // A name inside **bold**: one line of it, literal (Literal). Hidden characters are shown
-    // escaped first, so collapsing the name to one line cannot drop them.
-    internal static string Plain(string text) => Literal(Text.OneLine(ShownText.Reveal(text, rightToLeft: true))) ?? "";
+    // A name inside **bold**: its first line, literal (Literal), whitespace collapsed as
+    // Text.OneLine does, but a character the message's escaping shows (ShownText) is kept as the
+    // text it is, never collapsed or trimmed as a space: escaped with the rest of the message, it is
+    // one of the host's own marks (EscapedText, #803). A line of nothing else is kept as it is, so
+    // a name of only such characters still shows their escapes rather than nothing.
+    internal static string Plain(string text) => FirstLine(text) is { } line ? Literal(line) ?? line : "";
+
+    static string? FirstLine(string text)
+    {
+        static bool Space(char c) => char.IsWhiteSpace(c) && !ShownText.HasHidden(c.ToString());
+        foreach (var raw in text.Split('\n'))
+        {
+            var start = 0;
+            var end = raw.Length;
+            while (start < end && Space(raw[start])) { start++; }
+            while (end > start && Space(raw[end - 1])) { end--; }
+            if (start == end) { continue; }
+            var sb = new StringBuilder(end - start);
+            var space = false;
+            for (var i = start; i < end; i++)
+            {
+                if (Space(raw[i])) { space = true; continue; }
+                if (space) { sb.Append(' '); }
+                space = false;
+                sb.Append(raw[i]);
+            }
+            return sb.ToString();
+        }
+        return null;
+    }
 
     // The agent's own words (an intention, a tool's title or description) drawn as the words they
     // are, never as Markdown (#212). Joined in as they were, an intention holding a line that
@@ -286,7 +336,32 @@ public static partial class CopilotPermission
     }
 
     // The digest of an approval's identity, as a question id carries it: the first 8 bytes of its
-    // SHA-256, lowercase hex. A Codex approval's id is bound the same way (CodexApprovalId).
+    // SHA-256 over its WTF-8, lowercase hex. A Codex approval's id is bound the same way (CodexApprovalId).
     internal static string IdentityHash(string identity) =>
-        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity)).AsSpan(0, 8));
+        Convert.ToHexStringLower(SHA256.HashData(Wtf8(identity)).AsSpan(0, 8));
+
+    // UTF-8, with half a surrogate pair written as its own three bytes (WTF-8) rather than as U+FFFD:
+    // a tool's arguments can hold one (\uD800 in JSON, put back by Controls), and two prompts that
+    // differ only there are not the same prompt. Text without one is exactly its UTF-8.
+    static byte[] Wtf8(string text)
+    {
+        var bytes = new List<byte>(text.Length + 16);
+        Span<byte> one = stackalloc byte[4];
+        for (var i = 0; i < text.Length;)
+        {
+            if (Rune.DecodeFromUtf16(text.AsSpan(i), out var r, out var n) == System.Buffers.OperationStatus.Done)
+            {
+                var written = r.EncodeToUtf8(one);
+                for (var k = 0; k < written; k++) { bytes.Add(one[k]); }
+                i += n;
+                continue;
+            }
+            var c = text[i];
+            bytes.Add((byte)(0xE0 | (c >> 12)));
+            bytes.Add((byte)(0x80 | ((c >> 6) & 0x3F)));
+            bytes.Add((byte)(0x80 | (c & 0x3F)));
+            i++;
+        }
+        return [.. bytes];
+    }
 }

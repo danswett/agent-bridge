@@ -14,13 +14,13 @@ how the host does it and what it refuses.
 | Copilot CLI | Other words for a question that is one option list | Yes (`allowOther` is set on exactly that shape) |
 | Copilot CLI | Other in a form of several fields, or in a checkbox list | Refused: no walk reaches it |
 | Copilot CLI | The older `question` / `choices` format | Refused: agent-ha-bridge never drove it, and no current build writes it |
-| Copilot CLI | Permission prompts: a shell command, path access, a file edit or read, a URL, an MCP tool, a custom tool | Yes, beyond agent-ha-bridge (below): approve once or deny. Refused, `answerAtMachine`, when `permissions.remoteApproval` is off. A character not drawn where it runs and a right-to-left letter are shown escaped, and still approved (#220, #253 decision 3) |
+| Copilot CLI | Permission prompts: a shell command, path access, a file edit or read, a URL, an MCP tool, a custom tool | Yes, beyond agent-ha-bridge (below): approve once or deny. Refused, `answerAtMachine`, when `permissions.remoteApproval` is off. A character not drawn where it runs and a right-to-left letter are shown escaped (#220); such an approval carries `escaped`, and Approve on it takes the two-step confirmation from a person's device this machine approved, through the relay only, or is held at the machine by `permissions.escapedApproval` (#803, [v1-sessions.md](protocol/v1-sessions.md#escaped-approvals)). Deny goes as for any approval |
 | Copilot CLI | Other permission prompts (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read | Refused, `answerAtMachine` |
 | Claude Code | `AskUserQuestion`, one to four questions, each one option (`choice`) or several (`multi`, at least one, the first nine rows) | Yes |
 | Claude Code | Free text in `AskUserQuestion` ("Type something") | Refused: no field offers `allowOther` (below) |
 | Claude Code | More than four questions, a question without options, two questions with the same text | Refused, `answerAtMachine` |
 | Claude Code | Permission prompts | Refused, `answerAtMachine`: agent-ha-bridge's hook reports them and offers only its reply box, best effort |
-| Codex | An approval its `PermissionRequest` hook recorded (`<id>.approval.json`) | Yes: approve or deny, always `unconfirmed` (below). Its message is the whole command, fenced; a marker holding only the hook's 300-character preview (agent-ha-bridge's hook, an older host) or a command past 16,384 characters is `truncated`, and refused like any truncated question (#209). One whose `tool_input` holds anything but the command and its description (an MCP tool's `host`, a `workdir`), or a network approval (`description` `network-access <target>`), is answered at the machine (#338) |
+| Codex | An approval its `PermissionRequest` hook recorded (`<id>.approval.json`) | Yes: approve or deny, always `unconfirmed` (below). Its message is the whole command, fenced; a marker holding only the hook's 300-character preview (agent-ha-bridge's hook, an older host) or a command past 16,384 characters is `truncated`, and refused like any truncated question (#209). One whose `tool_input` holds anything but the command and its description (an MCP tool's `host`, a `workdir`), or a network approval (`description` `network-access <target>`), is answered at the machine (#338). One the host escaped anything in carries `escaped`, and Approve on it takes the same two-step confirmation as a Copilot permission prompt's, which names the approval's `<DecisionId>#<digest>` id (#803, #958) |
 | Codex | An approval seen only in the rollout, or one agent-ha-bridge has already typed into | Refused, `answerAtMachine` |
 
 These are what agent-ha-bridge answers, with two deliberate gaps and one deliberate
@@ -265,6 +265,13 @@ content is `stale`; unreadable, or anything else its own sender would reject, is
 marker: it never writes, renames or removes it, so its attempt is recorded in its own
 ledger (below), not in agent-ha-bridge's file. That attempt is keyed by the generation, not
 the whole id, so a generation is typed into once whatever it reads as later.
+
+An Approve on an approval carrying `escaped` also carries its confirmation (#803,
+[v1-sessions.md](protocol/v1-sessions.md#escaped-approvals)), signed for the whole id. The host
+checks it when the answer is taken, and again at the typing slot only once the fresh marker has
+rebuilt to exactly that id, so it is checked against what the person confirmed and never
+against the cached listing; what that second check can still catch is the confirmation's own
+standing (its device taken off the list, its lifetime passed).
 
 Codex records nothing that says how an approval was answered: the hook removes the marker
 on the next event however it was answered, and the rollout does not name the approval. So
