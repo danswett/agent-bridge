@@ -1150,8 +1150,11 @@ host can start the episode again from those fields.
   `needsYou` from the relay's presence, once #269's grace period has passed, so a short drop
   never is. #805 owns the threshold.
 * **A session restored after a crash (#780)**: the machine's `restored` notice after a crash is
-  `needsYou` now. The session itself is classed by its `restored` field once a host sets it (a
-  later slice of #780; no host sends it yet).
+  `needsYou`. Hosts set a restored session's `restored` field, but in this version its `class`
+  does not follow `restored`: it comes from `status`, `question` and `attention` like any other
+  session's (it is restored idle, so `done` if its last turn left an answer of the main agent's
+  own, else `fyi`). Whether `restored` after a crash should make the session itself `needsYou`
+  is an open Product decision, tracked on #780.
 
 `signInNeeded` pushes as the `signIn` notice of #800, at most once an hour per machine, agent
 and account (ui.md §6.13). The rest of `attention` has no push of its own yet. Being `needsYou`,
@@ -1299,7 +1302,7 @@ is for disposable evaluation, not production service enrollment.
 | `driverPrincipal` | string? | With `driver` `agent`, which agent, when the host knows: at most 128 bytes, plain text, shown as secondary detail only. Absent otherwise |
 | `subagents` | [Subagent](#subagent)[]? | The sub-agents the session started, at any depth ([design/subagents.md](../design/subagents.md)): running ones (`working`, `waiting`) first, newest start first, then the most recently finished. At most 20, and fewer if the [session budget](#session-budget) trims them. Absent when there are none. Finished ones stay until the session ends. Only Copilot sends them so far |
 | `subagentsMore` | number? | Entries left out of `subagents`, by the host's limit or the budget. Absent when none are |
-| `restored` | object? | Set on a session its host restored, idle, after a reboot or a crash (#780), once its window has been seen ready (never on one that may be asking whether to trust its folder), for that run of the host and at most 24 hours: `at`, `cause`, `midTurn` (it went while working, and no prompt has arrived since the restore), `questionLost` (a question was waiting in it) and, with `midTurn` only, `continue`: the words a client offers to send as an ordinary `session.reply` when a person presses Continue, with no more trust than any reply. No host sends it. `midTurn` and `continue` go once a prompt arrives after the restore. A question the interrupted run left waiting is not shown as `question` (`questionLost` says it went) |
+| `restored` | object? | Set on a session its host restored, idle, after a reboot or a crash (#780), once its window has been seen ready (never on one that may be asking whether to trust its folder), for that run of the host and at most 24 hours: `at`, `cause`, `midTurn` (it went while working, and no prompt has arrived since the restore), `questionLost` (a question was waiting in it) and, with `midTurn` only, `continue`: the words a client offers to send as an ordinary `session.reply` when a person presses Continue, with no more trust than any reply; the host never sends that reply itself. Hosts set `restored` on each session they restore ([What went](#hello)); it does not change the session's `class` ([Notification class](#notification-class-913)). `midTurn` and `continue` go once a prompt arrives after the restore. A question the interrupted run left waiting is not shown as `question` (`questionLost` says it went) |
 | `waitingOn` | string? | Status precedence rule 2: the id of the sub-agent whose question is `question`, while the session has none of its own. Absent otherwise |
 | `attention` | [Attention](#attention)? | **New (#800).** What is wrong with the session that `status` cannot say: its agent needs signing in again, its turn ended on an error, or it stopped responding. Absent when nothing is |
 | `class` | `"needsYou"` \| `"done"` \| `"fyi"`? | **New (#913).** The session's notification tier, which every client follows instead of its own rules: [Notification class](#notification-class-913). Absent from an older host; a client then keeps today's behaviour. A client that does not know a value reads it as absent |
