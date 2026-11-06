@@ -842,6 +842,63 @@ public sealed class HostManagerTests : IAsyncLifetime
         Assert.True(await m.IsRunningAsync());
     }
 
+    [Theory]
+    [Trait("Category", "Network")]
+    // Stopped by this app, or by another process (Program's stop, a second app), which the first
+    // cannot cancel and only its stop marker tells of.
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_stop_while_starting_waits_on_a_launcher_an_earlier_run_of_the_app_started_is_not_undone_by_a_fresh_launcher(bool fromElsewhere)
+    {
+        // A host that keeps crashing: the launcher an earlier run started (77) waits between
+        // restarts, so no host answers, and ends at its next look once the Stop's marker is there.
+        // The app's launch-time Start takes it on and waits; the person presses Stop meanwhile
+        // (#478 review: a fresh launcher started then cleared the marker as older than itself, and
+        // started the host after Stop had said it was stopped).
+        var looks = 0;
+        HostManager Manager() => new(manager.Layout, tasks, processes, _ =>
+        {
+            Interlocked.Increment(ref looks);
+            lock (processes) { if (File.Exists(StopMarker)) { processes.Alive.Remove(77); } }
+            throw new IOException("not listening");
+        }, userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(2),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(10),
+            Elevated = () => false,
+        };
+        var m = Manager();
+        var startedUtc = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
+        using var launcherFiles = new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { });
+        Assert.True(launcherFiles.HoldRecord(77, startedUtc));
+        processes.Alive.Add(77);
+        processes.Others.Add((77, startedUtc.Ticks));
+        // A launcher started now does what a real one does first: clears a marker older than itself.
+        var startedAfterStop = false;
+        var stopped = false;
+        processes.OnStart = () =>
+        {
+            startedAfterStop |= Volatile.Read(ref stopped);
+            launcherFiles.ClearStoppedBefore(DateTime.UtcNow.AddSeconds(1));
+        };
+
+        // Asked for first, as at launch, and waiting on that launcher before the Stop.
+        var start = m.StartAsync();
+        await Wait.UntilAsync(() => Volatile.Read(ref looks) >= 3, "Start to wait on the launcher", TimeSpan.FromSeconds(30));
+        await (fromElsewhere ? Manager() : m).StopAsync();
+        Volatile.Write(ref stopped, true);
+
+        var ended = await Record.ExceptionAsync(() => start.WaitAsync(TimeSpan.FromSeconds(10)));
+
+        Assert.False(startedAfterStop);
+        Assert.Empty(processes.Started);
+        Assert.True(File.Exists(StopMarker));
+        Assert.True(launcherFiles.Stopped());
+        // The Start gave way to the Stop, and says so, rather than timing out.
+        Assert.IsType<OperationCanceledException>(ended);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Starting_with_no_task_when_a_launcher_it_started_ends_without_a_host_fails_and_starts_no_other()

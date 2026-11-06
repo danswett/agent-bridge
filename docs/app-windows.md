@@ -238,7 +238,11 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   it anyway, says so in its log, and waits for the lock once more to write it again if it has
   gone meanwhile. An app opened after a launcher started waits for the host that launcher
   brings up, but starts one fresh launcher if it ends first with no host answering (it saw a
-  Stop, or its host ended on purpose). A launcher looks for the marker again
+  Stop, or its host ended on purpose), and never once a stop marker is there again. The app
+  runs one Start or Stop at a time: a Stop cancels a Start that is under way or waiting before
+  it writes its marker, so the Start pressed at launch never starts a launcher after a Stop
+  pressed meanwhile, and a Start asked for after a Stop runs once that Stop is done (#478). A
+  launcher looks for the marker again
   before every start of the host, once its record is held, so a Stop that came just after it
   cleared the last one is honoured even when the app could not find it yet. A host the launcher cannot vouch for
   (one it could not create in its job, which is then also not told it is watched, or one started

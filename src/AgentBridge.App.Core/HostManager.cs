@@ -273,7 +273,39 @@ public sealed class HostManager
     // elevated app never starts it directly: the host would be elevated too, unable to type
     // into ordinary agent windows and refusing the app once it runs unelevated again. The
     // task always runs it unelevated.
+    //
+    // One Start or Stop at a time (lifecycle), and a Stop cancels a Start already under way or
+    // waiting before it writes its marker: the app's launch-time Start runs unawaited, with Stop
+    // still enabled, and Program's callers are separate again. Otherwise a Start waiting on a
+    // launcher the Stop then ended started a fresh one, which cleared the Stop's marker as older
+    // than itself and started the host after Stop had said it was stopped (#478 review). A Start
+    // asked for after a Stop waits for it, then runs: the later one wins either way.
     public async Task StartAsync(CancellationToken ct = default)
+    {
+        CancellationToken stop;
+        lock (lifecycle) { stop = stopping.Token; }
+        using var both = CancellationTokenSource.CreateLinkedTokenSource(ct, stop);
+        try
+        {
+            await lifecycle.WaitAsync(both.Token);
+            try { await StartNowAsync(both.Token); }
+            finally { lifecycle.Release(); }
+        }
+        // Whatever the cancelled wait ended with: a look at the pipe cancelled mid-way can end in
+        // the pipe's own error, not a cancellation.
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException) && stop.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(StoppedWhileStarting);
+        }
+    }
+
+    const string StoppedWhileStarting = "a stop was asked for while the host was starting";
+
+    readonly SemaphoreSlim lifecycle = new(1, 1);
+    // Cancelled by each Stop, and replaced, so Starts under way or waiting give way to it.
+    CancellationTokenSource stopping = new();
+
+    async Task StartNowAsync(CancellationToken ct)
     {
         // Whatever starts it now, a stop asked for earlier is over (#106).
         ClearStopped();
@@ -304,6 +336,11 @@ public sealed class HostManager
         {
             if (!started && !LauncherAlive())
             {
+                // Start cleared the marker as it began, so one there now is a later Stop's, from
+                // another process (Program's); a launcher started now would clear it as older than
+                // itself and start the host after that Stop (#478 review).
+                ct.ThrowIfCancellationRequested();
+                if (File.Exists(StopMarker)) { throw new OperationCanceledException(StoppedWhileStarting); }
                 launcher = processes.Start(layout.LauncherExe, layout.ServeArguments);
                 started = true;
                 deadline = Time.GetUtcNow() + StartTimeout;
@@ -502,6 +539,17 @@ public sealed class HostManager
     // session, design §6.3 invariant 13), so ending it anyway would be the very thing it refused.
     // The 2026-10-29 review found an agent could run this through the app's uninstall hook.
     public async Task StopAsync(CancellationToken ct = default)
+    {
+        CancellationTokenSource starts;
+        lock (lifecycle) { (starts, stopping) = (stopping, new CancellationTokenSource()); }
+        // Outside the lock: cancelling runs a Start's continuations here.
+        starts.Cancel();
+        await lifecycle.WaitAsync(ct);
+        try { await StopNowAsync(ct); }
+        finally { lifecycle.Release(); }
+    }
+
+    async Task StopNowAsync(CancellationToken ct)
     {
         // A stop on purpose: the launcher must not start the host again after it (#106). Before
         // the stop itself, so a host that crashes while stopping is not started again either.
