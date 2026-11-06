@@ -27,6 +27,7 @@ public sealed class DepartureWatchdog : IDisposable
     readonly TimeSpan bound;
     DepartureStatus status = DepartureStatus.None;
     ITimer? timer;
+    bool disposed;
 
     // A null handler only marks the state, for the status to show.
     public DepartureWatchdog(IDepartureStuckHandler? handler = null, TimeProvider? time = null, TimeSpan? bound = null)
@@ -47,7 +48,7 @@ public sealed class DepartureWatchdog : IDisposable
     {
         lock (state)
         {
-            if (status.State != DepartureState.None) { return; }
+            if (disposed || status.State != DepartureState.None) { return; }
             status = new DepartureStatus(DepartureState.Committed, time.GetUtcNow());
             timer = time.CreateTimer(_ => Elapsed(), null, bound, Timeout.InfiniteTimeSpan);
         }
@@ -58,7 +59,9 @@ public sealed class DepartureWatchdog : IDisposable
         DepartureStatus stuck;
         lock (state)
         {
-            if (status.State != DepartureState.Committed) { return; }
+            // A callback already queued when the serve loop disposed this must not request a
+            // restart after the host has finished stopping.
+            if (disposed || status.State != DepartureState.Committed) { return; }
             stuck = status = status with { State = DepartureState.Stuck, Reason = StuckReason };
         }
         // A throwing handler must not take down the timer thread; the state is already marked.
@@ -68,17 +71,28 @@ public sealed class DepartureWatchdog : IDisposable
 
     public void Dispose()
     {
-        lock (state) { timer?.Dispose(); }
+        lock (state)
+        {
+            disposed = true;
+            timer?.Dispose();
+        }
     }
 }
 
 // The host's default: one fixed line, then the existing host.restart path (HostHandover: a
 // supervised host exits for its launcher to restart, an unsupervised one starts its replacement
-// after it has stopped). No exception text or path is logged.
-public sealed class RestartingDepartureStuckHandler(Action<string> log, Action? restart) : IDepartureStuckHandler
+// after it has stopped). No exception text or path is logged. Once the host is already stopping
+// (a committed stop, shutdown or sign-out whose teardown outlasts the bound) it only logs:
+// host.restart then would bring back a host the user or the OS asked to stop.
+public sealed class RestartingDepartureStuckHandler(Action<string> log, Action? restart, Func<bool>? stopping = null) : IDepartureStuckHandler
 {
     public void DepartureStuck(DepartureStatus status)
     {
+        if (stopping?.Invoke() == true)
+        {
+            log("departure stuck: committed departure did not exit; the host is already stopping, so it is not restarted");
+            return;
+        }
         if (restart is null)
         {
             log("departure stuck: committed departure did not exit; deliveries stay refused until the host restarts");

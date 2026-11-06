@@ -580,7 +580,7 @@ async Task<int> ServeAsync(HostHandover handover)
         handover.Request();
         stop.Cancel();
     });
-    using var departureWatchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(Log, RestartHost));
+    using var departureWatchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(Log, RestartHost, () => stop.IsCancellationRequested));
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,

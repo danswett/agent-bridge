@@ -110,7 +110,11 @@ would leave the host refusing deliveries for ever. `DepartureWatchdog` notices t
   let go of its lock. No new restart or exit path is added. This is not
   `WatchdogRecovery`/forced recovery: commit required no accepted work in flight,
   and the fence has refused new work since, so the restart carries no input.
-  With no restart action the handler only logs that deliveries stay refused.
+  With no restart action the handler only logs that deliveries stay refused. If the
+  host is already stopping when the bound passes (a committed `RemoteStop`,
+  `Shutdown` or `SignOut` whose teardown runs past 2 minutes; one usage-monitor
+  disposal alone can wait 90 s), it only logs, so a requested stop is never turned
+  into a restart. A disposed watchdog (the serve loop has ended) never fires.
 - `LifecycleCoordinator.Departure` and `HostControl.Departure` expose
   `DepartureStatus(State: None | Committed | Stuck, CommittedAt, Reason)` to the
   host's status/health readers. It is **not** added to `HostStatus` (the local-pipe

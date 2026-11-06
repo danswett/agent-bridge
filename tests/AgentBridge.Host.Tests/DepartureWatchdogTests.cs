@@ -63,6 +63,32 @@ public sealed class DepartureWatchdogTests
     }
 
     [Fact]
+    public async Task A_host_already_stopping_is_not_restarted_when_its_departure_outlasts_the_bound()
+    {
+        var time = new FakeTimeProvider();
+        var lines = new List<string>();
+        var restarts = 0;
+        using var watchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(lines.Add, () => restarts++, () => true), time);
+        var (coordinator, _) = await Committed(time, watchdog);
+        time.Advance(DepartureWatchdog.DefaultBound);
+        Assert.Equal(DepartureState.Stuck, coordinator.Departure.State);
+        Assert.Equal(0, restarts);
+        Assert.Equal(["departure stuck: committed departure did not exit; the host is already stopping, so it is not restarted"], lines);
+    }
+
+    [Fact]
+    public async Task A_disposed_watchdog_never_fires_even_for_a_later_commit()
+    {
+        var time = new FakeTimeProvider();
+        var handler = new Handler();
+        var watchdog = new DepartureWatchdog(handler, time);
+        watchdog.Dispose();
+        await Committed(time, watchdog);
+        time.Advance(TimeSpan.FromHours(1));
+        Assert.Equal(0, handler.Calls);
+    }
+
+    [Fact]
     public async Task Without_a_commit_there_is_no_watchdog()
     {
         var time = new FakeTimeProvider();
