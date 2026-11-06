@@ -1223,10 +1223,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // What a held reply says while the launch is still followed: the question its window asks,
     // answered from a device where the bridge allows that for folder trust (#947), else the
-    // machine; and, with no question drawn, only that it has not started yet (#1018).
+    // machine; and, with no question drawn, that it is still starting (#1018), naming Needs you only
+    // where a trust question would show there with a way to answer it.
     string Waiting(string label, StartupQuestion question) => question switch
     {
-        StartupQuestion.None => FirstReplyWords.WaitingToStart,
+        StartupQuestion.None => FirstReplyWords.StillStarting(label, RemoteFolderTrust && TrustDevices.Count > 0),
         StartupQuestion.Trust => FirstReplyWords.AskingTrust(label, RemoteFolderTrust && TrustDevices.Count > 0),
         _ => FirstReplyWords.AskingAtMachine(label),
     };

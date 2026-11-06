@@ -262,7 +262,7 @@ In order, for every reply:
    transcript already exists, so the check below never catches it (`LaunchService.HeldForReply`,
    #780). While following it says what the window shows: the folder-trust question (answered from
    a device where allowed, #947, else at the machine), another startup question (at the machine),
-   or only "waiting to start, send again in a moment" (#1018). Once following has ended unready, it stays so while that agent runs (the launcher, or the
+   or only "still starting, send it again in a moment" (#1018). Once following has ended unready, it stays so while that agent runs (the launcher, or the
    process it handed the session to), until a prompt of the person's is in its transcript after the
    launch (Copilot; a turn count would not do: it leaves out the turn that prompt starts, and a new
    CLI's `session.resume` ending a killed turn counts one with nobody having typed) or, for an agent
@@ -291,7 +291,11 @@ In order, for every reply:
    With the trust question showing it is `refused` with words for the phone (`FirstReplyWords`):
    answer it first, from the phone where the host allows that for a session it launched
    (#947), else at the machine. With the window unreadable or not drawn yet it is `refused`
-   as "waiting to start, send again in a moment", and nothing is typed. So a session launched
+   as "the session is still starting, so it can't take a reply yet. Send it again in a moment"
+   (Creative's words; the clients read it as "The machine refused this reply: {reason}."), and nothing is typed. For a
+   launch the bridge follows it names Needs you ("If it asks whether to trust its folder, that shows in Needs you")
+   only where remote folder trust is on with a device approved, so a reason never promises a place that is not coming.
+   A refused reply stays in the sender's box (only a delivered one comes out), so sending again costs a tap. So a session launched
    with no first prompt takes its first reply from the phone. The point read up to is where
    confirmation starts.
 6. The worker types it. Nothing written is `refused`, and the staged files are deleted with

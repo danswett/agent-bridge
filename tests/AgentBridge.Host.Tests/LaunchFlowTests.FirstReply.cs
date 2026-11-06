@@ -83,17 +83,24 @@ public sealed partial class LaunchFlowTests
         Assert.Empty(screens.Typed);
     }
 
-    [Fact]
-    public async Task A_session_whose_window_is_not_drawn_yet_holds_a_reply_as_waiting_to_start_and_types_nothing()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task A_session_whose_window_is_not_drawn_yet_holds_a_reply_as_still_starting_and_types_nothing(bool fromDevices, bool approved)
     {
         screens.Rows = [];
-        var (launching, other, _) = await ServeWithRepliesAsync(Config(), readyWait: TimeSpan.FromMilliseconds(200));
+        var (launching, other, _) = await ServeWithRepliesAsync(Config(c => c with { RemoteFolderTrust = fromDevices, RemoteFolderTrustDevices = approved ? ["a-device"] : [] }), readyWait: TimeSpan.FromMilliseconds(200));
         var unknown = await LaunchAsync(launching, new { agent = "copilot", workspace = "App" });
         Assert.Equal("unconfirmed", unknown.Outcome_);
 
         var reply = await ReplyFromAsync(other, unknown.Session!, "hello from the phone");
 
-        Assert.Equal(("refused", FirstReplyWords.WaitingToStart), reply);
+        // Needs you is named only where the question would show there with a way to answer it.
+        var needsYou = fromDevices && approved;
+        Assert.Equal(("refused", needsYou
+            ? "Copilot is still starting, so it can't take a reply yet. If it asks whether to trust its folder, that shows in Needs you. Otherwise, send it again in a moment"
+            : "Copilot is still starting, so it can't take a reply yet. Send it again in a moment"), reply);
         Assert.Empty(screens.Typed);
     }
 }

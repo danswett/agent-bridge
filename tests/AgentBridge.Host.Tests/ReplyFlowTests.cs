@@ -886,13 +886,14 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task A_first_reply_is_held_as_waiting_to_start_and_never_typed_while_the_window_cannot_be_read_or_shows_no_box(bool readable)
+    public async Task A_first_reply_is_held_as_still_starting_and_never_typed_while_the_window_cannot_be_read_or_shows_no_box(bool readable)
     {
         var (transcript, ch) = await FreshAsync(pid => pid == 101 && readable ? ["", "  Starting…"] : null);
 
         var (outcome, reason) = await ReplyAsync(ch, "hello there", id: FreshSession);
 
-        Assert.Equal(("refused", FirstReplyWords.WaitingToStart), (outcome, reason));
+        // Creative's words (#1018): the clients read it as "The machine refused this reply: {reason}."
+        Assert.Equal(("refused", "the session is still starting, so it can't take a reply yet. Send it again in a moment"), (outcome, reason));
         Assert.DoesNotContain("at the machine", reason);
         Assert.Empty(injector.Plans);
         Assert.False(File.Exists(transcript));
