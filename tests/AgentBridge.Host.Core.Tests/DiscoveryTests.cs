@@ -1,5 +1,7 @@
+using System.Runtime.ExceptionServices;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Discovery;
+using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Protocol;
 using Xunit;
@@ -9,6 +11,32 @@ public class DiscoveryTests
     const string A = "11111111-1111-4111-8111-111111111111";
     const string B = "22222222-2222-4222-8222-222222222222";
 
+    // An agent never installed is looked for on every pass, and a hook log never written read:
+    // each absence was an exception, most of the host's 5 a second (#608).
+    [Fact]
+    public void Looking_for_an_agent_never_installed_and_a_hook_log_never_written_throws_nothing()
+    {
+        using var f = new Fixture();
+        var thread = Environment.CurrentManagedThreadId;
+        var thrown = new List<string>();
+        void Count(object? sender, FirstChanceExceptionEventArgs e)
+        {
+            if (Environment.CurrentManagedThreadId == thread) { lock (thrown) { thrown.Add(e.Exception.GetType().Name); } }
+        }
+        CopilotDiscovery.Folder sessions, registrations;
+        bool read;
+        AppDomain.CurrentDomain.FirstChanceException += Count;
+        try
+        {
+            sessions = CopilotDiscovery.ProbeFolder(Path.Combine(f.ClaudeHome, "sessions"));
+            registrations = CopilotDiscovery.ProbeFolder(f.ClaudeRegistrations);
+            read = new HookLogWatch(f.Runtime, "claude").Refresh();
+        }
+        finally { AppDomain.CurrentDomain.FirstChanceException -= Count; }
+
+        Assert.Equal((CopilotDiscovery.Folder.Absent, CopilotDiscovery.Folder.Absent, true), (sessions, registrations, read));
+        Assert.Empty(thrown);
+    }
     [Fact]
     public async Task A_Copilot_session_whose_lock_is_held_by_a_live_process_is_listed_with_its_workspace()
     {
