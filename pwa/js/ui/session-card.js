@@ -43,6 +43,7 @@ import { aloud, backgroundCounts, delegateEvents, delegateFold, delegateList, ev
 import { delegateOf } from '../needs-you.js';
 import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
 import { CollapsingHeader, PHONE } from './collapse-header.js';
+import { CollapsingFoot } from './collapse-foot.js';
 import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js';
 
@@ -630,10 +631,14 @@ export class SessionCard {
     this.#guardQuestion(e.question);
     e.stream = h('div', { class: 'stream' }, e.user, e.prompt, e.agentBlock, e.question);
     e.reply = h('div', { class: 'reply-slot' });
+    // A phone's compact reply area (CollapsingFoot, ui.md §6.5): a pinned bar holding a copy of the
+    // box, drawn, not read, and no tab stop; a tap on it brings the box back, focused.
+    e.replyCopy = h('div', { class: 'reply-copy', 'aria-hidden': 'true' }, h('span'));
+    e.replyBar = h('div', { class: 'reply-bar' }, e.replyCopy);
     e.scroll = h('div', { class: 'stream-scroll' }, e.stream);
     this.#watchHold(e.scroll);
     e.conversation = h('div', { class: 'conversation', id: this.ids.conversation, role: 'tabpanel', 'aria-labelledby': this.ids.tabC },
-      e.scroll, e.reply);
+      e.scroll, e.reply, e.replyBar);
 
     // The inspector: Details, then Tools.
     e.facts = h('dl', { class: 'facts' });
@@ -668,7 +673,9 @@ export class SessionCard {
     e.head = h('div', { class: 'session-head' }, e.bar, e.top);
     this.view = h('section', { class: 'session-view', 'aria-labelledby': this.ids.title, hidden: true, dataset: { tab: 'conversation' } },
       e.head, h('div', { class: 'view-body' }, e.conversation, e.inspector));
-    this.collapse = new CollapsingHeader({ view: this.view, head: e.head, top: e.top, bar: e.bar, scroller: e.scroll });
+    const foot = new CollapsingFoot({ view: this.view, slot: e.reply, bar: e.replyBar, copy: e.replyCopy, scroller: e.scroll });
+    this.collapse = new CollapsingHeader({ view: this.view, head: e.head, top: e.top, bar: e.bar, scroller: e.scroll, foot });
+    this.foot = foot;
     this.#phone?.addEventListener('change', this.#onPhone);
     this.#applyTab();
     // A question that stays where it is can still move (#491): a title wrapping, a tool line
@@ -1363,7 +1370,7 @@ export class SessionCard {
         this.#reply = null;
       }
       if (hostId) {
-        this.#reply = new ReplyBox({ machineName: this.machineName, replying: { service: ctx.replies, hostId, sessionId: s.id }, attach: ctx.capabilities.includes('sessions.attach'), largeMax: ctx.largeAttachments?.() ?? 0 });
+        this.#reply = new ReplyBox({ machineName: this.machineName, replying: { service: ctx.replies, hostId, sessionId: s.id }, attach: ctx.capabilities.includes('sessions.attach'), largeMax: ctx.largeAttachments?.() ?? 0, onGoToQuestion: () => this.#goToQuestion(), onChange: () => this.foot?.changed() });
         if (this.#replyDraft.hostId === hostId) { this.#reply.els.input.value = this.#replyDraft.text; }
       }
       this.#replyHost = hostId;
@@ -1561,6 +1568,23 @@ export class SessionCard {
     this.#scrollTo(el && view.contains(el) && !fits ? el : view, behavior);
   }
 
+  // The phone notice's "Go to the question" (ui.md §6.5): an app scroll to the question, which
+  // leaves the header as it was, and focus on its first choice. A question taking nothing yet (its
+  // machine offline) has no choice to focus: its heading takes focus, as a notification's does.
+  #goToQuestion() {
+    const view = this.#guarded?.isConnected ? this.#guarded : null;
+    if (!view) { return; }
+    const usable = (c) => !c.disabled && !c.closest('fieldset:disabled') && c.getClientRects().length > 0;
+    let target = [...view.querySelectorAll('.answer-controls button, .answer-controls input, .answer-controls select, .answer-controls textarea')].find(usable)
+      ?? [...view.querySelectorAll(QUESTION_CONTROLS)].find(usable);
+    if (!target) {
+      target = view.querySelector('.question-head');
+      if (target) { target.tabIndex = -1; }
+    }
+    target?.focus({ preventScroll: true });
+    this.revealQuestion(scrollBehavior(), target);
+  }
+
   // A scroll to the question: the guard runs from now and, for a smooth scroll that has somewhere
   // to go, again from each step of it until it lands, since that takes the browser's own time. Only
   // that scroll, heard for a little while: a question already in sight makes no scroll, and a
@@ -1577,7 +1601,9 @@ export class SessionCard {
     const room = covered > 0 ? parseFloat(sc.ownerDocument.defaultView?.getComputedStyle?.(sc).getPropertyValue('--ab-space-2')) || 0 : 0;
     const top = box.top + (covered > 0 ? covered + room : 0);
     // A pixel's rounding is nowhere to go.
-    const moves = sc.getClientRects().length > 0 && (v.top < top - 1 || v.bottom > box.bottom + 1);
+    // And what the reply area covers at the foot (scroll-padding-bottom).
+    const bottom = box.bottom - (this.collapse?.footCovered() ?? 0);
+    const moves = sc.getClientRects().length > 0 && (v.top < top - 1 || v.bottom > bottom + 1);
     const scroll = () => view.scrollIntoView({ block: 'nearest', behavior });
     // A scroll the app makes leaves the header as it was.
     if (this.collapse) { this.collapse.appScroll(scroll); } else { scroll(); }
