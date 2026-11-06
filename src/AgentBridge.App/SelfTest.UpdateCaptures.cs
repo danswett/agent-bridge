@@ -7,8 +7,9 @@ using Microsoft.UI.Xaml.Media;
 
 namespace AgentBridge.App;
 
-// The update captures Creative's acceptance of #719 asks for (6643004091): the bar over every page
-// ready, restarting and failed, and Settings' updates (When an update is ready among them) with a release ready, in Light and Dark,
+// The update captures Creative's acceptance of #719 asks for (6643004091, 6677102646): the bar over
+// every page ready, restarting and failed, and Settings' updates (When an update is ready among
+// them) under the banner, and a refusal with no banner, in Light and Dark,
 // and in high contrast on CI (CheckHighContrast). The demo never updates, so a stand-in release is
 // ready here, and the restart is held, then refused, rather than carried out.
 static partial class SelfTest
@@ -59,6 +60,7 @@ static partial class SelfTest
         var held = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var update = new AppUpdateViewModel(() => "0.1.999", _ => held.Task);
         SettingsViewModel? page = null;
+        SettingsViewModel? alone = null;
         try
         {
             window.ShowPage("sessions");
@@ -89,18 +91,24 @@ static partial class SelfTest
             check(bar is { Severity: InfoBarSeverity.Warning } && !bar.Message.Any(char.IsDigit) && Action() is { } retry && AutomationProperties.GetName(retry) == "Try again" && retry.Style == accent,
                 $"draws a failed install as a warning with Try again and no machine detail{where}");
 
-            // Settings' update row, over the stand-in release.
+            // Settings' update row, over the stand-in release, under the banner offering it: the
+            // banner says the offer, so Settings' line doesn't repeat it, and its Restart to update
+            // stays (Creative, 6677102646, principle 6). Captured with the banner, the whole window.
             if (settingsBefore is not null)
             {
                 page = settingsBefore.WithUpdater(new StandInUpdater());
+                var offering = new AppUpdateViewModel(() => "0.1.999", _ => Task.FromResult<string?>(AutoUpdater.NotNow));
+                main.AppUpdate = offering;
+                page.ShareRestart(offering);
                 window.SettingsPage.ViewModel = page;
                 window.ShowPage("settings");
                 await page.CheckForUpdatesAsync();
                 var row = ById<StackPanel>(window.SettingsPage, "UpdateRow");
                 var status = row is null ? null : ById<TextBlock>(row, "UpdateStatus");
-                var ready = await Until(() => row is { ActualHeight: > 0 } && status is not null && Text(status) == "Version 0.1.999 is ready. Restart to update."
+                var ready = await Until(() => row is { ActualHeight: > 0 } && status is not null && Text(status) == ""
+                    && bar is { IsOpen: true, Message: "Version 0.1.999 is ready. Restart to update." }
                     && ById<Button>(row, "InstallUpdate") is { Visibility: Visibility.Visible }, TimeSpan.FromSeconds(5));
-                check(ready, $"captures Settings' update row with a release ready{where} ({(status is null ? "" : Text(status))})");
+                check(ready, $"captures Settings' update row with a release ready under the banner offering it, without repeating the offer{where} ({(status is null ? "" : Text(status))})");
                 check(status is not null && AutomationProperties.GetLiveSetting(status) == AutomationLiveSetting.Polite, $"makes Settings' update line a polite live region{where}");
                 // When an update is ready (#689, 6674007815), drawn with the row: Restart to update unless this machine was set otherwise.
                 var mode = row is null ? null : ById<RadioButtons>(row, "WhenUpdateReady");
@@ -109,27 +117,41 @@ static partial class SelfTest
                 {
                     row!.StartBringIntoView();
                     await Task.Delay(300);
-                    await Looks(look => Picture(row, File("settings", look), Under(row)));
+                    await Looks(look => Picture(window.RootElement, File("settings", look), Under(window.RootElement)));
                 }
 
                 // A restart started from Settings and refused by another profile (Creative,
-                // 6676653935): one restart, one state, so the banner shows the failure as a
-                // warning with Try again, and Settings' status line says the same words, as a
-                // status, not an error.
+                // 6676653935, 6677102646): one restart, one state, so the banner shows the failure
+                // as a warning with Try again, and Settings' line doesn't repeat it, nor is it an
+                // error.
                 var sharedRestart = new AppUpdateViewModel(() => "0.1.999", _ => Task.FromResult<string?>(refused));
                 main.AppUpdate = sharedRestart;
                 page.ShareRestart(sharedRestart);
                 await page.InstallUpdateAsync(_ => Task.FromResult(true));
                 const string refusedWords = "The update didn't install because another bridge profile is running from this installation.";
-                var both = await Until(() => row is { ActualHeight: > 0 } && status is not null && Text(status) == refusedWords
+                var both = await Until(() => row is { ActualHeight: > 0 } && status is not null && Text(status) == ""
                     && bar is { IsOpen: true, Severity: InfoBarSeverity.Warning, Message: refusedWords } && Action() is { } again && AutomationProperties.GetName(again) == "Try again"
                     && page.Error is null, TimeSpan.FromSeconds(5));
-                check(both, $"shows a restart from Settings that another profile refused on the banner, with Try again, and in Settings' words, not as an error{where} ({(status is null ? "" : Text(status))})");
+                check(both, $"shows a restart from Settings that another profile refused on the banner, with Try again, said once, not as an error{where} ({(status is null ? "" : Text(status))})");
                 if (both)
                 {
-                    await Looks(look => Picture(row!, File("settings-refused", look), Under(row!)));
+                    await Looks(look => Picture(window.RootElement, File("settings-refused", look), Under(window.RootElement)));
                     await Looks(look => Picture(bar!, File("bar-settings-refused", look), Under(bar!)));
                 }
+
+                // With no banner (a copy whose app has no updater of its own), the refusal is said in
+                // Settings, once, as a status.
+                alone = settingsBefore.WithUpdater(new StandInUpdater());
+                alone.RestartDownloaded = _ => Task.FromResult<string?>(refused);
+                main.AppUpdate = new AppUpdateViewModel();
+                window.SettingsPage.ViewModel = alone;
+                await alone.InstallUpdateAsync(_ => Task.FromResult(true));
+                row = ById<StackPanel>(window.SettingsPage, "UpdateRow");
+                status = row is null ? null : ById<TextBlock>(row, "UpdateStatus");
+                var once = await Until(() => row is { ActualHeight: > 0 } && status is not null && Text(status) == refusedWords
+                    && bar is { IsOpen: false } && alone.Error is null, TimeSpan.FromSeconds(5));
+                check(once, $"says a refused restart once in Settings when no banner shows it, not as an error{where} ({(status is null ? "" : Text(status))})");
+                if (once) { await Looks(look => Picture(window.RootElement, File("settings-refused-no-banner", look), Under(window.RootElement))); }
             }
         }
         finally
@@ -138,6 +160,7 @@ static partial class SelfTest
             main.AppUpdate = before;
             if (settingsBefore is not null) { window.SettingsPage.ViewModel = settingsBefore; }
             page?.Detach();
+            alone?.Detach();
             if (!contrast) { window.RootElement.RequestedTheme = ElementTheme.Default; }
             window.ShowPage("sessions");
         }

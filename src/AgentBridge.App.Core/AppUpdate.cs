@@ -58,7 +58,7 @@ public sealed class AppUpdateViewModel : Observable
     bool restarting;
 
     // None: the demo and a copy the updater cannot update.
-    public AppUpdateViewModel() : this(() => null, _ => Task.FromResult<string?>(null)) { }
+    public AppUpdateViewModel() : this(() => null, _ => Task.FromResult<string?>(AutoUpdater.NotInstalled)) { }
 
     // restart(confirm): AutoUpdater.RestartToUpdateAsync, which asks confirm(warning) itself, last,
     // when a session here is busy.
@@ -137,7 +137,11 @@ public sealed class AppUpdateViewModel : Observable
     // AutoUpdater.NotNow if the person chose not to; otherwise why it did not install.
     public async Task<string?> RestartAsync(Func<string, Task<bool>>? confirm)
     {
-        if (!CanRestart) { return restarting ? "an update is already being installed" : "no update has been downloaded yet"; }
+        // Not CanRestart: a release Settings downloaded itself is not the banner's until the updater
+        // takes it (RestartToUpdateAsync adopts it), so Settings' press must reach the updater even
+        // with no version here; the banner's button shows only with one (Engineering's
+        // Claude-family review of #719, 6677216492).
+        if (restarting) { return "an update is already being installed"; }
         restarting = true;
         problem = null;
         Notify();

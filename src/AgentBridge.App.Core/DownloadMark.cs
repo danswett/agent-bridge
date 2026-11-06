@@ -86,8 +86,8 @@ public sealed class DownloadMark(string file)
         Read() is { } m && m.Version == version && m.Source == source && m.Digest.Matches(package);
 
     // Just before install: the file, held open so it cannot be changed or replaced until this
-    // process ends (the installer takes it once the app has exited), and checked from that handle
-    // against the mark. Null when it is not the bytes the mark vouches for.
+    // process ends, and checked from that handle against the mark. The installer opens it by its
+    // path once the app has exited, after the hold. Null when it is not the bytes the mark vouches for.
     public FileStream? Hold(string package, string version, string source)
     {
         if (Read() is not { } m || m.Version != version || m.Source != source) { return null; }

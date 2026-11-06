@@ -412,11 +412,15 @@ into one folder with one version. An app update is a host update, so they never 
     rest in accent (Creative on #719, 6675195544). There is one restart with one state, whichever
     control starts it: Settings' Restart to update goes through the banner's
     (`SettingsViewModel.ShareRestart`), so the control pressed shows its ring, the banner shows
-    "Restarting to update…", and a failure shows on the banner as the warning with Try again and
-    in Settings' status line in the same words, as a status, not an error (Engineering's
-    second-family review, 6676638175; Creative, 6676653935). A check from Settings that GitHub
-    refuses or limits while a release is ready shows both: the offer first, then #709's sentence
-    with its next check, as a status; Restart to update stays. A newer release downloaded while
+    "Restarting to update…", and a failure shows on the banner as the warning with Try again,
+    never as an error (Engineering's second-family review, 6676638175; Creative, 6676653935). A
+    release Settings downloaded itself, with automatic downloads off, is taken by the app's
+    updater when Settings' Restart to update is pressed, so the press installs it (6677216492).
+    Nothing is said twice on one screen (Creative, 6677102646): while the banner, above Settings,
+    offers the release or says why it didn't install, Settings' line doesn't repeat it; with no
+    banner, Settings says it, once. A check from Settings that GitHub refuses or limits is
+    Settings' own news, said there with its next check as a status, after the offer when Settings
+    says the offer, and whatever the banner says; Restart to update stays. A newer release downloaded while
     one waits takes its place. A release an earlier run downloaded is
     ready from the next start, before any check (`UpdateManager.UpdatePendingRestart`), so it is
     offered offline or while the feed refuses (#530), but only if it came from the feed and
@@ -431,8 +435,13 @@ into one folder with one version. An app update is a host update, so they never 
     matches, and otherwise removed and the download has failed. The mark keeps the checksum and its
     algorithm. A package offered after a restart must still match it, and just before install the
     package is checked again from a handle that keeps it open, read-only to everyone else, until
-    the app has exited and the installer takes it. A release whose feed gives no checksum is never
-    installed.
+    the app exits; the installer opens it by its path after that, so the check does not reach
+    past the app's exit (Engineering's second-family review, 6677353697, left to Engineering and
+    Trust). A release whose feed gives no checksum is never installed. The checksum proves the
+    package is the one the chosen feed names, not who published it: the feed supplies its own
+    checksum. The app downloads full packages only (`AppPackages`): Velopack rebuilds a release
+    from deltas into a package that is never the full package's bytes, so it would fail this
+    check (6677216492).
   * **Restart to update** says what a restart would interrupt, when a session here is waiting on
     the person or has a turn running ("Restart to update now?", Not now the default): the agents
     keep running, but a question or approval the host was carrying may then have to be answered
@@ -668,10 +677,9 @@ connector's Install button on a machine the dashboard drives.
   release's full package must rebuild this version's full package byte for byte. If it does not
   (or there is no delta), it is rebuilt from that release with `vpk delta generate` and checked
   the same way; if that fails too, the full package is published alone, with a warning, since a
-  wrong delta would cost every copy a failed patch first. A copy on the previous version
-  downloads only the delta rather than the ~100 MB full package; one further behind applies the
-  chain of deltas, as far back as the newest ten releases Velopack's GitHub source reads, or
-  else the full package. Each architecture's delta is checked against the same channel's
+  wrong delta would cost every copy a failed patch first. The app downloads only full packages
+  since #719 (its checksum check, above), so the deltas are published but not downloaded by the
+  app. Each architecture's delta is checked against the same channel's
   package; the first release with Arm64 in it has no Arm64 base, so it publishes Arm64's full
   package alone (with the warning) and x64's delta as usual.
 * **Once per version:** a version whose tag exists is skipped, so re-running a run publishes

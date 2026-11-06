@@ -1759,7 +1759,9 @@ public sealed class SettingsTests : IAsyncLifetime
         await settings.InstallUpdateAsync();
 
         Assert.Equal(1, asked);
-        Assert.Equal(AppUpdateViewModel.DidNotInstall(why, again: true), settings.Error);
+        // No banner shows it here, so this line does, once, as a status (Creative, 6677102646).
+        Assert.Null(settings.Error);
+        Assert.Equal("The update didn't install because another bridge profile is running from this installation.", settings.UpdateStatus);
         Assert.False(updater.Applied);
         Assert.Empty(host.Sent(HostOps.Stop));
     }
@@ -1858,7 +1860,8 @@ public sealed class SettingsTests : IAsyncLifetime
         await install;
 
         Assert.False(settings.UpdateAvailable);
-        Assert.Equal("Version 0.2.0 is no longer the newest; check for updates again.", settings.UpdateStatus);
+        // Why the restart didn't install, never dropped (6677216492), then what Settings learned since.
+        Assert.Equal($"The update didn't install because a newer update was downloaded meanwhile; {Product.Name} offers it again once it is downloaded. Version 0.2.0 is no longer the newest; check for updates again.", settings.UpdateStatus);
         // And an event after Settings went idle changes nothing.
         settings.UpdatesChanged();
         Assert.False(settings.UpdateAvailable);
@@ -2226,6 +2229,26 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.True(settings.UpdateAvailable);
     }
 
+    // Creative (6677102646, principle 6): while the banner above Settings offers the same release,
+    // Settings doesn't repeat the offer; #709's sentence, which the banner doesn't say, stays.
+    [Fact]
+    public async Task With_the_banner_offering_the_same_release_Settings_says_only_what_the_banner_doesnt()
+    {
+        await Connected();
+        await updater.DownloadAsync(_ => { });
+        settings.ShareRestart(new AppUpdateViewModel(() => "0.2.0", _ => Task.FromResult<string?>(null)));
+        Assert.Equal("", settings.UpdateStatus);
+        var limited = new AgentBridge.Host.Core.Updates.ReleaseDiscoveryException(
+            "GitHub is limiting how often this network can check for updates.", DateTimeOffset.UtcNow + TimeSpan.FromMinutes(5), limited: true);
+        updater.CheckFails = limited;
+
+        await settings.CheckForUpdatesAsync();
+
+        Assert.Equal(limited.Message, settings.UpdateStatus);
+        Assert.True(settings.UpdateAvailable);
+        Assert.Null(settings.Error);
+    }
+
     // Engineering's second-family review of #719 (6676638175), Creative (6676653935): one restart,
     // with one state, whichever control starts it. Wired as App wires them: Settings' Restart to
     // update refused by another profile shows on the banner as a failure with Try again, and in
@@ -2246,11 +2269,63 @@ public sealed class SettingsTests : IAsyncLifetime
         await page.InstallUpdateAsync(_ => Task.FromResult(true));
 
         const string refused = "The update didn't install because another bridge profile is running from this installation.";
-        Assert.Equal((true, "Try again", refused), (banner.Failed, banner.ActionLabel, banner.Message));
-        Assert.Equal(refused, page.UpdateStatus);
+        Assert.Equal((true, true, "Try again", refused), (banner.Shown, banner.Failed, banner.ActionLabel, banner.Message));
+        // The banner above Settings says it; Settings doesn't repeat it (Creative, 6677102646),
+        // and its Restart to update stays.
+        Assert.Equal("", page.UpdateStatus);
+        Assert.True(page.UpdateAvailable);
         Assert.Null(page.Error);
         Assert.False(updater.Applied);
         Assert.Empty(host.Sent(HostOps.Stop));
+
+        // Engineering's second-family review (6677353697), MEDIUM: a check GitHub limits after the
+        // refusal is Settings' own news, said here; the banner keeps the refusal.
+        var limited = new AgentBridge.Host.Core.Updates.ReleaseDiscoveryException(
+            "GitHub is limiting how often this network can check for updates.", DateTimeOffset.UtcNow + TimeSpan.FromMinutes(5), limited: true);
+        updater.CheckFails = limited;
+        await page.CheckForUpdatesAsync();
+        Assert.Equal(limited.Message, page.UpdateStatus);
+        Assert.Equal((true, refused), (banner.Failed, banner.Message));
+    }
+
+    // Engineering's Claude-family review of #719 (6677216492), HIGH: wired as App wires them, with
+    // the app's updater already running, a release Settings found and downloaded itself (downloads
+    // off, so the background never took it) was never the banner's, and Settings' Restart to
+    // update did nothing at all. It reaches the app's updater, which takes it and installs it.
+    [Fact]
+    public async Task With_the_apps_updater_running_Settings_Restart_to_update_installs_a_release_Settings_downloaded_itself()
+    {
+        await Connected();
+        prefs = prefs with { AutoUpdate = false };
+        var observed = new ObservedUpdater(updater);
+        var page = new SettingsViewModel(connection, manager, observed, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        var auto = new AutoUpdater(observed, connection, manager, () => prefs, p => prefs = p, _ => { }, _ => null);
+        var banner = AppUpdateViewModel.For(auto);
+        page.ShareRestart(banner);
+        Assert.Null(banner.Version);
+
+        await page.CheckForUpdatesAsync();
+        Assert.True(page.UpdateAvailable);
+        await page.InstallUpdateAsync(_ => Task.FromResult(true));
+
+        Assert.True(updater.Applied);
+        Assert.False(banner.Failed);
+        Assert.Null(page.Error);
+    }
+
+    // And a restart pressed here that failed and took the release with it is still said here, when
+    // no banner says it: Settings never drops why (6677216492).
+    [Fact]
+    public async Task A_restart_from_Settings_that_failed_and_lost_the_release_is_still_said_in_Settings()
+    {
+        await Connected();
+        await updater.DownloadAsync(_ => { });
+        settings.RestartDownloaded = _ => { updater.Ready = null; return Task.FromResult<string?>("installing 0.2.0 failed: the package is gone"); };
+
+        await settings.InstallUpdateAsync(_ => Task.FromResult(true));
+
+        Assert.StartsWith($"The update didn't install because the installer reported an error; {Product.Name} offers it again once it is downloaded.", settings.UpdateStatus);
+        Assert.Null(settings.Error);
     }
 
     // And while it runs, the control pressed (Settings') shows its ring and says so, and the banner

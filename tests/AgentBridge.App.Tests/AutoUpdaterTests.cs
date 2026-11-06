@@ -815,8 +815,12 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         using (var held = mark.Hold(package, "0.2.0", "https://feed.b|False"))
         {
             Assert.NotNull(held);
-            Assert.Throws<IOException>(() => File.WriteAllText(package, "tampered"));
-            Assert.Throws<IOException>(() => File.Delete(package));
+            // Windows keeps the file as held (the app runs only there); elsewhere sharing is advisory.
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.Throws<IOException>(() => File.WriteAllText(package, "tampered"));
+                Assert.Throws<IOException>(() => File.Delete(package));
+            }
         }
 
         File.WriteAllText(package, "tampered");

@@ -58,7 +58,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         // No channel named: the installed package's own decides, `win` for x64 and `win-arm64` for
         // Arm64 (build/app-channels.ps1), so a copy is only ever offered its own architecture.
         var first = manager is null;
-        manager = new UpdateManager(from);
+        manager = new UpdateManager(from, AppPackages.Options);
         // Only for the source this start began with: a change of feed or of "Include pre-releases"
         // drops what was downloaded, which must not come back as ready from the packages folder,
         // now or at a later start (the mark says which source the package came from, and the
@@ -75,7 +75,8 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
             : null;
 
     // The package held for the installer (DownloadMark.Hold): open, read-only to everyone else,
-    // until this process ends, so the bytes checked are the ones Update.exe takes.
+    // until this process ends. Update.exe opens it by its path only after that (Velopack's
+    // UpdateExe.Apply), so the hold does not reach into the installer (6677353697).
     static FileStream? handedOver;
 
     // A release an earlier run downloaded and nobody has restarted into yet (#516): ready from this
@@ -170,9 +171,9 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         if (ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded ({ready} is); nothing was installed"); }
         var release = pending?.TargetFullRelease ?? local ?? throw new InvalidOperationException("no downloaded update to install; check for updates again");
         if (release.Version.ToString() != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded; nothing was installed"); }
-        // The bytes verified and marked, still, held open and unchangeable until Update.exe takes
-        // them once this process has ended: Velopack finds the package by its name, so the file is
-        // checked from the handle that keeps it.
+        // The bytes verified and marked, still, held open and unchangeable until this process
+        // ends: Velopack finds the package by its name, so the file is checked from the handle that
+        // keeps it.
         var from = Manager();
         handedOver?.Dispose();
         handedOver = (PackageFile(release) is { } file ? mark.Hold(file, version, source!) : null)

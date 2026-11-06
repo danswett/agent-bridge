@@ -513,15 +513,30 @@ public sealed class SettingsViewModel : Observable
     {
         // A release the app downloaded in the background is said here whenever Settings itself is
         // doing nothing about updates (#516): what an earlier check here said ("Up to date", say)
-        // is older than that download, so it gives way. A restart of it that failed, here or on
-        // the banner, is said in the banner's words (one restart, one state); and a check GitHub
-        // refused or limited since follows the offer, never hiding it nor hidden by it (Creative,
-        // 6676653935).
-        get => !Busy && Downloaded is { } ready
-            ? shared is { Failed: true } restart ? restart.Message : Ready(ready) + (discoveryNote is { } note ? $" {note}" : "")
-            : updateStatus;
+        // is older than that download, so it gives way. The banner above every pane owns the offer
+        // and a failed restart of it while it shows them: nothing is said twice on one screen
+        // (Creative, 6677102646, correcting 6676653935). Without the banner, a restart refused
+        // here is said here, once, in its words. A check GitHub refused or limited since stays
+        // here, after the offer when Settings says it (6676653935).
+        get
+        {
+            if (Busy) { return updateStatus; }
+            var banner = shared is { Shown: true } open ? open : null;
+            // Dropped only when the banner says it, or a release downloaded since makes it old news.
+            var failed = banner is { Failed: true } || refusedHere is not { } refused
+                || (Downloaded is { } now && now != refused.Version) ? null : refused.Sentence;
+            // With nothing ready, the failure, then what Settings learned since (a release gone
+            // stale, say).
+            if (Downloaded is not { } ready) { return Said(failed, updateStatus); }
+            var offer = failed ?? (banner?.Version == ready || banner is { Failed: true } ? null : Ready(ready));
+            return Said(offer, discoveryNote);
+        }
         private set => Set(ref updateStatus, value);
     }
+    static string Said(params string?[] lines) => string.Join(" ", lines.Where(s => s is { Length: > 0 }));
+    // A restart pressed here that did not install, and the release it was for: said here unless
+    // the banner says it, until the next press, check or change of source.
+    (string Sentence, string Version)? refusedHere;
     // What the release discovery said when a check here could not ask GitHub (#709), until the
     // next check here or a change of source.
     string? discoveryNote;
@@ -609,7 +624,7 @@ public sealed class SettingsViewModel : Observable
             foundAt = sourceAt;
             // Everything a check here said is the old source's, "Up to date" included: kept, it
             // claimed the new source current without ever asking it (Copilot, ac778916).
-            (updateVersion, readyHere, updateStatus, discoveryNote) = (null, null, "", null);
+            (updateVersion, readyHere, updateStatus, discoveryNote, refusedHere) = (null, null, "", null, null);
             return;
         }
         if (readyHere is null)
@@ -823,7 +838,7 @@ public sealed class SettingsViewModel : Observable
     {
         if (updater.InstalledVersion is null) { UpdateStatus = "Updates are off in a development copy."; return; }
         UpdateStatus = "Checking…";
-        discoveryNote = null;
+        (discoveryNote, refusedHere) = (null, null);
         // Its answer is for the source as it began: one changed meanwhile drops it (Reconcile).
         var at = sourceAt;
         // GitHub limiting or unreachable is a wait, said as the status with when the next check
@@ -845,6 +860,7 @@ public sealed class SettingsViewModel : Observable
     // version starts it again.
     public Task InstallUpdateAsync(Func<string, Task<bool>>? confirm = null) => RunUpdateAsync(async () =>
     {
+        refusedHere = null;
         updateVersion = updater.Ready ?? updateVersion;
         if (updateVersion is null) { return; }
         // A download that fails is the update failing, for the account's devices too, unless the
@@ -906,10 +922,10 @@ public sealed class SettingsViewModel : Observable
             if (why is null) { return; }
             UpdateStatus = "";
             if (why == AutoUpdater.NotNow) { return; }
-            // Shared with the banner: its failed state says it, here too (UpdateStatus), as a
-            // status, not an error. Otherwise the error says it.
-            if (shared is not null) { return; }
-            throw new InvalidOperationException(AppUpdateViewModel.DidNotInstall(why, updater.Ready is not null));
+            // A status, never an error (Creative, 6676653935): the banner's failed state says it
+            // while the banner shows, and this line does when it doesn't (UpdateStatus).
+            refusedHere = (AppUpdateViewModel.DidNotInstall(why, updater.Ready is not null), updateVersion!);
+            return;
         }
         if (RestartWarning.For(host) is { } warning && confirm is not null)
         {
