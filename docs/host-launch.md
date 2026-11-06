@@ -253,7 +253,8 @@ The cause is `reboot` across boots or logons; on the same boot, `restart` if the
 as died: it is offered, never typed into. A Claude or Codex one whose registration is gone reads as
 uncertain (above): not offered, its folder kept.
 
-**Restoring.** Once every session is judged, what this start found died is restored, newest first,
+**Restoring.** Once every session is judged, or 10 minutes after start while one still is (its agent's discovery held: those
+judged are not kept back by it, and it is restored once it is judged, #855), what this start found died is restored, newest first,
 one at a time, each as a resume from Launch would be (`launch <id> (host-restore): …` in the log):
 every check that resume meets (agent-ha-bridge, `launch.enabled`, discovery held, its folder still
 approved, not already running, busy while a folder-trust or Bypass Permissions question waits for a
@@ -268,7 +269,7 @@ for this run, at most 24 hours (the badge goes then; what the interrupted run le
 for one that went mid-turn `continue`, the words of the reply a client offers as **Continue**
 ("You were interrupted by a reboot at 03:12; carry on where you left off", in the machine's time).
 Continue is an ordinary `session.reply` a person sends, with no more trust than any reply; no host
-sends it, and `midTurn` and `continue` go once a prompt arrives after the restore, whether its turn is still running when the host looks or has already ended. A question or approval the interrupted run left waiting is not shown as asked (`questionLost` says it went); one asked after the restore is. Nor is the turn it was in shown as running: the session reads idle until a prompt arrives after the restore. That boundary outlives the host run: the record keeps each restored session's `boundary` (its latest restore), with `interrupted`, the ids of the questions it set aside as the interrupted run's and still unanswered (a stale Claude hook approval by its tool and time), the newest 64 of them (one left out is shown as new after a restart, never a new one hidden), for as long as it keeps the session, live or owed (one held undecided at a start and adopted once the hold lifts keeps it too), apart from the crash-loop stamp, and a host started again holds it on the sessions before its first discovery pass publishes them, so the interrupted run's question is never listed again as asked, or answerable, after a host restart. Replayed, those questions are told by their ids, not their times: a question asked after the restore that a clock set back dated before it is still shown. An entry without `interrupted` (an older record, or one not yet read with its boundary) is told by time, as before. The badge and Continue are not shown again. Replies still read the transcript first and refuse while it holds an unanswered ask, since typing into a question the agent may still show would answer it; for Copilot, a turn left open by a CLI that was killed ends with the new CLI's `session.resume`, but what it left asking still keeps replies out (the new CLI may show it again without writing it again, and Enter would accept it) until it is completed, aborted, replaced by a question asked since, or a prompt is typed at the machine; an answer to it is refused as stale.
+sends it, and `midTurn` and `continue` go once a prompt arrives after the restore, whether its turn is still running when the host looks or has already ended. A question or approval the interrupted run left waiting is not shown as asked (`questionLost` says it went); one asked after the restore is. Nor is the turn it was in shown as running: the session reads idle until a prompt arrives after the restore. That boundary outlives the host run: the record keeps each restored session's `boundary` (its latest restore), with `interrupted`, the ids of the questions it set aside as the interrupted run's and still unanswered (a stale Claude hook approval by its tool and time), the newest 64 of them (one left out is shown as new after a restart, never a new one hidden), for as long as it keeps the session, live or owed (one held undecided at a start and adopted once the hold lifts keeps it too), apart from the crash-loop stamp, and a host started again holds it on the sessions before its first discovery pass publishes them, so the interrupted run's question is never listed again as asked, or answerable, after a host restart. Replayed, those questions are told by their ids, not their times: a question asked after the restore that a clock set back dated before it is still shown. An entry without `interrupted` (an older record, or one not yet read with its boundary) is told by time, as before. The badge and Continue are not shown again. Replies still read the transcript first and refuse while it holds an unanswered ask, since typing into a question the agent may still show would answer it; for Copilot, a turn left open by a CLI that was killed ends with the new CLI's `session.resume`, but what it left asking still keeps replies out (the new CLI may show it again without writing it again, and Enter would accept it) until it is completed, aborted, replaced by a question the session itself asks since (a subagent's is its own, #855), or a prompt is typed at the machine; an answer to it is refused as stale.
 
 **Crash loops.** Each restore is stamped in the record **before** its launch (on its owed entry, or in `stamps` for one the record holds no entry of), so a session that registers and dies at once, with the host, is still known as restored. A restore that starts nothing (busy, refused, or withdrawn because the host is stopping or its caller cancelled it before the agent started) puts back what was there before, its own stamp and mark only; a restore that registers and dies before its launch returns is offered as a loop. A restored session that dies before it has been seen live 10 minutes (with the host
 watching, judged as at a start, so one its agent ended normally does not count; or found dead at the next start, including an offer an earlier run restored whose session had not registered) is not restored again: it is kept owed, offered, and counted in
@@ -296,7 +297,8 @@ while the restore record cannot take its stamp first: the recorder did not start
 not be set aside) or failed, or the write failed.
 
 **Worktrees.** The reclaimer keeps the worktree of every session owed or still being judged, as it
-keeps a live session's, and of a session restored on request until it registers, starts nothing, or
+keeps a live session's, and of a restored session while it is still stamped, live or just gone, so the record's own snapshot holds
+its folder as it dies (#855), and of a session restored on request until it registers, starts nothing, or
 its stamp goes (every worktree, while its folder is not known, and across a restart, when only its stamp is left). A folder deleted since is placed under what is left of its path, so it keeps
 the worktree it was in; one owed without a folder, one whose place cannot be resolved (a link that
 cannot be read), or a record set aside, keeps every worktree.
@@ -307,6 +309,11 @@ from then. No timer is set more than a day ahead, and one that fires early only 
 system's timers refuse anything past about 49.7 days and that refusal stopped the host at every start.
 How long `hello` says what went (24 hours) and the 10 minutes before a partial notification are
 counted on the monotonic clock, so a clock set back stretches neither.
+**A clock set forward** more than the 7 days an offer is kept would let every offer go at once, nobody having
+seen it. A step the host did not live through is not counted against them (#855): while it runs, a step of more
+than 7 days that the monotonic clock did not take; at a start, a record last written more than 7 days
+before, which the wall clock cannot tell from a machine off that long, so each offer keeps the time it had left
+when the record was written. A smaller step counts, as days with the machine off do.
 Anything else that stops the record from starting, or from being looked at later, is logged and keeps
 every worktree for that run; the host goes on serving.
 

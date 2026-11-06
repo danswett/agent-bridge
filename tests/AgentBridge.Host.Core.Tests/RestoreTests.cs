@@ -904,7 +904,118 @@ public sealed class RestoreTests : IDisposable
         }
     }
 
+    // Engineering on #813 (6675455641; #855): the judge reads what the agent records now before an
+    // ending kept while discovery was held. Kept as ended, a session resumed since whose registration
+    // now says it has not ended, and gone with the host, read as ended: neither offered nor its folder
+    // kept.
+    [Fact]
+    public async Task An_ending_kept_while_held_gives_way_to_a_registration_that_says_not_ended_and_the_session_is_offered()
+    {
+        var now = Time.GetUtcNow();
+        RestoreFiles.Write(Record, new RestoreFile
+        {
+            Boot = Fixture.T0, Instance = "run1", Written = now.AddMinutes(-5),
+            Owed = [new RestoreOwed(E("a", AgentKind.Claude), RestoreCause.Crash, now.AddMinutes(-10), now.AddMinutes(-10), Decided: false, EndedSeen: true)],
+        });
+        ends.Of["a"] = false;
+        await using var r = Recorder();
+
+        r.Start();
+
+        Assert.Equal(["a"], Assert.Single(told).Offered.Select(o => o.Id));
+        Assert.Equal(["/work/repo"], r.Folders()!);
+        var w = Assert.Single(Written().Owed);
+        Assert.Equal((true, (bool?)null), (w.Decided, w.Uncertain));
+    }
+
+    // Engineering on #813 (6675455641; #855): a record last written more than a week ago (a clock set
+    // forward, or a machine off that long) let every offer go at once, nobody having seen it. Each
+    // keeps what it had left when the record was written.
+    [Fact]
+    public async Task An_offer_in_a_record_written_more_than_a_week_ago_keeps_the_time_it_had_left()
+    {
+        var now = Time.GetUtcNow();
+        RestoreFiles.Write(Record, new RestoreFile
+        {
+            Boot = Fixture.T0, Instance = "run1", Written = now.AddDays(-8),
+            Owed = [new RestoreOwed(E("a"), RestoreCause.Reboot, now.AddDays(-9), now.AddDays(-9), Decided: true)],
+        });
+        await using var r = Recorder();
+
+        r.Start();
+
+        Assert.Equal(["/work/repo"], r.Folders()!);
+        Assert.Equal(now.AddDays(-1), Assert.Single(Written().Owed).At);
+        Time.Advance(RestoreRecorder.OwedFor - TimeSpan.FromDays(1) - TimeSpan.FromMinutes(1));
+        Assert.Single(r.Folders()!);
+        Time.Advance(TimeSpan.FromMinutes(2));
+        Assert.Empty(r.Folders()!);
+    }
+
+    // The same, the clock set forward while the host runs: the step the monotonic clock did not take
+    // is not counted against an offer.
+    [Fact]
+    public async Task A_clock_set_forward_more_than_a_week_while_the_host_runs_lets_no_offer_go()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var clock = new SystemLimits(Time);
+        await using var r = Recorder(clock: clock);
+        r.Start();
+        Assert.Single(told);
+
+        clock.SetForward(TimeSpan.FromDays(8));
+        clock.Advance(RestoreRecorder.LongestWait);
+        Assert.Single(r.Folders()!);
+
+        clock.Advance(RestoreRecorder.OwedFor - RestoreRecorder.LongestWait - TimeSpan.FromMinutes(1));
+        Assert.Single(r.Folders()!);
+        clock.Advance(TimeSpan.FromMinutes(2));
+        Assert.Empty(r.Folders()!);
+    }
+
     // ---- Host B: restoring (#780) ----
+
+    // Engineering, TKQ_ on #837 (#855): every session is judged before the newest is restored, but
+    // only until NoticeAfter. A discovery that stayed held kept every restore back for as long as it
+    // did; past it, what is decided is restored, and the held one once it is judged.
+    [Fact]
+    public async Task What_is_judged_is_restored_once_ten_minutes_have_passed_though_another_agents_discovery_is_still_held()
+    {
+        Previous(Fixture.T0, false, E("a"), E("b", AgentKind.Claude));
+        source.HeldNow = new DiscoveryHeld("the claude processes could not be listed", [AgentKind.Claude]);
+        var resumer = new Resumer();
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+
+        Time.Advance(RestoreRecorder.JudgeEvery);
+        Assert.Empty(resumer.Asked);
+        Time.Advance(RestoreRecorder.NoticeAfter);
+        await Until(() => resumer.Asked.Count == 1);
+        Assert.Equal("a", resumer.Asked[0].Id);
+
+        source.HeldNow = null;
+        Time.Advance(RestoreRecorder.JudgeEvery);
+        await Until(() => resumer.Asked.Count == 2);
+        Assert.Equal(["a", "b"], resumer.Asked.Select(x => x.Id));
+    }
+
+    // Trust on #837 (#855): a restored session still stamped keeps its folder in the record's own
+    // snapshot. Kept only once owed again, one that died between the reclaimer's two reads (the
+    // record's, then live processes') was kept by neither.
+    [Fact]
+    public async Task A_restored_session_keeps_its_folder_while_stamped_live_and_once_it_dies()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer();
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => told.Count == 1);
+
+        source.Upsert(S("a"));
+        Assert.Equal(["/work/repo"], r.Folders()!);
+        source.Remove("a");
+        Assert.Equal(["/work/repo"], r.Folders()!);
+    }
 
     [Fact]
     public async Task What_a_crash_took_is_restored_one_at_a_time_as_it_was_launched_and_one_push_says_so_once_all_are_done()
@@ -1863,9 +1974,10 @@ public sealed class RestoreTests : IDisposable
     }
 
     // A restore on request of a session the record holds no owed entry of keeps its folder from any
-    // reclaim while it waits its turn and launches, and until it registers.
+    // reclaim while it waits its turn and launches, and once it registers while it is still stamped,
+    // as any restored session does (#855), until it has lived LoopWithin.
     [Fact]
-    public async Task A_restore_on_request_keeps_its_folder_from_a_reclaim_until_its_session_registers()
+    public async Task A_restore_on_request_keeps_its_folder_from_a_reclaim_until_its_session_has_lived_ten_minutes()
     {
         source.Sessions.Add(S("s"));
         var resumer = new Resumer { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
@@ -1882,6 +1994,8 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal(["/work/repo"], r.Folders()!);
 
         source.Upsert(S("s"));
+        Assert.Equal(["/work/repo"], r.Folders()!);
+        Time.Advance(RestoreRecorder.LoopWithin + RestoreRecorder.Coalesce);
         Assert.Empty(r.Folders()!);
     }
 
@@ -1931,7 +2045,8 @@ public sealed class RestoreTests : IDisposable
     // ---- Copilot on #837 at fcdac180 ----
 
     // A restore on request that had not registered when the host went is still a request at the next
-    // start: its folder is not known, so every worktree is kept until it registers.
+    // start: its folder is not known, so every worktree is kept until it registers, and its own then
+    // while it is still stamped (#855).
     [Fact]
     public async Task A_restore_on_request_not_yet_registered_when_the_host_went_keeps_every_worktree_at_the_next_start()
     {
@@ -1950,6 +2065,8 @@ public sealed class RestoreTests : IDisposable
         Assert.Null(second.Folders());
 
         source.Upsert(S("s"));
+        Assert.Equal(["/work/repo"], second.Folders()!);
+        Time.Advance(RestoreRecorder.LoopWithin + RestoreRecorder.Coalesce);
         Assert.Empty(second.Folders()!);
     }
 
