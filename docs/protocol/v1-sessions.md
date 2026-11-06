@@ -1274,7 +1274,9 @@ them, and the `restored` notice is its own.
   that comes due while the window is open, and while the first or one already grouped is still
   pending, does not go as itself: it joins the machine's one `group` notice, made when the second
   arrives (alerting, as a question does) and replaced in place, silently, as more join within the
-  window or as they are answered. The first question keeps its own notice, which the group does
+  window or as they are answered. A device whose alerting group had not reached it when it was
+  replaced (the relay down, the rate limit, a retry) gets the replacement alerting instead: each
+  device hears a burst once. The first question keeps its own notice, which the group does
   not replace: it carries the approve or answer controls, and its session's later notices
   (`resolved`, `finished`, its next question) replace whatever its tag shows. A session whose own
   question notice is on devices is not grouped either: its next question replaces that. A

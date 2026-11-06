@@ -137,6 +137,10 @@ public sealed class PushNotifier : IAsyncDisposable
     bool groupGrew;
     // A grouped notice was made since the last was withdrawn.
     bool groupOut;
+    // The devices an alerting grouped notice was made for that has not reached them yet: whatever
+    // replaces it before it goes (a session joining while the relay is down, rate-limited or retrying)
+    // alerts for them in its place, so a burst is never only ever said silently.
+    readonly HashSet<string> groupAlertOwed = new(StringComparer.Ordinal);
     readonly SemaphoreSlim wake = new(0);
     IPushSender? sender;
     // A sender whose connection failed a push: nothing more is tried on it, and the next
@@ -190,6 +194,8 @@ public sealed class PushNotifier : IAsyncDisposable
         public TrustedPeerLease? Grant;
         // A finished notice waiting out FinishedCollapse.
         public bool Collapsed;
+        // A grouped notice that alerts.
+        public bool Alerts;
     }
 
     // Whether a device has the app on screen now, subscribed to this host (SessionService.Watching).
@@ -396,6 +402,7 @@ public sealed class PushNotifier : IAsyncDisposable
         outbox.RemoveAll(o => o.Device == device);
         foreach (var k in finishedSent.Keys.Where(k => k.Device == device).ToList()) { finishedSent.Remove(k); }
         foreach (var k in shownOn.Keys.Where(k => k.Device == device).ToList()) { shownOn.Remove(k); }
+        groupAlertOwed.Remove(device);
     }
 
     void OnChanged(object? _, SessionChange change)
@@ -634,7 +641,12 @@ public sealed class PushNotifier : IAsyncDisposable
         if (r.Status is >= 200 and < 300)
         {
             if (o.Kind == NoticeKind.Question && o.Question is { } q) { shownOn[key] = q; }
-            else if (o.Kind == NoticeKind.Group) { shownOn[key] = GroupKey; }
+            else if (o.Kind == NoticeKind.Group)
+            {
+                shownOn[key] = GroupKey;
+                // Its alert reached the device: what changes it from now is silent there.
+                if (o.Alerts) { groupAlertOwed.Remove(o.Device); }
+            }
             else { shownOn.Remove(key); }
             if (o.Kind == NoticeKind.Finished) { finishedSent[key] = time.GetUtcNow(); }
             // The hourly repeat counts from a notice that reached a device, and only that is kept
@@ -796,6 +808,7 @@ public sealed class PushNotifier : IAsyncDisposable
         {
             if (!groupOut) { return; }
             groupOut = false;
+            groupAlertOwed.Clear();
             EnqueueGroup(shownTo, NoticeKind.Resolved, 0, silent: true, now);
             return;
         }
@@ -805,26 +818,33 @@ public sealed class PushNotifier : IAsyncDisposable
         EnqueueGroup(store.All, NoticeKind.Group, grouped.Count, silent, now);
     }
 
+    // Silent is the notice's own; a device still owed the group's alert (one made for it that never
+    // reached it, replaced here) gets it alerting all the same, until an alerting one is delivered.
     void EnqueueGroup(IReadOnlyList<PushSubscriber> to, NoticeKind kind, int count, bool silent, DateTimeOffset now)
     {
         foreach (var sub in to)
         {
             if (!MayNotify(sub)) { continue; }
-            outbox.Add(new Outgoing
-            {
-                Device = sub.Device,
-                Session = GroupKey,
-                Kind = kind,
-                Plain = PushNotice.Serialize(GroupMessage(kind, count, sub.App, now, silent)),
-                Ttl = (int)options.QuestionTtl.TotalSeconds,
-                Urgency = kind == NoticeKind.Group && !silent ? "high" : "normal",
-                Topic = PushNotice.Topic(machine.Id, GroupKey),
-                Created = now,
-                NotBefore = now,
-                Grant = sub.Grant,
-            });
+            var alerts = kind == NoticeKind.Group && (!silent || groupAlertOwed.Contains(sub.Device));
+            if (alerts) { groupAlertOwed.Add(sub.Device); }
+            outbox.Add(GroupOutgoing(sub, kind, count, alerts, now));
         }
     }
+
+    Outgoing GroupOutgoing(PushSubscriber sub, NoticeKind kind, int count, bool alerts, DateTimeOffset now) => new()
+    {
+        Device = sub.Device,
+        Session = GroupKey,
+        Kind = kind,
+        Plain = PushNotice.Serialize(GroupMessage(kind, count, sub.App, now, silent: !alerts)),
+        Ttl = (int)options.QuestionTtl.TotalSeconds,
+        Urgency = alerts ? "high" : "normal",
+        Topic = PushNotice.Topic(machine.Id, GroupKey),
+        Created = now,
+        NotBefore = now,
+        Grant = sub.Grant,
+        Alerts = alerts,
+    };
 
     // The outbox's key, and the tag's part after the machine id, for the grouped notice: no session id
     // has this shape. Its own, not the first question's session's: that session's later notices

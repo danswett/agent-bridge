@@ -1748,6 +1748,37 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal(5, sender.Sent.Count);
     }
 
+    // The group's alert counts once it reaches a device, not once it is made: a session joining while
+    // the relay is down replaces the alerting notice still waiting, and its replacement alerts in its
+    // place. Once delivered, what changes it is silent.
+    [Fact]
+    public async Task A_group_whose_alert_never_left_while_the_relay_was_down_still_alerts_once_on_every_device()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s3", SessionStatus.Waiting, question: Q("q3")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Empty(sender.Sent);
+
+        sender.Connected = true;
+        await After(TimeSpan.Zero);
+        source.Upsert(S("s4", SessionStatus.Waiting, question: Q("q4")));
+        await After(TimeSpan.FromSeconds(2));
+
+        foreach (var device in new[] { Phone, Laptop })
+        {
+            var groups = Received().Where(r => r.Device == device && Kind(r.Notification) == "group").ToList();
+            Assert.Equal([(3, false, "high"), (4, true, "normal")],
+                groups.Select(g => (g.Notification.GetProperty("data").GetProperty("sessions").GetInt32(), Silent(g.Notification), g.Urgency)));
+        }
+    }
+
     // Only a session joining it alerts: one leaving it, after a later question opened a new window,
     // changes it quietly.
     [Fact]
