@@ -280,8 +280,8 @@ current gate reading. The record of that shadow follows.
 
 The order of work across the product is
 [#696](https://github.com/danswett/agent-bridge/issues/696). Trust and daily-use
-reliability come first, and features are frozen until the P0s close. The steps below are
-the machine and migration steps within it.
+reliability come first. The feature freeze for the P0s ended on 11-04 at 23:08 PT, when all four
+closed. The steps below are the machine and migration steps within it.
 
 1. **Watch ULTRA.** Its HA entities (`*_dswett_ultra_*`) and the PWA should agree, and answers, replies and launches from the phone and the HA card should all work. Install from the PWA worked on 2026-11-01 (0.1.690 to 0.1.700); Install from the HA card's button is still untried live (#161).
 2. ~~**HOME view-only install**~~ Done 2026-11-01: the PWA lists HOME online and read-only.
@@ -540,7 +540,11 @@ agent-ha-bridge releases from this work:
 | 11-04 | An agent that needs sign-in is P0 (#800): shown as its own status, escalated, and recovered without RDP: a silent resume first, then sign-in from the phone by the agent's own device code with the URL allowlisted |
 | 11-04 | **No-RDP tenet** (above): #696 rule 5, the `needs-rdp` label, and #801–#805 filed |
 | 11-04 | Times: the product UI shows the viewer's local time, adding the zone where another machine's time could be misread; "Pacific" applies to repository text (AGENTS.md) |
+| 11-04 | The P0 feature freeze ends at 23:08 PT: #212, #209, #662 and #220 are closed, and Migration starts ([#696](https://github.com/danswett/agent-bridge/issues/696#issuecomment-6651880884)) |
 | 11-05 | Remote Other on Copilot forms matches the terminal (#876). #510 may ship a time-limited interim without Other on Copilot lists, with the reason shown, until #908 lands. Schema-less and legacy-choice questions: the card says why now, remote support follows (#887) |
 | 11-05 | Lab recordings (#736) sign in with dedicated lab-only accounts per agent, kept in the lab's Key Vault and provisioned by the owner |
 | 11-05 | Agent messaging (#912): a standing coordination grant (an owner-approved daily group whose members message each other unattended) replaces hourly G windows for coordinators, subject to a security review; delegate isolation (Q47) accepted for now, revisited after three `delegate-tools` cases; 17 other gating recommendations accepted |
 | 11-05 | Notifications (#913): Needs you interrupts, Done pushes only for Watched sessions and silently, FYI never; delegates roll up; one notification per session; only the active device alerts; one reminder at 15 min; a three-way Default/Watch/Mute setting; an Activity bell in the header; the badge counts Needs you only |
+| 11-05 | **Every element has a purpose** (owner, a #696 tenet): nothing is drawn twice on one screen; if two elements show the same fact, one goes. Phones lose the delegate strip once the Delegates tab carries the count and the needs glyph (#620, #661) |
+| 11-05 | Who decides what: Product owns the ranked epics (Now, Next, Later), the exceptions to any freeze, and product and design holds (with Creative). Engineering and Quality own the order PRs land in, speed and safety; they take PRs advancing the top-ranked Now item first (#689) |
+| 11-05 | Order changes reach Engineering as one **ORDER CHANGE** notice on #696 (rule 7): old and new position, why, and **Next grant** (the next free slot) or **Preempt** (pause the lowest-ranked work in flight, even under a work-in-progress freeze). Engineering answers within 15 minutes, and the dashboard (#755) flags drift |
