@@ -269,6 +269,26 @@ test.describe('on a phone', () => {
     expect(answer.y + answer.height).toBeLessThanOrEqual((await v.locator('.reply-slot').boundingBox()).y);
   });
 
+  test('the session changing while the person is on "Go to the question" leaves them on it, and the area whole', async ({ page }) => {
+    const v = await session(page);
+    await upsert(page, IDLE, { status: 'waiting', statusSince: later(), updatedAt: later(), question: choices('q-935') });
+    const link = box(v).getByRole('button', { name: 'Go to the question' });
+    await expect(link).toBeVisible();
+    await settle(v);
+    const max = await end(v);
+    await scrollTo(v, max);
+    await link.focus();
+    await expect(link).toBeFocused();
+    // Its words and its status moving on, the question still waiting: the notice is drawn again.
+    await upsert(page, IDLE, { activity: { response: `${LONG}\n\nStill here.` }, updatedAt: later(2000) });
+    await upsert(page, IDLE, { status: 'waiting', statusSince: later(3000), updatedAt: later(3000) });
+    await expect(v.locator('.stream')).toContainText('Still here.');
+    await expect(link).toBeFocused();
+    // Focus still inside it, reading back up does not fold the area the person is in.
+    await scrollTo(v, max - 400);
+    expect((await foot(v)).fy).toBe(0);
+  });
+
   test('under reduced motion it leaves with the cross-fade, and does not slide', async ({ page }) => {
     const v = await session(page);
     await page.emulateMedia({ reducedMotion: 'reduce' });

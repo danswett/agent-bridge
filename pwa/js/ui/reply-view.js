@@ -310,15 +310,20 @@ export class ReplyBox {
     const pending = this.#pending();
     const linked = e.toQuestion === e.toQuestion.ownerDocument.activeElement;
     e.held.hidden = !held;
+    // Each written only when it changes: rewriting the notice on every update would take a focused
+    // "Go to the question" out of the page, and focus with it.
+    const say = (words) => { if (e.held.contains(e.toQuestion) || e.held.textContent !== words) { e.held.textContent = words; } };
     if (this.#offline) {
-      e.held.textContent = this.#offline;
+      say(this.#offline);
     } else if (held && this.#session.question.answerAtMachine) {
-      e.held.textContent = 'The session is waiting at the machine for a prompt only it can answer. Answer it there first, then reply.';
+      say('The session is waiting at the machine for a prompt only it can answer. Answer it there first, then reply.');
     } else if (held && this.#phone?.matches && this.#onGoToQuestion) {
       // A phone's notice is one line, and its link takes the person to the question (ui.md §6.5).
-      e.held.replaceChildren(h('span', { class: 'reply-notice-text' }, 'Answer its question first.'), ' ', e.toQuestion);
+      if (!e.held.contains(e.toQuestion)) {
+        e.held.replaceChildren(h('span', { class: 'reply-notice-text' }, 'Answer its question first.'), ' ', e.toQuestion);
+      }
     } else if (held) {
-      e.held.textContent = 'The session is waiting for an answer to its question. Answer that first, then reply.';
+      say('The session is waiting for an answer to its question. Answer that first, then reply.');
     }
     e.held.classList.toggle('reply-notice', e.held.contains(e.toQuestion));
     // Offline, the words can still be written, to go once it is back; a question would take them.
