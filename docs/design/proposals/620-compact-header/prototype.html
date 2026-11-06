@@ -114,7 +114,10 @@
   textarea::placeholder { color: var(--text3); }
   textarea:focus { outline: none; }
   .box:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .send { flex: none; margin: 2px; width: 32px; height: 32px; border-radius: 6px; display: grid; place-items: center; background: var(--bridge); color: var(--on-bridge); opacity: .55; }
+  /* A11: a 44 × 44 touch target around the 32 px button that is drawn; the negative margin keeps the box's 36 px footprint, so nothing moves. */
+  .send { flex: none; position: relative; margin: -4px; width: 44px; height: 44px; display: grid; place-items: center; color: var(--on-bridge); opacity: .55; }
+  .send::before { content: ''; position: absolute; inset: 6px; border-radius: 6px; background: var(--bridge); }
+  .send svg { position: relative; }
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
   /* Reduced motion: nothing travels; the header cross-fades in and out. */
@@ -470,6 +473,10 @@ full.addEventListener('touchcancel', endTouch);
       if (r.top >= sr.top + Math.max(BAR, fullH + ty) && r.bottom <= sr.bottom - Math.max(fbarH, footH - fy)) return;
       clearTimeout(fadeTimer); clearTimeout(animTimer);
       fading = false; phone.classList.remove('fading', 'animating');
+      // The reply area folds to its bar too, as on a short screen's scroll to a question: a landscape phone's reply area can cover the control as well.
+      clearTimeout(ffadeTimer); clearTimeout(fanimTimer);
+      ffading = false; phone.classList.remove('ffading', 'fanimating');
+      freturned = false; fheld = froom; frun = 0;
       programmatic = true; returned = false; held = null; run = 0; dir = 0;
       const y = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
       scroller.scrollTop = Math.max(y - BAR - 8, room);
@@ -481,14 +488,17 @@ full.addEventListener('touchcancel', endTouch);
 
   // A scroll the app makes (to an arriving question, a restored position) never folds or brings back the header.
   const scrollProgrammatically = (target) => {
+    // On every screen, a reduced-motion fade under way would land after the scroll and fold what the scroll keeps.
+    clearTimeout(fadeTimer); fading = false; phone.classList.remove('fading');
+    clearTimeout(ffadeTimer); ffading = false; phone.classList.remove('ffading');
     let hidden = -ty;
     // The one exception to keeping the header as it was: on a screen shorter than twice the header the kept header
     // would cover what the app scrolls to, so it folds to the bar first.
     // Judged on the full header, not on where it is now: an already compact header still folds a full reply area.
     const stageH = $('stage').clientHeight;
     if (stageH < 2 * fullH) {
-      if (hidden < room) { clearTimeout(fadeTimer); clearTimeout(animTimer); fading = false; phone.classList.remove('fading', 'animating'); hidden = room; }
-      clearTimeout(ffadeTimer); clearTimeout(fanimTimer); ffading = false; phone.classList.remove('ffading', 'fanimating');
+      if (hidden < room) { clearTimeout(animTimer); phone.classList.remove('animating'); hidden = room; }
+      clearTimeout(fanimTimer); phone.classList.remove('fanimating');
       fy = froom;   // the foot folds to its bar with it
     }
     const wasFull = hidden === 0;
