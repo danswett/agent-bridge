@@ -1556,21 +1556,21 @@ count, and its row to "Needs sign-in". Sessions that confirm leave the count one
 **Pushes, toasts and Home Assistant notices**
 
 One pattern everywhere: *Agent* on *machine*, then the state. *Agent* is the host's own name
-for it: Copilot, Claude Code or Codex.
+for it, as the host sends it: Copilot, Claude or Codex.
 
-| State | Title | Grouped (2 or more sessions waiting) |
-|---|---|---|
-| Needs sign-in | "*Agent* on *machine* needs sign-in" | "*Agent* on *machine* needs sign-in · 2 sessions: *A*, *B*" |
-| Not responding | "*Agent* on *machine* isn't responding" | The same, with " · *n* sessions: *A*, *B*" |
-| Not authorised | "*Agent* on *machine* wasn't authorised" | The same |
-| Rate limited | "*Agent* on *machine* hit a rate limit" | The same |
-| Agent error | "*Agent* on *machine* stopped with an error" | The same |
+| State | Title | Grouped (2 or more sessions waiting) | Body |
+|---|---|---|---|
+| Needs sign-in | "*Agent* on *machine* needs sign-in" | "*Agent* on *machine* needs sign-in · 2 sessions: *A*, *B*" | "*n* sessions affected" ("1 session affected") |
+| Not responding | "*Agent* on *machine* isn't responding" | The same, with " · *n* sessions: *A*, *B*" | `attention.message` |
+| Not authorised | "*Agent* on *machine* wasn't authorised" | The same | `attention.message` |
+| Rate limited | "*Agent* on *machine* hit a rate limit" | The same | `attention.message` |
+| Agent error | "*Agent* on *machine* stopped with an error" | The same | `attention.message` |
 
-- **The body** is the host's composed sentence (`attention.message`, from
-  `AgentErrors.Templates`, #841), never the agent's or the CLI's own words. The titles' verbs
-  match those templates, so a push and the session's line read the same. Never the account, the
-  code or the URL. The roll-up (the count and the sessions' titles) rides in the grouped title,
-  so the body needs none.
+- **The body:** for sign-in, the count of sessions affected (`v1-sessions.md`, Push `signIn`),
+  one notice per (machine, agent, account). For the other four, the host's composed sentence
+  (`attention.message`, from `AgentErrors.Templates`, #841). Never the agent's or the CLI's own
+  words, the account, the code or the URL. The titles' verbs match those templates, so a notice
+  and the session's line read the same.
 - **Tiers** (how each one interrupts) are #913's.
 - **What sends today:** only sign-in pushes from the host (#928): one per (machine, agent,
   account), as soon as the first session needs it and again at most hourly while any still
@@ -1601,7 +1601,7 @@ for it: Copilot, Claude Code or Codex.
 | Banner | "*Agent* on *machine* needs sign-in"; "*n* sessions affected"; "Checking for a sign-in that still works…"; "Waiting for sign-in"; "Waiting for sign-in · code expires *time*"; "Code expired"; "Signed in · waiting for *n* sessions to confirm"; "Signed in · *n* sessions recovered"; "Recovered by itself"; "Sign-in refused · *reason*"; "Sign-in failed"; "Sign in at the machine · *reason*"; "Couldn't start sign-in. Try again."; "*machine* can't be reached now" |
 | Sheet | "Starting *Agent*'s sign-in on *machine*…"; "Open this page and enter the code."; "Expires *time*"; "Code expired"; "This sign-in code couldn't be shown." |
 | Buttons | "Sign in"; "Show code"; "Open"; "Copy"; "Cancel"; "Try again" |
-| Push and HA notice titles | "*Agent* on *machine* needs sign-in"; "… isn't responding"; "… wasn't authorised"; "… hit a rate limit"; "… stopped with an error"; grouped, " · *n* sessions: *A*, *B*". The body is `attention.message` |
+| Push and HA notice titles | "*Agent* on *machine* needs sign-in"; "… isn't responding"; "… wasn't authorised"; "… hit a rate limit"; "… stopped with an error"; grouped, " · *n* sessions: *A*, *B*". Body: "*n* sessions affected" for sign-in; `attention.message` for the others |
 
 **Platforms**
 
