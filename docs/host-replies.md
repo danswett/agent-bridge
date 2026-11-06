@@ -308,12 +308,17 @@ transcript; the reply is added to them, and the prompt recorded differs, so the 
 moments between the transcript check and the keys landing would take the words; the window
 is the worker's start-up, about the same as for an answer.
 
-**What a reason says.** A reply's or an answer's `reason` states only what happened, as a
-lowercase clause with no full stop, naming the agent's session: never where to look, which the
-client's receipt already says ("Check the conversation…", #967), and never "check at the
-machine" (#995). Where the host itself failed (an exception reading the screen, typing, or
+**What a reason says.** An `unconfirmed` reply's or answer's `reason` states only what
+happened, as a lowercase clause with no full stop, naming the agent's session: never where to
+look, which the client's receipt already says ("Check the conversation…", #967), and never
+"check at the machine" (#995). A refusal is different: nothing was typed, so its reason still
+says where the person's next move is ("answer at the machine", "reply at the machine"; Creative,
+6680283740 on #995). Where the host itself failed (an exception reading the screen, typing, or
 checking the transcript, or the attempt ledger unreadable), the reason is "the machine
-couldn't deliver it", and the exception's text goes to the host's log only (#802).
+couldn't deliver it", and the exception's text goes to the host's log only (#802). Launch and
+End session reasons follow the same rule (#1021): fixed words ("the machine couldn't start the
+session", "the machine couldn't end the session"), with their "check at the machine" tails
+where they had them (#467), and the exception's text in the host's log only.
 
 ## Progress and timings
 

@@ -333,8 +333,9 @@ In order, for every answer:
    `User responded: …`. A form, even of one field, needs the structured record: its
    rendering trims, renders `a=x, b=y` (equally `a="x, b=y"`), and cannot tell options
    `x`, `x ` and `pick=x` apart. A different record, an error, a skip, the session
-   ending, or nothing is `unconfirmed` with the reason. Claude and Codex as above. Reasons
-   state only the fact, and an exception's text goes to the host's log only, as for replies
+   ending, or nothing is `unconfirmed` with the reason. Claude and Codex as above. An
+   `unconfirmed` reason states only the fact (a refusal may say "answer at the machine"), and
+   an exception's text goes to the host's log only, as for replies
    ([host-replies.md](host-replies.md), "What a reason says").
 
 Progress and timings work as for replies ([host-replies.md](host-replies.md#progress-and-timings)):

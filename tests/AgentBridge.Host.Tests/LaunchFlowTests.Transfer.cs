@@ -162,7 +162,8 @@ public sealed class LaunchTransferFlowTests : LaunchFlowFixture
         }
         var refused = await LaunchAsync(channel, new { agent = "copilot", workspace = "App", transfer = Offered() });
         Assert.Equal("refused", refused.Outcome_);
-        Assert.Contains("signing person is not independently pinned", refused.Reason);
+        Assert.Contains(logged, line => line.Contains("could not be brought from") && line.Contains("signing person is not independently pinned"));
+        Assert.Equal(BroughtWords, refused.Reason);
         Assert.Empty(starter.Specs);
         Assert.Empty(RelayStore.Stored);
 
@@ -224,19 +225,19 @@ public sealed class LaunchTransferFlowTests : LaunchFlowFixture
         // The same command again, in another press: one press is one transfer.
         var again = await LaunchAsync(ch, new { agent = "copilot", workspace = "App", transfer });
         Assert.Equal("refused", again.Outcome_);
-        Assert.EndsWith("that command has been carried out already; press again", again.Reason);
+        AssertNotBrought(again.Reason, "that command has been carried out already; press again");
 
         // Signed for another machine to receive it: this one will not carry it.
         var elsewhere = await LaunchAsync(ch, new { agent = "copilot", workspace = "App", transfer = Transfer(away, toAway, to: client.Id) });
-        Assert.Contains("the signed command is not for this launch", elsewhere.Reason);
+        AssertNotBrought(elsewhere.Reason, "the signed command is not for this launch");
 
         // Signed by another device than the one asking.
         using var stranger = P256KeyPair.Generate();
-        Assert.Contains("the signed command is not for this launch", (await LaunchAsync(ch, new { agent = "copilot", workspace = "App", transfer = Transfer(away, toAway, signer: stranger) })).Reason);
+        AssertNotBrought((await LaunchAsync(ch, new { agent = "copilot", workspace = "App", transfer = Transfer(away, toAway, signer: stranger) })).Reason, "the signed command is not for this launch");
 
         // A session the other machine does not offer for resume cannot be asked for by name.
         var unknown = await LaunchAsync(ch, new { agent = "copilot", workspace = "App", transfer = Transfer(away, toAway, session: Guid.NewGuid().ToString()) });
-        Assert.EndsWith("that session is not one its machine offers (it is not on its resume list)", unknown.Reason);
+        AssertNotBrought(unknown.Reason, "that session is not one its machine offers (it is not on its resume list)");
 
         Assert.Single(starter.Specs);
         Assert.Empty(RelayStore.Stored);
@@ -271,7 +272,7 @@ public sealed class LaunchTransferFlowTests : LaunchFlowFixture
         {
             var o = await LaunchAsync(ch, new { agent = "copilot", workspace = "App", transfer = Transfer(away, toAway) });
             Assert.Equal("refused", o.Outcome_);
-            Assert.EndsWith("the bundle could not be uploaded in time; try again", o.Reason);
+            AssertNotBrought(o.Reason, "the bundle could not be uploaded in time; try again");
         }
         // Stalled in storage, not before it (a slow machine can spend the second packing).
         Assert.InRange(storage.Uploads, 1, 3);
@@ -295,7 +296,7 @@ public sealed class LaunchTransferFlowTests : LaunchFlowFixture
         {
             var o = await LaunchAsync(ch, new { agent = "copilot", workspace = "App", transfer = Transfer(away, toAway) });
             Assert.Equal("refused", o.Outcome_);
-            Assert.Contains("this machine's transfer folder could not be prepared", o.Reason);
+            AssertNotBrought(o.Reason, "this machine's transfer folder could not be prepared");
         }
         File.Delete(away.Transfers.Staging);
         Assert.Equal("started", (await LaunchAsync(ch, new { agent = "copilot", workspace = "App", transfer = Transfer(away, toAway) })).Outcome_);
@@ -349,7 +350,9 @@ public sealed class LaunchTransferFlowTests : LaunchFlowFixture
         }, "phone");
 
         Assert.Equal(LaunchOutcome.Refused, result.Outcome);
-        Assert.Contains("the relay went away", result.Reason);
+        Assert.Contains("the machine couldn't start the session", result.Reason);
+        Assert.DoesNotContain("the relay went away", result.Reason);
+        Assert.Contains(logged, line => line.Contains("the relay went away"));
         var (claim, problem) = store.Claim("phone", [new() { Id = file }]);
         Assert.Null(problem);
         Assert.NotNull(claim);
@@ -398,6 +401,15 @@ public sealed class LaunchTransferFlowTests : LaunchFlowFixture
         Assert.Empty(RelayStore.Stored);
         Assert.Empty(Left(away.Transfers.Staging));
     }
+    const string BroughtWords = "the session couldn't be brought from the other machine";
+
+    // The other machine's own words are in the host's log, never in what the person is told.
+    void AssertNotBrought(string? reason, string theirWords)
+    {
+        Assert.Equal(BroughtWords, reason);
+        Assert.Contains(logged, line => line.Contains("could not be brought from") && line.Contains(theirWords));
+    }
+
     [Fact]
     public async Task Nothing_moves_from_a_machine_that_does_not_hand_its_sessions_on_or_to_one_that_does_not_take_them()
     {
@@ -409,7 +421,7 @@ public sealed class LaunchTransferFlowTests : LaunchFlowFixture
 
         var o = await LaunchAsync(ch, new { agent = "copilot", workspace = "App", transfer = Transfer(away, toAway) });
         Assert.Equal("refused", o.Outcome_);
-        Assert.EndsWith("this machine does not hand its sessions to other machines (launch.transfer.serve in its config)", o.Reason);
+        AssertNotBrought(o.Reason, "this machine does not hand its sessions to other machines (launch.transfer.serve in its config)");
 
         ServeTransfers(c => c with { Transfer = TransferConfig.Default with { Receive = false } });
         Assert.DoesNotContain(TransferProtocol.Capability, await CapabilitiesAsync(ch));
