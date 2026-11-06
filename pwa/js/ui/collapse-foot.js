@@ -133,6 +133,8 @@ export class CollapsingFoot {
 
   // Shown again, or back from another tab: whole, as a session opens (ui.md §6.5).
   whole() {
+    // A reduced-motion fade out still running would fold it again when it ends, as the header's.
+    if (this.#fading) { this.#endFade(); }
     const f = this.#fold;
     const { top, max } = this.#end();
     f.sync(toEnd(top, max), max);

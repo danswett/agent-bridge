@@ -249,6 +249,19 @@ test('under reduced motion it leaves with a cross-fade, not a slide', async () =
   p.foot.disable();
 });
 
+test('shown again mid-fade, it stays whole: the fade ends and does not fold it after', async () => {
+  const p = page({ reduced: true, top: 600 });
+  p.scroll(568);
+  assert.equal(p.classes.has('ffading'), true);
+  p.foot.whole();
+  p.foot.render(false);
+  assert.equal(p.classes.has('ffading'), false);
+  await new Promise((r) => setTimeout(r, 400));
+  p.foot.render(false);
+  assert.equal(p.fy(), 0);
+  p.foot.disable();
+});
+
 test('disabled, it leaves nothing behind', () => {
   const p = page();
   p.scroll(MAX - 400);
