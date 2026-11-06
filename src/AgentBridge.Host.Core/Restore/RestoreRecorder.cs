@@ -520,7 +520,8 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     RestoreNotice NoticeOf(List<RestoreOwed> offered, int waiting, List<RestoreOwed> about)
     {
         var latest = about.MaxBy(w => w.At)!;
-        return new RestoreNotice
+        // Within its budget in hello and the push, whatever the titles hold (RestoreProtocol.Fit).
+        return RestoreProtocol.Fit(new RestoreNotice
         {
             At = started,
             Cause = latest.Cause,
@@ -536,7 +537,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
                 QuestionLost = w.Entry.QuestionWaiting ? true : null,
             })],
             OfferedMore = offered.Count > RestoreProtocol.MaxOffered ? offered.Count - RestoreProtocol.MaxOffered : null,
-        };
+        });
     }
 
     // Judged to have died, and so offered: not one kept only for its folder (RestoreOwed.Uncertain).
@@ -552,9 +553,11 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         {
             Id = s.Id,
             Agent = s.Agent,
-            Title = s.Title,
+            // Within what a read accepts (RestoreFiles.Bounded), so a record this host wrote is never
+            // set aside for its own fields.
+            Title = Limits.KeepStart(s.Title, Limits.Title),
             Cwd = s.Cwd,
-            Model = s.Model,
+            Model = Limits.KeepStart(s.Model, LaunchProtocol.MaxName),
             Turn = s.Status switch
             {
                 SessionStatus.Working => RestoreTurn.Working,

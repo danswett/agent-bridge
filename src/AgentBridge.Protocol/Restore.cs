@@ -16,6 +16,29 @@ public static class RestoreProtocol
     // day, so a host that runs for weeks stops saying what went the morning it started. One
     // constant until Design says otherwise (#780).
     public static readonly TimeSpan ShownFor = TimeSpan.FromHours(24);
+
+    // machine.restore as sent, well inside a message beside the rest of hello. Its fields are bounded
+    // (MaxOffered names, each title Limits.Title), but their JSON can be larger (12 bytes for each
+    // emoji); a notice past this was made unsendable, and hello with it (Engineering on #837).
+    public const int MaxNoticeBytes = 8 * 1024;
+    // What Fit cuts each title to first.
+    public const int FitTitleBytes = 60;
+
+    // A notice within maxBytes: titles cut, then gone, then the last names counted in offeredMore
+    // instead, never the counts or the cause.
+    public static RestoreNotice Fit(RestoreNotice n, int maxBytes = MaxNoticeBytes)
+    {
+        bool Fits(RestoreNotice x) => ProtocolJson.ByteCount(x) <= maxBytes;
+        if (Fits(n)) { return n; }
+        n = n with { Offered = [.. n.Offered.Select(o => o with { Title = Limits.KeepStart(o.Title, FitTitleBytes) })] };
+        if (Fits(n)) { return n; }
+        n = n with { Offered = [.. n.Offered.Select(o => o with { Title = null })] };
+        while (!Fits(n) && n.Offered.Count > 0)
+        {
+            n = n with { Offered = [.. n.Offered.Take(n.Offered.Count - 1)], OfferedMore = (n.OfferedMore ?? 0) + 1 };
+        }
+        return n;
+    }
 }
 
 // Why the sessions went. Reboot: the machine started again, or the person signed out, so every

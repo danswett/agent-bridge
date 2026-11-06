@@ -314,6 +314,41 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal("run2", Written().Instance);
     }
 
+    // Engineering on #837: a record holding a field longer than the host ever writes (a 70,000
+    // character title) is set aside as malformed, as any unreadable record: read, it made
+    // machine.restore larger than a message, and hello could not be sent.
+    [Fact]
+    public async Task A_record_with_a_field_longer_than_the_host_writes_is_set_aside()
+    {
+        Previous(Fixture.T0, false, E("a") with { Title = new string('x', 70_000) });
+        await using var r = Recorder();
+
+        r.Start();
+
+        Assert.Null(r.Folders());
+        Assert.Null(r.Notice);
+        Assert.Empty(told);
+        Assert.True(File.Exists(Record + ".unreadable"));
+    }
+
+    // And the notice itself stays within its budget whatever its titles hold: twenty titles of 60
+    // emoji each are within Limits.Title, but their JSON is three times that. Cut, every session is
+    // still named.
+    [Fact]
+    public async Task The_restore_notice_stays_within_its_budget_with_every_session_named()
+    {
+        var title = string.Concat(Enumerable.Repeat("\U0001F600", 60));
+        Previous(Fixture.T0, false, [.. Enumerable.Range(0, RestoreProtocol.MaxOffered).Select(i => E($"s{i:D2}") with { Title = title })]);
+        await using var r = Recorder();
+
+        r.Start();
+
+        var n = r.Notice!;
+        Assert.True(ProtocolJson.ByteCount(n) <= RestoreProtocol.MaxNoticeBytes);
+        Assert.Equal(RestoreProtocol.MaxOffered, n.Offered.Count);
+        Assert.Null(n.OfferedMore);
+    }
+
     [Fact]
     public async Task A_session_that_goes_stays_in_the_record_for_a_minute_and_a_clean_stop_says_so()
     {

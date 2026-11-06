@@ -92,6 +92,7 @@ public static class RestoreFiles
             {
                 return (null, "it is malformed");
             }
+            if (!Bounded(file)) { return (null, "it holds a field longer than the host ever writes"); }
             return (file, null);
         }
         // A time the converter cannot read throws as it is, not as a JsonException.
@@ -100,6 +101,21 @@ public static class RestoreFiles
             return (null, e.Message);
         }
     }
+
+    // Every string within what the host writes, by the protocol's own limits: a 70,000-character title
+    // read as it was made machine.restore larger than a message, and hello with it (Engineering on
+    // #837). Set aside instead, as any malformed record. A folder has no protocol limit: Windows' own
+    // longest path bounds it.
+    public const int MaxCwdChars = 32_767;
+
+    static bool Bounded(RestoreFile file) =>
+        Within(file.Instance, LaunchProtocol.MaxName)
+        && file.Sessions.Concat(file.Owed.Select(w => w.Entry)).All(e =>
+            Within(e.Id, LaunchProtocol.MaxName) && Within(e.Title, Limits.Title) && Within(e.Model, LaunchProtocol.MaxName)
+            && (e.Cwd is null || e.Cwd.Length <= MaxCwdChars)
+            && (e.Launch is not { } l || new[] { l.Launcher, l.Workspace, l.Profile, l.Model, l.Effort, l.Context, l.Permissions }.All(v => Within(v, LaunchProtocol.MaxName))));
+
+    static bool Within(string? text, int maxBytes) => text is null || Encoding.UTF8.GetByteCount(text) <= maxBytes;
 
     // Each owed entry's judgement as written, never a default: one with no time read as MinValue, was
     // let go at once and its worktree with it, rather than the record set aside (Copilot on #813).
