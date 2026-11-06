@@ -133,7 +133,7 @@ public sealed class SignInTests
     [Theory]
     [InlineData("this credential store is busy", "another sign-in is under way")]
     [InlineData("too many recent sign-in requests", "too many requests, try again later")]
-    [InlineData("too many sign-ins are pending", "too many sign-ins under way")]
+    [InlineData("too many sign-ins are pending", "too many sign-ins waiting on this machine")]
     [InlineData("sign-in is unavailable or not authorized", "not available from this device")]
     [InlineData("Signed out", null)]
     [InlineData("This credential store is busy", null)]

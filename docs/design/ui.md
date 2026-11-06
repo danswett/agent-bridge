@@ -2066,8 +2066,8 @@ that survives a failed turn never hides the error behind "Delegating".
   Raw text from the machine or the CLI is never shown, verbatim or trimmed: it belongs in
   diagnostics (#802). A line with no reason from that set reads without one ("Sign-in
   refused"). The set for a refused start, by the host's reason: "too many requests, try again
-  later", "another sign-in is under way", "too many sign-ins under way" and "not available from
-  this device".
+  later", "another sign-in is under way", "too many sign-ins waiting on this machine" and "not
+  available from this device".
 
 **Machine banner** (one per machine, agent and account, rolled up from the sessions' `attention`)
 

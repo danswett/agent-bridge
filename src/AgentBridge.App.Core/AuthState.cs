@@ -196,7 +196,7 @@ public static partial class AuthState
     {
         ["too many recent sign-in requests"] = "too many requests, try again later",
         ["this credential store is busy"] = "another sign-in is under way",
-        ["too many sign-ins are pending"] = "too many sign-ins under way",
+        ["too many sign-ins are pending"] = "too many sign-ins waiting on this machine",
         ["sign-in is unavailable or not authorized"] = "not available from this device",
     };
 

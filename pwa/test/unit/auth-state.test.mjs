@@ -91,6 +91,7 @@ test('a refused start\'s reason is shown only in this client\'s words for one of
   assert.equal(readStartResult({ outcome: 'refused', reason: 'this credential store is busy' }).reason, 'another sign-in is under way');
   assert.equal(readStartResult({ outcome: 'refused', reason: 'too many recent sign-in requests' }).reason, 'too many requests, try again later');
   assert.equal(readStartResult({ outcome: 'refused', reason: 'sign-in is unavailable or not authorized' }).reason, 'not available from this device');
+  assert.equal(readStartResult({ outcome: 'refused', reason: 'too many sign-ins are pending' }).reason, 'too many sign-ins waiting on this machine');
   // Anything else, however plain, reads as no reason: "Sign-in refused".
   for (const raw of ['Signed out', 'This Credential Store Is Busy', 'this credential store is busy ', 'a supported agent and request UUID are required', 'constructor', 'toString', 7]) {
     assert.equal(readStartResult({ outcome: 'refused', reason: raw }).reason, null, String(raw));
