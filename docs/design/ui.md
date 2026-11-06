@@ -1262,6 +1262,180 @@ never its text. A card with it shows "Driven by an external agent · @*login*" o
 sessions and one line, "Collaborators' sessions: in the Slipgates app". No card approves a held
 message.
 
+### 6.12 Restored sessions (#780)
+
+**Not built yet:** planned for #780 Host B and its client slices; the field names here are the
+plan's, not a shipped contract.
+
+After a reboot or a host crash, the host starts again the sessions that were running and says so.
+Decided 2026-11 on #780; the protocol is #780's plan, and nothing here adds to it. Every element
+below reads one field, named in brackets. A client shows only what the host sends: it never
+works out on its own that a session died or came back.
+
+A restored session always opens idle. Nothing is typed into it, and nothing is sent for you.
+
+**The row mark** (`restored.at`, `restored.cause`)
+
+- **Where:** text on the row's line 2 (§6.1), as one of its two facts. The other fact is the
+  usual one, so it follows the facts-on-a-line rules (#214).
+- **Text:** "Restored after a reboot · 03:12" when `cause` is `reboot`, and "Restored after the
+  host restarted · 03:12" when it is `crash`. The time is `restored.at` in the client's time
+  format, as every time on the row is.
+- **Form:** the row's existing secondary text tokens. No new glyph, no colour, no badge. The
+  status glyph still says what the session is doing (§2.2), which is idle.
+- **Lifetime:** the mark and Continue share one lifetime. Both go when a reply is delivered or
+  the session starts working, whichever comes first, and after 24 h or at the end of this host
+  run at most (the host stops sending `restored` then). Neither ever comes back: a client never
+  keeps the mark longer, and never brings it back once it has gone.
+
+**The machine notice** (`hello.machine.restore`, announced through `hello.changed`, #646)
+
+- **Where and how:** one banner per machine, in the same form as the Discovery held banner
+  (#293, #786): an informational InfoBar over every page, in the window's banner area (§7),
+  below that machine's Discovery held banner (Platforms, below, gives each client's place). It is
+  closable.
+- **Content:** a title and the lines below, with no line limit: every failure and its reason is
+  shown. A line whose list is empty is left out. The banner grows to fit, but the banner area as
+  a whole, every banner included, takes at most a third of the window's height (a quarter on a
+  phone); past that, the area scrolls inside itself. Every notice's full text and buttons stay
+  reachable by keyboard and screen reader, and the page under the banners is never pushed out of
+  view.
+  - Title: "*machine* restarted after a reboot at 03:12" (`cause: reboot`) or "*machine*'s host
+    restarted at 03:12" (`cause: crash`), from `at`. With `signedInAt`, the reboot title ends
+    "… · restored when you signed in at 08:40".
+  - "Restored *n* sessions" (`restored`).
+  - When `midTurn` is non-zero: "Can continue: *title*, *title*". The titles are those of this
+    machine's sessions whose `restored.midTurn` is true, from the client's own session list, so
+    the host sends no extra field. Each title opens its session, where Continue waits. A session
+    continued since, here or on another device, drops out, and the line is left out once none
+    remain. If the list doesn't have them yet, the line reads "*n* were mid-turn", with no promise
+    to continue, until it does.
+  - "Questions lost: *title*, *title*" (`questionsLost[].title`). The question itself died with
+    the session; the notice says so, and nothing reasks it.
+  - "Couldn't be restored: *title* (*reason*)", one per entry in `failed`, with the host's
+    `reason` as sent. The plan's "waiting on folder trust at the machine" is one such reason.
+  - "*n* sessions weren't restored again because they died within 10 minutes" (`loops`).
+- **Offered only:** when the client is read-only beside agent-ha-bridge (G5), or when the
+  machine's `sessions.restoreOnStart` is off (`offered`), the notice still says what died, and
+  the "Restored …" line reads instead "*n* sessions can be restored at the machine". It offers no
+  button: restoring happens at the machine. Under G5 that stays so; with the setting merely off,
+  a Restore button with a confirmation, from any client, is #948.
+- **Dismissal:** per device, as #786's: closing it hides it on this device only, it is not saved
+  across app restarts, and it comes back only if the host sends a new notice. Its close button is
+  named "Dismiss restore notice on *machine*".
+- **Lifetime when not dismissed:** while the host sends `hello.machine.restore` for the machine.
+  It goes when the notice is gone or replaced.
+- **No notice** when nothing died: the host sends none, and the client shows none.
+
+**Continue** (`restored.midTurn`, `restored.continue`, the `session.reply` operation)
+
+- **Where:** a small secondary button, "Continue", in the session pane directly above the reply
+  box (§6.5), left-aligned with it. Never in the row, the card, the notice or a notification.
+- **When:** only while the session's `restored.midTurn` is true, with the mark's lifetime: the
+  host clears it once a reply is delivered or the session starts working, or after 24 h or at the
+  end of this host run at most, and the button goes with it.
+- **What it does:** sends `restored.continue`, verbatim, through the reply box's ordinary Send
+  path: the `session.reply` operation (capability `sessions.reply`) with
+  `{ id, request, text: restored.continue, progress: true }`. The
+  client does not edit, translate or rebuild the text. Whatever is typed in the reply box stays
+  there, unsent.
+- **Progress:** the §6.5 receipt (ring, check, Try again; #600, #617). The `request` follows the
+  ordinary Send rule ([v1-sessions.md, `session.reply`](../protocol/v1-sessions.md#sessionreply),
+  whose `request` has `session.answer`'s semantics): resending after a lost response, and Try
+  again after a failure with no outcome, reuse the same `request`, so the host types it at most
+  once and returns the first outcome. Only Try again after a `busy` or `refused` outcome sends a
+  **new** `request`, because the host remembers each outcome for ten minutes and would only
+  repeat it. `unconfirmed` is never retried: the receipt says to check at the machine, as §6.5's
+  does. While it is in
+  flight the button is disabled and keeps focus (A4).
+- **In the conversation:** shown as the person's own message, exactly as a typed reply is. It is
+  not agent-driven, so #489's marking does not apply.
+- **After:** the button goes once the reply is delivered, with no "Sent" state. Focus moves only
+  if it is still on Continue then, and goes to the session's reply box; focus anywhere else stays
+  where it is (A4, §6.4's receipt rule).
+- **Never automatic:** no client presses it, on start, on reconnect or on a timer.
+
+**Push and toast** (Web Push kind `restored`; `hello.machine.restore`)
+
+- One per machine per start, and only if something died. The host decides; a client never adds
+  one per session.
+- **Text:** title "*machine* restarted", body "Restored *n* sessions · *m* need you" when there
+  are lost questions or failures, else "Restored *n* sessions". When offered only: "*n* sessions
+  can be restored at the machine".
+- **Sound:** none. Decision #764 keeps sound for pending questions and approvals only, so this
+  notice is silent on every platform. The push payload sets `notification.silent: true`, so an
+  older service worker that shows kind `restored` as a `question` stays silent too.
+- **Opening it** opens the machine's session list, with the notice over it.
+- An older service worker shows kind `restored` as a `question`; that is accepted.
+
+**The Settings toggle** (`sessions.restoreOnStart`, per machine, through `SettingsRequest`)
+
+- In the Settings host section, per machine: a switch, "Restore sessions after a reboot or
+  crash", on by default.
+- Help text, one line: "Starts the sessions that were running when this machine stopped. Off:
+  you're told what stopped, and nothing starts."
+- A read-only client shows the switch disabled, with the value the host sends.
+
+**Older clients** (no `sessions.restore` in `hello`)
+
+They ignore `restored` and `hello.machine.restore`: no mark, no notice, no Continue. The
+restored session is an ordinary idle row, and its conversation is intact. The push still
+arrives, as a `question`.
+
+**States**
+
+| | Reboot (`cause: reboot`) | Host crash (`cause: crash`) |
+|---|---|---|
+| Restored, idle | Mark "Restored after a reboot · 03:12"; counted in the notice | Mark "Restored after the host restarted · 03:12"; counted |
+| Restored mid-turn (`midTurn`) | Mark; Continue above the reply box; "mid-turn" line | Same |
+| Offered only (G5 or setting off; `offered`) | No mark (nothing started); notice "*n* sessions can be restored at the machine" | Same |
+| Failed (`failed`) | No mark; notice "Couldn't be restored: *title* (*reason*)" | Same |
+| Loop (`loops`) | No mark; notice "*n* sessions weren't restored again …" | Same |
+| Question lost (`questionLost`, `questionsLost`) | Mark; notice "Questions lost: *title*"; no question shown | Same |
+
+**Accessibility** (§9.1)
+
+- Continue's accessible name includes the session: "Continue *title*" (A1). One verb (A7).
+- The notice is a polite live region, announced once when it arrives, never again on a
+  reconnect or a re-render (A6).
+- Keyboard order: the notice, then its close button, then the next banner's close button or the
+  page (A3, A4).
+- Reduced motion: the notice and Continue appear and go without animation (A10).
+- The mark is text, so it is read with the row; it needs no description of its own.
+
+**Copy**
+
+| Use | Text |
+|---|---|
+| Row mark | "Restored after a reboot · *time*" / "Restored after the host restarted · *time*" |
+| Notice title | "*machine* restarted after a reboot at *time*" / "*machine*'s host restarted at *time*" |
+| Signed in | "restored when you signed in at *time*" |
+| Restored | "Restored *n* sessions"; "Can continue: *title*, *title*"; "*n* were mid-turn" |
+| Offered | "*n* sessions can be restored at the machine" |
+| Lost | "Questions lost: *title*, …" |
+| Failed | "Couldn't be restored: *title* (*reason*)" |
+| Loop | "*n* sessions weren't restored again because they died within 10 minutes" |
+| Close | "Dismiss restore notice on *machine*" |
+| Button | "Continue" (name "Continue *title*") |
+| Push | "*machine* restarted" / "Restored *n* sessions · *m* need you" |
+| Toggle | "Restore sessions after a reboot or crash" |
+
+**Platforms**
+
+- **Windows app:** InfoBar (Informational) in the window's banner area over every page, below
+  that machine's Discovery held InfoBar (§7, Windows: Banners); Continue a standard secondary
+  Button; the toast through the app's ordinary notification path (§7).
+- **PWA:** the same notice as one of §7's app banners, at the top of the content above the page,
+  over every page, after the app banners §7 lists. The PWA has no Discovery held banner (it
+  says "Discovery held" on the machine's row, §6.6), so there is none to sit below. The restore
+  notice alone is an exception to §7's "no icon and no dismiss" app banners; every other PWA
+  banner keeps §7's rule. The push through `sw.js`, kind `restored`.
+- **Apple (#260, owner welshofer):** note only. The same fields; the native form is that track's
+  decision.
+- **Home Assistant:** read only. `sensor.agent_bridge_<machine>_restore` (state: the last restore
+  time; attributes: the notice), a `restored` attribute on each session's status sensor, and one
+  persistent notification per restore. No Continue in Home Assistant.
+
 ## 7. Platform shells
 
 **Notifications, on every client (#253):** a question still pending after 2 s is notified
