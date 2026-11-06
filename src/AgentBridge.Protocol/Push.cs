@@ -62,7 +62,9 @@ public sealed record PushNotification
     // the one before it on the device.
     public required string Tag { get; init; }
     public string Lang { get; init; } = "en";
-    // Resolved notices replace a question quietly.
+    // Resolved notices replace a question quietly, and finished (Done) ones never alert (#913):
+    // silent everywhere, older clients and Home Assistant included, not only where a client
+    // reads data.class.
     public bool? Silent { get; init; }
     public required PushNoticeData Data { get; init; }
 }
@@ -80,6 +82,12 @@ public sealed record PushNoticeData
     // SignIn: whose sign-in it is, and how many sessions it stops. Never the account.
     public AgentKind? Agent { get; init; }
     public int? Sessions { get; init; }
+    // The notice's tier (#913), as session.class: NeedsYou for a question, a sign-in and a crash's
+    // restored notice, Done for finished (never NeedsYou). Absent on resolved, which withdraws a
+    // notice rather than being one, on a reboot's restored, and from an older host. An unknown one
+    // reads as absent, as session.class does.
+    [JsonConverter(typeof(UnknownAsAbsentConverter<NotificationClass>))]
+    public NotificationClass? Class { get; init; }
     public required DateTimeOffset At { get; init; }
 }
 

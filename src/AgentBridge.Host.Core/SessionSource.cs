@@ -1063,6 +1063,10 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         Commits++;
         entry.CommittedFull = full;
         entry.CommittedWith = inputs;
+        // Last, from the session as clients are shown it, the ending override included (#913).
+        // classSince carries over from what was last sent while the tier is unchanged (an episode).
+        var tier = NotificationClasses.Of(shown);
+        shown = shown with { Class = tier, ClassSince = NotificationClasses.Since(shown, tier, entry.Unbudgeted) };
         var getForm = SessionBudget.Fit(shown);
         var listForm = SessionBudget.Fit(shown.WithoutHistory());
         var json = JsonSerializer.Serialize(getForm, ProtocolJson.Options);
