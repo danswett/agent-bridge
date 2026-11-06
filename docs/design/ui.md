@@ -931,6 +931,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **Every delegate named (D3):** delegates started within 60 s of each other share a line,
     "Started *Tidy changelog* and *Update screenshots* · 9m". With three or more it reads
     "Started 3 delegates: *A*, *B* and 1 more", and "1 more" expands the line to name the rest.
+    "*n* more" meets §9.1 A11's size: 44×44 on touch, 32×32 with a pointer. Its text can stay
+    small; the hit area makes up the size.
     One that reports back in the same gap leaves the shared line for its own merged line, in place.
   - **Runs fold (D3):** more than 3 lines in a row between two messages fold into one, drawn
     "5 delegates · 4 reported back › 1 still working". It shows no working glyph. It expands in
@@ -953,13 +955,12 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       Counts of 0 are left out ("5 delegates · 3 reported back, 1 failed › 1 still working").
       They change in place as state arrives. At 0 still working the link goes, and the line is
       the button alone.
-    - **Focus when the link goes (§9.1 A4):** if the "still working" link has focus when it
-      goes, focus moves to the delegate event line that replaces it, the report-back line of
-      the delegate that ended the count. That line takes focus programmatically (`tabindex="-1"`;
-      on Windows, focused by code without becoming a tab stop) and is read once (A6). If that
-      line isn't there (the fold is closed, so its lines aren't drawn), focus goes to the
-      conversation's newest message instead, taken the same way. If focus is elsewhere, it
-      stays where it is.
+    - **Focus when the link goes (§9.1 A4):** if focus is on the fold's toggle (its button) or
+      its "still working" link when that link goes: while the fold stays, focus moves to the
+      fold's toggle; if the fold goes too, it moves to that delegate's name in its line, or to
+      the first delegate's name. If the focused control is no longer drawn (hidden in place),
+      it counts as lost focus and follows the same rule. Focus anywhere else stays where it is,
+      and the view never scrolls to follow it (H3a).
     - **Two sibling targets, never one inside the other:** the fold's button, then the "1 still
       working" link after it in the tab order.
     - **The chevron is the button's.** It ends the button's text, inside its target and focus
@@ -2148,9 +2149,11 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   disclosure button named for its whole summary, with `aria-expanded` (Windows: ExpandCollapse)
   for open or closed. Its "1 still working" link is a sibling after it in the tab order, never
   nested in the button, and opens that delegate. With none still working, there is only the
-  button (§6.4). If the link had focus when it went, focus moves to the delegate event line
-  that replaces it (`tabindex="-1"`, read once), or, if that line isn't there, to the
-  conversation's newest message; focus elsewhere stays put (A4).
+  button (§6.4). If focus is on the toggle or its link when the link goes, it moves to the
+  fold's toggle while the fold stays; if the fold goes too, to that delegate's name in its
+  line, or to the first delegate's name. A focused control no longer drawn counts as lost
+  focus and follows the same rule. Focus anywhere else stays where it is, and the view never
+  scrolls to follow it (A4, H3a). "*n* more" meets A11's size (§6.4).
 - **A question card (#773):** each field is named for its title. A required field says so
   where the role supports it: on a radio group (`radiogroup` with `aria-required`) and on a
   text or number field (`required`; `IsRequiredForForm` on Windows, on the radio list or the
