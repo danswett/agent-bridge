@@ -133,6 +133,36 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task A_logout_after_a_finished_probe_or_a_due_time_wakes_the_monitor_no_sooner_than_its_own_pace()
+    {
+        ClaudeSaved(Now.AddMinutes(-20));
+        ClaudeScript();
+        var claude = new ClaudeUsageCollector(Options(), time, Probes(seen: Seen), Log);
+        await claude.CollectAsync();
+        await Until(() => UsageProbesStarted.Any());
+        ClaudeSaved(time.GetUtcNow(), session: 20);
+        Assert.Single(UsageProbesStarted).End(0);
+        await Settled(claude);
+        Assert.Equal(DateTimeOffset.MinValue, claude.WakeAt);
+
+        // Signed out before the finished probe's reading was read: nothing more to wake for.
+        ClaudeLoggedOut();
+        Assert.Equal(ClaudeUsageCollector.SignedOutError, (await claude.CollectAsync())!.Error);
+        Assert.Null(claude.WakeAt);
+
+        // Signed in with a fresh reading, due again in a quarter of an hour; signed out, and that
+        // time passes: still nothing to wake for.
+        ClaudeSaved(time.GetUtcNow());
+        Assert.Null((await claude.CollectAsync())!.Error);
+        Assert.NotNull(claude.WakeAt);
+        var due = claude.WakeAt!.Value;
+        ClaudeLoggedOut();
+        await claude.CollectAsync();
+        time.Advance(due - time.GetUtcNow() + TimeSpan.FromMinutes(1));
+        Assert.Null(claude.WakeAt);
+    }
+
+    [Fact]
     public async Task A_machine_never_signed_in_to_claude_shows_nothing_and_asks_claude_nothing()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(AccountPath)!);

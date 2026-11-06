@@ -97,6 +97,10 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
             // credential: an account this host saw here has signed out, and says so until the next
             // sign-in (#238, live check 2). One never seen here was never signed in: nothing to show.
             // Either way nothing is asked of Claude Code: auth status needs an account to be about.
+            // Nor is the monitor woken early for it: a cycle that finished before the logout, or a
+            // due time from before it, left WakeAt in the past, and the file (up to 8 MiB) was read
+            // again every half minute for as long as Claude Code stayed signed out (#238 review).
+            lock (gate) { (finished, nextDue) = (false, null); }
             return Task.FromResult(saved.NoAccount ? Gone(now) : null);
         }
         Seen(saved.Key);
