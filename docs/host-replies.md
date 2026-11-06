@@ -269,7 +269,7 @@ In order, for every reply:
    `permission.completed`, since the last abort or shutdown. One left open when a new CLI
    resumed the session (`session.resume`, with no end written for it) still counts, since the
    new CLI may show it again without writing it again: until it completes, an abort or shutdown,
-   a question asked since, or a prompt typed at the machine (`refused`, saying it was resumed). The whole transcript counts,
+   a question the session itself asks since (a subagent's is its own, #855), or a prompt typed at the machine (`refused`, saying it was resumed). The whole transcript counts,
    since a subagent's question stops only that subagent and other work can write any
    amount after it (and the session source does not report a subagent's question): it is
    read from the start once per session, in the background as soon as the session is found

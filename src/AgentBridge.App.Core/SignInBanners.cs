@@ -16,6 +16,9 @@ namespace AgentBridge.App.Core;
 // never logged, announced, kept past its sheet or put in a toast.
 public static class SignInBanners
 {
+    // The most of a session's title the banner shows (the PWA's TITLE_MAX).
+    public const int TitleMax = 120;
+
     // One machine's part: its sessions, and whether a person can sign its agents in from here.
     public sealed record Source(string MachineKey, string Name, IReadOnlyList<Session> Sessions, bool CanSignIn);
 
@@ -95,7 +98,9 @@ public static class SignInBanners
                 var shown = g.Needed.Count > 0 ? g.Needed : g.Confirming;
                 banners.Add(new Banner(
                     key, m.MachineKey, g.Agent, string.IsNullOrEmpty(m.Name) ? "this machine" : m.Name, g.Account, waiting ? "confirming" : "needed",
-                    [.. shown.Select(s => (s.Id, string.IsNullOrEmpty(s.Title) ? "Untitled session" : s.Title!))],
+                    // An agent's title, revealed and at most a line long (as a host's sentence): a hidden or
+                    // bidi character can't reorder the banner, nor a long one stretch it (#979). Each opens by its id.
+                    [.. shown.Select(s => (s.Id, AuthState.PlainText(s.Title, TitleMax) ?? "Untitled session"))],
                     atMachine, g.Recovery,
                     // Sign in only where the host says a person's device can (signIn phone): a value this
                     // app doesn't know, or none, makes no claim, so no button either (6648000166). Only a
@@ -113,7 +118,7 @@ public static class SignInBanners
     }
 
     // What a banner says, and what is read aloud when it comes or changes (ui.md §6.13): "Copilot on
-    // DEV-VM1 needs sign-in · @octocat" over "4 sessions affected".
+    // DEV-VM1 needs sign-in · @octocat" over "2 sessions affected: Fix the relay, Draft the notes".
     public static (string Head, string Line, string Said) Words(Banner b)
     {
         var who = b.Subject;
@@ -129,18 +134,30 @@ public static class SignInBanners
             var confirming = $"Signed in \u00b7 waiting for {Core.Words.Plural(b.Sessions.Count, "session", "sessions")} to confirm";
             return ($"{who}{acct}", confirming, $"{who}: {confirming}");
         }
+        var line = StateLine(b) ?? Affected(b) + string.Join(", ", b.Sessions.Select(s => s.Title));
+        return ($"{who} needs sign-in{acct}", line, $"{who} needs sign-in");
+    }
+
+    // What a needed banner says instead of its sessions, or null when it has nothing else to say.
+    static string? StateLine(Banner b)
+    {
         var f = b.Flow;
-        var line =
-            b.AtMachine ? "Sign in at the machine"
+        return b.AtMachine ? "Sign in at the machine"
             : f?.Outcome == "failed" ? (f.Reason is { } failed ? $"Sign-in failed \u00b7 {failed}" : "Sign-in failed")
             : f?.Outcome == "refused" ? (f.Reason is { } refused ? $"Sign-in refused \u00b7 {refused}" : "Sign-in refused")
             : b.Expired ? "Code expired"
             : b.Code is { Refused: false } code ? $"Waiting for sign-in \u00b7 code expires {AuthState.Clock(code.ExpiresAt)}"
             : b.Recovery == "checking" ? "Checking for a sign-in that still works\u2026"
             : b.Recovery == "signingIn" && f is null ? "Waiting for sign-in"
-            : $"{Core.Words.Plural(b.Sessions.Count, "session", "sessions")} affected";
-        return ($"{who} needs sign-in{acct}", line, $"{who} needs sign-in");
+            : null;
     }
+
+    // "2 sessions affected: " before the sessions' titles, each a link to its session (ui.md §6.13,
+    // owner decision 6675817525), with no line of titles of its own; without a session, the count alone.
+    public static string Affected(Banner b) => $"{Core.Words.Plural(b.Sessions.Count, "session", "sessions")} affected" + (b.Sessions.Count > 0 ? ": " : "");
+
+    // Whether the banner's line names its sessions: a needed banner with nothing else to say.
+    public static bool ListsSessions(Banner b) => b.State == "needed" && b.Sessions.Count > 0 && StateLine(b) is null;
 
     // What is said aloud as a banner changes, once each (§9.1 A6): every way an attempt can end, as the
     // banner or the sheet shows it, so none passes unsaid. Never the machine's own words, nor the code.
@@ -202,8 +219,11 @@ public sealed class SignInBannerViewModel : Observable
     public string Head => SignInBanners.Words(banner).Head;
     public string Line => SignInBanners.Words(banner).Line;
     public bool HasLine => Line.Length > 0;
+    // The line names its sessions, each a link (the view draws them in it): "2 sessions affected: ".
+    public bool ListsSessions => SignInBanners.ListsSessions(banner);
+    public bool PlainLine => HasLine && !ListsSessions;
+    public string Affected => SignInBanners.Affected(banner);
     public ObservableCollection<SignInSession> Sessions { get; }
-    public bool HasSessions => Sessions.Count > 0;
     public string Problem => banner.Flow?.Problem ?? "";
     public bool HasProblem => Problem.Length > 0;
 

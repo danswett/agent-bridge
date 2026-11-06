@@ -123,11 +123,12 @@ internal sealed class SessionTracker
             // its tool and its time, so a different approval a clock set back gave the same time is
             // not taken for it (Engineering, cr2-837h). A record from before kept the time alone.
             var tool = _state.Tools.Current()?.Id;
-            _staleHook = _state.AskedFrom is { } from && discovered.Registration?.HookStatusAt is { } hook
-                && (_state.Known is { } known
-                    ? (tool is not null && known.Contains(HookKey(hook, tool))) || known.Contains(HookKey(hook, null))
-                    : hook < from)
-                ? (hook, tool) : null;
+            _staleHook = null;
+            if (_state.AskedFrom is { } from && discovered.Registration?.HookStatusAt is { } hook)
+            {
+                if (_state.Known is { } known) { _staleHook = KnownHook(known, hook, tool); }
+                else if (hook < from) { _staleHook = (hook, tool); }
+            }
             changed = true;
         }
         changed |= _builtFrom != _state.AskedFrom;
@@ -459,6 +460,21 @@ internal sealed class SessionTracker
             var max = AgentBridge.Host.Core.Restore.RestoreFiles.MaxInterrupted;
             return ids.Count > max ? [.. ids.Skip(ids.Count - max)] : ids;
         }
+    }
+
+    // The stale hook approval an earlier run set aside, if the registration's is it. With the tool not
+    // known on this pass (the transcript unreadable, or not there yet), the one set aside at that time
+    // is taken with its tool from the key; nothing set it aside again later, so missing it here showed
+    // the old approval once the transcript was read (Engineering, cr-837j).
+    static (DateTimeOffset At, string? Tool)? KnownHook(IReadOnlySet<string> known, DateTimeOffset at, string? tool)
+    {
+        if (tool is not null && known.Contains(HookKey(at, tool))) { return (at, tool); }
+        if (known.Contains(HookKey(at, null))) { return (at, tool); }
+        if (tool is not null) { return null; }
+        var suffix = "@" + HookKey(at, null)["hook:".Length..];
+        var key = known.Where(k => k.StartsWith("hook:", StringComparison.Ordinal) && k.EndsWith(suffix, StringComparison.Ordinal) && k.Length > "hook:".Length + suffix.Length)
+            .OrderBy(k => k, StringComparer.Ordinal).FirstOrDefault();
+        return key is null ? null : (at, key["hook:".Length..^suffix.Length]);
     }
 
     static string HookKey(DateTimeOffset at, string? tool) =>
