@@ -102,6 +102,9 @@ public sealed class UsageOptions
     public TimeSpan CodexReportTimeout { get; init; } = TimeSpan.FromSeconds(60);
     public TimeSpan CodexGrace { get; init; } = TimeSpan.FromSeconds(30);
     public TimeSpan CodexCeiling { get; init; } = TimeSpan.FromMinutes(10);
+    // How long connecting to the managed daemon's control socket (and its WebSocket upgrade) may
+    // take before the daemon is taken as not there, and the probe skips that pass.
+    public TimeSpan DaemonConnectTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
     public static UsageOptions For(SessionSourceOptions sessions, UsageSettings? usage = null)
     {
