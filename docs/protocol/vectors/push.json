@@ -423,8 +423,8 @@
         {
           "name": "group",
           "json": {
-            "title": "3 sessions need you on DEV-VM1",
-            "body": "Open Needs you to answer them.",
+            "title": "Needs you",
+            "body": "DEV-VM1 · 3 sessions waiting on you",
             "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&needsyou=1",
             "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:~needsyou",
             "lang": "en",

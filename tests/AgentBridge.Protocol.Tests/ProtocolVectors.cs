@@ -582,7 +582,7 @@ public static class ProtocolVectors
             })
             .Valid("group", new PushNotification
             {
-                Title = "3 sessions need you on DEV-VM1", Body = "Open Needs you to answer them.", Tag = PushNotice.Tag(MachineId, "~needsyou"), Data = GroupData,
+                Title = "Needs you", Body = "DEV-VM1 · 3 sessions waiting on you", Tag = PushNotice.Tag(MachineId, "~needsyou"), Data = GroupData,
                 Navigate = PushNotice.NavigateNeedsYou("https://danswett.github.io/agent-bridge/", MachineId),
             });
         f.Record<PushMessage>(Host).Valid("question", new PushMessage { Notification = notification });

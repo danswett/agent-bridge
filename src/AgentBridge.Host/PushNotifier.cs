@@ -856,8 +856,8 @@ public sealed class PushNotifier : IAsyncDisposable
         Notification = new PushNotification
         {
             // No agent text at all (#263): the machine's name and a count.
-            Title = kind == NoticeKind.Group ? PushGroupWords.Title(count, machine.Name) : PushGroupWords.WithdrawnTitle,
-            Body = kind == NoticeKind.Group ? PushGroupWords.Body(count) : PushGroupWords.WithdrawnBody(machine.Name),
+            Title = PushGroupWords.Title,
+            Body = kind == NoticeKind.Group ? PushGroupWords.Body(count, machine.Name) : PushGroupWords.WithdrawnBody(machine.Name),
             Navigate = PushNotice.NavigateNeedsYou(app, machine.Id),
             Tag = PushNotice.Tag(machine.Id, GroupKey),
             Silent = silent ? true : null,
@@ -1187,14 +1187,15 @@ public sealed class PushNotifier : IAsyncDisposable
     }
 }
 
-// The grouped notice's words (#913 rule 3), in one place for Creative. #913's example names each
-// machine ("3 sessions need you: DEV-VM1 (2), ULTRA (1)"); a host knows only its own, so its group
-// names it once. No agent text (#263), and nothing to answer from the notice (#253).
+// The grouped notice's words (#913 rule 3), in one place for Creative (6690989275). #913's example
+// names each machine ("3 sessions need you: DEV-VM1 (2), ULTRA (1)"); a host knows only its own, so
+// its group names it once. No agent text (#263), and nothing to answer from the notice (#253).
 static class PushGroupWords
 {
-    public static string Title(int count, string machine) => count == 1 ? $"1 session needs you on {machine}" : $"{count} sessions need you on {machine}";
-    public static string Body(int count) => count == 1 ? "Open Needs you to answer it." : "Open Needs you to answer them.";
+    // The same for the group, its silent changes and its withdrawal: a change never re-titles it.
+    public const string Title = "Needs you";
+    // The machine first, after the same " · " as a single notice's first line.
+    public static string Body(int count, string machine) => count == 1 ? $"{machine} · 1 session waiting on you" : $"{machine} · {count} sessions waiting on you";
     // The withdrawal, which a client may show for a moment as it replaces the group.
-    public const string WithdrawnTitle = "Needs you";
     public static string WithdrawnBody(string machine) => $"{machine} · no longer waiting";
 }

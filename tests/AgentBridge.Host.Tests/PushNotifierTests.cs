@@ -1645,7 +1645,7 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal([2, 3], groups.Select(n => n.GetProperty("data").GetProperty("sessions").GetInt32()));
         Assert.Equal(("high", PushNotice.Topic(Machine, "~needsyou")), (received[1].Urgency, received[1].Topic));
         var last = groups[^1];
-        Assert.Equal(("3 sessions need you on DEV", "Open Needs you to answer them."), (last.GetProperty("title").GetString(), last.GetProperty("body").GetString()));
+        Assert.Equal(("Needs you", "DEV · 3 sessions waiting on you"), (last.GetProperty("title").GetString(), last.GetProperty("body").GetString()));
         Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}&needsyou=1", last.GetProperty("navigate").GetString());
         // Nothing to answer from it (#253), and nothing of any session's (#263).
         var data = last.GetProperty("data");
@@ -1731,7 +1731,7 @@ public sealed class PushNotifierTests : IDisposable
         await After(TimeSpan.FromSeconds(2));
         var fewer = Received()[^1].Notification;
         Assert.Equal(("group", 1, true), (Kind(fewer), fewer.GetProperty("data").GetProperty("sessions").GetInt32(), Silent(fewer)));
-        Assert.Equal("1 session needs you on DEV", fewer.GetProperty("title").GetString());
+        Assert.Equal(("Needs you", "DEV · 1 session waiting on you"), (fewer.GetProperty("title").GetString(), fewer.GetProperty("body").GetString()));
 
         source.Upsert(S("s1", SessionStatus.Working));
         await After(TimeSpan.FromSeconds(2));
