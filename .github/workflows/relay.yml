@@ -4,6 +4,9 @@ name: Relay deploy
 # only then offers it to production, which waits for a person to approve (the production
 # environment's required reviewer). Rollback is a workflow_dispatch with the digest of an image
 # production ran before (infra/rollback-target.sh).
+# After production's smoke test it bakes for 10 minutes (infra/bake-production.sh). If the roll
+# applied and then the roll, smoke test or bake failed, the same approved job rolls production
+# back, the run fails and an incident is opened (#577).
 # No long-lived Azure secret is stored anywhere: every job that touches Azure signs in with GitHub
 # OIDC, and each environment has its own principal with rights over its own app only.
 # Infra itself (infra/) is applied by a person with infra/deploy.ps1; see docs/relay-deploy.md.
@@ -62,6 +65,8 @@ jobs:
           persist-credentials: false
       - name: A rollback goes only to an image production ran before
         run: bash infra/test-rollback-target.sh
+      - name: The bake fails a build that loses devices, restarts or changes version, and anything it cannot read
+        run: bash infra/test-bake-production.sh
       - run: |
           az bicep install
           az bicep build -f infra/main.bicep --stdout > /dev/null
@@ -258,6 +263,21 @@ jobs:
     permissions:
       contents: read
       id-token: write # azure/login's OIDC sign-in
+    # For the incident job, after a failure once the roll began.
+    outputs:
+      roll: ${{ steps.roll.outcome }}
+      smoke: ${{ steps.smoke.outcome }}
+      bake: ${{ steps.bake.outcome }}
+      reason: ${{ steps.bake.outputs.reason }}
+      failed_at: ${{ steps.bake.outputs.failed_at || steps.revert_target.outputs.at }}
+      image: ${{ needs.build.outputs.image }}
+      version: ${{ github.sha }}
+      previous_digest: ${{ steps.baseline.outputs.digest }}
+      applied: ${{ steps.revert_target.outputs.applied }}
+      recovery: ${{ steps.revert_target.outcome }}
+      recovery_roll: ${{ steps.revert_roll.outcome }}
+      recovery_smoke: ${{ steps.revert_smoke.outcome }}
+      reverted_version: ${{ steps.revert_target.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -270,16 +290,63 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # Before the roll: the devices online, the revision's restarts and the digest production
+      # runs, which the bake compares with and a failure after the roll rolls back to. Without a
+      # device count or a restart count it refuses here, before production is touched.
+      - id: baseline
+        run: ./infra/bake-production.sh baseline
       - id: roll
         env:
           IMAGE_REF: ${{ needs.build.outputs.image }}
         run: ./infra/roll-production.sh "$IMAGE_REF" "$GITHUB_SHA"
       - name: Smoke test, without a token (nothing on production is signed by CI)
+        id: smoke
         env:
           RELAY_URL: ${{ steps.roll.outputs.url }}
         run: |
           dotnet run --project tools/AgentBridge.RelaySmoke -c Release -- \
             --relay "$RELAY_URL" --origin "$PWA_ORIGIN" --expect-version "$GITHUB_SHA" --expect-push --wait 180
+      # 40 samples 15 s apart; the timeout leaves room for slow reads, and running out is a failure.
+      - name: Bake for 10 minutes (devices back, no restarts, this version)
+        id: bake
+        timeout-minutes: 25
+        env:
+          EXPECT_IMAGE: ${{ needs.build.outputs.image }}
+          EXPECT_VERSION: ${{ github.sha }}
+          BASELINE_ONLINE: ${{ steps.baseline.outputs.online }}
+          BASELINE_REVISION: ${{ steps.baseline.outputs.revision }}
+          BASELINE_RESTARTS: ${{ steps.baseline.outputs.restarts }}
+        run: ./infra/bake-production.sh watch
+      # Once the roll has begun, a failure (the roll partway, the smoke test or the bake) rolls back
+      # here, in the run the owner already approved, with no second approval (the owner's decision
+      # on #577): to the digest production ran before the roll, only if production now runs this
+      # job's image, and only through rollback-target.sh's checks. Never when the baseline or
+      # sign-in failed: the roll was skipped then. The failed step keeps the job, and so the run,
+      # failed; the incident job opens the issue.
+      - name: Rollback target after a failure once the roll began
+        id: revert_target
+        if: failure() && (steps.roll.outcome == 'success' || steps.roll.outcome == 'failure')
+        env:
+          BAD_IMAGE: ${{ needs.build.outputs.image }}
+          PREVIOUS_DIGEST: ${{ steps.baseline.outputs.digest }}
+        run: ./infra/bake-production.sh revert
+      - name: Roll back
+        id: revert_roll
+        if: failure() && steps.revert_target.outcome == 'success' && steps.revert_target.outputs.applied == 'true'
+        env:
+          IMAGE_REF: ${{ steps.revert_target.outputs.image }}
+          VERSION: ${{ steps.revert_target.outputs.version }}
+          REPLACING_FAILED: 'true'
+        run: ./infra/roll-production.sh "$IMAGE_REF" "$VERSION"
+      - name: Smoke test after the rollback
+        id: revert_smoke
+        if: failure() && steps.revert_roll.outcome == 'success'
+        env:
+          VERSION: ${{ steps.revert_target.outputs.version }}
+          RELAY_URL: ${{ steps.revert_roll.outputs.url }}
+        run: |
+          dotnet run --project tools/AgentBridge.RelaySmoke -c Release -- \
+            --relay "$RELAY_URL" --origin "$PWA_ORIGIN" --expect-version "$VERSION" --expect-push --wait 180
 
   rollback:
     if: vars.RELAY_DEPLOY == 'true' && inputs.rollback_to != ''
@@ -293,6 +360,16 @@ jobs:
     permissions:
       contents: read
       id-token: write # azure/login's OIDC sign-in
+    # For the incident job. A rollback's own failure is never rolled back automatically: a person
+    # chose this image, and the incident says what failed.
+    outputs:
+      roll: ${{ steps.roll.outcome }}
+      smoke: ${{ steps.smoke.outcome }}
+      bake: ${{ steps.bake.outcome }}
+      reason: ${{ steps.bake.outputs.reason }}
+      failed_at: ${{ steps.bake.outputs.failed_at }}
+      image: ${{ steps.target.outputs.image }}
+      version: ${{ steps.target.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -311,15 +388,70 @@ jobs:
         env:
           DIGEST: ${{ inputs.rollback_to }}
         run: ./infra/rollback-target.sh "$DIGEST"
+      # Production is presumably what's broken, so a /healthz without a count, or a revision without
+      # a restart count, is recorded as unknown here rather than blocking the rollback; the bake
+      # then skips only the online floor, and still checks the version and restarts.
+      - id: baseline
+        run: ./infra/bake-production.sh baseline --rollback
       - id: roll
         env:
           IMAGE_REF: ${{ steps.target.outputs.image }}
           VERSION: ${{ steps.target.outputs.version }}
         run: ./infra/roll-production.sh "$IMAGE_REF" "$VERSION"
       - name: Smoke test
+        id: smoke
         env:
           VERSION: ${{ steps.target.outputs.version }}
           RELAY_URL: ${{ steps.roll.outputs.url }}
         run: |
           dotnet run --project tools/AgentBridge.RelaySmoke -c Release -- \
             --relay "$RELAY_URL" --origin "$PWA_ORIGIN" --expect-version "$VERSION" --expect-push --wait 180
+      - name: Bake for 10 minutes (devices back, no restarts, this version)
+        id: bake
+        timeout-minutes: 25
+        env:
+          EXPECT_IMAGE: ${{ steps.target.outputs.image }}
+          EXPECT_VERSION: ${{ steps.target.outputs.version }}
+          BASELINE_ONLINE: ${{ steps.baseline.outputs.online }}
+          BASELINE_REVISION: ${{ steps.baseline.outputs.revision }}
+          BASELINE_RESTARTS: ${{ steps.baseline.outputs.restarts }}
+        run: ./infra/bake-production.sh watch
+
+  # A failure after a roll began, in production or a rollback, opens an incident issue from
+  # ops/templates/incident.md, with no device, address or account in it (the repository is
+  # public). Its own job, so issues: write is never given to a job that signs in to Azure.
+  incident:
+    needs: [production, rollback]
+    if: >-
+      always() &&
+      ((needs.production.outputs.recovery == 'success' && needs.production.outputs.applied == 'true') ||
+      needs.production.outputs.recovery == 'failure' ||
+      (needs.rollback.outputs.roll == 'success' && (needs.rollback.outputs.smoke == 'failure' || needs.rollback.outputs.bake == 'failure')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Open the incident issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BAKE_JOB: ${{ needs.production.result != 'skipped' && 'production' || 'rollback' }}
+          ROLL_OUTCOME: ${{ needs.production.outputs.roll || needs.rollback.outputs.roll }}
+          SMOKE_OUTCOME: ${{ needs.production.outputs.smoke || needs.rollback.outputs.smoke }}
+          BAKE_OUTCOME: ${{ needs.production.outputs.bake || needs.rollback.outputs.bake }}
+          BAKE_REASON: ${{ needs.production.outputs.reason || needs.rollback.outputs.reason }}
+          BAKE_FAILED_AT: ${{ needs.production.outputs.failed_at || needs.rollback.outputs.failed_at }}
+          BAKE_IMAGE: ${{ needs.production.outputs.image || needs.rollback.outputs.image }}
+          BAKE_VERSION: ${{ needs.production.outputs.version || needs.rollback.outputs.version }}
+          PREVIOUS_DIGEST: ${{ needs.production.outputs.previous_digest }}
+          APPLIED: ${{ needs.production.outputs.applied }}
+          RECOVERY: ${{ needs.production.outputs.recovery }}
+          RECOVERY_ROLL: ${{ needs.production.outputs.recovery_roll }}
+          RECOVERY_SMOKE: ${{ needs.production.outputs.recovery_smoke }}
+          REVERT_VERSION: ${{ needs.production.outputs.reverted_version }}
+        run: ./infra/bake-production.sh incident

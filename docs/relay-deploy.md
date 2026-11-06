@@ -115,12 +115,35 @@ replicas no stable addresses to forward to, so that step is the `standard` size 
    roster ([protocol/roster.md](protocol/roster.md)): the host that left is listed as offline in
    the app's presence, and the app (kind `app`, a person's device) forgets it.
 6. **production** (`main` only, environment `production`): waits for approval by the
-   required reviewer. `infra/roll-production.sh` refuses an app `infra/` has not adopted,
-   writes the image it replaces to the job summary, rolls the digest, and the smoke test
-   runs again without a token.
+   required reviewer. `infra/bake-production.sh baseline` first records what production runs
+   and serves (devices online, the revision's restarts, the image's digest), and without a
+   device count or a restart count refuses before anything changes. `infra/roll-production.sh`
+   refuses an app `infra/` has not adopted, writes the image it replaces to the job summary,
+   rolls the digest, and the smoke test runs again without a token. Then the **bake**
+   (`bake-production.sh watch`, #577): every 15 s for 10 min, `/healthz` must answer with the
+   new version, the revision's restart count (from Azure) must not rise, and from minute 3 the
+   devices online must be at least 80% of the count before the roll (not compared when that
+   was under 3). The timeline (counts and yes/other only) goes to the job summary. Anything it
+   can't read is a failure, as is running out of time.
+   If the roll fails partway, or the smoke test or bake fails, the same approved job rolls back
+   with no second approval (the owner's decision on #577): `bake-production.sh revert` checks
+   that production now runs this build (if the roll never applied, nothing is rolled back),
+   then `rollback-target.sh` checks the digest production ran before, `roll-production.sh` rolls
+   it, and the smoke test runs at its version. The run still fails, and the **incident** job
+   (`issues: write`, no Azure sign-in) opens an `area:ops` issue from
+   [ops/templates/incident.md](../ops/templates/incident.md): mitigated if the rollback passed its
+   smoke test, otherwise saying production may still run the failed build, naming the digest
+   production ran before the roll as the recovery target (or saying there is none) and the
+   failed build's digest as not to be used. The rollback's own roll writes its summary section
+   as "Production, automatic rollback", with no `rollback_to` hint, since the image it replaces
+   is the failed build. A failure before the roll (sign-in, baseline) changes nothing and rolls
+   nothing back.
 7. **rollback**: run the workflow by hand with `rollback_to=<image digest>` (`sha256:…`); see
-   [Rollback](#rollback). Same approval, same script, same smoke test. Not scanned again: it
-   returns to an image that ran.
+   [Rollback](#rollback). Same approval, same script, same smoke test and bake. Not scanned
+   again: it returns to an image that ran. Its baseline records an unknown device or restart
+   count instead of refusing, since production is presumably what's broken; the bake then skips
+   only the online floor (and fails an unchanged revision whose restarts it can't judge). A
+   failed smoke test or bake there opens an incident and rolls nothing back automatically.
 
 Every job that touches Azure (build, staging, production, rollback) signs in with GitHub OIDC
 (`azure/login`); only those jobs, and `attest`, get `id-token: write`, and `infra`, which only
@@ -347,9 +370,16 @@ Staging has its own keys in `kv-abrelay-stg-wus2`; rotating them affects only th
 
 ## Rollback
 
+- **Automatically**, after a deploy: the production job rolls back by itself when the roll
+  applied and then the roll, smoke test or bake failed (pipeline step 6), and opens an
+  incident. It can't when production ran no image by digest from this registry before the
+  roll, or ran this same image; the incident then says so, and the next item is the way back.
 - **A bad build:** run `relay.yml` (Actions, *Relay deploy*, *Run workflow* on `main`) with
   `rollback_to=<digest>`, the `sha256:…` the production job's summary gives under "roll back"
-  for the image it replaced, and approve the `production` environment as for any deploy.
+  for the image it replaced (in its first "Production" section: after an automatic rollback
+  that didn't finish, take the incident's recovery target instead, and never the
+  "Production, automatic rollback" section's, whose replaced image is the failed build),
+  and approve the `production` environment as for any deploy.
   `infra/rollback-target.sh` accepts only a digest that a revision of the production app has
   run, and takes the commit that revision ran as the version the smoke test expects; anything
   else is refused before production is touched. To see what production has run:

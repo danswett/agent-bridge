@@ -22,13 +22,19 @@ previous=$(az containerapp show -g "$RESOURCE_GROUP" -n "$PRODUCTION_APP" --quer
 previous_version=$(az containerapp show -g "$RESOURCE_GROUP" -n "$PRODUCTION_APP" \
   --query "properties.template.containers[0].env[?name=='Relay__Version'].value | [0]" -o tsv)
 # A rollback takes the digest of an image production ran (infra/rollback-target.sh), never a tag.
-if [[ "$previous" =~ @(sha256:[0-9a-f]{64})$ ]]; then
+# REPLACING_FAILED=true is relay.yml's automatic rollback (#577): the image it replaces is the
+# build that just failed, so naming it as the way back would send a person onto the bad build.
+heading="### Production"
+if [ "${REPLACING_FAILED:-}" = true ]; then
+  heading="### Production, automatic rollback"
+  rollback="not to the image before: that is the build that failed in this run. Use the recovery target in this run's incident, or the first Production section's roll back"
+elif [[ "$previous" =~ @(sha256:[0-9a-f]{64})$ ]]; then
   rollback="run this workflow with rollback_to=${BASH_REMATCH[1]}"
 else
   rollback="the image it replaced was not deployed by digest, so the workflow cannot roll back to it; see docs/relay-deploy.md, Rollback"
 fi
 {
-  echo "### Production"
+  echo "$heading"
   echo "- now: \`$image\` ($version)"
   echo "- before: \`$previous\` ($previous_version)"
   echo "- roll back: $rollback"

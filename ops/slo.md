@@ -13,7 +13,7 @@ how fast we change things: while there's budget, ship; once it's spent, ship onl
 | S2 | **End to end:** canary echoes completed ÷ attempted, every 5 min (presence, channel echo, 1 MiB blob) | Synthetic canary (SYN-1, #576) | **99%** | about 6 h 43 min | Planned |
 | S3 | **Round-trip latency:** canary echo round trip | Canary | **p95 < 500 ms**, p99 < 1 s, in 99% of 1-hour windows | 7 bad hours | Planned |
 | S4 | **Forward latency:** in-node receive-to-send time | `relay.forward.duration` (OBS-1, #569) | **p99 ≤ 5 ms** (design §5.8) | n/a: an objective, alerted on breach | Planned |
-| S5 | **Deploy recovery:** relay deploys after which `online` regained ≥ 80% of its pre-deploy count within 3 min | Bake step (DEP-1, #577) | **100%**: any miss rolls back and opens an incident | 0 | Planned |
+| S5 | **Deploy recovery:** relay deploys after which `online` regained ≥ 80% of its pre-deploy count within 3 min | Bake step (DEP-1, #577; `infra/bake-production.sh`) | **100%**: any miss rolls back and opens an incident | 0 | Built (the bake); reporting planned |
 | S6 | **Push delivery:** push forwards answered 2xx, or 404/410 (a gone subscription), ÷ all | The `push to {Host}: {Status}` log line (`push-outcomes` in queries/relay.kql), which keeps the exact status. The `relay.pushes` metric records only the status class, so a VAPID failure (401/403) and normal expiry (404/410) look alike there. OBS-1 adds `gone` as an outcome of its own | **99%** | 1% | Planned |
 | S7 | **Release safety:** Beta (and later Stable) releases not later halted | `rollout.json` (REL-2, #580) | **No halts on Beta in 28 days.** A halt on Dev is the system working | 0 | Planned |
 
