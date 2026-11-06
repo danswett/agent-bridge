@@ -321,6 +321,22 @@ public sealed class UsageSharingTests : IAsyncLifetime
     }
 
     [Fact]
+    public void A_host_does_not_take_a_keyless_reading_from_a_peer_but_still_takes_a_keyed_one()
+    {
+        var store = PeerUsage.Load(null, Id('d'), "1", time);
+        var vm = new UsageReader(Id('a'), "VM");
+        var transcript = new AgentUsage
+        {
+            Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.Transcript, MeasuredAt = Now,
+            Windows = [new UsageWindow { Key = "primary", Label = "5h limit", Percent = 23 }],
+        };
+
+        Assert.Equal(0, store.Take([transcript, transcript with { Windows = [], Error = "Codex needs signing in again on this machine" }], vm));
+        Assert.Empty(store.Entries);
+        Assert.Equal(1, store.Take([transcript with { AccountKey = "c0dec0dec0de", Source = UsageSource.Api }], vm));
+    }
+
+    [Fact]
     public void A_hosts_own_reading_beats_a_peers_copy_of_it()
     {
         var me = Id('d');

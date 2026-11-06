@@ -33,7 +33,16 @@ public static class HostOps
     // other devices (update.*, docs/protocol/v1-update.md), and which of the host's asks
     // (HostStatus.UpdateAsks) it has taken on. For the app alone, like every management op.
     public const string UpdateReport = "host.update.report";
+    // The app is about to stop the host, or replace it with an update (#238): the host starts no
+    // usage probe whose process would go with it for the next while, and says whether one is still
+    // running or in its grace. The app waits until none is before it stops the host. For the app
+    // alone, like every management op. An older host answers "unknown op": it runs no such probe.
+    public const string ProbeHold = "host.probes.hold";
 }
+
+// host.probes.hold's answer. Busy: a probe whose process goes with the host is running or in its
+// grace; Why says which, for the app's log.
+public sealed record ProbeHoldResult(bool Busy, string? Why = null);
 
 // A device's press of Check or Install, waiting for this machine's app: carried in the host's
 // status, which the app follows, until the app says it has taken it (UpdateReport.Taken). By:
@@ -72,15 +81,20 @@ public sealed record SignInStatus(SignInState State, string? UserCode = null, st
 // RemoteFolderTrustDevices: launch.remoteFolderTrustDevices, the devices (by id) approved to answer
 // them; null when none is.
 // DevBoxKeepAwake: devBox.keepAwake, keeping this Dev Box from hibernating on disconnect.
+// EscapedApproval: permissions.escapedApproval, confirm or machine (#803); null from a host before it.
+// EscapedApprovalDevices: permissions.escapedApprovalDevices, the devices that may confirm one; null
+// while absent, when the folder-trust devices may, and only while folder trust is on.
 public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, bool RemoteFolderTrust = false, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
-    bool DevBoxKeepAwake = false)
+    bool DevBoxKeepAwake = false, string? EscapedApproval = null, IReadOnlyList<string>? EscapedApprovalDevices = null)
 {
     // By the devices in it, not the list object, so a restart is not asked for because two reads
     // of the same file made two lists.
     public bool Equals(HostSettingsView? other) =>
         other is not null && RemoteApproval == other.RemoteApproval && Name == other.Name && RemoteFolderTrust == other.RemoteFolderTrust
         && (RemoteFolderTrustDevices ?? []).SequenceEqual(other.RemoteFolderTrustDevices ?? [], StringComparer.Ordinal)
-        && DevBoxKeepAwake == other.DevBoxKeepAwake;
+        && DevBoxKeepAwake == other.DevBoxKeepAwake && EscapedApproval == other.EscapedApproval
+        && (EscapedApprovalDevices is null) == (other.EscapedApprovalDevices is null)
+        && (EscapedApprovalDevices ?? []).SequenceEqual(other.EscapedApprovalDevices ?? [], StringComparer.Ordinal);
 
     public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0, DevBoxKeepAwake);
 }

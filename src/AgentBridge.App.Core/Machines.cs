@@ -158,6 +158,10 @@ public interface IFleetLink : IAsyncDisposable
     // machine asking (machinePublic, whose device id is machine), for exactly that question, choice
     // and request. Null when it cannot be signed now. None in a stand-in.
     SignedCommand? SignTrust(byte[]? machinePublic, string machine, string question, string choice, string request) => null;
+    // An escaped approval's confirmation (#803), signed as for SignTrust, for that session, question,
+    // what was read (EscapedText.Shown) and the answer's request, as of when its button was pressed.
+    // Null when it cannot be signed now.
+    SignedCommand? SignEscapedApproval(byte[]? machinePublic, string machine, string session, string question, string shown, string request, DateTimeOffset pressed) => null;
     // This app's own device id on the relay, which a machine approves to answer folder-trust
     // questions from; and the people's devices (the PWA, this app elsewhere) the relay lists now.
     string? DeviceId => null;
@@ -742,6 +746,11 @@ public sealed class RelayFleetLink : IFleetLink
             ? Transfers.SignCommand(key, k, TrustProtocol.Action(choice), question, machine, DateTimeOffset.UtcNow, request)
             : null;
 
+    public SignedCommand? SignEscapedApproval(byte[]? machinePublic, string machine, string session, string question, string shown, string request, DateTimeOffset pressed) =>
+        machinePublic is { } k && Wire.DeviceId(k) == machine
+            ? Transfers.SignCommand(key, k, EscapedApproval.Action, session, machine, pressed, request, question, shown)
+            : null;
+
     public async ValueTask DisposeAsync()
     {
         stop.Cancel();
@@ -752,7 +761,8 @@ public sealed class RelayFleetLink : IFleetLink
 // Every machine's usage as one list (pwa/js/usage.js, mergeUsage): one row per allowance (an
 // agent and its account), carrying the freshest reading any machine has. A reading outranks a
 // failure however new, since a failure is stamped with when the attempt was made; a failure
-// newer than the reading is still the latest word on why nothing fresher exists.
+// newer than the reading is still the latest word on why nothing fresher exists. A reading that
+// names no account is a row of its own for each machine that read it (UsageShare.Key).
 public static class UsageMerge
 {
     public static UsageReport Merge(IEnumerable<UsageReport> reports)
@@ -786,7 +796,7 @@ public static class UsageMerge
     {
         var slots = new Dictionary<string, (AgentUsage? Reading, AgentUsage? Failure)>(StringComparer.Ordinal);
         var order = new List<string>();
-        foreach (var a in reports.SelectMany(r => r.Agents))
+        foreach (var a in Current([.. reports.SelectMany(r => r.Agents)]))
         {
             var key = UsageShare.Key(a);
             if (!slots.TryGetValue(key, out var slot)) { order.Add(key); }
@@ -798,6 +808,39 @@ public static class UsageMerge
             slots[key] = slot;
         }
         return order.Select(k => slots[k]);
+    }
+
+    // One machine's readings of an agent that name an account and that name none are never shown
+    // side by side: whichever kind it took last stands for it (#200). Codex alternates between them,
+    // a probe's keyed reading while idle and its transcripts' keyless ones while a session runs, and
+    // kept apart they were one allowance shown twice, the older of the two going stale beside it.
+    // A failure is held to the same rule: a sign-out older than the other kind's last reading is
+    // history, and one newer than it still stands; of two failures of the two kinds and no reading
+    // newer than either, the later stands. Entries of the two kinds measured at the same moment go
+    // to whichever was reported first, as two readings of one account do.
+    static IEnumerable<AgentUsage> Current(List<AgentUsage> all)
+    {
+        static (AgentKind, string?) Of(AgentUsage a) => (a.Agent, a.ReadBy?.Id);
+        var newest = new Dictionary<((AgentKind, string?) Machine, bool Keyless), (DateTimeOffset At, int Order)>();
+        var failed = new Dictionary<((AgentKind, string?) Machine, bool Keyless), (DateTimeOffset At, int Order)>();
+        for (var i = 0; i < all.Count; i++)
+        {
+            var a = all[i];
+            var latest = a.Windows.Count == 0 ? failed : newest;
+            var kind = (Of(a), UsageShare.Keyless(a));
+            if (!latest.TryGetValue(kind, out var n) || a.MeasuredAt > n.At) { latest[kind] = (a.MeasuredAt, i); }
+        }
+        return all.Where((a, i) =>
+        {
+            var otherKind = (Of(a), !UsageShare.Keyless(a));
+            var read = newest.TryGetValue(otherKind, out var other);
+            if (a.Windows.Count == 0)
+            {
+                if (read && a.MeasuredAt <= other.At) { return false; }
+                return !failed.TryGetValue(otherKind, out var f) || a.MeasuredAt > f.At || (a.MeasuredAt == f.At && i < f.Order);
+            }
+            return !read || a.MeasuredAt > other.At || (a.MeasuredAt == other.At && i < other.Order);
+        });
     }
 
     // A machine's own readings, marked as taken by it, so a client can say where each one came from

@@ -572,4 +572,33 @@ public sealed class DecisionContractTests
         Assert.Equal(HaContract.ReplyMaxChars, Root["constants"]!["replyMaxChars"]!.GetValue<int>());
         Assert.Equal(HaDecision.QuestionMaxChars, Root["constants"]!["questionMaxChars"]!.GetValue<int>());
     }
+
+    [Fact]
+    public void An_approval_the_host_escaped_anything_in_offers_Deny_only_and_says_where_to_approve_it()
+    {
+        // Approve on it takes a person's signed confirmation from an approved device (#803), which
+        // Home Assistant, whose users include agents, cannot give.
+        var q = QuestionMapper.Approval("r1#0011223344556677", "Allow **shell**?\n\n```\necho \u202E safe\n```", DateTimeOffset.UnixEpoch);
+        Assert.NotNull(q.Escaped);
+
+        var plan = HaDecision.Plan(q, AgentKind.Copilot);
+
+        Assert.False(plan.TerminalOnly);
+        Assert.Equal(["Deny"], plan.Choices);
+        Assert.EndsWith(HaDecision.DenyOnlyNote, plan.Question);
+        Assert.Equal(["Approve", "Deny"], HaDecision.Plan(QuestionMapper.Approval("r2#0011223344556677", "Allow **shell**?\n\n```\necho safe\n```", DateTimeOffset.UnixEpoch), AgentKind.Copilot).Choices);
+    }
+
+    [Fact]
+    public void An_approval_with_too_many_escapes_to_mark_offers_Deny_and_sends_Approve_to_the_machine_not_the_app()
+    {
+        var q = QuestionMapper.Approval("r1#0011223344556677", "Allow **shell**?\n\n```\necho " + string.Concat(Enumerable.Repeat("\u200B", EscapedApproval.MaxMarks + 1)) + "\n```", DateTimeOffset.UnixEpoch);
+        Assert.Null(q.Truncated);
+
+        var plan = HaDecision.Plan(q, AgentKind.Copilot);
+
+        Assert.False(plan.TerminalOnly);
+        Assert.Equal(["Deny"], plan.Choices);
+        Assert.EndsWith(HaDecision.AtMachineNote, plan.Question);
+    }
 }

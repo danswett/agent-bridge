@@ -1026,6 +1026,176 @@ public class MergeRuleTests
         }
     }
 
+    // Main's CI concurrency group replaces a pending run with a newer one, cancelling it before it
+    // starts: it tested nothing, so the run before it still decides, green or red, whether a newer
+    // run is waiting or not.
+    [Theory]
+    [InlineData("success", "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("failure", "failure", "Main is red (CI c500000): waiting for main to be fixed")]
+    public void A_main_run_replaced_before_it_started_is_passed_over_for_the_run_before_it(string before, string state, string description)
+    {
+        var runs = MainRuns((7, "queued", null, 1), (6, "completed", "cancelled", 1), (5, "completed", before, 1));
+        var empty = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs, mainJobs: MainJobs());
+        var unpicked = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs, mainJobs: MainJobs((null, 0), (0, 0)));
+        var config = WriteConfig();
+        try
+        {
+            var output = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, empty, OnMain);
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), unpicked, OnMain);
+
+            Assert.Equal([$"{Head} {state} merge-rule {description} "], empty.Posted);
+            Assert.Equal([$"{Head} {state} merge-rule {description} "], unpicked.Posted);
+            Assert.Contains("repos/danswett/agent-bridge/actions/runs/6/jobs?per_page=100", empty.RestPaths);
+            Assert.Contains($"repos/danswett/agent-bridge/compare/{"c6".PadRight(40, '0')}...{"c7".PadRight(40, '0')}?per_page=1", empty.RestPaths);
+            Assert.Contains($"Main: ci.yml run 5 (attempt 1) on c500000 ended {before}. Passed over run(s) 6 on c600000", output.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // The newest run covers a replaced run's commit only if it builds on it: GitHub doesn't promise
+    // pushes enter main's concurrency group in order, so a newest run on an older or diverged
+    // commit (the replaced commit then never tested), or a compare that can't be read, blocks.
+    [Theory]
+    [InlineData("""{"status": "ahead"}""", "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("""{"status": "identical"}""", "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("""{"status": "behind"}""", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData("""{"status": "diverged"}""", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(null, "error", "Couldn't read main's CI: gh: HTTP 502")]
+    public void A_replaced_main_run_is_passed_over_only_when_the_newest_run_builds_on_its_commit(string? compare, string state, string description)
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns((7, "queued", null, 1), (6, "completed", "cancelled", 1), (5, "completed", "success", 1)), mainJobs: MainJobs(), mainCompare: compare);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Equal([$"{Head} {state} merge-rule {description} "], github.Posted);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // A passed run vouches only for main up to its own commit: an older run by id on a later
+    // commit (runs created out of push order) that was replaced, failed or is being re-run blocks
+    // until it passes, and so do main's later commits that can't all be listed.
+    [Theory]
+    [InlineData("completed", "cancelled", 1, true, "ahead", 1, "failure", "Main's CI hasn't passed on c600000, a commit after CI c700000: waiting for main to be green")]
+    [InlineData("completed", "failure", 1, true, "ahead", 1, "failure", "Main's CI hasn't passed on c600000, a commit after CI c700000: waiting for main to be green")]
+    [InlineData("in_progress", null, 2, true, "ahead", 1, "failure", "Main's CI hasn't passed on c600000, a commit after CI c700000: waiting for main to be green")]
+    [InlineData("completed", "success", 2, true, "ahead", 1, "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("completed", "cancelled", 1, false, "identical", 0, "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("completed", "cancelled", 1, true, "ahead", 101, "failure", "Main's commits after CI c700000 can't all be listed: waiting for main's CI")]
+    [InlineData("completed", "cancelled", 1, false, "diverged", 0, "failure", "Main's commits after CI c700000 can't all be listed: waiting for main's CI")]
+    [InlineData("completed", "cancelled", 1, true, null, 1, "error", "Couldn't read main's CI: gh: HTTP 502")]
+    public void A_passed_main_run_does_not_vouch_for_a_later_commit_whose_older_run_has_not_passed(string status, string? conclusion, int attempt, bool later, string? compare, int total, string state, string description)
+    {
+        var commits = new[] { new { sha = "c6".PadRight(40, '0') } }.Take(later ? 1 : 0);
+        var after = compare is null ? null : JsonSerializer.Serialize(new { status = compare, total_commits = total, commits });
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns((7, "completed", "success", 1), (6, status, conclusion, attempt), (5, "completed", "success", 1)), mainAfter: after);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Equal([$"{Head} {state} merge-rule {description} "], github.Posted);
+            Assert.Contains($"repos/danswett/agent-bridge/compare/{"c7".PadRight(40, '0')}...main?per_page=100", github.RestPaths);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // A passed run's later commits each need their run found: one past the first page (runs aren't
+    // promised to be created in push order) is read from the next few, and blocks unless it
+    // passed; one not found within them, or never run, or a page that can't be read, fails closed.
+    [Theory]
+    [InlineData("cancelled", "failure", "Main's CI hasn't passed on c500000, a commit after CI c400000: waiting for main to be green")]
+    [InlineData("passed", "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("beyond", "failure", "Main's CI on c500000, a commit after CI c400000, can't be found: waiting for main's CI")]
+    [InlineData("never", "failure", "Main's CI on c500000, a commit after CI c400000, can't be found: waiting for main's CI")]
+    [InlineData("unreadable", "error", "Couldn't read main's CI: gh: HTTP 502")]
+    public void A_passed_main_run_does_not_vouch_for_a_later_commit_whose_run_is_past_the_first_page(string where, string state, string description)
+    {
+        // Twenty finished runs, ids down from the given one; run 5 is the later commit's.
+        static string Page(int from, int cancelled = 0) =>
+            MainRuns([.. Enumerable.Range(from - 19, 20).Reverse().Select(id => ((long)id, "completed", (string?)(id == cancelled ? "cancelled" : "success"), 1))]);
+        string?[] pages = where switch
+        {
+            "cancelled" => [Page(40), Page(20, cancelled: 5)],
+            "passed" => [Page(40), Page(20)],
+            "beyond" => [Page(40), Page(200), Page(180), Page(160), Page(140), Page(20, cancelled: 5)],
+            "never" => [Page(40), MainRuns((20, "completed", "success", 1))],
+            _ => [Page(40), null],
+        };
+        var after = JsonSerializer.Serialize(new { status = "ahead", total_commits = 1, commits = new[] { new { sha = "c5".PadRight(40, '0') } } });
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainAfter: after, mainPages: pages);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Equal([$"{Head} {state} merge-rule {description} "], github.Posted);
+            Assert.Contains("repos/danswett/agent-bridge/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=20&page=2", github.RestPaths);
+            Assert.DoesNotContain(github.RestPaths, p => p.EndsWith("&page=6", StringComparison.Ordinal) || (where == "never" && p.EndsWith("&page=3", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // Only a cancelled run proven never to have started, with a newer run after it, is passed over:
+    // one a runner picked up, the newest run, a re-run, or one whose jobs can't be read or are cut
+    // short could hide a real failure, so it still blocks, whether the run before it passed or
+    // failed (a red main stays red: the newest finished run cancelled, nothing newer, run 5 red).
+    // The newest run cancelled pending, by whatever took its place, never tested its commit: it
+    // blocks until it's re-run.
+    [Theory]
+    [InlineData(7L, 1, "[[12,0]]", "success", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(7L, 1, "[[null,3]]", "success", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(0L, 1, "[]", "success", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(7L, 2, "[]", "success", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(7L, 1, "truncated", "success", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(7L, 1, null, "success", "error", "Couldn't read main's CI: gh: HTTP 502")]
+    [InlineData(7L, 1, "[[12,0]]", "failure", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(0L, 1, "[]", "failure", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(7L, 2, "[]", "failure", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(7L, 1, "truncated", "failure", "failure", "Main is red (CI c600000): waiting for main to be fixed")]
+    [InlineData(7L, 1, null, "failure", "error", "Couldn't read main's CI: gh: HTTP 502")]
+    public void A_cancelled_main_run_not_proven_replaced_before_it_started_still_blocks(long newer, int attempt, string? jobs, string before, string state, string description)
+    {
+        var runs = new List<(long, string, string?, int)>();
+        if (newer != 0)
+            runs.Add((newer, "queued", null, 1));
+        runs.Add((6, "completed", "cancelled", attempt));
+        runs.Add((5, "completed", before, 1));
+        var listed = jobs switch
+        {
+            null => null,
+            "truncated" => """{"total_count": 101, "jobs": []}""",
+            _ => MainJobs([.. JsonSerializer.Deserialize<long?[][]>(jobs)!.Select(j => (j[0], (int)j[1]!.Value))]),
+        };
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns([.. runs]), mainJobs: listed);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Equal([$"{Head} {state} merge-rule {description} "], github.Posted);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
     [Fact]
     public void The_fixes_main_label_exempts_only_the_main_check_so_a_sensitive_fix_still_needs_its_receipt()
     {
@@ -1257,6 +1427,14 @@ public class MergeRuleTests
             workflow_runs = runs.Select(r => new { id = r.Id, head_sha = $"c{r.Id}".PadRight(40, '0'), status = r.Status, conclusion = r.Conclusion, run_attempt = r.Attempt }),
         });
 
+    // A run's jobs as REST lists them: each with its runner (null before one picks it up) and steps.
+    static string MainJobs(params (long? Runner, int Steps)[] jobs) =>
+        JsonSerializer.Serialize(new
+        {
+            total_count = jobs.Length,
+            jobs = jobs.Select(j => new { runner_id = j.Runner, steps = Enumerable.Range(1, j.Steps).Select(n => new { number = n }) }),
+        });
+
     static object Suite(string slug, object? run, string status, string? conclusion, params object[] checkRuns) =>
         new { app = new { slug }, workflowRun = run, status, conclusion, checkRuns = new { nodes = checkRuns } };
 
@@ -1330,7 +1508,7 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainCompare = """{"status": "ahead"}""", string? mainAfter = """{"status": "identical", "total_commits": 0, "commits": []}""", string?[]? mainPages = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -1356,8 +1534,23 @@ public class MergeRuleTests
         public JsonDocument Rest(string path)
         {
             RestPaths.Add(path);
+            // Main's runs a page at a time when given pages (null: one that can't be read), past
+            // the last none.
+            if (mainPages is not null && path.Contains("/actions/workflows/", StringComparison.Ordinal))
+            {
+                var page = path.Contains("&page=", StringComparison.Ordinal) ? int.Parse(path[(path.LastIndexOf('=') + 1)..], System.Globalization.CultureInfo.InvariantCulture) : 1;
+                return JsonDocument.Parse(page > mainPages.Length ? """{"workflow_runs": []}""" : mainPages[page - 1] ?? throw new InvalidOperationException("gh: HTTP 502"));
+            }
             if (path.Contains("/actions/workflows/", StringComparison.Ordinal))
                 return failMain ? throw new InvalidOperationException("gh: HTTP 502") : JsonDocument.Parse(mainRuns ?? MainRuns((1, "completed", "success", 1)));
+            if (path.Contains("/actions/runs/", StringComparison.Ordinal))
+                return JsonDocument.Parse(mainJobs ?? throw new InvalidOperationException("gh: HTTP 502"));
+            // Main's commits after a passed run's, then two of main's commits compared, not a pull
+            // request's head against main.
+            if (path.Contains("...main?", StringComparison.Ordinal))
+                return JsonDocument.Parse(mainAfter ?? throw new InvalidOperationException("gh: HTTP 502"));
+            if (path.Contains("/compare/", StringComparison.Ordinal) && !path.Contains("/compare/main...", StringComparison.Ordinal))
+                return JsonDocument.Parse(mainCompare ?? throw new InvalidOperationException("gh: HTTP 502"));
             if (failStatuses && path.Contains("/statuses", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 502");
             return JsonDocument.Parse(path.Contains("/statuses", StringComparison.Ordinal)

@@ -506,13 +506,21 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             // (status, permission prompts) and wins. One CLI owns one session.
             var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
             var pids = sessions.Select(s => s.ProcessId).ToHashSet();
-            var own = ClaudeSessionDiscovery.Find(_options.ClaudeHome, observed.Processes, findTranscript, holds, accounted, observed.Unidentified);
+            var own = ClaudeSessionDiscovery.Find(_options.ClaudeHome, observed.Processes, findTranscript, holds, accounted, observed.Unidentified, _options.UsageProbeRoots);
             sessions = [.. sessions, .. own.Where(s => !ids.Contains(s.Id) && !pids.Contains(s.ProcessId))];
         }
         if (agent == AgentKind.Codex)
         {
             accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsCodexAppServer(p.CommandLine)).Select(p => p.Id));
             HoldForPidless(observed, accounted, pidless!, holds);
+        }
+        // The host's own usage probe is nobody's session (#200), and nor is the `claude auth status`
+        // it asks before one, though only when this host started it: a person's own run of it holds
+        // as any Claude process does.
+        if (agent == AgentKind.Claude)
+        {
+            accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsClaudeUsageProbe(p.CommandLine)
+                || (CommandLine.IsClaudeAuthStatus(p.CommandLine) && _processes.IsOwnChild(p))).Select(p => p.Id));
         }
         Account(agent, observed, accounted, previous, holds);
         return new(agent, sessions, holds, observed, ended);
@@ -1063,6 +1071,10 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         Commits++;
         entry.CommittedFull = full;
         entry.CommittedWith = inputs;
+        // Last, from the session as clients are shown it, the ending override included (#913).
+        // classSince carries over from what was last sent while the tier is unchanged (an episode).
+        var tier = NotificationClasses.Of(shown);
+        shown = shown with { Class = tier, ClassSince = NotificationClasses.Since(shown, tier, entry.Unbudgeted) };
         var getForm = SessionBudget.Fit(shown);
         var listForm = SessionBudget.Fit(shown.WithoutHistory());
         var json = JsonSerializer.Serialize(getForm, ProtocolJson.Options);

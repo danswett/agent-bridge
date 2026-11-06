@@ -177,6 +177,9 @@ public sealed class PeerUsage
         // Its place among the further accounts was that machine's; here it is just its account.
         var fit = UsageProtocol.FitAgent(a with { ReadBy = by, Slot = null });
         if (fit.ReadBy is not { } reader || reader.Id == me || fit.Agent == AgentKind.Unknown) { return false; }
+        // A reading that names no account could be anyone's allowance: it is shown only beside the
+        // machine that read it, never passed on as this account's (#200).
+        if (UsageShare.Keyless(fit)) { return false; }
         var now = time.GetUtcNow();
         if (fit.MeasuredAt > now + Ahead || fit.MeasuredAt < now - Kept) { return false; }
         var key = UsageShare.Key(fit);

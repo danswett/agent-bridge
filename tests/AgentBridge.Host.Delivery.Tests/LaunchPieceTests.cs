@@ -133,7 +133,11 @@ public sealed class LaunchPieceTests : IDisposable
     [Trait("Category", "Process")]
     public Task A_batch_command_cannot_inherit_a_probe_writer_from_another_launch() => SharedInheritanceWindow(true);
 
-    async Task SharedInheritanceWindow(bool batch)
+    [WindowsFact]
+    [Trait("Category", "Process")]
+    public Task A_usage_probe_cannot_inherit_a_probe_writer_from_another_launch() => SharedInheritanceWindow(false, usageProbe: true);
+
+    async Task SharedInheritanceWindow(bool batch, bool usageProbe = false)
     {
         var pidFile = Out("concurrent.pid");
         var shim = Out("concurrent.cmd");
@@ -150,11 +154,19 @@ public sealed class LaunchPieceTests : IDisposable
         AgentBridge.Host.Core.Usage.ICommandRunner runner = batch
             ? new BatchFileRunner(new AgentBridge.Host.Core.Usage.CommandRunner())
             : new AgentBridge.Host.Core.Usage.CommandRunner();
-        var pending = Task.Run(() =>
-        {
-            entered.Set();
-            return runner.RunAsync(batch ? shim : Echo, batch ? [] : ["--probe-child", pidFile, "close"], TimeSpan.FromMinutes(2), stop.Token);
-        });
+        AgentBridge.Host.Core.Usage.IProbeProcess? probe = null;
+        var pending = usageProbe
+            ? Task.Run(() =>
+            {
+                entered.Set();
+                probe = new ProbeLauncher().Start(new AgentBridge.Host.Core.Usage.ProbeCommand(Echo, ["--probe-child", pidFile, "close"], Path.GetDirectoryName(pidFile)!,
+                    new Dictionary<string, string?>()));
+            })
+            : Task.Run(() =>
+            {
+                entered.Set();
+                return runner.RunAsync(batch ? shim : Echo, batch ? [] : ["--probe-child", pidFile, "close"], TimeSpan.FromMinutes(2), stop.Token);
+            });
         Process? child = null;
         try
         {
@@ -175,6 +187,7 @@ public sealed class LaunchPieceTests : IDisposable
             stop.Cancel();
             try { await pending.WaitAsync(TimeSpan.FromSeconds(30)); }
             catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+            probe?.Dispose();
             if (child is not null)
             {
                 if (!child.HasExited) { child.Kill(); await child.WaitForExitAsync(); }
@@ -265,6 +278,38 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.Equal("CODEX_HOME=" + home, native.Output.Trim());
         Assert.Equal(native.Output.Trim(), batch.Output.Trim());
         Assert.Equal(inherited, Environment.GetEnvironmentVariable("CODEX_HOME"));
+    }
+
+    [Fact]
+    [Trait("Category", "Process")]
+    public async Task A_usage_probe_runs_in_its_folder_with_the_profiles_home_set_a_removed_variable_gone_and_nothing_on_its_input()
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(root, "usage probe")).FullName;
+        string script;
+        if (OperatingSystem.IsWindows())
+        {
+            // An npm shim, as claude.cmd is: run through cmd.exe.
+            script = Path.Combine(root, "claude.cmd");
+            File.WriteAllText(script, "@echo off\r\necho home=%CLAUDE_CONFIG_DIR%\r\necho gone=%AGENT_BRIDGE_PROBE_TEST%\r\necho cwd=%CD%\r\nset /p LINE=\r\necho stdin=[%LINE%]\r\nexit /b 3\r\n");
+        }
+        else
+        {
+            script = Path.Combine(root, "claude");
+            File.WriteAllText(script, "#!/bin/sh\necho \"home=$CLAUDE_CONFIG_DIR\"\necho \"gone=$AGENT_BRIDGE_PROBE_TEST\"\necho \"cwd=$(pwd)\"\nread LINE\necho \"stdin=[$LINE]\"\nexit 3\n");
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        Environment.SetEnvironmentVariable("AGENT_BRIDGE_PROBE_TEST", "inherited");
+        try
+        {
+            using var probe = new ProbeLauncher().Start(new AgentBridge.Host.Core.Usage.ProbeCommand(script, ["auth", "status"], folder,
+                new Dictionary<string, string?> { ["CLAUDE_CONFIG_DIR"] = Path.Combine(root, "profile"), ["AGENT_BRIDGE_PROBE_TEST"] = null }))!;
+
+            Assert.Equal(3, await probe.Exited.WaitAsync(TimeSpan.FromSeconds(30)));
+            var lines = (await probe.Output).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Assert.Equal([$"home={Path.Combine(root, "profile")}", "gone=", $"cwd={folder}", "stdin=[]"], lines);
+            Assert.Null(probe.Input);
+        }
+        finally { Environment.SetEnvironmentVariable("AGENT_BRIDGE_PROBE_TEST", null); }
     }
 
     [Fact]

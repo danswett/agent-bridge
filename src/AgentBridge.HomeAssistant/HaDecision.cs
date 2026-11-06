@@ -233,6 +233,19 @@ public static partial class HaDecision
         if (question.Message.Length > QuestionMaxChars) { return Terminal(question, TooLong); }
         if (question.Kind == QuestionKind.Approval)
         {
+            // One the host escaped anything in is approved only by a two-step confirmation from a
+            // person's phone, browser or Windows app, or at the machine (#803): Home Assistant has no
+            // device key, and its users include agents (homeAssistant.agentUserIds). Deny goes as for
+            // any approval, and nothing on the card, a push or a notification's buttons offers more.
+            if (question.Escaped is not null)
+            {
+                // One the machine keeps for itself, or with too many escapes to mark, is approved
+                // nowhere else, so the card does not send the person to the app for it.
+                var note = question.Escaped.Approve == EscapedApproval.Confirm ? DenyOnlyNote : AtMachineNote;
+                var denyOnly = $"{question.Message}\n\n{note}";
+                if (denyOnly.Length > QuestionMaxChars) { return Terminal(question, TooLong); }
+                return new DecisionPlan(question.Id, denyOnly, ["Deny"], [], AnswerOnTap: true, TerminalOnly: false, TakesTypedAnswer: false);
+            }
             // A Codex approval: its own tap is the answer (Publish-DaemonSessionDecision).
             return new DecisionPlan(question.Id, question.Message, ["Approve", "Deny"], [], AnswerOnTap: true, TerminalOnly: false, TakesTypedAnswer: false);
         }
@@ -267,6 +280,11 @@ public static partial class HaDecision
     const string Misleading = "it holds characters that can be drawn other than as they run, so it is answered where it runs.";
     const string NotAsWritten = "it would not be drawn here as it is written, so it is answered where it runs.";
     const string NotWhole = "its command did not come whole in a block, so it may be cut short, and it is answered where it runs.";
+
+    // Under an approval the host escaped anything in, which the card offers Deny for only (#803).
+    public const string DenyOnlyNote = $"_Approve from the {Product.App} or at the machine._";
+    // Under one only the machine approves: its policy is machine, or it has too many escapes to mark.
+    public const string AtMachineNote = "_Approve at the machine._";
 
     // What a push says in place of such an approval.
     public const string MisleadingPush = "An approval is waiting at the machine. It holds characters that can be drawn other than as they run, so it is not shown here; answer it in the terminal.";

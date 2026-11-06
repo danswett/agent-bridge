@@ -118,19 +118,65 @@ export function latestUsage(reports) {
   return entries;
 }
 
+// Which allowance a reading is of: its agent and account. One that names no account at all (Codex's
+// from its transcripts, or from a probe that could not be sure whose it was) could be anyone's, so
+// it stays a row of its own for the machine that read it: grouped by agent alone, the newest would
+// stand in for every other user's (#200). Mirrors UsageShare.Key. readBy is always there by now:
+// UsageBook stamps each host's own readings with that host, and a reading passed on already names
+// the machine that took it, so keyless readings of two machines never share a key. UsageBook drops
+// any kept reading that names no machine; called directly with one, it is still kept apart from
+// other readings, by what it read and when, the same key every time.
+export function usageKey(a) {
+  if (!a.accountKey && !a.account) { return `${a.agent}\u0000\u0000${a.readBy?.id ?? `\u0001${a.source ?? ''}\u0001${a.measuredAt ?? ''}`}`; }
+  return `${a.agent}\u0000${a.accountKey ?? (a.account ?? '').toLowerCase()}`;
+}
+
 function usageSlots(reports) {
   const slots = new Map();
-  for (const report of reports) {
-    for (const a of report?.agents ?? []) {
-      const key = `${a.agent}\u0000${a.accountKey ?? (a.account ?? '').toLowerCase()}`;
-      const entry = { ...a, key, at: Date.parse(a.measuredAt ?? '') || 0 };
-      const kind = hasReading(entry) ? 'reading' : 'failure';
-      const slot = slots.get(key) ?? {};
-      if (!slot[kind] || slot[kind].at < entry.at) { slot[kind] = entry; }
-      slots.set(key, slot);
-    }
+  for (const a of current((reports ?? []).flatMap((report) => report?.agents ?? []))) {
+    const key = usageKey(a);
+    const entry = { ...a, key, at: Date.parse(a.measuredAt ?? '') || 0 };
+    const kind = hasReading(entry) ? 'reading' : 'failure';
+    const slot = slots.get(key) ?? {};
+    if (!slot[kind] || slot[kind].at < entry.at) { slot[kind] = entry; }
+    slots.set(key, slot);
   }
   return slots.values();
+}
+
+// One machine's readings of an agent that name an account and that name none are never shown side
+// by side: whichever kind it took last stands for it (#200). Codex alternates between them, a
+// probe's keyed reading while idle and its transcripts' keyless ones while a session runs, and kept
+// apart they were one allowance shown twice. A failure is held to the same rule: a sign-out older
+// than the other kind's last reading is history, and one newer than it still stands. Readings of
+// the two kinds measured at the same moment go to whichever was reported first. Of two failures of
+// the two kinds, with no reading newer than either, the later stands. Mirrors UsageMerge.Current.
+function current(agents) {
+  const of = (a) => `${a.agent}\u0000${a.readBy?.id ?? ''}`;
+  const at = (a) => Date.parse(a.measuredAt ?? '') || 0;
+  const keyless = (a) => !a.accountKey && !a.account;
+  const kind = (a, bare) => `${of(a)}\u0000${bare}`;
+  const newest = new Map();
+  const failed = new Map();
+  agents.forEach((a, order) => {
+    if (!a.readBy?.id) { return; }
+    const latest = a.windows?.length ? newest : failed;
+    const n = latest.get(kind(a, keyless(a)));
+    if (!n || at(a) > n.at) { latest.set(kind(a, keyless(a)), { at: at(a), order }); }
+  });
+  return agents.filter((a, i) => {
+    // Of no known machine (only a direct caller's; UsageBook places every reading): nothing to
+    // stand in for, or be stood in for by.
+    if (!a.readBy?.id) { return true; }
+    const other = newest.get(kind(a, !keyless(a)));
+    if (!a.windows?.length) {
+      if (other && at(a) <= other.at) { return false; }
+      const f = failed.get(kind(a, !keyless(a)));
+      return !f || at(a) > f.at || (at(a) === f.at && i < f.order);
+    }
+    if (!other) { return true; }
+    return at(a) > other.at || (at(a) === other.at && i < other.order);
+  });
 }
 
 export function severity(percent) {
@@ -330,8 +376,10 @@ export class UsageBook {
     // A reading and a newer failure of each allowance.
     const loaded = readUsage({ agents: Array.isArray(entries) ? entries.slice(0, 2 * KEPT_MAX) : [] }).agents;
     // A machine forgotten while the store was being read takes what it read with it here too, and
-    // the store hears of that: what was saved is what was loaded, not what is kept.
-    this.#kept = this.#fresh(loaded).filter((a) => this.#stands(a));
+    // the store hears of that: what was saved is what was loaded, not what is kept. One that names no
+    // machine (kept before readings were marked) cannot be placed beside the rest, and goes too, so
+    // every reading merged here names the machine that took it.
+    this.#kept = this.#fresh(loaded).filter((a) => a.readBy?.id && this.#stands(a));
     this.#saved = JSON.stringify(loaded);
     this.#cache = { save };
     this.#keep();

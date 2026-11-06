@@ -470,7 +470,7 @@ Where stage 2 knowingly differs from the daemon:
 | An empty multi-select answer is allowed only for Copilot | The host's `Field` carries no `minItems`; Copilot's own forms allow it |
 | `takes_typed_answer` only for a lone choice that allows another answer | The daemon also offers it for yes/no, which the host's question model cannot take |
 | Claude forms use field slots, never the selector's choices | Claude's questions always arrive as forms here |
-| An approval offers `Approve` / `Deny` on the selector with `answer_on_tap` | The host's approval is a question kind of its own |
+| An approval offers `Approve` / `Deny` on the selector with `answer_on_tap`. One the host escaped anything in (`escaped`, #803) offers `Deny` only, under "_Approve from the Agent Bridge app or at the machine._" (or "_Approve at the machine._" when its `approve` is `machine` or `tooMany`), and its phone buttons are Deny only | The host's approval is a question kind of its own. Approve on an escaped approval needs a person's signed confirmation from an approved device, which Home Assistant cannot give: it has no device key, and its users include agents (`agentUserIds`) |
 | `Cancel request` says `Answer NOT sent` and resets the selector | The host has no way to cancel an agent's question |
 | A reply while a question is open answers the question; at a question only the terminal can answer, it says `Reply NOT sent` (`the session is waiting on a question`) | The host refuses a reply while its session asks a question |
 | A free-text answer from the reply box must differ from the box at arming | The box keeps the previous reply; the daemon reads it the same way through its baseline |
@@ -827,7 +827,14 @@ device.
   newest release again, downloads it (`downloading` with `update_percentage`), records the
   attempt in the connector's state file (an attempt that cannot be recorded is not handed
   over: the host that came back could not say how it ended), shows `restarting` and hands the
-  release to Velopack,
+  release to Velopack. Before that, still showing `downloading`, it makes sure nothing the update
+  ends is mid-refresh (#238): this host's own usage probes are held and a standalone Codex
+  app-server it started is waited for, at most 11 minutes; another profile's host running from the
+  package refuses the install, since its probes cannot be held from this host (its pipe takes
+  management only from the app; install from the app there, which holds them all), asked again
+  once this host's wait is over. When it cannot confirm, the
+  install fails to start and `stage_detail` and the notification say why. The release goes to
+  Velopack,
   which applies it once the host has exited; the host then stops as on Ctrl+C. Velopack
   force-stops everything else running from the package folder (the app, and every other
   profile's host, with their sessions' delivery), starts the app again in the background for the

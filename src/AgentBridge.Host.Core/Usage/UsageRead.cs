@@ -28,12 +28,25 @@ internal static class UsageRead
     public static string? String(JsonElement e, string name) =>
         Property(e, name) is { ValueKind: JsonValueKind.String } v ? v.GetString() : null;
 
+    // Finite only: an agent's garbled reply (1e400, or "NaN" or "Infinity" in a string) is no
+    // figure at all. Taken as one, its infinity could not be written as JSON, and the report that
+    // carried it failed for every agent, pass after pass (#238 review).
     public static double? Number(JsonElement e, string name) => Property(e, name) switch
     {
-        { ValueKind: JsonValueKind.Number } v => v.GetDouble(),
-        { ValueKind: JsonValueKind.String } v when double.TryParse(v.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var d) => d,
+        { ValueKind: JsonValueKind.Number } v when v.TryGetDouble(out var d) && double.IsFinite(d) => d,
+        { ValueKind: JsonValueKind.String } v when double.TryParse(v.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var d) && double.IsFinite(d) => d,
         _ => null,
     };
+
+    // A time an agent gives in seconds or milliseconds since 1970: none when it is not after then,
+    // or past what a time can hold, which threw rather than reading as unknown.
+    public static DateTimeOffset? UnixSeconds(double? seconds) =>
+        seconds is { } s && s > 0 && s <= MaxUnixSeconds ? DateTimeOffset.FromUnixTimeSeconds((long)s) : null;
+
+    public static DateTimeOffset? UnixMilliseconds(double? milliseconds) =>
+        milliseconds is { } ms && ms > 0 && ms <= MaxUnixSeconds * 1000.0 ? DateTimeOffset.FromUnixTimeMilliseconds((long)ms) : null;
+
+    static readonly double MaxUnixSeconds = DateTimeOffset.MaxValue.ToUnixTimeSeconds();
 
     public static DateTimeOffset? Instant(JsonElement e, string name) =>
         String(e, name) is { Length: > 0 } text && DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture,

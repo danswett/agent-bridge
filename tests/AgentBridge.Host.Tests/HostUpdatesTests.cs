@@ -19,6 +19,41 @@ public sealed class HostUpdatesTests : IDisposable
     }
 
     [Fact]
+    public async Task Installing_from_Home_Assistant_waits_for_this_hosts_usage_probe_and_refuses_what_it_cannot_confirm()
+    {
+        TimeSpan? waited = null;
+        var stops = 0;
+        var updates = new VelopackHostUpdates(root, "default", () => stops++, _ => { },
+            ready: ct => HostUpdateGate.ReadyAsync(() => null, (wait, _) => { waited = wait; return Task.FromResult(true); }, ct));
+        await updates.ReadyAsync(CancellationToken.None);
+        Assert.Equal(TimeSpan.FromMinutes(11), waited);
+
+        // Still finishing when the wait is up.
+        var busy = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new VelopackHostUpdates(root, "default", () => stops++, _ => { }, ready: ct => HostUpdateGate.ReadyAsync(() => null, (_, _) => Task.FromResult(false), ct)).ReadyAsync(CancellationToken.None));
+        Assert.Contains("still finishing after 11 minutes", busy.Message, StringComparison.Ordinal);
+
+        // Another profile's host, whose probes cannot be held from here: refused before this one's are waited for.
+        var settled = false;
+        var why = await HostUpdateGate.ReadyAsync(() => "another profile's host (pid 4242) runs from this installation", (_, _) => { settled = true; return Task.FromResult(true); }, CancellationToken.None);
+        Assert.StartsWith("another profile's host (pid 4242) runs from this installation, whose usage probes cannot be held from here", why, StringComparison.Ordinal);
+        Assert.False(settled);
+        Assert.Equal(0, stops);
+    }
+
+    [Fact]
+    public async Task Installing_from_Home_Assistant_is_refused_when_another_profiles_host_starts_while_this_ones_probe_finishes()
+    {
+        var started = false;
+        var why = await HostUpdateGate.ReadyAsync(
+            () => started ? "another profile's host (pid 6161) runs from this installation" : null,
+            (_, _) => { started = true; return Task.FromResult(true); },
+            CancellationToken.None);
+
+        Assert.StartsWith("another profile's host (pid 6161) runs from this installation", why, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void A_read_only_host_is_given_no_updater_and_so_serves_no_update_buttons()
     {
         var made = 0;

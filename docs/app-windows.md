@@ -260,7 +260,15 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   not stop; 1 from Task Manager; 0xC000013A for Ctrl+C or logging off. A Stop from the app
   also covers the launcher, which no pipe reaches between crash restarts or while the host it
   restarted is still starting: Stop writes a marker (`host.stopped` in the profile's folder)
-  that the launcher checks after every host exit and every wait before starting the host again;
+  that the launcher checks after every host exit and every wait before starting the host again.
+  It is written only once the host's usage probes are done, just before the host is asked to
+  stop (or when no host answers), so a host that crashes during that wait, or while the app
+  quits during it, is still started again; the Stop then says the host ended unexpectedly
+  rather than that nothing was stopped, but only when its process has gone and nothing answers
+  on its pipe (a host whose process is still there but no longer answers is reported as not
+  stopped). Stops run one at a
+  time (Settings' Stop and Restart, an update's), so a second waits for the first and finds the
+  host stopped, rather than clearing the first's marker (#238). The app then
   waits until the task's run has ended, stopping a host that opens its pipe meanwhile; and ends
   the run itself if it is still there after the 20 s start timeout. A host the launcher starts
   also looks for the marker once its pipe is open and, finding it, exits 0 without serving, so
@@ -290,8 +298,24 @@ into one folder with one version. An app update is a host update, so they never 
   `%LOCALAPPDATA%\AgentBridge`: that is the host's data root (device keys, accounts,
   config, logs), and Velopack deletes its install folder on uninstall.
 * `OnBeforeUpdateFastCallback` (the old version, before files are replaced) stops the host
-  over the pipe and waits for its process to exit, so nothing in `current\` is locked;
-  `OnAfterUpdateFastCallback` (the new version) starts it again through its logon task.
+  over the pipe and waits for its process to exit, so nothing in `current\` is locked. Every
+  update the app starts has stopped the host already, after waiting for its usage probes (below),
+  so the hook finds it stopped and begins nothing. One it finds running (an update the app did
+  not start) is stopped only if its usage probes are done within 6 s. Velopack gives this hook
+  15 s and kills it after that, carrying on with the update
+  ([Velopack: App Hooks](https://docs.velopack.io/integrating/hooks)), so the hook waits at most
+  10 s in all and leaves the rest to the app's own start and exit. If the probes are not done, the
+  host is not asked to stop at all, and Velopack ends it with the package, which can cut a Codex
+  app-server it started mid-refresh (#238). The app turns off Velopack's own apply of a downloaded
+  update when the app starts (`SetAutoApplyOnStartup(false)`), so an update is applied only by
+  the app's own install, which waits for the probes, or by a person: `Update.exe` run by hand,
+  a newer setup run over the app, or an uninstall. If one of those comes while a Codex usage probe
+  is running (up to about 10 minutes for one that is slow to answer, usually under a minute) and
+  Codex happens to be refreshing its sign-in, the person may have to sign in to Codex again.
+  Keeping the probe alive across those is #974. The same holds for uninstall, whose hook has
+  30 s, and which then goes on;
+  `OnAfterUpdateFastCallback` (the new version, also 15 s) starts it again through its logon
+  task, waiting at most 10 s.
   The app also stops the host itself before `ApplyUpdatesAndRestart`, and starts it on
   launch if it is not running.
 * `OnBeforeUninstallFastCallback` stops the host and attempts bounded cleanup of only the
@@ -347,6 +371,21 @@ into one folder with one version. An app update is a host update, so they never 
   and every session change, and since its sessions were last read in full (a reconnect starts
   the wait again), or six hours after it first found one, whatever the sessions are
   doing (though still only once they are read in full, so not in the middle of a reconnect).
+  Before the host is stopped, for this or anything else (Settings' Stop, Restart and Update and
+  restart), the app asks it to hold its usage probes (`host.probes.hold`) and waits until no
+  Codex app-server it started to read Codex's allowance is still answering or in its grace
+  (#238): the app-server's input goes with the host, and cutting it mid-refresh can sign Codex
+  out. A host that cannot say, or is still busy after 11 minutes, is neither stopped nor ended;
+  the stop fails and says why. An install that is due waits a tick at a time for that, the
+  six-hour one too (and is checked again once the host has answered: the switch, the sessions and
+  the release as of then), and the host
+  starts no new probe meanwhile. Before an update (Settings' or automatic), every other profile's
+  host running from the package is held and waited for the same way, since Velopack ends them
+  too, each held again every round and once more just before the hand-over, with the package
+  looked at again once they are done (a host started meanwhile is held too); one that cannot
+  confirm, or a host of the package no pipe reaches, stops the update before anything is stopped.
+  Quitting gives up those waits, never a probe, so a host already stopped for the update is
+  started again within Quit's 25 s.
   The path is that of "Update and restart": the host stopped over the pipe, then
   `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version starts the
   host again. The new version's first start shows a toast: the version it came from, and the
@@ -458,8 +497,9 @@ into one folder with one version. An app update is a host update, so they never 
 
 ### Releases and updates: every merge to main is a pre-release
 
-CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` a GitHub
-pre-release, `v0.1.<n>`, of the whole package. Installed copies include pre-releases by
+CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` whose CI built the
+app a GitHub pre-release, `v0.1.<n>`, of the whole package. A change the app's jobs don't
+select (docs only, say) builds and publishes nothing. Installed copies include pre-releases by
 default and install them by themselves once their host is idle (Automatic updates, above);
 Settings, **Check for updates** and **Install**, does it at once, as does the Home Assistant
 connector's Install button on a machine the dashboard drives.
@@ -468,17 +508,28 @@ connector's Install button on a machine the dashboard drives.
   requests and pushes, so main's versions only rise, with gaps; a re-run keeps its number.
   Renaming or recreating `ci.yml` starts the count at 1 again, below every release, and no
   installed copy would ever take one: move the minor version up (`0.2.<n>`) in the same change.
-* **When:** after every check job in CI on that commit has passed: the `product` tests (Linux,
-  Windows x64 and Windows on Arm) and both `app` jobs (x64 and Arm64: build, pack, self-test,
-  install), and also the PWA, Home Assistant, spike and light jobs, none of which may have failed
-  or been cancelled. It runs for pushes to `danswett/agent-bridge`'s `main` only: never a pull
+* **When:** after every check job CI selected on that commit has passed, the `app` jobs among
+  them: the `product` tests (Linux, Windows x64 and Windows on Arm), both `app` jobs (x64 and
+  Arm64: build, pack, self-test, install), and whichever PWA, Home Assistant, spike and light
+  jobs ran, none of which may have failed or been cancelled. Main's CI plans from its last passed
+  commit, so an app change whose own run was replaced while waiting is built by the next run.
+  It runs for pushes to `danswett/agent-bridge`'s `main` only: never a pull
   request or a fork. It
-  is the only job with `contents: write`, and runs one at a time (concurrency group
-  `publish-prerelease`). Before it, `publish-gate` lets through only the commit `main` is at
-  now: GitHub keeps one waiting job per concurrency group and cancels the older waiting one, so
-  a slow build of an older merge must not reach the group and evict a newer one. A run whose
-  commit main has moved past publishes nothing, and the newer commit's run publishes instead
-  (re-run it if it failed).
+  is the only job with `contents: write` (CI's other writes are `attest`'s `attestations: write`
+  and `id-token: write`, and main's `relay-image-sarif` job's `security-events: write`, which
+  uploads the relay image's scan to code scanning), and runs one at a time (concurrency group
+  `publish-prerelease`), and publishes each version once, never one older than any already
+  out and never from a commit that doesn't hold the latest release's commit, so release order
+  doesn't rest on the order main's CI runs go in (first attempts share
+  concurrency group `ci-main`, whose order GitHub doesn't promise, and a re-run has a group of
+  its own): a run publishes even after `main` has moved on, unless main's head has since
+  changed the app (main's own selector, under the lock, says so; main's later run publishes
+  both, where publishing this first could leave that one's lower version refused), and
+  one that reaches `publish` after a newer release publishes nothing. Its group keeps every
+  waiting publish (`queue: max`, up to 100; GitHub cancels one arriving to a full queue, never
+  one already waiting), where by default the next to arrive would replace the one waiting, so a
+  re-run of an old run could leave a newer run's app unpublished; the order waiting publishes
+  start in is not promised, which is why the checks above keep the order.
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
@@ -521,8 +572,11 @@ connector's Install button on a machine the dashboard drives.
   package alone (with the warning) and x64's delta as usual.
 * **Once per version:** a version whose tag exists is skipped, so re-running a run publishes
   nothing twice. A version older than one already published is skipped (two merges close
-  together, the later one's build first). A draft left by a failed attempt is deleted and the
-  version uploaded again.
+  together, the later one's build first). So is a version whose commit doesn't hold the
+  latest release's commit (`compare` says it is behind): an ancestor's run created after its
+  descendant's has the higher number, and would otherwise take installed copies back to older
+  code; a commit off that line, or a tag or comparison that can't be read, stops the publish.
+  A draft left by a failed attempt is deleted and the version uploaded again.
 * **Pruning:** the newest 20 pre-releases stay; older ones are deleted with their assets, and
   their tags stay. A full (non-pre-release) release, a draft, or a release not tagged
   `v<major>.<minor>.<patch>` is never touched.
