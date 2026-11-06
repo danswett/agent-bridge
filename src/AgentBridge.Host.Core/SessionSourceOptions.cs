@@ -33,6 +33,12 @@ public sealed class SessionSourceOptions
 
     public bool UseFileSystemWatcher { get; init; } = true;
 
+    // The Not responding watchdog (#800, 6646501884 §1): a session still working whose transcript
+    // has had no event of any kind for this long, or for NotRespondingBusyAfter while a tool, a
+    // delegate or a background shell is running (a build or a CI watch can be quiet that long).
+    public TimeSpan NotRespondingAfter { get; init; } = TimeSpan.FromMinutes(10);
+    public TimeSpan NotRespondingBusyAfter { get; init; } = TimeSpan.FromMinutes(30);
+
     // Where discovery says what holds it and what it carried on without. Null: nowhere.
     public Action<string>? Log { get; init; }
 

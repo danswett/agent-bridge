@@ -45,6 +45,8 @@ namespace AgentBridge.Host.Core.Parsing;
 //     woken it and it stops.
 // A nested agent's start and parent are written only beside it (ClaudeSubagents, Nested).
 // What any sub-agent says is in its own transcript, never in the session's response.
+// Sign-in and turn-ending errors (session.attention): TODO(#800), once a real redacted sample of
+// Claude Code's is captured (AgentErrors). None was on VM1, and no string is guessed meanwhile.
 internal sealed class ClaudeParser(SessionState state, TimeProvider time) : TranscriptParser(state, time)
 {
     static readonly IReadOnlyList<byte[]> Markers =

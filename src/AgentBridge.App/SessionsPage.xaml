@@ -69,13 +69,23 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock
+                <!-- Where focus lands when a closed sign-in sheet's banner has gone (ui.md §6.13):
+                     programmatically only, never a Tab stop. -->
+                <ContentControl
+                    x:Name="SessionsHeading"
                     VerticalAlignment="Center"
-                    Style="{StaticResource AbTypeTitle}"
-                    TextTrimming="CharacterEllipsis"
-                    TextWrapping="NoWrap"
-                    AutomationProperties.HeadingLevel="Level1"
-                    Text="Sessions" />
+                    HorizontalContentAlignment="Stretch"
+                    IsTabStop="False"
+                    UseSystemFocusVisuals="True"
+                    AutomationProperties.Name="Sessions">
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        Style="{StaticResource AbTypeTitle}"
+                        TextTrimming="CharacterEllipsis"
+                        TextWrapping="NoWrap"
+                        AutomationProperties.HeadingLevel="Level1"
+                        Text="Sessions" />
+                </ContentControl>
                 <!-- Your order, Most recent or Machine (#164). -->
                 <Button
                     x:Name="SortButton"
@@ -196,7 +206,99 @@
                 <ListView.Header>
                     <!-- Needs you · N (§6.1, #165), the list's first section: moved here from the Sessions page's
                          cards as it was, its approval logic untouched (NeedsYou.cs); the grid only spaces it. -->
-                    <Grid Padding="12,0,12,8">
+                    <StackPanel Padding="12,0,12,8" Spacing="8">
+                        <!-- Sign-in (#800, ui.md §6.13): one banner per machine, agent and account whose agent needs a
+                             person to sign it in, listing the sessions it holds up, with Sign in where the machine can
+                             run the agent's own sign-in. Not dismissible: it goes when the sessions no longer need it.
+                             Every word on it is plain text, never a link the host chose (SignInBanners, AuthState).
+                             In the list's header, with Needs you, so however many there are they scroll with the
+                             list and never push it, or a lower Sign in, off the window. -->
+                        <ItemsControl
+                            x:Name="SignInBannerList"
+                            AutomationProperties.AutomationId="SignInBanners"
+                            IsTabStop="False"
+                            ItemsSource="{x:Bind ViewModel.SignIns}"
+                            Visibility="{x:Bind local:Ui.Show(ViewModel.HasSignIns), Mode=OneWay, FallbackValue=Collapsed}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Spacing="8" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="core:SignInBannerViewModel">
+                                    <Border
+                                        AutomationProperties.AutomationId="SignInBanner"
+                                        AutomationProperties.Name="{x:Bind Head, Mode=OneWay}"
+                                        Background="{ThemeResource AbNeedsFill}"
+                                        BorderBrush="{ThemeResource AbNeeds}"
+                                        BorderThickness="1"
+                                        CornerRadius="8"
+                                        Padding="12,10">
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <!-- Decorative: the heading says it. -->
+                                            <local:StatusGlyphView Size="16" Margin="0,2,0,0" VerticalAlignment="Top" Glyph="{x:Bind Glyph, Mode=OneWay}" />
+                                            <StackPanel Grid.Column="1" Spacing="4">
+                                                <TextBlock
+                                                    AutomationProperties.AutomationId="SignInHead"
+                                                    AutomationProperties.HeadingLevel="Level2"
+                                                    FontWeight="SemiBold"
+                                                    Foreground="{ThemeResource AbNeedsHead}"
+                                                    TextWrapping="Wrap"
+                                                    Text="{x:Bind Head, Mode=OneWay}" />
+                                                <!-- Where focus lands when the sheet closes on success (ui.md §6.13): programmatically only,
+                                                     never a Tab stop (SessionsPage.FocusSignInBanner). -->
+                                                <ContentControl
+                                                    AutomationProperties.AutomationId="SignInStatus"
+                                                    AutomationProperties.Name="{x:Bind Line, Mode=OneWay}"
+                                                    IsTabStop="False"
+                                                    UseSystemFocusVisuals="True"
+                                                    HorizontalContentAlignment="Stretch"
+                                                    Visibility="{x:Bind local:Ui.Show(HasLine), Mode=OneWay}">
+                                                    <TextBlock
+                                                        AutomationProperties.AutomationId="SignInLine"
+                                                        TextWrapping="Wrap"
+                                                        Text="{x:Bind Line, Mode=OneWay}" />
+                                                </ContentControl>
+                                                <ItemsControl ItemsSource="{x:Bind Sessions}" IsTabStop="False" Visibility="{x:Bind local:Ui.Show(HasSessions), Mode=OneWay}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate x:DataType="core:SignInSession">
+                                                            <HyperlinkButton
+                                                                Padding="0"
+                                                                MinHeight="32"
+                                                                AutomationProperties.AutomationId="SignInSession"
+                                                                Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                                                Click="{x:Bind Press}">
+                                                                <TextBlock TextWrapping="Wrap" Text="{x:Bind Title}" />
+                                                            </HyperlinkButton>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                                <TextBlock
+                                                    AutomationProperties.AutomationId="SignInProblem"
+                                                    Foreground="{ThemeResource AbNeedsText}"
+                                                    TextWrapping="Wrap"
+                                                    Text="{x:Bind Problem, Mode=OneWay}"
+                                                    Visibility="{x:Bind local:Ui.Show(HasProblem), Mode=OneWay}" />
+                                                <Button
+                                                    MinHeight="32"
+                                                    Margin="0,4,0,0"
+                                                    Style="{StaticResource AccentButtonStyle}"
+                                                    AutomationProperties.AutomationId="SignInVerb"
+                                                    AutomationProperties.Name="{x:Bind VerbName, Mode=OneWay}"
+                                                    Content="{x:Bind VerbText, Mode=OneWay}"
+                                                    Visibility="{x:Bind local:Ui.Show(HasVerb), Mode=OneWay}"
+                                                    Click="{x:Bind Press}" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    <Grid>
                         <!-- Needs you · N (#165): every pending question on every machine, oldest first. It
                              refers to the cards below and never moves them. -->
                         <Border
@@ -310,6 +412,7 @@
                             </StackPanel>
                         </Border>
                     </Grid>
+                    </StackPanel>
                 </ListView.Header>
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="core:SessionCardViewModel">

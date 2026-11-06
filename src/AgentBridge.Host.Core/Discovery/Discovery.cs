@@ -37,8 +37,11 @@ internal sealed record Registration(
 
 // A Codex command waiting for approval (<id>.approval.json): the hook writes it on
 // PermissionRequest and removes it on the next event that proves it was answered.
-// Attempted: agent-ha-bridge has already typed an answer into this generation.
-internal sealed record ApprovalMarker(string DecisionId, string Question, DateTimeOffset? Created, bool Attempted);
+// Attempted: agent-ha-bridge has already typed an answer into this generation. Question is the
+// hook's activity line, the command cut to 300 characters and unfenced; Command is the whole
+// command as this host's hook records it (cut only past CommandMax, saying so in CommandCut),
+// absent from a marker agent-ha-bridge's hook or an older host wrote (#209).
+internal sealed record ApprovalMarker(string DecisionId, string Question, DateTimeOffset? Created, bool Attempted, string? Tool = null, string? Command = null, bool CommandCut = false);
 
 public enum ApprovalMarkerState { Absent, Unreadable, Present }
 
@@ -46,7 +49,8 @@ public enum ApprovalMarkerState { Absent, Unreadable, Present }
 // before typing (Set-CodexApprovalAttempt): the marker names this session, carries a
 // generation (DecisionId), and an attempt it records is a boolean true. Anything else is
 // Unreadable, which a caller must treat as "something may be pending", never as absent.
-public sealed record ApprovalMarkerRead(ApprovalMarkerState State, string? DecisionId = null, string? Question = null, DateTimeOffset? Created = null, bool Attempted = false)
+public sealed record ApprovalMarkerRead(ApprovalMarkerState State, string? DecisionId = null, string? Question = null, DateTimeOffset? Created = null, bool Attempted = false,
+    string? Tool = null, string? Command = null, bool CommandCut = false)
 {
     public static string PathFor(string registrationPath, string sessionId) =>
         Path.Combine(Path.GetDirectoryName(registrationPath)!, RegistrationDiscovery.SafeKey(sessionId) + ".approval.json");
@@ -75,7 +79,8 @@ public sealed record ApprovalMarkerRead(ApprovalMarkerState State, string? Decis
                 if (tried.ValueKind != JsonValueKind.True) { return new(ApprovalMarkerState.Unreadable); }
                 attempted = true;
             }
-            return new(ApprovalMarkerState.Present, decision.GetString(), Json.Str(e, "Question") ?? "", Json.Time(e, "Created"), attempted);
+            return new(ApprovalMarkerState.Present, decision.GetString(), Json.Str(e, "Question") ?? "", Json.Time(e, "Created"), attempted,
+                Json.Str(e, "Tool"), Json.Str(e, "Command"), Json.Bool(e, "CommandCut") == true);
         }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return new(ApprovalMarkerState.Absent); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or ArgumentException) { return new(ApprovalMarkerState.Unreadable); }
@@ -231,12 +236,29 @@ internal static class CopilotDiscovery
     {
         try
         {
-            var attributes = File.GetAttributes(path);
+            // Not File.GetAttributes, which says absence by throwing: an agent never installed was
+            // two exceptions a pass, most of the host's 5 a second (#608).
+            if (Attributes(path) is not { } attributes) { return Folder.Absent; }
             if (attributes.HasFlag(FileAttributes.ReparsePoint)) { return Folder.Link; }
             return attributes.HasFlag(FileAttributes.Directory) ? Folder.Present : Folder.Unreadable;
         }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return Folder.Absent; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return Folder.Unreadable; }
+    }
+
+    // What is at a path, or null when nothing is: the OS saying the file or a folder above it is
+    // not there. Anything else it says (denied, unreadable) still throws.
+    internal static FileAttributes? Attributes(string path)
+    {
+        var attributes = new FileInfo(path).Attributes;
+        if ((int)attributes != -1) { return attributes; }
+        // Windows says -1 for a drive that is not ready (removable media, a locked volume) too,
+        // which is not absence: taken for it, every session there would be retired.
+        if (Path.GetPathRoot(Path.GetFullPath(path)) is { Length: > 0 } root && !Directory.Exists(root))
+        {
+            throw new IOException($"{root} is not ready");
+        }
+        return null;
     }
 
     // The subfolders, each with whether it is a link. The attributes come with the listing.
@@ -799,7 +821,7 @@ internal static class RegistrationDiscovery
         if (agent == AgentKind.Codex
             && ApprovalMarkerRead.Read(path, id) is { State: ApprovalMarkerState.Present } marker)
         {
-            approval = new ApprovalMarker(marker.DecisionId!, marker.Question ?? "", marker.Created, marker.Attempted);
+            approval = new ApprovalMarker(marker.DecisionId!, marker.Question ?? "", marker.Created, marker.Attempted, marker.Tool, marker.Command, marker.CommandCut);
         }
         return new Registration(
             id,

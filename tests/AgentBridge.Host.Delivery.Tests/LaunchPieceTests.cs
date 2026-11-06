@@ -455,7 +455,9 @@ public sealed class LaunchPieceTests : IDisposable
 
     static void Git(string dir, params string[] args)
     {
-        var r = AgentBridge.Host.Delivery.Launch.Git.Run(dir, args);
+        // Fixture setup is not testing git's production timeout. A loaded runner took
+        // longer than its default 30 seconds just to create the seed commit (#664).
+        var r = AgentBridge.Host.Delivery.Launch.Git.Run(dir, args, timeout: TimeSpan.FromMinutes(2));
         Assert.True(r.Ok, $"git {string.Join(' ', args)}: {r.Said}");
     }
 

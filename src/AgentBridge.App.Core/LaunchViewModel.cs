@@ -279,7 +279,7 @@ public sealed partial class LaunchViewModel : Observable
         && (lastVia is null || lastVia == m || lastVia == watchedLoopback);
     public bool ShowOpen => lost is null && last is { State: DeliveryState.Done } e && Result(e)?.Session is not null;
     // What the last launch came to, for tests and the self-test: none, sending, waiting, failed or its outcome.
-    public string State => lost is not null ? "unconfirmed" : last is not { } e ? "none" : e.State != DeliveryState.Done ? e.State.ToString().ToLowerInvariant() : OutcomeOf(e);
+    public string State => lost is not null ? "unconfirmed" : last is not { } e ? "none" : e.State != DeliveryState.Done ? e.State.ToString().ToLowerInvariant() : e.Request == startedLate ? "started" : OutcomeOf(e);
 
     bool Pending => lost is null && last?.State is DeliveryState.Sending or DeliveryState.Waiting;
 
@@ -318,6 +318,7 @@ public sealed partial class LaunchViewModel : Observable
             m.Deliveries.Changed -= watch;
             watching.Remove(m);
         }
+        WatchSessions();
         var list = main.AllMachines.Where(m => m.Host.Can(LaunchProtocol.Capability) || ReadOnly(m) is not null)
             .OrderBy(m => m.IsLocal ? 0 : 1)
             .Select(m => new Choice(m.Key, m.IsLocal ? $"{m.Name} (this machine)" : m.Name)).ToList();
@@ -352,6 +353,7 @@ public sealed partial class LaunchViewModel : Observable
         }
         machine = next;
         options = null;
+        StopBusy();
         localTrust = null;
         sources = [];
         sourcesKnown = false;
@@ -389,7 +391,11 @@ public sealed partial class LaunchViewModel : Observable
     // launch.options again.
     // Left for another page: the choices are fetched again when it is opened, not as machines come
     // and go meanwhile. launch.options is costly at the host (profiles, resumable folders).
-    public void Closed() => shown = false;
+    public void Closed()
+    {
+        shown = false;
+        StopBusy();
+    }
 
     public async Task RefreshAsync()
     {
@@ -419,6 +425,7 @@ public sealed partial class LaunchViewModel : Observable
                 // A reload that fails says so, rather than leaving choices that may be out of date.
                 if (got is not null) { options = got; Listed(m, load); } else { options = null; error = failed; }
                 Draw();
+                ArmBusy(m);
             }
             done.SetResult();
         });
@@ -694,6 +701,7 @@ public sealed partial class LaunchViewModel : Observable
     void Submit(Machine m, LaunchRequest launch)
     {
         var transfer = launch.Transfer is not null;
+        late = null;
         var sent = m.Deliveries.Submit(Key, LaunchProtocol.Launch, request => launch with { Request = request }, _ => false, payload: launch, replayAfterRestart: false,
             timeout: transfer ? Transfers.LaunchTimeout : LaunchTimeout, resendOnBusy: false, giveUp: transfer ? Transfers.GiveUp : null);
         // Held (the machine went offline under the page, #269): nothing went, so there is nothing to
@@ -744,7 +752,8 @@ public sealed partial class LaunchViewModel : Observable
         var outcome = OutcomeOf(d);
         // A launch that started an agent now asking about its folder: the question, and the prompt
         // that went with it. A later busy launch naming it does not replace it.
-        if (outcome == "unconfirmed" && Result(d)?.Trust is { } asking && d.Payload is LaunchRequest went) { askedBy[m.Key] = (asking.Id, went.Prompt); }
+        if (outcome == "unconfirmed" && Result(d)?.Trust is { } asking && d.Payload is LaunchRequest went) { askedBy[m.Key] = (asking, went.Prompt, d.Request); }
+        FollowLate(m, d);
         if (outcome == "started")
         {
             // Only the prompt that went: one typed since for the next launch stays.
@@ -770,7 +779,7 @@ public sealed partial class LaunchViewModel : Observable
 
     void Show()
     {
-        var (text, tone) = lost is not null ? (lost, Tone.Warn) : last is { } e ? Describe(e, lastName) : ("", Tone.None);
+        var (text, tone) = lost is not null ? (lost, Tone.Warn) : last is { } e ? Describe(e, lastName, startedLate: e.Request == startedLate) : ("", Tone.None);
         // Only a change is news: the status line is announced to screen readers whenever it is
         // raised, and this runs on every update of any machine.
         if (text != StatusText || tone != StatusTone)
@@ -783,8 +792,9 @@ public sealed partial class LaunchViewModel : Observable
         DrawTrust();
     }
 
-    // What a launch's progress or outcome says (describeLaunch in the PWA).
-    public static (string Text, Tone Tone) Describe(Delivery e, string? machineName)
+    // What a launch's progress or outcome says (describeLaunch in the PWA). startedLate: an
+    // unconfirmed one whose session has since appeared (LaunchViewModel.Late.cs).
+    public static (string Text, Tone Tone) Describe(Delivery e, string? machineName, bool startedLate = false)
     {
         var on = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
         switch (e.State)
@@ -800,7 +810,7 @@ public sealed partial class LaunchViewModel : Observable
                 return ($"{NameOr(machineName)} returned an error: {Sentence(e.Reason ?? "no reason given")} The launch may have started: check at the machine before launching again.{Again(e, machineName)}", Tone.Warn);
         }
         var how = Result(e)?.Launched?.Worktree == true ? " in a new worktree" : "";
-        return OutcomeOf(e) switch
+        return (startedLate && e.State == DeliveryState.Done ? "started" : OutcomeOf(e)) switch
         {
             "started" => (Result(e)?.Launched?.Transfer is not null ? $"Session brought over and started{how}. The original is still on its machine." : $"Session started{how}.", Tone.Ok),
             // Also said here when the launch may never have gone (no reply, a host that restarted).

@@ -36,6 +36,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         Marker("\"session.resume\""),
         Marker("\"session.model_change\""),
         Marker("\"session.shutdown\""),
+        Marker("\"session.error\""),
+        // A turn starting clears a turn's error (NewTurn), on a cold read too.
+        Marker("\"assistant.turn_start\""),
         Marker("\"subagent.started\""),
         // What a delegate was given, by whom, and its model since: a cold read whose window
         // its start falls before still lists it with its task, nesting and current model.
@@ -49,6 +52,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     ];
 
     bool _turnAskedForTools;
+    // The host's sentence for the error that ended this turn, which the CLI's notice of it is
+    // shown as (MainText); none once the next turn starts.
+    string? _turnError;
     readonly Dictionary<string, string> _permissionQuestion = new(StringComparer.Ordinal);
     static readonly byte[] AssistantMessage = Marker("\"assistant.message\"");
     static readonly byte[] ToolStart = Marker("\"tool.execution_start\"");
@@ -58,16 +64,19 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
 
     // The main agent's replies too, for activity.own: a session whose delegates filled the
     // parsed window had no reply of the main agent's in it. A delegate's carries an agentId,
-    // and is not wanted; a main reply quoting that word is merely missed. And a delegate's
+    // and is not wanted; a main reply quoting that word is merely missed, except while the
+    // session needs sign-in, when that reply (a read_agent request names an agentId) is what
+    // clears it: Count reads the stamp itself. And a delegate's
     // tool calls, whose permission prompts can fall in the window when the calls do not.
     protected override bool SkimWants(ReadOnlySpan<byte> line) =>
-        base.SkimWants(line) || (line.IndexOf(AssistantMessage) >= 0 && line.IndexOf(Stamped) < 0)
+        base.SkimWants(line) || (line.IndexOf(AssistantMessage) >= 0 && (line.IndexOf(Stamped) < 0 || S.Attention is { Kind: AttentionKind.SignInNeeded }))
         || (line.IndexOf(ToolStart) >= 0 && line.IndexOf(Stamped) >= 0);
 
     public override void Reset()
     {
         base.Reset();
         _turnAskedForTools = false;
+        _turnError = null;
         _permissionQuestion.Clear();
     }
 
@@ -101,6 +110,19 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         var data = Json.Obj(e, "data") ?? default;
         switch (Json.Str(e, "type"))
         {
+            // A sign-in failure and what clears it are kept past the skim too (Failed, NewTurn,
+            // Answered): a signed-out session whose delegates wrote on past the parsed window
+            // read as fine again after the host restarted.
+            case "session.error" when !IsSubagent(e):
+                if (AgentErrors.Copilot(data, Json.Time(e, "timestamp") ?? Time.GetUtcNow()) is { } failure)
+                {
+                    _turnError = failure.Message;
+                    Failed(failure);
+                }
+                break;
+            case "assistant.turn_start" when !IsSubagent(e):
+                NewTurn();
+                break;
             case "user.message" when !IsSubagent(e):
                 if (Text.NonBlank(Json.Str(data, "content")) is { } text)
                 {
@@ -114,6 +136,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                         if (Notice(data)) { S.UncountedTurn = true; }
                         break;
                     }
+                    NewTurn();
                     Prompted(text, from, label, Json.Str(e, "id"));
                     S.Prompts++;
                     S.UncountedTurn = false;
@@ -124,8 +147,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             // to say, as they always were. Cut as taken: nothing else holds these strings.
             case "assistant.message" when !IsSubagent(e):
                 {
+                    Answered(data, Json.Time(e, "timestamp"));
                     var reasoning = Text.NonBlank(Json.Str(data, "reasoningText"));
-                    var content = Text.NonBlank(Json.Str(data, "content"));
+                    var content = MainText(data);
                     if (reasoning is not null) { S.OwnReasoning = Limits.KeepEnd(reasoning, Limits.Reasoning).Text; }
                     if (content is not null) { (S.OwnResponse, S.OwnResponseCut) = Limits.KeepEnd(content, Limits.Response); }
                     if (reasoning is not null || content is not null) { S.OwnAt = Json.Time(e, "timestamp"); }
@@ -216,6 +240,12 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         S.OwnResponseCut = false;
         S.OwnReasoning = null;
         S.OwnAt = null;
+        // Turns may have started and failed unread: a notice in the tail names no error of the
+        // skim's (#846), only the generic sentence unless its own error is read there.
+        _turnError = null;
+        // A sign-in failure the skim read is kept: bytes never read are no evidence the model
+        // answered, as a retry loop can write plenty without one (#800). The tail clears it only
+        // with a main reply after it, and a newer failure there moves its since.
     }
 
     protected override bool Apply(JsonElement e, DateTimeOffset? at)
@@ -362,6 +392,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                         // "steering" even when no turn is running, and those typed while idle
                         // or sent by the bridge are "idle" and carry parentAgentTaskId.
                         var (from, label, injected) = Source(Json.Str(data, "source"));
+                        // Memory, a skill's context or a notice is no prompt: a turn it starts
+                        // writes its own turn_start.
+                        if (!injected) { NewTurn(); }
                         UserPrompt(text, at, from: from, label: label, injected: injected, key: Json.Str(e, "id"), notice: injected && Notice(data));
                     }
                     _turnAskedForTools = false;
@@ -369,12 +402,17 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 }
             case "assistant.turn_start" when !sub:
                 S.SetStatus(SessionStatus.Working);
+                NewTurn();
                 _turnAskedForTools = false;
                 break;
             case "assistant.message" when !sub:
                 {
+                    Answered(data, at);
                     S.Model = Text.NonBlank(Json.Str(data, "model")) ?? S.Model;
-                    S.MainSaid(Text.NonBlank(Json.Str(data, "content")), Text.NonBlank(Json.Str(data, "reasoningText")), at);
+                    S.MainSaid(MainText(data), Text.NonBlank(Json.Str(data, "reasoningText")), at);
+                    // The CLI's notice of the error that ended the turn is written after it, and
+                    // starts nothing: read as a reply, it set the session working again for good.
+                    if (TurnErrorNotice(data)) { break; }
                     // The turn's latest reply decides whether it goes on to run tools. Copilot answers an
                     // agent_idle notification inside the turn it starts: a read_agent request, its
                     // result, then the reply with nothing more to run. Kept from the first, the session
@@ -424,6 +462,17 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "session.shutdown" when !sub:
                 S.Abandon(at);
                 break;
+            // An error that ends the turn (AgentErrors.Copilot): the turn is over, so the session
+            // is idle, with the error or the sign-in it needs beside it. A delegate's is its own.
+            case "session.error" when !sub:
+                {
+                    if (AgentErrors.Copilot(data, Now(at)) is not { } attention) { return false; }
+                    _turnError = attention.Message;
+                    S.FailTurn(at);
+                    Failed(attention);
+                    _turnAskedForTools = false;
+                    break;
+                }
             case "tool.execution_start":
                 {
                     var id = Json.Str(data, "toolCallId");
@@ -476,6 +525,55 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         }
         return true;
     }
+
+    // A turn starting leaves the last one's error behind it, as the CLI's own session list clears
+    // its error on a prompt. Never a sign-in: VM1's Quality session (#800) signed out at 16:45:05,
+    // ended a turn at 16:50:55 and failed sign-in again 51 ms later, and Migration's turn_end at
+    // 16:47:25 proved nothing either. A prompt, a turn starting or ending, a hook and anything the
+    // bridge typed are all written whether the agent can reach its model or not.
+    void NewTurn()
+    {
+        _turnError = null;
+        if (S.Attention is { Kind: not AttentionKind.SignInNeeded }) { S.Attention = null; }
+    }
+
+    // Only the model answering proves a sign-in good again: text of its own or a tool it asked
+    // for, written after the latest sign-in failure (a later failure sets it again). Not an empty
+    // message, and not the CLI's own "Turn error" notice, which it writes as an assistant.message
+    // carrying no model's words (emitDetachedTurnError, cli-main.js 1.0.105).
+    void Answered(JsonElement data, DateTimeOffset? at)
+    {
+        // Another error is the next turn's to clear (NewTurn): the CLI's turn-error notice
+        // follows one as an assistant.message, and it would never have been seen.
+        if (S.Attention is not { Kind: AttentionKind.SignInNeeded } attention) { return; }
+        var content = Text.NonBlank(Json.Str(data, "content"));
+        if ((Asked(data) || (content is not null && !TurnErrorNotice(data))) && at is { } t && t > attention.Since) { S.Attention = null; }
+    }
+
+    // The main agent's text as shown; a model's reply is the model's. The CLI's turn-error notice
+    // carries the error's own words, which can hold a credential, a path or an address, and reach
+    // every client, HA and a finished push: it is shown as the host's sentence for the error that
+    // ended the turn (AgentErrors.Template), as attention.message is, and none of its words
+    // (#846). Redacting them was a blocklist that missed a new shape every round (#840, #841).
+    string? MainText(JsonElement data) =>
+        TurnErrorNotice(data)
+            ? TurnErrorNoticeText + " " + (_turnError ?? AgentErrors.Template(AttentionKind.Error, ErrorClass.Other, null, AgentKind.Copilot))
+            : Text.NonBlank(Json.Str(data, "content"));
+
+    static bool Asked(JsonElement data) => Json.Arr(data, "toolRequests") is { } requests && requests.GetArrayLength() > 0;
+
+    // emitDetachedTurnError (cli-main.js 1.0.105): "⚠️ Turn error: …" with no tool requested.
+    static bool TurnErrorNotice(JsonElement data) =>
+        !Asked(data) && Text.NonBlank(Json.Str(data, "content")) is { } content && content.StartsWith(TurnErrorNoticeText, StringComparison.Ordinal);
+
+    // Another error while it needs sign-in (a slash command failing, say) is no proof it can
+    // reach its model, and the next prompt would clear it.
+    void Failed(Attention attention)
+    {
+        if (attention.Kind == AttentionKind.SignInNeeded || S.Attention is not { Kind: AttentionKind.SignInNeeded }) { S.Attention = attention; }
+    }
+
+    const string TurnErrorNoticeText = "\u26A0\uFE0F Turn error:";
 
     // A permission request is asked of the person like a question, so it is one, of kind
     // approval, carrying in full what it would allow (CopilotPermission). A host with

@@ -107,9 +107,12 @@ public sealed class UsagePeers : IAsyncDisposable
             // A new link (a reconnect): every host on it has appeared anew, so each is asked once
             // the minimum gap since it was last asked allows, not at the next five minutes.
             if (!ReferenceEquals(seenOn, l)) { seen.Clear(); seenOn = l; }
-            ForgetGone(l.Relay);
+            // One presence message's lists for the whole pass: who is forgotten and who is asked
+            // are judged on the same roster.
+            var snap = l.Relay.Snapshot;
+            ForgetGone(snap);
             var now = time.GetUtcNow();
-            var hosts = l.Relay.Presence.Where(p => p.Kind == HostKind && p.Id != me && p.Id != l.Relay.DeviceId
+            var hosts = snap.Presence.Where(p => p.Kind == HostKind && p.Id != me && p.Id != l.Relay.DeviceId
                 && Trust?.HasRole(p.Id, TrustedPeerStore.Host) != false).ToList();
             // When each came into presence, by this clock: the relay's own stamp (Since) is another
             // clock, and a few minutes' skew between the two would read as a host appearing anew.
@@ -123,7 +126,7 @@ public sealed class UsagePeers : IAsyncDisposable
                 await AskAsync(l, p, cancellationToken);
             }
             // Hosts long gone are not remembered for ever.
-            var present = l.Relay.Presence.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
+            var present = l.Relay.Snapshot.Presence.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
             foreach (var id in asked.Keys.Where(id => !present.Contains(id) && now - asked[id] > Every).ToList()) { asked.Remove(id); said.Remove(id); }
             return due.Count;
         }
@@ -140,25 +143,24 @@ public sealed class UsagePeers : IAsyncDisposable
         return since >= MinimumGap && seen.GetValueOrDefault(id) > at;
     }
 
-    // A machine forgotten from the account's roster takes the readings it took with it. Only with a
-    // roster to say so: without one (an older relay, or one not yet read) nothing is inferred.
-    void ForgetGone(RelayClient relay)
+    // An older relay can briefly omit a disconnecting host from both lists. Require two actual
+    // consecutive presence messages, both with a roster, before dropping its cached readings.
+    void ForgetGone(PresenceSnapshot snap)
     {
-        if (Members(relay) is not { } account) { return; }
+        if (Members(snap) is not { } account || snap.Previous is not { } before || Members(before) is not { } previous) { return; }
+        account.UnionWith(previous);
         if (store.Forget(account.Contains) is > 0 and var n) { log($"usage: dropped {n} reading(s) taken by machines no longer the account's"); }
     }
 
     // The account's machines, online or not, as the relay's roster has them; null without one.
     // Where the relay keeps a roster, every machine the account has, online or not, and this one.
-    // RelayClient sets Presence and then Known from each presence message. Known is read first, so
-    // where those stores stay in order (x64), a machine coming online between the two reads is in
-    // one list or the other, never neither, which would read as forgotten. Should it be in neither
-    // anyway, it is online and due to be asked, so its readings are back within the pass.
-    HashSet<string>? Members(RelayClient relay)
+    // From one presence message (RelayClient.Snapshot, #206): reading its two lists one after the
+    // other could straddle a message on Arm64, and a machine coming online between them would be
+    // in neither, read as forgotten, and its readings dropped until it next answered.
+    HashSet<string>? Members(PresenceSnapshot snap)
     {
-        if (relay.Known is not { } known) { return null; }
-        Interlocked.MemoryBarrier();
-        return relay.Presence.Select(p => p.Id).Concat(known.Select(k => k.Id)).Append(me).ToHashSet(StringComparer.Ordinal);
+        if (snap.Known is not { } known) { return null; }
+        return snap.Presence.Select(p => p.Id).Concat(known.Select(k => k.Id)).Append(me).ToHashSet(StringComparer.Ordinal);
     }
 
     async Task AskAsync(Link l, PresenceEntry peer, CancellationToken cancellationToken)
@@ -203,7 +205,8 @@ public sealed class UsagePeers : IAsyncDisposable
         var report = Read<UsageReport>(await ch.RequestAsync(UsageProtocol.Get, new UsageRequest { Shared = shared }, Wait, cancellationToken));
         // Still a host of the account now: one that left, or connected again as something else,
         // while it was being asked is not believed.
-        if (l.Relay.Presence.FirstOrDefault(p => p.Id == peer.Id) is not { Kind: HostKind } now) { return "left while being asked"; }
+        var snap = l.Relay.Snapshot;
+        if (snap.Presence.FirstOrDefault(p => p.Id == peer.Id) is not { Kind: HostKind } now) { return "left while being asked"; }
         if (Trust?.HasRole(ch, TrustedPeerStore.Host) == false) { return "is no longer a pinned host"; }
         // Nor what it passes on from a machine the account has since forgotten (it may not have
         // heard yet). Machines that are only offline are still the account's.
@@ -212,7 +215,7 @@ public sealed class UsagePeers : IAsyncDisposable
         {
             agents = agents.Where(a => a?.ReadBy is not { } by || by.Id == me || trust.HasRole(by.Id, TrustedPeerStore.Host));
         }
-        if (Members(l.Relay) is { } members) { agents = agents.Where(a => a?.ReadBy is not { } by || members.Contains(by.Id)); }
+        if (Members(snap) is { } members) { agents = agents.Where(a => a?.ReadBy is not { } by || members.Contains(by.Id)); }
         // For the account this connection was signed in as: an answer that arrives after the host
         // signed in to another one is not taken for it.
         var took = store.Take(agents, new UsageReader(peer.Id, now.Name), l.Relay.AccountId is { Length: > 0 } a ? a : null);

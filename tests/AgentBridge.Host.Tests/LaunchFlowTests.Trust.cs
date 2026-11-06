@@ -267,12 +267,41 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
 
         var options = await RequestAsync(ch, LaunchProtocol.Options, new { });
         Assert.False(options.TryGetProperty("trust", out _));
-        Assert.Equal("Busy: Claude in App is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all), so nothing was launched. Try again in a couple of minutes.",
+        // What the machine lists says what it is waiting on; a launch turned away says it was (#122).
+        Assert.Equal("Claude in App is asking whether to allow Bypass Permissions. New launches wait until it's answered.",
             options.GetProperty("busy").GetString());
         var busy = await LaunchTrustAsync(ch, new { workspace = "API" });
         Assert.Equal("busy", busy.GetProperty("outcome").GetString());
+        Assert.Equal("Busy: Claude in App is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all), so nothing was launched. Try again in a couple of minutes.",
+            busy.GetProperty("reason").GetString());
         Assert.False(busy.TryGetProperty("trust", out _));
         Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
+    public async Task Trusting_Claude_from_a_phone_says_its_Bypass_Permissions_warning_is_waiting_next_and_types_nothing_into_it()
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        starter.Registers = false;
+        screens.Rows = ClaudeAsks();
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var q = (await LaunchTrustAsync(ch, new { agent = "claude", workspace = "App", prompt = "go" })).GetProperty("trust");
+
+        // Trusted, and Allow all's warning comes next (#158).
+        screens.OnTyped = plan =>
+        {
+            screens.Rows = !plan.Sends[0].Enter ? ClaudeAsks(onYes: true)
+                : [" WARNING: Claude Code running in Bypass Permissions mode", "", " ❯ 1. No, exit", "   2. Yes, I accept"];
+        };
+        var answer = await AnswerAsync(ch, Answer(ch, q.GetProperty("id").GetString()!, "trust", client.Key));
+
+        Assert.Equal(("unconfirmed", "Not confirmed: the folder was trusted, and Claude is now asking in its window to confirm Bypass Permissions mode (Allow all). Only a person at the machine can answer that; the session appears here once they do.", null), answer);
+        // Only the trust answer's two keys went; nothing into the warning.
+        Assert.Equal(2, screens.Plans.Count);
+        var options = await RequestAsync(ch, LaunchProtocol.Options, new { });
+        Assert.False(options.TryGetProperty("trust", out _));
+        Assert.StartsWith("Claude in App is asking whether to allow Bypass Permissions", options.GetProperty("busy").GetString());
     }
 
     [Fact]

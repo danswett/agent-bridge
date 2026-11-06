@@ -116,7 +116,8 @@ public static partial class CopilotPermission
 
     static string? Message(string kind, JsonElement p)
     {
-        var intention = Json.Str(p, "intention");
+        // The agent's own words, never Markdown (Literal).
+        var intention = Literal(Json.Str(p, "intention"));
         switch (kind)
         {
             case "commands" when Json.Str(p, "fullCommandText") is { } command:
@@ -136,7 +137,7 @@ public static partial class CopilotPermission
                     var paths = list.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList();
                     if (paths.Count == 0) { return null; }
                     var access = Json.Str(p, "accessKind") is { Length: > 0 } a ? a : "path";
-                    return Join($"Allow **{access}** access?", Fence(string.Join('\n', paths)));
+                    return Join($"Allow **{Plain(access)}** access?", Fence(string.Join('\n', paths)));
                 }
             case "url" when Json.Str(p, "url") is { } url:
                 return Join("Allow **URL** access?", intention, Fence(url));
@@ -147,7 +148,16 @@ public static partial class CopilotPermission
                     return Join($"Allow **{Plain(title)}**?", Fence($"{server}/{tool}"), Args(p));
                 }
             case "custom-tool" when Json.Str(p, "toolName") is { } tool:
-                return Join($"Allow **{Plain(tool)}**?", Json.Str(p, "toolDescription"), Args(p));
+                {
+                    // With its arguments, the description is the agent's words before them. Without
+                    // any, it is all the prompt shows of what runs, so it is shown as written, in a
+                    // block: escaped as prose, "Deploy: prod" was drawn "Deploy\: prod" by every card
+                    // that shows an approval as its source, and with no block at all the cards held
+                    // it at the machine as a command in prose (ApprovalShape).
+                    var args = Args(p);
+                    var description = Json.Str(p, "toolDescription");
+                    return Join($"Allow **{Plain(tool)}**?", args is null ? (string.IsNullOrWhiteSpace(description) ? null : Fence(description)) : Literal(description), args);
+                }
             default:
                 return null;
         }
@@ -189,7 +199,7 @@ public static partial class CopilotPermission
 
     // A code block that the text cannot close early: its fence is longer than any run of
     // backticks inside.
-    static string Fence(string text, string language = "")
+    internal static string Fence(string text, string language = "")
     {
         var longest = 0;
         var run = 0;
@@ -202,9 +212,48 @@ public static partial class CopilotPermission
         return $"{fence}{language}\n{text}\n{fence}";
     }
 
-    // A name inside **bold**: markup characters would change what the line says. Hidden
-    // characters are shown escaped first, so collapsing the name to one line cannot drop them.
-    static string Plain(string text) => Text.OneLine(ShownText.Reveal(text, rightToLeft: true))?.Replace("*", "\\*").Replace("_", "\\_").Replace("`", "\\`") ?? "";
+    // A name inside **bold**: one line of it, literal (Literal). Hidden characters are shown
+    // escaped first, so collapsing the name to one line cannot drop them.
+    internal static string Plain(string text) => Literal(Text.OneLine(ShownText.Reveal(text, rightToLeft: true))) ?? "";
+
+    // The agent's own words (an intention, a tool's title or description) drawn as the words they
+    // are, never as Markdown (#212). Joined in as they were, an intention holding a line that
+    // opens a fence made the command's own fence close it, so the command was drawn as Markdown
+    // ([safe](https://other.example) showing only "safe"), under Approve once. So every character
+    // that starts an inline construct anywhere (code, emphasis, a link, an image or an address
+    // made a link, raw HTML, an entity, a table cell, the extras' strikethrough, sub- and
+    // superscript, inserted and marked text) is backslash-escaped, as is a line's first character
+    // where it would start a block (a heading, a quote, a list, a rule or a setext underline), and
+    // a line's leading whitespace, which would make it indented code, is dropped. What is left is
+    // paragraphs of text.
+    internal static string? Literal(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) { return null; }
+        var b = new StringBuilder(text.Length + 16);
+        foreach (var raw in text.Split('\n'))
+        {
+            if (b.Length > 0) { b.Append('\n'); }
+            var line = raw.TrimStart(' ', '\t');
+            // Whether the line so far is all digits, kept as it goes: copying the prefix to check it at
+            // every '.' or ')' made a line of 100,000 periods copy some 10 GB.
+            var digits = true;
+            for (var i = 0; i < line.Length; i++)
+            {
+                var c = line[i];
+                var escape = c is '\\' or '`' or '*' or '_' or '[' or ']' or '<' or '>' or '&' or '|' or '~' or '^' or '+' or '=' or '!' or '#' or ':'
+                    || (i == 0 && c == '-')
+                    // An ordered list's marker: digits then . or ) at a line's start.
+                    || ((c is '.' or ')') && i > 0 && digits)
+                    // A bare address (https://, mailto:, www.) is not made a link either: a link
+                    // drawn from it would end where the renderer guesses, escapes and all.
+                    || (c == '.' && i >= 3 && line.AsSpan(i - 3, 3).Equals("www", StringComparison.OrdinalIgnoreCase));
+                if (escape) { b.Append('\\'); }
+                b.Append(c);
+                digits &= char.IsAsciiDigit(c);
+            }
+        }
+        return b.ToString();
+    }
 
     // The names a message shows escaped and on one line, whose own text the identity holds as well
     // when it holds a character drawn other than as it runs: a custom tool named with a real U+202E

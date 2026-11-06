@@ -40,11 +40,39 @@ public sealed class UiTestFramework(IMessageSink sink) : XunitTestFramework(sink
         }
     }
 
-    sealed class AssemblyRunner(ITestAssembly assembly, IEnumerable<IXunitTestCase> testCases, IMessageSink sink, IMessageSink executionSink, ITestFrameworkExecutionOptions options)
+    internal class AssemblyRunner(ITestAssembly assembly, IEnumerable<IXunitTestCase> testCases, IMessageSink sink, IMessageSink executionSink, ITestFrameworkExecutionOptions options)
         : XunitTestAssemblyRunner(assembly, testCases, sink, executionSink, options)
     {
-        protected override Task<RunSummary> RunTestCollectionAsync(IMessageBus messageBus, ITestCollection testCollection, IEnumerable<IXunitTestCase> testCases, CancellationTokenSource cancellationTokenSource) =>
-            new CollectionRunner(testCollection, testCases, DiagnosticMessageSink, messageBus, TestCaseOrderer, new ExceptionAggregator(Aggregator), cancellationTokenSource).RunAsync();
+        readonly SemaphoreSlim? turns = CollectionTurns(assembly, options);
+
+        static SemaphoreSlim? CollectionTurns(ITestAssembly assembly, ITestFrameworkExecutionOptions options)
+        {
+            var behavior = assembly.Assembly.GetCustomAttributes(typeof(Xunit.CollectionBehaviorAttribute)).SingleOrDefault();
+            var threads = options.MaxParallelThreads() ?? behavior?.GetNamedArgument<int>("MaxParallelThreads") ?? 0;
+            return threads < 0 ? null : new SemaphoreSlim(threads == 0 ? Environment.ProcessorCount : threads);
+        }
+
+        protected override async Task<RunSummary> RunTestCollectionAsync(IMessageBus messageBus, ITestCollection testCollection, IEnumerable<IXunitTestCase> testCases, CancellationTokenSource cancellationTokenSource)
+        {
+            // Replacing xunit's collection runner also replaces its private semaphore wait.
+            // Keep that limit: otherwise every class starts its own UI thread at once (#660).
+            if (turns is not null)
+                await turns.WaitAsync(cancellationTokenSource.Token);
+            try
+            {
+                return await new CollectionRunner(testCollection, testCases, DiagnosticMessageSink, messageBus, TestCaseOrderer, new ExceptionAggregator(Aggregator), cancellationTokenSource).RunAsync();
+            }
+            finally
+            {
+                turns?.Release();
+            }
+        }
+
+        public override void Dispose()
+        {
+            turns?.Dispose();
+            base.Dispose();
+        }
     }
 
     sealed class CollectionRunner(ITestCollection collection, IEnumerable<IXunitTestCase> testCases, IMessageSink sink, IMessageBus bus, ITestCaseOrderer orderer, ExceptionAggregator aggregator, CancellationTokenSource cancel)

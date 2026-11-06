@@ -227,8 +227,9 @@ test.describe('on a phone', () => {
 
   test('an approval is big allow and deny buttons, answered on a tap', async ({ page }) => {
     await openDemo(page);
+    // As a host sends a Codex approval (#209): an older host's prose is answered at the machine.
     const q = await ask(page, {
-      id: 'q-approval', kind: 'approval', message: 'Run `rm -rf build`?',
+      id: 'q-approval', kind: 'approval', message: 'Allow **Bash**?\n\n```\nrm -rf build\n```',
       fields: [{ name: 'decision', type: 'choice', required: true, options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No, and tell the agent what to do' }] }],
     });
     await expect(q.locator('.question-head')).toHaveText('Main agent asks');

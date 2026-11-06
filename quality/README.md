@@ -33,6 +33,9 @@ The base is strong. CI already tests what ships, not just the code:
   take 2 min 45 s on one machine, build included. The three slowest projects take most of
   that: Host.Delivery (1 min 46 s, with real console injection), HomeAssistant (1 min 9 s)
   and Host (1 min 6 s).
+  App tests keep a UI thread per test, but start only `maxParallelThreads` collections
+  at once (one per core by default). #660 verified that their custom runner bypassed
+  xunit's collection limit; the cause of the simultaneous CI stalls remains unproven.
 - **Binaries as they ship:** the NativeAOT injector types into a real console, and the NativeAOT
   hook is started fresh for each event. The relay container runs read-only, as it ships. The
   packaged WinUI app runs its `--self-test` (UIA, every theme resource), Setup.exe installs
@@ -325,7 +328,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
 
    The jobs, and what each one's for (#459):
    - `light` holds the small Linux checks on one runner: `design-gen`, `a11y-contrast`,
-     `pwa-unit` with its coverage pass, `pwa-site-csp` and `docs-links`. Each step runs when its
+     `pwa-unit` with its coverage pass, `pwa-site-csp`, `playwright-apt` and `docs-links`. Each step runs when its
      suite is selected, and every selected one runs even after another fails. It isn't folded
      into `plan`, since a failure there would skip every job that needs the plan.
    - `pwa-ui` runs Playwright on four runners: Chromium in one, WebKit (about twice as slow) in
@@ -333,7 +336,36 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `pwa-e2e` runs `test/e2e`, in both browsers, in the one job that builds the dev stack. The
      shards set `PWA_SKIP_E2E`, so `test/e2e` is left out of them rather than skipping itself;
      together the five run every spec. The one PWA job these replace took a median of 15
-     minutes.
+     minutes. Every job that runs `playwright install --with-deps` (each `pwa-ui` leg, `pwa-e2e`
+     and `spikes-linux`) first downloads Playwright's system packages through
+     `.github/actions/playwright-system-packages`, and if apt's first mirror hasn't finished in
+     five minutes it fetches the rest from the runner's Canonical fallback,
+     `https://archive.ubuntu.com` (main run 41927187905 lost a WebKit shard to that mirror at
+     100 kB/s, and main run 41952998347 `pwa-e2e`). Each of those jobs gets 35 minutes, so a
+     fallback download still leaves time for the tests; the browsers' own download, on a cache
+     miss, is unchanged. To prove that fallback once without waiting for a slow mirror, once this
+     `workflow_dispatch` trigger is on `main` (until then a branch's run by hand may not
+     start): make a new commit of its own on a throwaway branch from `main` (an empty one,
+     `git commit --allow-empty`, with the usual trailers), push the branch, never open a pull
+     request at that commit, and run
+     `gh workflow run ci.yml --ref <branch> -f force-apt-fallback=true`. The plan job fails any
+     run by hand, before checkout, that doesn't ask for the fallback, runs on `main` or a tag,
+     or runs `main`'s head or any open pull request's: its checks, `quality-gate` among them,
+     land on the commit, and the merge rule reads the latest run per head, so on a pull
+     request's head they would stand in for its own run. One started there by mistake still
+     leaves a failed CI run on that head, and since the merge rule takes the newest run,
+     re-running the pull request's older run doesn't clear it: stop and report it, and recover
+     only as Quality or Engineering authorizes. Each `pwa-ui` leg then takes the Azure mirror
+     off before downloading anything (the action's `force-apt-fallback`; `pwa-e2e` and
+     `spikes-linux` download as before), says in its log that it was forced and not timed out,
+     fails if apt still fetches a package from Azure, and counts the packages that came from
+     `https://archive.ubuntu.com`. The WebKit legs are the proof: one that counts none fails;
+     Chromium's, whose packages the runner may already have, only warns. Read each WebKit leg's
+     count and its `Get:` lines before calling the fallback proven. Those two checks, the Azure
+     fetch and the Canonical count, belong to the forced proof alone: a fallback after a real
+     five-minute timeout, on any run, is the one above, unchanged (#817 first proposed failing
+     that one on an Azure fetch too, and dropped it). A run by hand runs every
+     job, as on `main`, but is never a release and writes no cache.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
@@ -497,6 +529,11 @@ changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
   summary lists per-project counts and times and the 10 slowest tests. Next, each suite's
   duration is compared with its catalog `baseline`, and one that grows more than 50% slower
   gets flagged in the PR summary.
+  - The CardTests chunked large-file case includes phase evidence in its existing timeout
+    (#513): attachment start, chunk bytes/count and timings, reply receipt, client-observed
+    acknowledgement, and terminal UI state. The last phase distinguishes pipe progress from
+    UI settlement; it does not extend the wait or replace delivered/byte assertions.
+    UI settlement uses the view model's status/tone, independently of the delivery state.
 - **Flakes:** a test that passes and fails on the same code is flaky. It's reported, never
   silently retried to green. The flake record is the `flaky` label and its issues, one per test,
   each with its run links and counts.

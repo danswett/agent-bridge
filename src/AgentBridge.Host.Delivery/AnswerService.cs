@@ -97,18 +97,23 @@ public sealed class AnswerService : ISessionAnswerer
 
     // gate: the one the host's ReplyService shares, so an answer and a reply never type into
     // one session at once; a service of its own when none is given (tests).
-    public AnswerService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
+    // Test-only compatibility overload; production must pass the shared gate explicitly.
+    internal AnswerService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
         IConsoleInjector injector, AnswerOptions options, Action<string>? log = null, DeliveryGate? gate = null)
+        : this(gate ?? new DeliveryGate(), source, processes, probe, guard, injector, options, log) { }
+
+    public AnswerService(DeliveryGate gate, ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
+        IConsoleInjector injector, AnswerOptions options, Action<string>? log = null)
     {
         this.source = source;
         this.processes = processes;
         this.probe = probe;
         this.guard = guard;
-        this.injector = injector;
+        this.injector = new GateTrackedInjector(injector, gate);
         this.options = options;
         this.log = log ?? (_ => { });
-        this.gate = gate ?? new DeliveryGate();
-        requests = new OutcomeMemory<AnswerResult>(options.Time, options.RememberFor);
+        this.gate = gate ?? throw new ArgumentNullException(nameof(gate));
+        requests = new OutcomeMemory<AnswerResult>(options.Time, options.RememberFor, this.gate, Busy);
         ledger = new AttemptLedger(options.AttemptLedgerPath, options.Time);
     }
 
@@ -140,7 +145,7 @@ public sealed class AnswerService : ISessionAnswerer
             {
                 return Refused("approving Copilot permission prompts from another device is turned off on this machine (permissions.remoteApproval); answer at the machine");
             }
-            if (question.AnswerAtMachine == true) { return Refused(AtMachine(session.Agent, question)); }
+            if (question.AnswerAtMachine == true) { return Refused(Undrivable(session, question) ?? AtMachine(session.Agent, question)); }
             if (session.Agent is not (AgentKind.Copilot or AgentKind.Claude or AgentKind.Codex))
             {
                 return Refused($"answering is not supported for {session.Agent.ToString().ToLowerInvariant()} yet; answer at the machine");
@@ -166,6 +171,24 @@ public sealed class AnswerService : ISessionAnswerer
             // failures once a key may have gone.
             return Refused($"the host could not answer: {e.Message}");
         }
+    }
+
+    // Why a Copilot form held to be answered at the machine is held there, from its own schema:
+    // the field, and what about it the keys cannot drive (CopilotFieldSchema), as typing it would
+    // have said. Without it the answer was refused with nothing but "can only be answered at the
+    // machine", the field's reason never reaching the person (#812 review). Fixed text built from
+    // the schema, never from the answer. Null when the question cannot be read again.
+    string? Undrivable(Session session, Question question)
+    {
+        if (session.Agent != AgentKind.Copilot || question.Kind != QuestionKind.Form || !Guid.TryParseExact(session.Id, "D", out _)) { return null; }
+        try
+        {
+            var transcript = Path.Combine(options.CopilotHome, "session-state", session.Id, "events.jsonl");
+            if (CopilotTranscript.Find(transcript, question.Id).Arguments is not { } arguments) { return null; }
+            var (_, problem) = CopilotForm.Read(arguments);
+            return problem;
+        }
+        catch (Exception) { return null; }
     }
 
     static string AtMachine(AgentKind agent, Question question) => question.Kind == QuestionKind.Approval

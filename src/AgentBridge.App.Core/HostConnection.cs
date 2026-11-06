@@ -97,6 +97,10 @@ public sealed class HostConnection : IAsyncDisposable
 
     // Raised on the UI thread: the link, hello, status or usage changed.
     public event Action? Changed;
+    // Raised on the UI thread: signin.code or signin.done (#800, AuthState), by name, with its data
+    // as sent. They come only to the channels in a flow, and are not kept here: a code is the
+    // sheet's for as long as it is open, and no one else's.
+    public event Action<string, JsonElement>? AgentSignIn;
 
     public bool Can(string capability) => Capabilities.Contains(capability);
 
@@ -189,17 +193,39 @@ public sealed class HostConnection : IAsyncDisposable
         });
     }
 
-    async Task RunAsync(CancellationToken ct)
+    // The attempt under way (connecting, or connected), which Reconnect cancels; null between
+    // attempts.
+    CancellationTokenSource? attempt;
+
+    // Ends the attempt under way, connecting or connected, and lets the loop start another, as when
+    // the connection fails: for a link that is not Connected while its host answers on its pipe
+    // (#800: an app sat ~20 h believing its live host was not running). The one loop goes on, so
+    // attempts never overlap, and calling it again, or between attempts, does no more than once.
+    public void Reconnect()
+    {
+        if (Volatile.Read(ref attempt) is { } now)
+        {
+            try { now.Cancel(); }
+            // Ended and disposed meanwhile: the next attempt starts anyway.
+            catch (ObjectDisposedException) { }
+        }
+        RetryNow();
+    }
+
+    async Task RunAsync(CancellationToken stopping)
     {
         // What the host last refused this device with, while every attempt since has been refused
         // the same way: logged once, not at every attempt.
         string? refusal = null;
-        while (!ct.IsCancellationRequested)
+        while (!stopping.IsCancellationRequested)
         {
             IClientChannel? ch = null;
             HelloResult? said = null;
             string? refusedNow = null;
             Volatile.Write(ref poked, 0);
+            var mine = CancellationTokenSource.CreateLinkedTokenSource(stopping);
+            Volatile.Write(ref attempt, mine);
+            var ct = mine.Token;
             try
             {
                 ch = await connect(ct);
@@ -289,7 +315,13 @@ public sealed class HostConnection : IAsyncDisposable
                 }
                 log($"connection to the host ended: {ch.CloseReason?.Message}");
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (OperationCanceledException) when (stopping.IsCancellationRequested) { break; }
+            // Reconnect: whatever the cancellation surfaced as.
+            catch (Exception e) when (mine.IsCancellationRequested && !stopping.IsCancellationRequested && e is not OutOfMemoryException)
+            {
+                log("host connection: the attempt under way was ended to reconnect");
+                ui.Post(() => SetState(LinkState.Connecting, "reconnecting"));
+            }
             catch (LocalRefusedException e) { ui.Post(() => SetState(LinkState.Refused, e.Message)); }
             catch (HostNotRunningException e) { ui.Post(() => SetState(LinkState.NotRunning, e.Message)); }
             catch (HostErrorException e) when (Refusal(said))
@@ -309,6 +341,8 @@ public sealed class HostConnection : IAsyncDisposable
                 Volatile.Write(ref helloChanged, null);
                 Volatile.Write(ref current, null);
                 if (ch is not null) { await ch.DisposeAsync(); }
+                Interlocked.CompareExchange(ref attempt, null, mine);
+                mine.Dispose();
                 if (Volatile.Read(ref connected).Task.IsCompleted) { Volatile.Write(ref connected, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)); }
             }
             refusal = refusedNow;
@@ -316,7 +350,7 @@ public sealed class HostConnection : IAsyncDisposable
             {
                 if (State == LinkState.Connected) { SetState(LinkState.Connecting, "the host went away; reconnecting"); }
             });
-            try { await WaitAsync(refusedNow is not null, ct); }
+            try { await WaitAsync(refusedNow is not null, stopping); }
             catch (OperationCanceledException) { break; }
         }
     }
@@ -546,7 +580,7 @@ public sealed class HostConnection : IAsyncDisposable
     {
         Session s;
         bool exact;
-        try { s = Received.Read<Session>(data, out exact); }
+        try { s = ReceivedLimits.Fit(Received.Read<Session>(data, out exact)); }
         catch (JsonException)
         {
             // A session the app could not read may be the busy one: the list is not
@@ -554,6 +588,8 @@ public sealed class HostConnection : IAsyncDisposable
             RefuseOn(ch);
             throw;
         }
+        // Its attention (#800), which the protocol's record doesn't carry yet, kept beside it.
+        AuthState.Attach(s, data);
         PostSessions(ch, () =>
         {
             Sessions.Upsert(s, exact, ch, seq);
@@ -653,6 +689,13 @@ public sealed class HostConnection : IAsyncDisposable
                 {
                     var d = Received.Read<DiscoveryChanged>(ev.Data);
                     PostSessions(ch, () => Sessions.SetHeld(d.DiscoveryHeld, ch));
+                    break;
+                }
+            case AuthState.CodeEvent or AuthState.DoneEvent:
+                {
+                    var name = ev.Name;
+                    var data = ev.Data.Clone();
+                    PostSessions(ch, () => AgentSignIn?.Invoke(name, data));
                     break;
                 }
             case UsageProtocol.Update:

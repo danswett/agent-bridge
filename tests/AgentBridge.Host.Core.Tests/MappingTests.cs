@@ -13,6 +13,82 @@ public class QuestionMappingTests
     }
 
     [Fact]
+    public void A_field_is_shown_as_the_input_Copilot_draws_for_it_not_as_its_keywords_suggest()
+    {
+        // cli-main.js `tle`: a number with an enum is a number box, and a string with only anyOf
+        // a text box; a client offering them as lists would offer what the host then refuses.
+        var q = Ask(""""
+        { "message": "m", "requestedSchema": { "properties": {
+          "rate": { "type": "integer", "enum": [1, 2, 3], "default": 2 },
+          "mode": { "type": "string", "anyOf": [ { "const": "x", "title": "X" } ] } } } }
+        """");
+
+        Assert.Equal([FieldType.Number, FieldType.Text], q.Fields.Select(f => f.Type));
+        Assert.All(q.Fields, f => Assert.Null(f.Options));
+        // The number box takes any number, and the host checks no list of them (review of #844).
+        Assert.True(q.AnswerAtMachine);
+    }
+
+    [Theory]
+    // A list Copilot opens on its Other box (a null default, or one naming no option), and lists
+    // the host cannot drive, are flagged to the person rather than offered and then refused (#700).
+    [InlineData("""{ "type": "string", "enum": ["a", "b"], "default": null }""")]
+    [InlineData("""{ "type": "string", "enum": ["a", "b"], "default": "z" }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": [] } }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"] }, "default": "a" }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"] }, "default": ["z"] }""")]
+    public void A_list_the_host_would_refuse_is_shown_to_be_answered_at_the_machine(string field)
+    {
+        var q = Ask($$"""{ "message": "m", "requestedSchema": { "properties": { "pick": {{field}} } } }""");
+
+        Assert.True(q.AnswerAtMachine);
+    }
+
+    [Theory]
+    // A Yes / No field whose default is not Yes or No: a text default opens it on its Other row
+    // (#768), so the person is told up front.
+    [InlineData("""{ "type": "boolean", "default": "yes" }""", true)]
+    [InlineData("""{ "type": "boolean", "default": "" }""", true)]
+    [InlineData("""{ "type": "boolean", "default": 1 }""", true)]
+    [InlineData("""{ "type": "boolean", "default": true }""", false)]
+    [InlineData("""{ "type": "boolean", "default": false }""", false)]
+    [InlineData("""{ "type": "boolean", "default": null }""", false)]
+    [InlineData("""{ "type": "boolean" }""", false)]
+    public void A_yes_or_no_field_is_offered_only_when_its_default_is_yes_no_or_none(string field, bool atMachine)
+    {
+        var q = Ask($$"""{ "message": "m", "requestedSchema": { "properties": { "ok": {{field}} } } }""");
+
+        Assert.Equal(atMachine ? true : null, q.AnswerAtMachine);
+    }
+
+    [Theory]
+    // A checkbox list whose `items` yield no options: nothing to offer, and nothing the keys
+    // could walk (Copilot review of 318c7334).
+    [InlineData("""{ "type": "array" }""")]
+    [InlineData("""{ "type": "array", "items": true }""")]
+    [InlineData("""{ "type": "array", "items": "x" }""")]
+    [InlineData("""{ "type": "array", "items": [] }""")]
+    [InlineData("""{ "type": "array", "items": {} }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": [] } }""")]
+    public void A_checkbox_list_whose_items_yield_no_options_is_shown_to_be_answered_at_the_machine(string field)
+    {
+        var q = Ask($$"""{ "message": "m", "requestedSchema": { "properties": { "many": {{field}} } } }""");
+
+        Assert.True(q.AnswerAtMachine);
+    }
+
+    [Theory]
+    [InlineData("""{ "type": "string", "enum": ["a", "b"] }""")]
+    [InlineData("""{ "type": "string", "enum": ["a", "b"], "default": "b" }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"] }, "default": null }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"] }, "default": ["b"] }""")]
+    public void A_list_with_no_default_or_one_naming_its_options_is_offered(string field)
+    {
+        var q = Ask($$"""{ "message": "m", "requestedSchema": { "properties": { "pick": {{field}} } } }""");
+
+        Assert.Null(q.AnswerAtMachine);
+    }
+    [Fact]
     public void Every_schema_field_type_maps_onto_the_contract_field_in_order()
     {
         var q = Ask("""
@@ -24,7 +100,6 @@ public class QuestionMappingTests
               "named": { "type": "string", "enum": ["s6", "s7"], "enumNames": ["S6: keys", "S7: relay"] },
               "titled": { "type": "string", "title": "Next step", "description": "Pick one", "default": "a",
                           "oneOf": [ { "const": "a", "title": "Do A (Recommended)" }, { "const": "b", "title": "Do B" } ] },
-              "untyped": { "oneOf": [ { "const": "u", "title": "U" } ] },
               "ok": { "type": "boolean", "default": true },
               "many": { "type": "array", "items": { "type": "string", "enum": ["p", "q"] } },
               "manyTitled": { "type": "array", "items": { "anyOf": [ { "const": "m1", "title": "First" }, { "const": "m2", "title": "Second" } ] } },
@@ -39,22 +114,22 @@ public class QuestionMappingTests
 
         Assert.Equal(QuestionKind.Form, q.Kind);
         Assert.Equal("Tell me", q.Message);
-        Assert.Equal(["plain", "named", "titled", "untyped", "ok", "many", "manyTitled", "count", "ratio", "notes"], q.Fields.Select(f => f.Name));
+        Assert.Equal(["plain", "named", "titled", "ok", "many", "manyTitled", "count", "ratio", "notes"], q.Fields.Select(f => f.Name));
         Assert.Equal(
-            [FieldType.Choice, FieldType.Choice, FieldType.Choice, FieldType.Choice, FieldType.Boolean, FieldType.Multi, FieldType.Multi, FieldType.Number, FieldType.Number, FieldType.Text],
+            [FieldType.Choice, FieldType.Choice, FieldType.Choice, FieldType.Boolean, FieldType.Multi, FieldType.Multi, FieldType.Number, FieldType.Number, FieldType.Text],
             q.Fields.Select(f => f.Type));
+        Assert.Null(q.AnswerAtMachine);
         Assert.Equal([new Option("x"), new Option("y")], q.Fields[0].Options!);
         Assert.Equal([new Option("s6", "S6: keys"), new Option("s7", "S7: relay")], q.Fields[1].Options!);
         var titled = q.Fields[2];
         Assert.Equal(("Next step", "Pick one", "a", true), (titled.Title, titled.Description, titled.Default!.Value.GetString(), titled.Required));
         Assert.Equal([new Option("a", "Do A (Recommended)"), new Option("b", "Do B")], titled.Options!);
-        Assert.Equal([new Option("u", "U")], q.Fields[3].Options!);
-        Assert.True(q.Fields[4].Default!.Value.GetBoolean());
-        Assert.Equal([new Option("p"), new Option("q")], q.Fields[5].Options!);
-        Assert.Equal([new Option("m1", "First"), new Option("m2", "Second")], q.Fields[6].Options!);
-        Assert.Equal(3, q.Fields[7].Default!.Value.GetInt32());
-        Assert.Null(q.Fields[9].Options);
-        Assert.True(q.Fields[9].Required);
+        Assert.True(q.Fields[3].Default!.Value.GetBoolean());
+        Assert.Equal([new Option("p"), new Option("q")], q.Fields[4].Options!);
+        Assert.Equal([new Option("m1", "First"), new Option("m2", "Second")], q.Fields[5].Options!);
+        Assert.Equal(3, q.Fields[6].Default!.Value.GetInt32());
+        Assert.Null(q.Fields[8].Options);
+        Assert.True(q.Fields[8].Required);
         Assert.Null(q.Fields[0].Required);
     }
 
@@ -104,6 +179,19 @@ public class QuestionMappingTests
         Assert.Null(whole.Truncated);
         Assert.True(approval.Truncated);
         Assert.True(QuestionMapper.FromClaudeAskUserQuestion("c", claude.RootElement, Fixture.T0).Truncated);
+    }
+
+    // A Codex command past the message's limit is cut, its closing fence with it: it is truncated, which
+    // every client refuses saying part of it is missing, not held at the machine for its shape as well,
+    // which clients read first and said only that it is answered there.
+    [Fact]
+    public void A_codex_command_too_long_to_send_whole_is_truncated_and_not_held_at_the_machine_for_its_shape()
+    {
+        var q = QuestionMapper.CodexApproval("c1", "Bash", "echo " + new string('x', Limits.QuestionMessage), false, "", Fixture.T0, atMachine: false);
+
+        Assert.True(q.Truncated);
+        Assert.Null(q.AnswerAtMachine);
+        Assert.False(ApprovalShape.IsFencedCommand(q.Message));
     }
 
     [Theory]

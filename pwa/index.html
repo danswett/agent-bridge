@@ -8,14 +8,14 @@
   <meta name="theme-color" content="#202326" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="Agent Bridge">
+  <meta name="apple-mobile-web-app-title" content="Slipgates">
   <meta name="referrer" content="no-referrer">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" sizes="180x180">
   <link rel="stylesheet" href="design/tokens.css">
   <link rel="stylesheet" href="app.css">
-  <title>Agent Bridge</title>
+  <title>Slipgates</title>
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
@@ -25,9 +25,9 @@
        #/settings), so the browser's own back goes between them. -->
   <div class="shell">
     <header class="appbar" id="appbar">
-      <a class="brand" href="#/sessions" aria-label="Agent Bridge: sessions">
-        <svg class="mark" viewBox="0 0 48 48" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-mark"/></svg>
-        <span class="brand-name" data-brand>Agent Bridge</span>
+      <a class="brand" href="#/sessions" aria-label="Slipgates: sessions">
+        <svg class="mark" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-mark-20"/></svg>
+        <span class="brand-name" data-brand>Slipgates</span>
       </a>
       <div class="search" role="search" hidden>
         <svg class="ab-icon ab-icon-16 search-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-search"/></svg>
@@ -43,7 +43,7 @@
       </div>
     </header>
 
-    <nav id="nav" class="nav" aria-label="Agent Bridge" hidden>
+    <nav id="nav" class="nav" aria-label="Slipgates" hidden>
       <a class="nav-item" href="#/sessions" data-nav="sessions" title="Sessions">
         <svg class="ab-icon nav-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-sessions"/></svg>
         <span class="nav-label">Sessions</span>
@@ -70,6 +70,9 @@
       <!-- What a status banner says as it appears: a live region already on the page, since one
            unhidden with its words already in it is not reliably read out. -->
       <p id="banner-said" class="sr-only" role="status" aria-live="polite"></p>
+      <!-- Sign-in (#800): said politely, outside the list pane, which a phone hides while a session is open.
+           Each announcement is a line added to it, and only additions are read. -->
+      <div id="sign-in-said" class="sr-only" role="status" aria-live="polite" aria-atomic="false" aria-relevant="additions"></div>
       <div id="update-banner" class="banner" hidden>
         <span>A new version of the app is ready.</span>
         <button type="button" id="reload" class="button">Reload</button>
@@ -89,7 +92,7 @@
 
       <section id="signin" class="panel page" aria-labelledby="signin-h" hidden>
         <h2 id="signin-h" class="page-title">Sign in</h2>
-        <p><span data-brand>Agent Bridge</span> shows the agent sessions on your machines. Sign in with the GitHub account your machines use.</p>
+        <p><span data-brand>Slipgates</span> shows the agent sessions on your machines. Sign in with the GitHub account your machines use.</p>
         <p id="signin-error" class="note warn" role="alert" hidden></p>
         <div class="row">
           <button type="button" id="signin-button" class="button">Sign in with GitHub</button>
@@ -121,6 +124,9 @@
             </div>
             <div id="machine-tabs" class="machine-tabs" role="tablist" aria-label="Machines" hidden></div>
             <p id="host-state" class="note" role="status" aria-live="polite"></p>
+            <!-- An agent that needs sign-in (#800): one banner per machine, agent and account. Its
+                 live region is on the page before anything is said in it. -->
+                  <div id="sign-in-banners" class="sign-in-banners" hidden></div>
             <!-- Needs you · N (#165, ui.md §6.1): every pending question, oldest first, at the top of
                  the list pane. It refers to sessions and never moves their rows. -->
             <div id="needs-you" class="needs-you" role="region" aria-labelledby="needs-you-h" hidden>
@@ -142,7 +148,7 @@
         <section id="machines" class="machines-page" aria-labelledby="machines-h">
           <h2 id="machines-h" class="page-title">Machines</h2>
           <ul id="machine-list" class="machines"></ul>
-          <p id="machines-empty" class="note" hidden>No machines online. Start <span data-brand>Agent Bridge</span> on a machine signed in to the same GitHub account.</p>
+          <p id="machines-empty" class="note" hidden>No machines online. Start <span data-brand>Slipgates</span> on a machine signed in to the same GitHub account.</p>
         </section>
       </div>
 

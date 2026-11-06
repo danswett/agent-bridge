@@ -129,7 +129,34 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal(1, main.Waiting);
     }
 
-    // As agent-executor's host answers a device it has not approved: hello, offering nothing, and
+    // #293: each machine's Discovery held banner is its own, and dismissing one hides only it.
+    [Fact]
+    public async Task Dismissing_one_machines_discovery_held_banner_leaves_every_other_machines_banner_shown()
+    {
+        await BothMachinesAsync();
+        string[] Held() => TestUi.Read<string[]>(() => [.. main.HeldNotices.Select(n => n.Text)]);
+        await localHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("the claude processes could not be listed", [AgentKind.Claude])));
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot])));
+        await Wait.UntilAsync(() => Held().Length == 2, "both machines' banners");
+        Assert.StartsWith("Test PC: Discovery held: the claude processes", Held()[0]);
+        Assert.StartsWith("Build server: Discovery held: an unrecognised copilot process", Held()[1]);
+        Assert.Equal("Dismiss Discovery held on Build server", TestUi.Read(() => main.HeldNotices[1].DismissName));
+
+        TestUi.Read(() => { main.Dismiss(main.HeldNotices.Single(n => n.Machine == "remote-id")); return true; });
+        Assert.StartsWith("Test PC: Discovery held:", Assert.Single(Held()));
+
+        // The other machine's hold changing brings neither back but its own.
+        await localHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("a claude registration changed while it was read", [AgentKind.Claude])));
+        await Wait.UntilAsync(() => Held().SingleOrDefault()?.Contains("a claude registration", StringComparison.Ordinal) == true, "this machine's new hold");
+        Assert.Single(Held());
+
+        // Dismissing this machine's hides it too, and leaves the other's dismissal as it was.
+        TestUi.Read(() => { main.Dismiss(main.HeldNotices.Single()); return true; });
+        Assert.Empty(Held());
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("an unrecognised copilot process (pid 5120)", [AgentKind.Copilot])));
+        await Wait.UntilAsync(() => Held().Length == 1, "the other machine's banner back for its new hold");
+        Assert.StartsWith("Build server: Discovery held: an unrecognised copilot process (pid 5120)", Held()[0]);
+    }
     // a refusal of the sessions the app asks for next. Asked again every 5 s for hours (#602).
     async Task RefusedAsync()
     {
@@ -251,9 +278,9 @@ public sealed class FleetTests : IAsyncLifetime
         await BothMachinesAsync();
         ui.Post(() => main.SelectedMachine = main.Machines.Single(m => m.Key == "remote-id"));
 
-        // The relay connection itself went: nothing says the machine has.
+        // The relay connection itself went: nothing says the machine has. The fleet reads the link
+        // on its Changed, posted to this test's UI turn and run there, so it is done when Set returns.
         link.Set(FleetState.Connecting);
-        await Task.Delay(200);
         Assert.NotNull(Card("there"));
 
         link.Set(FleetState.Connected, ("host-id", "Test PC"));
@@ -468,7 +495,9 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.False(TestUi.Read(() => question.CanAnswer));
         ui.Post(() => question.Choose(question.Fields[0].Options.Single(o => o.Value == "sqlite")));
         Assert.Equal(0, TestUi.Read(() => main.Waiting));
-        await Task.Delay(200);
+        // An answer sent would have been written as it was chosen: once the other machine's host has
+        // everything sent before this, none was.
+        await Remote().Host.CallAsync(FakeHost.Barrier);
         Assert.Empty(remoteHost.Sent(Ops.SessionAnswer));
     }
 
@@ -1177,6 +1206,42 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.False(Rows().Single(r => r.Name == "Test PC").ViewOnly);
     }
 
+    // #788: the row says so from the host's hold itself, whatever the banner shows, as ui.md §6.6
+    // and the PWA's machine row do.
+    [Fact]
+    public async Task A_held_machines_row_says_discovery_held_with_the_hosts_reason_for_its_tooltip_until_the_hold_clears()
+    {
+        await BothMachinesAsync();
+        const string reason = "an unrecognised copilot process (pid 4120)";
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld(reason, [AgentKind.Copilot])));
+        await Wait.UntilAsync(() => Rows().Single(r => r.Name == "Build server").Held, "the held machine's row");
+
+        var row = Rows().Single(r => r.Name == "Build server");
+        Assert.Equal("1 session · Discovery held", row.Facts);
+        Assert.Equal($"Discovery held: {reason}", row.FactsWhy);
+        Assert.DoesNotContain("pid", row.Facts);
+        var here = Rows().Single(r => r.Name == "Test PC");
+        Assert.Equal(("1 session", null), (here.Facts, here.FactsWhy));
+
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged());
+        await Wait.UntilAsync(() => !Rows().Single(r => r.Name == "Build server").Held, "the hold to clear");
+        Assert.Equal(("1 session", null), (row.Facts, row.FactsWhy));
+    }
+
+    [Fact]
+    public async Task A_held_read_only_machines_row_says_discovery_held_in_view_onlys_place_and_both_reasons_in_its_tooltip()
+    {
+        const string why = "read-only: answer at the machine";
+        remoteHost.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "windows", "0.1.0", ReadOnly: why, Instance: "run-7"), [Capabilities.SessionsRead]));
+        remoteHost.Held = new DiscoveryHeld("the claude processes could not be listed", [AgentKind.Claude]);
+        await BothMachinesAsync();
+        await Wait.UntilAsync(() => Rows().Any(r => r.Name == "Build server" && r.ViewOnly && r.Held), "the held read-only machine's row");
+
+        var row = Rows().Single(r => r.Name == "Build server");
+        Assert.Equal("1 session · Discovery held", row.Facts);
+        Assert.Equal($"View only: {why} · Discovery held: the claude processes could not be listed", row.FactsWhy);
+    }
+
     [Fact]
     public async Task A_machine_chosen_from_a_menu_after_it_was_forgotten_changes_nothing_and_the_list_keeps_its_rows()
     {
@@ -1364,8 +1429,8 @@ public sealed class FleetTests : IAsyncLifetime
         link.Raise();
         await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
 
+        // The fleet reads the link on its Changed, run on this test's UI turn: done when Set returns.
         link.Set(FleetState.Connecting);
-        await Task.Delay(200);
         Assert.Single(Offline());
 
         // A drop between reading the state and reading the list is the same.
@@ -1373,7 +1438,6 @@ public sealed class FleetTests : IAsyncLifetime
         await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
         link.BeforeOfflineRead = () => link.Quietly(FleetState.Connecting, ("host-id", "Test PC"), ("remote-id", "Build server"));
         link.Raise();
-        await Task.Delay(200);
         Assert.Single(Offline());
 
         // An older relay keeps no roster: nothing listed, and nothing to forget.
@@ -1573,6 +1637,38 @@ public sealed class RelayFleetLinkTests
         await Wait.UntilAsync(() => host.Relay.Presence.Any(p => p.Id == link.DeviceId), "the app in the host's presence", Patience);
         Assert.Equal("app", host.Relay.Presence.Single(p => p.Id == link.DeviceId).Kind);
         Assert.Equal(1, Volatile.Read(ref asked));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_renamed_app_comes_back_under_its_new_name_as_the_same_device_not_a_second_one()
+    {
+        // An install from before the rebrand (#537) connected as "… · Agent Bridge app"; after the
+        // update it connects with the same key under the new name. The name is display only: the
+        // device is its key, so other machines see one device, renamed, not a new one to approve.
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(7, "octo");
+        await using var host = await relay.ConnectAsync(token, "Build server", "host");
+        var key = P256KeyPair.Generate();
+        RelayAccount Account() => new(relay.Url.ToString(), token, "7", "octo");
+        string id;
+        await using (var before = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(Account()), key, "Test PC · Agent Bridge app"))
+        {
+            before.Start();
+            await Wait.UntilAsync(() => host.Relay.Presence.Any(p => p.Id == before.DeviceId), "the app before the update", Patience);
+            id = before.DeviceId!;
+            Assert.Equal("Test PC · Agent Bridge app", host.Relay.Presence.Single(p => p.Id == id).Name);
+        }
+        await Wait.UntilAsync(() => host.Relay.Presence.All(p => p.Id != id), "the app gone for its update", Patience);
+
+        await using var after = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(Account()), key, Product.DeviceName("Test PC"));
+        after.Start();
+        await Wait.UntilAsync(() => host.Relay.Presence.Any(p => p.Id == after.DeviceId), "the app after the update", Patience);
+
+        Assert.Equal(id, after.DeviceId);
+        var app = Assert.Single(host.Relay.Presence, p => p.Kind == "app");
+        Assert.Equal(id, app.Id);
+        Assert.Equal($"Test PC · {Product.Name}", app.Name);
     }
 
     [Fact]

@@ -160,6 +160,9 @@ public sealed class WorkerInjector : IConsoleInjector
                 var parts = final.Split(' ');
                 var stage = parts.Length > 1 ? parts[1] : "?";
                 var code = parts.Length > 2 && int.TryParse(parts[2], CultureInfo.InvariantCulture, out var c) ? c : 0;
+                // A later send held to the screen, refused after an earlier one went: what went
+                // stays, and nothing after it does.
+                if (wrote && (stage, code) == ("screen", 0)) { return Interrupted(ScreenChangedPartway); }
                 return wrote ? Interrupted($"the injector failed while typing ({stage} error {code})") : Nothing(Explain(stage, code));
             }
             var exit = process.ExitCode;
@@ -176,6 +179,9 @@ public sealed class WorkerInjector : IConsoleInjector
 
     // What a send held to the screen (KeySend.Expect) comes to when the screen no longer reads so.
     public const string ScreenChanged = "the prompt on the session's screen changed before anything was typed; look again and answer, or answer at the machine";
+
+    // The same, for a send after the first: the keys before it went, and nothing after.
+    public const string ScreenChangedPartway = "the session's screen changed after part of it was typed, so nothing more was";
 
     // What a person can do about a failure that happened before any key was written.
     internal static string Explain(string stage, int code) => (stage, code) switch
