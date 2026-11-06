@@ -380,7 +380,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal(2, starter.Specs.Count);
 
         // Copilot on #837: extra arguments from the config that carry a prompt (-i) would make the
-        // restore submit one. Not on the allowlist, so refused before anything starts, and it stays
+        // restore submit one. Refused by the prompt-flag check before anything starts, and it stays
         // offered for Launch.
         const string Prompted = "76767676-7676-4676-8676-767676767676";
         Resumable(Prompted, app, "Extra prompt");
@@ -394,36 +394,52 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal(2, starter.Specs.Count);
     }
 
-    // Copilot on #837, and the lead's allowlist: a restore passes on no extra argument not known to
-    // carry no prompt and widen no permission (none yet). --allow-all would give a session started by
-    // hand, restored asking permission, Allow all it never had; Claude takes a bare argument as its
-    // prompt. Both are refused, and nothing starts.
+    // Engineering's ruling on #837 (r4487705409): a restore passes on only options on the agent's
+    // allowlist, each value in its expected form. --allow-all would give a session started by hand,
+    // restored asking permission, Allow all it never had; Claude takes a bare argument as its prompt;
+    // -- puts what follows past the options; a value that is not a path could be read as a prompt. Each
+    // is refused, nothing starts, and the reason (logged) names the option, never a value. --add-dir
+    // with a full path (Copilot's own --help) is passed on.
     [Fact]
-    public async Task A_restore_refuses_extra_arguments_not_known_to_be_safe_whether_they_widen_permissions_or_carry_a_prompt()
+    public async Task A_restore_passes_on_only_allowlisted_options_with_values_in_their_expected_form_and_says_which_by_name()
     {
-        const string Hand = "75757575-7575-4575-8575-757575757575";
+        const string Widened = "75757575-7575-4575-8575-757575757575";
         const string Talk = "74747474-7474-4474-8474-747474747474";
+        const string Unknown = "73737373-7373-4373-8373-737373737373";
+        const string Separated = "72727272-7272-4272-8272-727272727272";
+        const string Worded = "71717171-7171-4171-8171-717171717171";
+        const string Good = "70707070-7070-4070-8070-707070707070";
+        const string Prompt = "carry on where you left off";
         locator.Installed["claude"] = @"C:\fake\claude.exe";
-        Resumable(Hand, app, "By hand");
+        foreach (var id in new[] { Widened, Unknown, Separated, Worded, Good }) { Resumable(id, app, "By hand"); }
         ClaudeResumable(Talk, app, "Plan the release");
-        var launcher = Launcher(Config(c => c with
-        {
-            Permissions = LaunchProtocol.Ask,
-            ResumeCount = 0,
-            Agents = new Dictionary<string, AgentConfig>
+        var folder = Path.Combine(Path.GetTempPath(), "notes");
+        Task<LaunchResult> Restore(string id, AgentKind agent, string launcher, params string[] extras) =>
+            Launcher(Config(c => c with
             {
-                ["copilot"] = new() { ExtraArgs = ["--allow-all"] },
-                ["claude"] = new() { ExtraArgs = ["carry on where you left off"] },
-            },
-        }));
+                Permissions = LaunchProtocol.Ask,
+                ResumeCount = 0,
+                Agents = new Dictionary<string, AgentConfig> { [launcher] = new() { ExtraArgs = extras } },
+            })).ResumeAsync(new ResumeAsk(id, agent, null, RestoreRecorder.RestorePrincipal));
 
-        var widened = await launcher.ResumeAsync(new ResumeAsk(Hand, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
-        var positional = await launcher.ResumeAsync(new ResumeAsk(Talk, AgentKind.Claude, null, RestoreRecorder.RestorePrincipal));
+        var widened = await Restore(Widened, AgentKind.Copilot, "copilot", "--allow-all");
+        var positional = await Restore(Talk, AgentKind.Claude, "claude", Prompt);
+        var unknown = await Restore(Unknown, AgentKind.Copilot, "copilot", "--yolo");
+        var separated = await Restore(Separated, AgentKind.Copilot, "copilot", "--", Prompt);
+        var worded = await Restore(Worded, AgentKind.Copilot, "copilot", "--add-dir", Prompt);
 
-        Assert.Equal((LaunchOutcome.Refused, LaunchOutcome.Refused), (widened.Outcome, positional.Outcome));
-        Assert.Contains("extraArgs", widened.Reason, StringComparison.Ordinal);
-        Assert.Contains("extraArgs", positional.Reason, StringComparison.Ordinal);
+        Assert.All(new[] { widened, positional, unknown, separated, worded }, r => Assert.Equal(LaunchOutcome.Refused, r.Outcome));
+        Assert.Contains("the option --allow-all", widened.Reason, StringComparison.Ordinal);
+        Assert.Contains("a positional argument", positional.Reason, StringComparison.Ordinal);
+        Assert.Contains("the option --yolo", unknown.Reason, StringComparison.Ordinal);
+        Assert.Contains("the -- separator", separated.Reason, StringComparison.Ordinal);
+        Assert.Contains("a value for --add-dir", worded.Reason, StringComparison.Ordinal);
+        Assert.All(new[] { positional, separated, worded }, r => Assert.DoesNotContain(Prompt, r.Reason, StringComparison.Ordinal));
         Assert.Empty(starter.Specs);
+
+        var good = await Restore(Good, AgentKind.Copilot, "copilot", "--add-dir", folder);
+        Assert.Equal((LaunchOutcome.Started, Good), (good.Outcome, good.Session));
+        Assert.Equal(["--session-id", Good, "--banner", "--add-dir", folder], Assert.Single(starter.Specs).Arguments);
     }
 
     [Fact]
