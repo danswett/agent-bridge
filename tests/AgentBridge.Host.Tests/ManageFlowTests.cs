@@ -108,8 +108,11 @@ public sealed class ManageFlowTests : IAsyncLifetime
         return made;
     }
 
-    void Restarted()
+    // The host after a restart, started only once the old one has left (HostHandover): until then the old
+    // host may still be writing manage-pending.json, as a handover marks it (CI once read it unmarked).
+    async Task RestartedAsHostAsync(int restartsSoFar)
     {
+        await RestartedAsync(restartsSoFar);
         manage = Make();
         service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { ReadOnly = () => readOnly, Manage = manage };
         host.Hub.Handler = service.HandleAsync;
@@ -495,7 +498,7 @@ public sealed class ManageFlowTests : IAsyncLifetime
         time.Advance(TimeSpan.FromMinutes(5));
         stopWins = false;
         // Started again by hand, well inside the window a restart is reported done in.
-        Restarted();
+        await RestartedAsHostAsync(1);
 
         var again = await SendAsync(ch, ManageProtocol.Restart, command);
 
@@ -507,10 +510,10 @@ public sealed class ManageFlowTests : IAsyncLifetime
     {
         var (phone, ch) = await OpenAsync();
         Assert.Equal(ManageOutcome.Accepted, (await SendAsync(ch, ManageProtocol.Restart, Sign(phone.Key, ManageProtocol.Restart))).Outcome);
-        Restarted();
+        await RestartedAsHostAsync(1);
         time.Advance(TimeSpan.FromMinutes(5));
         Assert.Equal(ManageOutcome.Accepted, (await SendAsync(ch, ManageProtocol.Restart, Sign(phone.Key, ManageProtocol.Restart))).Outcome);
-        Restarted();
+        await RestartedAsHostAsync(2);
         time.Advance(TimeSpan.FromMinutes(5));
 
         var third = await SendAsync(ch, ManageProtocol.Restart, Sign(phone.Key, ManageProtocol.Restart));
@@ -528,7 +531,7 @@ public sealed class ManageFlowTests : IAsyncLifetime
         var command = Sign(phone.Key, ManageProtocol.Restart);
         var first = await SendAsync(ch, ManageProtocol.Restart, command);
         time.Advance(TimeSpan.FromSeconds(40));
-        Restarted();
+        await RestartedAsHostAsync(1);
 
         var again = await SendAsync(ch, ManageProtocol.Restart, command);
 
