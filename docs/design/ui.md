@@ -1043,7 +1043,15 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       and stale keep them read-only, with no Send answer. Failed keeps them read-only, with
       Try again, which resends the same request, so the same answer, never a new one.
       Focus is never dropped as these change (A4). Send answer keeps focus through its ring
-      and check. If focus is on Send answer when it changes: when Try again takes its place,
+      and check. On the normal path the card's status line stays empty; it speaks only for an
+      exception (Still sending…, a stall, Waiting for *machine*, or an outcome other than
+      Delivered), never says Up next, since a question holds the session, and never says
+      "answered" before the host confirms. Confirmed, Send answer shows the check for about 1 s
+      and the card resolves to "You answered · *value*" (§6.5), with no badge; a Needs you
+      entry, where a client still draws one, says the same. Not confirmed says, as today, "Sent,
+      but not confirmed. Check at the machine.": the answer is final and is never resent, and
+      nothing offers a second one. "Check at the machine" is the known no-RDP gap #467, which
+      replaces it with a remote check. Decided, not yet built (#600; builds in #616, #625). Today both clients show Sending…, Sending again… and "Delivered. The session has your reply." If focus is on Send answer when it changes: when Try again takes its place,
       focus moves to Try again, and when it goes with nothing in its place (not confirmed,
       stale), focus moves to the card's heading, whose description is the outcome line. If
       focus is anywhere else, it stays there, so an outcome arriving later never takes it.
@@ -1108,14 +1116,6 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     colour: "Answer at the machine · *machine*". A prompt that reached the device cut short
     (`truncated`) can't be answered from here either, as before. Leaving the session is never
     an answer: the row keeps its glyph until the host clears the question.
-  - **While an answer goes** (#600): the control that sent it shows its ring (a tap
-    question's tapped option, or the answer's button; §6.5) and the card's
-    status line stays empty, as a reply's receipt does (§6.5); the line speaks only for an
-    exception (Still sending…, a stall, Waiting for *machine*, or an outcome other than
-    Delivered). Never Up next, since a question holds the session, and never "answered".
-    Confirmed, that control shows the check for about 1 s and the card resolves to "You
-    answered · *value*" ("You answered", §6.5), with no badge. An entry in the Needs you
-    lane, where a client still draws one, says the same.
   - **Resolved:** the card quietens, with no Needs you fill, and reads "Main agent asked"
     (or "Delegate *name* asked") over the question as it was shown. Below that:
     - with this device's answer record for the question, the record's progress and outcome as
@@ -1272,10 +1272,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Send answer shares Send's edge and receipt** (#773): a question card's Send answer, and an
   approval's Approve once, end at the same right edge as Send, and show the same in-flight and
   outcome states as Send: its ring, its check and the exception-only line, with the same quiet
-  window and announcements (the owner's #600 decision). The states #600 gave a tapped option
-  (its ring on the option, the option kept pressed, "one attempt per prompt") belong to Send
-  answer instead, as §6.4's "While an answer goes" says: the ring is on Send answer, and the
-  chosen value stays selected and read-only. No client draws a ring on an option.
+  window and announcements (the owner's #600 decision, below). As §6.4's "While an answer
+  goes" says, the ring is on Send answer, and the chosen value stays selected and read-only.
+  No client draws a ring on an option.
 - **Phone: one line at rest (#935, the owner, 2026-11-05).** Below 760 the box starts at one
   line, 52 tall, with Attach before the text and Send after it, as the native composers do. It
   grows a line at a time to six lines of text, then scrolls inside.
@@ -1306,12 +1305,12 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   unless something's wrong", #617; the boards are the Proposal #600 set, §10) says where a
   reply or an answer has got only when something needs saying. This section is the spec; the
   proposal page ([proposals/600-reply-progress.md](proposals/600-reply-progress.md)) keeps the
-  reasoning.
+  reasoning. **Decided, not yet built (#600; builds in #616, #625).** Today both clients show Sending…, Sending again… and "Delivered. The session has your reply."
   - **The normal path is quiet.** While a reply or an answer is on its way, Send's progress
-    ring (an answer's: the control that sent it) is the only thing that shows it; nothing appears under
+    ring (an answer's: Send answer's) is the only thing that shows it; nothing appears under
     the box or on the card's status line, whatever stage the host reports. When it is
     delivered, Send cross-fades from the ring to the `check` icon, holds it about 1 s
-    (`sendCheckHold`), and cross-fades back to rest. An answer's control does the same, and
+    (`sendCheckHold`), and cross-fades back to rest. Send answer does the same, and
     the card then resolves to "You answered · *value*" (below). There is no badge and no
     "Delivered" line.
   - **The line is for exceptions only.** A line under the box, and on a question card its
@@ -1325,19 +1324,22 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     something to say, so neither an exception nor the outcome moves the box or the card's
     controls. The room stays until the box is next typed in or the session is left, so the
     check and its return to rest move nothing either. On a question card the line is there,
-    empty, from Send. A refusal whose reason is longer still may grow, as today's does.
+    empty, from Send answer. A refusal whose reason is longer still may grow, as today's does.
   - **Timing.** Nothing is shown or spoken for the first 400 ms after Send. A spoken stage
     is the furthest reached, so a backlog is never played, at most one a second, and an
     outcome is spoken at once, skipping any stage not yet spoken.
   - **The states,** for a reply. An answer has the same rows, but never Up next (a question
     holds the session), ends in "You answered" (below), and has "Answer" for "Reply" in what
-    is spoken:
+    is spoken. An answer that is not confirmed says, as today, "Sent, but not confirmed. Check
+    at the machine.": it is final and never resent, so nothing invites a second answer.
+    "Check at *machine*", for a reply or an answer, is the known no-RDP gap #467, which
+    replaces it with a remote check:
 
     | State | When | Seen | Colour | Spoken (polite, at most one a second; a failure assertive, §9.1 A6) |
     |---|---|---|---|---|
     | Quiet | 0–400 ms after Send | Send's ring | – | nothing; Send is busy |
     | Uploading | attachments, before the request | *line*: today's ("Uploading 2 attachments… 40%") | text2 | as today |
-    | Sending | from 400 ms until the machine has it | Send's ring | – | "Sending reply" |
+    | Sending | from 400 ms until the machine has it | Send's ring | – | nothing; Send's busy state says it once (A6) |
     | Sent | progress `received` | Send's ring | – | "Reply sent" |
     | Passed to the agent | progress `typed` | Send's ring | – | "Reply passed to the agent" |
     | Up next | `typed` with `working: true` (replies only) | Send's ring | – | "Reply up next, after the agent's current step" |
@@ -1347,7 +1349,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     | Passed, stalled | `typed` on an idle session, then nothing for 10 s | *line*: Passed to the agent · not picked up yet | text2 | "Reply passed to the agent, not picked up yet" |
     | Still being delivered | a resend met the first copy in flight | *line*: the stage reached · still being delivered | text2 | "Reply still being delivered" |
     | Waiting for the machine | held on this device while the machine isn't connected | *line*: Waiting for *machine* · it goes when *machine* is back; Send's ring stands still | text2 | "Reply waiting for *machine*" |
-    | Not confirmed | result `unconfirmed` (host: a reply 60 s, an answer 15 s), or the client's 9 min | *line*: Sent, but not confirmed. Check at *machine* before sending it again. | Needs you's text colour | the sentence |
+    | Not confirmed | result `unconfirmed` (host: a reply 60 s, an answer 15 s), or the client's 9 min | *line*: Sent, but not confirmed. Check at *machine* before sending it again. (an answer: Sent, but not confirmed. Check at the machine.) | Needs you's text colour | the sentence |
     | Busy, stale | result `busy` or `stale` | *line*: today's ("Not sent: …") | Needs you's text colour | the words |
     | Refused, failed | result `refused`; the request failed | *line*: today's ("The machine refused this reply: …", "Couldn't send it: …") | Danger | the words |
 
@@ -1365,36 +1367,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     same geometry, never Segoe's CheckMark. Send stays the same size and colour throughout:
     only its glyph cross-fades (§5.3). In forced colours it takes Send's own system colours,
     as the arrow does (the glyph is drawn in the button's current colour; §9.1 A9).
-  - **Tap to answer.** A single-choice question sends when an option is tapped, with no Send
-    answer button, so the tapped option is the control that sent it (creative director,
-    2026-11-04, under the owner's option A). On both clients the same ring as Send's, at
-    Send's size and stroke, shows at the option's trailing edge, and the other options are
-    disabled at the choices' existing disabled opacity (`.choice:disabled` in the PWA; the
-    option buttons' disabled state on Windows, from QuestionViewModel); the tapped option keeps
-    full opacity. Delivered, the ring cross-fades to the same stroked `check` for about
-    1 s (`sendCheckHold`), then the question resolves to "You answered · *value*". An
-    exception shows the same *line* on the card's status line, and the options stay disabled
-    while the request is open. An outcome other than Delivered stops the ring, as it returns
-    Send to rest, and the existing retry rules decide the rest (`answerControls` in the PWA,
-    QuestionViewModel on Windows), since a host types into a prompt once
-    ("One attempt per prompt", [`session.answer`](../protocol/v1-sessions.md#sessionanswer)):
-    - **Not confirmed, stale:** the answer may already have been typed, so the tapped option
-      stays pressed, the others stay disabled, and the line says so ("Sent, but not
-      confirmed. Check at *machine* before sending it again."; stale's "Already answered or
-      gone"). A fresh answer is never offered.
-    - **Busy, refused:** nothing was typed, so the options are enabled again with none
-      pressed, as today (busy after its short pause).
-    - **Failed:** the host answered the request with an error (the client's `failed`); the
-      options stay as they are and today's Try again resends the same request. A lost
-      connection or response is not Failed: it is Waiting for *machine* or Still sending…,
-      and both clients resend the same request on their own, so it never needs Try again.
-
-    Under reduced motion the ring stands
-    still, as Send's does (§5.3). What is spoken is unchanged. A question with a separate
-    submit button (free text, several choices, a form) keeps the ring on that button.
   - **You answered · *value*:** a confirmed answer's words on the resolved card, the same on
     the card and in a Needs you entry, in text2 with no badge. The value is:
-    - a tap question: the label of the option that went;
+    - a choice: the label of the option chosen;
     - free text: its first line, with runs of white space as one space, cut at the last
       word break within 40 characters (or at 40, with no break after the 20th) and ended
       with "…" when longer. It is drawn as plain text, isolated in its own direction;
@@ -2175,12 +2150,13 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   exactly so, beside the block they describe. An approval's card has no Copy. Hidden includes
   what draws blank but runs as part of a word (U+00A0 and the other spaces but U+0020, U+2800;
   #546), which the Needs you lane refuses as it refuses a bidi control.
-- **Receipt words** (§6.5, #600). On screen, only for an exception: Still sending… · Sent ·
+- **Receipt words** (§6.5, #600; Decided, not yet built (#600; builds in #616, #625): today both clients show Sending…, Sending again… and "Delivered. The session has your reply."). On screen, only for an exception: Still sending… · Sent ·
   still waiting on *machine* · Passed to the agent · not picked up yet · still being
   delivered · Waiting for *machine* · it goes when *machine* is back; outcomes other than
-  Delivered keep today's words. On a resolved card: You answered · *value* (the option's
+  Delivered keep today's words, and an answer not confirmed says "Sent, but not confirmed.
+  Check at the machine." and never invites a second answer. On a resolved card: You answered · *value* (the option's
   label, free text's first line cut to about 40 characters, nothing for a form). Spoken
-  only, never shown on the normal path: Sending reply · Reply sent · Reply passed to the
+  only, never shown on the normal path: Reply sent · Reply passed to the
   agent · Reply up next, after the agent's current step · Reply delivered (and "Answer" for
   an answer). Delivered is Send's check, never a line or a badge. Older hosts use the same
   words, less the stages they don't report. Never "typed", "queued", "injected", "in the
@@ -2237,15 +2213,15 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   `CanvasText` hairline. The reply area's compact bar (§6.5, #935) is the same: its copy of the
   draft is drawn only, focus anywhere in the reply area brings the box back in full, it never
   expands over the focused control, and focus never lands on a hidden control.
-- **The reply and answer receipt (#600)** is a polite live region (`role=status` on the PWA;
+- **The reply and answer receipt (#600; Decided, not yet built (#600; builds in #616, #625): today both clients show Sending…, Sending again… and "Delivered. The session has your reply.")** is a polite live region (`role=status` on the PWA;
   `AutomationProperties.LiveSetting` Polite with a LiveRegionChanged event on Windows),
   present and empty from Send. The normal path shows nothing, but its stages are still
-  announced: Sending, Sent, Passed to the agent, Up next and Delivered, prefixed "Reply" or
-  "Answer", nothing in the first 400 ms, at most one a second (only the later of two is
+  announced: Sent, Passed to the agent, Up next and Delivered, prefixed "Reply" or
+  "Answer" (Sending is not: Send's busy state already says it, once, A6), nothing in the first 400 ms, at most one a second (only the later of two is
   spoken), and the outcome always. An exception's line is announced as it appears; a reply
   or answer that failed (Refused, failed) is said assertively, as A6 says. Send's
   check is not announced on its own: "Reply delivered" says it, and Send's accessible name
-  stays "Send". In forced colours Send's ring and check take Send's own system colours, as
+  stays "Send" (Send answer's, "Send answer"). In forced colours Send's ring and check take Send's own system colours, as
   its arrow does (A9), at full opacity, including the still ring of "Waiting for *machine*":
   on Send's Highlight fill GrayText would fall below A8's 3:1, so stillness and the waiting words
   say the request is held, never a dimmed ring. Every word on the line is CanvasText, so

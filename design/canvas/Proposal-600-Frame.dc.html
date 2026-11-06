@@ -24,9 +24,11 @@
 .p600f-receipt { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; min-height: 18px; font-size: 13px; line-height: 18px; font-weight: 600; }
 .p600f-q { border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .p600f-qh { font-size: 12px; line-height: 16px; font-weight: 600; }
-.p600f-choice { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 8px 0 12px; border-radius: 6px; font-size: 13px; line-height: 18px; }
-.p600f-choice-label { flex: 1; min-width: 0; }
-.p600f-choice-end { width: 18px; height: 18px; flex: none; display: grid; place-items: center; }
+.p600f-radios { display: flex; flex-direction: column; }
+.p600f-radio { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 13px; line-height: 18px; }
+.p600f-qfoot { display: flex; gap: 8px 12px; align-items: center; margin-top: 8px; }
+.p600f-qfoot > .p600f-qsend { align-self: flex-end; }
+.p600f-qsendfix { min-width: 112px; height: 32px; justify-content: center; }
 .p600f-qsend { align-self: flex-start; padding: 6px 14px; border-radius: 6px; font-size: 13px; line-height: 18px; font-weight: 600; display: flex; gap: 8px; align-items: center; }
 .p600f-cap { width: 100%; font-size: 12px; line-height: 17px; }
 .p600f-cap b { display: block; font-size: 13px; line-height: 18px; margin-bottom: 4px; }
@@ -81,22 +83,31 @@
           <div class="p600f-qh" style="color: {{q.head}}">{{q.heading}}</div>
           <div style="font-size: 13px; line-height: 18px">{{q.text}}</div>
           <sc-if value="{{q.open}}">
-            <!-- A single-choice question sends on a tap (question-view.js #buildTap; QuestionViewModel), so the tapped option is the control that sent it (ui.md §6.5, "Tap to answer"): it carries Send's ring and check at its trailing edge, and the others are disabled. -->
-            <sc-for list="{{q.choices}}" as="c">
-              <div class="p600f-choice" style="background: {{c.bg}}; color: {{c.fg}}; border: 1px solid {{c.edge}}; opacity: {{c.op}}">
-                <span class="p600f-choice-label">{{c.text}}</span>
-                <span class="p600f-choice-end">
-                  <sc-if value="{{c.ring}}"><svg viewBox="0 0 16 16" width="18" height="18"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="28.3 9.4" transform="rotate(-90 8 8)"/></svg></sc-if>
-                  <sc-if value="{{c.check}}"><svg viewBox="0 0 20 20" width="18" height="18"><path d="{{SEND_CHECK}}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></sc-if>
-                </span>
-              </div>
-            </sc-for>
-            <sc-if value="{{q.retry}}"><span class="p600f-qsend" style="background: {{t.card}}; color: {{t.text}}; border: 1px solid {{t.stroke2}}; font-weight: 400">Try again</span></sc-if>
+            <!-- ui.md §6.4 "Answering" (#773): the platform's radio list, chosen first, then one Send answer. Nothing sends on a tap, and no option ever carries a ring. -->
+            <div class="p600f-radios" role="radiogroup">
+              <sc-for list="{{q.choices}}" as="c">
+                <div class="p600f-radio">
+                  <svg viewBox="0 0 20 20" width="18" height="18" style="flex: none"><circle cx="10" cy="10" r="8.5" fill="none" stroke="{{c.ring}}" stroke-width="1.5"/><sc-if value="{{c.on}}"><circle cx="10" cy="10" r="4.5" fill="{{c.dot}}"/></sc-if></svg>
+                  <span>{{c.text}}</span>
+                </div>
+              </sc-for>
+            </div>
           </sc-if>
-          <!-- Always rendered, and empty on the normal path: the line keeps its room from Send, so an exception's words never add a row or move the card's controls. -->
-            <div class="p600f-receipt" style="min-height: {{receiptMin}}px; color: {{r.color}}; margin-top: 0">
+          <!-- The footer row: the receipt line on the left, always rendered and empty on the normal path, so an exception's words never move the card's controls; Send answer (or Try again) right-aligned. At phone width the line wraps under the button. -->
+          <div class="p600f-qfoot" style="flex-direction: {{q.footDir}}">
+            <div class="p600f-receipt" style="min-height: {{receiptMin}}px; color: {{r.color}}; margin-top: 0; flex: 1 1 auto; align-self: stretch">
               <span>{{r.text}}<span style="font-weight: 400; color: {{r.subColor}}">{{r.sub}}</span></span>
             </div>
+            <sc-if value="{{q.showSend}}">
+              <!-- Send answer keeps its size and fill: like Send, only its content cross-fades, to the ring, then the check, then back to its label (ui.md §6.5). -->
+              <span class="p600f-qsend p600f-qsendfix" style="background: {{t.bridge}}; color: {{t.onBridge}}; border: {{sendBorder}}">
+                <sc-if value="{{q.sendRing}}"><svg viewBox="0 0 16 16" width="18" height="18"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="28.3 9.4" transform="rotate(-90 8 8)"/></svg></sc-if>
+                <sc-if value="{{q.sendCheck}}"><svg viewBox="0 0 20 20" width="18" height="18"><path d="{{SEND_CHECK}}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></sc-if>
+                <sc-if value="{{q.sendLabel}}"><span>Send answer</span></sc-if>
+              </span>
+            </sc-if>
+            <sc-if value="{{q.retry}}"><span class="p600f-qsend p600f-qsendfix" style="background: {{t.card}}; color: {{t.text}}; border: 1px solid {{t.stroke2}}; font-weight: 400">Try again</span></sc-if>
+          </div>
         </div>
       </sc-if>
     </div>
@@ -205,22 +216,21 @@ class Component extends DCLogic {
     if (f.q) {
       const open = f.q !== 'answered';
       const picked = 1;
-      // In flight or just confirmed, the tapped option is pressed (Bridge fill, as .choice[aria-pressed])
-      // and the rest sit at the choices' disabled opacity (.choice:disabled, .6). The retry rules
-      // (answerControls) then decide: unconfirmed, stale or failed (qheld) keep that, with no ring,
-      // since a prompt takes one attempt; failed adds Try again (qretry), resending the same request.
-      // Busy and refused enable every option again, with none pressed.
-      const busy = !!(f.sending || f.done || f.qheld);
+      // ui.md §6.4 "While an answer goes" (#773, #774): what was chosen stays selected and
+      // read-only while the answer goes and once an outcome forbids another (qheld), never
+      // dimmed as disabled. Send answer carries the ring, then the check. Not confirmed and stale
+      // (qheld) take Send answer away, since an unconfirmed answer is final and never resent;
+      // failed (qretry) puts Try again in its place, which resends the same request. Busy and
+      // refused make the fields editable again, with Send answer back.
       const choices = ['Breaking changes first', 'Fixes first', 'One list, newest first'].map((text, i) => {
-        const on = busy && i === picked;
-        return {
-          text, ring: on && !!f.sending, check: on && !!f.done,
-          bg: on ? t.bridge : t.card, fg: on ? t.onBridge : t.text, edge: on ? t.bridge : t.stroke2,
-          op: busy && !on ? 0.6 : 1,
-        };
+        const on = i === picked;
+        return { text, on, ring: on ? t.bridge : t.text2, dot: t.bridge };
       });
+      const gone = !!(f.qheld || f.qretry);
       q = {
         open, answered: !open, choices, retry: !!f.qretry,
+        showSend: open && !gone, sendRing: !!f.sending, sendCheck: !!f.done, sendLabel: !f.sending && !f.done,
+        footDir: w < 400 ? 'column-reverse' : 'row',
         heading: open ? 'Main agent asks' : 'Main agent asked',
         text: f.qtext || 'Which order for the 1.33 notes?',
         bg: open && !f.hc ? t.needsFill : t.card,

@@ -20,6 +20,16 @@
 > one a second. The Delivered check badge is gone, and `check` is now Send's stroked success
 > glyph. Where this page describes a receipt line for the normal stages or a check badge, the
 > revision and ui.md §6.5 win; the boards are redrawn to it.
+>
+> **Revised on #617's review (2026-11-05).** Decided, not yet built (#600; builds in #616,
+> #625): today both clients show Sending…, Sending again… and "Delivered. The session has
+> your reply." A question card answers only with Send answer (#773, #774): nothing sends on a
+> tap, and Send answer, never an option, carries the ring and the check. An answer that is
+> not confirmed keeps today's words, "Sent, but not confirmed. Check at the machine.": it is
+> final and never resent, so nothing invites a second answer. "Check at the machine" is the
+> known no-RDP gap #467, which replaces it with a remote check. "Sending" is not spoken: Send's
+> busy state already says it, once (ui.md §9.1 A6). The answer, decided and older-host boards
+> are redrawn to this.
 > Issue [#600](https://github.com/danswett/agent-bridge/issues/600) (parent #597). The host side is #598 / PR #611.
 
 Written for the owner, who decides, and for whoever builds #600. Read the problem, then
@@ -119,7 +129,7 @@ own (principle 3), 14 px on the PWA and 16 px on Windows. The client states (`se
 ### Answers
 
 Answers have the same rows with "Answer" in place of "Reply" in what the screen reader
-says. There are four differences:
+says. There are five differences:
 
 - **No Up next.** An answer never carries `working`, so it goes Sent, then Passed to the
   agent, then the outcome.
@@ -132,6 +142,10 @@ says. There are four differences:
 - **A shorter confirmation wait.** The host waits up to 15 s after typing an answer for the
   session to record it (`AnswerOptions.ConfirmTimeout`), not a reply's 60 s, so "Sent, but
   not confirmed" can come sooner for an answer. The client's 9 min limit is the same.
+- **Not confirmed is final.** An answer that is not confirmed says today's words, "Sent, but
+  not confirmed. Check at the machine.", and is never resent: a host types into a prompt
+  once, so nothing on the card invites a second answer (#617's review). "Check at the
+  machine" is the no-RDP gap #467, which replaces it with a remote check.
 
 ### Timing and flicker
 
@@ -400,11 +414,11 @@ one is labelled "Proposal #600 · Decided (owner, 2026-11-04)". Each frame is a 
 |---|---|
 | [proposal-600-phone-reply.png](600-reply-progress/proposal-600-phone-reply.png) · [light](600-reply-progress/proposal-600-phone-reply-light.png) | PWA phone, a reply to a working session: Send's ring at 0 ms, Sent and Up next spoken but not drawn, Send's check on Delivered, then rest. Nothing appears under the box. |
 | [proposal-600-windows-reply.png](600-reply-progress/proposal-600-windows-reply.png) · [light](600-reply-progress/proposal-600-windows-reply-light.png) | The Windows app: Send's ProgressRing, the check on Delivered, rest, and the one exception, "Passed to the agent · not picked up yet". |
-| [proposal-600-answer.png](600-reply-progress/proposal-600-answer.png) · [light](600-reply-progress/proposal-600-answer-light.png) | An answer in the question card: a single-choice question sends on a tap, so the tapped option carries the ring and its check while the other options are disabled (creative director, 2026-11-04, under option A; ui.md §6.5 "Tap to answer"), then "You answered · Fixes first", on the phone and in a narrow Windows pane. The status line stays empty while the answer goes. Two more frames follow ui.md §6.5's retry rules: "Sent, but not confirmed." stops the ring and keeps the options disabled with the tapped one pressed, never offering a second answer, since a prompt takes one attempt; and a request the host answered with an error (failed) keeps them so and shows today's Try again, which resends the same request; a lost connection instead waits and resends on its own. |
+| [proposal-600-answer.png](600-reply-progress/proposal-600-answer.png) · [light](600-reply-progress/proposal-600-answer-light.png) | An answer in the question card, as ui.md §6.4 "Answering" has it (#773): the option is chosen first, then Send answer carries the ring and its check while the choice stays selected and read-only; no option carries a ring. Then "You answered · Fixes first", on the phone and in a narrow Windows pane. The status line, left of Send answer, stays empty while the answer goes. Two more frames follow ui.md §6.4's outcome rules: not confirmed takes Send answer away and says today's "Sent, but not confirmed. Check at the machine.", since the answer is final and never resent; and a request the host answered with an error (failed) puts today's Try again in Send answer's place, which resends the same request; a lost connection instead waits and resends on its own. |
 | [proposal-600-paths.png](600-reply-progress/proposal-600-paths.png) · [light](600-reply-progress/proposal-600-paths-light.png) | The exceptions, the only time a line appears, in seven frames: Still sending…, Sent · still waiting, Passed to the agent · still being delivered, Waiting for ULTRA (Send's ring still), Not confirmed, Refused, and an older host. |
 | [proposal-600-access.png](600-reply-progress/proposal-600-access.png) · [light](600-reply-progress/proposal-600-access-light.png) | High contrast (Night sky on dark, Desert on light), with Send in its own system colours; reduced motion; and what a screen reader hears. |
 | [proposal-600-states.png](600-reply-progress/proposal-600-states.png) · [light](600-reply-progress/proposal-600-states-light.png) | Every state drawn as a table: what Send shows, and the line for the exceptions only. |
-| [proposal-600-decided.png](600-reply-progress/proposal-600-decided.png) · [light](600-reply-progress/proposal-600-decided-light.png) · [contrast](600-reply-progress/proposal-600-decided-contrast.png) · [contrast light](600-reply-progress/proposal-600-decided-contrast-light.png) · [reduced](600-reply-progress/proposal-600-decided-reduced.png) · [reduced light](600-reply-progress/proposal-600-decided-reduced-light.png) | "You answered · *value*" after the button's check: a tap question's label, free text cut at about 40 characters, a form's bare "You answered", a Needs you entry, and the Windows card. |
+| [proposal-600-decided.png](600-reply-progress/proposal-600-decided.png) · [light](600-reply-progress/proposal-600-decided-light.png) · [contrast](600-reply-progress/proposal-600-decided-contrast.png) · [contrast light](600-reply-progress/proposal-600-decided-contrast-light.png) · [reduced](600-reply-progress/proposal-600-decided-reduced.png) · [reduced light](600-reply-progress/proposal-600-decided-reduced-light.png) | "You answered · *value*" after Send answer's check: a choice's label, free text cut at about 40 characters, a form's bare "You answered", a Needs you entry, and the Windows card. |
 | [proposal-600-older.png](600-reply-progress/proposal-600-older.png) · [light](600-reply-progress/proposal-600-older-light.png) · [contrast](600-reply-progress/proposal-600-older-contrast.png) · [contrast light](600-reply-progress/proposal-600-older-contrast-light.png) · [reduced](600-reply-progress/proposal-600-older-reduced.png) · [reduced light](600-reply-progress/proposal-600-older-reduced-light.png) | Older hosts: Send's ring, Still sending… at 3 s, the same check on Delivered, an answer's "You answered", and the Windows app. |
 | [contact-sheet.png](600-reply-progress/contact-sheet.png) | All of the above, side by side. |
 
