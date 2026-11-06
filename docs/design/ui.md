@@ -564,7 +564,9 @@ Sections, top to bottom:
    - A session that needs sign-in is never counted in N nor shown by the filter: the sign-in
      banner owns it (§6.13, owner decision 2026-11-05). Its row still says so where it lives.
    - A question on a machine that is away, or back but not yet confirmed by its next full list,
-     is neither counted in N nor shown by the filter, nor raised as a notification (#269).
+     is neither counted in N nor shown by the filter, nor raised as a notification (#269). The
+     exception is a return's 3 s grace (#950, "Coming back to the app", rule 6): N and the
+     filter's rows stay as they were, with the question held, until the grace is over.
    - **Look:** the `needs` glyph (`idle` at none), then "Needs you · N". It is a control, so it
      takes the platform's button styling and never a status colour. Pressed, it has the
      selection's look (the quiet fill, the 3×16 Bridge pill, semibold words) and, at its
@@ -621,7 +623,7 @@ client's own relay link is up on the same account:
   run out), and so do the session open, its machine tab, your order and pins.
 - Nothing on them can be done: answering, Approve once and Deny, replying, attaching, End session,
   and launching or resuming on that machine are disabled. Their questions leave Needs you, the
-  badges and notifications. In an offline machine's session, the reply box and the question say
+  badges and notifications (after a return, once the grace below is over). In an offline machine's session, the reply box and the question say
   why in place of their actions (§6.4, §6.5; #950).
 - Back again, they can be acted on only once the machine's next full list (its snapshot) has
   confirmed that the session and its question still exist, never on the copy kept meanwhile. A
@@ -654,17 +656,25 @@ added the same evening; the timeline is drawn in
 3. **A quiet cue only when it's news.** If any machine's list is still not whole 1 s after the
    return, the title row shows "Updating…" in text2, in a fixed slot beside the title. It
    doesn't move, isn't announced, and goes the moment every list is whole. A return that
-   finishes in under 1 s changes nothing on screen.
+   finishes in under 1 s changes nothing on screen. On the PWA desktop and in the Windows app,
+   the list pane's own header row (the one holding the Sessions heading) plays the phone title
+   row's part, and the slot is at its end. Neither the slot nor the strip ever goes above the
+   list or into the window chrome.
 4. **When the grace runs out (3 s),** a machine that isn't back shows the away states on its rows
    (§2.2): the glyph and words change in place. If the client's own link is still down, the
-   connection strip takes the title row's place, at the same height (§7). It is announced once,
-   politely.
+   connection strip replaces the title row's content (the list header row's, on a desktop and
+   in the Windows app), at the same height (§7). It is announced once, politely. The Windows
+   app does the same, and no longer raises its "connecting" banner for this case.
 5. **Nothing pushes the rows.** There are no "Connecting…" rows above the sessions, ever. A
    machine with no kept list says so in the same fixed slot ("Connecting to 2 machines…"), never
-   as rows. Banners already showing stay put. A new connection banner is never inserted above
-   the list.
+   as rows. Banners already showing when the app comes back stay put. A new connection banner is
+   never inserted above the list.
 6. **A real outage reads as it always has** once the grace is over, including the 15-minute
-   rule above. Notifications and Needs you follow the hold as they do now.
+   rule above. During the grace, rule 1 wins for what is drawn: a held question keeps its row,
+   in the list and under Needs you's filter, and N (and so the badges) doesn't change, though
+   the question is held at once (`aria-disabled`, rule 2). Once the grace is over, a machine
+   still away has today's behaviour: its questions leave Needs you, the badges and
+   notifications. Notifications follow the hold as they do now.
 7. **Platforms:** the PWA first. The Windows app takes rules 1–5 on waking from sleep, with the
    same 3 s. Apple and Android take them through §7 when they are un-parked.
 8. **A machine's connection news is never a sentence over the list.** Offline, Connecting,
@@ -672,18 +682,25 @@ added the same evening; the timeline is drawn in
    `hostNote()`, #396).
    - Inside an offline machine's session, the reply box and the question say why, in text2, in
      place of their usual actions: "*machine* is offline · you can answer once it's back" (§6.4,
-     §6.5).
+     §6.5). If focus was on a control the line replaces, focus moves to the line, which takes
+     `tabindex="-1"`. It isn't announced separately: its words are what is read as focus lands.
+     Focus never drops to the page.
    - The machine tab and the Machines page (§6.6) carry the machine's own state.
    - Only an error the person can act on (Couldn't reach, unsupported) shows, in rule 3's fixed
-     slot, on one line, naming the machine.
+     slot, on one line, naming the machine ("Couldn't reach *machine*"). While it shows,
+     "Updating…" doesn't. With more than one, the slot shows the first in machine order, plus
+     "and N more" if that fits the line.
 
 | Time after the return | Rows, open session, machine tab | A held session's controls | Title row's slot | Connection strip |
 |---|---|---|---|---|
 | 0 (return) | As they last were; anything arriving updates in place | `aria-disabled` until the machine's list is whole; drawn as they were. A press does nothing and shows "Updating…" under the control | Empty | None |
 | Every list whole before 1 s | Fresh data, in place | Back to normal | Never shown | None |
 | 600 ms, hold still on | As they last were | Drawn disabled | Empty | None |
-| 1 s, any list not whole | As they last were | Drawn disabled | "Updating…", or "Connecting to N machines…" for machines with no kept list; it goes when every list is whole | None |
-| 3 s, grace over | A machine not back: the away states (§2.2), in place. The rest as they are | Disabled as §6.1 says; an offline machine's session says why (rule 8) | As at 1 s, unless the strip has taken the title row's place | Only if the client's own link is down: in the title row's place, at its height, announced once, politely |
+| 1 s, any list not whole | As they last were | Drawn disabled | "Updating…", or "Connecting to N machines…" for machines with no kept list; an actionable error ("Couldn't reach *machine*") in their place. It goes when every list is whole | None |
+| 3 s, grace over | A machine not back: the away states (§2.2), in place. The rest as they are | Disabled as §6.1 says; an offline machine's session says why (rule 8) | As at 1 s, unless the strip has replaced the title row's content | Only if the client's own link is down: in the title row (or list header row), at its height, announced once, politely |
+
+Through the grace, Needs you's N, its filter's rows and the badges stay as they were (rule 6).
+On the PWA desktop and in the Windows app, "title row" is the list pane's header row (rule 3).
 
 The owner may change the 3 s grace; the 1 s cue and the 600 ms point stand with it unless the
 owner changes them too.
@@ -1111,7 +1128,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       collaborator's read-only view, §6.7) and while a sent answer's outcome forbids sending
       another (§6.5). While its machine is away it stays, disabled, as §6.1's controls do; once
       that machine is offline, the card says "*machine* is offline · you can answer once it's
-      back" in text2 in place of its actions (§6.1, #950 rule 8). Why
+      back" in text2 in place of its actions, and focus on an action it replaces moves to that
+      line (§6.1, #950 rule 8). Why
       visible and not hidden until complete: the rule that a button which doesn't apply is
       absent, not disabled (A7), is about actions that do nothing in the current state, and
       an open question's Send answer always applies. Hidden until complete, the card's only
@@ -1365,8 +1383,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   (§6.2: it leaves the header as it was) and puts focus on its first choice. With the notice,
   the reply area is 99 at rest on a phone.
 - **While its machine is offline** (§6.1, #950 rule 8), the box says why in text2, in place of
-  its usual actions: "*machine* is offline · you can answer once it's back". During a return's
-  hold, its controls are held as §6.1's rule 2 says.
+  its usual actions: "*machine* is offline · you can answer once it's back". Focus on a control it
+  replaces moves to the line (§6.1, rule 8). During a return's hold, its controls are held as
+  §6.1's rule 2 says.
 - **Platform styling:**
   - Windows and the PWA: a card with a 2 px Bridge bottom edge.
   - macOS: a capsule field.
@@ -2299,7 +2318,8 @@ question, as choosing its row does.
 
 **Coming back to the app, on every client (#950):** §6.1's "Coming back to the app" rules hold
 where each client comes back: the PWA first, on returning to the screen or a network change; the
-Windows app, rules 1–5, on waking from sleep, with the same 3 s grace; Apple and Android when
+Windows app, rules 1–5, on waking from sleep, with the same 3 s grace and the slot and strip in
+the list pane's header row, never in the title bar; Apple and Android when
 they are un-parked.
 
 **Windows (WinUI 3):**
@@ -2323,9 +2343,10 @@ they are un-parked.
 - **Banners** sit over every page, `InfoBar`s in this order (#293):
   - What stops the app from its job: the host not running, refusing the app, connecting, or
     view only. Warning, with no close button: it goes once that is put right. On waking from
-    sleep or changing network, "connecting" is not raised during §6.1's 3-second grace (#950). What
-    shows after the grace if the link is still down is not decided yet: rule 5 inserts no new
-    connection banner above the list ([proposals/950-calm-return.md](proposals/950-calm-return.md) §5).
+    sleep or changing network, "connecting" is not raised for it (#950): during §6.1's 3-second
+    grace nothing shows, and after it, if the link is still down, the connection strip replaces
+    the list header row's content at the same height (§6.1, rules 3 and 4). A banner already
+    showing when the app comes back stays put.
   - "Discovery held: …" ([v1-sessions.md](../protocol/v1-sessions.md#discovery-held)), one per
     held machine, its name first when there is more than one. Informational, with the
     `InfoBar`'s close button, named "Dismiss Discovery held on *machine*" (§9.1 A1) and reached
@@ -2368,6 +2389,10 @@ they are un-parked.
   platforms' controls.
 - **Desktop:** the Windows layout with a 56 px web app bar in place of the title bar (mark,
   name, search, machines online, account).
+  - **Coming back (#950):** the list pane's header row (the Sessions heading) holds the fixed
+    slot at its end, and the connection strip replaces that row's content at the same height,
+    as the phone's title row does (§6.1, rules 3 and 4). Neither ever goes into the web app bar
+    or above the list.
 - **Phone:**
   - a 24/32 title row with Search and New, and the sort menu between them;
   - machine tabs;
@@ -2375,7 +2400,7 @@ they are un-parked.
     is the way to Launch.
   - The app bar comes back only as a strip while the connection has news (connecting,
     reconnecting, paused, an error), and as the search row while searching.
-    - **The strip takes the title row's place, at the same height** (#950), so nothing below it
+    - **The strip replaces the title row's content, at the same height** (#950), so nothing below it
       moves. After a return it shows only once §6.1's 3-second grace has run out with this
       client's own link still down, and it is announced once, politely. A machine's own news
       is never the strip's: it is on its rows, its tab and the Machines page (§6.1, rule 8).
@@ -2544,7 +2569,9 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
 - **Return words (#950):** "Updating…" (the title row's cue, and under a held control pressed);
   "Connecting to N machines…" (the same slot, for machines with no kept list); "*machine* is
   offline · you can answer once it's back" (the reply box and the question). An error the person
-  can act on (Couldn't reach, unsupported) is one line in the same slot, naming the machine.
+  can act on (Couldn't reach, unsupported) is one line in the same slot, naming the machine
+  ("Couldn't reach *machine*", with "and N more" when there are others and it fits), in place of
+  "Updating…".
   Never a sentence over the list about a machine's connection: no "*machine* is offline. Its
   sessions are as it last sent them…", "Connecting to *machine*…" or "Opening an end-to-end
   encrypted channel to *machine*…" there.
@@ -2618,7 +2645,9 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
 - **Coming back to the app (#950, §6.1):** a held control is `aria-disabled` from the moment
   of the return, before it is drawn disabled at 600 ms, so it is never said to work while it is
   held. The "Updating…" cue is never announced. The connection strip, if the grace runs out with
-  the client's own link down, is announced once, politely.
+  the client's own link down, is announced once, politely. When an offline machine's line
+  replaces a focused control (rule 8), focus moves to the line (`tabindex="-1"`), whose words
+  are read as focus lands, with no separate announcement; focus never drops to the page.
 - **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
   menu key opens a row's menu, and Ctrl/⌘+K focuses search. The shortcut is named where
   search is (the Windows search box's tooltip, on hover or when Tab reaches it) and nowhere

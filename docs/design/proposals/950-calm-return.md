@@ -44,20 +44,24 @@ It was the spec, not a bug:
    control, never a toast. Opening and reading a session always work.
 3. **A cue only when it's news:** "Updating…" in text2 in a fixed slot beside the title, from 1 s
    while any list isn't whole. Never announced, never moves. A return under 1 s shows nothing.
+   On a desktop and in the Windows app the slot is at the end of the list pane's header row.
 4. **At 3 s,** a machine that isn't back shows the away states in place. If the client's own link
-   is down, the strip takes the title row's place at the same height, announced once, politely.
+   is down, the strip replaces the title row's (or list header row's) content at the same height,
+   announced once, politely.
 5. **Nothing pushes the rows.** No "Connecting…" rows. A machine with no kept list says so in the
-   fixed slot ("Connecting to 2 machines…"). Banners showing stay put; none is newly inserted
-   above the list.
-6. **A real outage reads as before** after the grace, the 15-minute rule included. Notifications
-   and Needs you follow the hold.
+   fixed slot ("Connecting to 2 machines…"). Banners showing when the app comes back stay put;
+   none is newly inserted above the list.
+6. **A real outage reads as before** after the grace, the 15-minute rule included. During the
+   grace, held questions keep their rows and N doesn't change, though they are held at once;
+   after it, a machine still away has today's behaviour. Notifications follow the hold.
 7. **Platforms:** the PWA first; Windows takes rules 1–5 on waking from sleep; Apple and Android
    when un-parked.
 8. **No connection sentence over the list.** Offline, Connecting, Opening a channel and Couldn't
    reach go. An offline machine's reply box and question say "Studio-PC is offline · you can
-   answer once it's back" in text2, in place of their actions. The tab and the Machines page carry
-   the machine's state. Only an actionable error (Couldn't reach, unsupported) shows, in the
-   fixed slot, one line, naming the machine.
+   answer once it's back" in text2, in place of their actions; focus on a replaced control moves
+   to the line. The tab and the Machines page carry the machine's state. Only an actionable error
+   (Couldn't reach, unsupported) shows, in the fixed slot, one line, naming the machine, in place
+   of "Updating…".
 
 ## 3. Timeline
 
@@ -70,10 +74,11 @@ waiting. The person comes back to the PWA at t = 0.
 | Row order and positions | Unchanged; an arriving change uses Reorder | The same | The same | The same: nothing moves |
 | Open session, machine tab | As last seen | As last seen | As last seen | Away state; the question and reply box say why once the machine is offline |
 | Held controls (Send answer, Send, End session…) | `aria-disabled`, drawn as before; a press shows "Updating…" under it | Drawn disabled | Drawn disabled | Disabled, or replaced by the offline line |
-| Title row's slot | Empty | Empty | "Updating…" (or "Connecting to N machines…") | The same, unless the strip has taken the title row |
+| Title row's slot | Empty | Empty | "Updating…" (or "Connecting to N machines…"); an actionable error in their place | The same, unless the strip has replaced the title row's content |
 | Connection strip | None | None | None | Only if this client's own link is down: in the title row's place, announced once |
 | Sentences or rows above the list | None | None | None | None |
-| Needs you, badge, notifications | Follow the hold, as today | The same | The same | The same |
+| Needs you, badge | Unchanged: a held question keeps its row and its count | The same | The same | Today's behaviour: a machine still away leaves N and the filter |
+| Notifications | Follow the hold, as today | The same | The same | The same |
 
 If Studio-PC's list is whole at any point, its column stops there: the cue goes at once, its
 controls work again, and everything left is fresh data drawn in place.
@@ -93,15 +98,24 @@ disabled; a press during the first 600 ms sends nothing and shows "Updating…";
 inserted above the list on a return; the cue is never in a live region; the strip is announced
 once.
 
-## 5. Not decided here
+## 5. Decided on review
 
-Listed for Creative and the owner rather than guessed:
-- Where the title row's fixed slot and the strip sit on the PWA desktop and the Windows app,
-  which have an app bar or title bar rather than the phone's title row.
-- What the Windows app shows at the end of the grace if its own link to the host is still down,
-  given rule 5 (no new connection banner above the list) and that it has no strip.
-- What the slot shows when an actionable error and "Updating…" or "Connecting to N machines…"
-  are due at once.
-- During the grace, held questions leave Needs you's count at once (rule 6), so N, and the rows
-  the pressed filter shows, can change before the rows do.
-- Where focus goes when an offline machine's line replaces a focused control (§9.1 A4).
+The spec PR's open questions, ruled by Creative on 2026-11-05 within the accepted design, and in
+ui.md:
+- **The slot and the strip on the PWA desktop and in the Windows app:** the list pane's own
+  header row (the one holding the Sessions heading) plays the phone title row's part. The cue and
+  "Connecting to N machines…" sit in a fixed slot at its end; the strip, after the grace with the
+  client's own link down, replaces that row's content at the same height. Never above the list,
+  never in the window chrome.
+- **Windows after the grace, its own link still down:** rule 4 applies as on the PWA, with the
+  strip in the list header row. The "connecting" banner is no longer raised for this case. A
+  banner already showing when the app comes back stays put (rule 5).
+- **An actionable error and "Updating…" both due:** the error takes the slot ("Couldn't reach
+  Studio-PC", one line), and "Updating…" isn't shown while it is. With more than one error, the
+  first by machine order, plus "and N more" if that fits the line.
+- **Needs you during the grace:** rule 1 wins for what's drawn. Held questions keep their rows
+  and N doesn't change during the grace; they are held at once (`aria-disabled`, rule 2). After
+  the grace, today's behaviour applies to any machine still away (rule 6).
+- **Focus when the offline line replaces a focused control:** focus moves to the line, which takes
+  `tabindex="-1"`. It isn't announced separately: its words are read as focus lands. Focus never
+  drops to the page.
