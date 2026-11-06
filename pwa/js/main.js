@@ -49,10 +49,23 @@ import { whileVisible } from './ui/ticker.js';
 import { RelayBlobs } from './blobs.js';
 import { recentTimings } from './timing.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
+import { applyTextSize, readTextSize, saveTextSize } from './text-size.js';
 
 // Installed on iOS or iPadOS, the edge swipe walks the same back stack as Android's Back.
 if (installedOnApple(markPlatform())) { edgeSwipeBack(document, () => history.back()); }
 const $ = (id) => document.getElementById(id);
+
+// Text size (ui.md §4.4): this device's choice, already on the page from text-size-boot.js.
+{
+  const buttons = [...document.querySelectorAll('#text-size [data-text-size]')];
+  const show = (size) => { for (const b of buttons) { b.setAttribute('aria-pressed', String(b.dataset.textSize === size)); } };
+  const size = readTextSize();
+  applyTextSize(size);
+  show(size);
+  for (const b of buttons) {
+    b.addEventListener('click', () => { applyTextSize(b.dataset.textSize); saveTextSize(b.dataset.textSize); show(b.dataset.textSize); });
+  }
+}
 const params = new URLSearchParams(location.search);
 const BASE = RELAY || location.origin;
 
