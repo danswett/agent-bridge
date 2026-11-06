@@ -16,14 +16,30 @@ public static class Ui
 
     public static Brush Brush(string key) => (Brush)Application.Current.Resources[key];
 
-    public static Brush ToneBrush(Tone tone) => tone switch
+    public static Brush ToneBrush(Tone tone) => Brush(ToneKey(tone));
+
+    public static string ToneKey(Tone tone) => tone switch
     {
-        Tone.Ok => Brush("AbBridge"),
-        Tone.Warn => Brush("AbNeedsText"),
-        Tone.Bad => Brush("AbDangerText"),
-        Tone.Progress => Brush("AbBridge"),
-        _ => Brush("AbText2"),
+        Tone.Ok => "AbBridge",
+        Tone.Warn => "AbNeedsText",
+        Tone.Bad => "AbDangerText",
+        Tone.Progress => "AbBridge",
+        _ => "AbText2",
     };
+
+    // The design's brush for the theme an element is drawn in, which Brush can't give: it reads the
+    // app's theme, and an element can ask for another. High contrast takes the system's, as Brush does.
+    public static Brush ThemedBrush(string key, ElementTheme theme)
+    {
+        if (!new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast
+            && Application.Current.Resources.MergedDictionaries.FirstOrDefault(d => d.Source?.ToString().EndsWith(Design.DesignKeys.Source["ms-appx:///".Length..], StringComparison.OrdinalIgnoreCase) == true) is { } design
+            && design.ThemeDictionaries.TryGetValue(theme == ElementTheme.Dark ? "Dark" : "Light", out var d) && d is ResourceDictionary themed
+            && themed.TryGetValue(key, out var b) && b is Brush brush)
+        {
+            return brush;
+        }
+        return Brush(key);
+    }
 
     // A status's words (docs/design/ui.md §2.2, §3): needs' text for a question, agent's text while
     // an agent drives, else secondary, as the meta line they lead is (§6.1, §6.2). Never active or

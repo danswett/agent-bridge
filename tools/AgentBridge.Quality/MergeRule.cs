@@ -20,6 +20,7 @@ sealed class MergeRuleConfig
     public CodeQlConfig Codeql { get; set; } = new();
     public List<string> IgnoreWorkflows { get; set; } = [];
     public MainGreenConfig MainGreen { get; set; } = new();
+    public CopilotWaiverConfig CopilotWaiver { get; set; } = new();
     public List<string> SensitivePaths { get; set; } = [];
 
     public static MergeRuleConfig Parse(string yaml)
@@ -40,6 +41,8 @@ sealed class MergeRuleConfig
         config.Codeql ??= new();
         config.MainGreen ??= new();
         config.MainGreen.ExemptLabels ??= [];
+        config.CopilotWaiver ??= new();
+        config.CopilotWaiver.Labels ??= [];
         var missing = new List<string>();
         if (string.IsNullOrWhiteSpace(config.Base)) missing.Add("base");
         if (string.IsNullOrWhiteSpace(config.StatusPoster)) missing.Add("status_poster");
@@ -81,6 +84,15 @@ sealed class MainGreenConfig
     /// <summary>The workflow file whose latest finished push run on the base branch says whether it's green.</summary>
     public string Workflow { get; set; } = "";
     public List<string> ExemptLabels { get; set; } = [];
+}
+
+/// <summary>
+/// Temporary (2026-11-05, #955): labels that let an independent review's receipt stand in for
+/// Copilot's review while Copilot's review quota is exhausted.
+/// </summary>
+sealed class CopilotWaiverConfig
+{
+    public List<string> Labels { get; set; } = [];
 }
 
 /// <summary>
@@ -208,19 +220,26 @@ static class MergeRule
             && string.Equals(r.CommitOid, pr.HeadSha, StringComparison.OrdinalIgnoreCase)
             && r.State is not ("PENDING" or "DISMISSED")).ToList();
         var copilot = onHead.Any(r => CopilotReviewFailure(r.Body) is null);
-        if (!copilot && onHead.Count > 0)
-            failures.Add($"Copilot's review of {sha} didn't complete ({CopilotReviewFailure(onHead[^1].Body)}): request another");
-        else if (!copilot)
-            pending.Add($"waiting for a Copilot review of {sha}");
-
-        var sensitive = pr.FullyRead ? SensitiveFiles(config, pr.Files) : [];
-        var marked = MarkedSecurity(config, pr);
-        var needsReceipt = marked || (pr.FullyRead && (sensitive.Count > 0 || !pr.FilesComplete));
         var receipt = pr.Statuses
             .Where(s => s.Context == config.IndependentReview.Context
                 && s.Creator is not null && config.IndependentReview.Posters.Contains(s.Creator, StringComparer.OrdinalIgnoreCase))
             .OrderByDescending(s => s.CreatedAt)
             .FirstOrDefault();
+        // Temporary (#955): while Copilot's review quota is exhausted, a waiver label lets the
+        // independent review's success receipt on the head stand in for Copilot's review. The label
+        // alone waives nothing.
+        var waivedBy = pr.Labels.FirstOrDefault(l => config.CopilotWaiver.Labels.Contains(l, StringComparer.OrdinalIgnoreCase));
+        var waived = !copilot && waivedBy is not null && receipt?.State == "success";
+        if (!copilot && !waived && waivedBy is not null)
+            failures.Add($"Copilot review waived by the label '{waivedBy}', but the waiver needs an independent review's receipt on {sha} in its place");
+        else if (!copilot && !waived && onHead.Count > 0)
+            failures.Add($"Copilot's review of {sha} didn't complete ({CopilotReviewFailure(onHead[^1].Body)}): request another");
+        else if (!copilot && !waived)
+            pending.Add($"waiting for a Copilot review of {sha}");
+
+        var sensitive = pr.FullyRead ? SensitiveFiles(config, pr.Files) : [];
+        var marked = MarkedSecurity(config, pr);
+        var needsReceipt = marked || (pr.FullyRead && (sensitive.Count > 0 || !pr.FilesComplete));
         // A reviewer's failure blocks any pull request, sensitive or not.
         if (receipt is { State: "failure" or "error" })
             failures.Add($"the independent review of {sha} failed: {receipt.Description}");
@@ -271,7 +290,7 @@ static class MergeRule
         var reasons = failures.Concat(pending).ToList();
         var state = failures.Count > 0 ? (mainBlocks && main.State == "error" ? "error" : "failure") : pending.Count > 0 ? "pending" : "success";
         var description = state == "success"
-            ? $"Copilot reviewed {sha}; every check passed{(needsReceipt ? "; independent review on file" : "")}{(main.State != "success" ? $"; main isn't green, but it's labelled {exemptBy}" : "")}"
+            ? $"{(waived ? "Copilot review waived (label); independent review on file" : $"Copilot reviewed {sha}")}; every check passed{(needsReceipt && !waived ? "; independent review on file" : "")}{(main.State != "success" ? $"; main isn't green, but it's labelled {exemptBy}" : "")}"
             : Capitalize(string.Join("; ", reasons));
         return new MergeVerdict(state, Truncate(Printable(description)), reasons, sensitive);
     }

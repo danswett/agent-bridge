@@ -41,6 +41,8 @@ without them: where they disagree, this page wins and the mock-ups get fixed.
 5. **The interface doesn't explain itself.** No helper sentences inside the UI ("Replies go
    to the main agent…"). If a control needs a sentence, the control is wrong. Tooltips and
    accessibility labels carry the detail.
+6. **Every element has a purpose** (the owner, 2026-11-05). Nothing is drawn twice on one
+   screen. If two elements show the same fact, one goes. A design review checks this first.
 
 ## 2. Status language
 
@@ -356,7 +358,8 @@ Selection survives a resize across breakpoints. #166 has the acceptance criteria
 - **Scrolling:** from 760 the window itself never scrolls. The app bar, the rail and the
   reply box stay put; a page scrolls on its own, and on Sessions the list, the conversation
   and the inspector each do (#288). A phone's list scrolls the page; a pushed session's
-  panes scroll on their own.
+  panes scroll on their own. On a phone, the session's header floats over its conversation
+  and collapses as the conversation scrolls (§6.2, #620). From 760 nothing collapses.
 - **A pushed session** takes the whole screen on a phone, with the reply box at its foot: the
   bottom navigation gives way to it, and Back (the header's, or the platform's own) returns
   to the list.
@@ -471,6 +474,7 @@ easing in, its duration out, and how far it travels.
 | Menu and flyout | The row menu, Sort, the overflow menu, flyouts | A click, a long press, Shift+F10 or the menu key | It fades in and settles 4 from its anchor. Choosing an item acts at once, and the menu fades out | `menu`: fast, decelerate; fast out; nudge | Windows: `MenuFlyout`'s own. PWA: the tokens, on a popover where supported. Apple and Android: the system menus | Instant |
 | Scroll to a question | The open session's conversation, and the list when a notification opens a session | A question arrives while the person is at the end of the conversation; a toast, the tray, the menu bar, a waiting row or (in the PWA, until #253 reaches it) a Needs you entry opens a session | The view scrolls smoothly to the question or the row. It never scrolls a conversation the person has scrolled back through (a response growing below on its own doesn't count: the reader is still at its end), is touching, or has the pointer over, nor one in a page or app in the background. For 500 ms after a question appears in a conversation on screen (arriving, shown as its session opens, shown again as its tab, the Sessions page or the app comes back (the window taking the focus back included, visible all along or not), moved as the inspector is shown or hidden or the window crosses a layout width, moved where it is by anything above it changing height (the title wrapping, a tool line, the response, the reasoning or your message, a kept draft dismissed or an answer's receipt going, the delegate strip or a banner appearing or going), by the conversation being pulled back as it gets shorter, or sideways as the window or a pane is narrowed or widened, or becoming answerable as its machine's hold lifts or its machine starts taking answers), or is scrolled into view (a notification's answer focused included), a click or tap on its choices, Approve once, Deny or Send is ignored, so a click already on its way to what was there can't answer it. Needs you's Approve once, Deny and Resend wait the same way after the lane changes (an entry arriving, going or moving, and its answers moved by an entry above growing as its answer goes, by anything above the lane changing height, a banner or the app bar appearing included, or by the list being pulled back as rows below get shorter or go while it is scrolled to its end; an answer's status appearing below the last answers, or the list scrolling, moves nothing and doesn't restart it) or comes back on screen, and while a session opened from it scrolls the list to its row. A smooth scroll to it counts from where it comes to rest; a scroll the person makes after that doesn't restart the wait, unless something above the answers changes height in the same moment, which counts as a move (the scroll and the move can't be told apart). A scroll pulled back to its end (what it scrolls got shorter, or it got taller) is never set aside as the person's: it counts as a move. A click or tap on an answer first reads where the answers are: moved since they were last read (an update drawn in the moment before the click), or unreadable, the click is ignored and the wait starts. A key acts at once | `scroll`: emphasis, standard | Windows: `StartBringIntoView` with `AnimationDesired`; the answers' places read after each layout pass and scroll (`AnswerWatch`) and as a pointer presses one, setting aside only a scroll the person makes (a wheel, a finger, a key or the scroll bar). PWA: `scrollIntoView` with smooth behaviour, at the browser's pace; the places read on `ResizeObserver` and scroll events (`watchMoves`) and as a click comes. Apple: `ScrollViewReader`. Android: `animateScrollToItem` | Instant: a jump |
 | Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle | By key or menu, the moved row slides to its new place, and the row it passed takes its own new place at once. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place. No other row moves | `reorder`: standard, standard | Windows: no `ReorderThemeTransition`, which slides the neighbours. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
+| Collapse | A phone's session header (§6.2, #620) | Scrolling the conversation up 64 or down 32 in one direction, mid-conversation; a tap on the bar's title; focus moving into the header | The header slides down over the conversation, or back up under the bar. The conversation never moves. Near the top there is no motion of its own: the header rides with the scroll | `collapse`: standard, standard | PWA: the tokens on transform. Apple: the large title's own collapse. Android: the top app bar's scroll behaviours | Cross-fade |
 
 **Not in the design:**
 - **Loops** other than the two glyphs and an in-flight progress ring: no pulsing dot, badge
@@ -646,12 +650,70 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 ### 6.2 Session header
 
 - **Title:** the session name.
-- **One meta line:** glyph · status text (rule set §2.2) · machine · repo.
+- **One meta line:** glyph · status text (rule set §2.2) · machine · repo. A phone's is
+  shorter (below).
 - **Actions:** icon buttons with tooltips: Pin, Details (everything removed from rows),
   and toggle inspector. End session lives in Details on desktop, and in the overflow menu
   on phones.
 - **Phone:** Back (to the list) leads the header, and Pin, Details and End session are in its
   overflow menu.
+- **Phone: at rest (#620; the owner, 2026-11-05).** The title, one meta line and the tabs: 152
+  tall at 390 × 844 with a two-line title, in every delegate state.
+  - **The title:** 24/32 bold, between Back and More, **at most two lines** with an ellipsis.
+    The full title is the h2's text, so it is read in full, and it is in Details.
+  - **One meta line, never wrapped:** glyph · status (§2.2) · machine, and the account only
+    when it isn't the person's own ("Delegating to 2 agents · DEV-VM2"). The status is never
+    shortened. The account, then the machine, give way with an ending ellipsis, and their full
+    text is still read. The repository is in Details.
+  - **The tabs, on their own row of 48:** Conversation, Delegates, Tools.
+    - **There is no delegate strip on a phone,** whatever the delegates are doing. The
+      Delegates tab carries what it carried.
+    - **While delegates are running,** the tab's label has their count: "Delegates 2", read as
+      "Delegates, 2 running". With none running, there is no count. The count is the
+      session's own delegates, not the ones they delegate to in turn.
+    - **While a delegate is asking,** the tab leads with the `needs` glyph, and its name says
+      so: "Delegates, 2 running, 1 asking". Asking counts a delegate at any depth, since the
+      question is the person's wherever it comes from. The question itself is in the
+      conversation, naming the delegate (#661, §7.0), and is answered there without opening the tab.
+    - The count and glyph change in place, so the row never changes height.
+    - The tabs are one Tab stop with arrows inside, as every tab list.
+  - Tablet, desktop and the Windows app keep the header above, chips included.
+- **Phone: collapse on scroll (#620).** A session opens with its header in full, as above. The
+  header floats over the conversation's top, and the conversation scrolls under it.
+  - **Near the top,** scrolling down slides the title, meta line and tabs up under a
+    pinned 48 bar: Back, the session's glyph, the title on one line with an ellipsis (17/22,
+    semibold), More. The header follows the scroll with no easing (iOS's large title). The
+    bar's fill, hairline and title fade in (`crossFade`) once the big title is under it (40).
+    Once the header has gone under the bar (the at-rest height less 48), it is compact.
+  - **Mid-conversation,** 64 up in one direction brings the whole header back over the
+    conversation (`collapse`), and 32 down sends it away. The count restarts when the
+    direction changes, so reading back and forth changes nothing. A tap on the bar's title
+    brings it back, and the top always shows it in full. The reply area does the mirror image
+    (§6.5, #935), so the two never both take full room mid-conversation.
+  - **Only the person's own scrolling counts:** a finger, a wheel, a trackpad, the keys or the
+    scroll bar. A scroll the app makes (to a question, a restored position) and a response
+    growing below leave the header as it was, except on a screen shorter than twice the
+    header (a landscape phone), where a scroll to a question folds it to the bar first.
+    There the header is also capped at the conversation's height and scrolls within itself,
+    so focus inside it is never out of view. Overscroll is clamped, so a bounce never reads
+    as a scroll up. Scroll to a question puts it 8 below what the header covers (the bar, or
+    the whole header if it was showing). The question guard (§5.3) is unaffected: the
+    question never moves as the header collapses or returns.
+  - **While the session waits on you,** the bar's glyph is `needs` on its disc.
+  - **The title stays the one h2.** The bar's copy is drawn, not read; the status is read from
+    the meta line. Nothing is announced. Focus moving into the header brings it back, and it
+    stays while focus is there. Focus the app puts on the title as a session opens (#707)
+    doesn't hold it: the person's own scrolling folds it as usual. The conversation's scroll padding is what the header covers
+    plus 8, so focus never lands under it. Tab order is Back, More, the tabs, then
+    the conversation. The tabs are one tab stop, on the selected tab; Left and Right move
+    and select, wrapping, and Home and End go to the first and last.
+  - **Reduced motion:** coming back and going are a cross-fade with no travel; near the top
+    the header still follows the scroll. The thresholds don't change.
+  - **Only the conversation collapses it.** On the Delegates, Tools and Details tabs the header
+    stays whole.
+  - **From 760, and in the Windows app,** the header never collapses. A session never opens
+    collapsed. Native clients use the platform's own: `NavigationStack`'s large title on
+    Apple; `exitUntilCollapsedScrollBehavior` then `enterAlwaysScrollBehavior` on Android.
 - **Details** is a property list: Agent, Machine, Repository, Branch (mono), Folder (mono, and
   a long path gives up its middle, never a word), Model, Started, how long in this state,
   background agents and commands, turns, compactions and the process id; then End session.
@@ -675,8 +737,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   Bridge. Finished delegates fold into a single "N finished" item.
 - **macOS:** the same, as a token row labelled "Delegates".
 - **Narrow desktop:** the Delegates tab.
-- **Phone:** one horizontal chip row. iOS opens a sheet with medium and large detents.
-  Android and the PWA open the delegate in place or as a pushed screen.
+- **Phone:** no chips (§6.2, the owner 2026-11-05). The Delegates tab carries the running count
+  and the `needs` glyph, and a delegate's question is answered in the conversation. iOS opens
+  a delegate from the tab in a sheet with medium and large detents. Android and the PWA open it
+  in place or as a pushed screen.
 - **Inspector:**
   - the delegate's name and glyph;
   - a property list: Status, Model, Kind (background or task), ID (mono). A delegate that asks
@@ -688,8 +752,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Choosing:** at three panes a strip item shows its delegate in the inspector, in place of
   Details and Tools, bringing a hidden inspector back; pressed again, it lets go. Below three
   panes the Delegates tab lists every delegate under its parent, finished ones folded, and the
-  one opened is pushed in the list's place with "All delegates" to go back. A phone's chip
-  pressed again lets its delegate go too, unless another tab hides it: then it shows it. A
+  one opened is pushed in the list's place with "All delegates" to go back. A
   delegate stays open across a resize, and as it finishes (its fold opens).
 - **A host that lists none** (Claude, Codex, a host before sub-agents) gets no strip; its
   Delegates tab, while it counts background agents, says only how many.
@@ -1066,11 +1129,32 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   (its ring on the option, the option kept pressed, "one attempt per prompt") belong to Send
   answer instead, as §6.4's "While an answer goes" says: the ring is on Send answer, and the
   chosen value stays selected and read-only. No client draws a ring on an option.
+- **Phone: one line at rest (#935, the owner, 2026-11-05).** Below 760 the box starts at one
+  line, 52 tall, with Attach before the text and Send after it, as the native composers do. It
+  grows a line at a time to six lines of text, then scrolls inside.
+- **While a question waits** (§5.3), one line above the box in `needs` text: "Answer its
+  question first. Go to the question". The link is a scroll the app makes to the question
+  (§6.2: it leaves the header as it was) and puts focus on its first choice. With the notice,
+  the reply area is 99 at rest on a phone.
 - **Platform styling:**
   - Windows and the PWA: a card with a 2 px Bridge bottom edge.
   - macOS: a capsule field.
   - iOS: a capsule field over the keyboard.
   - Android: a filled field on `surfaceContainer`.
+- **Phone: compact while reading (#935).** Below 760 the reply area floats over the
+  conversation's foot, and mirrors the header (§6.2). A session opens with it in full.
+  - **Near the end,** it rides down with the scroll, and past its room it is compact: a
+    pinned 48 bar (plus the safe area) holding a one-line copy of the box, the draft's first
+    line or the placeholder. The copy is drawn, not read, and is not a tab stop; a tap on it
+    brings the box back in full and focuses it.
+  - **Away from the end,** 32 up sends it away and 64 down brings it back, with its own
+    count. The end always shows it in full. A draft is never hidden: the bar shows its first
+    line. Like the header, it never expands over the focused control: while that control
+    would be under it, it waits, still counting, until the control would stay in view.
+  - **Focus anywhere in the reply area** brings it back at once and holds it. A scroll the
+    app makes keeps it as it was, unless it lands at the end, where it shows in full. On a
+    screen shorter than twice the header it folds with the header.
+  - **Reduced motion:** a cross-fade, as the header's. From 760 it never collapses.
 
 ### 6.6 Machines
 
@@ -1514,7 +1598,8 @@ question, as choosing its row does.
 **Android (Compose, later):**
 - **Sessions:** a Material 3 search bar, filter chips (Needs you · N first), list items, an
   extended "New session" FAB, and a navigation bar.
-- **Session:** a top app bar, assist chips for delegates, and the composer on
+- **Session:** a top app bar, assist chips for delegates on a tablet (a phone has the
+  Delegates tab, §6.2), and the composer on
   `surfaceContainer`.
 
 **PWA:**
@@ -1700,6 +1785,14 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   facts of its own; what is drawn keeps them.
 - **Reduced motion** stops all glyph animation, and turns every other motion into an
   instant change or a short cross-fade (§5.3). Nothing relies on motion alone.
+- **The phone's collapsing header** (§6.2, #620) hides nothing from assistive technology.
+  The folded parts stay in the tree and the tab order, focus reaching them brings the header
+  back, and collapsing is never announced. The bar's one-line copy is drawn only: the title is
+  read from the h2 and the status from the meta line. Nothing focused in the conversation
+  lands under the header, and the header never expands over the focused control. In high contrast the bar is `Canvas` with a
+  `CanvasText` hairline. The reply area's compact bar (§6.5, #935) is the same: its copy of the
+  draft is drawn only, focus anywhere in the reply area brings the box back in full, it never
+  expands over the focused control, and focus never lands on a hidden control.
 - **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
   menu key opens a row's menu, and Ctrl/⌘+K focuses search. The shortcut is named where
   search is (the Windows search box's tooltip, on hover or when Tab reaches it) and nowhere

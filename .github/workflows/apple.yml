@@ -10,6 +10,13 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels its older run (as in ci.yml, #431): a superseded run on
+# a macOS runner only holds capacity other work is queued for. A push to main is grouped by its
+# own run id, so it is never grouped with another run and never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   native-clients:
     runs-on: macos-15

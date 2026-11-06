@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #620: a strip of phone frames</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<!-- A proposal the owner decided on 2026-11-04 (ui.md §6.2 is now the spec): docs/design/proposals/620-compact-header.md. Each frame is a Proposal-620-Frame. -->
+<div style="width: {{bw}}px; height: {{bh}}px; box-sizing: border-box; padding: 32px; background: {{t.bg}}; color: {{t.text}}; font-family: 'Segoe UI Variable Text', system-ui, -apple-system, Roboto, sans-serif; overflow: hidden">
+  <div style="display: flex; align-items: center; gap: 12px">
+    <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.bridge}}; background: {{t.tag}}">Proposal #620 · Decided (owner, 2026-11-04)</span>
+    <span style="font-size: 12px; color: {{t.text2}}">{{t.name}}</span>
+  </div>
+  <h1 style="margin: 10px 0 2px; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 22px; line-height: 28px; font-weight: 600">{{b.title}}</h1>
+  <p style="margin: 0 0 24px; font-size: 13px; line-height: 18px; color: {{t.text2}}; max-width: 1300px">{{b.sub}}</p>
+  <div style="display: flex; gap: {{gap}}px; align-items: flex-start">
+    <sc-for list="{{b.frames}}" as="fr">
+      <dc-import name="Proposal-620-Frame" theme="{{theme}}" f="{{fr}}" hint-size="300px,900px"></dc-import>
+    </sc-for>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"board":{"editor":"enum","options":["phone","sizes","android","rules","rest","bottom","access"],"default":"phone"},"$preview":{"width":1720,"height":1060}}'>
+const THEMES = {
+  dark: { bg: '#1B1E21', text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', bridge: '#2DD4BF', tag: 'rgba(45,212,191,.14)', name: 'Dark' },
+  light: { bg: '#E6E9EC', text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', bridge: '#0B7A6E', tag: 'rgba(11,122,110,.12)', name: 'Light' },
+};
+const BOARDS = {
+  phone: {
+    title: 'PWA on an iPhone (390 × 844): the header collapses as you scroll, and comes back as you scroll up',
+    sub: 'At rest, as the owner ruled on 2026-11-05: the title in at most two lines, one meta line and the tabs, 152 pt, with no delegate strip (the Delegates tab carries the count). Scrolling down slides the title, the meta line and the tabs up under one pinned 48 pt bar (Back, the session’s glyph, the title on one line, More), tied to your finger as iOS’s large title is. Scrolling back up 64 pt, or reaching the top, brings it all back, over the conversation. Collapsing never moves what you are reading. Marks on the right: chrome (amber), conversation (Bridge, with its share of the screen) and the reply area (grey), as measured in the PWA.',
+    w: 1900, h: 1060, gap: 24,
+    frames: [
+      { vp: 'i15', state: 'rest', measure: true, at: 'today', label: 'Today, at rest', notes: ['Header 151, chips 61, tabs 45: 257 pt above the conversation, and the reply area 196 below. The conversation gets 391 pt, 46%: the owner’s “about 45%”.'] },
+      { vp: 'i15', state: 'rest', offset: 300, measure: true, at: 'today', label: 'Today, scrolled', notes: ['Exactly the same. Nothing collapses: reading the rest of a turn, or getting to the question, is done through a 391 pt slot.'] },
+      { vp: 'i15', state: 'rest', decided: true, measure: true, at: 'proposed', label: 'Proposed, at rest: no delegate strip', notes: ['The title in at most two lines, one meta line and the tabs: 152 pt, in every delegate state. No delegate strip: the Delegates tab carries the count (“Delegates 3”). Opening a session always shows it like this, at the top.'] },
+      { vp: 'i15', state: 'compact', offset: 240, measure: true, at: 'proposed', label: 'Proposed, scrolled down', notes: ['Once the header has slid under the bar, the conversation gets 600 pt, 71% of the screen: 209 pt more.', 'The needs glyph stays in the bar while the session waits on you.'], sr: 'Nothing is announced. The heading is the same h2, now one line.' },
+      { vp: 'i15', state: 'rest', decided: true, offset: 260, measure: true, at: 'proposed', label: 'Proposed, scrolled back up', notes: ['64 pt of scrolling up brings the whole header back where you are, over the conversation, as Safari’s and Chrome’s bars come back. Nothing under it moves. Reaching the top does the same.'] },
+    ],
+  },
+  sizes: {
+    title: 'Four phones, today and while scrolled: the conversation’s share of the screen',
+    sub: 'Today’s PWA measured with Playwright at each size, with a two-line title, a delegate chip row and a pending question; the proposed column replaces the header, chips and tabs with the 48 pt bar and keeps everything else. The smallest phone gains most: its conversation doubles.',
+    w: 2560, h: 900, gap: 14,
+    frames: [
+      { vp: 'se', k: 0.56, state: 'rest', offset: 300, measure: true, at: '375 × 667', label: 'Today', notes: ['214 pt, 32%.'] },
+      { vp: 'se', k: 0.56, state: 'compact', offset: 300, measure: true, at: '375 × 667', label: 'Scrolled, proposed', notes: ['423 pt, 63%: ×2.0.'] },
+      { vp: 'i15', k: 0.56, state: 'rest', offset: 300, measure: true, at: '390 × 844', label: 'Today', notes: ['391 pt, 46%.'] },
+      { vp: 'i15', k: 0.56, state: 'compact', offset: 300, measure: true, at: '390 × 844', label: 'Scrolled, proposed', notes: ['600 pt, 71%: ×1.5.'] },
+      { vp: 'max', k: 0.56, state: 'rest', offset: 300, measure: true, at: '430 × 932', label: 'Today', notes: ['497 pt, 53%. The meta line fits in two lines here.'] },
+      { vp: 'max', k: 0.56, state: 'compact', offset: 300, measure: true, at: '430 × 932', label: 'Scrolled, proposed', notes: ['688 pt, 74%: ×1.4.'] },
+      { vp: 'android', k: 0.56, state: 'rest', offset: 300, measure: true, at: '412 × 915', label: 'Android, today', notes: ['480 pt, 52%.'] },
+      { vp: 'android', k: 0.56, state: 'compact', offset: 300, measure: true, at: '412 × 915', label: 'Android, scrolled', notes: ['671 pt, 73%: ×1.4.'] },
+    ],
+  },
+  android: {
+    title: 'PWA on Android (412 × 915): the same collapse, read as Material’s collapsing top app bar',
+    sub: 'The PWA follows the Windows design on every platform (§7), so the bar is the same one. It behaves as an Android user expects of a large top app bar: it collapses as content scrolls up under it and returns with the first scroll back (enterAlways), and never leaves the screen entirely.',
+    w: 1600, h: 1080, gap: 24,
+    frames: [
+      { vp: 'android', state: 'rest', measure: true, at: 'today', label: 'Today, at rest and scrolled', notes: ['Header 133 (the meta line fits in two lines at 412), chips 61, tabs 45: 239 pt. The conversation gets 480 pt, 52%.'] },
+      { vp: 'android', state: 'rest', decided: true, measure: true, at: 'proposed', label: 'Proposed, at rest: no delegate strip', notes: ['The title in at most two lines, one meta line and the tabs: 152 pt. No delegate strip: the Delegates tab carries the count.'] },
+      { vp: 'android', state: 'compact', offset: 240, measure: true, at: 'proposed', label: 'Proposed, scrolled down', notes: ['The 48 pt bar: 671 pt of conversation, 73%. The system back gesture still goes back to the list.'] },
+      { vp: 'android', state: 'rest', decided: true, offset: 260, measure: true, at: 'proposed', label: 'Proposed, scrolled back up', notes: ['The header returns over the conversation; the tabs are back in reach. Reaching the top does the same.'] },
+    ],
+  },
+  rules: {
+    title: 'When it collapses and when it comes back: tied to your finger at the top, thresholds after that',
+    sub: 'Near the top the header follows your scrolling; further down, thresholds decide. Only your own scrolling counts: a finger, a wheel, the keys. A response growing below, a scroll to an arriving question and a restored position never fold the header. Counting restarts whenever the direction changes, so the small back-and-forth of reading changes nothing. Coming back takes 64 pt, twice the 32 pt that sends it away again.',
+    w: 1660, h: 940, gap: 18,
+    frames: [
+      { vp: 'i15', k: 0.6, state: 'rest', decided: true, at: '0 pt', label: 'Opened: at the top', notes: ['A session always opens at rest, header in full.'] },
+      { vp: 'i15', k: 0.6, state: 'rest', decided: true, ride: 100, at: '↓ 100 pt', label: 'Near the top: it rides with you', notes: ['Until the header is under the bar (104 pt here) it moves with your finger, as iOS’s large title does; the title reappears in the bar on one line. Nothing jumps and no gap opens.'] },
+      { vp: 'i15', k: 0.6, state: 'compact', offset: 240, at: '↓ 104 pt', label: 'Collapsed', notes: ['The bar is all that is left. The header slid off the conversation, which never moved under it.'] },
+      { vp: 'i15', k: 0.6, state: 'compact', offset: 200, at: '↑ 40 pt', label: 'Back up a little: stays compact', notes: ['Under 64 pt up, the bar stays. Reading back a paragraph doesn’t bring the header over it.'] },
+      { vp: 'i15', k: 0.6, state: 'rest', decided: true, offset: 150, at: '↑ 64 pt', label: 'Comes back', notes: ['64 pt up in one direction brings the whole header back over the conversation (standard duration and easing); 32 pt down sends it away again. A tap on the bar’s title, or reaching the top, does the same.'] },
+      { vp: 'i15', k: 0.6, state: 'compact', offset: 520, glyph: 'needs', at: 'waiting', label: 'Waiting on you, collapsed', notes: ['The needs glyph, on its disc, leads the bar’s title for as long as the question waits. The bar’s copy is drawn, not read: the status is read once, from the meta line (ui.md §6.2, §9.2).'], sr: '“Fix the witness timer after a resume, heading level 2” … “Waiting on you · 3 delegates still running · Demo machine”' },
+    ],
+  },
+  rest: {
+    title: 'Optional, at rest: a clamped title, a one-line meta, and where the chips and tabs go (D3, D4)',
+    sub: 'Secondary decisions; keeping today’s header is recommended, since the owner finds it fine at rest and the collapse already returns the room while reading. The one at-rest case the measurements flag is a long title: today it has no limit, and a four-line title takes 64 pt more.',
+    w: 1900, h: 1060, gap: 22,
+    frames: [
+      { vp: 'i15', state: 'rest', long: true, measure: true, at: 'D3 · 1, recommended', label: 'Keep: 24/32, no limit', notes: ['A long title wraps as far as it needs: here four lines, a 215 pt header. Rare, and the collapse folds it away as soon as you scroll.'] },
+      { vp: 'i15', state: 'rest', long: true, top: 'oneline', measure: true, at: 'D3 · 2', label: '24/32, at most two lines; meta on one line', notes: ['The title stops at two lines with an ellipsis; the full title is in Details and the heading’s accessible name. The meta line keeps one line and the repository gives way first.'] },
+      { vp: 'i15', state: 'rest', long: true, top: 'small', measure: true, at: 'D3 · 3', label: '20/26, two lines; meta on one line', notes: ['Smaller than the phone’s 24/32 title token: a new size for one place. 103 pt of header.'] },
+      { vp: 'i15', state: 'rest', top: 'onerow', measure: true, at: 'D4 · 2', label: 'Tabs and chips in one row', notes: ['One 52 pt row that scrolls sideways: tabs first, then the chips. Saves 53 pt, but the chips start off screen at 390 and narrower.'] },
+      { vp: 'i15', state: 'rest', top: 'intab', measure: true, at: 'D4 · 3', label: 'Chips into the Delegates tab', notes: ['No chip row on a phone: the Delegates tab says how many are running. Saves 61 pt, at the cost of the at-a-glance strip §6.3 gives phones.'] },
+    ],
+  },
+  bottom: {
+    title: 'Optional, the bottom: a one-line notice and a reply box that starts at one line (D5, D6)',
+    sub: 'Secondary decisions; keeping today’s is recommended. Once the header collapses, the reply area is the larger piece of chrome (196 pt against the bar’s 48), so this is where any further room would come from. Each frame is collapsed, with a question waiting.',
+    w: 1900, h: 1060, gap: 22,
+    frames: [
+      { vp: 'i15', state: 'compact', offset: 300, measure: true, at: 'D5 · 1 · D6 · 1, recommended', label: 'Keep: the two-line notice, a two-line box', notes: ['196 pt: the notice’s two lines, then the box with Attach and Send under its two lines.'] },
+      { vp: 'i15', state: 'compact', offset: 300, bottom: 'notice', measure: true, at: 'D6 · 2', label: 'One-line notice with a link', notes: ['“Answer its question first. Go to the question”: one line, needs’ text, and the link scrolls to the question and focuses its first choice. 175 pt.'] },
+      { vp: 'i15', state: 'compact', offset: 300, bottom: 'one', measure: true, at: 'D5 · 2', label: 'A box that starts at one line', notes: ['Attach and Send sit beside one line of text, 52 pt tall, as the native composers do. 120 pt with today’s notice.'] },
+      { vp: 'i15', state: 'compact', offset: 300, bottom: 'both', measure: true, at: 'D5 · 2 + D6 · 2', label: 'Both', notes: ['99 pt: the conversation gets 697 pt, 83%.'] },
+      { vp: 'i15', state: 'compact', offset: 300, bottom: 'grown', held: true, draft: 'Push it, but run the witness tests once more on the branch first and tell me how long the full suite takes now that the fix is in.', measure: true, at: 'D5 · 2', label: 'Growing as you type', notes: ['The box grows a line at a time up to 6 lines (144 pt of text), then scrolls inside. Send stays at the foot of the box, by the thumb.'] },
+    ],
+  },
+  access: {
+    title: 'Keyboard, screen reader, reduced motion and high contrast',
+    sub: 'The heading is never removed, only restyled; focus is never hidden; and the folded parts stay in the accessibility tree and the tab order, so reaching any of them brings the header back first.',
+    w: 1340, h: 1080, gap: 24,
+    frames: [
+      { vp: 'i15', state: 'rest', decided: true, offset: 300, focus: 'tab', at: 'keyboard', label: 'Focus inside the header expands it', notes: ['Shift+Tab from the conversation, or a VoiceOver or TalkBack swipe, reaches the Delegates tab: the header comes back before the focus ring draws, and stays while focus is in it.'] },
+      { vp: 'i15', state: 'compact', offset: 300, focus: 'back', at: 'screen reader', label: 'The bar keeps its heading', notes: ['The same h2, one line. Back and More keep their names. The bar’s copy is drawn, not read: the status is read once, from the meta line. Collapsing announces nothing and moves no focus.'], sr: '“Back, button” … “Fix the witness timer after a resume, heading level 2” … “Waiting on you · 3 delegates still running · Demo machine”' },
+      { vp: 'i15', state: 'compact', offset: 300, hc: true, at: 'forced colours', label: 'High contrast (Night sky; Desert in light)', notes: ['The bar is Canvas with a CanvasText rule under it; the glyph keeps its system-colour form (§9). Nothing relies on a shadow or a tint to show the bar’s edge.'] },
+      { vp: 'i15', state: 'compact', offset: 300, at: 'reduced motion', label: 'Reduced motion: a cross-fade', notes: ['Nothing travels: the full header and the bar cross-fade over crossFade (83 ms). The thresholds are unchanged.'] },
+    ],
+  },
+};
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const b = BOARDS[this.props.board] || BOARDS.phone;
+    return { t: THEMES[theme], theme, b, bw: b.w, bh: b.h, gap: b.gap || 24 };
+  }
+}
+</script>
+</body>
+</html>
