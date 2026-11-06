@@ -257,7 +257,14 @@ export class ReplyBox {
     e.attach.hidden = !this.#attach;
     e.attach.disabled = held || pending || this.#files.length + this.#preparing >= AttachmentLimits.perReply;
     for (const b of e.files.querySelectorAll('button.remove')) { b.disabled = pending; }
-    e.send.disabled = held || pending || !!this.#busyTimer || this.#preparing > 0 || (text.trim() === '' && this.#files.length === 0);
+    // Nothing to send, or held: disabled, and focus, if it was here, goes back to the words (a
+    // delivered reply empties the box). On its way, or back after busy: not disabled, which
+    // would drop focus to the top of the page (#369); #send does nothing meanwhile, and the
+    // service sends one request per reply whatever is pressed.
+    const off = held || this.#preparing > 0 || (text.trim() === '' && this.#files.length === 0);
+    if (off && e.send === e.send.ownerDocument.activeElement && !e.input.disabled) { e.input.focus(); }
+    e.send.disabled = off;
+    if (!off && (pending || this.#busyTimer)) { e.send.setAttribute('aria-disabled', 'true'); } else { e.send.removeAttribute('aria-disabled'); }
     e.resend.disabled = !!this.#offline;
   }
 

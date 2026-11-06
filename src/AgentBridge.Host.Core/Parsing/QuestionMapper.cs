@@ -43,16 +43,28 @@ internal static class QuestionMapper
     // and a command past the hook's CommandMax is kept to its start) is truncated, so no client
     // approves what it cannot show; one with no command at all (a tool that runs none) shows the
     // tool and is answered at the machine.
-    public static Question CodexApproval(string id, string? tool, string? command, bool cut, string preview, DateTimeOffset askedAt, bool atMachine)
+    //
+    // Its id is the marker's DecisionId and a digest of what is shown (CodexApprovalId, #958),
+    // worked out from the content alone; atMachine (agent-ha-bridge already typed into it) is
+    // laid on after, so it holds the approval without changing which one it is.
+    public static Question CodexApproval(string decisionId, string? tool, string? command, bool cut, string preview, DateTimeOffset askedAt, bool atMachine)
     {
+        var shown = CodexApprovalShown(tool, command, cut, preview, askedAt);
+        var q = shown with { Id = CodexApprovalId.For(decisionId, tool, command, cut, preview, shown) };
+        return atMachine ? q with { AnswerAtMachine = true } : q;
+    }
+
+    static Question CodexApprovalShown(string? tool, string? command, bool cut, string preview, DateTimeOffset askedAt)
+    {
+        const string id = "";
         var who = $"Allow **{CopilotPermission.Plain(string.IsNullOrWhiteSpace(tool) ? "Codex" : tool)}**?";
         if (command is not { Length: > 0 })
         {
             var legacy = preview.StartsWith("Needs approval: ", StringComparison.Ordinal) ? preview["Needs approval: ".Length..] : preview;
-            var held = Approval(id, legacy.Length > 0 ? $"{who}\n\n{CopilotPermission.Fence(legacy)}" : who, askedAt, atMachine);
+            var held = Approval(id, legacy.Length > 0 ? $"{who}\n\n{CopilotPermission.Fence(legacy)}" : who, askedAt);
             return tool is null && command is null ? held with { Truncated = true } : held with { AnswerAtMachine = true };
         }
-        var q = Approval(id, $"{who}\n\n{CopilotPermission.Fence(command)}", askedAt, atMachine);
+        var q = Approval(id, $"{who}\n\n{CopilotPermission.Fence(command)}", askedAt);
         if (cut) { q = q with { Truncated = true }; }
         // Whatever the command, what is sent is that shape, which every client checks before it
         // offers Approve; one that is not would be answered nowhere else, so it is held here. One

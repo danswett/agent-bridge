@@ -44,11 +44,23 @@ with rollback, and the publication writer (DSWETT-HOME) moves last.
 **Current goal (decided 2026-10-29):** parity with agent-ha-bridge first, then migrate
 real machines. New features wait, except the few marked "beyond parity" in parity.md.
 
-**HA retention (owner, 2026-11-02):** the optional HA dashboard must keep working
-without any legacy daemon. #317 tracks native fenced publication (#318) followed by
-writer migration, rollback and rehearsal (#319). This replaces the planned dashboard
-retirement, not the current G7 migration refusal. Copilot CLI session
-`d5ac689c-a9f6-4618-8e8f-9220793487f4` owns this implementation; coordination is on #170.
+**HA redirect (owner, 2026-11-02; reconciled 2026-11-05):** HA functionality must
+remain without any legacy daemon. #387 redirects delivery to the separate
+[HA integration and companion card](https://github.com/danswett/agent-bridge-home-assistant/issues/1);
+HA owns entities/actions/presentation and Bridge remains generic at protocol/core.
+The current host connector is compatibility, not that target implemented.
+#318's permanent native publisher direction is superseded, not completed.
+#317 remains the parent goal, #319 the verified reversible production cutover,
+and #389 cleanup only after replacement. G7 still refuses writer migration.
+[Disposition and dependencies](ha-connector.md#retaining-ha-without-a-legacy-daemon-317)
+retain #322 and existing owners. #331/#337 closed unmerged on 2026-11-05 at
+12:45 PT, with branches and heads kept. #345 closed
+unmerged on 2026-11-05 at 00:59:49 PT, with sources retained. #394's original
+architecture/enrollment proposal at `d9382fd31dc9fad9d34919317bf7a3265de43c18`
+is preserved historical, unadopted evidence, withdrawn from its corrected
+documentation-only scope. #522 is merged design and #534 a draft read profile
+with reference fixtures, not proof of installable HA delivery.
+Copilot CLI session `d5ac689c-a9f6-4618-8e8f-9220793487f4` retains coordination.
 
 ## 2. Where things are (2026-11-02)
 
@@ -237,13 +249,16 @@ legacy daemon or HA changes. Scope is coordinated on #170.
 - **Next on track A:** S2 (#174), using the sub-agent transcripts the soak recorded (in `~/repos/wt/agent-bridge-soak-transcripts`, not committed). #175 still needs its live check.
 - **Queued backend:** #231 (agents installed later), #257 (provider-neutral account ID), #239, #206, #207, #241.
 
-In flight on #317 (publication owner above):
-- #318: first slice is the native protocol-1 policy/fence contract, verified against
-  legacy-function recordings (`PublicationTests`). It does not enable publication.
-  Next: protected receipts and actual HA resource/dashboard observation, renderer and
-  versioned card publication, then integration into the connector.
-- #319: writer cutover remains blocked until #318 and the disposable-HA handover/
-  rollback rehearsal pass. No live HA or legacy-install changes during development.
+Historical native publication work under #317, superseded by #387's redirect:
+- #322's merged protocol-1 policy/fence contract and recordings are retained
+  compatibility evidence, not publication enablement. #331/#337 closed unmerged on
+  2026-11-05 at 12:45 PT, with branches and heads kept; #345 closed unmerged on
+  2026-11-05 at 00:59:49 PT, with sources retained. The
+  [retain/extract/supersede boundaries](ha-connector.md#publisher-work-disposition-387)
+  replace the former instruction to continue that stack.
+- #319 still gates writer cutover on the replacement integration/card and
+  disposable-HA handover/rollback verification. No live HA or legacy-install
+  changes during development; no cleanup under #389 before that gate.
 
 ## 3. Shadow gate (#40)
 
@@ -287,9 +302,10 @@ closed. The steps below are the machine and migration steps within it.
 2. ~~**HOME view-only install**~~ Done 2026-11-01: the PWA lists HOME online and read-only.
 3. **Migrate machines while the soak runs** (owner, 2026-11-01): ~~ARM8~~ done. ~~DEV-VM1~~ done 11-02 14:16 PT. Its keep-awake has landed (#224), and the commands are with the owner. Then DASDESK when it's online, and the Mac after P5. Repeat rehearsal step E6-07 (worktree reclaim) on one of them.
 4. **The VM soak's gate** (§3): report it when it passes, then run `-Finish` to deallocate.
-5. **Writer migration** (P7, #317): native shared publication first (#318), then a
-   reversible, verified handover (#319). Keep the HA dashboard working without a
-   legacy daemon; do not bypass G7 or retire the dashboard as a migration prerequisite.
+5. **Writer migration** (P7, #317): verify the separate HA integration/card
+   replacement (#387), then reversible handover/rollback (#319). Do not resume
+   superseded #318 publication work, bypass G7, or retire HA functionality as a
+   migration prerequisite. Cleanup remains gated under #389.
 6. **UI design track** (§5).
 7. **Later:** code signing, macOS (P5), native phone apps (P8), relay scale (S9), observability (§5.10), and decommissioning the old relay stamp in the trial subscription (awaiting the owner's approval).
 
@@ -327,6 +343,7 @@ took over from f7ba0bcc when DEV-VM1 began migrating. Quality now owns all merge
 | U8 | #176 | Delegates in both clients | PWA part 1 (attribution) done in #230. **App done**: #250 (closed #229), after a clean security re-review. PWA part 2 (strip, tab, inspector) is pushed to `ui/u8-pwa-delegates`, stacked on #252 (in review, security review next). It becomes a PR once #252 merges |
 | U9 | #232 | Motion (ui.md §5.3), signed off 2026-11-02 | Spec and tokens done in #233. In review: #261 (PWA, draft; security review before merge) and #275 (app, draft) |
 | U10 | #253 | One row, one question: Needs you becomes a filter, the question lives only in the conversation, and an approval's notification only opens it. Signed off 2026-11-02 (option A, every recommended answer) | Spec: #302 (ui.md, subagents.md §7, ui-plan.md, boards). Next, three slices, each with a security review: U10a PWA, U10b Windows app (its toasts already done in #377), U10c Apple in #260 (@welshofer) |
+| | #600 | Reply and answer progress: one receipt under the box or on the question card, updated in place (Sending… / Sent / Passed to the agent / Up next / Delivered). **Decided by the owner 2026-11-04**, every recommended option (D1–D7: plain words, 400 ms quiet window and dwell, 3/5/10 s stalls, no timings in the UI, ring plus check badge, text2, older hosts unchanged); follow-ups settled 09:10 PT (#477): the `check` icon badge, "You answered · value", older hosts get the same waiting words and Delivered (superseding D7); **revised on re-review the same day to "quiet unless something's wrong"** (#617): Send's ring is the only in-flight signal, Send cross-fades to a check for about 1 s on Delivered, a line appears only for exceptions, stages are still spoken, and the check badge is dropped | Spec: #617 (normative in ui.md §6.5, with §5.3, §6.4, §8, §9; proposal and boards in `docs/design/proposals/600-reply-progress`). Builds on both clients after the host side, #598 / PR #611 |
 | | #167 | App icon (#167's last deliverable) | **Done**: #278. Windows and the PWA are generated from `tokens.json` `appIcon`. The SVG sources for macOS, iOS and Android are in `design/app-icon`, and their catalogs come with P5 and P8. Three proportions not on the design board need the owner's eye (#170) |
 | | #231 | Settings: each agent's state and "Set up" (UI half) | Not started; waits for the backend half (track A) |
 | | #181 | Monospace: **Slipgates Mono** (was Agent Bridge Mono; our OFL build of Iosevka, `design/fonts/slipgates-mono`), decided 2026-11-01 | Bundled in both clients (U3). Rebuilt at a normal 600 width for #295, and with Medium and Vietnamese for #544 |
@@ -531,6 +548,8 @@ agent-ha-bridge releases from this work:
 | 11-02 | Attention (#253), signed off with option A and every recommended answer:<br>• Needs you is a filter of the rows, in their own order, starting off at each launch.<br>• A row says only its status.<br>• The question is drawn and answered only in the conversation. Approve once escapes characters not drawn where they run, and stays offered.<br>• Approving on a phone takes two taps.<br>• An approval's notification only opens its question; other questions keep their buttons.<br>• The macOS menu bar extra names the waiting sessions.<br>Spec in #302; reasoning in docs/design/proposals/253-attention.md |
 | 11-03 | Type (#544, #557), every recommendation approved: **Slipgates Sans** (option B, a tuned Inter) is the text face on every platform, with hinted statics in one collection on Windows and the variable pair elsewhere; the monospace is **Slipgates Mono**, with Medium 500 and Vietnamese added; no client may synthesize a weight or style (ui.md §4.2); real italic on Windows; the reading measure about 8% wider (770 px). The interim Inter Tight wordmark (#558) moves to Slipgates Sans |
 | 11-03 | Type width (#544 §11): Slipgates Sans was asked whether it reads condensed, and is tuned rather than replaced: the text cut (opsz 14) at every size on every platform, +2% tracking on the Title role and the wordmark only (`type.tracking`; body text untracked), and the wordmark in Slipgates Sans SemiBold |
+| 11-03 | First-run setup and Settings (#384), option (a) in all 13 decisions: Working is the neutral ring with a check, with no success colour; readiness rows reuse the `done`, `idle`, `ended` and `failed` glyphs; one-line consent, security and cost lines are allowed in Settings and setup only; setup's stepper replaces Settings' pane with the rail kept; Overview is the health list; device approval of permission prompts stays On by default, and folder-trust answers from devices Off; Subfolders is per folder, Off, once the host supports it; test sessions close afterwards by default; Local only is a neutral chip; the PWA shows Settings read only; Install Node.js goes through the same consent card; Agency is its own agent sharing Copilot CLI's hooks and sign-in. Spec in ui.md §6.8–§6.10 (#532); reasoning and boards in docs/design/proposals/384-first-run.md |
+| 11-04 | An agent installed after the bridge (#231), option (a): offered as Collaboration's discovery is (§6.7), with a grey dot on Settings › Agents and an Overview card, "*Agent* *version* is installed · Set it up to see its sessions in Slipgates", with Set up and Not now. Not now holds per agent and version. Never a toast, a push or a count, and never on a read-only host. Spec in ui.md §6.9 and §9 (#532) |
 | 11-04 | Product priorities (#696), signed off by the owner. A Head of Product owns the order of work. **Now:** Trust (input integrity and approval safety; #662 raised to P0) and Daily-use reliability. **Next:** Migration, Setup, Rebrand, Ops basics. **Later:** Performance, Conversation UI. **Parked:** Polish and motion (accessibility bugs exempt), Apple/macOS, Federation (#519). The P0 PRs land first, and no new slice starts in a Later or Parked epic until #209, #212, #220 and #662 close. New features start Parked |
 | 11-04 | Agent messaging on the relay, same account only, becomes its own goal (#728, Next, first), split from #519's cross-account federation, which stays Parked. It is gated on #55, and #55 moves up to sixth in Trust |
 | 11-04 | Dogfood readiness (#747, Next, second; absorbs Setup): 5 beta testers on Windows and the phone PWA, an opt-in beta telemetry tier with a pseudonymous install id (an amendment to design.md §5.10, written in #732), feedback in a private repository, and #55 not required before the first tester. Entry gates are on #731 |

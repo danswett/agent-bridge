@@ -14,6 +14,22 @@ public sealed class HostSettingsTests : IDisposable
         return HostSettings.Load(folder);
     }
 
+    // Only a file not found is absent: a config.json that is a folder (or whose metadata cannot be
+    // read) was read as no settings at all, restore and remote approval on, by File.Exists.
+    [Fact]
+    public void A_config_json_that_cannot_be_read_as_a_file_turns_everything_off_rather_than_reading_as_absent()
+    {
+        Directory.CreateDirectory(Path.Combine(folder, HostSettings.FileName));
+
+        var (settings, problem) = HostSettings.Load(folder);
+
+        Assert.Contains("could not be read", problem);
+        Assert.False(settings.RestoreOnStart);
+        Assert.False(settings.RemoteApproval);
+        Assert.True(settings.ReadOnly);
+        Assert.Equal((HostSettings.Default, (string?)null), HostSettings.Load(Path.Combine(folder, "missing")));
+    }
+
     [Fact]
     public void Remote_approval_is_on_without_a_file_or_a_setting_and_off_only_when_set_false()
     {
@@ -69,6 +85,25 @@ public sealed class HostSettingsTests : IDisposable
 
         Assert.Equal(on, settings.Push);
         if (problem is null) { Assert.Null(said); } else { Assert.Contains(problem, said); }
+    }
+
+    [Theory]
+    [InlineData(null, true, null)]
+    [InlineData("{ \"sessions\": {} }", true, null)]
+    [InlineData("{ \"sessions\": { \"restoreOnStart\": true } }", true, null)]
+    [InlineData("{ \"sessions\": { \"restoreOnStart\": false } }", false, null)]
+    [InlineData("{ \"sessions\": { \"restoreOnStart\": \"yes\" } }", false, "sessions.restoreOnStart is not true or false")]
+    [InlineData("{ \"sessions\": true }", false, "sessions is not an object")]
+    [InlineData("not json", false, "is not valid")]
+    public void Restoring_sessions_after_a_reboot_is_on_unless_set_false_and_a_value_that_is_not_true_or_false_turns_it_off(string? text, bool on, string? problem)
+    {
+        var (settings, said) = With(text);
+
+        Assert.Equal(on, settings.RestoreOnStart);
+        if (problem is null) { Assert.Null(said); } else { Assert.Contains(problem, said); }
+        // Off because the file has a problem starts nothing, but keeps what a reboot took to offer;
+        // off because the person said so keeps nothing (sec-813).
+        Assert.Equal(problem is not null, settings.RestoreKept);
     }
 
     [Fact]
@@ -172,6 +207,17 @@ public sealed class HostSettingsTests : IDisposable
         Assert.Equal(1, Run("config", "set", "delivery.readOnly", "yes"));
         Assert.Equal(0, Run("config", "set", "delivery.readOnly", "true"));
         Assert.True(HostSettings.Load(folder).Settings.ReadOnly);
+    }
+
+    [Fact]
+    public void Restoring_sessions_is_turned_off_at_the_machine_with_the_cli_and_only_with_true_or_false()
+    {
+        Assert.Equal(1, Run("config", "set", "sessions.restoreOnStart", "no"));
+        Assert.True(HostSettings.Load(folder).Settings.RestoreOnStart);
+        Assert.Equal(0, Run("config", "set", "sessions.restoreOnStart", "false"));
+        Assert.False(HostSettings.Load(folder).Settings.RestoreOnStart);
+        Assert.Equal(0, Run("config", "unset", "sessions.restoreOnStart"));
+        Assert.True(HostSettings.Load(folder).Settings.RestoreOnStart);
     }
 
     [Fact]

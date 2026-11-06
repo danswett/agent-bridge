@@ -1,14 +1,18 @@
 // Tiles rendered board PNGs into one contact sheet, offline and deterministically.
-// Usage: node contact-sheet.js <dir> <prefix> [out.png] [columns]
+// Usage: node contact-sheet.js <dir> <prefix> [out.png] [columns] [--note=<text>]
 // Example: node contact-sheet.js ../../docs/design/proposals/384-first-run proposal-384-
+// --note replaces the subtitle's "proposal mockups, not approved", for a decided proposal.
 const fs = require('fs');
 const path = require('path');
 const { PNG } = require('pngjs');
 const { chromium } = require('playwright');
 
-const [dirArg, prefix = '', outArg, colsArg] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const noteArg = args.find(a => a.startsWith('--note='));
+const [dirArg, prefix = '', outArg, colsArg] = args.filter(a => !a.startsWith('--note='));
+const note = noteArg ? noteArg.slice('--note='.length) : 'proposal mockups, not approved';
 if (!dirArg) {
-  console.error('usage: node contact-sheet.js <dir> <prefix> [out.png] [columns]');
+  console.error('usage: node contact-sheet.js <dir> <prefix> [out.png] [columns] [--note=<text>]');
   process.exit(2);
 }
 const dir = path.resolve(dirArg);
@@ -52,7 +56,7 @@ main { display: grid; grid-template-columns: repeat(${cols}, ${cellW}px); gap: $
 figure { margin: 0; }
 .img { width: ${cellW}px; height: ${cellH}px; display: grid; place-items: center; background: #E6E6E6; border-radius: 4px; overflow: hidden; }
 figcaption { font-size: 12px; line-height: 16px; padding-top: 6px; }
-</style></head><body><h1>${esc(prefix || path.basename(dir))}</h1><p>${files.length} boards · proposal mockups, not approved</p><main>${cells}</main></body></html>`;
+</style></head><body><h1>${esc(prefix || path.basename(dir))}</h1><p>${files.length} boards · ${esc(note)}</p><main>${cells}</main></body></html>`;
 
 (async () => {
   const browser = await chromium.launch();

@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Processes;
+using AgentBridge.Host.Core.Restore;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery.Launch;
@@ -45,6 +46,63 @@ public sealed class HeldWorktreeUsage(ISessionSource sessions, IWorktreeUsage? i
     }
 
     static WorktreeUsage Unknown(DiscoveryHeld held) => WorktreeUsage.Unknown($"session discovery is held, waiting on {held.Reason}");
+}
+
+// A session waiting to be restored after a reboot or a crash (#780) works in its folder as surely as
+// a live one does: the restore resumes it there. Its folders are added to the snapshot, and when they
+// cannot be known (the record could not be read) the snapshot is unknown, which keeps every worktree.
+// Asked afresh at each read, as discovery's hold is.
+public sealed class RestoreWorktreeUsage(IRestorePending pending, IWorktreeUsage? inner) : IWorktreeUsage
+{
+    public WorktreeUsage Read()
+    {
+        if (pending.Folders() is not { } waiting) { return WorktreeUsage.Unknown("the sessions waiting to be restored cannot be read"); }
+        var usage = inner?.Read() ?? WorktreeUsage.Unknown("this host has no way to read it");
+        if (!usage.Known || waiting.Count == 0) { return usage; }
+        var physical = new List<string>();
+        foreach (var w in waiting)
+        {
+            if (Place(w) is not { } p) { return WorktreeUsage.Unknown("the folder of a session waiting to be restored cannot be resolved"); }
+            physical.Add(p);
+        }
+        return usage with { Directories = [.. usage.Directories, .. physical] };
+    }
+
+    // Where a waiting session's folder is, or was. One that is gone (a subfolder deleted since) is
+    // placed under its nearest ancestor that still exists, resolved: the missing rest cannot be
+    // links. Reading every gone folder as unknown kept every worktree for the whole week its
+    // session was offered. Null only when that ancestor cannot be resolved (a link that is missing
+    // or cannot be read, or a file where a folder was): it may lead under any worktree.
+    static string? Place(string folder)
+    {
+        if (Folders.Physical(folder) is { } physical) { return physical; }
+        try
+        {
+            if (!Path.IsPathFullyQualified(folder)) { return null; }
+            var current = Path.GetFullPath(folder);
+            var missing = new Stack<string>();
+            while (!Present(current))
+            {
+                if (Path.GetDirectoryName(current) is not { } parent) { return null; }
+                missing.Push(Path.GetFileName(current));
+                current = parent;
+            }
+            return Folders.Physical(current) is { } root ? Path.Combine([root, .. missing]) : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
+    }
+
+    // Whether anything is there, a dangling link included (its attributes are its own). Anything
+    // but plain absence (an unreadable entry) throws, and leaves the folder's place unknown.
+    static bool Present(string path)
+    {
+        try
+        {
+            File.GetAttributes(path);
+            return true;
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return false; }
+    }
 }
 
 // A read-only safety snapshot, as agent-ha-bridge's Get-BridgeWorktreeUsage takes it: not

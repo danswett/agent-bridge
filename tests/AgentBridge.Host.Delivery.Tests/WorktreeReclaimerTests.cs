@@ -267,6 +267,52 @@ public sealed class WorktreeReclaimerTests : IDisposable
         Assert.False(Directory.Exists(finished));
     }
 
+    // #780: a session that died with a reboot or a crash is resumed in its worktree, so it keeps it
+    // as a live one does; and when what waits cannot be read, every worktree is kept.
+    [Fact]
+    public void A_worktree_whose_session_waits_to_be_restored_is_kept_and_all_are_kept_when_what_waits_cannot_be_read()
+    {
+        var waiting = Tree();
+        var finished = Tree();
+
+        Assert.Equal(0, Reclaim(new RestoreWorktreeUsage(new Pending(null), nobody)));
+        Assert.True(Directory.Exists(waiting) && Directory.Exists(finished));
+        Assert.Contains(logs, l => l.EndsWith("cannot be established (the sessions waiting to be restored cannot be read)", StringComparison.Ordinal));
+
+        // A folder whose place cannot be resolved (here a file where a folder was; a link that cannot
+        // be read) may lead under any of them.
+        var notAFolder = Path.Combine(root, "not-a-folder");
+        File.WriteAllText(notAFolder, "");
+        Assert.Equal(0, Reclaim(new RestoreWorktreeUsage(new Pending([Path.Combine(waiting, "src"), Path.Combine(notAFolder, "sub")]), nobody)));
+        Assert.True(Directory.Exists(finished));
+        Assert.Contains(logs, l => l.EndsWith("cannot be established (the folder of a session waiting to be restored cannot be resolved)", StringComparison.Ordinal));
+
+        Assert.Equal(1, Reclaim(new RestoreWorktreeUsage(new Pending([Path.Combine(waiting, "src")]), nobody)));
+        Assert.True(Directory.Exists(waiting));
+        Assert.False(Directory.Exists(finished));
+        Assert.EndsWith("a live session is working in it", Retained(waiting));
+    }
+
+    sealed class Pending(IReadOnlyList<string>? folders) : AgentBridge.Host.Core.Restore.IRestorePending
+    {
+        public IReadOnlyList<string>? Folders() => folders;
+    }
+
+    // sec-813: a waiting session's folder deleted since is placed under what is left of its path, so
+    // it keeps the worktree it was in, not every worktree for the week it is offered.
+    [Fact]
+    public void A_waiting_sessions_folder_that_is_gone_keeps_only_the_worktree_it_was_in()
+    {
+        var waiting = Tree();
+        var finished = Tree();
+
+        Assert.Equal(1, Reclaim(new RestoreWorktreeUsage(new Pending([Path.Combine(waiting, "deleted", "deeper")]), nobody)));
+
+        Assert.True(Directory.Exists(waiting));
+        Assert.False(Directory.Exists(finished));
+        Assert.EndsWith("a live session is working in it", Retained(waiting));
+    }
+
     [Fact]
     public void A_hold_that_begins_while_a_worktree_is_being_checked_keeps_it()
     {

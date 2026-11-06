@@ -172,6 +172,7 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                 if (Strings(ns["extraArgs"]) is { Count: > 0 } extra)
                 {
                     // agent-ha-bridge added them to every launcher's command line.
+                    // A restore passes them on only as Launchers.RestoreRefusal allows, as for any agent's (#837).
                     foreach (var id in AllLaunchers) { Put(Agent(id), "extraArgs", Array(extra), "newSession.extraArgs", $"launch.agents.{id}.extraArgs"); }
                 }
                 foreach (var id in AllLaunchers)

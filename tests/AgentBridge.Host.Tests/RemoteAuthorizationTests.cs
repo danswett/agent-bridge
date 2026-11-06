@@ -187,6 +187,35 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         Assert.False(readerChannel.Events.TryRead(out _));
     }
 
+    // #780: machine.restore names the sessions a reboot took. A host peer, which may not read
+    // sessions, is not told them in hello either, nor told when they change.
+    [Fact]
+    public async Task A_host_peer_is_not_told_the_sessions_a_reboot_took_but_a_person_and_a_reader_are()
+    {
+        RestoreNotice? notice = new() { At = time.GetUtcNow(), Cause = RestoreCause.Reboot, Offered = [new RestoreSession { Id = SessionId, Agent = AgentKind.Copilot, Title = "Read without taking over" }] };
+        var watched = new SessionService(source, new MachineInfo(host.Id, "Host", "windows", "0.1.0")) { Drivers = drivers, Time = time, Restore = () => notice };
+        host.Hub.Handler = authorization.Handler(watched);
+        var other = await PeerAsync("app");
+        Pin(other, TrustedPeerStore.Host);
+        var person = await PeerAsync();
+        Pin(person, TrustedPeerStore.Person);
+        var reader = await PeerAsync();
+        Pin(reader);
+        var otherChannel = await other.Hub.OpenAsync(host.Id, Patience);
+        var personChannel = await person.Hub.OpenAsync(host.Id, Patience);
+        var readerChannel = await reader.Hub.OpenAsync(host.Id, Patience);
+        HelloResult Hello(JsonElement response) => Result(response).Deserialize<HelloResult>(ProtocolJson.Options)!;
+
+        Assert.Null(Hello(await otherChannel.RequestAsync(Ops.Hello, new { changes = true }, Patience)).Machine.Restore);
+        Assert.Equal(SessionId, Assert.Single(Hello(await personChannel.RequestAsync(Ops.Hello, new { changes = true }, Patience)).Machine.Restore!.Offered).Id);
+        Assert.NotNull(Hello(await readerChannel.RequestAsync(Ops.Hello, new { }, Patience)).Machine.Restore);
+
+        notice = null;
+        time.Advance(watched.HelloCheck);
+        Assert.Equal(Events.HelloChanged, (await personChannel.Events.ReadAsync().AsTask().WaitAsync(Patience)).Name);
+        await Task.Delay(200);
+        Assert.False(otherChannel.Events.TryRead(out _));
+    }
     [Theory]
     [InlineData(TrustedPeerStore.Host)]
     [InlineData(TrustedPeerStore.Person)]

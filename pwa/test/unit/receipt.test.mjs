@@ -404,3 +404,34 @@ test('after a sign-out nothing more is announced: not a follower, not one waitin
   t.mock.timers.tick(ReceiptTiming.followMs);
   assert.deepEqual(page, []);
 });
+
+// The history a request's announcements are kept in is kept by recency, and never let go while a
+// view still draws it (#965): it was let go by age alone, so a card still showing an outcome,
+// drawn afresh after more than fifty newer requests, said the outcome again.
+function drawDelivered(request) {
+  const said = [];
+  const clock = new ReceiptClock({ describe: () => outcome('reply'), draw: () => {}, say: (text) => said.push(text) });
+  clock.show({ request, state: 'done', outcome: 'delivered', attempts: 1, reason: null, progress: null });
+  return { clock, said };
+}
+
+test('an outcome still drawn is not said again when its card is drawn afresh after more than fifty newer requests', () => {
+  stopReceipts();
+  const first = drawDelivered('kept-1');
+  assert.deepEqual(first.said, ['Reply delivered']);
+  for (let i = 0; i < 60; i++) { drawDelivered(`newer-1-${i}`).clock.destroy(); }
+  // The card drawn afresh, as a session's update draws it: the new view first, then the old one goes.
+  const again = drawDelivered('kept-1');
+  first.clock.destroy();
+  assert.deepEqual(again.said, []);
+});
+
+test('an outcome drawn again recently is not said again, however long ago it was first drawn', () => {
+  stopReceipts();
+  drawDelivered('kept-2').clock.destroy();
+  for (let i = 0; i < 30; i++) { drawDelivered(`newer-2a-${i}`).clock.destroy(); }
+  drawDelivered('kept-2').clock.destroy();
+  for (let i = 0; i < 30; i++) { drawDelivered(`newer-2b-${i}`).clock.destroy(); }
+  const again = drawDelivered('kept-2');
+  assert.deepEqual(again.said, []);
+});

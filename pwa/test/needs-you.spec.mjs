@@ -622,6 +622,23 @@ test.describe('the badge', () => {
     await expect(lane(page)).toBeHidden();
     await expect.poll(() => page.evaluate(() => window.__badge.at(-1))).toBe(0);
   });
+
+  test('a rest leaves the app badge and the rows as they were, and a dropped relay still clears the badge', async ({ page }) => {
+    await openDemo(page);
+    const demoRows = page.locator('#session-list > .session[data-host-id="demo"]');
+    await expect(lane(page).locator('.needs-you-head')).toHaveText('Needs you · 1');
+    await expect.poll(() => page.evaluate(() => window.__badge.at(-1))).toBe(1);
+    // Out of sight for 15 s, the relay connection rests (#610) and says so as it closes.
+    await page.evaluate(() => window.agentBridgeDemo.connection.emit('lost', { code: 1000, reason: 'resting', resting: true }));
+    await expect(demoRows.first()).toHaveAttribute('data-stale', 'confirming');
+    await expect(lane(page)).toBeHidden();
+    await expect(demoRows.filter({ hasText: 'Reconnecting' })).toHaveCount(0);
+    await expect(demoRows.locator('use[href*="#glyph-failed"]')).toHaveCount(0);
+    expect(await page.evaluate(() => window.__badge.at(-1))).toBe(1);
+    await page.evaluate(() => window.agentBridgeDemo.connection.emit('lost', { code: 1006, reason: '' }));
+    await expect(demoRows.first()).toHaveAttribute('data-stale', 'reconnecting');
+    await expect.poll(() => page.evaluate(() => window.__badge.at(-1))).toBe(0);
+  });
 });
 
 for (const width of [390, 900, 1440]) {

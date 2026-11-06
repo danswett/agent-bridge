@@ -63,6 +63,27 @@ public sealed partial class DemoHost : IAsyncDisposable
 
     public int Count { get { lock (gate) { return sessions.Count; } } }
 
+    // The self-test's progress gallery (ui.md §6.5): an answer or a reply to a scripted session
+    // gets what the script returns, not the demo's own handling, so each receipt state (held on its
+    // way, unconfirmed, busy, refused, failed) is drawn from a real request on a real channel. A
+    // script that throws fails the request, as a host's error does.
+    readonly Dictionary<string, Func<Task<object?>>> scripted = new(StringComparer.Ordinal);
+
+    public void Script(string sessionId, Func<Task<object?>>? outcome)
+    {
+        lock (gate)
+        {
+            if (outcome is null) { scripted.Remove(sessionId); }
+            else { scripted[sessionId] = outcome; }
+        }
+    }
+
+    Func<Task<object?>>? ScriptFor(string sessionId) { lock (gate) { return scripted.GetValueOrDefault(sessionId); } }
+
+    // A session added or changed, and one removed, as the host would send them (the gallery's).
+    public Task PutAsync(Session s) => Change(s);
+    public Task RemoveSessionAsync(string id) => RemoveAsync(id);
+
     // The protocol's example sessions, and three more: a question answered with one click, a
     // Copilot permission prompt, and a main agent with delegates, so every kind of card is on screen.
     public static IReadOnlyList<Session> Examples()
@@ -188,8 +209,8 @@ public sealed partial class DemoHost : IAsyncDisposable
             case Ops.Hello:
                 {
                     var hello = new HelloResult(1, new MachineInfo(MachineId, MachineName, "windows", version, Dev: true, Sessions: Count), remote
-                        ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, AuthState.Capability]
-                        : [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, HostOps.Capability, HostOps.AgentReadinessCapability, HostOps.AgentSetupCapability, HostOps.AgentInstallCapability]);
+                        ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, Capabilities.SessionsProgress, UsageProtocol.Capability, LaunchProtocol.Capability, AuthState.Capability]
+                        : [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, Capabilities.SessionsProgress, UsageProtocol.Capability, LaunchProtocol.Capability, HostOps.Capability, HostOps.AgentReadinessCapability, HostOps.AgentSetupCapability, HostOps.AgentInstallCapability]);
                     // Held for a test: the reply a recovery reads before it subscribes again.
                     if (HoldHello is { } hold) { HoldHello = null; return After(hold.Task, hello); }
                     return Done(hello);
@@ -229,20 +250,29 @@ public sealed partial class DemoHost : IAsyncDisposable
             case Ops.SessionAnswer:
                 {
                     var r = data.Deserialize<AnswerRequest>(ProtocolJson.Options)!;
+                    if (ScriptFor(r.Id) is { } script) { return script(); }
+                    // As a host that offers sessions.progress says how far it has got (#598, #600).
+                    var progress = r.Progress == true ? ServedRequest.Current : null;
+                    progress?.Progress(new DeliveryProgress(DeliveryProgress.Received));
                     Session? s;
                     lock (gate) { s = sessions.GetValueOrDefault(r.Id); }
                     if (s?.Question is not { } q || q.Id != r.Question) { return Done(new AnswerResult(AnswerOutcome.Stale, "the session is no longer asking that question")); }
                     if (Answers.Check(q, r) is { } problem) { return Done(new AnswerResult(AnswerOutcome.Refused, problem)); }
+                    progress?.Progress(new DeliveryProgress(DeliveryProgress.Typed, s.Status == SessionStatus.Working));
                     _ = Change(s with { Question = null, Status = SessionStatus.Working, StatusSince = now, UpdatedAt = now });
                     return Done(new AnswerResult(AnswerOutcome.Delivered));
                 }
             case Ops.SessionReply:
                 {
                     var r = data.Deserialize<ReplyRequest>(ProtocolJson.Options)!;
+                    if (ScriptFor(r.Id) is { } script) { return script(); }
+                    var progress = r.Progress == true ? ServedRequest.Current : null;
+                    progress?.Progress(new DeliveryProgress(DeliveryProgress.Received));
                     if (Replies.Check(r) is { } problem) { return Done(new ReplyResult(AnswerOutcome.Refused, problem)); }
                     Session? s;
                     lock (gate) { s = sessions.GetValueOrDefault(r.Id); }
                     if (s is null) { return Done(new ReplyResult(AnswerOutcome.Stale, "the session has ended")); }
+                    progress?.Progress(new DeliveryProgress(DeliveryProgress.Typed, s.Status == SessionStatus.Working));
                     _ = Change(s with { Status = SessionStatus.Working, StatusSince = now, UpdatedAt = now, Activity = s.Activity with { UserMessage = r.Text } });
                     return Done(new ReplyResult(AnswerOutcome.Delivered));
                 }
@@ -643,14 +673,21 @@ public sealed partial class DemoHost : IAsyncDisposable
     // arriving (#489), which nothing in the demo sends on its own.
     public Task Upsert(Session next) => Change(next);
 
+    // The pauses a change and a removal take, as a host's would; a test holds them to order a
+    // removal against a turn finishing.
+    internal Func<TimeSpan, Task> Pause { get; set; } = d => Task.Delay(d);
+
     // finishes: a turn started here ends a moment later, as an agent's would; not a session that has
-    // stopped answering (#800).
-    async Task Change(Session next, bool finishes = true)
+    // stopped answering (#800). onlyIfPresent: the finishing update, which must not bring back a
+    // session removed while it waited to be written (#625, Copilot 4485774643): the gallery's, removed
+    // in its own 400 ms pause, came back and was sent again as an upsert.
+    async Task Change(Session next, bool finishes = true, bool onlyIfPresent = false)
     {
-        await Task.Delay(400);
+        await Pause(TimeSpan.FromMilliseconds(400));
         IProtocolChannel[] to;
         lock (gate)
         {
+            if (onlyIfPresent && !sessions.ContainsKey(next.Id)) { return; }
             sessions[next.Id] = next;
             revision++;
             to = [.. subscribers.Where(s => s.IsOpen)];
@@ -659,17 +696,19 @@ public sealed partial class DemoHost : IAsyncDisposable
         // The agent takes the answer or reply and finishes its turn a little later.
         if (finishes && next.Status == SessionStatus.Working)
         {
-            await Task.Delay(3000);
+            await Pause(TimeSpan.FromMilliseconds(3000));
+            // Removed meanwhile (the self-test's gallery cleans up after itself): it stays gone.
+            lock (gate) { if (!sessions.ContainsKey(next.Id)) { return; } }
             var done = DateTimeOffset.UtcNow;
             // The main agent wrote last: the top-level text is its own again. A few short blocks, so a
             // conversation's pictures show the space between them (#765).
-            await Change(next with { Status = SessionStatus.Idle, StatusSince = done, UpdatedAt = done, Activity = next.Activity with { Response = "Done: that's taken care of.\n\nThe branch is pushed.\n\n- the suite passes\n- nothing else is open", TurnCount = (next.Activity.TurnCount ?? 0) + 1, Reasoning = null, Source = null, Own = null } });
+            await Change(next with { Status = SessionStatus.Idle, StatusSince = done, UpdatedAt = done, Activity = next.Activity with { Response = "Done: that's taken care of.\n\nThe branch is pushed.\n\n- the suite passes\n- nothing else is open", TurnCount = (next.Activity.TurnCount ?? 0) + 1, Reasoning = null, Source = null, Own = null } }, onlyIfPresent: true);
         }
     }
 
     async Task RemoveAsync(string id)
     {
-        await Task.Delay(400);
+        await Pause(TimeSpan.FromMilliseconds(400));
         IProtocolChannel[] to;
         lock (gate)
         {
