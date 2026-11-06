@@ -19,13 +19,29 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
     long now;
     long order;
     Action? onNextWait;
+    bool frozen;
+
+    // The longest wait a frozen clock still fires: a service's look-again interval, not its budget.
+    static readonly long SteadyTicks = TimeSpan.FromMilliseconds(100).Ticks;
 
     // start: where its time begins. A fixed date unless the code reads it against something on the
     // wall clock, as a migration does against the files and spool names it writes.
-    public PollClock(DateTimeOffset? start = null)
+    // frozen: time stands still, so a budget (a wait for a session to register, a window to look
+    // ready) cannot run out however slow the machine or the test is; only short waits fire, each
+    // at the time it was armed. Run() lets time move on, for a test that is about a budget
+    // running out (#421: a launch test's 5 s budget ran out under load before the host's first
+    // look at the window, so its trust question was never seen).
+    public PollClock(DateTimeOffset? start = null, bool frozen = false)
     {
         epoch = start ?? new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        this.frozen = frozen;
         driving = Task.Run(DriveAsync);
+    }
+
+    public void Run()
+    {
+        lock (gate) { frozen = false; }
+        armed.Release();
     }
 
     public override DateTimeOffset GetUtcNow() => epoch.AddTicks(Interlocked.Read(ref now));
@@ -53,12 +69,15 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
         while (!stop.IsCancellationRequested)
         {
             Wait? due;
+            bool still;
             lock (gate)
             {
+                still = frozen;
                 due = waits.Count == 0 ? null : waits.MinBy(w => (w.DueAt, w.Order));
+                if (still && due is not null && due.DueAt - now > SteadyTicks) { due = null; }
                 if (due is not null)
                 {
-                    if (due.DueAt > now) { Interlocked.Exchange(ref now, due.DueAt); }
+                    if (!still && due.DueAt > now) { Interlocked.Exchange(ref now, due.DueAt); }
                     waits.Remove(due);
                     if (due.Period is { } every) { due.Arm(now + every); }
                 }
@@ -66,6 +85,9 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
             if (due is not null)
             {
                 due.Callback(due.State);
+                // Time does not move, so a look-again wait fires at once: not faster than the
+                // thread pool and the files it reads can keep up with.
+                if (still) { await Task.Delay(1); }
                 continue;
             }
             try { await armed.WaitAsync(stop.Token); }

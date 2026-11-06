@@ -601,7 +601,7 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
         screens.OnTyped = _ =>
         {
             screens.Rows = ["› go"];
-            Task.Delay(TimeSpan.FromSeconds(3)).ContinueWith(_ => starter.RegisterCodex(starter.Specs[0], starter.Pids[0], 7001, starter.CodexId), TaskScheduler.Default);
+            Task.Delay(TimeSpan.FromSeconds(3), clock).ContinueWith(_ => starter.RegisterCodex(starter.Specs[0], starter.Pids[0], 7001, starter.CodexId), TaskScheduler.Default);
         };
         var answer = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key));
 
