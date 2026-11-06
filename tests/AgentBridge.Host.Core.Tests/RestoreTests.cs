@@ -1227,6 +1227,46 @@ public sealed class RestoreTests : IDisposable
         Assert.True(asked.Question!.AskedAt > Fixture.T0.AddSeconds(5) && asked.Question.AskedAt < Fixture.T0.AddSeconds(20));
     }
 
+    // The new run asks the same question again, read in the same first read as the interrupted run's
+    // ask: it is the new run's, shown, and the session is waiting (Copilot on #837).
+    [Fact]
+    public async Task A_question_the_new_run_asks_again_in_the_first_read_is_shown()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999985";
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var real = f.Source();
+        real.Mark(Id, new SessionRestored { At = Fixture.T0.AddSeconds(20), Cause = RestoreCause.Reboot, QuestionLost = true });
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 3),
+            Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 30));
+
+        await real.RefreshAsync();
+
+        var asked = real.Get(Id)!;
+        Assert.Equal(SessionStatus.Waiting, asked.Status);
+        Assert.NotNull(asked.Question);
+    }
+
+    // A restored Claude session's registration keeps the interrupted run's "waiting" (SessionStart
+    // keeps the last hook status): that approval went with the run, and the session is idle, not
+    // waiting on it (Copilot on #837).
+    [Fact]
+    public async Task A_restored_claude_session_is_not_shown_waiting_on_the_interrupted_runs_hook_approval()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999984";
+        var transcript = f.ClaudeTranscript(Id);
+        Fixture.Append(transcript, Claude.User("go", 1), Claude.Assistant(2, "tool_use", Claude.ToolUse("t0", "Bash", new System.Text.Json.Nodes.JsonObject { ["command"] = "deploy.sh" })));
+        f.ClaudeRegistration(Id, 703, transcript, hookStatus: "waiting", hookAt: Fixture.T0.AddSeconds(3));
+        f.Processes.Run(AgentKind.Claude, 703);
+        await using var real = f.Source();
+        real.Mark(Id, new SessionRestored { At = Fixture.T0.AddSeconds(20), Cause = RestoreCause.Reboot, QuestionLost = true });
+
+        await real.RefreshAsync();
+
+        var after = real.Get(Id)!;
+        Assert.Equal((SessionStatus.Idle, (Question?)null), (after.Status, after.Question));
+    }
+
     // Marked before it registers, and given a whole turn before the source first reads it: that
     // prompt came after the restore, by its own time, so Continue has gone.
     [Fact]

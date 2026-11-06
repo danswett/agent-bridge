@@ -28,6 +28,10 @@ internal sealed class SessionTracker
     Session? _built;
     // The restore boundary the last build was made with (QuestionsFrom).
     DateTimeOffset? _builtFrom;
+    // The boundary the hook status was last looked at with, and the interrupted run's hook status
+    // time it found, if any.
+    DateTimeOffset? _hookFrom;
+    DateTimeOffset? _staleHookAt;
     // The restore boundary the session last built set the interrupted run's questions aside by.
     public DateTimeOffset? BuiltFrom => _builtFrom;
     IReadOnlyList<ClaudeSubagents.Record> _nested = [];
@@ -107,6 +111,17 @@ internal sealed class SessionTracker
         }
         // A restore's boundary (QuestionsFrom) set or moved since the last build changes what it
         // shows as asked (#780), though nothing it reads did.
+        // The hook status a restored Claude session's registration carries when the boundary is
+        // first read with, from before it, is the interrupted run's: SessionStart keeps the last
+        // status recorded (as agent-ha-bridge's hook does), so its old "waiting" read as the new
+        // run asking (Copilot on #837). Told by being that same record, not by its time; a hook
+        // event since is the new run's.
+        if (_hookFrom != _state.AskedFrom)
+        {
+            _hookFrom = _state.AskedFrom;
+            _staleHookAt = _state.AskedFrom is { } from && discovered.Registration?.HookStatusAt is { } hook && hook < from ? hook : null;
+            changed = true;
+        }
         changed |= _builtFrom != _state.AskedFrom;
         _state.EndBacklog();
         if (!changed) { return _built!; }
@@ -186,7 +201,7 @@ internal sealed class SessionTracker
             {
                 case "idle": status = SessionStatus.Idle; hintAt = hookAt; break;
                 case "working": status = SessionStatus.Working; hintAt = hookAt; break;
-                case "waiting" when question is null && _state.Tools.Current() is { } tool:
+                case "waiting" when question is null && hookAt != _staleHookAt && _state.Tools.Current() is { } tool:
                     // A permission prompt, which agent-ha-bridge's Notification hook reports
                     // and only mirrors: it offers the reply box at best, never a proven
                     // answer, so it is answered at the machine.

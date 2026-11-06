@@ -136,8 +136,10 @@ internal sealed class SessionState
         Pending.RemoveAll(q => q.Id == question.Id);
         Pending.Add(question);
         if (askedFrom is not { } from) { return; }
+        // Asked again by the new run, in the first read too, it is the new run's: kept apart, it
+        // was hidden though the agent was asking it (Copilot on #837).
         if (backlog && question.AskedAt < from) { interrupted.Add(question.Id); }
-        else if (!backlog) { interrupted.Remove(question.Id); }
+        else { interrupted.Remove(question.Id); }
     }
 
     public bool Answer(string? id) => id is not null && Pending.RemoveAll(q => q.Id == id) > 0;
