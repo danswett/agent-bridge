@@ -5,13 +5,15 @@ using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
 
 namespace AgentBridge.App;
 
 // The sign-in captures owed before sessions.signin is turned on (Creative, #800 6655285995, and
 // #895 6660406957, 6660693656): every state of the banner and the sheet, in Light and Dark, and in
-// high contrast on CI (CheckHighContrast). They are the banner as it first comes, a Needs sign-in
+// high contrast on CI (CheckHighContrast). They are the banner as it first comes (its sessions links
+// in its line, #963), a Needs sign-in
 // row, a signIn this app doesn't know (no claim, nothing to press), a sign-in under way from another
 // device (Show code), the sheet with its code and the banner behind it, Failed, an expired code,
 // and signed in waiting for the sessions to confirm. The behaviour is CheckSignIn's to prove; these
@@ -78,6 +80,9 @@ static partial class SelfTest
             var came = await Until(() => Verb() is { Content: "Sign in" }, TimeSpan.FromSeconds(20));
             check(came, $"draws the sign-in banner for the captures{where}");
             if (!came) { return; }
+            // The banner as it first comes: its line names its sessions, each a link (ui.md §6.13).
+            var linked = await Until(() => Banner() is { } fresh && Find<TextBlock>(fresh).Any(t => AutomationProperties.GetAutomationId(t) == "SignInAffected" && t.ActualHeight > 0 && t.Inlines.OfType<Hyperlink>().Count() == 3), TimeSpan.FromSeconds(5));
+            check(linked, $"captures the banner with its sessions as links in its line{where} ({Line()})");
             await Banners("banner");
 
             // A row of a session that needs sign-in, as the list draws it.
@@ -94,7 +99,7 @@ static partial class SelfTest
             // machine" (6648000166).
             AppLog.Write($"self-test: sign-in captures{where}: no claim");
             await remote.SignInWayAsync("rdp");
-            var noClaim = await Until(() => Banner() is not null && Verb() is null && Line() == "3 sessions affected", TimeSpan.FromSeconds(10));
+            var noClaim = await Until(() => Banner() is not null && Verb() is null && Line().StartsWith("3 sessions affected: ", StringComparison.Ordinal), TimeSpan.FromSeconds(10));
             check(noClaim, $"captures a banner whose way to sign in makes no claim{where}: nothing to press, never at the machine ({Line()})");
             if (noClaim) { await Banners("no-claim"); }
             await remote.SignInWayAsync("phone");

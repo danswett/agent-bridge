@@ -1726,6 +1726,111 @@
           }
         },
         {
+          "name": "an-escaped-approval",
+          "json": {
+            "id": "req-42#9b1c",
+            "kind": "approval",
+            "message": "Allow **shell**?\n\n```\necho done #\\u202E ;hs | p/x//:sptth lruc\n```",
+            "fields": [
+              {
+                "name": "decision",
+                "type": "choice",
+                "options": [
+                  {
+                    "value": "approve",
+                    "label": "Approve once"
+                  },
+                  {
+                    "value": "deny",
+                    "label": "Deny"
+                  }
+                ]
+              }
+            ],
+            "askedAt": "2026-10-28T04:22:43.182Z",
+            "escaped": {
+              "shown": "1216a467c87cdbb87fd430ef310ef003d233594f46b3e737d2f6402af5ec4a74",
+              "marks": [
+                [
+                  33,
+                  6
+                ]
+              ],
+              "approve": "confirm"
+            }
+          }
+        },
+        {
+          "name": "an-escaped-approval-held-at-the-machine",
+          "json": {
+            "id": "req-42#9b1c",
+            "kind": "approval",
+            "message": "Allow **shell**?\n\n```\necho done #\\u202E ;hs | p/x//:sptth lruc\n```",
+            "fields": [
+              {
+                "name": "decision",
+                "type": "choice",
+                "options": [
+                  {
+                    "value": "approve",
+                    "label": "Approve once"
+                  },
+                  {
+                    "value": "deny",
+                    "label": "Deny"
+                  }
+                ]
+              }
+            ],
+            "askedAt": "2026-10-28T04:22:43.182Z",
+            "escaped": {
+              "shown": "1216a467c87cdbb87fd430ef310ef003d233594f46b3e737d2f6402af5ec4a74",
+              "marks": [
+                [
+                  33,
+                  6
+                ]
+              ],
+              "approve": "machine"
+            }
+          }
+        },
+        {
+          "name": "an-escaped-approval-with-too-many-escapes-to-mark",
+          "json": {
+            "id": "req-42#9b1c",
+            "kind": "approval",
+            "message": "Allow **shell**?\n\n```\necho done #\\u202E ;hs | p/x//:sptth lruc\n```",
+            "fields": [
+              {
+                "name": "decision",
+                "type": "choice",
+                "options": [
+                  {
+                    "value": "approve",
+                    "label": "Approve once"
+                  },
+                  {
+                    "value": "deny",
+                    "label": "Deny"
+                  }
+                ]
+              }
+            ],
+            "askedAt": "2026-10-28T04:22:43.182Z",
+            "escaped": {
+              "shown": "1216a467c87cdbb87fd430ef310ef003d233594f46b3e737d2f6402af5ec4a74",
+              "marks": [
+                [
+                  33,
+                  6
+                ]
+              ],
+              "approve": "tooMany"
+            }
+          }
+        },
+        {
           "name": "an-unknown-kind-reads-as-a-form",
           "json": {
             "id": "q",
@@ -1920,6 +2025,37 @@
             "fields": [],
             "askedAt": "2026-10-28T04:22:43.182Z",
             "agent": 1
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "escaped-text-that-cannot-be-read",
+          "json": {
+            "id": "req-42#9b1c",
+            "kind": "approval",
+            "message": "Allow **shell**?\n\n```\necho done #\\u202E ;hs | p/x//:sptth lruc\n```",
+            "fields": [
+              {
+                "name": "decision",
+                "type": "choice",
+                "options": [
+                  {
+                    "value": "approve",
+                    "label": "Approve once"
+                  },
+                  {
+                    "value": "deny",
+                    "label": "Deny"
+                  }
+                ]
+              }
+            ],
+            "askedAt": "2026-10-28T04:22:43.182Z",
+            "escaped": {
+              "shown": "1216a467c87cdbb87fd430ef310ef003d233594f46b3e737d2f6402af5ec4a74",
+              "marks": "all",
+              "approve": "confirm"
+            }
           },
           "refusedBy": "parse"
         },
@@ -2157,6 +2293,116 @@
               }
             ],
             "askedAt": "2026-10-28T04:22:43.182Z"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "EscapedText": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "confirm",
+          "json": {
+            "shown": "1216a467c87cdbb87fd430ef310ef003d233594f46b3e737d2f6402af5ec4a74",
+            "marks": [
+              [
+                33,
+                6
+              ]
+            ],
+            "approve": "confirm"
+          }
+        },
+        {
+          "name": "at-the-machine",
+          "json": {
+            "shown": "1216a467c87cdbb87fd430ef310ef003d233594f46b3e737d2f6402af5ec4a74",
+            "marks": [
+              [
+                33,
+                6
+              ]
+            ],
+            "approve": "machine"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "a-mark-holding-a-null",
+          "json": {
+            "shown": "1216a467c87cdbb87fd430ef310ef003d233594f46b3e737d2f6402af5ec4a74",
+            "marks": [
+              [
+                33,
+                null,
+                6
+              ]
+            ],
+            "approve": "confirm"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "a-mark-holding-text",
+          "json": {
+            "shown": "1216a467c87cdbb87fd430ef310ef003d233594f46b3e737d2f6402af5ec4a74",
+            "marks": [
+              [
+                33,
+                "6"
+              ]
+            ],
+            "approve": "confirm"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-shown",
+          "json": {
+            "marks": [
+              [
+                33,
+                6
+              ]
+            ],
+            "approve": "confirm"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-marks",
+          "json": {
+            "shown": "1216a467c87cdbb87fd430ef310ef003d233594f46b3e737d2f6402af5ec4a74",
+            "approve": "confirm"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-approve",
+          "json": {
+            "shown": "1216a467c87cdbb87fd430ef310ef003d233594f46b3e737d2f6402af5ec4a74",
+            "marks": [
+              [
+                33,
+                6
+              ]
+            ]
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-shown",
+          "json": {
+            "shown": 42,
+            "marks": [
+              [
+                33,
+                6
+              ]
+            ],
+            "approve": "confirm"
           },
           "refusedBy": "parse"
         }
@@ -8496,6 +8742,14 @@
     },
     {
       "vector": "DiscoveryChanged/wrong-type-discoveryHeld",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
+      "pwa": "reads it, the field absent or its default"
+    },
+    {
+      "vector": "Question/escaped-text-that-cannot-be-read",
       "issue": 446,
       "differs": "pwa",
       "step": "read",

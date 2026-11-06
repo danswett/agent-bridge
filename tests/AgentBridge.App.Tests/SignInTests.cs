@@ -14,8 +14,8 @@ public sealed class SignInTests
 
     static Session WithAttention(Session s, string? attention) => AuthState.Attach(s, Json(attention is null ? "{}" : $$"""{"attention":{{attention}}}"""));
 
-    static Session Needing(string id, string account = "octocat", AgentKind agent = AgentKind.Copilot, string? signIn = "phone", string? recovery = null) =>
-        WithAttention(Make.Session(id: id, title: $"Session {id}") with { Agent = agent },
+    static Session Needing(string id, string account = "octocat", AgentKind agent = AgentKind.Copilot, string? signIn = "phone", string? recovery = null, string? title = null) =>
+        WithAttention(Make.Session(id: id, title: title ?? $"Session {id}") with { Agent = agent },
             $$"""{"kind":"signInNeeded","since":"2026-11-05T00:40:00Z","agent":"{{AuthState.WireName(agent)}}","account":"{{account}}"{{(signIn is null ? "" : $",\"signIn\":\"{signIn}\"")}}{{(recovery is null ? "" : $",\"recovery\":\"{recovery}\"")}}}""");
 
     static string Code(string userCode = "WDJB-MJHT", string uri = "https://github.com/login/device") =>
@@ -130,6 +130,24 @@ public sealed class SignInTests
         Assert.Null(AuthState.ReadDone(Json("""{"flow":"flow-1","outcome":"failed","reason":"The code was declined."}"""))!.Reason);
     }
 
+    [Theory]
+    [InlineData("this credential store is busy", "another sign-in is under way")]
+    [InlineData("too many recent sign-in requests", "too many requests, try again later")]
+    [InlineData("too many sign-ins are pending", "too many sign-ins waiting on this machine")]
+    [InlineData("sign-in is unavailable or not authorized", "not available from this device")]
+    [InlineData("Signed out", null)]
+    [InlineData("This credential store is busy", null)]
+    [InlineData("a supported agent and request UUID are required", null)]
+    [InlineData("Error: EACCES C:\\Users\\mona\\.copilot", null)]
+    public void A_refused_starts_reason_is_shown_only_in_the_apps_words_for_one_of_the_hosts_never_the_machines_text(string raw, string? shown)
+    {
+        var r = AuthState.ReadStartResult(Json(JsonSerializer.Serialize(new { outcome = "refused", reason = raw })));
+        Assert.Equal(("refused", shown), (r.Outcome, r.Reason));
+        var key = SignInBanners.KeyOf("m1", AgentKind.Copilot, "octocat");
+        var b = Banners([Needing("a")], flows: new() { [key] = new SignInBanners.Flow("done", Outcome: "refused", Reason: r.Reason) }).Single();
+        Assert.Equal(shown is null ? "Sign-in refused" : $"Sign-in refused · {shown}", SignInBanners.Words(b).Line);
+    }
+
     [Fact]
     public void Rule_10_a_session_that_needs_sign_in_waits_on_you_with_its_agent_and_account()
     {
@@ -200,8 +218,32 @@ public sealed class SignInTests
         Assert.Equal(3, banners.Count);
         var b = banners.Single(x => x.Account == "octocat" && x.Agent == AgentKind.Copilot);
         Assert.Equal(new[] { "a", "b" }, b.Sessions.Select(s => s.Id).Order());
-        Assert.Equal(("Copilot on DEV-VM1 needs sign-in · @octocat", "2 sessions affected", "Copilot on DEV-VM1 needs sign-in"), SignInBanners.Words(b));
+        Assert.Equal(("Copilot on DEV-VM1 needs sign-in · @octocat", "2 sessions affected: Session a, Session b", "Copilot on DEV-VM1 needs sign-in"), SignInBanners.Words(b));
         Assert.Equal("Sign in", SignInBanners.Verb(b));
+    }
+
+    [Fact]
+    public void The_banner_names_its_sessions_in_its_line_each_a_link_with_no_line_of_titles_of_its_own()
+    {
+        var b = Banners([Needing("a")]).Single();
+        Assert.Equal(("1 session affected: ", "1 session affected: Session a", true), (SignInBanners.Affected(b), SignInBanners.Words(b).Line, SignInBanners.ListsSessions(b)));
+        // A line with something else to say names none of them.
+        Assert.False(SignInBanners.ListsSessions(Banners([Needing("a", signIn: "machine")]).Single()));
+        Assert.False(SignInBanners.ListsSessions(Banners([Needing("a", recovery: "checking")]).Single()));
+        Assert.False(SignInBanners.ListsSessions(Banners([Needing("a", recovery: "pending")]).Single()));
+    }
+
+    [Fact]
+    public void A_banner_shows_a_long_title_with_bidi_characters_bounded_and_revealed_and_opens_it_by_its_id()
+    {
+        var title = "Fix \u202Etxt.exe\u202C the relay " + new string('x', 10_000);
+        var b = Banners([Needing("a", title: title)]).Single();
+        var (id, shown) = b.Sessions.Single();
+        Assert.Equal("a", id);
+        Assert.Equal(120, shown.Length);
+        Assert.StartsWith("Fix \\u202Etxt.exe\\u202C the relay x", shown, StringComparison.Ordinal);
+        Assert.EndsWith("…", shown, StringComparison.Ordinal);
+        Assert.DoesNotContain('\u202E', SignInBanners.Words(b).Line);
     }
 
     [Fact]
@@ -214,10 +256,10 @@ public sealed class SignInTests
         Assert.Equal((false, (string?)null), (unsaid.AtMachine, SignInBanners.Verb(unsaid)));
         // No capability: no button, and no claim about the machine either.
         Assert.Null(SignInBanners.Verb(Banners([Needing("a")], canSignIn: false).Single()));
-        Assert.Equal("1 session affected", SignInBanners.Words(Banners([Needing("a")], canSignIn: false).Single()).Line);
+        Assert.Equal("1 session affected: Session a", SignInBanners.Words(Banners([Needing("a")], canSignIn: false).Single()).Line);
         // A word this app doesn't know: no Sign in the host may not relay, and no claim about the machine.
         var unknown = Banners([Needing("a", signIn: "rdp")]).Single();
-        Assert.Equal((false, (string?)null, "1 session affected"), (unknown.AtMachine, SignInBanners.Verb(unknown), SignInBanners.Words(unknown).Line));
+        Assert.Equal((false, (string?)null, "1 session affected: Session a"), (unknown.AtMachine, SignInBanners.Verb(unknown), SignInBanners.Words(unknown).Line));
         var machine = Banners([Needing("a", signIn: "machine")]).Single();
         Assert.True(machine.AtMachine);
         Assert.Null(SignInBanners.Verb(machine));
@@ -235,7 +277,7 @@ public sealed class SignInTests
         foreach (var (newest, older) in new (string?, string)[] { ("future-flow", "phone"), (null, "phone"), ("future-flow", "machine"), (null, "machine") })
         {
             var b = Banners([At("old", 0, older), At("new", 30, newest)]).Single();
-            Assert.Equal((false, false, (string?)null, "2 sessions affected"), (b.CanSignIn, b.AtMachine, SignInBanners.Verb(b), SignInBanners.Words(b).Line));
+            Assert.Equal((false, false, (string?)null, "2 sessions affected: A session, A session"), (b.CanSignIn, b.AtMachine, SignInBanners.Verb(b), SignInBanners.Words(b).Line));
         }
         Assert.Equal("Sign in", SignInBanners.Verb(Banners([At("old", 0, "machine"), At("new", 30, "phone")]).Single()));
     }
@@ -276,7 +318,7 @@ public sealed class SignInTests
         Assert.Equal(("confirming", "Signed in · waiting for 2 sessions to confirm", (string?)null), (b.State, SignInBanners.Words(b).Line, SignInBanners.Verb(b)));
         // One fails sign-in again: needed, counting it alone.
         var again = Banners([Needing("a", recovery: "pending"), Needing("b", recovery: "failed")]).Single();
-        Assert.Equal(("needed", "1 session affected", "Sign in"), (again.State, SignInBanners.Words(again).Line, SignInBanners.Verb(again)));
+        Assert.Equal(("needed", "1 session affected: Session b", "Sign in"), (again.State, SignInBanners.Words(again).Line, SignInBanners.Verb(again)));
     }
 
     // The demo's other machine, as the app reaches it, running #800's scenario.
@@ -324,9 +366,9 @@ public sealed class SignInTests
         await demo.Host.NeedSignInAsync();
         await Wait.UntilAsync(() => demo.Banner is { Sessions.Count: 3 } && demo.Main.Sessions.Any(c => c.Id == "demo-stalled"), "the sign-in banner");
 
-        Assert.Equal(("Copilot on Build server needs sign-in · @demo-user", "3 sessions affected"), TestUi.Read(() => (demo.Banner!.Head, demo.Banner.Line)));
+        Assert.Equal(("Copilot on Build server needs sign-in · @demo-user", "3 sessions affected: Coordinate the release, Fix the relay reconnect, Review the usage panel"), TestUi.Read(() => (demo.Banner!.Head, demo.Banner.Line)));
         Assert.Equal("Sign in to Copilot on Build server", TestUi.Read(() => demo.Banner!.VerbName));
-        Assert.Equal(3, TestUi.Read(() => demo.Main.NeedsYou.Count(e => e.Mode == NeedsYouMode.SignIn)));
+        Assert.DoesNotContain(TestUi.Read(() => demo.Main.NeedsYou.ToList()), e => DemoHost.SignInSessions.Contains(e.Card.Id));
         // An error and a session not responding are on their rows, and not counted as waiting on you.
         Assert.Equal("Agent error", TestUi.Read(() => demo.Main.Sessions.Single(c => c.Id == "demo-error-quota").Line.FirstFact));
         // Both are driven by an agent: the row says what is wrong, not "Driven by an agent".
@@ -431,11 +473,8 @@ public sealed class SignInTests
         await Wait.UntilAsync(() => demo.Banner is { HasVerb: true }, "the sign-in banner");
         TestUi.Read(() => { demo.Banner!.Press(); return 0; });
         await Wait.UntilAsync(() => demo.Main.SignInSheet is { HasCode: true }, "the code");
-        Assert.Equal(3, TestUi.Read(() => demo.Main.NeedsYou.Count(e => e.Mode == NeedsYouMode.SignIn)));
         await demo.StopHostAsync();
         await Wait.UntilAsync(() => demo.Main.SignInSheet is null, "the sheet closed");
-        // Needs you goes with the banner: nothing there to act on while this machine's host is away.
-        await Wait.UntilAsync(() => demo.Main.NeedsYou.All(e => e.Mode != NeedsYouMode.SignIn), "Needs you without sign-in");
         Assert.Equal(0, TestUi.Read(() => demo.Main.SignInCodesHeld));
         Assert.DoesNotContain(demo.Said, s => s.Contains("recovered", StringComparison.Ordinal));
     }
@@ -571,11 +610,12 @@ public sealed class SignInTests
         TestUi.Read(() => { demo.Main.CancelSignIn(); return 0; });
         // Press B: slow, and refused with no flow. A's late code comes while it starts, and is held for it.
         await Wait.UntilAsync(() => demo.Banner is { HasVerb: true, Busy: false }, "Sign in again");
-        demo.Host.NextStartRefusal = "not now";
+        demo.Host.NextStartRefusal = "this credential store is busy";
         demo.Host.NextStartDelay = TimeSpan.FromSeconds(4);
         TestUi.Read(() => { demo.Banner!.Press(); return 0; });
         await Wait.UntilAsync(() => demo.Main.SignInCodesHeld == 1, "A's late code held while B starts");
-        await Wait.UntilAsync(() => demo.Main.SignInSheet is null && demo.Banner is { Line: "Sign-in refused \u00b7 not now" }, "B refused, the sheet closed", patience: TimeSpan.FromSeconds(8),
+        // The host's reason in the app's words, never its own (ui.md §6.13).
+        await Wait.UntilAsync(() => demo.Main.SignInSheet is null && demo.Banner is { Line: "Sign-in refused \u00b7 another sign-in is under way" }, "B refused, the sheet closed", patience: TimeSpan.FromSeconds(8),
             why: () => $"sheet {demo.Main.SignInSheet?.Shape ?? "none"}; banner {demo.Banner?.Line}");
         // At once, not after the ten seconds an early event is otherwise held.
         Assert.Equal(0, TestUi.Read(() => demo.Main.SignInCodesHeld));
@@ -622,25 +662,19 @@ public sealed class SignInTests
             why: () => string.Join(" | ", fleet.Main.SignIns.Select(b => $"{b.Kind} {b.MachineKey} {b.Line}")));
     }
 
+    // The banner owns sign-in (owner decision 6675817525, ui.md §6.13): Needs you, its count and the
+    // app's badge (Waiting) count questions and approvals only.
     [Fact]
     [Trait("Category", "Network")]
-    public async Task A_sign_in_entry_in_Needs_you_follows_its_sessions_since_when_a_new_failure_moves_it()
+    public async Task Sessions_that_need_sign_in_are_not_in_Needs_you_its_count_or_the_badge()
     {
         await using var demo = new Demo();
         await demo.Host.NeedSignInAsync();
-        var id = DemoHost.SignInSessions[0];
-        await Wait.UntilAsync(() => demo.Main.NeedsYou.Any(e => e.Card.Id == id), "the sign-in entry");
-        var entry = TestUi.Read(() => demo.Main.NeedsYou.First(e => e.Card.Id == id));
-        var before = TestUi.Read(() => (entry.AskedAt, entry.Meta));
-        Assert.EndsWith("4m", before.Meta, StringComparison.Ordinal);
-        await demo.Host.FailSignInAgainAsync();
-        await Wait.UntilAsync(() => entry.AskedAt > before.AskedAt.AddMinutes(1), "the entry's age following the new failure's since",
-            why: () => $"entry {entry.AskedAt:O}; session {AuthState.Of(entry.Card.Session)?.Since:O}");
-        var after = TestUi.Read(() => (Same: demo.Main.NeedsYou.Contains(entry), entry.AskedAt, entry.Meta, Since: AuthState.Of(entry.Card.Session)!.Since));
-        // The same entry, so focus on it stays, with the age its order is by.
-        Assert.True(after.Same);
-        Assert.Equal(after.Since, after.AskedAt);
-        Assert.False(after.Meta.EndsWith("4m", StringComparison.Ordinal), after.Meta);
+        await Wait.UntilAsync(() => demo.Banner is { Sessions.Count: 3 }, "the sign-in banner");
+        var (entries, waiting, asking) = TestUi.Read(() => (demo.Main.NeedsYou.ToList(), demo.Main.Waiting, demo.Main.AllCards.Count(c => c.Session.Question is not null)));
+        Assert.DoesNotContain(entries, e => DemoHost.SignInSessions.Contains(e.Card.Id));
+        Assert.Equal(asking, waiting);
+        Assert.Equal(waiting, entries.Count);
     }
 
     [Fact]
@@ -938,7 +972,6 @@ public sealed class SignInTests
         await Wait.UntilAsync(() => demo.Main.SignIns.Any(b => b.Line == "Signed in · waiting for 3 sessions to confirm"), "waiting to confirm", why: () => string.Join(" | ", demo.Main.SignIns.Select(b => b.Line)));
         Assert.Null(TestUi.Read(() => demo.Main.SignInSheet));
         Assert.Equal(3, TestUi.Read(() => DemoHost.SignInSessions.Count(id => demo.Main.Sessions.Single(c => c.Id == id).Line.Text == "Signed in · waiting for the session to confirm")));
-        Assert.Equal(0, TestUi.Read(() => demo.Main.NeedsYou.Count(e => e.Mode == NeedsYouMode.SignIn)));
         Assert.DoesNotContain(TestUi.Read(() => demo.Main.SignIns.ToList()), b => b.Line.Contains("recovered", StringComparison.Ordinal) || b.HasVerb);
         Assert.Contains("Copilot on Build server: Signed in · waiting for 3 sessions to confirm", demo.Said);
 
@@ -962,8 +995,7 @@ public sealed class SignInTests
         await Wait.UntilAsync(() => demo.Main.SignIns.Any(b => b.Line == "Signed in · waiting for 3 sessions to confirm"), "waiting to confirm");
 
         await demo.Host.FailSignInAgainAsync();
-        await Wait.UntilAsync(() => demo.Banner is { Line: "3 sessions affected", HasVerb: true }, "needed again", why: () => string.Join(" | ", demo.Main.SignIns.Select(b => b.Line)));
-        Assert.Equal(3, TestUi.Read(() => demo.Main.NeedsYou.Count(e => e.Mode == NeedsYouMode.SignIn)));
+        await Wait.UntilAsync(() => demo.Banner is { ListsSessions: true, HasVerb: true } b && b.Line.StartsWith("3 sessions affected: ", StringComparison.Ordinal), "needed again", why: () => string.Join(" | ", demo.Main.SignIns.Select(b => b.Line)));
         Assert.True(TestUi.Read(() => DemoHost.SignInSessions.All(id => demo.Main.Sessions.Single(c => c.Id == id).Line.FirstFact == "Needs sign-in")));
     }
 

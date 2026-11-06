@@ -113,6 +113,7 @@ var options = new SessionSourceOptions
     UsageProbeRoots = [.. new[] { Identity.DefaultRoot, serveFolder is null ? null : Path.GetDirectoryName(Path.GetFullPath(serveFolder)) }
         .OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase)],
     CopilotRemoteApproval = settings.RemoteApproval,
+    EscapedApproval = settings.EscapedApproval,
     Log = command == "serve" ? Log : null,
     // Only serve keeps what it listed for its next start (#147); no other command reads or writes it.
     StateFile = command == "serve" && serveFolder is not null ? Path.Combine(serveFolder, "sessions-listed.json") : null,
@@ -446,14 +447,32 @@ async Task<int> ServeAsync(HostHandover handover)
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore);
     launcher.SessionStarted += restore.Launched;
     launcher.SeenReadyLate += restore.SeenReadyLate;
-    restore.Restore(launcher);
-    restore.Start();
+    // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
+    // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an
+    // agent; the resumes stay held until the look with the pipe open, below, has passed too.
+    var startGate = new HostStartGate(handover, identity.Folder);
+    if (!startGate.StartRestore(restore, launcher))
+    {
+        Log($"stopped from the {Product.App} while starting; not serving");
+        return 0;
+    }
     transfers.Launcher = launcher;
     // No reply into a session whose launch here has not seen its window ready (a restore at folder
     // trust above all): Enter would answer the question (#780).
     if (replies is ReplyService typist) { typist.LaunchHeld = launcher.HeldForReply; }
+    // Nor /exit, whose Enter would answer it the same way: such a session is terminated untyped (#855).
+    if (stops is StopService stopper) { stopper.LaunchHeld = launcher.HeldForReply; }
     // Folder-trust questions answered by a person from their devices, where config.json allows it.
     var trustAnswers = new FolderTrustAnswers(identity.Key, launcher, Log) { Trust = trustedPeers };
+    // Approve on an approval with escaped characters, confirmed from a person's device approved here
+    // (#803): permissions.escapedApprovalDevices, or while that is absent the folder-trust devices,
+    // as the app's Settings changes them.
+    foreach (var problem in settings.PermissionProblems) { Log($"config.json: {problem}"); }
+    var escapedApprovals = new EscapedApprovals(identity.Key, settings.EscapedApproval,
+        EscapedApprovals.Devices(settings.EscapedApprovalDevices, () => launcher.RemoteFolderTrust, () => launcher.TrustDevices), Log) { Trust = trustedPeers };
+    Log(settings.EscapedApproval == EscapedApproval.Confirm
+        ? $"an approval with escaped characters is approved from a device by a two-step confirmation, from {(settings.EscapedApprovalDevices is null ? "the folder-trust devices while folder trust is on (launch.remoteFolderTrustDevices)" : $"{settings.EscapedApprovalDevices.Count} device(s) (permissions.escapedApprovalDevices)")}"
+        : "an approval with escaped characters is approved only at the machine (permissions.escapedApproval)");
     // Before the connector, which launches from the card through it.
     // The host's own updates, from the machine's update entity: through the app's package, which
     // carries the host (Windows only: elsewhere nothing packages it yet). Installing ends this
@@ -485,6 +504,7 @@ async Task<int> ServeAsync(HostHandover handover)
         ReadOnly = OfferedReadOnly,
         G5 = g5,
         TrustAnswers = trustAnswers,
+        EscapedApprovals = escapedApprovals,
         Updates = updates,
         Restore = () => restore.Notice,
     };
@@ -640,6 +660,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // Only now: a host stopped while starting, whose pipe the app could not reach, must start no
     // usage probe it would cut short on its way out, past the app's probe hold (#238 review).
     usageMonitor?.Start();
+    startGate.Serving();
     Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");
 
     var backoff = new ReconnectBackoff();
@@ -684,6 +705,7 @@ async Task<int> ServeAsync(HostHandover handover)
             transfers.Attach(relay, hub);
             usagePeers?.Attach(relay, hub);
             trustAnswers.Attach(relay);
+            escapedApprovals.Attach(relay);
             updates.Attach(relay);
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
@@ -732,6 +754,7 @@ async Task<int> ServeAsync(HostHandover handover)
             transfers.Attach(null, null);
             usagePeers?.Attach(null, null);
             trustAnswers.Attach(null);
+            escapedApprovals.Attach(null);
             updates.Attach(null);
         }
         reconnects++;
