@@ -11,25 +11,28 @@
   --tap: 44px;
   /* The type ramp (docs/design/ui.md §4.3; design/tokens.json type.roles.pwa): on a desktop the
      Windows ramp, below the two-pane width the phone's. Size / line height, in px. */
-  --type-title: 20px;
-  --type-title-line: 28px;
-  --type-row: 14px;
-  --type-row-line: 20px;
-  --type-reading: 15px;
-  --type-reading-line: 24px;
-  --type-meta: 12px;
-  --type-meta-line: 16px;
-  --type-section: 12px;
-  --type-section-line: 16px;
-  --type-code: 12px;
-  --type-code-line: 18px;
+  /* Text size (ui.md §4.4): one multiplier for every role, set on this device in Settings.
+     Default is 1, the ramp as it was. No role goes under 11 px. Text fields keep 16 px. */
+  --text-scale: 1;
+  --type-title: max(11px, calc(20px * var(--text-scale)));
+  --type-title-line: calc(28px * var(--text-scale));
+  --type-row: max(11px, calc(14px * var(--text-scale)));
+  --type-row-line: calc(20px * var(--text-scale));
+  --type-reading: max(11px, calc(15px * var(--text-scale)));
+  --type-reading-line: calc(24px * var(--text-scale));
+  --type-meta: max(11px, calc(12px * var(--text-scale)));
+  --type-meta-line: calc(16px * var(--text-scale));
+  --type-section: max(11px, calc(12px * var(--text-scale)));
+  --type-section-line: calc(16px * var(--text-scale));
+  --type-code: max(11px, calc(12px * var(--text-scale)));
+  --type-code-line: calc(18px * var(--text-scale));
   /* The shell: the web app bar, the rail, and the bottom navigation on a phone. */
   --appbar: 56px;
   --rail: 48px;
   --tabbar: 56px;
   --font-text: var(--ab-font-sans);
   font-family: var(--font-text);
-  font-size: 16px;
+  font-size: calc(16px * var(--text-scale));
   line-height: 1.45;
   -webkit-text-size-adjust: 100%;
   /* The safe areas (#168): what the browser says is under a notch or the home indicator, and
@@ -46,6 +49,8 @@
   --safe-bottom: var(--env-safe-bottom);
   --safe-left: var(--env-safe-left);
 }
+:root[data-text-size="smaller"] { --text-scale: 0.9; }
+:root[data-text-size="larger"] { --text-scale: 1.15; }
 :root[data-platform]:not([data-standalone="true"][data-platform="ios"]):not([data-standalone="true"][data-platform="ipados"]) {
   --safe-top: 0px;
   --safe-right: 0px;
@@ -56,18 +61,18 @@
 :root[data-standalone="true"]:is([data-platform="ios"], [data-platform="ipados"]) { touch-action: manipulation; }
 @media (max-width: 759px) {
   :root {
-    --type-title: 24px;
-    --type-title-line: 32px;
-    --type-row: 15px;
-    --type-row-line: 20px;
-    --type-reading: 16px;
-    --type-reading-line: 24px;
-    --type-meta: 13px;
-    --type-meta-line: 18px;
-    --type-section: 13px;
-    --type-section-line: 18px;
-    --type-code: 13px;
-    --type-code-line: 18px;
+    --type-title: max(11px, calc(24px * var(--text-scale)));
+    --type-title-line: calc(32px * var(--text-scale));
+    --type-row: max(11px, calc(15px * var(--text-scale)));
+    --type-row-line: calc(20px * var(--text-scale));
+    --type-reading: max(11px, calc(16px * var(--text-scale)));
+    --type-reading-line: calc(24px * var(--text-scale));
+    --type-meta: max(11px, calc(13px * var(--text-scale)));
+    --type-meta-line: calc(18px * var(--text-scale));
+    --type-section: max(11px, calc(13px * var(--text-scale)));
+    --type-section-line: calc(18px * var(--text-scale));
+    --type-code: max(11px, calc(13px * var(--text-scale)));
+    --type-code-line: calc(18px * var(--text-scale));
   }
 }
 
@@ -462,9 +467,10 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
    row; on a desktop the list's header, with New as an Accent button), all on one line at 390 px
    (#213). The count sits under the title. */
 .sessions-head {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "title sort actions" "count count count";
+  display: grid; grid-template-columns: max-content minmax(0, 1fr) auto; grid-template-areas: "title sort actions" "count count count";
   align-items: center; gap: 0 var(--ab-space-2); margin-bottom: var(--ab-space-2);
 }
+/* On a phone the title keeps its word whole at every text size (§4.4), and Sort gives up width. */
 .sessions-head .page-title { grid-area: title; overflow-wrap: anywhere; }
 .head-actions { grid-area: actions; display: flex; align-items: center; gap: var(--ab-space-1); }
 .count { grid-area: count; color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line); font-variant-numeric: tabular-nums; }
@@ -474,6 +480,16 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   border: 1px solid var(--ab-field-edge); border-radius: var(--ab-radius-control); padding: 2px 6px;
 }
 @media (pointer: coarse) { .sort { min-height: var(--tap); } }
+/* A phone with no room for the title, Sort and the icons on one line takes the list pane's two lines below,
+   keeping Tab's order the order drawn (§9.1 A3). */
+@media (max-width: 369px) {
+  .sessions-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title sort" "count actions"; }
+  .head-actions { justify-self: end; }
+}
+@media (max-width: 389px) {
+  [data-text-size="larger"] .sessions-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title sort" "count actions"; }
+  [data-text-size="larger"] .head-actions { justify-self: end; }
+}
 .new-session { position: relative; gap: var(--ab-space-1); }
 /* On a phone, New is an icon in the title row, in Bridge, as Search beside it. */
 @media (max-width: 759px) {
@@ -1157,7 +1173,7 @@ summary {
 .opt .mark { color: var(--ab-text2); }
 .opt.chosen .mark { color: var(--ab-bridge); }
 .opt .label { flex: 1; overflow-wrap: anywhere; }
-.badge { font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--ab-bridge); border: 1px solid currentColor; border-radius: 999px; padding: 0 6px; }
+.badge { font-size: max(11px, .72rem); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--ab-bridge); border: 1px solid currentColor; border-radius: 999px; padding: 0 6px; }
 .badge.req { color: var(--ab-needs-text); }
 .answer-box { margin-top: 6px; min-height: var(--tap); padding: 10px; border: 1px solid var(--ab-stroke2); border-radius: 8px; background: var(--ab-card); overflow-wrap: anywhere; }
 .answer-box.empty { color: var(--ab-text2); font-style: italic; }
@@ -1388,8 +1404,9 @@ summary {
 .end-session .resend { margin-bottom: 6px; }
 
 /* ---- settings ---- */
-.notify h3, .account h3 { margin: 0 0 var(--ab-space-2); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
+.notify h3, .text-size h3, .account h3 { margin: 0 0 var(--ab-space-2); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
 .account p { margin: 0; color: var(--ab-text2); overflow-wrap: anywhere; }
+.segmented { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; max-width: 360px; }
 
 /* ---- motion (ui.md §5.3) ----
    Only the generated tokens time anything here, and under prefers-reduced-motion they are 0, so
@@ -1453,7 +1470,8 @@ summary {
 
   .session-bar {
     position: absolute; top: 0; left: 0; right: 0; z-index: 1; display: flex; align-items: center; gap: var(--ab-space-1);
-    min-height: 3rem; padding: 0 var(--ab-space-1); pointer-events: none; isolation: isolate;
+    /* Never under 48 px (collapse-header.js BAR), so Smaller text can't leave the tabs showing beneath it. */
+    min-height: max(3rem, 48px); padding: 0 var(--ab-space-1); pointer-events: none; isolation: isolate;
   }
   .session-bar > .icon-button, .session-bar > .row-menu { pointer-events: auto; }
   .session-bar::before {
