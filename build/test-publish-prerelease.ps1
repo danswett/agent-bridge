@@ -512,11 +512,13 @@ Check "A commit whose later commits on main leave the app alone, docs only say, 
 
 Check "A main head that isn't after the commit, or a selector answer that can't be read, stops publishing" {
     # With no release (0), only main's head is compared: the release ancestry check has nothing to read.
+    # A compare that can't be read is refused by Invoke-Gh, as gh's nonzero exit, naming that read.
+    $unreadable = "gh api repos/$repo/compare/$commit...$descendant failed (1)"
     foreach ($case in @(
         @{ Name = 'a diverged head'; Head = 'abababababababababababababababababababab'; Releases = 3; Selects = $false; Set = {} },
         @{ Name = 'a head behind the commit'; Head = $ancestor; Releases = 3; Selects = $false; Set = {} },
         @{ Name = 'an unknown head comparison'; Head = $descendant; Releases = 0; Selects = $false; Set = { $global:PpAncestry = 'unknown' } },
-        @{ Name = 'an unreadable head comparison'; Head = $descendant; Releases = 0; Selects = $false; Set = { $global:PpAncestry = 'fail' } },
+        @{ Name = 'an unreadable head comparison'; Head = $descendant; Releases = 0; Selects = $false; Set = { $global:PpAncestry = 'fail' }; Says = $unreadable },
         @{ Name = 'a failing selector'; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = 'fail' } },
         @{ Name = 'no selector output'; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = $null } },
         @{ Name = 'malformed selector output'; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = '{"jobs":' } },
@@ -526,9 +528,10 @@ Check "A main head that isn't after the commit, or a selector answer that can't 
         Reset $case.Releases
         $global:PpSelect = $appTail
         & $case.Set
-        $threw = $false
-        try { Invoke-Publish '0.1.600' -Head $case.Head } catch { $threw = $_.Exception.Message -like '*not publishing v0.1.600*' }
-        Assert $threw "$($case.Name) was published past"
+        $said = $null
+        try { Invoke-Publish '0.1.600' -Head $case.Head } catch { $said = $_.Exception.Message }
+        $says = if ($case.Contains('Says')) { $case.Says } else { '*not publishing v0.1.600*' }
+        Assert ($said -clike $says) "$($case.Name) was published past (said: '$said')"
         Assert (@(Uploads).Count -eq 0 -and @(Deletes).Count -eq 0) "$($case.Name): uploads: $(Uploads); deletes: $(Deletes)"
         Assert (-not ($global:PpCalls | Where-Object { $_ -like 'gh api -X*' -or $_ -like 'gh release*' })) "$($case.Name): writes: $($global:PpCalls -join '; ')"
         Assert ($case.Selects -eq [bool]($global:PpCalls | Where-Object { $_ -like 'selector*' })) "$($case.Name): calls: $($global:PpCalls -join '; ')"
