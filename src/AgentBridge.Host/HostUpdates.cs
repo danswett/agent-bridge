@@ -113,21 +113,6 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
         }
     }
 
-    // A release downloaded into the package and waiting to be applied, newer than this one: what
-    // Velopack applies when the app next starts, and Update.exe applies by hand, without waiting for
-    // a usage probe (UsageProbes.UpdateStaged, #238). Velopack's own reading of the package folder
-    // the app and every host share. Null where nothing is installed. Read on a read-only host too,
-    // which serves no Install but is ended by an apply all the same.
-    internal static string? Staged(string dataRoot, IVelopackLocator? locator = null)
-    {
-        try
-        {
-            var m = new UpdateManager(new SimpleFileSource(new DirectoryInfo(Path.Combine(dataRoot, "app"))), null, locator ?? VelopackLocator.CreateDefaultForPlatform());
-            return m.IsInstalled && m.UpdatePendingRestart is { } waiting ? waiting.Version.ToString() : null;
-        }
-        catch (Exception e) when (e is not OutOfMemoryException) { return null; }
-    }
-
     public string? ReleasesUrl
     {
         get

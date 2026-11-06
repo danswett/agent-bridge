@@ -780,8 +780,6 @@ UsageProbes NewUsageProbes(string folder)
         WorkingDirectory = Path.Combine(folder, UsageProbes.FolderName),
         ClaudeAccountSeen = Path.Combine(folder, "usage-claude-account.json"),
         ClientVersion = HostVersion(),
-        // An app update waiting to be applied (Windows only: elsewhere nothing packages the host).
-        UpdateStaged = OperatingSystem.IsWindows() ? () => VelopackHostUpdates.Staged(Path.GetDirectoryName(folder) ?? Identity.DefaultRoot) : null,
         // Beside every profile, so hosts serving different bridge profiles share it (#238).
         Lease = key => new FileKeepAwakeLock(Path.Combine(Identity.DefaultRoot, "usage-probes", key + ".lock")).TryTake(),
     };

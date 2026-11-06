@@ -303,13 +303,12 @@ into one folder with one version. An app update is a host update, so they never 
   ([Velopack: App Hooks](https://docs.velopack.io/integrating/hooks)), so the hook waits at most
   10 s in all and leaves the rest to the app's own start and exit. If the probes are not done, the
   host is not asked to stop at all, and Velopack ends it with the package, which can cut a Codex
-  app-server it started mid-refresh, and then the person may have to sign in to Codex again
-  (#238). So that no app-server is running when such an update applies, a host starts no
-  standalone Codex app-server while an update is downloaded and waiting to be applied (Velopack's
-  `UpdatePendingRestart`). Velopack applies a waiting update by itself when the app next starts
-  (its default), and `Update.exe` can apply one by hand; neither waits for the probes, and both
-  need one waiting. Left open: a newer setup run over the installed app, an uninstall, or an
-  update downloaded after a probe started and applied in the minute or two the probe runs.
+  app-server it started mid-refresh (#238). The app turns off Velopack's own apply of a downloaded
+  update when the app starts (`SetAutoApplyOnStartup(false)`), so an update is applied only by
+  the app's own install, which waits for the probes, or by a person: `Update.exe` run by hand,
+  a newer setup run over the app, or an uninstall. If one of those comes while a Codex usage probe
+  is running (up to about 10 minutes for one that is slow to answer, usually under a minute) and
+  Codex happens to be refreshing its sign-in, the person may have to sign in to Codex again.
   Keeping the probe alive across those is #974. The same holds for uninstall, whose hook has
   30 s, and which then goes on;
   `OnAfterUpdateFastCallback` (the new version, also 15 s) starts it again through its logon

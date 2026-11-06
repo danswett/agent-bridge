@@ -251,7 +251,7 @@ refresh and locking, and runs no model turn.
   does the one-shot `usage` command, which remembers nothing), and a file that cannot be read says
   nothing either way.
 * **Codex.** The route follows what Codex runs here:
-  * no Codex process, and no app update waiting to be applied (below): a standalone `codex app-server` over stdio (JSON lines, `CODEX_HOME` set,
+  * no Codex process: a standalone `codex app-server` over stdio (JSON lines, `CODEX_HOME` set,
     made absolute without resolving its `..` off Windows, which the system takes after any link
     before it, for a home that is not the default);
   * the managed daemon running: a WebSocket on its control socket
@@ -367,14 +367,13 @@ E4). So the host never kills a probe:
   package, whose probes it cannot hold, asked both before and after the wait. Giving up that wait
   (the host stopping) leaves the probe running. Velopack's own update and uninstall hooks wait
   only a few seconds, within the 15 s Velopack gives the update hook and the 30 s it gives the
-  uninstall hook, and leave a busy host to Velopack. A host therefore starts no standalone
-  app-server while an app update is downloaded and waiting to be applied: Velopack applies a
-  waiting update by itself when the app next starts, and `Update.exe` can apply one by hand,
-  neither waiting for the probes; the probe skips that pass as it does beside a Codex session
-  without the daemon, its transcripts standing. So only a host that is killed outright, or a busy
-  one Velopack ends for a setup run over the app, an uninstall, or an update downloaded after the
-  probe started and applied while it ran, can still have a probe cut short, and then the person
-  may have to sign in to Codex again (#974).
+  uninstall hook, and leave a busy host to Velopack. The app turns off Velopack's own apply of a
+  downloaded update when the app starts, so nothing applies an update by itself without that
+  wait. So only a host that is killed outright, or a busy one Velopack ends because a person ran
+  `Update.exe` by hand, ran a newer setup over the app, or uninstalled it, can still have a probe
+  cut short: while the probe runs (up to about 10 minutes for one slow to answer, then 30 s more,
+  usually under a minute), and if Codex is refreshing its sign-in just then, the person may have
+  to sign in to Codex again (#974).
 
 **Leaving the agents' credentials alone.** A host never reads, refreshes, copies or logs Claude's
 or Codex's credentials: Anthropic retires a refresh token once used and Codex's are single-use too,
