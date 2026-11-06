@@ -34,6 +34,9 @@ $semver = [semver]$Version
 $ReleasesDir = @($ReleasesDir | ForEach-Object { [IO.Path]::GetFullPath($_) })
 $work = Join-Path (Split-Path $ReleasesDir[0]) 'publish-work'
 $mode = if ($DryRun) { 'dry run: ' } else { '' }
+$haltsPath = Join-Path $PSScriptRoot '..' 'ops' 'halts.json'
+. (Join-Path $PSScriptRoot 'validate-halt-list.ps1')
+Assert-ReleaseHaltList $haltsPath
 
 function Invoke-Gh {
     # gh reports a failure on stderr and a nonzero exit; unchecked, it would read as no releases.
@@ -47,9 +50,33 @@ function Write-Plan([string]$line, [switch]$Warn) {
     if ($env:GITHUB_STEP_SUMMARY) { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "* $mode$line" }
 }
 
+# GitHub's API now and then fails a single call (HTTP 500, an empty response) and answers the next
+# one. Twice on 2026-11-05 that alone turned main red, after every build and test had passed
+# (#907). Only listing and deleting releases go through this: both are safe to repeat.
+$ghRetryDelays = @(2, 8)
+function Invoke-GhRetry {
+    for ($attempt = 0; ; $attempt++) {
+        try { return Invoke-Gh @args }
+        catch {
+            if ($attempt -ge $ghRetryDelays.Count) { throw }
+            Write-Plan "$($_.Exception.Message); trying again in $($ghRetryDelays[$attempt]) s"
+            Start-Sleep -Seconds $ghRetryDelays[$attempt]
+        }
+    }
+}
+
 function Get-Release {
-    @(Invoke-Gh api "repos/$Repository/releases?per_page=100" --paginate --jq '.[] | {id, tag_name, draft, prerelease}' |
+    @(Invoke-GhRetry api "repos/$Repository/releases?per_page=100" --paginate --jq '.[] | {id, tag_name, draft, prerelease}' |
             Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
+}
+
+function Remove-Release([long]$id) {
+    try { Invoke-GhRetry api -X DELETE "repos/$Repository/releases/$id" | Out-Null }
+    catch {
+        # A DELETE that failed may still have gone through, and its retries then fail as "not
+        # found": the release being gone is what counts.
+        if (@(Get-Release | Where-Object id -EQ $id).Count) { throw }
+    }
 }
 
 function Get-TagVersion([string]$tagName) {
@@ -229,7 +256,8 @@ if ($publishing) {
         # A draft is all a failed attempt leaves (it is published only after every upload), and
         # vpk refuses a tag that has one.
         Write-Plan "deleting the draft $tag left by an earlier attempt"
-        if (-not $DryRun) { Invoke-Gh api -X DELETE "repos/$Repository/releases/$($leftover.id)" | Out-Null }
+        # This one must go before anything is uploaded, so failing to delete it still fails.
+        if (-not $DryRun) { Remove-Release $leftover.id }
     }
     if (-not $DryRun) {
         if (-not $env:GH_TOKEN) { throw 'GH_TOKEN is needed to publish' }
@@ -246,6 +274,9 @@ if ($publishing) {
         $draft = @(Get-Release | Where-Object { $_.draft -and $_.tag_name -eq $tag })
         if ($draft.Count -ne 1) { throw "expected one draft $tag after the upload, found $($draft.Count)" }
         foreach ($b in $builds) { Invoke-Gh release upload $tag $b.AssetsFile -R $Repository --clobber | Out-Null }
+        # The same reviewed policy for every channel; upload before exposing the draft.
+        # Clients verify GitHub's asset digest and never treat a missing policy as empty.
+        Invoke-Gh release upload $tag $haltsPath -R $Repository --clobber | Out-Null
         $run = if ($env:GITHUB_RUN_ID) { " (CI run $env:GITHUB_SERVER_URL/$Repository/actions/runs/$env:GITHUB_RUN_ID)" } else { '' }
         $hasDelta = [bool]($builds | Where-Object { Test-Path $_.DeltaPath })
         $installers = @($builds | ForEach-Object { "$($_.Expected.Installer) on $(if ($_.Machine -eq 'x64') { 'an x64 PC' } else { 'a Windows on Arm PC' })" })
@@ -273,15 +304,31 @@ if ($publishing) {
 
 # --- Keep the newest pre-releases. Deleting a release deletes its assets but not its tag; full
 # releases, drafts and anything not tagged v<major>.<minor>.<patch> are never touched.
-$current = if ($DryRun) { $releases } else { Get-Release }
+# Pruning is housekeeping: by now the release is out (or wasn't due), so a GitHub failure here,
+# after its retries, is a warning rather than a failed publish. The next publish prunes again.
+try { $current = if ($DryRun) { $releases } else { Get-Release } }
+catch {
+    Write-Plan -Warn "old pre-releases were not pruned: listing the releases failed ($($_.Exception.Message)); the next publish prunes them"
+    # GitHub's pwsh step ends with `exit $LASTEXITCODE`: the failed gh call's code would turn this red.
+    $global:LASTEXITCODE = 0
+    return
+}
 $pre = @($current | Where-Object { $_.prerelease -and -not $_.draft } | ForEach-Object {
         $v = Get-TagVersion $_.tag_name
         if ($v) { [pscustomobject]@{ Id = $_.id; Tag = $_.tag_name; Version = $v } }
     })
 if ($DryRun -and $publishing) { $pre += [pscustomobject]@{ Id = $null; Tag = $tag; Version = $semver } }
 $old = @($pre | Sort-Object Version -Descending | Select-Object -Skip $Keep)
+$failed = 0
 foreach ($o in $old) {
     Write-Plan "deleting the pre-release $($o.Tag) and its assets (the tag stays)"
-    if (-not $DryRun) { Invoke-Gh api -X DELETE "repos/$Repository/releases/$($o.Id)" | Out-Null }
+    if ($DryRun) { continue }
+    try { Remove-Release $o.Id }
+    catch {
+        $failed++
+        Write-Plan -Warn "the pre-release $($o.Tag) was not deleted ($($_.Exception.Message)); the next publish deletes it"
+    }
 }
-Write-Plan "$([Math]::Min($pre.Count, $Keep)) pre-release(s) kept, $($old.Count) deleted"
+Write-Plan "$([Math]::Min($pre.Count, $Keep)) pre-release(s) kept, $($old.Count - $failed) deleted$(if ($failed) { ", $failed left for the next publish" })"
+# A pruning failure above is a warning; see the comment at the listing.
+$global:LASTEXITCODE = 0

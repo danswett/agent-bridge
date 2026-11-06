@@ -237,8 +237,52 @@ public static partial class HaNotify
     }
 
     // Clear-DaemonAnswerButtons' payload: the question's notification withdrawn by its tag.
-    public static JsonObject Clear(string sessionId) =>
-        new() { ["message"] = ClearMessage, ["data"] = new JsonObject { ["tag"] = Tag(sessionId) } };
+    public static JsonObject Clear(string sessionId) => ClearTag(Tag(sessionId));
+
+    static JsonObject ClearTag(string tag) =>
+        new() { ["message"] = ClearMessage, ["data"] = new JsonObject { ["tag"] = tag } };
+
+    // The sign-in notice (#800, §3 of 6646501884's signIn push): one per machine, agent and
+    // account, never per session. Its tag names the account only by a digest, as the host's push
+    // tag does; nothing in the notice names it, and no code or URL is ever in one.
+    public static string SignInTag(string slug, string agent, string? account) =>
+        $"bridge_signin_{slug}_{agent}_{AccountDigest(account)}";
+
+    public static string AccountDigest(string? account) =>
+        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(account ?? ""))).Substring(0, 8);
+
+    // "<machine> · Copilot needs sign-in" over "2 sessions: <name>, <name>", the host's push's
+    // words. The first three sessions are named; more are counted.
+    public static (string Title, string Message) SignIn(string machineName, string agentName, IReadOnlyList<string> sessionNames)
+    {
+        var shown = string.Join(", ", sessionNames.Take(3)) + (sessionNames.Count > 3 ? ", …" : "");
+        var count = sessionNames.Count == 1 ? "1 session" : $"{sessionNames.Count} sessions";
+        return (NotificationTitle($"{machineName} · {agentName} needs sign-in"), Cap($"{count}: {shown}"));
+    }
+
+    // The sign-in notice for the phones answer buttons go to: the same styling as a question's, no
+    // actions (nothing is answered from it), and the dashboard to open.
+    public static JsonObject SignInPayload(string tag, string title, string message, string dashboardUrlPath, string machineName,
+        string icon = "mdi:chat-question", string iconColor = "#FFFFFF", string color = "#FF9F0A", string interruptionLevel = "time-sensitive")
+    {
+        var data = new JsonObject
+        {
+            ["tag"] = tag,
+            ["url"] = $"/{dashboardUrlPath}",
+            ["group"] = "agent-bridge",
+        };
+        if (!string.IsNullOrWhiteSpace(icon))
+        {
+            data["notification_icon"] = icon;
+            data["notification_icon_color"] = iconColor;
+            data["color"] = color;
+        }
+        if (!string.IsNullOrWhiteSpace(interruptionLevel)) { data["interruption-level"] = interruptionLevel; }
+        if (!string.IsNullOrWhiteSpace(machineName)) { data["subtitle"] = $"{machineName} - needs sign-in"; }
+        return new JsonObject { ["title"] = title, ["message"] = message, ["data"] = data };
+    }
+
+    public static JsonObject ClearSignIn(string tag) => ClearTag(tag);
 
     // Get-BridgeAnswerButtonChoice: what a tap means, or null when the event is not one of ours.
     public static TapChoice? Choice(JsonElement data)

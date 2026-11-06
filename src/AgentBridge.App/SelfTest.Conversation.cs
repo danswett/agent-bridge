@@ -21,6 +21,7 @@ static partial class SelfTest
         var launched = main.AllCards.FirstOrDefault(c => c.UserMessage == launchedPrompt);
         if (launched is null || !await Until(() => launched.HasResponse, TimeSpan.FromSeconds(10))) { check(false, "finds the launched session's message and reply"); return; }
         var cards = new[] { launched, main.AllCards.First(c => c.Id == DelegatingId) };
+        yoursId = launched.Id;
 
         var wrong = new List<string>();
         var dragged = new List<string>();
@@ -32,7 +33,7 @@ static partial class SelfTest
             {
                 var view = await Choose(window, main, card.Id, "YourMessage");
                 layout.Tab = SessionTab.Conversation;
-                var scroll = view is null ? null : ById<ScrollViewer>(view, "Conversation");
+                var scroll = view is null ? null : ConversationScroller(view);
                 var column = scroll is null ? null : Find<StackPanel>(scroll).FirstOrDefault(s => s.Name == "Conversation");
                 var bubble = view is null ? null : ById<Border>(view, "YourMessage");
                 if (scroll is null || column is null || bubble is null || !await Until(() => bubble.ActualWidth > 0 && scroll.ViewportWidth > 0, TimeSpan.FromSeconds(5)))
@@ -47,7 +48,7 @@ static partial class SelfTest
             // The list narrowed to its narrowest, then halfway back, so the session stays wider than the
             // measure and the column moves.
             if (width is 1440.0 && await Choose(window, main, launched.Id, "YourMessage") is { } shown
-                && ById<ScrollViewer>(shown, "Conversation") is { } scroll2 && Find<StackPanel>(scroll2).FirstOrDefault(s => s.Name == "Conversation") is { } column2
+                && ConversationScroller(shown) is { } scroll2 && Find<StackPanel>(scroll2).FirstOrDefault(s => s.Name == "Conversation") is { } column2
                 && ById<Border>(shown, "YourMessage") is { } bubble2)
             {
                 var divider = window.Sessions.ListDividerView;
@@ -70,7 +71,8 @@ static partial class SelfTest
                 await Until(() => Math.Abs(scroll2.ViewportWidth - before) <= 1, TimeSpan.FromSeconds(5));
             }
             else if (width is 1440.0) { dragged.Add("the launched session not drawn at 1440"); }
-            // Pictures for review: the short message beside the short reply, wide and narrow, both themes.
+            // Pictures for review: the short message beside the short reply of a few blocks, wide and
+            // narrow, both themes; high contrast's are taken in its own pass (PictureYoursInHighContrast).
             if (width is 1440.0 or 1200.0 or 400.0 && await Choose(window, main, launched.Id, "YourMessage") is not null)
             {
                 await Task.Delay(300);
@@ -85,6 +87,32 @@ static partial class SelfTest
         }
         check(wrong.Count == 0, $"puts your message at the right of the conversation's column, at most 85% of it, beside a short reply and a long one, the column and the reply box at the same measure, centred in the pane, at every width{(wrong.Count > 0 ? $": not {string.Join("; ", wrong)}" : "")}");
         check(dragged.Count == 0, $"keeps the conversation and the reply box centred in the pane while a divider is dragged{(dragged.Count > 0 ? $": not {string.Join("; ", dragged)}" : "")}");
+    }
+
+    // The launched session pictured above, for its pictures in high contrast, which is on only later,
+    // in its own pass.
+    static string? yoursId;
+
+    // The light and dark pictures' third theme (#765): the launched session at the same three widths
+    // in high contrast, while that pass has it on.
+    static async Task PictureYoursInHighContrast(MainWindow window, Action<bool, string> check, string outFile)
+    {
+        var taken = new List<string>();
+        if (yoursId is not null && window.Sessions.Layout is { } layout)
+        {
+            foreach (var (width, mode) in new[] { (1440.0, PaneMode.Three), (1200.0, PaneMode.Two), (400.0, PaneMode.One) })
+            {
+                Resize(window, width, 900);
+                await Until(() => layout.Mode == mode, TimeSpan.FromSeconds(10));
+                if (await Choose(window, window.ViewModel, yoursId, "YourMessage") is null) { continue; }
+                layout.Tab = SessionTab.Conversation;
+                await Task.Delay(300);
+                await Picture(window.RootElement, Path.ChangeExtension(outFile, $".yours.{width:0}.highcontrast.png"));
+                taken.Add($"{width:0}");
+            }
+            Resize(window, 1440, 1000);
+        }
+        check(taken.Count == 3, $"pictures your message and its reply in high contrast at 1440, 1200 and 400 ({(taken.Count > 0 ? string.Join(", ", taken) : "none")})");
     }
 
     // What is out of place in a conversation's column, its bubble and its reply box, or null: each

@@ -326,9 +326,9 @@ public sealed class ChannelHub
                     if (reply.TryGetProperty("early", out var answer) && answer.ValueKind == JsonValueKind.Object) { ch.AnsweredEarly(answer); }
                     ch.Ready.TrySetResult();
                     break;
-                case ChannelKind.Transport when ch is { Handshake.IsComplete: true }:
+                case ChannelKind.Transport when ch is { Handshake: { IsComplete: true, Receive: { } receive } }:
                     RequirePeer(ch);
-                    var message = JsonDocument.Parse(MessageDeflate.Unpack(ch.Handshake.Receive!.DecryptWithAd([], body), SecureChannel.MaxMessageBytes)).RootElement;
+                    var message = JsonDocument.Parse(MessageDeflate.Unpack(receive.DecryptWithAd([], body), SecureChannel.MaxMessageBytes)).RootElement;
                     // A response has re, an event ev, a request op. Anything else is a frame
                     // from a newer peer this one does not know, and is ignored.
                     if (message.TryGetProperty("re", out _)) { ch.Complete(message); }

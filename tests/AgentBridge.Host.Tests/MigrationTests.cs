@@ -32,7 +32,25 @@ public abstract class MigrationFixture : IAsyncLifetime
     private protected async Task Migrated()
     {
         var report = await _f.Migrator().MigrateAsync(dryRun: false);
-        Assert.True(report.Ok, report.ToString());
+        if (report.Ok) { return; }
+
+        // Rollback may have removed its spool. Diagnostics must preserve the migration error.
+        var details = new List<string>(report.Lines);
+        try
+        {
+            var log = SpoolContract.LogPath(_f.Runtime);
+            details.Add("Fixture hook log (last 10 lines):");
+            details.AddRange(File.Exists(log) ? File.ReadLines(log).TakeLast(10) : ["missing"]);
+            var spool = SpoolContract.SpoolDirectory(_f.Runtime);
+            details.Add("Remaining fixture spool files (up to 10):");
+            details.AddRange(Directory.Exists(spool)
+                ? Directory.EnumerateFiles(spool).Take(10).Select(p => Path.GetFileName(p)) : ["missing"]);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            details.Add($"Fixture diagnostics unavailable: {ex.GetType().Name}");
+        }
+        Assert.Fail(string.Join(Environment.NewLine, details));
     }
 
     private protected async Task RolledBack()
@@ -349,6 +367,344 @@ public sealed class MigrationTests : MigrationFixture
         Assert.Equal(before, _f.Listing());
     }
 
+    // Codex runs its cached copy of the plugin, not the source, and refreshes it only for a new
+    // version (#123): each version's copy is re-pointed with the source, entry by exact entry,
+    // and put back byte for byte.
+    [Fact]
+    public async Task Codexs_cached_copies_of_the_plugin_are_re_pointed_with_its_source_and_restored_byte_for_byte()
+    {
+        // An older version Codex still keeps, from before the native hook, with a person's own
+        // entry beside agent-ha-bridge's.
+        var older = _f.CodexCacheHooks("0.9.0");
+        Directory.CreateDirectory(Path.GetDirectoryName(older)!);
+        File.WriteAllText(older, new JsonObject
+        {
+            ["hooks"] = new JsonObject
+            {
+                ["Stop"] = new JsonArray(new JsonObject
+                {
+                    ["hooks"] = new JsonArray(
+                        new JsonObject { ["type"] = "command", ["command"] = "C:\\mine\\stop.cmd", ["timeout"] = 5 },
+                        new JsonObject { ["type"] = "command", ["command"] = $"pwsh -NoProfile -ExecutionPolicy Bypass -File {_f.CodexScript}", ["timeout"] = 20 }),
+                }),
+            },
+        }.ToJsonString());
+        var cached = File.ReadAllBytes(_f.CodexCacheHooks());
+        var olderBytes = File.ReadAllBytes(older);
+        var before = _f.Listing();
+        var hook = _f.InstalledHook;
+
+        var dry = await _f.Migrator().MigrateAsync(dryRun: true);
+        Assert.Contains($"codex-cache-{FakeAgentHaBridge.CodexVersion}: re-point 6 hook(s) in {_f.CodexCacheHooks()}", dry.ToString());
+        Assert.Contains($"codex-cache-0.9.0: re-point 1 hook(s) in {older}", dry.ToString());
+        await Migrated();
+
+        var codex = FakeAgentHaBridge.Read(_f.CodexCacheHooks())["hooks"]!.AsObject();
+        Assert.Equal(6, codex.Count);
+        Assert.All(codex, e => Assert.Equal($"{hook} codex hook", (string?)e.Value![0]!["hooks"]![0]!["command"]));
+        var stop = FakeAgentHaBridge.Read(older)["hooks"]!["Stop"]![0]!["hooks"]!;
+        Assert.Equal("C:\\mine\\stop.cmd", (string?)stop[0]!["command"]);
+        Assert.Equal($"{hook} codex hook", (string?)stop[1]!["command"]);
+        Assert.Contains($"{_f.CodexCacheHooks()}: as migrated", _f.Migrator().Status());
+
+        await RolledBack();
+        Assert.Equal(cached, File.ReadAllBytes(_f.CodexCacheHooks()));
+        Assert.Equal(olderBytes, File.ReadAllBytes(older));
+        Assert.Equal(before, _f.Listing());
+    }
+
+    [Fact]
+    public async Task Another_plugins_or_marketplaces_cache_is_left_as_it_is_even_naming_agent_ha_bridges_hook()
+    {
+        var command = $"{_f.GoHook} codex hook {_f.CodexScript}";
+        string Other(params string[] parts) => Path.Combine([_f.CodexHome, "plugins", "cache", .. parts, "1.0.0", "hooks.json"]);
+        var others = new[] { Other("another-marketplace", "agent-ha-bridge"), Other("agent-ha-bridge", "another-plugin") };
+        foreach (var path in others)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, new JsonObject { ["hooks"] = new JsonObject { ["Stop"] = new JsonArray(new JsonObject { ["hooks"] = new JsonArray(new JsonObject { ["type"] = "command", ["command"] = command }) }) } }.ToJsonString());
+        }
+        var bytes = others.Select(File.ReadAllBytes).ToList();
+
+        await Migrated();
+
+        Assert.Equal(bytes, others.Select(File.ReadAllBytes));
+        Assert.DoesNotContain(others[0], _f.Migrator().Status());
+    }
+
+    [Fact]
+    public async Task A_link_in_Codexs_plugin_cache_refuses_the_migration_before_anything_is_touched()
+    {
+        // Codex makes its cache of plain folders; a link there could lead a rewrite out of it.
+        var elsewhere = Path.Combine(_f.Home, "elsewhere", "2.0.0");
+        Directory.CreateDirectory(elsewhere);
+        File.Copy(_f.CodexHooks, Path.Combine(elsewhere, "hooks.json"));
+        try { Directory.CreateSymbolicLink(Path.Combine(_f.CodexCache, "2.0.0"), elsewhere); }
+        // Windows lets only an administrator, or developer mode, make one.
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException) { return; }
+        var listing = _f.Listing();
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("is a symbolic link or junction, which Codex does not make", report.ToString());
+        Assert.Equal(listing, _f.Listing());
+        Assert.Empty(_f.Runtime_.Calls);
+    }
+
+    [Fact]
+    public async Task A_linked_codex_home_refuses_the_migration_before_anything_is_touched()
+    {
+        // Every cache path below a linked .codex still looks contained by name; the link is the escape.
+        var elsewhere = Path.Combine(_f.Home, "elsewhere-codex");
+        Directory.Move(_f.CodexHome, elsewhere);
+        try { Directory.CreateSymbolicLink(_f.CodexHome, elsewhere); }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException) { Directory.Move(elsewhere, _f.CodexHome); return; }
+        var listing = _f.Listing();
+        var cached = File.ReadAllBytes(Path.Combine(elsewhere, Path.GetRelativePath(_f.CodexHome, _f.CodexCacheHooks())));
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains($"{Path.GetFullPath(_f.CodexHome)}, on the way to Codex's plugin cache, is a symbolic link or junction", report.ToString());
+        Assert.Equal(listing, _f.Listing());
+        Assert.Equal(cached, File.ReadAllBytes(Path.Combine(elsewhere, Path.GetRelativePath(_f.CodexHome, _f.CodexCacheHooks()))));
+        Assert.Empty(_f.Runtime_.Calls);
+    }
+
+    [Fact]
+    public async Task A_custom_codex_home_outside_the_home_beneath_a_linked_folder_refuses_the_migration_before_anything_is_touched()
+    {
+        // installation.json's codexHome can be anywhere: its own folder is plain, a folder above it
+        // is linked, and it is not under the home, so no check may start from the home's prefix.
+        var outside = Directory.CreateTempSubdirectory("abmigrate-codexhome-").FullName;
+        var target = Path.Combine(outside, "real");
+        var link = Path.Combine(outside, "codex-link");
+        try
+        {
+            Directory.CreateDirectory(target);
+            Directory.Move(_f.CodexHome, Path.Combine(target, "profile"));
+            try { Directory.CreateSymbolicLink(link, target); }
+            catch (Exception e) when (e is UnauthorizedAccessException or IOException) { return; }
+            var codexHome = Path.Combine(link, "profile");
+            var installation = Path.Combine(_f.BridgeHome, "installation.json");
+            var json = FakeAgentHaBridge.Read(installation);
+            json["codexHome"] = codexHome;
+            File.WriteAllText(installation, json.ToJsonString(new() { WriteIndented = true }));
+            var listing = _f.Listing();
+            var outsideBytes = Directory.EnumerateFiles(target, "*", SearchOption.AllDirectories).ToDictionary(f => f, File.ReadAllBytes);
+
+            var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+            Assert.False(report.Ok);
+            Assert.Contains($"{link}, on the way to Codex's plugin cache, is a symbolic link or junction", report.ToString());
+            Assert.Equal(listing, _f.Listing());
+            Assert.Equal(outsideBytes.Keys.Order(), Directory.EnumerateFiles(target, "*", SearchOption.AllDirectories).Order());
+            foreach (var (file, bytes) in outsideBytes) { Assert.Equal(bytes, File.ReadAllBytes(file)); }
+            Assert.Empty(_f.Runtime_.Calls);
+        }
+        finally
+        {
+            if (Directory.Exists(link)) { Directory.Delete(link); }
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    // The link tests above use symbolic links, which Windows makes only for an administrator or in
+    // developer mode, so they return early on a Windows runner without either. A junction needs
+    // neither, and is what a person (or a tool) would make there: on Windows these make a real
+    // one (`mklink /J`) and fail if it cannot be made; elsewhere, where there are none, a
+    // symbolic link. Either way the refusal must come before anything under the home, the
+    // custom codexHome outside it, or the junction's target is written.
+    [Theory]
+    [InlineData("the Codex home")]
+    [InlineData("a cached version")]
+    [InlineData("a custom Codex home outside the home")]
+    [InlineData("a folder above a custom Codex home outside the home")]
+    [InlineData("a cached version in a custom Codex home outside the home")]
+    public async Task A_junction_on_the_way_to_Codexs_plugin_cache_refuses_the_migration_before_anything_is_touched(string where)
+    {
+        var outside = Directory.CreateTempSubdirectory("abmigrate-junction-").FullName;
+        string? link = null;
+        try
+        {
+            var codexHome = _f.CodexHome;
+            if (where.Contains("custom", StringComparison.Ordinal))
+            {
+                codexHome = where.StartsWith("a folder above", StringComparison.Ordinal)
+                    ? Path.Combine(outside, "codex-link", "profile")
+                    : where == "a custom Codex home outside the home" ? Path.Combine(outside, "codex-link") : Path.Combine(outside, "profile");
+                var installation = Path.Combine(_f.BridgeHome, "installation.json");
+                var json = FakeAgentHaBridge.Read(installation);
+                json["codexHome"] = codexHome;
+                File.WriteAllText(installation, json.ToJsonString(new() { WriteIndented = true }));
+            }
+            var version = Path.Combine(codexHome, Path.GetRelativePath(_f.CodexHome, Path.GetDirectoryName(_f.CodexCacheHooks())!));
+            string target;
+            switch (where)
+            {
+                case "the Codex home":
+                    (link, target) = (_f.CodexHome, Path.Combine(outside, "real-codex"));
+                    Directory.Move(_f.CodexHome, target);
+                    break;
+                case "a custom Codex home outside the home":
+                    (link, target) = (codexHome, Path.Combine(outside, "real-codex"));
+                    Directory.Move(_f.CodexHome, target);
+                    break;
+                case "a folder above a custom Codex home outside the home":
+                    (link, target) = (Path.Combine(outside, "codex-link"), Path.Combine(outside, "real"));
+                    Directory.CreateDirectory(target);
+                    Directory.Move(_f.CodexHome, Path.Combine(target, "profile"));
+                    break;
+                default:
+                    if (codexHome != _f.CodexHome) { Directory.Move(_f.CodexHome, codexHome); }
+                    (link, target) = (version, Path.Combine(outside, "moved-version"));
+                    Directory.Move(version, target);
+                    break;
+            }
+            Junction(link, target);
+            Assert.True(File.GetAttributes(link).HasFlag(FileAttributes.ReparsePoint));
+            Assert.True(File.Exists(Path.Combine(version, "hooks.json")), "the cached hooks are reached through the junction");
+            var home = Snapshot(_f.Home);
+            var external = Snapshot(outside);
+            Assert.Contains(external.Keys, k => k.EndsWith("hooks.json", StringComparison.Ordinal) && k.StartsWith(target + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+
+            foreach (var dryRun in new[] { true, false })
+            {
+                var report = await _f.Migrator().MigrateAsync(dryRun);
+
+                Assert.False(report.Ok);
+                Assert.Contains($"{link}, on the way to Codex's plugin cache, is a symbolic link or junction, which Codex does not make", report.ToString());
+            }
+            Assert.Equal(home, Snapshot(_f.Home));
+            Assert.Equal(external, Snapshot(outside));
+            Assert.Empty(_f.Runtime_.Calls);
+        }
+        finally
+        {
+            if (link is not null && new DirectoryInfo(link).LinkTarget is not null) { Directory.Delete(link); }
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    // A custom codexHome outside the home, plain all the way: its cached copy is re-pointed with
+    // the source, and a rollback puts every file under it back byte for byte.
+    [Fact]
+    public async Task A_custom_Codex_home_outside_the_home_has_its_cached_hooks_re_pointed_and_restored_byte_for_byte()
+    {
+        var outside = Directory.CreateTempSubdirectory("abmigrate-customhome-").FullName;
+        try
+        {
+            var codexHome = Path.Combine(outside, "profile");
+            Directory.Move(_f.CodexHome, codexHome);
+            var installation = Path.Combine(_f.BridgeHome, "installation.json");
+            var json = FakeAgentHaBridge.Read(installation);
+            json["codexHome"] = codexHome;
+            File.WriteAllText(installation, json.ToJsonString(new() { WriteIndented = true }));
+            var cached = Path.Combine(codexHome, Path.GetRelativePath(_f.CodexHome, _f.CodexCacheHooks()));
+            var home = _f.Listing();
+            var external = Directory.EnumerateFiles(outside, "*", SearchOption.AllDirectories).ToDictionary(f => f, File.ReadAllBytes);
+
+            await Migrated();
+
+            var hook = _f.InstalledHook;
+            foreach (var path in new[] { cached, _f.CodexHooks })
+            {
+                var entries = FakeAgentHaBridge.Read(path)["hooks"]!.AsObject();
+                Assert.Equal(6, entries.Count);
+                Assert.All(entries, e => Assert.Equal($"{hook} codex hook", (string?)e.Value![0]!["hooks"]![0]!["command"]));
+            }
+            Assert.Contains($"{cached}: as migrated", _f.Migrator().Status());
+
+            await RolledBack();
+
+            Assert.Equal(home, _f.Listing());
+            Assert.Equal(external.Keys.Order(), Directory.EnumerateFiles(outside, "*", SearchOption.AllDirectories).Order());
+            foreach (var (file, bytes) in external) { Assert.Equal(bytes, File.ReadAllBytes(file)); }
+        }
+        finally { Directory.Delete(outside, recursive: true); }
+    }
+
+    static void Junction(string link, string target)
+    {
+        if (!OperatingSystem.IsWindows()) { Directory.CreateSymbolicLink(link, target); return; }
+        using var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", ["/c", "mklink", "/J", link, target])
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+        })!;
+        mklink.WaitForExit();
+        Assert.True(mklink.ExitCode == 0, $"mklink /J {link} {target}: {mklink.StandardError.ReadToEnd()}");
+        Assert.Equal(target, new DirectoryInfo(link).LinkTarget);
+    }
+
+    // Every file below root, with its hash and last write time, and every link with its target,
+    // never followed: a junction's target is snapshotted where it is, under an owned root. The
+    // lock a migrate holds while it runs is left out, as in Listing.
+    static SortedDictionary<string, string> Snapshot(string root)
+    {
+        var snapshot = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var folders = new Stack<DirectoryInfo>([new DirectoryInfo(root)]);
+        while (folders.TryPop(out var folder))
+        {
+            foreach (var entry in folder.EnumerateFileSystemInfos())
+            {
+                if (entry.LinkTarget is { } target) { snapshot[entry.FullName] = "link " + target; }
+                else if (entry is DirectoryInfo d) { folders.Push(d); }
+                else if (entry.Name != "migration.lock")
+                {
+                    snapshot[entry.FullName] = $"{Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(entry.FullName)))} {entry.LastWriteTimeUtc.Ticks}";
+                }
+            }
+        }
+        return snapshot;
+    }
+
+    [Theory]
+    [InlineData("its version folder")]
+    [InlineData("its hooks.json")]
+    public async Task A_link_put_in_Codexs_plugin_cache_since_migrating_refuses_the_rollback_before_anything_is_touched(string linked)
+    {
+        // The cache was plain when migrated; a rollback must not then write through a link out of it.
+        await Migrated();
+        var outside = Directory.CreateTempSubdirectory("abmigrate-rollback-").FullName;
+        var version = Path.GetDirectoryName(_f.CodexCacheHooks())!;
+        var link = linked == "its hooks.json" ? _f.CodexCacheHooks() : version;
+        var moved = Path.Combine(outside, "moved");
+        try
+        {
+            if (link == version) { Directory.Move(version, moved); }
+            else { File.Move(link, moved); }
+            try
+            {
+                if (link == version) { Directory.CreateSymbolicLink(link, moved); }
+                else { File.CreateSymbolicLink(link, moved); }
+            }
+            catch (Exception e) when (e is UnauthorizedAccessException or IOException) { return; }
+            var listing = _f.Listing();
+            var outsideBytes = Directory.EnumerateFiles(outside, "*", SearchOption.AllDirectories).ToDictionary(f => f, File.ReadAllBytes);
+            _f.Runtime_.Calls.Clear();
+
+            foreach (var dryRun in new[] { true, false })
+            {
+                var report = await _f.Migrator().RollbackAsync(dryRun);
+
+                Assert.False(report.Ok);
+                Assert.Contains($"Refused: {link}, on the way to {_f.CodexCacheHooks()} in Codex's plugin cache, is a symbolic link or junction", report.ToString());
+                Assert.Contains("Nothing was rolled back", report.ToString());
+            }
+            Assert.Equal(listing, _f.Listing());
+            Assert.Equal(outsideBytes.Keys.Order(), Directory.EnumerateFiles(outside, "*", SearchOption.AllDirectories).Order());
+            foreach (var (file, bytes) in outsideBytes) { Assert.Equal(bytes, File.ReadAllBytes(file)); }
+            Assert.Empty(_f.Runtime_.Calls);
+        }
+        finally
+        {
+            FileSystemInfo info = link == version ? new DirectoryInfo(link) : new FileInfo(link);
+            if (info.LinkTarget is not null) { info.Delete(); }
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task A_hook_file_edited_while_migrated_gets_only_its_own_entries_back()
     {
@@ -629,6 +985,47 @@ public sealed class MigrationTests : MigrationFixture
         Assert.Contains("Codex runs agent-ha-bridge's PowerShell hook directly", report.ToString());
         Assert.Equal(listing, _f.Listing());
         Assert.Empty(_f.Runtime_.Calls);
+    }
+
+    // Only a cached copy holding this installation's own native entry keeps it, and has its write
+    // time weighed against running Codex sessions; a newer one holding nothing of this
+    // installation's must not refuse a session that started after every one of its own was written.
+    [Theory]
+    [InlineData("only a person's", false)]
+    [InlineData("another installation's", false)]
+    [InlineData("none", false)]
+    [InlineData("this installation's", true)]
+    public async Task A_newer_cached_copy_is_weighed_against_a_running_Codex_only_when_it_holds_this_installations_native_hook(string entries, bool refused)
+    {
+        var spaced = Path.Combine(_f.Home, "App Data", "bin");
+        var source = FakeAgentHaBridge.Read(_f.CodexHooks);
+        var native = (string)source["hooks"]!.AsObject().First().Value![0]!["hooks"]![0]!["command"]!;
+        JsonObject Hooks(params string[] commands) => new()
+        {
+            ["hooks"] = new JsonObject
+            {
+                ["Stop"] = new JsonArray(new JsonObject { ["hooks"] = new JsonArray([.. commands.Select(c => (JsonNode)new JsonObject { ["type"] = "command", ["command"] = c })]) }),
+            },
+        };
+        var newer = _f.CodexCacheHooks("2.0.0");
+        Directory.CreateDirectory(Path.GetDirectoryName(newer)!);
+        File.WriteAllText(newer, (entries switch
+        {
+            "only a person's" => Hooks("C:\\mine\\stop.cmd"),
+            "another installation's" => Hooks(native.Replace(".agent-ha-bridge", ".agent-ha-bridge-other", StringComparison.Ordinal)),
+            "none" => new JsonObject { ["hooks"] = new JsonObject() },
+            _ => Hooks("C:\\mine\\stop.cmd", native),
+        }).ToJsonString());
+        // Written after the running session started; everything of this installation's before.
+        var started = DateTimeOffset.UtcNow.AddMinutes(1);
+        File.SetLastWriteTimeUtc(newer, started.AddMinutes(10).UtcDateTime);
+        _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Codex] = 1;
+        _f.Runtime_.AgentsStarted[AgentBridge.Protocol.AgentKind.Codex] = started;
+
+        var report = await _f.Migrator(hookFolder: spaced).MigrateAsync(dryRun: true);
+
+        Assert.Equal(!refused, report.Ok);
+        Assert.Equal(refused, report.ToString().Contains($"Codex's hooks ({newer}) were last written after", StringComparison.Ordinal));
     }
 
     [Fact]

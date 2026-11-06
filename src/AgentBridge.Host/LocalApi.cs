@@ -50,7 +50,8 @@ public static class LocalApi
         {
             CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability,
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
-                .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : []] },
+                .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],
+                .. control.HasAgentInstall ? new[] { HostOps.AgentInstallCapability } : []] },
             CallerKind.Agent => hello with { Capabilities = [.. hello.Capabilities.Where(AgentCapabilities.Contains)] },
             _ => hello,
         });

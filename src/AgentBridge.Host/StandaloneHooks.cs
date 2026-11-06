@@ -63,7 +63,9 @@ public sealed class StandaloneHooks(
         _ => throw new ArgumentException("Choose copilot (also Agency), claude or codex."),
     };
 
-    static JsonObject Read(string path) => JsonNode.Parse(Registrations.Decode(File.ReadAllBytes(path)),
+    static JsonObject Read(string path) => Parse(path, File.ReadAllBytes(path));
+
+    static JsonObject Parse(string path, byte[] bytes) => JsonNode.Parse(Registrations.Decode(bytes),
         documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip }) as JsonObject
         ?? throw new InvalidDataException($"{path} is not a JSON object; it was left alone");
 
@@ -73,6 +75,8 @@ public sealed class StandaloneHooks(
     static byte[] Bytes(JsonNode value) => Encoding.UTF8.GetBytes(value.ToJsonString(Pretty) + Environment.NewLine);
 
     static void Write(string path, JsonNode value) => DurableFile.Replace(path, Bytes(value), MigrationRecord.Hash(path));
+
+    internal void CheckInstall(string agent) => Preflight(agent, removing: false);
 
     void Preflight(string agent, bool removing)
     {
@@ -235,8 +239,11 @@ public sealed class StandaloneHooks(
             var backup = Path.Combine(HookFolder, "backups", "claude-settings.json");
             if (!File.Exists(backup)) { DurableFile.Replace(backup, File.ReadAllBytes(path), null); }
         }
-        // Save ownership first: an interrupted install can be safely retried or removed.
-        DurableFile.Replace(owner, Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile }), ownerBefore);
+        // Save ownership first: an interrupted install can be safely retried or removed. The
+        // record is rewritten without setupCompleted, so an earlier completed setup cannot
+        // outlive a repair that fails below; readiness reports this record as incomplete.
+        var incomplete = Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile });
+        DurableFile.Replace(owner, incomplete, ownerBefore);
         RefreshFiles(profile, hookSource);
         instructions.Apply(InstructionBackup(agent));
         if (root is not null) { DurableFile.Replace(path, Bytes(root), before); }
@@ -256,6 +263,10 @@ public sealed class StandaloneHooks(
             savedState = savedState with { Homes = saved with { ClaudeConfigDirExplicit = explicitConfigDir } };
         }
         savedState.Save(profile);
+        // Only now, after registrations, the Codex plugin and intake are all written, does the
+        // record say setup completed. That is setup evidence, not proof that hooks run.
+        DurableFile.Replace(owner, Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile, ["setupCompleted"] = true }),
+            MigrationRecord.Hash(incomplete));
         output.WriteLine($"Registered. Restart the host from the {Product.App}, then start new agent sessions to load the hooks.");
         if (agent == "codex") { output.WriteLine("Start Codex at this machine and approve its hook trust prompt once; until then Codex silently skips its hooks."); }
     }
@@ -283,9 +294,17 @@ public sealed class StandaloneHooks(
             if (before is not null) { root = Read(path); Unregister(root, agent); }
         }
         var instructions = ManagedInstructions.Plan(Instructions(agent), profile, removing: true);
+        var original = agent == "claude" && root is not null ? ClaudeOriginal(root, output) : null;
         Preflight(agent, removing: true);
         output.WriteLine($"{(dryRun ? "Would remove" : "Removing")} only {agent} hooks owned by {profile}.");
         if (dryRun) { return; }
+        // Clear completion before the first cleanup step: a removal that fails or is cancelled
+        // part way (plugin removed but not its marketplace, instructions left behind) must read
+        // as incomplete and keep ownership for Repair, not as a completed setup. Preflight just
+        // verified, under the lock, that this record is this profile's own.
+        var owner = Path.Combine(Home(agent), OwnerFile);
+        var incomplete = Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile });
+        DurableFile.Replace(owner, incomplete, MigrationRecord.Hash(owner));
         if (agent == "codex")
         {
             if (present)
@@ -297,15 +316,41 @@ public sealed class StandaloneHooks(
         else if (root is not null)
         {
             if (agent == "copilot" && root.All(p => p.Key == "version")) { DurableFile.Remove(path, before); }
-            else { DurableFile.Replace(path, Bytes(root), before); }
+            else { DurableFile.Replace(path, original ?? Bytes(root), before); }
         }
         instructions.Apply(InstructionBackup(agent));
-        var owner = Path.Combine(Home(agent), OwnerFile);
-        // A dedicated Copilot file with somebody else's additions must remain attributable,
-        // otherwise reinstall would have to claim an unowned file or permanently refuse it.
-        if (agent != "copilot" || !File.Exists(path)) { DurableFile.Remove(owner, MigrationRecord.Hash(owner)); }
+        // Ownership goes only after every cleanup step succeeded. A dedicated Copilot file with
+        // somebody else's additions must remain attributable, otherwise reinstall would have to
+        // claim an unowned file or permanently refuse it; its record stays without completion.
+        if (agent != "copilot" || !File.Exists(path)) { DurableFile.Remove(owner, MigrationRecord.Hash(incomplete)); }
         // Keep the private runtime and binary: sessions already open retain their commands.
         output.WriteLine("Removed. Existing sessions keep their hooks until they end; other settings and Codex hook trust were left alone.");
+    }
+
+    // The first original settings, byte for byte (comments and formatting included), when
+    // the settings without our hooks still parse to exactly what they held; otherwise null,
+    // and removal rewrites the current settings without our hooks. A missing backup is not
+    // proof that setup created the file, so the file is never deleted. Only a backup that
+    // is actually absent is skipped quietly: File.Exists is also false for a directory or
+    // a path it may not inspect, which must warn like any other unreadable backup.
+    byte[]? ClaudeOriginal(JsonObject remaining, TextWriter output)
+    {
+        var backup = Path.Combine(HookFolder, "backups", "claude-settings.json");
+        try
+        {
+            var original = File.ReadAllBytes(backup);
+            return JsonNode.DeepEquals(Parse(backup, original), remaining) ? original : null;
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+        // ArgumentException: duplicate property names parse but throw when DeepEquals reads them.
+        catch (Exception e) when (e is JsonException or InvalidDataException or ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            output.WriteLine($"Warning: {backup} is unreadable ({e.Message}); the original settings cannot be restored, so only the owned hooks are removed from the current settings.");
+            return null;
+        }
     }
 
     static FileStream Lock(string profile)

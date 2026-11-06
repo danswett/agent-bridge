@@ -2,10 +2,12 @@ using AgentBridge.Local;
 
 namespace AgentBridge.App.Core;
 
-public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = false)
+public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = false, bool canInstall = false)
 {
     public string Id => agent.Id;
     public string Label => agent.Label;
+    public bool CanInstall => canInstall && agent.Id is "copilot" or "claude" or "codex"
+        && agent.Installation.State == ReadinessState.Missing && agent.Hooks.State != ReadinessState.Blocked;
     public bool CanSetUp => canManage && agent.Installation.State == ReadinessState.Working
         && agent.Hooks.State != ReadinessState.Blocked;
     public bool CanRemove => canManage && agent.Hooks.State != ReadinessState.Blocked;

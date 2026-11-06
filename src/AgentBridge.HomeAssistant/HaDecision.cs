@@ -91,7 +91,7 @@ public static partial class HaDecision
         // which is the card's own. Who asks leads the card's Markdown as literal text, so it cannot
         // open a fence or a link around the prompt.
         var asks = $"{HaPayloads.NeutraliseTemplates(MarkdownLiteral(Titled(question, session)))} asks:\n\n";
-        var held = Misleads(question, session) ? Misleading : HeldByHost(question) ?? Unshaped(question) ?? TooLongToShow(question, asks.Length);
+        var held = Misleads(question, session) ? Misleading : HeldByHost(question) ?? Unshaped(question, session.Agent) ?? TooLongToShow(question, asks.Length);
         return Plan(question with { Message = asks + Shown(question, held, asks.Length) }, session.Agent, held) with { Agent = agent, AgentName = name, Asker = asker };
     }
 
@@ -125,7 +125,7 @@ public static partial class HaDecision
     // The host's question as the card should show it.
     public static DecisionPlan Plan(Question question, AgentKind agent)
     {
-        var held = Misleads(question) ? Misleading : HeldByHost(question) ?? Unshaped(question) ?? TooLongToShow(question, 0);
+        var held = Misleads(question) ? Misleading : HeldByHost(question) ?? Unshaped(question, agent) ?? TooLongToShow(question, 0);
         return Plan(question with { Message = Shown(question, held, 0) }, agent, held);
     }
 
@@ -152,8 +152,14 @@ public static partial class HaDecision
     // command's fence early or show a link's words where `curl ... | sh` runs. The card shows every
     // approval as its source (Shown), and still answers one Markdown would not draw as written
     // (ApprovalShape) in the terminal, as the app's card does.
-    static string? Unshaped(Question question) =>
-        question.Kind == QuestionKind.Approval && !ApprovalShape.DrawsAsWritten(ShownText.Reveal(question.Message, rightToLeft: true)) ? NotAsWritten : null;
+    // A Codex approval is answered here only as a host sends it from #209, the whole command in one
+    // block (ApprovalShape.IsFencedCommand): an older host sent "Needs approval: " and the hook's
+    // 300-character preview, cut to 297 and "..." with nothing marking it truncated, so Approve would
+    // run more than the card shows (#209 security review).
+    static string? Unshaped(Question question, AgentKind agent) =>
+        question.Kind != QuestionKind.Approval ? null
+        : agent == AgentKind.Codex && !ApprovalShape.IsFencedCommand(question.Message) ? NotWhole
+        : !ApprovalShape.DrawsAsWritten(ShownText.Reveal(question.Message, rightToLeft: true)) ? NotAsWritten : null;
 
     // An approval is never cut on the card (Approve would allow what was not shown): one whose source,
     // fenced, with its notes and who asks, does not fit is answered in the terminal, cut there.
@@ -190,7 +196,9 @@ public static partial class HaDecision
         }
         var room = QuestionMaxChars - leading - notes.Length - TerminalNote(held).Length - TruncatedNote.Length;
         var text = ShownText.Reveal(question.Message, rightToLeft: true);
-        var cut = false;
+        // One the host cut is already missing a part, whatever else holds it (a misleading
+        // reference wins the terminal reason over TooLong), so it is said even when it fits.
+        var cut = question.Truncated == true;
         while (true)
         {
             var fence = FenceFor(text);
@@ -258,6 +266,7 @@ public static partial class HaDecision
     const string AtMachine = "this prompt can only be answered at the machine.";
     const string Misleading = "it holds characters that can be drawn other than as they run, so it is answered where it runs.";
     const string NotAsWritten = "it would not be drawn here as it is written, so it is answered where it runs.";
+    const string NotWhole = "its command did not come whole in a block, so it may be cut short, and it is answered where it runs.";
 
     // What a push says in place of such an approval.
     public const string MisleadingPush = "An approval is waiting at the machine. It holds characters that can be drawn other than as they run, so it is not shown here; answer it in the terminal.";

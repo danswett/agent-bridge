@@ -35,14 +35,56 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
     // False when the offset is inside a line (a skim that jumped to the window and found
     // no newline yet), so the next read drops that fragment instead of parsing it.
     bool _aligned = true;
-    byte[] _anchor = [];
+    readonly byte[] _anchor = new byte[AnchorBytes];
+    int _anchorLength;
     bool _started;
+    // The file's size and write time as they were just before the last read, and when they were
+    // looked at. Every pass opened every transcript to find it unchanged, most of the host's
+    // kernel time (#608); the same size and time, looked at well after that time, is unchanged.
+    FileInfo? _info;
+    (long Length, DateTime Written)? _stamp;
+    DateTime _stampedAt;
+    // A write within this of a look may not have moved the time a file system keeps (a coarse
+    // clock), so a stamp that recent is not trusted to show a same-size rewrite.
+    static readonly TimeSpan Racy = TimeSpan.FromSeconds(2);
 
     public string Path { get; } = path;
 
     public long Offset => _offset;
 
+    // Tests: how many times the file was opened.
+    internal int Opens { get; private set; }
+    // Tests: run once a read has parsed what it found, before it notes where it stopped.
+    internal Action? AfterParse { get; set; }
+    // Tests: the wall clock a look is timed by, compared with the file system's own times.
+    internal Func<DateTime> UtcNow { get; set; } = static () => DateTime.UtcNow;
+
     public TailOutcome Read(ILineSink sink)
+    {
+        var before = Stamp(out var at);
+        if (_started && before is { } now && _stamp is { } last && now == last && now.Written < _stampedAt - Racy) { return TailOutcome.Unchanged; }
+        var outcome = Open(sink);
+        if (outcome is TailOutcome.Missing or TailOutcome.Unreadable) { _stamp = null; }
+        else { (_stamp, _stampedAt) = (before, at); }
+        return outcome;
+    }
+
+    (long Length, DateTime Written)? Stamp(out DateTime at)
+    {
+        at = UtcNow();
+        try
+        {
+            _info ??= new FileInfo(Path);
+            _info.Refresh();
+            // A link (a symlink or junction to the transcript) has a size and time of its own, not
+            // its target's, and would read as unchanged for ever: no stamp, so it is read each pass.
+            if (_info.Exists && _info.Attributes.HasFlag(FileAttributes.ReparsePoint)) { return null; }
+            return _info.Exists ? (_info.Length, _info.LastWriteTimeUtc) : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
+    }
+
+    TailOutcome Open(ILineSink sink)
     {
         FileStream stream;
         try
@@ -50,6 +92,7 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
             // Shared read, write and delete: the agent keeps the transcript open while it
             // writes, and nothing here may stop it renaming or deleting the file either.
             stream = new FileStream(Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.SequentialScan);
+            Opens++;
         }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return TailOutcome.Missing; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return TailOutcome.Unreadable; }
@@ -75,7 +118,7 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
             sink.Reset();
             _offset = 0;
             _aligned = true;
-            _anchor = [];
+            _anchorLength = 0;
             _started = true;
         }
 
@@ -104,25 +147,27 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
         // A trailing line with no newline yet stays unread: the offset stops just past the
         // last newline, so it is read whole once it is finished.
         (_offset, _aligned) = Scan(stream, position, length, aligned, stopAtLineStart: long.MaxValue, sink.Parse);
-        _anchor = ReadAnchor(stream, _offset);
+        AfterParse?.Invoke();
+        _anchorLength = ReadAnchor(stream, _offset, _anchor);
         return restart ? TailOutcome.Restarted : TailOutcome.Appended;
     }
 
     bool AnchorStillMatches(FileStream stream)
     {
-        if (_anchor.Length == 0) { return true; }
-        var now = ReadAnchor(stream, _offset);
-        return now.AsSpan().SequenceEqual(_anchor);
+        if (_anchorLength == 0) { return true; }
+        Span<byte> now = stackalloc byte[AnchorBytes];
+        var read = ReadAnchor(stream, _offset, now);
+        return now[..read].SequenceEqual(_anchor.AsSpan(0, _anchorLength));
     }
 
-    static byte[] ReadAnchor(FileStream stream, long offset)
+    // Into buffer, the bytes just before offset; how many.
+    static int ReadAnchor(FileStream stream, long offset, Span<byte> buffer)
     {
         var count = (int)Math.Min(AnchorBytes, offset);
-        if (count == 0) { return []; }
-        var buffer = new byte[count];
+        if (count == 0) { return 0; }
         stream.Seek(offset - count, SeekOrigin.Begin);
-        stream.ReadExactly(buffer);
-        return buffer;
+        stream.ReadExactly(buffer[..count]);
+        return count;
     }
 
     static bool IsLineStart(FileStream stream, long position)
@@ -140,7 +185,9 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
     {
         if (start >= end) { return (start, aligned); }
         stream.Seek(start, SeekOrigin.Begin);
-        var chunk = ArrayPool<byte>.Shared.Rent(ChunkBytes);
+        // No bigger than the read: a 1 MiB rent for a one-line append was a large-object array
+        // whenever the pool had none to hand.
+        var chunk = ArrayPool<byte>.Shared.Rent((int)Math.Min(ChunkBytes, end - start));
         var line = new ArrayBufferWriter<byte>();
         var oversized = false;
         var dropping = !aligned;

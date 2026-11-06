@@ -1,6 +1,6 @@
 // Draws the app icon's rasters (design/README.md, "App icon") without a browser or a native
-// library: the icon is only rounded squares and circles, filled or stroked, so each is a
-// signed distance and every pixel is 4×4 samples of them. Only +, -, ×, ÷ and sqrt, which IEEE
+// library: the icon is only rounded squares and circles, filled or stroked, and filled paths of
+// lines and cubics, so each is a signed distance and every pixel is 4×4 samples of them. Only +, -, ×, ÷ and sqrt, which IEEE
 // rounds exactly, so the same pixels come out on every machine and CI can compare them.
 //
 // Also PNG and ICO, written and read: a staleness check compares pixels, never compressed
@@ -26,10 +26,101 @@ function circleDistance(px, py, s) {
   return Math.sqrt(dx * dx + dy * dy) - s.r;
 }
 
-// A shape, in the scene's grid units: { kind: 'rect', x, y, width, height, rx } or
-// { kind: 'circle', cx, cy, r }, painted { fill } or { stroke, strokeWidth } with an
-// { r, g, b } colour.
-function prepare(shape, k) {
+// A sample further than this from an edge is wholly in or out, so its distance needn't be exact.
+const NEAR = 0.5 / SAMPLES;
+
+// A path's edges in pixels: each cubic flattened to lines short enough (about 2 px) that the
+// chords stay within a hundredth of a pixel of the curve at any icon size.
+function pathEdges(commands, k) {
+  const edges = [];
+  let x = 0, y = 0, sx = 0, sy = 0;
+  const line = (x1, y1) => { if (x1 !== x || y1 !== y) { edges.push([x, y, x1, y1]); } x = x1; y = y1; };
+  for (const { c, p } of commands) {
+    const q = p.map((v) => v * k);
+    if (c === 'M') { if (x !== sx || y !== sy) { line(sx, sy); } x = sx = q[0]; y = sy = q[1]; }
+    else if (c === 'L') { line(q[0], q[1]); }
+    else if (c === 'Z') { line(sx, sy); }
+    else if (c === 'C') {
+      const [x0, y0] = [x, y];
+      const hull = Math.sqrt((q[0] - x0) ** 2 + (q[1] - y0) ** 2) + Math.sqrt((q[2] - q[0]) ** 2 + (q[3] - q[1]) ** 2) + Math.sqrt((q[4] - q[2]) ** 2 + (q[5] - q[3]) ** 2);
+      const n = Math.max(4, Math.ceil(hull / 2));
+      for (let i = 1; i <= n; i++) {
+        const t = i / n, u = 1 - t;
+        const a = u * u * u, b = 3 * u * u * t, d = 3 * u * t * t, e = t * t * t;
+        line(a * x0 + b * q[0] + d * q[2] + e * q[4], a * y0 + b * q[1] + d * q[3] + e * q[5]);
+      }
+    } else { throw new Error(`the rasterizer draws paths of M, L, C and Z only, not ${c}`); }
+  }
+  if (x !== sx || y !== sy) { line(sx, sy); }
+  return edges;
+}
+
+// Signed distance to a path filled by the nonzero rule: negative inside. Edges are bucketed by
+// pixel row, so a sample looks only at the few that cross its row or come within NEAR of it.
+function pathShape(commands, k, size) {
+  const edges = pathEdges(commands, k);
+  const rows = Array.from({ length: size }, () => []);
+  for (const e of edges) {
+    const lo = Math.max(0, Math.floor(Math.min(e[1], e[3]) - NEAR));
+    const hi = Math.min(size - 1, Math.floor(Math.max(e[1], e[3]) + NEAR));
+    for (let r = lo; r <= hi; r++) { rows[r].push(e); }
+  }
+  return { at: pathDistance, rows };
+}
+
+function windingAt(px, py, s) {
+  let winding = 0;
+  for (const [x0, y0, x1, y1] of s.rows[Math.floor(py)] ?? []) {
+    if ((y0 <= py) !== (y1 <= py)) {
+      const cross = (x1 - x0) * (py - y0) - (px - x0) * (y1 - y0);
+      if (y1 > y0 ? cross > 0 : cross < 0) { winding += y1 > y0 ? 1 : -1; }
+    }
+  }
+  return winding;
+}
+
+// An edge is a boundary only where the fill changes across it. Subpaths that overlap, as the
+// nonzero rule allows, leave edges inside the fill, and measuring to them cut see-through seams;
+// oppositely wound subpaths that share an edge cancel it, and measuring to that one drew a faint
+// line across an empty notch. Only an edge within NEAR can change a sample's coverage, so only
+// those are probed, either side along its normal; it is dropped when both probes agree.
+const SIDE = 1e-4;
+function isNoBoundary(fx, fy, ux, uy, s) {
+  const nx = ux * SIDE, ny = uy * SIDE;
+  return (windingAt(fx + nx, fy + ny, s) !== 0) === (windingAt(fx - nx, fy - ny, s) !== 0);
+}
+
+function pathDistance(px, py, s) {
+  const inside = windingAt(px, py, s) !== 0;
+  let best = NEAR * 2;
+  for (const [x0, y0, x1, y1] of s.rows[Math.floor(py)] ?? []) {
+    if (px < Math.min(x0, x1) - best || px > Math.max(x0, x1) + best) { continue; }
+    const dx = x1 - x0, dy = y1 - y0, wx = px - x0, wy = py - y0;
+    const l2 = dx * dx + dy * dy;
+    const t = l2 > 0 ? clamp01((wx * dx + wy * dy) / l2) : 0;
+    const ex = wx - t * dx, ey = wy - t * dy;
+    const dist = Math.sqrt(ex * ex + ey * ey);
+    if (dist >= best) { continue; }
+    if (dist < NEAR && l2 > 0) {
+      const len = Math.sqrt(l2);
+      // Probe a little way in from a vertex, where the neighbouring edge can't be in the way.
+      const nudge = Math.min(NEAR, len / 2) / len;
+      const tp = t < nudge ? nudge : t > 1 - nudge ? 1 - nudge : t;
+      if (isNoBoundary(x0 + tp * dx, y0 + tp * dy, -dy / len, dx / len, s)) { continue; }
+    }
+    best = dist;
+  }
+  return inside ? -best : best;
+}
+
+// A shape, in the scene's grid units: { kind: 'rect', x, y, width, height, rx },
+// { kind: 'circle', cx, cy, r } or { kind: 'path', commands } (filled only), painted { fill }
+// or { stroke, strokeWidth } with an { r, g, b } colour.
+function prepare(shape, k, size) {
+  if (shape.kind === 'path') {
+    if (shape.stroke) { throw new Error('the rasterizer fills paths; it does not stroke them'); }
+    return { ...pathShape(shape.commands, k, size), half: null, color: shape.fill };
+  }
   const s = shape.kind === 'rect'
     ? { at: roundedRectDistance, cx: (shape.x + shape.width / 2) * k, cy: (shape.y + shape.height / 2) * k, hw: (shape.width / 2) * k, hh: (shape.height / 2) * k, r: Math.min(shape.rx ?? 0, shape.width / 2, shape.height / 2) * k }
     : { at: circleDistance, cx: shape.cx * k, cy: shape.cy * k, r: shape.r * k };
@@ -41,7 +132,7 @@ function prepare(shape, k) {
 // The scene at size × size pixels: RGBA, 8 bits a channel, not premultiplied.
 export function render(scene, size) {
   const k = size / scene.grid;
-  const shapes = scene.shapes.map((s) => prepare(s, k));
+  const shapes = scene.shapes.map((s) => prepare(s, k, size));
   const out = Buffer.alloc(size * size * 4);
   const n = SAMPLES * SAMPLES;
   for (let y = 0; y < size; y++) {
@@ -136,13 +227,24 @@ function filterRow(type, row, prev, bpp) {
   return out;
 }
 
-export function encodePng({ width, height, pixels }, { level = 9 } = {}) {
+// opaque: RGB with no alpha channel, which Apple's App Store icon must be ("Invalid large app
+// icon" otherwise); it refuses an image with any pixel that isn't fully opaque.
+export function encodePng({ width, height, pixels: rgba }, { level = 9, opaque = false } = {}) {
+  const channels = opaque ? 3 : 4;
+  let pixels = rgba;
+  if (opaque) {
+    pixels = Buffer.alloc(width * height * 3);
+    for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
+      if (rgba[i + 3] !== 255) { throw new Error('an opaque PNG must have no transparent pixel'); }
+      pixels[j] = rgba[i]; pixels[j + 1] = rgba[i + 1]; pixels[j + 2] = rgba[i + 2];
+    }
+  }
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8; // bits per channel
-  ihdr[9] = 6; // RGBA
-  const stride = width * 4;
+  ihdr[9] = opaque ? 2 : 6; // RGB or RGBA
+  const stride = width * channels;
   const rows = [];
   for (let y = 0; y < height; y++) {
     const row = pixels.subarray(y * stride, (y + 1) * stride);
@@ -150,7 +252,7 @@ export function encodePng({ width, height, pixels }, { level = 9 } = {}) {
     // The filter whose bytes sum smallest as signed values, as libpng chooses.
     let best = null, bestSum = Infinity;
     for (let t = 0; t < 5; t++) {
-      const f = filterRow(t, row, prev, 4);
+      const f = filterRow(t, row, prev, channels);
       let sum = 0;
       for (let i = 1; i < f.length; i++) { sum += f[i] < 128 ? f[i] : 256 - f[i]; }
       if (sum < bestSum) { best = f; bestSum = sum; }
@@ -160,12 +262,12 @@ export function encodePng({ width, height, pixels }, { level = 9 } = {}) {
   return Buffer.concat([SIGNATURE, chunk('IHDR', ihdr), chunk('IDAT', deflateSync(Buffer.concat(rows), { level })), chunk('IEND', Buffer.alloc(0))]);
 }
 
-// Only what encodePng writes, RGBA at 8 bits and not interlaced; anything else, or a chunk cut
+// Only what encodePng writes, RGBA or RGB at 8 bits, not interlaced and with no tRNS; anything else, or a chunk cut
 // short or failing its CRC, is null, which the staleness check reports as stale. A corrupt file
 // must never pass for current because the pixels it happens to inflate to match.
 export function decodePng(buf) {
   if (buf.length < 8 || !buf.subarray(0, 8).equals(SIGNATURE)) { return null; }
-  let at = 8, width = 0, height = 0, ended = false;
+  let at = 8, width = 0, height = 0, ended = false, channels = 4;
   const idat = [];
   while (!ended && at + 12 <= buf.length) {
     const len = buf.readUInt32BE(at);
@@ -177,7 +279,12 @@ export function decodePng(buf) {
       if (len !== 13) { return null; }
       width = data.readUInt32BE(0);
       height = data.readUInt32BE(4);
-      if (data[8] !== 8 || data[9] !== 6 || data[12] !== 0) { return null; }
+      if (data[8] !== 8 || (data[9] !== 6 && data[9] !== 2) || data[12] !== 0) { return null; }
+      channels = data[9] === 2 ? 3 : 4;
+    } else if (type === 'tRNS' || type === 'PLTE') {
+      // A tRNS colour key makes an RGB file transparent, so reading it as opaque would let an
+      // iOS icon with a see-through plate pass --check; encodePng never writes either chunk.
+      return null;
     } else if (type === 'IDAT') {
       idat.push(data);
     } else if (type === 'IEND') {
@@ -189,22 +296,27 @@ export function decodePng(buf) {
   if (!ended || !width || !height || width > 4096 || height > 4096) { return null; }
   let raw;
   try { raw = inflateSync(Buffer.concat(idat)); } catch { return null; }
-  const stride = width * 4;
+  const stride = width * channels;
   if (raw.length !== (stride + 1) * height) { return null; }
-  const pixels = Buffer.alloc(stride * height);
+  const packed = Buffer.alloc(stride * height);
   for (let y = 0; y < height; y++) {
     const type = raw[y * (stride + 1)];
     if (type > 4) { return null; }
     const src = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
     for (let i = 0; i < stride; i++) {
-      const a = i >= 4 ? pixels[y * stride + i - 4] : 0;
-      const b = y ? pixels[(y - 1) * stride + i] : 0;
-      const c = y && i >= 4 ? pixels[(y - 1) * stride + i - 4] : 0;
+      const a = i >= channels ? packed[y * stride + i - channels] : 0;
+      const b = y ? packed[(y - 1) * stride + i] : 0;
+      const c = y && i >= channels ? packed[(y - 1) * stride + i - channels] : 0;
       const pred = predict(type, a, b, c);
-      pixels[y * stride + i] = (src[i] + pred) & 0xff;
+      packed[y * stride + i] = (src[i] + pred) & 0xff;
     }
   }
-  return { width, height, pixels };
+  if (channels === 4) { return { width, height, pixels: packed, opaque: false }; }
+  const pixels = Buffer.alloc(width * height * 4);
+  for (let i = 0, j = 0; j < packed.length; i += 4, j += 3) {
+    pixels[i] = packed[j]; pixels[i + 1] = packed[j + 1]; pixels[i + 2] = packed[j + 2]; pixels[i + 3] = 255;
+  }
+  return { width, height, pixels, opaque: true };
 }
 
 // The size of a PNG, from its header alone.

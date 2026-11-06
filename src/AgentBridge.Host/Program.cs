@@ -362,7 +362,8 @@ async Task<int> ServeAsync(HostHandover handover)
     // types, stops or launches still looks afresh, immediately before it acts.
     var haProbe = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : null;
     var g5 = new SharedAgentHaBridgeProbe((IAgentHaBridgeProbe?)haProbe ?? new NoAgentHaBridge());
-    var (answers, replies, attachments, stops) = Typists(source, g5, processes, writes, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled);
+    var deliveryGate = new DeliveryGate();
+    var (answers, replies, attachments, stops) = Typists(source, g5, processes, writes, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled, deliveryGate);
     using var attachmentsLifetime = attachments;
     // Notifications: the account's phones hear of questions and finished turns even with the
     // app closed. Subscriptions live in the profile's own folder, for this account only. None at
@@ -416,7 +417,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // through the relay's blob store (docs/host-transfer.md). Bundles wait in the profile's own
     // private folder, never a shared temporary one.
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log) { Trust = trustedPeers };
-    var launcher = Launcher(source, g5, attachments, transfers);
+    var launcher = Launcher(source, g5, attachments, transfers, deliveryGate);
     transfers.Launcher = launcher;
     // Folder-trust questions answered by a person from their devices, where config.json allows it.
     var trustAnswers = new FolderTrustAnswers(identity.Key, launcher, Log) { Trust = trustedPeers };
@@ -496,11 +497,23 @@ async Task<int> ServeAsync(HostHandover handover)
         ClaudeConfigDirExplicit = options.ClaudeConfigDirExplicit,
     };
     var codexEnvironment = new Dictionary<string, string> { ["CODEX_HOME"] = agentHomes.Codex };
-    var agentSetup = OperatingSystem.IsWindows() ? new AgentSetupService(new StandaloneHooks(identity.Folder,
+    var standaloneHooks = OperatingSystem.IsWindows() ? new StandaloneHooks(identity.Folder,
         agentHomes, Path.Combine(AppContext.BaseDirectory, "agent-bridge-host-hook.exe"),
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge"),
-        ServeReadOnly, agentLocator, new BatchFileRunner(new CommandRunner(codexEnvironment), codexEnvironment)),
-        ServeReadOnly, stop.Token) : null;
+        ServeReadOnly, agentLocator, new BatchFileRunner(new CommandRunner(codexEnvironment), codexEnvironment)) : null;
+    var agentSetup = standaloneHooks is null ? null : new AgentSetupService(standaloneHooks, ServeReadOnly, stop.Token);
+    await using var agentInstall = standaloneHooks is null ? null : new AgentInstallService(identity.Folder,
+        agentLocator, agentLocator.Refresh, new VersionCommandRunner(),
+        () =>
+        {
+            var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "winget.exe");
+            return File.Exists(path) ? path : null;
+        },
+        agent =>
+        {
+            if (ServeReadOnly() is { } why) { throw new InvalidOperationException($"CLI installation is unavailable while this host is read-only: {why}"); }
+            standaloneHooks.CheckInstall(agent);
+        }, stop.Token);
     await using var agentReadiness = new AgentReadinessService(identity.Folder, agentHomes,
         settings.Launch, agentLocator, new VersionCommandRunner(), ServeReadOnly, intake);
     var control = new HostControl(new HostControlOptions
@@ -532,6 +545,8 @@ async Task<int> ServeAsync(HostHandover handover)
         ReadOnlyNow = ServeReadOnly,
         Agents = agentReadiness,
         AgentSetup = agentSetup,
+        AgentInstall = agentInstall,
+        Lifecycle = new LifecycleCoordinator(deliveryGate, new DepartureConditions()),
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
@@ -708,13 +723,13 @@ async Task<int> ServeAsync(HostHandover handover)
 // Launching and resuming sessions from other devices (docs/host-launch.md): only in the folders
 // the profile's config.json approves, and on Windows only for now. The agent starts in a console
 // of its own on this desktop, so the host must run here, as the user, unelevated.
-LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers)
+LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers, DeliveryGate deliveryGate)
 {
     foreach (var problem in settings.LaunchProblems) { Log($"config.json: {problem}"); }
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
     IAgentHaBridgeProbe probe = new ReadOnlyGate(g5, ReadOnlyReason());
     IConsoleInjector injector = OperatingSystem.IsWindows() ? new WorkerInjector() : new NoScreens();
-    var launcher = new LaunchService(source, probe, injector, starter, agentLocator, new AgencyCatalog(new BatchFileRunner(new CommandRunner())), new LaunchServiceOptions
+    var launcher = new LaunchService(deliveryGate, source, probe, injector, starter, agentLocator, new AgencyCatalog(new BatchFileRunner(new CommandRunner())), new LaunchServiceOptions
     {
         CopilotHome = options.CopilotHome,
         ClaudeHome = options.ClaudeHome,
@@ -809,7 +824,7 @@ static string OsName() =>
 // session at once. Files sent with replies are staged in the profile's own folder, private
 // to this user (docs/host-replies.md), and the prompts already
 // answered are recorded there too, so none is typed into twice.
-(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, IAgentHaBridgeProbe g5, IProcessInspector processes, TranscriptWrites writes, string staging, string attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled)
+(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, IAgentHaBridgeProbe g5, IProcessInspector processes, TranscriptWrites writes, string staging, string attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled, DeliveryGate gate)
 {
     if (!OperatingSystem.IsWindows())
     {
@@ -819,17 +834,16 @@ static string OsName() =>
     var probe = new ReadOnlyGate(g5, ReadOnlyReason());
     var injector = new WorkerInjector();
     var guard = new TargetGuard();
-    var gate = new DeliveryGate();
     if (!File.Exists(Path.Combine(AppContext.BaseDirectory, WorkerInjector.FileName))) { Log($"{WorkerInjector.FileName} is missing beside the host; answers and replies will be refused"); }
     Log(probe.Active() is { } active ? $"answering, replying and ending sessions are off for now: {active}" : "answering, replying and ending sessions are on");
     if (settingsProblem is not null) { Log(settingsProblem); }
     Log($"approving Copilot permission prompts from other devices is {(settings.RemoteApproval ? "on" : "off")} (permissions.remoteApproval)");
     var attachments = new AttachmentStore(new AttachmentOptions { StagingRoot = staging }, Log, blobs: blobs);
     return (
-        new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval, CodexApprovalsUnsettled = codexUnsettled, Writes = writes }, Log, gate),
-        new ReplyService(source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome, Writes = writes }, Log, gate, attachments),
+        new AnswerService(gate, source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval, CodexApprovalsUnsettled = codexUnsettled, Writes = writes }, Log),
+        new ReplyService(gate, source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome, Writes = writes }, Log, attachments),
         attachments,
-        new StopService(source, processes, probe, injector, new WindowsProcessControl(), new StopOptions { CopilotHome = options.CopilotHome }, Log, gate));
+        new StopService(gate, source, processes, probe, injector, new WindowsProcessControl(), new StopOptions { CopilotHome = options.CopilotHome }, Log));
 }
 
 // Why this host takes nothing from other devices whatever agent-ha-bridge does, or null: made

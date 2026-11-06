@@ -126,6 +126,47 @@ public class NoiseTests
         Assert.ThrowsAny<CryptographicException>(() => res.ReadMessage(ini.WriteMessage([])));
     }
 
+    // The receive path reads IsComplete and then Receive while another thread may be writing the
+    // last handshake message (an IK responder's reply, ChannelHub.AnswerIkAsync). A thread spinning
+    // on IsComplete saw it true with Receive still null, the cipher states split after the step.
+    [Theory]
+    [InlineData("IK")]
+    [InlineData("XX")]
+    public async Task A_handshake_is_complete_to_another_thread_only_once_its_cipher_states_exist(string pattern)
+    {
+        using var a = P256KeyPair.Generate();
+        using var b = P256KeyPair.Generate();
+        for (var i = 0; i < 100; i++)
+        {
+            INoiseHandshake last;
+            if (pattern == "IK")
+            {
+                var ini = new IKHandshake(true, a, [], b.Public);
+                var res = new IKHandshake(false, b, []);
+                res.ReadMessage(ini.WriteMessage([]));
+                last = res;
+            }
+            else
+            {
+                var ini = new XXHandshake(true, a, []);
+                var res = new XXHandshake(false, b, []);
+                res.ReadMessage(ini.WriteMessage([]));
+                ini.ReadMessage(res.WriteMessage([]));
+                last = ini;
+            }
+            var watching = 0;
+            var watcher = Task.Run(() =>
+            {
+                Volatile.Write(ref watching, 1);
+                while (!last.IsComplete) { }
+                return last.Send is not null && last.Receive is not null;
+            });
+            SpinWait.SpinUntil(() => Volatile.Read(ref watching) == 1);
+            last.WriteMessage([]);
+            Assert.True(await watcher.WaitAsync(TimeSpan.FromSeconds(10)), $"{pattern} was complete without its cipher states (try {i})");
+        }
+    }
+
     [Fact]
     public void An_IK_opener_refuses_a_responder_key_off_the_curve_before_any_ECDH()
     {

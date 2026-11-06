@@ -142,11 +142,57 @@ public sealed partial class SessionCardViewModel : Observable
     // When the main agent last wrote what is shown: own.at for its own text beside a delegate's,
     // which moves the session's updatedAt without touching the main agent's answer; else the
     // session's age, as on its row.
-    public string ResponseAgeText => ResponseByDelegate && session.Activity.Own?.At is { } at ? Words.Age(at, ctx.Time.GetUtcNow()) : AgeText;
+    public string ResponseAgeText => Words.Age(ResponseByDelegate && session.Activity.Own?.At is { } at ? at : session.UpdatedAt, ctx.Time.GetUtcNow());
+    // Since when a Not responding session (rule 12) has been silent: when the host last heard from
+    // the agent (lastEventAt), else since it said so; null for any other row (#878, ui.md §6.13).
+    public DateTimeOffset? SilentSince => View == "stalled" && AuthState.Of(session) is { Kind: AuthState.NotResponding } a ? a.LastEventAt ?? a.Since : null;
+    // When the row's trailing age counts from: for Not responding, since it went silent, so the age
+    // says since when; otherwise the session's last update. The response's age stays the session's.
+    public DateTimeOffset RowAt => SilentSince ?? session.UpdatedAt;
     public string Reasoning => Voice.Reasoning ?? "";
     public bool HasReasoning => ctx.ShowDetail() && Reasoning.Length > 0;
     public string UserMessage => session.Activity.UserMessage ?? "";
-    public bool HasUserMessage => !string.IsNullOrEmpty(session.Activity.UserMessage);
+    // The person's own last message, as a bubble; a prompt they didn't type is the Prompt line
+    // instead (#489).
+    public bool HasUserMessage => !string.IsNullOrEmpty(session.Activity.UserMessage) && Prompt is null;
+
+    // A prompt the person didn't type (#489, ui.md §6.4): never a bubble, but a label line in agent
+    // colour at the column's start (a clock for a schedule, the driven diamond otherwise), two
+    // lines of it, and Show prompt. What this card saw of the session's prompts folds a schedule's
+    // repeat and dates it (PromptMemory).
+    readonly PromptMemory prompts = new();
+    PromptMemory.Seen promptSeen;
+    bool promptOpen;
+    // Worked out once an update, not on every binding: it reveals and trims the whole prompt.
+    PromptOrigin? prompt;
+    public PromptOrigin? Prompt => prompt;
+    public bool HasPrompt => Prompt is not null;
+    public bool PromptIsSchedule => Prompt?.Schedule == true;
+    public bool PromptIsDriven => Prompt is { Schedule: false };
+    public string PromptLabel => Prompt?.Label ?? "";
+    public string PromptBy => Prompt?.By ?? "";
+    public bool HasPromptBy => Prompt?.By is not null;
+    // A repeat says so instead of a preview: its words are the last's, which the person has seen.
+    public string PromptPreview => Prompt is { Repeat: false } p ? p.Preview : "";
+    public bool HasPromptPreview => Prompt is { Repeat: false } && !promptOpen;
+    public string PromptText => Prompt?.Text ?? "";
+    public string PromptAgeText => promptSeen.At is { } at ? Words.Age(at, ctx.Time.GetUtcNow()) : "";
+    public bool HasPromptAge => promptSeen.At is not null;
+    public string PromptToggleName => Prompt?.DisclosureName(promptOpen) ?? "";
+    // Show prompt: a new prompt starts collapsed; an update to the same one keeps it as the person
+    // left it.
+    public bool PromptOpen
+    {
+        get => promptOpen;
+        set
+        {
+            if (!Set(ref promptOpen, value)) { return; }
+            Raise(nameof(HasPromptPreview));
+            Raise(nameof(PromptToggleName));
+            Raise(nameof(PromptToggleText));
+        }
+    }
+    public string PromptToggleText => promptOpen ? "Hide prompt" : "Show prompt";
     public bool ShowHistory => ctx.ShowDetail();
 
     public string Facts
@@ -235,6 +281,9 @@ public sealed partial class SessionCardViewModel : Observable
         var first = !synced;
         synced = true;
         session = next;
+        promptSeen = prompts.Observe(next);
+        prompt = PromptOrigin.Of(next, promptSeen.Repeat);
+        if (promptSeen.Fresh) { promptOpen = false; }
         Sync();
         Delegates.Update(next, ctx.Time.GetUtcNow());
         // A new question opens a folded card: it waits on you, and must not stay folded away.
@@ -368,11 +417,15 @@ public sealed partial class SessionCardViewModel : Observable
         // Idle needs no clock; delegating does, since it is waiting on something.
         SinceText = View == "idle" ? "" : $"for {Words.Duration(session.StatusSince, now)}";
         UpdatedText = $"updated {Words.Ago(session.UpdatedAt, now)}";
-        AgeText = Words.Age(session.UpdatedAt, now);
+        AgeText = Words.Age(RowAt, now);
         Raise(nameof(SinceText));
         Raise(nameof(UpdatedText));
         Raise(nameof(AgeText));
+        // The row's name says its age (ui.md §9.1 A1). The row sets it only when its words change,
+        // once a minute at most, and it is no live region: Narrator reads it when the row is reached.
+        Raise(nameof(RowLabel));
         Raise(nameof(ResponseAgeText));
+        Raise(nameof(PromptAgeText));
         // "last seen 2m ago" moves on with the clock too.
         if (Away) { RaiseStatus(); }
         SyncDetails();

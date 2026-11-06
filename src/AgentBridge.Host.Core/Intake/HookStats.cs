@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using AgentBridge.Hooks;
+using AgentBridge.Host.Core.Discovery;
 
 namespace AgentBridge.Host.Core.Intake;
 
@@ -194,9 +195,8 @@ public sealed class HookLogWatch(string runtimeRoot, string agent, TimeProvider?
     // path is absence; anything else there that is not a file fails the refresh.
     static bool Present(string path)
     {
-        FileAttributes attributes;
-        try { attributes = File.GetAttributes(path); }
-        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return false; }
+        // Without an exception for absence, the usual answer while no hook has run (#608).
+        if (CopilotDiscovery.Attributes(path) is not { } attributes) { return false; }
         if (attributes.HasFlag(FileAttributes.Directory)) { throw new IOException($"{path} is not a file"); }
         return true;
     }

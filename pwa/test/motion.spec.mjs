@@ -1214,17 +1214,24 @@ test('a receipt that goes from above a question that stays moves it up, and a cl
   const before = await answered(page);
   // The second, drawn again as it stays (reworded): the receipt goes and the question moves up
   // into its place, as a click is on its way.
-  const after = await page.evaluate(async () => {
+  // The click lands as soon as the redraw is in the page, before any frame: the guard the redraw
+  // set is looked at then, not at a later frame. That frame can start after the guard's 500 ms
+  // have run out on a slow runner, ahead of the same frame's ResizeObserver setting it again (#864).
+  const after = await page.evaluate(() => new Promise((resolve) => {
     const slot = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .question-slot');
     const d = window.agentBridgeDemo;
     const s = d.host.get('019a1b2c-codex-example');
+    const seen = new MutationObserver(() => {
+      if (slot.querySelector('.answer-receipt')) { return; }
+      seen.disconnect();
+      const question = slot.querySelector('.question');
+      const armed = question.hasAttribute('data-arriving');
+      question.querySelector('.choice').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      resolve({ gone: true, same: question.dataset.question, armed });
+    });
+    seen.observe(slot, { childList: true, subtree: true });
     d.upsert({ ...s, question: { ...s.question, message: 'Which, now?' }, updatedAt: new Date(Date.now() + 63_000).toISOString() });
-    for (let i = 0; i < 120 && slot.querySelector('.answer-receipt'); i += 1) { await new Promise((r) => requestAnimationFrame(r)); }
-    const question = slot.querySelector('.question');
-    const armed = question.hasAttribute('data-arriving');
-    question.querySelector('.choice').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
-    return { gone: !slot.querySelector('.answer-receipt'), same: question.dataset.question, armed };
-  });
+  }));
   expect(after).toEqual({ gone: true, same: 'q-second', armed: true });
   await page.waitForTimeout(100);
   expect(await answered(page)).toBe(before);

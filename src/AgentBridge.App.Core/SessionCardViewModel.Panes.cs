@@ -29,11 +29,39 @@ public sealed partial class SessionCardViewModel
     // Only the status's first fact, as StatusRules made it, never its words cut at a separator
     // (#286): "Waiting on you · 2 delegates still running" is one fact on a row and both in the
     // header.
-    public string RowStatus => Driven && Glyph != StatusGlyph.Needs ? "Driven by an agent" : Line.FirstFact;
+    public string RowStatus => DriverDrawn ? DriverText : Line.FirstFact;
+    // Nor over rules 10-12 (#800), which say what is wrong; the glyph keeps the driven badge.
+    bool DriverDrawn => Driven && Glyph != StatusGlyph.Needs && Line.Rule is not (StatusRules.SignIn or StatusRules.Error or StatusRules.NotResponding);
     public string RowPlace => Machine ?? Place;
     public string RowFacts => string.Join(StatusLine.Separator, new[] { RowStatus, RowPlace }.Where(s => !string.IsNullOrEmpty(s)));
-    // A row read aloud (§9): its glyph's name already says the status and machine.
-    public string RowLabel => Unread ? $"{GlyphLabel}, new activity" : GlyphLabel;
+
+    // A row read aloud (ui.md §9.1 A1, #796). It starts with the words the row draws, in the order
+    // drawn and from the properties the row binds, so the two can't drift: the title, line 2's
+    // status and place, then the age, or "New activity" where the dot takes the age's place. Then
+    // what else the glyph's name (§9.2) says that the row doesn't draw, so nothing it said before
+    // goes unsaid: the status's later facts, or all of it under "Driven by an agent"; the driver
+    // while a question's words take its place; and the machine while the row shows where instead.
+    // The glyph's name alone left out line 2's place and the age (#796). Each part as the PWA names
+    // its row (#791), so both clients read a row alike. A delegate's name in a status fact is read
+    // without its commas, as in the glyph's name, so it can't read as facts of its own (#303).
+    public string RowLabel
+    {
+        get
+        {
+            var line = Line;
+            var unsaid = DriverDrawn ? line.Spoken : string.Join(StatusLine.Separator, line.Facts.Skip(1).Select(DelegateLabel.Aloud));
+            return string.Join(", ", new[]
+            {
+                Title,
+                DelegateLabel.Aloud(RowStatus),
+                RowPlace,
+                Unread ? "New activity" : AgeText,
+                unsaid,
+                Driven && !DriverDrawn ? "driven by an agent" : null,
+                Machine is null ? ctx.MachineName() : null,
+            }.Where(s => !string.IsNullOrEmpty(s)));
+        }
+    }
 
     // The header's one meta line after the glyph (§6.2): status, machine, repository.
     public string HeaderPlace => string.Join(" · ", new[] { Machine, Place }.Where(s => !string.IsNullOrEmpty(s)));
@@ -80,6 +108,12 @@ public sealed partial class SessionCardViewModel
         if (session.Activity.TurnCount is { } t) { rows.Add(new("Turns", t.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
         if (session.Activity.Compactions is > 0 and var c) { rows.Add(new("Compactions", c.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
         if (session.ProcessId is { } pid) { rows.Add(new("Process", pid.ToString(System.Globalization.CultureInfo.InvariantCulture), Mono: true)); }
+        // What the agent said went wrong (#800): plain text, revealed and cut short by AuthState,
+        // never a link, and only here, never on its row.
+        // The host's sentence for what is wrong (6649775484), as it is: never the agent's own text.
+        if (AuthState.Of(session)?.Message is { } said) { rows.Add(new("Message", said)); }
+        // Not responding: the time it went silent, which the row's age counts from (ui.md §6.13).
+        if (AuthState.Clock(SilentSince) is { } silent) { rows.Add(new("Not responding since", silent)); }
         if (View != "idle") { rows.Add(new("For", Words.Duration(session.StatusSince, now))); }
         rows.Add(new("Updated", Words.Ago(session.UpdatedAt, now)));
         rows.Add(new("ID", session.Id, Mono: true));

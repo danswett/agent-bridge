@@ -10,6 +10,7 @@ import { PatchError, applyPatch, readPatch } from './session-patch.js';
 import { USAGE, readUsage } from './usage.js';
 import { UPDATE, readUpdateState } from './update.js';
 import { LAUNCH, TRUST, readLaunchOptions, readLaunchResult, readTrustResult } from './launch.js';
+import { SIGN_IN } from './auth-state.js';
 
 export class HostError extends Error {
   // fromHost: the host answered with ok:false. Otherwise the request never got an answer
@@ -362,6 +363,11 @@ export class HostClient {
         break;
       case Events.discoveryChanged:
         this.store?.setHeld(readDiscoveryHeld(data.discoveryHeld));
+        break;
+      // A device flow this channel is in (#800): its code, then how it ended. Only to its view.
+      case SIGN_IN.code:
+      case SIGN_IN.done:
+        this.store?.signIn(m.ev, data);
         break;
       case USAGE.update:
         this.#emit('usage', readUsage(data));

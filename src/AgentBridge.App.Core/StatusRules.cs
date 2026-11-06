@@ -46,7 +46,7 @@ public sealed record StatusLine(int Rule, StatusGlyph Glyph, string View, IReadO
 }
 
 // docs/design/ui.md §2.2, as pwa/js/status.js has it: rules 1-6 first match wins, rule 8
-// refines rule 4, and rule 7 is an overlay on whatever they chose. SessionStatusTests names a
+// refines rule 4, rules 10-12 are #800's, and rule 7 is an overlay on whatever they chose. SessionStatusTests names a
 // test after each rule.
 public static class StatusRules
 {
@@ -55,6 +55,12 @@ public static class StatusRules
     // Nor this: the session's machine is away (#269), and the row is what it last said, not to be
     // acted on. The host is unreachable, which is what `failed` says of a host (§2.1).
     public const int Away = -1;
+    // #800 (Session.attention, AuthState): the agent needs sign-in (or is signed in and waiting for the
+    // session to confirm), after rules 1 and 2; its latest turn ended on an error, before rules 4 and
+    // 5; it has stopped answering, refining rule 3.
+    public const int SignIn = 10;
+    public const int Error = 11;
+    public const int NotResponding = 12;
 
     public static StatusLine Offline(DateTimeOffset since, DateTimeOffset now) =>
         Line(Away, StatusGlyph.Failed, "offline", StatusTone.Muted, "Offline", $"last seen {Words.Ago(since, now)}");
@@ -64,7 +70,8 @@ public static class StatusRules
     public static StatusLine For(Session s)
     {
         var line = Pick(s);
-        return s.Driver == DriverKind.Agent ? line with { Driven = true, Tone = StatusTone.Agent } : line;
+        // Driven: the agent's tone, except over rules 10-12 (#800), which keep theirs (the PWA's too).
+        return s.Driver == DriverKind.Agent ? line with { Driven = true, Tone = line.Rule is SignIn or Error or NotResponding ? line.Tone : StatusTone.Agent } : line;
     }
 
     static StatusLine Pick(Session s)
@@ -72,18 +79,40 @@ public static class StatusRules
         var q = s.Question;
         var atMachine = q?.AnswerAtMachine == true ? "answer at the machine" : null;
         if (s.Status == SessionStatus.Ending) { return Line(Ending, StatusGlyph.Ended, "ending", StatusTone.Muted, "Ending session…"); }
-        if (s.Status == SessionStatus.Waiting)
+        // The session's own question asks (rule 1), or a delegate's (rule 2). The session's own wins
+        // at the host, which then sends no waitingOn.
+        var asker = s.Status == SessionStatus.Waiting ? s.WaitingOn ?? q?.Agent : null;
+        if (s.Status == SessionStatus.Waiting && asker is null)
         {
-            // Rule 2: a delegate's question, named for the delegate after the word Delegate, which
-            // "Main agent asks" never has. The session's own question wins over it at the host,
-            // which then sends no waitingOn.
-            if ((s.WaitingOn ?? q?.Agent) is { } asker)
-            {
-                var name = s.Subagents?.FirstOrDefault(a => a.Id == asker) is { } agent ? DelegateLabel.Titled(DelegateLabel.For(agent.Name, agent.Id)) : "A delegate";
-                return Line(2, StatusGlyph.Needs, "waiting", StatusTone.Needs, $"{name} asks", atMachine);
-            }
             var n = RunningDelegates(s);
             return Line(1, StatusGlyph.Needs, "waiting", StatusTone.Needs, "Waiting on you", n > 0 ? $"{Words.Plural(n, "delegate", "delegates")} still running" : null, atMachine);
+        }
+        // #800: what the host says is wrong with the session, shown over its status, which stays
+        // truthful underneath. Never idle, working or a stale age for any of them.
+        var at = AuthState.Of(s);
+        // Rule 10, confirming: signed in, and the host hasn't yet seen the model answer (recovery
+        // pending). Not waiting on you, and not recovered either: one fact, so the row says all of it.
+        // After the session's own question and before a delegate's (ui.md §6.13): the main agent
+        // can't run, which a delegate's question would otherwise hide.
+        if (AuthState.Confirming(at)) { return Line(SignIn, StatusGlyph.Idle, "confirming", StatusTone.Plain, "Signed in · waiting for the session to confirm"); }
+        // Rule 10: the agent can't run until a person signs it in. It waits on you as a question
+        // does: "Needs sign-in · Copilot · @octocat".
+        if (AuthState.NeedsSignIn(at))
+        {
+            return Line(SignIn, StatusGlyph.Needs, "signin", StatusTone.Needs, "Needs sign-in", s.Agent == AgentKind.Unknown ? null : AuthState.AgentName(s.Agent), at!.Account is { } account ? $"@{account}" : null);
+        }
+        if (asker is not null)
+        {
+            // Rule 2: a delegate's question, named for the delegate after the word Delegate, which
+            // "Main agent asks" never has.
+            var name = s.Subagents?.FirstOrDefault(a => a.Id == asker) is { } agent ? DelegateLabel.Titled(DelegateLabel.For(agent.Name, agent.Id)) : "A delegate";
+            return Line(2, StatusGlyph.Needs, "waiting", StatusTone.Needs, $"{name} asks", atMachine);
+        }
+        // Rule 12, refining rule 3: the host has heard nothing from a working session past its
+        // threshold. The failed glyph, and no button until there is something to do.
+        if (at?.Kind == AuthState.NotResponding)
+        {
+            return Line(NotResponding, StatusGlyph.Failed, "stalled", StatusTone.Needs, "Not responding", AuthState.Clock(at.LastEventAt ?? at.Since) is { } since ? $"since {since}" : null);
         }
         if (s.Status == SessionStatus.Working)
         {
@@ -91,6 +120,15 @@ public static class StatusRules
             return Line(3, StatusGlyph.Working, "working", StatusTone.Plain, "Working", task is null ? null : $"task: {DelegateLabel.Titled(DelegateLabel.For(task.Name, task.Id))}");
         }
         var b = s.Activity.Background;
+        // Rule 11, before rules 4 and 5: the latest turn ended on an agent error. Background work that
+        // survived the turn never hides it behind "Delegating" (ui.md §6.13). The row says its class in
+        // the app's own words; the host's message is in Details only, as plain text.
+        if (at?.Kind == AuthState.Error)
+        {
+            // Every delegate still running, task ones too, which can survive the failed turn (v1-sessions.md).
+            var running = RunningDelegates(s);
+            return Line(Error, StatusGlyph.Failed, "error", StatusTone.Needs, AuthState.ErrorWords(at.ErrorClass), running > 0 ? $"{Words.Plural(running, "delegate", "delegates")} still running" : null);
+        }
         if (b is { Agents: > 0 })
         {
             // The host's count is at any depth and never trimmed: a nested delegate counts once,

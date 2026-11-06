@@ -205,3 +205,66 @@ test('Read aloud, a delegate\'s name has no comma of its own, so it can\'t add f
   const working = sessionStatus(session({ status: 'working', subagents: [delegate('t', { kind: 'task', name: 'Lint, idle' })] }));
   assert.equal(statusLabel(working, { title: 'Fix' }), 'Fix, working · task: Delegate Lint idle');
 });
+
+// #800: Session.attention, shown over a truthful status: an agent that can't run until a person
+// signs it in, a turn ended on an error, and a working session the host has heard nothing from.
+// None of them ever reads as idle or working.
+const signIn = (fields = {}) => ({ kind: 'signInNeeded', since: '2026-11-04T23:00:00.000Z', agent: 'copilot', ...fields });
+
+test('Rule 10: a session that needs sign-in reads "Needs sign-in" with its agent and the needs glyph, never idle', () => {
+  assert.deepEqual(said({ status: 'idle', attention: signIn() }), { rule: 10, glyph: 'needs', text: 'Needs sign-in · Copilot', tone: 'needs' });
+  assert.equal(said({ status: 'idle', attention: signIn({ account: 'octocat' }) }).text, 'Needs sign-in · Copilot · @octocat');
+  // Its own question still comes first: the agent asked before it stopped.
+  assert.equal(said({ status: 'waiting', question: { id: 'q' }, attention: signIn() }).rule, 1);
+  assert.equal(statusLabel(sessionStatus(session({ attention: signIn() })), { title: 'Fix', machine: 'DEV-VM1' }), 'Fix, needs sign-in · Copilot, DEV-VM1');
+  // A row shows the first fact only.
+  assert.equal(sessionStatus(session({ attention: signIn({ account: 'octocat' }) })).facts[0], 'Needs sign-in');
+});
+
+test('Rule 11: a turn that ended on an agent error says its class with the failed glyph, and never the host\'s message', () => {
+  assert.deepEqual(said({ attention: { kind: 'error', errorClass: 'auth', message: 'Bad credentials.' } }), { rule: 11, glyph: 'failed', text: 'Not authorised', tone: 'needs' });
+  assert.equal(said({ attention: { kind: 'error', errorClass: 'rate' } }).text, 'Rate limited');
+  // A class without words of its own in ui.md §6.13 reads as "Agent error", as an unknown one does.
+  assert.equal(said({ attention: { kind: 'error', errorClass: 'quota' } }).text, 'Agent error');
+  assert.equal(said({ attention: { kind: 'error', errorClass: 'somethingNew' } }).text, 'Agent error');
+  assert.equal(said({ attention: { kind: 'meteor' } }).text, 'Agent error');
+  // Driven by an agent, it still says what is wrong in its own tone (rules 10-12 over rule 7).
+  assert.deepEqual(said({ driver: 'agent', attention: { kind: 'error', errorClass: 'auth' } }), { rule: 11, glyph: 'failed', text: 'Not authorised', tone: 'needs' });
+  assert.equal(said({ driver: 'agent' }).tone, 'agent');
+  // Before rules 4 and 5: background work that survived the turn never hides the error.
+  assert.deepEqual(said({ attention: { kind: 'error', errorClass: 'rate' }, activity: { background: { agents: 2, shells: 0 } } }), { rule: 11, glyph: 'failed', text: 'Rate limited · 2 delegates still running', tone: 'needs' });
+});
+
+test('Rule 10 comes after the session\'s own question and before a delegate\'s (ui.md §6.13)', () => {
+  const asking = { status: 'waiting', question: { id: 'q', agent: 'd1' }, waitingOn: 'd1', subagents: [delegate('d1', { status: 'waiting' })] };
+  // The main agent can't run: a delegate's question never hides it.
+  assert.deepEqual(said({ ...asking, attention: signIn() }), { rule: 10, glyph: 'needs', text: 'Needs sign-in · Copilot', tone: 'needs' });
+  assert.equal(said({ ...asking, attention: signIn({ recovery: 'pending' }) }).text, 'Signed in · waiting for the session to confirm');
+  // Without one, the delegate's question as before.
+  assert.equal(said(asking).rule, 2);
+  // The session's own question still comes first.
+  assert.equal(said({ status: 'waiting', question: { id: 'q' }, attention: signIn({ recovery: 'pending' }) }).rule, 1);
+});
+
+test('Rule 11 counts every delegate still running, task ones that survived the turn too', () => {
+  const running = [delegate('a'), delegate('t', { kind: 'task' })];
+  assert.equal(said({ attention: { kind: 'error', errorClass: 'rate' }, activity: { background: { agents: 1, shells: 0 } }, subagents: running }).text, 'Rate limited · 2 delegates still running');
+  assert.equal(said({ attention: { kind: 'error', errorClass: 'auth' }, subagents: [delegate('t', { kind: 'task' })] }).text, 'Not authorised · 1 delegate still running');
+});
+
+test('Rule 10, confirming: signed in and waiting for the session to confirm is neither "Needs sign-in" nor recovered', () => {
+  assert.deepEqual(said({ status: 'idle', attention: signIn({ recovery: 'pending' }) }), { rule: 10, glyph: 'idle', text: 'Signed in · waiting for the session to confirm', tone: 'plain' });
+  // Failing again while confirming goes straight back to Needs sign-in.
+  assert.equal(said({ status: 'idle', attention: signIn({ recovery: 'failed' }) }).text, 'Needs sign-in · Copilot');
+  // No recovery value says recovered (#818): one the client doesn't know is failed, as the protocol has it.
+  assert.equal(said({ status: 'idle', attention: signIn({ recovery: 'resumed' }) }).text, 'Needs sign-in · Copilot');
+  // Only the host clearing the attention does: the session's own status again.
+  assert.equal(said({ status: 'idle' }).text, 'Idle');
+});
+
+test('Rule 12: a working session the host has heard nothing from reads "Not responding · since" its last event, not working', () => {
+  const s = said({ status: 'working', attention: { kind: 'notResponding', lastEventAt: '2026-11-04T23:00:00.000Z' } });
+  assert.deepEqual([s.rule, s.glyph, s.tone], [12, 'failed', 'needs']);
+  assert.match(s.text, /^Not responding · since \d{1,2}:\d{2}/);
+  assert.equal(said({ status: 'working' }).rule, 3);
+});

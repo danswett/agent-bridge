@@ -324,6 +324,7 @@ public sealed partial class QuestionViewModel : Observable
         // offered (#253, decision 3); one Markdown would not draw as written is answered at the
         // machine (DrawnAsWritten).
         if (q.Kind == QuestionKind.Approval && !DrawnAsWritten(q)) { return (false, "atMachine"); }
+        if (NotWhole(q, agent)) { return (false, "atMachine"); }
         return (true, null);
     }
 
@@ -337,6 +338,13 @@ public sealed partial class QuestionViewModel : Observable
     // (ApprovalShape). This card draws an approval exactly as written since #323; the hold is kept
     // all the same, the rule Home Assistant's card, which draws Markdown, holds to as well.
     static bool DrawnAsWritten(Question q) => !ShownText.HasMisleadingReference(q.Message) && ApprovalShape.DrawsAsWritten(Shown(q));
+
+    // A Codex approval is answered here only as a host sends it from #209: the whole command in one
+    // block nothing in it can close (ApprovalShape.IsFencedCommand). An older host sent
+    // "Needs approval: " and the hook's 300-character preview, cut to 297 and "..." with nothing
+    // marking it truncated, so Approve once would run more than the card shows (#209 security review).
+    static bool NotWhole(Question q, AgentKind agent) =>
+        agent == AgentKind.Codex && q.Kind == QuestionKind.Approval && !ApprovalShape.IsFencedCommand(q.Message);
 
     // A lone surrogate cannot be read by the host (System.Text.Json refuses it), so text goes
     // well-formed, with U+FFFD in its place.

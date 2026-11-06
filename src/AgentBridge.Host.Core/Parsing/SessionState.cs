@@ -38,6 +38,9 @@ internal sealed class SessionState
     // The newest entry that is the session's own work (a prompt, a reply, a tool result),
     // so a hook's status can be told apart from the transcript tail it came after.
     public DateTimeOffset? LastActivityAt;
+    // The newest event of any kind, however little it changes (a model call, a hook, a delegate's
+    // tool): a session still writing these is busy, not stalled (the Not responding watchdog).
+    public DateTimeOffset? LastEventAt;
     // Prompts the user sent; turnCount is these less the one still in progress.
     public int Prompts;
     // The turn in progress is not a prompt's (Claude's turn for a delegate's notice), so no
@@ -54,6 +57,9 @@ internal sealed class SessionState
     public readonly BackgroundWork Background = new();
     // Questions the agent is waiting on, oldest first; the newest is the one shown.
     public readonly List<Question> Pending = [];
+    // session.attention (#800): what went wrong that the status cannot say. An error lasts until
+    // the next turn, a sign-in until the model is seen answering (CopilotParser.Answered).
+    public Attention? Attention;
 
     public SessionStatus Effective => Pending.Count > 0 ? SessionStatus.Waiting : Status;
     public DateTimeOffset? EffectiveSince;
@@ -63,12 +69,13 @@ internal sealed class SessionState
         FirstUserMessage = null;
         AgentTitle = null; UserMessage = null; UserMessageFrom = null; UserMessageLabel = null; UserMessageKey = null; Response = null; Reasoning = null; Model = null;
         ResponseBy = null; ReasoningBy = null; OwnResponse = null; OwnResponseCut = false; OwnReasoning = null; OwnAt = null;
-        Cwd = null; Branch = null; Repository = null; StartedAt = null; UpdatedAt = null; LastActivityAt = null;
+        Cwd = null; Branch = null; Repository = null; StartedAt = null; UpdatedAt = null; LastActivityAt = null; LastEventAt = null;
         Prompts = 0; Compactions = 0; Seen = false; UncountedTurn = false;
         Status = SessionStatus.Idle; StatusSince = null; EffectiveSince = null;
         Tools.Clear();
         Background.Clear();
         Pending.Clear();
+        Attention = null;
     }
 
     // Called after every event, with its time, so StatusSince is when the change happened
@@ -76,6 +83,7 @@ internal sealed class SessionState
     public void Observe(DateTimeOffset? at, SessionStatus before, bool visible)
     {
         Seen = true;
+        if (at is { } heard && (LastEventAt is null || heard > LastEventAt)) { LastEventAt = heard; }
         if (!visible) { return; }
         if (at is { } t && (UpdatedAt is null || t > UpdatedAt)) { UpdatedAt = t; }
         if (Effective != before || EffectiveSince is null) { EffectiveSince = at ?? EffectiveSince; }
@@ -125,6 +133,16 @@ internal sealed class SessionState
     {
         Tools.FailRunning(at);
         Pending.Clear();
+        Status = SessionStatus.Idle;
+    }
+
+    // The main agent's turn failed (#800, a session.error): its own tools and questions end with
+    // it. A background delegate may still be running, and its permission prompt is still the
+    // person's to answer.
+    public void FailTurn(DateTimeOffset? at)
+    {
+        Tools.FailRunning(at, mainOnly: true);
+        Pending.RemoveAll(q => q.Agent is null);
         Status = SessionStatus.Idle;
     }
 }
@@ -188,9 +206,10 @@ internal sealed class ToolHistory
 
     public bool AnyRunning => _entries.Any(e => e.Status == ToolStatus.Running);
 
-    public void FailRunning(DateTimeOffset? at)
+    // mainOnly: the main agent's tools, leaving a live delegate's running.
+    public void FailRunning(DateTimeOffset? at, bool mainOnly = false)
     {
-        foreach (var e in _entries.Where(e => e.Status == ToolStatus.Running))
+        foreach (var e in _entries.Where(e => e.Status == ToolStatus.Running && (!mainOnly || e.Agent is null)))
         {
             e.Status = ToolStatus.Failed;
             e.EndedAt = at;

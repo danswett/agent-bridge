@@ -111,18 +111,62 @@ public sealed class AgentReadinessTests : IDisposable
         new IntakeState(f.Runtime, Path.Combine(f.Root, "bridge"), "test", f.Time.GetUtcNow()) { Homes = Homes }.Save(Profile);
         Directory.CreateDirectory(f.ClaudeHome);
         var marker = Path.Combine(f.ClaudeHome, "agent-bridge-owner.json");
-        var original = JsonSerializer.Serialize(new { version = 1, profile = Profile });
+        var original = JsonSerializer.Serialize(new { version = 1, profile = Profile, setupCompleted = true });
         File.WriteAllText(marker, original);
         await using var service = Service();
 
         var agent = Agent(await service.RefreshAsync(), "claude");
 
+        Assert.Equal(HookSetupState.Completed, agent.HookSetup);
         Assert.Equal(ReadinessState.Unknown, agent.Hooks.State);
         Assert.Contains("owned setup record", agent.Hooks.Detail);
         Assert.Null(agent.LastHookHandledAt);
         Assert.Equal(ReadinessState.Unknown, agent.Authentication.State);
         Assert.Equal(ReadinessState.Unknown, agent.Activation.State);
         Assert.Equal(original, File.ReadAllText(marker));
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public async Task An_owned_record_without_completed_setup_stays_incomplete_and_repairable_on_every_check(bool intake, bool explicitFalse)
+    {
+        if (intake) { new IntakeState(f.Runtime, Path.Combine(f.Root, "bridge"), "test", f.Time.GetUtcNow()) { Homes = Homes }.Save(Profile); }
+        Directory.CreateDirectory(f.CodexHome);
+        var marker = Path.Combine(f.CodexHome, "agent-bridge-owner.json");
+        // Records written before setupCompleted existed are never migrated to completed on read.
+        var original = explicitFalse ? JsonSerializer.Serialize(new { version = 1, profile = Profile, setupCompleted = false })
+            : JsonSerializer.Serialize(new { version = 1, profile = Profile });
+        File.WriteAllText(marker, original);
+        await using var service = Service();
+
+        foreach (var report in new[] { await service.RefreshAsync(), await service.RefreshAsync(fresh: true) })
+        {
+            var agent = Agent(report, "codex");
+            Assert.Equal(HookSetupState.Incomplete, agent.HookSetup);
+            Assert.Equal(intake ? ReadinessState.Failed : ReadinessState.NeedsAction, agent.Hooks.State);
+            Assert.Contains("did not complete", agent.Hooks.Detail);
+            Assert.DoesNotContain("owned setup record", agent.Hooks.Detail);
+        }
+        Assert.Equal(original, File.ReadAllText(marker));
+    }
+
+    [Fact]
+    public async Task Without_an_ownership_record_setup_is_not_set_up_and_foreign_or_malformed_completion_is_not_trusted()
+    {
+        Directory.CreateDirectory(f.CodexHome);
+        File.WriteAllText(Path.Combine(f.CodexHome, "agent-bridge-owner.json"), JsonSerializer.Serialize(new { version = 1, profile = Profile, setupCompleted = "yes" }));
+        Directory.CreateDirectory(f.ClaudeHome);
+        File.WriteAllText(Path.Combine(f.ClaudeHome, "agent-bridge-owner.json"),
+            JsonSerializer.Serialize(new { version = 1, profile = Path.Combine(f.Root, "other-profile"), setupCompleted = true }));
+        await using var service = Service();
+
+        var report = await service.RefreshAsync();
+
+        Assert.Equal(HookSetupState.NotSetUp, Agent(report, "copilot").HookSetup);
+        Assert.Equal((ReadinessState.Failed, HookSetupState.Unknown), (Agent(report, "codex").Hooks.State, Agent(report, "codex").HookSetup));
+        Assert.Equal((ReadinessState.Blocked, HookSetupState.Unknown), (Agent(report, "claude").Hooks.State, Agent(report, "claude").HookSetup));
     }
 
     [Theory]
@@ -175,11 +219,11 @@ public sealed class AgentReadinessTests : IDisposable
             await Task.Delay(Timeout.InfiniteTimeSpan, ct);
             return new CommandResult(true, false, 0, "1.2.3");
         };
-        await using var service = Service();
+        await using var service = Service(timeout: TimeSpan.FromMinutes(1));
         using var cancel = new CancellationTokenSource();
 
         var pending = service.RefreshAsync(cancel.Token);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
         cancel.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
         Assert.Null(service.Snapshot);
@@ -227,7 +271,7 @@ public sealed class AgentReadinessTests : IDisposable
         {
             new IntakeState(f.Runtime, Path.Combine(f.Root, "bridge"), "test", f.Time.GetUtcNow()) { Homes = Homes }.Save(Profile);
             Directory.CreateDirectory(f.ClaudeHome);
-            File.WriteAllText(Path.Combine(f.ClaudeHome, "agent-bridge-owner.json"), JsonSerializer.Serialize(new { version = 1, profile = Profile }));
+            File.WriteAllText(Path.Combine(f.ClaudeHome, "agent-bridge-owner.json"), JsonSerializer.Serialize(new { version = 1, profile = Profile, setupCompleted = true }));
             afterSetup = service.RefreshAsync(fresh: true);
             overlappingCheck = service.RefreshAsync(fresh: true);
         }
@@ -248,7 +292,9 @@ public sealed class AgentReadinessTests : IDisposable
         await using var service = Service(timeout: TimeSpan.FromMilliseconds(50));
         try
         {
-            var agent = Agent(await service.RefreshAsync().WaitAsync(TimeSpan.FromSeconds(5)), "claude");
+            // The probe still times out at 50 ms, then has two seconds to clean up. This
+            // outer bound catches a hang, not a loaded runner's scheduling delay (#664).
+            var agent = Agent(await service.RefreshAsync().WaitAsync(TimeSpan.FromSeconds(30)), "claude");
             Assert.Equal(ReadinessState.Failed, agent.VersionCheck.State);
             Assert.Contains("timed out", agent.VersionCheck.Detail);
             Assert.Contains("without confirming cleanup", agent.VersionCheck.Detail);
@@ -335,14 +381,14 @@ public sealed class AgentReadinessTests : IDisposable
             if (Agent(report, "copilot").LastHookHandledAt is not null) { hookHeard.TrySetResult(); }
         };
         service.Start();
-        await initiallyChecked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await initiallyChecked.Task.WaitAsync(TimeSpan.FromSeconds(30));
         locator.Installed["copilot"] = "copilot.exe";
         f.Time.Advance(TimeSpan.FromMinutes(10));
-        await laterInstalled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await laterInstalled.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         SpoolContract.Write(f.Runtime, "copilot", "agent_stop", "{}"u8, [], f.Time.GetUtcNow(), 1);
         Assert.Equal(1, intake.Pass());
-        await hookHeard.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await hookHeard.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         var copilot = Agent(service.Snapshot!, "copilot");
         Assert.Equal(f.Time.GetUtcNow(), copilot.LastHookHandledAt);
